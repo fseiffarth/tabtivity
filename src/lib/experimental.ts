@@ -1,9 +1,11 @@
 /**
  * Experimental features and the rule that governs them.
  *
- * Every experimental feature is **off until someone ticks it**: the flag is a
- * tri-state, an explicit value is the answer, and an unset flag is off — Debug
- * mode included. A feature that is still moving needs to be invisible to someone
+ * Every experimental feature is **off until someone ticks it**, except the few
+ * in `ON_BY_DEFAULT_FLAGS` (mail, Tabby, project remarks; user decision
+ * 2026-10-26, so a fresh install shows them): the flag is a tri-state, an
+ * explicit value is the answer, and an unset flag is its default — Debug mode
+ * included. A feature that is still moving needs to be invisible to someone
  * using Tabtivity to work, and Debug mode is now just Debug mode: turning it on
  * shows no experiment (tab cost plan step 3, user decision 2026-10-10).
  *
@@ -74,10 +76,16 @@ export const EXPERIMENTAL_FLAGS = [
 
 export type ExperimentalFlag = (typeof EXPERIMENTAL_FLAGS)[number];
 
-/** Is `flag` live? The explicit setting if there is one, else off — except on a
- *  profile not yet marked `experimental_explicit`, where an unset flag still
- *  follows Debug mode until `migrateExperimentalOnce` has written the ticks (see
- *  the module header). */
+/** The experiments a profile gets without asking: unset means on for these,
+ *  so a fresh install shows them; an explicit `false` still turns one off. */
+export const ON_BY_DEFAULT_FLAGS: readonly ExperimentalFlag[] = ["mail_client", "assistant", "project_remarks"];
+const ON_BY_DEFAULT: ReadonlySet<ExperimentalFlag> = new Set(ON_BY_DEFAULT_FLAGS);
+
+/** Is `flag` live? The explicit setting if there is one, else its default
+ *  (`ON_BY_DEFAULT`) — except on a profile not yet marked `experimental_explicit`,
+ *  where an unset flag is also on in Debug mode until `migrateExperimentalOnce`
+ *  has written the ticks (see the module header). Settings not loaded yet count
+ *  as off, so a flag the user switched off never flashes in. */
 export function experimentalEnabled(
   settings: Settings | null | undefined,
   flag: ExperimentalFlag,
@@ -89,10 +97,12 @@ export function experimentalEnabled(
   // Same rule for the GPU renderer switch (the backend's `gpu_compositing()` is
   // a strict `unwrap_or(false)` too).
   if (flag === "gpu_compositing" && settings?.gpu_compositing == null) return false;
-  const explicit = settings?.[flag];
+  if (settings == null) return false;
+  const explicit = settings[flag];
   if (explicit != null) return explicit;
-  if (settings?.experimental_explicit === true) return false;
-  return settings?.debug ?? false;
+  if (ON_BY_DEFAULT.has(flag)) return true;
+  if (settings.experimental_explicit === true) return false;
+  return settings.debug ?? false;
 }
 
 /** The flags an unmarked Debug-mode profile had on without a tick: every one but

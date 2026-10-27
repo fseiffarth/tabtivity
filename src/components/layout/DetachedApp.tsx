@@ -48,13 +48,13 @@ import {
 import { applyDetachedStatus } from "../../stores/activity";
 import {
   allGroups,
-  allNodeIds as nodeIdsOf,
   orderedTabKeys,
-  setDetachedViewerState,
   type LayoutNode,
   type TabEntry,
   type TabKind,
 } from "../../stores/tabs";
+import { allNodeIds as nodeIdsOf } from "../../stores/tabs/layoutTree";
+import { setDetachedViewerState } from "../../stores/tabs/viewerState";
 import { withdrawnTabKinds } from "../../lib/experimental";
 import { PLATFORM } from "../../lib/platform";
 import { useTabLandStore } from "../../stores/drag/tabLand";
@@ -77,8 +77,8 @@ import { OpenExternalHost } from "../common/OpenExternalHost";
 import { SyncConfirmDialog } from "../common/SyncConfirmDialog";
 import { HpcGuardDialog } from "../common/HpcGuardDialog";
 import { UnfencedPlatformDialog } from "../common/UnfencedPlatformDialog";
-import { ScreenshotSaveOverlay } from "./ScreenshotSaveOverlay";
 import { DetachedCloseChoice } from "./DetachedCloseChoice";
+import { PrivacyCurtain } from "./PrivacyCurtain";
 
 interface Props {
   param: DetachedParam;
@@ -754,6 +754,8 @@ export function DetachedApp({ param }: Props) {
           emits browser events to every window — so it needs its own single
           download-consent host for the same reason AppShell does. */}
       <BrowserDownloadHost />
+      {/* Its own privacy curtain: each window is covered, and lifted, on its own. */}
+      <PrivacyCurtain />
       {/* A popout's viewer can Build or Format, so its exec-trust question
           renders here, in this window's own store. */}
       <ExecTrustHost />
@@ -769,11 +771,6 @@ export function DetachedApp({ param }: Props) {
           the hang impossible in either direction.) */}
       <HpcGuardDialog />
       <UnfencedPlatformDialog />
-      {/* #233: the screenshot save step. `useScreenshotPendingStore` is
-          per-window, so a PDF screenshot taken in a popout raised its overlay
-          nowhere: the shot reached the clipboard and the save-to-project half of
-          the feature simply never appeared. */}
-      <ScreenshotSaveOverlay />
       {closeChoice && (
         <DetachedCloseChoice
           onDock={() => {

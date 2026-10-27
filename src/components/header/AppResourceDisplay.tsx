@@ -50,10 +50,10 @@ function usageTone(kind: "cpu" | "ram", value: number): "low" | "medium" | "high
  */
 export function AppResourceDisplay({ folded = false, peek = 0 }: { folded?: boolean; peek?: number } = {}) {
   const t = useT();
-  // Each row defaults ON (undefined → shown) and is independent of debug mode.
-  const showCpu = useSettingsStore((s) => s.settings?.show_cpu_usage ?? true);
-  const showRam = useSettingsStore((s) => s.settings?.show_ram_usage ?? true);
-  const showGpu = useSettingsStore((s) => s.settings?.show_gpu_usage ?? true);
+  // Each row defaults OFF (undefined → hidden) and is independent of debug mode.
+  const showCpu = useSettingsStore((s) => s.settings?.show_cpu_usage ?? false);
+  const showRam = useSettingsStore((s) => s.settings?.show_ram_usage ?? false);
+  const showGpu = useSettingsStore((s) => s.settings?.show_gpu_usage ?? false);
   // Fast mode withdraws the readout: a poll every 5 s, forever, for a figure
   // that is by construction a readout of Tabtivity's own overhead — so the reading
   // and the cost of taking it are the same thing.

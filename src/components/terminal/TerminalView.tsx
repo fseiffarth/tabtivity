@@ -26,7 +26,7 @@ import {
   type TerminalOutputRange,
 } from "../../lib/terminal/terminalBus";
 import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
-import { terminalPalette } from "../../lib/terminal/terminalPalette";
+import { TERMINAL_MIN_CONTRAST, terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
@@ -35,7 +35,7 @@ import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { deliverDrop, insertIntoReader, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
-import { isExternalFileDrag, parseDroppedFiles } from "../files/importDrop";
+import { isExternalFileDrag, parseDroppedFiles } from "../../lib/files/droppedFiles";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
 import { registerScheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../../mobile-web/src/terminal/openCodeMini";
@@ -67,7 +67,7 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
-import { buildScaffoldFillPrompt } from "../projects/scaffold";
+import { buildScaffoldFillPrompt } from "../../lib/projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { type ConfirmSpec, useDialogs } from "../common/PromptDialogs";
@@ -535,6 +535,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         fontFamily:
           "'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Cascadia Mono', Consolas, Menlo, monospace",
         theme: terminalTheme(colorSchemeRef.current),
+        minimumContrastRatio: TERMINAL_MIN_CONTRAST,
       });
       const fit = new FitAddon();
       built.loadAddon(fit);
@@ -2297,6 +2298,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
    * (per CLI) — a full-pane view must not take over every pane of the CLI,
    * nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
   const [changesPicked, setChangesPicked] = useState(false);
+  /** The conversation on screen changed a file (`TerminalReaderView`'s probe):
+   * until it did, the Diffs tab is greyed out. */
+  const [changesKnown, setChangesKnown] = useState(false);
   // Diffs reads the conversation's files here, which a host tab's are not.
   const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent) && !readerOnHost;
   const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || changesOn);
@@ -2457,7 +2461,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         reader={readerAvailable && !readerAlways ? {
           open: readerOn,
           onToggle: () => setReader(!readerOn),
-          changes: changesOffered(readerAgent) && !readerOnHost ? { open: changesOn, onToggle: () => {
+          changes: changesOffered(readerAgent) && !readerOnHost ? { open: changesOn, empty: !changesKnown, onToggle: () => {
             if (changesOn) showReaderChat();
             else setChangesPicked(true);
           } } : undefined,
@@ -2490,6 +2494,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         focused={focused && readerOn && !changesOn}
         shown={readerOn}
         changesOpen={changesOn}
+        probeChanges={visible && readerTopBar && changesOffered(readerAgent) && !readerOnHost}
+        onChangesKnown={setChangesKnown}
         onShowChat={showReaderChat}
         navigationSlot={readerNavigationSlot}
         actionSlot={readerActionSlot}

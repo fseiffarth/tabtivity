@@ -3,10 +3,7 @@
  * in-app text/TeX/markdown editors.
  */
 import { describe, it, expect } from "vitest";
-import {
-  editHistoryReducer,
-  type EditHistory,
-} from "../../components/embed/FileViewerPane";
+import { editHistoryReducer, type EditHistory } from "../../components/embed/fileViewer/editableFile";
 
 const seed = (present: string): EditHistory => ({ past: [], present, future: [] });
 

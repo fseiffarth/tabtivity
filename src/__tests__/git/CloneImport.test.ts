@@ -4,7 +4,7 @@ import {
   providerFromCloneUrl,
   repoNameFromCloneUrl,
   sanitizeName,
-} from "../../components/projects/scaffold";
+} from "../../lib/projects/scaffold";
 
 // The import dialog's "GitHub / GitLab repository (clone)" source. `isCloneUrl`
 // gates the Import button; the backend's `validate_clone_url` is the real guard

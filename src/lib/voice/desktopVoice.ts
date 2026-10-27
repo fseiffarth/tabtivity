@@ -18,6 +18,7 @@ export type VoiceErrorCode =
   | "permission-denied"
   | "device-busy"
   | "device-failed"
+  | "mic-silent"
   | "model-failed"
   | "not-active"
   | "no-speech-server"
@@ -35,6 +36,7 @@ export const VOICE_ERROR_KEYS: Record<VoiceErrorCode, TranslationKey> = {
   "permission-denied": "terminal.reader.voice.err.denied",
   "device-busy": "terminal.reader.voice.err.busy",
   "device-failed": "terminal.reader.voice.err.device",
+  "mic-silent": "terminal.reader.voice.err.silent",
   "model-failed": "terminal.reader.voice.err.model",
   "not-active": "terminal.reader.voice.err.failed",
   "no-speech-server": "terminal.reader.voice.err.noSpeechServer",
@@ -111,6 +113,12 @@ export interface OwnerEvent { session: number | null; owner: VoiceOwner | null; 
 export const VOICE_MODELS = ["base", "small", "large-v3-turbo"] as const;
 export type VoiceModel = (typeof VOICE_MODELS)[number];
 export const DEFAULT_VOICE_MODEL: VoiceModel = "small";
+/** A model's name, size and verdict in a picker (Settings and the Chat's install card). */
+export const VOICE_MODEL_LABELS: Record<VoiceModel, TranslationKey> = {
+  base: "settings.voice.modelBase",
+  small: "settings.voice.modelSmall",
+  "large-v3-turbo": "settings.voice.modelLarge",
+};
 
 /** The speech language setting: `auto` is the UI language; `detect` lets
  * whisper guess, which it often gets wrong on a short utterance. */

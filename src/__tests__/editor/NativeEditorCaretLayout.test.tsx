@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor } from "@testing-library/react";
-import { snapToDevicePx } from "../../components/embed/FileViewerPane";
+import { snapToDevicePx } from "../../components/embed/fileViewer/caretMirror";
 
 const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));

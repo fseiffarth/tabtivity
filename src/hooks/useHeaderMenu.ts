@@ -1,6 +1,6 @@
 import { isVisibleControl } from "./useModalFocus";
 import { useEffect, useLayoutEffect, useRef, type FocusEvent, type KeyboardEvent } from "react";
-import { useHeaderHoverMenuStore } from "../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../stores/headerHoverMenu";
 
 /** Shared hover grace and keyboard navigation for header action menus. */
 export function useHeaderMenu(id: string) {
@@ -15,11 +15,11 @@ export function useHeaderMenu(id: string) {
     useHeaderHoverMenuStore.getState().open(id);
   };
   const close = () => useHeaderHoverMenuStore.getState().close(id);
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       if (!ref.current?.contains(document.activeElement)) close();
-    }, 250);
+    }, headerMenuCloseDelay(e));
   };
   useEffect(() => () => clearTimeout(timer.current), []);
   useLayoutEffect(() => {

@@ -316,13 +316,13 @@ const PANE_MARKER_CMDS: &[&str] = &[
 ];
 
 /// Agent CLIs a persisted tab may relaunch: every built-in agent's binary
-/// (`commands::agents`' registry, which the frontend's generated
+/// (`services::agent_registry`' registry, which the frontend's generated
 /// `agentCliTable.ts` mirrors, so `cmdToKind` writes each as an agent tab) plus
-/// `ollama`, the local-model launcher (`commands::ollama::LOCAL_DRIVERS`),
+/// `ollama`, the local-model launcher (`services::local_drivers::LOCAL_DRIVERS`),
 /// because those are the only commands `loadFromLayout` can legitimately have
 /// written.
 fn agent_cmds() -> Vec<&'static str> {
-    let mut cmds = crate::commands::agents::agent_bins();
+    let mut cmds = crate::services::agent_registry::agent_bins();
     cmds.push("ollama");
     cmds
 }
@@ -587,7 +587,7 @@ pub fn sanitize_tab_layout(
 
 /// Drop a persisted `localLaunch` unless it is a local-model tab's launch line
 /// Tabtivity itself builds for the driver and model it names
-/// (`commands::ollama::local_launch_line_ok`). The field is what lets such a
+/// (`services::local_drivers::local_launch_line_ok`). The field is what lets such a
 /// tab restore at all — the frontend relaunches it with `localLaunch.args` —
 /// so, like `resumeArgs`, it is an argv for a host-bound agent CLI and is never
 /// trusted from disk as written. Without it the tab is simply not restorable.
@@ -619,7 +619,7 @@ pub(crate) fn local_launch_ok(launch: &Value, cmd: &str) -> bool {
     else {
         return false;
     };
-    crate::commands::ollama::local_launch_line_ok(driver, model, cmd, &args)
+    crate::services::local_drivers::local_launch_line_ok(driver, model, cmd, &args)
 }
 
 /// Whether a persisted tab `env` may not set `key` (gap 17): the variables that
@@ -839,7 +839,15 @@ pub fn migrate_project_sessions_once() {
     if marker.exists() {
         return;
     }
-    let projects = crate::services::remote::projects().unwrap_or_default();
+    // An unreadable registry is not "no projects": the marker would then
+    // skip every project's migration for good. Try again next launch.
+    let projects = match crate::services::remote::projects() {
+        Ok(projects) => projects,
+        Err(e) => {
+            eprintln!("terminal_service: session migration postponed, projects.json unreadable: {e}");
+            return;
+        }
+    };
 
     let mut migrated = 0usize;
     for entry in projects.iter() {
@@ -1216,7 +1224,7 @@ mod tests {
         // The set used to be a hand copy of 13 CLIs, so a tab of any agent added
         // to the registry later (Kiro, Goose, Amp, …) came back as a plain shell.
         let set = known_tab_commands(&no_custom());
-        for bin in crate::commands::agents::agent_bins() {
+        for bin in crate::services::agent_registry::agent_bins() {
             let mut tabs = vec![entry(bin)];
             sanitize_tab_layout(&mut tabs, &set, &no_custom());
             assert_eq!(tabs[0].cmd, bin, "{bin} restored as a shell");

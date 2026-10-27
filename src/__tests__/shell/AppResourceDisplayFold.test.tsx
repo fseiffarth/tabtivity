@@ -33,7 +33,11 @@ beforeEach(() => {
   usePowerStore.setState({ onBattery: false, blurred: false });
   useHeaderStatusStore.setState({ reports: {} });
   act(() => {
-    useSettingsStore.setState({ settings: { fast_mode: false } as Settings, loaded: true });
+    // The rows are off by default; these tests are about a shown readout.
+    useSettingsStore.setState({
+      settings: { fast_mode: false, show_cpu_usage: true, show_ram_usage: true, show_gpu_usage: true } as Settings,
+      loaded: true,
+    });
   });
 });
 

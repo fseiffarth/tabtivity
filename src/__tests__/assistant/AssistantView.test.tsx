@@ -109,7 +109,7 @@ function baseOptions(over: Record<string, unknown> = {}) {
     clis: [
       { id: "claude", label: "Claude", local: false, installed: true, signedIn: true, ready: true },
       { id: "codex", label: "Codex", local: false, installed: true, signedIn: false, ready: false },
-      { id: "opencode_local", label: "OpenCode (local model)", local: true, installed: true, signedIn: null, ready: true },
+      { id: "opencode_local", label: "OpenCode", local: true, installed: true, signedIn: null, ready: true },
     ],
     localModels: ["qwen3:8b", "llama3.2"],
     ollamaReachable: true,
@@ -313,7 +313,7 @@ describe("replacing the chat", () => {
     await show();
     await waitFor(() => expect(screen.getByRole("button", { name: "CLI" }).textContent).toContain("Codex"));
     fireEvent.click(screen.getByRole("button", { name: "CLI" }));
-    fireEvent.click(screen.getByRole("option", { name: "OpenCode (local model)" }));
+    fireEvent.click(screen.getByRole("option", { name: "OpenCode (local)" }));
     await waitFor(() => expect(newChatCalls()).toEqual([{ cli: "opencode_local", model: "qwen3:8b" }]));
     await waitFor(() => expect(screen.getByRole("button", { name: "Local model" }).textContent).toContain("qwen3:8b"));
     fireEvent.click(screen.getByRole("button", { name: "Local model" }));

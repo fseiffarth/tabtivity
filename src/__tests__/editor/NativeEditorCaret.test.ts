@@ -27,11 +27,8 @@
  * in `NativeEditorCaretLayout.test.tsx`.
  */
 import { describe, it, expect } from "vitest";
-import {
-  snapToDevicePx,
-  applyIndent,
-  advanceTexBraceTabStop,
-} from "../../components/embed/FileViewerPane";
+import { snapToDevicePx } from "../../components/embed/fileViewer/caretMirror";
+import { applyIndent, advanceTexBraceTabStop } from "../../components/embed/fileViewer/indent";
 import { lineStartOffset, offsetToLineCol } from "../../lib/viewers/tex/tex";
 
 // --- vertical caret/glyph drift model ---------------------------------------

@@ -28,18 +28,17 @@ import {
   isResumableAgentTab,
   isSavedWhileLive,
   remoteHostIdOf,
-  restorableSavedTabs,
   ROOT_SCOPE,
-  savedLayoutTreeOf,
   toSavedTabEntry,
   useTabsStore,
-  type LocalLaunch,
   type SavedLayoutTree,
   type TabKind,
   type TabLocation,
   type TabEntry,
   type ViewerState,
 } from "./tabs";
+import { restorableSavedTabs, savedLayoutTreeOf } from "./tabs/savedLayout";
+import type { LocalLaunch } from "./tabs/types";
 import { useRunHostPrefStore } from "./remote/runHostPref";
 import { useTimerStore } from "./timer";
 import { useSettingsStore, whenSettingsLoaded } from "./settings";
@@ -56,8 +55,8 @@ import { useBoxesStore } from "./boxes";
 import { useStopProjectStore } from "./stopProjectPrompt";
 import { connectionStillOpen, openConnectionInRoot } from "../lib/remote/remoteConnect";
 import { loginDedupeKey, sshLogin, vpnLogin } from "../lib/remote/loginTarget";
-import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../components/projects/scaffold";
-import type { SavedPasswordState } from "../components/projects/useSavedCredential";
+import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../lib/projects/scaffold";
+import type { SavedPasswordState } from "../lib/projects/useSavedCredential";
 import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
 import { translate, useI18nStore, translateNow } from "../lib/i18n";

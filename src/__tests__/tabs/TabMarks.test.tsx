@@ -25,12 +25,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import {
   allGroups,
-  duplicateSpec,
   toSavedTabEntry,
   useTabsStore,
   type SavedTabEntry,
   type TabEntry,
 } from "../../stores/tabs";
+import { duplicateSpec } from "../../stores/tabs/tabEntries";
 import { applyMarkToTabs, applyTodoToTabs } from "../../stores/detached";
 import { isTabMark, markedTabs } from "../../lib/tabMarks";
 import { linkedTabOf, taskFromTab } from "../../lib/todoBoard";
@@ -201,6 +201,7 @@ describe("the tab's right-click menu", () => {
   });
 
   it("offers no card rows while the to-do board is off", () => {
+    useSettingsStore.setState({ settings: { todo_board: false } } as never);
     const { tab } = mountBar();
     fireEvent.contextMenu(tab());
     expect(menuRow("to-do card")).toBeUndefined();

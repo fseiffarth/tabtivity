@@ -1406,6 +1406,57 @@ and #2346 were spot-checked against the source.
       switcher's probe. Tests: `GitDirtyState`, `ProjectHoverCardGitState`,
       `MobileGitDots`, `GitBarRefresh`.
 
+### Threat-model mail analysis follow-ups (2026-10-26)
+
+From the mail-only pass in `docs/threat_model.md` ("Gaps found 2026-10-26 —
+mail analysis", gaps 71–73). These are findings from reading the code; none
+was reproduced against a live mailbox.
+
+2424. **An imported OpenPGP private key verified itself.** `PgpKeyring::import`
+    stored a secret key as Verified together with every user ID in it, so a
+    private key mailed by an attacker as "my key" gave positive signature
+    chrome to any `From` address it named, and became the preferred key for
+    encrypting to that address. (Gap 71.)
+    - **Fixed 2026-10-27 (not live, uncommitted).** An imported private key
+      starts Known and a re-import keeps the stored flag. Binding refuses a
+      key that does not name the account's address, and verifies the key only
+      when every address on it is one of the user's accounts. Unverified
+      private keys get the fingerprint checkbox. Old keyrings have their
+      unbound private keys demoted once (`secret_trust_migrated`).
+    - [ ] Refuse a bind unless *every* address on the key is one of the
+      user's accounts. A key naming the user's address plus a foreign one can
+      still become the signing key and receive encrypt-to-self copies. Also
+      run the all-own-addresses rule over keys bound under an older build.
+    - [ ] Keys dialog: let a fingerprint tick on a private key be undone, and
+      lowercase addresses the way the backend does (ASCII only) when deciding
+      whether to show Use for this account.
+    - [ ] 🖐️ Import a private key whose user ID is someone else's address:
+      it appears unverified with no Use for this account button, and a
+      message it signed shows no Verified badge. A private key naming only
+      your account's address can be bound, and then reads "your key".
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+2425. **The address-book star and Add from Inbox trust an unauthenticated
+    `From`.** The message view's ★ fills for any mail whose `From` address
+    has a card, and Add from Inbox makes a card for every Inbox sender,
+    phishing senders included, under the name they chose. Show the filled star
+    only for Personal cards, or only when `Authentication-Results` passes for
+    the `From` domain; have harvest skip senders that failed DMARC and junk
+    folders. (Gap 72.)
+2426. **The Thunderbird address-book import opens a picked SQLite file
+    without the viewer's hardening.** `mail_thunderbird::read_book` sets only
+    `trusted_schema = OFF` and ignores whether that worked. Use the hardened
+    opener from `commands/sqlite.rs` (`SQLITE_DBCONFIG_DEFENSIVE`, a progress
+    deadline, length limits), open the picked path without following a link,
+    and read a `-wal` only from the Thunderbird profile scan, not from beside
+    a picked file. (Gap 73.)
+
 ### Safe for everyone — non-expert users (2026-09-24)
 
 Plan: `docs/safe_for_everyone_plan.md`. Goal: every "⚠️ yours" row in

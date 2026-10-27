@@ -46,7 +46,7 @@ pub fn due_to_push(state_dir: &Path, now: &str, now_secs: u64) -> Vec<calendar_a
     if timer_lease::holder_in(&timer_lease::lease_file(state_dir), now_secs).is_some() {
         return Vec::new();
     }
-    let Ok(data) = crate::commands::calendar::read_data(&state_dir.join("calendar.json")) else {
+    let Ok(data) = crate::services::calendar_store::read_data(&state_dir.join("calendar.json")) else {
         return Vec::new();
     };
     let record = calendar_alarms::fired_file(state_dir);

@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(nul
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import { ServerAgentKeys } from "../../components/server/ServerAgentKeys";
-import { AgentLoginsRows } from "../../components/layout/SettingsSubPanels";
+import { AgentLoginsRows } from "../../components/settings/AgentLoginsRows";
 
 const login = (id: string, capable: boolean, extra: Record<string, unknown> = {}) => ({
   id,

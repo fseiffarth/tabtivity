@@ -1455,7 +1455,7 @@ fn ensure_seed(
 /// the project's own `project.json` — before anything connects. Ports are
 /// per-boot; this is the one writer.
 fn record_vm_endpoint(project_id: &str, ssh_port: u16) -> Result<(), String> {
-    crate::commands::projects::patch_project_entry_mirrored(
+    crate::services::project_registry::patch_project_entry_mirrored(
         project_id,
         |entry| {
             let mut spec: RemoteSpec = entry

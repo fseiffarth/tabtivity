@@ -8,14 +8,13 @@ import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
   ROOT_SCOPE,
   effectiveTabLocation,
-  hostTabId,
   isResumableAgentTab,
   refreshWorkspaceScope,
   useTabsStore,
-  workerRunnable,
   type TabEntry,
   type TabLocation,
 } from "../../stores/tabs";
+import { hostTabId, workerRunnable } from "../../stores/tabs/tabLocation";
 import { markMobileTmuxReady, mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { ASSISTANT_SCOPE, type AssistantLaunch, type AssistantModelRow, assistantCurrentModel, assistantErrorCode, assistantModelRows, assistantNewChat, assistantOptions } from "../../lib/assistant";
@@ -71,7 +70,7 @@ import {
   enabledInstalledAgentBins,
   type BuiltInAgentStatus,
   type StaticMenuItem,
-} from "../tabs/newTabItems";
+} from "../../lib/tabs/newTabItems";
 import { worktreeAgentSpec } from "../tabs/agentWorktrees";
 import { probeLocalModelPlacement } from "../tabs/localModelGroup";
 import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../lib/agents/localDrivers";
@@ -2779,7 +2778,7 @@ async function moveTabWorktree(
 }
 
 /** A Tabby chat the phone's model chip may switch, with the models its CLI can
- * run (`assistantModelRows` — the desktop Reader's chip lists the same), or
+ * run (`assistantModelRows` — the desktop Tabby's model dropdown lists the same), or
  * the refusal to answer with. Any other tab's `/model` is its CLI's own. */
 async function assistantChat(projectId: string, tmuxSession: string): Promise<
   | { scope: MobileScope; tab: TabEntry; launch: AssistantLaunch; rows: AssistantModelRow[]; models: string[] }

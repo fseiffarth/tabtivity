@@ -29,7 +29,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),
 }));
 
-import { AgentApiKeysRows, AgentLoginsRows } from "../../components/layout/SettingsSubPanels";
+import { AgentApiKeysRows } from "../../components/settings/AgentApiKeysRows";
+import { AgentLoginsRows } from "../../components/settings/AgentLoginsRows";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
 

@@ -69,14 +69,14 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
       const meta = `${ageLabel(Math.max(0, now - file.modified))} · ${formatBytes(file.size)}`;
       const content = <>
         {isImage
-          ? <img src={outboxFileUrl(scope, file.name)} alt="" loading="lazy" decoding="async" />
+          ? <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" />
           : <span aria-hidden="true">{file.kind === "application/pdf" ? "PDF" : file.kind.startsWith("text/") ? "≡" : "↓"}</span>}
         <strong>{sentName(file)}</strong>
         <span>{meta}</span>
       </>;
       return <div key={file.name} className="outbox-entry">
         {download
-          ? <a className="outbox-file" href={outboxFileUrl(scope, file.name, true)} download={sentName(file)} aria-label={label}>{content}</a>
+          ? <a className="outbox-file" href={outboxFileUrl(scope, file, true)} download={sentName(file)} aria-label={label}>{content}</a>
           : <button className={isImage ? "outbox-thumb" : "outbox-file"} onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{content}</button>}
         <div className="outbox-entry-actions">
           {/* Saving is on the tile itself, for every kind — a picture included.
@@ -84,7 +84,7 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
               thumbnail has no ⋯: the only way to keep a picture the agent sent
               was to open it full screen first and find Save there. The link is
               the same `?download=1` byte stream the sheet's Save uses. */}
-          <a className="outbox-save" href={outboxFileUrl(scope, file.name, true)} download={sentName(file)} aria-label={t("mobile.outbox.saveFile", { name: sentName(file) })}><span aria-hidden="true">⤓</span>{t("mobile.outbox.save")}</a>
+          <a className="outbox-save" href={outboxFileUrl(scope, file, true)} download={sentName(file)} aria-label={t("mobile.outbox.saveFile", { name: sentName(file) })}><span aria-hidden="true">⤓</span>{t("mobile.outbox.save")}</a>
           {shareAs(file) && <button
             className="outbox-save"
             disabled={sharing.busy === file.name}

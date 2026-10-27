@@ -182,6 +182,11 @@ export interface Settings {
      * only in effect while `project_files` is on too. Read by the sidecar per
      * request. */
     project_uploads?: boolean;
+    /** A paired phone's PDF reader may write remarks and highlights into a
+     * project PDF (Annotate; appended, never over a file changed since it was
+     * read). Unset is off; only in effect while `project_files` is on too. Read
+     * by the sidecar per request. */
+    project_remarks?: boolean;
     /** Quitting Tabtivity leaves the Mobile host running (headless owner). Unset
      * is off; read by the quit path. */
     stay_after_quit?: boolean;
@@ -302,12 +307,12 @@ export interface Settings {
   /** Calendar: minutes-before reminder pre-filled on a new event. `0` = none. */
   calendar_default_reminder_minutes?: number;
   /** Calendar: put a 📅 button in the header that opens the calendar overlay,
-   *  badged with the events left today. Default false. The twin of the header's
+   *  badged with the events left today. Default true (absent → shown). The twin of the header's
    *  mail button, with no experimental gate above it — the calendar is a shipped
    *  feature and reads nothing off the network. */
   calendar_global_app?: boolean;
   /** To-do board: put a ☑ button in the header that opens the global todo board
-   *  overlay, badged with what is due today. Default false.
+   *  overlay, badged with what is due today. Default true (absent → shown).
    *
    *  A plain setting rather than an experimental flag, for `calendar_global_app`'s
    *  reasons: the board reads one already-shipped local file (`calendar.json` —
@@ -671,6 +676,12 @@ export interface Settings {
   /** The AI switch (edge rail ⏻, `lib/aiSwitch.ts`): `true` stops every new
    *  AI use machine-wide. Backend-enforced (`services::ai_switch`). */
   ai_off?: boolean;
+  /** With `ai_off`: the instant (Unix ms) AI is on again by itself; unset or
+   *  `null` means off until switched back on. */
+  ai_off_until?: number | null;
+  /** The privacy curtain (`lib/window/privacyCurtain`): while a PDF or deck is
+   *  presented, cover the other app windows. Unset → on. */
+  privacy_curtain_on_present?: boolean;
   /** A fenced root-console agent sees every project, box folder and remote
    *  mirror read-only (default off: a widening). The mail `attach` argument
    *  needs it; recorded per root tab at spawn. */
@@ -768,12 +779,11 @@ export interface Settings {
    *  toggle and the connect path would otherwise read "nothing saved" over a
    *  perfectly good saved credential (see `lib/keyring.ts`). */
   vpn_saved_configs?: string[];
-  /** When true, the header's OpenVPN indicator is shown. Default OFF — most
-   *  projects are local-only, so the machine-wide tunnel control stays hidden
-   *  until asked for (the first-run `RemoteFeaturesPrompt`, or Settings). */
+  /** When true, the header's OpenVPN indicator is shown. Default ON (unset →
+   *  shown); the first-run `RemoteFeaturesPrompt` or Settings switch it off. */
   vpn_enabled?: boolean;
-  /** When true, the header's global-machines indicator is shown. Default OFF,
-   *  same reasoning as `vpn_enabled`. */
+  /** When true, the header's global-machines indicator is shown. Default ON,
+   *  like `vpn_enabled`. */
   machines_enabled?: boolean;
   /** True once the first-run "Using VPN or remote machines?" prompt has been
    *  shown/answered, so it never re-asks automatically. */
@@ -1265,6 +1275,8 @@ export interface GitPushProposal {
   diffstat: string;
   note: string;
   needs_url_confirm: boolean;
+  /** The push goes to the remote's default branch: it always waits for a click. */
+  to_default?: boolean;
   created_at: string;
   /** `allowed`: an "Allow CI" card the user allowed. */
   status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired" | "allowed";

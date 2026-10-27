@@ -286,7 +286,7 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "project_remarks" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
@@ -307,8 +307,8 @@ export function MobileSettings() {
 
   /** Project files, and the uploads switch that rides on it. Turning files on
    * asks whether the phone may add files too (Cancel keeps it read-only);
-   * turning it off clears uploads as well, so turning files on again later
-   * never reopens the write path unasked. One write either way: `setMailGate`
+   * turning it off clears uploads and PDF remarks as well, so turning files on
+   * again later never reopens a write path unasked. One write either way: `setMailGate`
    * spreads this render's `stored`, so a second write would undo the first. */
   const setProjectFiles = async (on: boolean) => {
     const uploads = on && await confirmAction({
@@ -323,6 +323,7 @@ export function MobileSettings() {
           ...(stored ?? { enabled: false }),
           project_files: on || undefined,
           project_uploads: uploads || undefined,
+          project_remarks: (on && stored?.project_remarks) || undefined,
         },
       });
     } catch (reason) {
@@ -359,6 +360,7 @@ export function MobileSettings() {
           root_access: stored?.root_access,
           project_files: stored?.project_files,
           project_uploads: stored?.project_uploads,
+          project_remarks: stored?.project_remarks,
           stay_after_quit: stored?.stay_after_quit,
           browser_client: stored?.browser_client,
           shell_tabs: stored?.shell_tabs,
@@ -463,6 +465,7 @@ export function MobileSettings() {
           root_access: stored?.root_access,
           project_files: stored?.project_files,
           project_uploads: stored?.project_uploads,
+          project_remarks: stored?.project_remarks,
           stay_after_quit: stored?.stay_after_quit,
           browser_client: stored?.browser_client,
           shell_tabs: stored?.shell_tabs,
@@ -504,6 +507,7 @@ export function MobileSettings() {
           root_access: stored?.root_access,
           project_files: stored?.project_files,
           project_uploads: stored?.project_uploads,
+          project_remarks: stored?.project_remarks,
           stay_after_quit: stored?.stay_after_quit,
           // `browser_client` is left out on purpose: lockdown closes browser
           // access too.
@@ -731,6 +735,12 @@ export function MobileSettings() {
         checked={stored?.project_uploads ?? false}
         disabled={busy || !stored?.project_files}
         onChange={(event) => void setMailGate("project_uploads", event.target.checked)}
+      />
+      <ToggleRow
+        label={<><Hint help={t("mobile.projectRemarksHelp")}>{t("mobile.projectRemarks")}</Hint> <UntestedTag id="mobile.files.remarks" /></>}
+        checked={stored?.project_remarks ?? false}
+        disabled={busy || !stored?.project_files}
+        onChange={(event) => void setMailGate("project_remarks", event.target.checked)}
       />
       <ToggleRow
         label={<><Hint help={t("mobile.noShellsHelp")}>{t("mobile.noShells")}</Hint> <UntestedTag id="mobile.noShells" /></>}

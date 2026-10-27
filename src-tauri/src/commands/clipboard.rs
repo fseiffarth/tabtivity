@@ -1,4 +1,4 @@
-//! System-clipboard bridge (images both ways, plus terminal text out):
+//! System-clipboard bridge (images in, terminal text out):
 //!
 //! - **In:** the file tree turns an image already on the OS clipboard into a PNG
 //!   file inside the project ([`clipboard_has_image`] / [`save_clipboard_image`]).
@@ -6,15 +6,9 @@
 //!   ever land inside the project root. Files and folders a file manager copied
 //!   are listed by [`clipboard_file_paths`]; the tree copies them in through
 //!   `fs::import_external_file`, the OS-drop route.
-//! - **Out:** [`copy_image_to_clipboard`] / [`copy_png_file_to_clipboard`] /
-//!   [`copy_png_bytes_to_clipboard`] put an image *on* the clipboard, so a
-//!   screenshot Tabtivity files into the project — or a region selected in the PDF
-//!   viewer — is pasteable straight into a chat, an editor, or an agent tab.
-//!   [`copy_text_to_clipboard`] does the same for terminal text: OSC 52
-//!   requests and the user's own copies out of a pane.
+//! - **Out:** [`copy_text_to_clipboard`] puts terminal text on the clipboard:
+//!   OSC 52 requests and the user's own copies out of a pane.
 
-use std::borrow::Cow;
-use std::path::Path;
 
 use crate::commands::fs::{canonical_or_new, enforce_confinement};
 
@@ -118,45 +112,6 @@ pub fn save_clipboard_image(project_dir: String, rel_path: String) -> Result<(),
     crate::commands::projects::write_no_follow(&dest_c, &png, true).map_err(|e| e.to_string())
 }
 
-/// Put raw RGBA8 pixels on the system clipboard as an image.
-///
-/// On X11/Wayland the clipboard has no OS-owned store: the *owning process*
-/// serves the data on request, and arboard tears its serving window down as soon
-/// as the last `Clipboard` handle drops — so a set-then-drop would leave nothing
-/// to paste. Hence the Linux path hands the image to a thread that calls
-/// `.wait()`, which keeps serving until another app takes the selection over
-/// (including the next Tabtivity screenshot). It therefore returns before the image
-/// is necessarily on the clipboard, and a failure there is silent. Windows and
-/// macOS copy the bytes into an OS-owned clipboard, so there they are set inline.
-pub fn copy_image_to_clipboard(width: usize, height: usize, rgba: Vec<u8>) -> Result<(), String> {
-    let expected = width.checked_mul(height).and_then(|p| p.checked_mul(4));
-    if expected != Some(rgba.len()) {
-        return Err("image has an unexpected size".to_string());
-    }
-    let image = arboard::ImageData {
-        width,
-        height,
-        bytes: Cow::Owned(rgba),
-    };
-
-    #[cfg(target_os = "linux")]
-    {
-        use arboard::SetExtLinux;
-        std::thread::spawn(move || {
-            if let Ok(mut cb) = arboard::Clipboard::new() {
-                let _ = cb.set().wait().image(image);
-            }
-        });
-        Ok(())
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-        cb.set_image(image).map_err(|e| e.to_string())
-    }
-}
-
 /// Longest text [`copy_text_to_clipboard`] takes. A terminal's OSC 52 request
 /// is capped far below this already (`OSC52_MAX_CHARS`); a longer user copy
 /// falls back to the webview. This bounds what the command itself will hold
@@ -180,8 +135,8 @@ fn check_clipboard_text(text: &str) -> Result<(), String> {
 /// dropped now and then — silently. The pane falls back to the webview only
 /// when this command fails.
 ///
-/// Serves the text the way [`copy_image_to_clipboard`] serves an image: on Linux
-/// a thread owns the selection until another app takes it over. It reports back
+/// On Linux the clipboard has no OS-owned store: a thread owns the selection
+/// (`.wait()`) until another app takes it over. It reports back
 /// once it has a clipboard connection, so a missing clipboard is an error here,
 /// but a failure after that (the set itself) is silent. Off the main thread
 /// throughout: arboard can stall negotiating with X11 (see [`clipboard_has_image`]).
@@ -217,68 +172,6 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
         })
         .await?
     }
-}
-
-/// Read a PNG file and put it on the system clipboard as an image.
-pub fn copy_png_file_to_clipboard(path: &Path) -> Result<(), String> {
-    let (width, height, rgba) = decode_png_rgba(path)?;
-    copy_image_to_clipboard(width, height, rgba)
-}
-
-/// Put an in-memory PNG on the system clipboard as an image.
-///
-/// The PDF viewer renders a selected rectangle into a small PNG in the webview
-/// and sends those compressed bytes here. Keeping the IPC payload compressed is
-/// important: a moderately sized selection can contain several million RGBA
-/// bytes, while the PNG is normally a fraction of that size.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub fn copy_png_bytes_to_clipboard(png: Vec<u8>) -> Result<(), String> {
-    let (width, height, rgba) = decode_png_bytes_rgba(&png)?;
-    copy_image_to_clipboard(width, height, rgba)
-}
-
-/// Decode a PNG file to RGBA8. Capture tools emit whatever color type they like
-/// (grayscale, palette, RGB, 16-bit), while the clipboard wants plain RGBA8:
-/// `normalize_to_color8` folds palette/16-bit/sub-byte-gray down to 8-bit
-/// channels, leaving only the four channel layouts expanded below.
-fn decode_png_rgba(path: &Path) -> Result<(usize, usize, Vec<u8>), String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    decode_png_bytes_rgba(&bytes)
-}
-
-/// Decode PNG bytes to the one pixel layout `arboard` accepts.
-fn decode_png_bytes_rgba(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    decoder.set_transformations(png::Transformations::normalize_to_color8());
-    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
-    let size = reader.output_buffer_size().ok_or("PNG too large to decode")?;
-    let mut buf = vec![0u8; size];
-    let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
-    let px = &buf[..info.buffer_size()];
-
-    let rgba = match info.color_type {
-        png::ColorType::Rgba => px.to_vec(),
-        // `as_chunks::<N>` rather than `chunks_exact(N)`: the chunk size is a
-        // constant, so each pixel arrives as a fixed-size array the compiler can
-        // see through instead of a slice it must bounds-check. `.0` is the whole
-        // chunks — the `.1` remainder is the trailing partial pixel, which
-        // `chunks_exact` dropped too, so this is the same data.
-        png::ColorType::Rgb => px
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|c| [c[0], c[1], c[2], 0xFF])
-            .collect(),
-        png::ColorType::GrayscaleAlpha => px
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .flat_map(|c| [c[0], c[0], c[0], c[1]])
-            .collect(),
-        png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 0xFF]).collect(),
-        png::ColorType::Indexed => return Err("indexed PNG was not expanded".to_string()),
-    };
-    Ok((info.width as usize, info.height as usize, rgba))
 }
 
 /// Encode raw RGBA8 pixels as a PNG byte buffer.
@@ -352,48 +245,5 @@ mod tests {
     fn encode_png_rejects_size_mismatch() {
         // 3 bytes can't be a 2x1 RGBA image (needs 8).
         assert!(encode_png(2, 1, &[0, 0, 0]).is_err());
-    }
-
-    /// Capture tools emit plain RGB PNGs (no alpha); the clipboard needs RGBA, so
-    /// the decoder has to widen them rather than reject them.
-    #[test]
-    fn decode_png_rgba_widens_an_rgb_png() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rgb.png");
-        let file = std::fs::File::create(&path).unwrap();
-        let mut encoder = png::Encoder::new(file, 2, 1);
-        encoder.set_color(png::ColorType::Rgb);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().unwrap();
-        writer.write_image_data(&[255, 0, 0, 0, 255, 0]).unwrap();
-        drop(writer);
-
-        let (width, height, rgba) = decode_png_rgba(&path).unwrap();
-        assert_eq!((width, height), (2, 1));
-        assert_eq!(rgba, vec![255, 0, 0, 255, 0, 255, 0, 255]);
-    }
-
-    /// An RGBA PNG (what Tabtivity itself writes) round-trips unchanged.
-    #[test]
-    fn decode_png_rgba_round_trips_rgba() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rgba.png");
-        let rgba = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
-        std::fs::write(&path, encode_png(2, 1, &rgba).unwrap()).unwrap();
-
-        assert_eq!(decode_png_rgba(&path).unwrap(), (2, 1, rgba));
-    }
-
-    #[test]
-    fn decode_png_bytes_round_trips_rgba() {
-        let rgba = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
-        let png = encode_png(2, 1, &rgba).unwrap();
-
-        assert_eq!(decode_png_bytes_rgba(&png).unwrap(), (2, 1, rgba));
-    }
-
-    #[test]
-    fn copy_image_rejects_size_mismatch() {
-        assert!(copy_image_to_clipboard(2, 1, vec![0, 0, 0]).is_err());
     }
 }

@@ -2,6 +2,8 @@
 
 Status: **steps 1–26 implemented, none live-verified (gap 51 mitigated, not
 fixed); step 27 (docs) done.** See "Implementation notes / deviations" below.
+A phone-only follow-up (2026-10-26, gaps 65–70, no high, nothing fixed yet) is
+under "Phone analysis" near the end.
 Three read-only reviewers (A, B, C)
 re-checked `docs/threat_model.md` against the code at `21eadf64`, then
 cross-reviewed each other's drafts at `ff9f83ab`. The last recheck landed at
@@ -248,6 +250,88 @@ CalDAV in-flight guard. Tracked elsewhere: Landlock TCP-bind
 (`todo/group-o-security.md`), the sandboxed `webkitgtk-6.0` route
 (`docs/browser_plan_b.md`), publishing the release key's fingerprint outside the repo,
 and `scripts/fresh-vm.sh` not verifying the `SHA256SUMS` signature.
+
+## Phone analysis (2026-10-26)
+
+A follow-up, read-only pass over the phone surface alone, at `0ce3cfd1` plus the
+uncommitted Running-shells work: every route of the sidecar router
+(`mobile_control/host.rs` `router`), the auth store, push, the service worker,
+the PWA's HTML sinks and storage, and the phone features since `ff9f83ab`
+(Runs-on host agents `945a878d`, host-tab conversations `f1805619`, the Diffs view
+`3058b079`, Running shells). One reviewer, nothing built or run. **No high finding**,
+so nothing was fixed; the new gaps are rows 65–70 of `docs/threat_model.md`.
+
+### Findings
+
+| Gap | Sev | Finding (evidence) | You do | Confidence |
+|---|---|---|---|---|
+| 65 | medium | **Desktop pictures and the clipboard picture reach every paired phone, with no switch.** `GET /tabs/{id}/desktop-images` needs only a session and one tab the phone may see (`host.rs` `desktop_images` → `inbox_project`); the window answers with the 40 newest pictures of Downloads/Desktop/Pictures/screenshots **and the live clipboard image** (`commands/mobile_control.rs:133-146`, `desktop_images.rs` `MAX_LISTED`), the owner without a window with the folders (`headless.rs:1297`). `POST` copies one into the project's `.tabtivity/inbox/`, which the phone reads back (`inbox_file`) — and which the project's fenced agents can read too. Project files cross only behind the default-off "Project files on the phone" switch, and a fence never mounts those folders, so this is the one default-on path from the user's private files to a phone (a stolen one included) and into a project. | — (paired or stolen phone) | confirmed (code) |
+| 66 | low | **`SameSite=Strict` does not keep other tailnet machines out.** `ts.net` is a public suffix (`psl` 2.1.241 `rules.txt:5940`), so the site is `<tailnet>.ts.net` and every other node's page — one another service serves, or one Funnel puts on the internet — is same-site: the session cookie rides its requests. Today the exact-`Origin` check carries it: every `POST`/`PUT`/`DELETE` handler in the router reaches `exact_origin` (directly, `mutation_guard`, `upload_scope` or a mutation helper — checked by a scan of the router), the terminal socket too, and no route sends CORS headers, so `GET` answers are unreadable cross-origin. One write without that check would be a CSRF from any page on the tailnet. | nothing (a page on another tailnet node) | confirmed (PSL); holds today |
+| 67 | low (model gap) | **"No shells on the phone" does not bound what a phone runs.** An agent CLI's own shell escape (Claude Code's `!`, and the same in other CLIs) typed from the phone runs a command; and the phone can answer every permission prompt. Locally that stays in the fence. On a remote-host tab — and on agents the phone can now *start* on a project's primary or worker (`945a878d`: `create_tab` → `createOnHost`, `MobileBridgeHost.tsx`) — it is the user's own account on that host, unfenced, with `shell_tabs` off. The threat model's phone rows do not say so. | — (paired or stolen phone) | confirmed (design) |
+| 68 | low (hardening) | **The Host session is out of the phone's reach by accident.** `root_open` lists root only when a new root agent would run fenced (`discovery.rs:905-931`), but nothing in the catalog or the desktop bridge looks at a record's `hostSession` (the Rust session schema does not carry it; `phoneListsTab` ignores it). What keeps the unfenced Host session off the phone is that root-scope agent tabs are never tmux-wrapped (`shouldPersistLocalTab`, `tmuxSession.ts:163`). A change to that rule would hand a phone with root access an unfenced agent. | — | confirmed (code) |
+| 69 | low (privacy) | **Phone dictation can leave the tailnet.** The Focus composer prefers Chromium's on-device model and otherwise falls back to the browser's own recognizer (`voiceInput.ts:114-140` `prepareOnDeviceSpeech` → `"remote"`), which on Chrome sends the audio to the vendor's speech service. The prompt being dictated leaves the tailnet; `push.rs` calls Web Push "the one channel that leaves the tailnet", and the model does not mention speech. | dictate a prompt | confirmed (code); vendor behaviour from its docs |
+| 70 | low | **A revoked phone keeps inbox pictures and ticket URLs.** Inbox files are answered `private, max-age=86400, immutable` (`host.rs` `INBOX_FILE_CACHE`), so the browser's HTTP cache keeps them a day, out of reach of gap 58's `forgetDeviceData()` (IndexedDB/localStorage/Cache Storage only). Opened PDFs leave `/api/v1/…?ticket=` URLs, with the host name and opaque ids, in the browser history, which the vendor account may sync (the ticket itself is dead after 5 min). | — (lost phone) | confirmed (code) |
+
+Informational, no row: the sign-in card reads any agent tab's screen
+(`Terminal.tsx:761` → `readSignIn`), so a hijacked agent can print an OAuth-looking
+link to its own site; the card shows the punycode host and opens only on a tap, as
+the desktop's sign-in card does. Tailnet members the node is shared with reach the
+pre-auth routes (pairing is code-gated and rate-limited); checking Serve's
+`Tailscale-User-Login` against the owner would narrow that.
+
+### Re-checked and holding
+
+Pairing (8 digits, rejection-sampled, 5 tries, 5 min, constant time; invite file for
+servers), challenge/login (P-256 over origin + device + nonce + expiry, single-use
+nonce, budgets per device), sliding session on `Instant` (gap B8's fix is in), open
+tickets bound to one path+query and to a live session, revoke (sessions, challenges,
+push rows, vault wraps), `__Host-` cookie. Push: vendor-host allowlist at subscribe
+and send, RFC 8291 encryption, details opt-in, per-scope and per-section filtering,
+keyed tags. Service worker: never caches `/api/`, `/healthz` or the PDF frame; a
+navigation fallback only. Device keys are non-extractable WebCrypto keys in
+IndexedDB; the local lock is a PBKDF2 verifier with escalating lockout (a UI gate:
+the key signs without it — stated in the lost-phone row). HTML sinks: only the chat's
+answers and prompts (`answerMarkdown.ts`: escape-first renderer, then a rebuild
+through a tag/class/style allowlist in an inert `<template>`); mail is plain text in
+`<pre>`; diffs and running-shell rows are React text. File bytes: only PNG, JPEG,
+GIF, WebP, PDF or `text/plain` ever go out (`outbox::classify`), with `nosniff` and the
+phone CSP. Uploads: leaf names sanitized (no leading dot, device names, no path), no
+dot folders, add-only. The sign-in relay: loopback, port ≥ 1024, not the bridge's,
+`state` + `code`/`error`, status only. Activity, alerts and every tab route read the
+per-phone catalog. New since `ff9f83ab`: Runs-on takes only a listed machine's opaque
+id and a live master, an agent and nothing else (`createOnHost`); the host-tab
+conversation reuses the desktop Reader's command; the Diffs view sits behind the
+project-files switch and sends checkout-relative paths only; Running shells carry the
+agent's description, never the command line.
+
+### Proposed steps (not run)
+
+| Step | Gaps | Files | Fix | Decision |
+|---|---|---|---|---|
+| P1 | 65 | `mobile_control/host.rs` (`desktop_images`, `attach_desktop_image`), `headless.rs`, `commands/mobile_control.rs`, settings schema, Mobile settings UI, `MobileBridgeHost.tsx` | A host switch "Desktop pictures on the phone" read per request like `project_files`; the clipboard picture behind its own sub-switch (or only while the window is focused?); refused answers `desktop_images_off`; the phone hides "From the desktop" when off. | DP1 |
+| P2 | 66 | `mobile_control/host.rs`, `host/tests.rs` | A router test that sends every non-`GET` route a foreign `Origin` and a missing one and expects 403 (so a new route cannot forget it); `Sec-Fetch-Site` `same-site`/`cross-site` refused on `/api/` `GET`s except a ticketed file read and top-level navigations. | — |
+| P3 | 67 | `docs/threat_model.md`, `docs/help/mobile.md`; optionally `create_tab` | Say it in the phone rows and the help page. Optionally: phone-started host agents only while `shell_tabs` is on, since on a host an agent is a shell. | DP2 |
+| P4 | 68 | `mobile_control/discovery.rs` (session-record read), `src/lib/projectTabHost.ts` | Drop a record with `hostSession: true` from the phone's catalog and refuse it in the bridge, explicitly, with a test; independent of the tmux rule. | — |
+| P5 | 69 | `mobile-web/src/screens/terminal/useVoiceInput.ts`, `voiceInput.ts`, prefs, i18n | Mark the mic when it uses the browser's service ("cloud"), and a prefs switch "On-device dictation only" that leaves voice off where the local model is unavailable. | DP3 |
+| P6 | 70 | `mobile_control/host.rs` (`INBOX_FILE_CACHE`, the definite-unpaired answers), `mobile-web/src/forgetDeviceData.ts` | `Clear-Site-Data: "cache"` on a logout and on the answers that mean "this device is unknown" (the phone's next challenge after a revoke); inbox files `private, max-age=3600` or `no-store`. | — |
+
+### Decisions for the user
+
+- **DP1 (P1) — desktop pictures on the phone.** A host switch, default **off**, the
+  clipboard picture under it *(recommended: like project files)*; default on with a
+  switch (keeps today's behaviour); or per phone.
+- **DP2 (P3) — agents on a remote host from the phone.** Document only
+  *(recommended: driving an agent is a paired phone's job)*; or allow phone-started
+  host agents only while `shell_tabs` is on.
+- **DP3 (P5) — dictation.** Mark cloud recognition and offer an on-device-only switch,
+  default off *(recommended)*; default on; or document only.
+
+### Not reviewed in this pass
+
+`markup.rs`/`markup_pdf.rs` parsers, `pty_bridge.rs` frame handling beyond the upgrade
+checks (gaps 43/44 and their fixes), the scheduler's phone half, the secrets vault
+routes (server mode), `web_client.rs` beyond what gap 45 covered, `files_windows.rs`,
+`host_files.rs` (SFTP library), and live behaviour on a phone.
 
 ## Not reviewed
 

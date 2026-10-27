@@ -5,12 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { apiKeyMenuGroups } from "../../components/tabs/apiKeyGroup";
-import {
-  AGENT_ITEMS,
-  agentMenuEntries,
-  buildStaticTabSpec,
-  type StaticMenuItem,
-} from "../../components/tabs/newTabItems";
+import { AGENT_ITEMS, buildStaticTabSpec, type StaticMenuItem } from "../../lib/tabs/newTabItems";
+import { agentMenuEntries } from "../../components/tabs/agentMenuEntries";
 import { tabTerminalSpawn, terminalSpawnKey } from "../../lib/terminal/terminalSpawn";
 import { toSavedTabEntry } from "../../stores/tabs";
 

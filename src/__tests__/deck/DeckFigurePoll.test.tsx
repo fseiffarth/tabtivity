@@ -12,7 +12,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { emptyDeck, blankSlide } from "../../lib/viewers/deck/model";
 import { NAMES } from "../../lib/brand";
 import { translate } from "../../lib/i18n";
-import { NO_FOLDER_LINK_HEADER } from "../../components/embed/fileAccess";
+import { NO_FOLDER_LINK_HEADER } from "../../lib/files/fileAccess";
 
 const files = new Map<string, string>();
 const writes: string[] = [];

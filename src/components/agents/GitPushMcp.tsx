@@ -122,6 +122,7 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
     </div>
     {proposal.url && <small className="git-push-proposal-url" title={proposal.url}>{proposal.url}</small>}
     {proposal.needs_url_confirm && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.confirmUrl")}</small>}
+    {proposal.to_default && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.toDefault")} <UntestedTag id="gitPushMcp.toDefault" /></small>}
     {ciRepo && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.ciAllowHelp")}</small>}
     {proposal.note && <p className="git-push-proposal-note">{t("gitPushMcp.note", { note: proposal.note })}</p>}
     {proposal.commits.length > 0 && <ul className="git-push-proposal-commits">

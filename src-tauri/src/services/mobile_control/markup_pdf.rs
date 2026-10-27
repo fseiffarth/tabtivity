@@ -1683,10 +1683,61 @@ impl Writer {
 /// incremental update. Pages are 1-based; `pages` must hold at least one
 /// mark each (`markup::validate`).
 pub fn bake(source: &[u8], pages: &[MarkupPage]) -> Result<Vec<u8>, BakeError> {
-    bake_by(source, pages, Instant::now() + BAKE_DEADLINE)
+    bake_by(source, pages, Instant::now() + BAKE_DEADLINE, Kind::Markup)
 }
 
-fn bake_by(source: &[u8], pages: &[MarkupPage], deadline: Instant) -> Result<Vec<u8>, BakeError> {
+/// The phone's **Annotate** (`remarks.rs`): the same incremental update, its
+/// marks written as the desktop viewer's own *remarks* (`notes.ts`) — a box
+/// as a `/Highlight` whose `/Contents` is its comment (empty when it has
+/// none), a typed note as a `/Text` sticky note at its corner holding the
+/// words. Only boxes and notes are remarks: the caller refuses the rest.
+pub fn bake_remarks(source: &[u8], pages: &[MarkupPage]) -> Result<Vec<u8>, BakeError> {
+    bake_by(source, pages, Instant::now() + BAKE_DEADLINE, Kind::Remarks)
+}
+
+/// What a bake writes the marks as.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The marked copy for an agent: every mark as drawn.
+    Markup,
+    /// Remarks into the file itself (`bake_remarks`).
+    Remarks,
+}
+
+/// The side of a sticky note's icon box, in PDF units — the desktop's
+/// `NOTE_ICON_PT`, what pdf.js sizes an appearance-less `/Text` to.
+const NOTE_ICON_PT: f64 = 22.0;
+
+/// A typed note as a `/Text` sticky note: the icon box at the note's corner,
+/// drawn as a speech bubble in its colour (the phone's frame paints only
+/// appearances), `/Contents` its words.
+fn sticky_note(color: Color, at: [f64; 2], text: &str, map: &Map) -> Annotation {
+    let [r, g, b] = rgb(color);
+    let (x, y) = map.apply(at[0], at[1]);
+    let rect = [x, y - NOTE_ICON_PT, x + NOTE_ICON_PT, y];
+    let [x0, y0, x1, y1] = rect;
+    // A bubble: a rounded-off square with a tail at its lower left.
+    let content = format!(
+        "q {r} {g} {b} rg 0.25 0.25 0.25 RG 0.8 w\n{} {} m {} {} l {} {} l {} {} l {} {} l {} {} l {} {} l h B Q\n",
+        num(x0 + 2.0), num(y0 + 6.0),
+        num(x0 + 2.0), num(y1 - 2.0),
+        num(x1 - 2.0), num(y1 - 2.0),
+        num(x1 - 2.0), num(y0 + 6.0),
+        num(x0 + 10.0), num(y0 + 6.0),
+        num(x0 + 5.0), num(y0 + 1.0),
+        num(x0 + 6.0), num(y0 + 6.0),
+        r = num(r), g = num(g), b = num(b),
+    );
+    let dict = vec![
+        (b"Subtype".to_vec(), name("Text")),
+        (b"Name".to_vec(), name("Comment")),
+        (b"Contents".to_vec(), text_string(text)),
+        (b"C".to_vec(), reals(&[r, g, b])),
+    ];
+    Annotation { dict, rect, resources: None, content }
+}
+
+fn bake_by(source: &[u8], pages: &[MarkupPage], deadline: Instant, kind: Kind) -> Result<Vec<u8>, BakeError> {
     let _allowance = AllowanceGuard::start(deadline);
     let mut doc = Doc::open(source, deadline)?;
     doc.keep = Some(pages.iter().map(|page| page.n).collect());
@@ -1709,7 +1760,10 @@ fn bake_by(source: &[u8], pages: &[MarkupPage], deadline: Instant) -> Result<Vec
         let page_ref = Obj::Ref(page.number, page.generation);
         let mut added = Vec::with_capacity(marked.marks.len());
         for mark in &marked.marks {
-            let built = annotation(mark, &map);
+            let built = match (kind, mark) {
+                (Kind::Remarks, Mark::Text { color, at, text, .. }) => sticky_note(*color, *at, text, &map),
+                _ => annotation(mark, &map),
+            };
             let appearance = allocate();
             let annot = allocate();
             let mut form = vec![
@@ -1727,6 +1781,10 @@ fn bake_by(source: &[u8], pages: &[MarkupPage], deadline: Instant) -> Result<Vec
             // viewer shows on hover or in its comments list.
             if let Some(comment) = mark.comment() {
                 dict.push((b"Contents".to_vec(), text_string(comment)));
+            } else if kind == Kind::Remarks && matches!(mark, Mark::Box { .. }) {
+                // A highlight with nothing written about it still carries
+                // `/Contents` — where a reader puts the cursor to add one.
+                dict.push((b"Contents".to_vec(), text_string("")));
             }
             dict.extend([
                 (b"Rect".to_vec(), reals(&built.rect)),
@@ -2113,7 +2171,7 @@ pub(crate) mod tests {
     fn a_spent_deadline_gives_up() {
         let source = classic_pdf(&[0], false);
         let past = Instant::now() - Duration::from_secs(1);
-        let result = bake_by(&source, &[page(1, [600.0, 800.0], vec![ink()])], past);
+        let result = bake_by(&source, &[page(1, [600.0, 800.0], vec![ink()])], past, Kind::Markup);
         // A tiny file may finish inside the 256-step check window; either way
         // nothing panics and nothing hangs.
         assert!(matches!(result, Ok(_) | Err(BakeError::TooComplex)));

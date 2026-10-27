@@ -24,11 +24,18 @@ interface HeaderSlotsState {
    *  the drop bar is drawn behind when there is no `beforeId` to draw it before. */
   drag: HeaderSlotsDrag;
   setDrag: (drag: HeaderSlotsState["drag"]) => void;
+  /** A drag reached the ‹ chevron: the folded icons show for the rest of that
+   *  drag, so it can land among them. Ends with the drag; the saved
+   *  `header_status_expanded` is untouched. */
+  foldPeek: boolean;
+  setFoldPeek: (foldPeek: boolean) => void;
 }
 
 export const useHeaderSlotsStore = create<HeaderSlotsState>((set) => ({
   present: {},
   drag: null,
+  foldPeek: false,
+  setFoldPeek: (foldPeek) => set((s) => (s.foldPeek === foldPeek ? s : { foldPeek })),
   setDrag: (drag) =>
     set((s) =>
       s.drag?.id === drag?.id &&

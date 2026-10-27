@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { formatBytes } from "../../lib/formatBytes";
 import { UntestedTag } from "../common/UntestedTag";
-import { readFileText } from "./fileAccess";
+import { readFileText } from "../../lib/files/fileAccess";
 
 /** How much of the file "Show source" puts on screen. */
 export const SOURCE_SHOWN_MAX_CHARS = 2 * 1024 * 1024;

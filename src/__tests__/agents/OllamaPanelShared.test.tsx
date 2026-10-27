@@ -26,7 +26,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),
 }));
 
-import { OllamaPanel } from "../../components/layout/SettingsSubPanels";
+import { OllamaPanel } from "../../components/settings/OllamaPanel";
 import { __resetOllamaActivityForTests, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });

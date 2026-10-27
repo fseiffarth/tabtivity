@@ -617,6 +617,23 @@ svg.alerts-toggle-icon {
   margin: 0 auto;
   padding: 36px 28px 40px;
 }
+.models-home-machine .local-model-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+}
+.models-home-machine .local-model-stat {
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-lg);
+}
+.models-home-machine .local-model-meter {
+  height: 6px;
+}
 .models-home-lead {
   margin: 0;
   font-size: 13px;

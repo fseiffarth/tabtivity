@@ -17,7 +17,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 
 import { useTabsStore } from "../../stores/tabs";
 import { setDetachedWindowContext } from "../../stores/detachedContext";
-import { pdfPresentLabel } from "../../components/embed/pdf/present";
+import { pdfPresentLabel } from "../../lib/viewers/pdfPresent";
 
 const flush = async () => {
   for (let i = 0; i < 10; i++) await Promise.resolve();

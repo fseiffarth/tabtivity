@@ -70,8 +70,8 @@ impl ImageFolder {
 }
 
 /// The platform's screenshot and picture folders plus Tabtivity's own screenshot
-/// staging area under `state_dir`, where a shot taken through the Screenshot
-/// app waits for its filing answer. Linux honours `user-dirs.dirs`, so a
+/// staging folder under `state_dir` (nothing fills it any more: the in-app
+/// capture is gone; it stays so a shot an older build staged still lists). Linux honours `user-dirs.dirs`, so a
 /// localized `~/Bilder` is found. Shared by the desktop command and the
 /// Mobile sidecar's answer with no window (headless owner plan, H3).
 pub fn default_folders(state_dir: &Path) -> Vec<ImageFolder> {

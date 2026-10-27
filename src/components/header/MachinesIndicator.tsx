@@ -14,7 +14,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { machineKey, useRemoteUsageStore, type RemoteUsageReport } from "../../stores/remote/remoteUsage";
 import { useHostBusyStore, busyReading, busyLabel } from "../../stores/remote/hostBusy";
-import { parseSshAddress } from "../projects/scaffold";
+import { parseSshAddress } from "../../lib/projects/scaffold";
 import { TerminalSignInToggle } from "../projects/TerminalSignInToggle";
 import { openConnectionInRoot } from "../../lib/remote/remoteConnect";
 import { loginDedupeKey, sshLogin } from "../../lib/remote/loginTarget";
@@ -23,7 +23,7 @@ import { isCarefulHost } from "../../lib/remote/carefulHost";
 import { sameTarget } from "../../lib/remote/machineSync";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import type { ConnState } from "../../stores/remote/remoteStatus";
 import type { GlobalMachine, MachineImportEntry, ProjectEntry } from "../../types";
@@ -264,9 +264,9 @@ export function MachinesOverlayHost() {
 function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   const t = useT();
   const isOverlay = surface === "overlay";
-  // Off by default (Settings' "Remote features") — most projects are local-only,
-  // so this fleet-wide SSH list stays out of the header until asked for.
-  const enabled = useSettingsStore((s) => s.settings?.machines_enabled ?? false);
+  // On by default (Settings' "Remote features"); switched off, this fleet-wide
+  // SSH list leaves the header.
+  const enabled = useSettingsStore((s) => s.settings?.machines_enabled ?? true);
   const headless = useSettingsStore((s) => s.settings?.connections_headless ?? true);
   // The whole settings object (not one flag) because the HPC tag is a map keyed
   // by SSH target: the row reads its own machine's entry, and writing one has to
@@ -412,10 +412,10 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     window.clearTimeout(closeTimer.current);
     openMenu(MENU_ID);
   }, [openMenu]);
-  const scheduleClose = useCallback(() => {
+  const scheduleClose = useCallback((e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
     if (keepOpenRef.current || reorderDragRef.current) return;
-    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), 250);
+    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), headerMenuCloseDelay(e));
   }, [closeMenu]);
 
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);

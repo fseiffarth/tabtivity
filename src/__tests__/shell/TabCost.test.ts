@@ -35,10 +35,10 @@ import { registerTerminal, unregisterTerminal } from "../../lib/terminal/termina
 import { _clearAsleepPtysForTest, markPtyAsleep } from "../../lib/terminal/sleepingPtys";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { en, translate, type Dict, type TranslationKey } from "../../lib/i18n";
-import { dict as de } from "../../lib/i18nDicts/de";
-import { dict as es } from "../../lib/i18nDicts/es";
-import { dict as fr } from "../../lib/i18nDicts/fr";
-import { dict as it_ } from "../../lib/i18nDicts/it";
+import { dict as de } from "../../lib/i18n/de";
+import { dict as es } from "../../lib/i18n/es";
+import { dict as fr } from "../../lib/i18n/fr";
+import { dict as it_ } from "../../lib/i18n/it";
 
 function fakeTerm(length: number, cols: number, rows: number, scrollback: number): Terminal {
   return {

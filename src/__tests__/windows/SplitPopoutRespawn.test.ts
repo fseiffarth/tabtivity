@@ -15,11 +15,11 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invokeMock
 
 import {
   useTabsStore,
-  findSplit,
   orderedTabKeys,
   allGroups,
   type SplitNode,
 } from "../../stores/tabs";
+import { findSplit } from "../../stores/tabs/layoutTree";
 
 function reset() {
   invokeMock.mockClear();

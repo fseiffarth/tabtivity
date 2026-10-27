@@ -606,7 +606,7 @@ describe("TexView", () => {
     await waitFor(() =>
       expect(mockInvoke).toHaveBeenCalledWith(
         "synctex_view",
-        { pdf: "/p/paper.pdf", input: "/p/paper.tex", line: 3 },
+        { pdf: "/p/paper.pdf", input: "/p/paper.tex", line: 3, projectId: "proj" },
       ),
     );
     const { usePdfSyncStore } = await import("../../stores/viewers/pdfSync");
@@ -684,7 +684,7 @@ describe("TexView", () => {
       fireEvent.click(textarea, { ctrlKey: true });
     });
     await waitFor(() => expect(usePdfSyncStore.getState().byPath["/p/paper.pdf"]).toBeDefined());
-    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("synctex_status", { pdf: "/p/paper.pdf" }));
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("synctex_status", { pdf: "/p/paper.pdf", projectId: "proj" }));
     expect(screen.queryByText(/source changed after the last compile/i)).toBeNull();
 
     // A line typed above it moves it: the stale notice names the unsaved file,

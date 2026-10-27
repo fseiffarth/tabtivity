@@ -32,19 +32,36 @@ describe("watched transcript reads", () => {
     const { read, ids } = reads(true);
     const stop = watchedReads(read);
     await vi.advanceTimersByTimeAsync(0);
-    expect(read).toHaveBeenCalledTimes(1);
+    // The read that armed the watch, and one to catch what it missed.
+    expect(read).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(UNWATCHED_POLL_MS * 3);
-    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(2);
     _notifyTranscriptChangedForTest(ids[0]);
     await vi.advanceTimersByTimeAsync(0);
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(3);
     // The change restarted the backstop clock.
     await vi.advanceTimersByTimeAsync(WATCHED_BACKSTOP_MS - 1);
-    expect(read).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
     expect(read).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(read).toHaveBeenCalledTimes(4);
     // One watch id for the life of the reads.
     expect(new Set(ids).size).toBe(1);
+    stop();
+  });
+
+  // A prompt's record written while the arming read ran told no one: the chat
+  // showed it as sending until the agent wrote again.
+  it("reads once more right after the watch is armed, unwatched to watched too", async () => {
+    let watched = false;
+    const read = vi.fn((_watch: string) => Promise.resolve(watched));
+    const stop = watchedReads(read);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    watched = true;
+    await vi.advanceTimersByTimeAsync(UNWATCHED_POLL_MS);
+    expect(read).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(WATCHED_BACKSTOP_MS - 1);
+    expect(read).toHaveBeenCalledTimes(3);
     stop();
   });
 
@@ -101,8 +118,8 @@ describe("watched transcript reads", () => {
     expect(a.ids[0]).not.toBe(b.ids[0]);
     _notifyTranscriptChangedForTest(a.ids[0]);
     await vi.advanceTimersByTimeAsync(0);
-    expect(a.read).toHaveBeenCalledTimes(2);
-    expect(b.read).toHaveBeenCalledTimes(1);
+    expect(a.read).toHaveBeenCalledTimes(3);
+    expect(b.read).toHaveBeenCalledTimes(2);
     stopA();
     stopB();
   });

@@ -18,7 +18,9 @@ import {
   openCodexHooksTab,
   type CodexHookState,
 } from "../../lib/agents/codexHooks";
+import { anchorOnScreen, firstVisibleAnchor } from "../../lib/shortcuts/hintAnchor";
 import { HintBubble } from "../common/HintBubble";
+import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
 
 /** Handlers for hints that carry a one-click action (`HintDef.action`). */
@@ -31,6 +33,13 @@ const HINT_ACTIONS: Record<HintActionId, () => void> = {
 // like a popup storm — one at a time, with a gap after each dismissal.
 const GRACE_MS = 3_000;
 const GAP_MS = 12_000;
+// The feature catalogue (`FEATURE_HINTS`, ~100 tips) is paced much harder: a few
+// per sitting, far apart, each only while its control is on screen. Anchors
+// appear without any store change (a viewer opens, a pane is shown), so the
+// host also looks again on a slow tick.
+const FEATURE_CAP = 3;
+const FEATURE_GAP_MS = 10 * 60_000;
+const TICK_MS = 5_000;
 
 /**
  * The contextual-hint engine: watches app state, picks the next eligible hint
@@ -87,8 +96,16 @@ export function HintHost() {
   }, [hasCodexTab, markSeen]);
 
   const mountedAt = useRef(Date.now());
-  const lastClearedAt = useRef(0);
+  const featureShown = useHintsStore((s) => s.featureShown);
+  const lastClosedAt = useHintsStore((s) => s.lastClosedAt);
   const [rect, setRect] = useState<DOMRect | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!hintsEnabled) return;
+    const id = window.setInterval(() => setTick((n) => n + 1), TICK_MS);
+    return () => window.clearInterval(id);
+  }, [hintsEnabled]);
 
   const def = active ? HINTS.find((h) => h.id === active) ?? null : null;
 
@@ -104,9 +121,13 @@ export function HintHost() {
       activeId,
       codexHookNeedsTrust: hasCodexTab && codexHookNeedsTrust(codexHook),
     };
-    const candidate = pickHint(ctx, seen, hintsEnabled);
+    const allowFeature = () =>
+      useHintsStore.getState().featureShown < FEATURE_CAP &&
+      Date.now() - useHintsStore.getState().lastClosedAt >= FEATURE_GAP_MS;
+    const opts = () => ({ anchorOnScreen, allowFeature: allowFeature() });
+    const candidate = pickHint(ctx, seen, hintsEnabled, opts());
     if (!candidate) return;
-    const earliest = Math.max(mountedAt.current + GRACE_MS, lastClearedAt.current + GAP_MS);
+    const earliest = Math.max(mountedAt.current + GRACE_MS, lastClosedAt + GAP_MS);
     const delay = Math.max(0, earliest - Date.now());
     const t = window.setTimeout(() => {
       // Re-check on fire: nothing surfaced meanwhile and it's still eligible.
@@ -114,7 +135,7 @@ export function HintHost() {
       const seenNow = new Set<string>(
         (useSettingsStore.getState().settings?.hints_seen as string[] | undefined) ?? [],
       );
-      const stillOn = pickHint(ctx, seenNow, hintsEnabled);
+      const stillOn = pickHint(ctx, seenNow, hintsEnabled, opts());
       if (stillOn === candidate) show(candidate as HintId);
     }, delay);
     return () => window.clearTimeout(t);
@@ -130,6 +151,9 @@ export function HintHost() {
     hasCodexTab,
     codexHook,
     show,
+    tick,
+    featureShown,
+    lastClosedAt,
   ]);
 
   // Measure the active hint's anchor and keep it positioned as the window/layout
@@ -144,7 +168,7 @@ export function HintHost() {
       return;
     }
     const measure = () => {
-      const el = document.querySelector(def.anchor as string);
+      const el = firstVisibleAnchor(def.anchor as string);
       setRect(el ? el.getBoundingClientRect() : null);
     };
     measure();
@@ -161,11 +185,31 @@ export function HintHost() {
   // dismissal/change so the class never lingers on stale chrome.
   useEffect(() => {
     if (!def?.anchor) return;
-    const el = document.querySelector(def.anchor);
+    const el = firstVisibleAnchor(def.anchor);
     if (!el) return;
     el.classList.add("hint-target");
     return () => el.classList.remove("hint-target");
   }, [def]);
+
+  // The user did what the hint points at (clicked its control): it has done its
+  // job, so retire it rather than leave it over the menu that just opened.
+  useEffect(() => {
+    if (!def?.anchor) return;
+    const selector = def.anchor;
+    const onClick = (e: MouseEvent) => {
+      const el = firstVisibleAnchor(selector);
+      if (el && e.target instanceof Node && el.contains(e.target)) markSeen(def.id);
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, [def, markSeen]);
+
+  // The target went away (pane hidden, dialog opened over it): drop the bubble
+  // without marking it seen, so it comes back when its control does.
+  useEffect(() => {
+    if (!def?.anchor || def.tier !== "feature") return;
+    if (!anchorOnScreen(def.anchor)) useHintsStore.setState({ active: null, lastClosedAt: Date.now() });
+  }, [def, tick]);
 
   // Esc dismisses the active hint while one is shown.
   useEffect(() => {
@@ -188,11 +232,11 @@ export function HintHost() {
       placement={def.placement}
       title={t(def.titleKey)}
       body={resolveHintBody(def, t)}
+      tag={def.tier === "feature" ? <UntestedTag id="desktop.hints.feature" /> : undefined}
       action={
         def.action && { label: t(def.action.labelKey), run: HINT_ACTIONS[def.action.id] }
       }
       onDismiss={() => {
-        lastClearedAt.current = Date.now();
         dismiss(def.id);
       }}
       onDisableAll={disableAll}

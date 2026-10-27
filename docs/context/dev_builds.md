@@ -62,9 +62,19 @@ change was not run live.
   `--fresh`/`reset` go back to a clean desktop; host-only (`/dev/kvm`). A host
   run writes the "(VM)" desktop entry (app grid and desktop icon), which runs
   an installed copy of the script under the VM folder, never the checkout's.
-  With a VM already there, a call asks: keep it (a stopped one boots with the
-  package installed over it; a running one gets the app started inside it via
-  the QEMU guest agent socket `qga.sock`), or delete it and start a new VM.
+  With a VM already there a call only UPDATES Tabtivity in it (no question, no
+  new VM, no base rebuild, state kept): a stopped VM boots with the package
+  installed over it; a running one gets the package copied in through the QEMU
+  guest agent socket `qga.sock` (`qga_exec --put`, 1 MiB per guest-exec,
+  SHA-256 checked), installed as root by the same `install.sh` the boot disc
+  carries, and the app quit and started again as `tester`. A silent agent is
+  reported ("Nothing was changed"), never waited on; `status` asks the running
+  guest what it has. `fresh-vm.sh current` installs the newest package built in
+  the checkout (`target/release/bundle/{deb,appimage}`, from
+  `APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri:bundle`; the frozen dev build is a
+  bare binary, so it is no source); the script never builds. The install stamp
+  is file name plus the head of the SHA-256, so a rebuild at the same version
+  is installed again (`apt-get --reinstall`) and the identical file is not.
   The guest login is `tester` / `tester`. Bake and desktop use the same
   standard VGA so the GPU and NIC PCI slots stay stable; boot output is
   saved in `<VM folder>/serial.log` (cloud images direct it to the serial
@@ -221,7 +231,16 @@ change was not run live.
   it and cancels the pass. `--build-now` and `--resume` return only once the
   detached run holds the lock (at most 5 s; `await_run`), since the chip
   re-reads at once and an earlier read still said idle — "Build now" looked
-  like it needed a second click (2026-10-20); the hook's `--queue` never waits;
+  like it needed a second click (2026-10-20); the hook's `--queue` never waits.
+  **Stop** (user, 2026-10-27; `--stop`, the chip's "Stop build" while a pass
+  runs or settles, `dev_build_stop`) cancels only that pass: auto-builds stay
+  on. It writes HEAD into `package-dev-auto.stopped`, which a running pass
+  cancels itself for (not a failure; an install under way still finishes) and
+  which keeps `queue_if_behind` from starting that same HEAD again on its next
+  poll; every `queue()` (the next commit), `--resume` and `--build-now` drop
+  it, and "Build now" is offered after a stop as while paused. `--stop` waits
+  for the run to let go of the lock (at most 15 s), and the settle wait now
+  sleeps a second at a time so a stop ends it at once;
   `scripts/package-dev-auto.sh --status` says what it is doing and
   `~/.local/share/tabtivity/package-dev-auto.log` holds the last build's output.
   After each run the loop calls `scripts/target-prune.sh` (2026-10-21; `target/`

@@ -140,7 +140,7 @@ fn slug_from(url: &str, label: &str) -> String {
 /// (https/ssh/git/scp-like only — no `ext::`, no local paths). Re-adding the
 /// same URL is a no-op that returns the existing entry rather than a duplicate.
 pub fn add_source(label: String, url: String) -> Result<SkillSource, String> {
-    crate::commands::git::validate_clone_url(&url)?;
+    crate::services::git_hardened::validate_clone_url(&url)?;
     add_source_in(&sources_path(), label, url)
 }
 
@@ -210,7 +210,7 @@ pub fn refresh_source(id: &str) -> Result<(), String> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        crate::commands::git::git_clone_blocking(
+        crate::services::git_hardened::git_clone_blocking(
             source.url.clone(),
             dest.to_string_lossy().to_string(),
         )
@@ -399,8 +399,8 @@ fn installed_skill_dir(target: &SkillTarget, name: &str) -> Result<PathBuf, Stri
     let name = plain_name(name, "skill name")?;
     let skills = target_skills_dir(target)?;
     if let SkillTarget::Project { dir } = target {
-        let project = crate::commands::fs::canonical_or_new(Path::new(dir))?;
-        let real = crate::commands::fs::canonical_or_new(&skills)?;
+        let project = crate::paths::canonical_or_new(Path::new(dir))?;
+        let real = crate::paths::canonical_or_new(&skills)?;
         if !real.starts_with(&project) {
             return Err(format!("'{}' leads out of the project", skills.display()));
         }

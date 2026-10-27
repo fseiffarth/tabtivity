@@ -1,13 +1,9 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  ViewerHeader,
-  useViewerState,
-  useEditableFile,
-  SaveButton,
-  UndoRedoButtons,
-  ExternalChangeBanner,
-} from "./FileViewerPane";
+import { ViewerHeader } from "./fileViewer/ViewerHeader";
+import { useEditableFile, ExternalChangeBanner } from "./fileViewer/editableFile";
+import { SaveButton, UndoRedoButtons } from "./fileViewer/toolbar";
+import { useViewerState } from "./fileViewer/viewerState";
 import { Dropdown } from "../common/Dropdown";
 import {
   parseTable,
@@ -37,7 +33,7 @@ import {
 import { UntestedTag } from "../common/UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { viewerErrorText } from "../../lib/viewers/limitError";
-import { useFileScope } from "./fileAccess";
+import { useFileScope } from "../../lib/files/fileAccess";
 
 /** Backend `read_spreadsheet` result (Dev G). Mirrors the Rust `SheetData`. */
 interface SheetData {

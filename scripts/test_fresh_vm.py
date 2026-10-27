@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise emitted guest scripts without starting QEMU or touching a VM."""
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ import re
 import socket
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 
 
@@ -16,7 +19,8 @@ SCRIPT = Path(__file__).with_name("fresh-vm.sh").read_text()
 
 def emit(name):
     definitions = []
-    for function in ("boot_hook", "desktop_setup", "install_script", "user_data", "guest_repair"):
+    for function in ("boot_hook", "desktop_setup", "install_script", "user_data", "guest_repair",
+                     "guest_live_update"):
         match = re.search(rf"^{function}\(\) \{{\n.*?^EOF\n\}}", SCRIPT, re.M | re.S)
         if match is None:
             raise AssertionError(f"missing function: {function}")
@@ -25,6 +29,11 @@ def emit(name):
         ["bash", "-c", "\n".join(definitions) + f"\nPKG_LABEL=FRESHPKG\n{name}"],
         check=True, capture_output=True, text=True,
     ).stdout
+
+
+def stamp_of(name, content=b""):
+    """The package stamp: file name and the head of its SHA-256."""
+    return f"{name} {hashlib.sha256(content).hexdigest()[:12]}"
 
 
 class GuestDesktopTests(unittest.TestCase):
@@ -76,14 +85,17 @@ fi''')
         executable.write_text("#!/bin/sh\nset -eu\n" + body + "\n")
         executable.chmod(0o755)
 
-    def run_guest(self, script, *args):
+    def redirect(self, script):
         # Redirect guest filesystem paths into a disposable fixture. The
         # emitted shell and its control flow otherwise run unchanged.
         for prefix in ("/tmp/", "/usr/sbin/", "/usr/bin/", "/etc/", "/var/lib/", "/dev/"):
             script = script.replace(prefix, str(self.root) + prefix)
         (self.root / "dev").mkdir(exist_ok=True)
         (self.root / "tmp").mkdir(exist_ok=True)
-        return subprocess.run(["sh", "-c", script, "guest", *args],
+        return script
+
+    def run_guest(self, script, *args):
+        return subprocess.run(["sh", "-c", self.redirect(script), "guest", *args],
                               env=self.env, capture_output=True, text=True)
 
     def test_same_package_repairs_desktop_before_stamp_shortcut(self):
@@ -92,7 +104,7 @@ fi''')
         (package / "example.deb").touch()
         state = self.root / "var/lib/fresh-vm"
         state.mkdir(parents=True)
-        (state / "installed").write_text("example.deb")
+        (state / "installed").write_text(stamp_of("example.deb"))
         result = self.run_guest(emit("install_script"), str(package))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "etc/systemd/system/display-manager.service").resolve(), self.unit)
@@ -115,7 +127,7 @@ fi''')
         (package / "example.deb").touch()
         state = self.root / "var/lib/fresh-vm"
         state.mkdir(parents=True)
-        (state / "installed").write_text("example.deb")
+        (state / "installed").write_text(stamp_of("example.deb"))
         result = self.run_guest(emit("install_script"), str(package))
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = self.log.read_text().splitlines()
@@ -144,9 +156,97 @@ fi''')
         commands = self.log.read_text().splitlines()
         install = next(c for c in commands if c.startswith("apt: install"))
         self.assertIn("--allow-downgrades", install)
+        self.assertIn("--reinstall", install)
         self.assertIn("-o Dpkg::Options::=--force-confold", install)
         self.assertFalse((self.root / "usr/sbin/policy-rc.d").exists())
-        self.assertEqual((self.root / "var/lib/fresh-vm/installed").read_text(), "example.deb")
+        self.assertEqual((self.root / "var/lib/fresh-vm/installed").read_text(), stamp_of("example.deb"))
+
+    def test_same_name_with_new_content_is_installed_again(self):
+        package = self.root / "disc"
+        package.mkdir()
+        (package / "example.deb").write_bytes(b"rebuilt at the same version")
+        state = self.root / "var/lib/fresh-vm"
+        state.mkdir(parents=True)
+        (state / "installed").write_text(stamp_of("example.deb", b"the first build"))
+        result = self.run_guest(emit("install_script"), str(package))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(c.startswith("apt: install") for c in self.log.read_text().splitlines()))
+        self.assertEqual((state / "installed").read_text(), stamp_of("example.deb", b"rebuilt at the same version"))
+
+    def test_the_very_same_file_is_not_installed_twice(self):
+        package = self.root / "disc"
+        package.mkdir()
+        (package / "example.deb").write_bytes(b"same bytes")
+        state = self.root / "var/lib/fresh-vm"
+        state.mkdir(parents=True)
+        (state / "installed").write_text(stamp_of("example.deb", b"same bytes"))
+        result = self.run_guest(emit("install_script"), str(package))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(c.startswith("apt: install") for c in self.log.read_text().splitlines()))
+
+    def live_fixture(self, app_pid=None):
+        """A copied-in live folder (install.sh + pkg/) and the previous install's entry."""
+        live = self.root / "var-tmp-live"
+        (live / "pkg").mkdir(parents=True)
+        (live / "install.sh").write_text(self.redirect(emit("install_script")))
+        (live / "pkg" / "example.deb").write_bytes(b"new build")
+        state = self.root / "var/lib/fresh-vm"
+        state.mkdir(parents=True)
+        entry = self.root / "usr/share/applications/fixture.desktop"
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.write_text("[Desktop Entry]\nExec=fixture-app --flag %U\n")
+        (state / "entry").write_text(str(entry))
+        self.program("pgrep", """printf 'pgrep %s\\n' "$*" >> "$FRESH_VM_TEST_LOG"
+printf '%s\\n' "${FRESH_VM_TEST_PIDS:-}" """)
+        if app_pid:
+            self.env["FRESH_VM_TEST_PIDS"] = str(app_pid)
+        return live
+
+    def test_live_update_installs_then_quits_the_old_app(self):
+        app = subprocess.Popen(["sleep", "60"])
+        reaper = threading.Thread(target=app.wait, daemon=True)
+        reaper.start()
+        self.addCleanup(lambda: app.poll() is None and app.kill())
+        live = self.live_fixture(app.pid)
+        started = time.monotonic()
+        result = self.run_guest(emit("guest_live_update"), str(live))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reaper.join(5)
+        self.assertIsNotNone(app.poll(), "the old app is still running")
+        self.assertLess(time.monotonic() - started, 15)
+        commands = self.log.read_text().splitlines()
+        install = next(i for i, c in enumerate(commands) if c.startswith("apt: install"))
+        self.assertLess(install, commands.index("pgrep -u tester -x -- fixture-app"))
+        self.assertIn("quitting the running app", result.stdout)
+        self.assertIn(stamp_of("example.deb", b"new build"), result.stdout)
+        self.assertFalse(live.exists(), "the copied package is left behind")
+
+    def test_live_update_with_no_running_app_still_installs(self):
+        live = self.live_fixture()
+        result = self.run_guest(emit("guest_live_update"), str(live))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("quitting", result.stdout)
+        self.assertEqual((self.root / "var/lib/fresh-vm/installed").read_text(),
+                         stamp_of("example.deb", b"new build"))
+
+    def test_failed_live_install_leaves_the_app_running(self):
+        app = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (app.kill(), app.wait()))
+        live = self.live_fixture(app.pid)
+        self.env["FRESH_VM_TEST_APT_RC"] = "100"
+        result = self.run_guest(emit("guest_live_update"), str(live))
+        self.assertEqual(result.returncode, 100, result.stderr)
+        self.assertIsNone(app.poll())
+        self.assertNotIn("pgrep", self.log.read_text())
+        self.assertFalse(live.exists())
+
+    def test_live_update_does_not_compete_with_the_boot_installer(self):
+        live = self.live_fixture()
+        self.env["FRESH_VM_TEST_INSTALL_STATE"] = "activating"
+        result = self.run_guest(emit("guest_live_update"), str(live))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("boot installer is still running", result.stderr)
+        self.assertNotIn("apt:", self.log.read_text())
 
     def test_desktop_setup_enables_and_recovers_the_guest_agent(self):
         channel = self.root / "dev/virtio-ports/org.qemu.guest_agent.0"
@@ -274,6 +374,237 @@ class GuestAgentTests(unittest.TestCase):
                         if proc.poll() is None:
                             proc.kill()
                             proc.communicate()
+
+
+class FakeAgent:
+    """A QEMU guest agent on a unix socket: records what the host runs and
+    copies, and answers the way a guest would for the few commands used."""
+
+    def __init__(self, path, installed=b"", mute=False):
+        self.path, self.installed, self.mute = path, installed, mute
+        self.files, self.execs, self.results = {}, [], {}
+        self.server = socket.socket(socket.AF_UNIX)
+        self.server.bind(path)
+        self.server.listen(8)
+        self.server.settimeout(0.2)
+        self.stop = False
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.stop = True
+        self.thread.join(5)
+        self.server.close()
+
+    def serve(self):
+        while not self.stop:
+            try:
+                client, _ = self.server.accept()
+            except (socket.timeout, OSError):
+                continue
+            with client:
+                if not self.mute:
+                    self.talk(client)
+
+    def talk(self, client):
+        stream = client.makefile("rwb")
+        while True:
+            line = stream.readline()
+            if not line:
+                return
+            request = json.loads(line)
+            args = request["arguments"]
+            if request["execute"] == "guest-sync":
+                reply = args["id"]
+            elif request["execute"] == "guest-exec":
+                reply = {"pid": len(self.execs) + 1}
+                data = base64.b64decode(args["input-data"]) if "input-data" in args else None
+                self.execs.append((args["arg"], data))
+                self.results[reply["pid"]] = self.answer(args["arg"], data)
+            else:
+                out = self.results[args["pid"]]
+                reply = {"exited": True, "exitcode": 0,
+                         "out-data": base64.b64encode(out).decode()}
+            stream.write(json.dumps({"return": reply}).encode() + b"\n")
+            stream.flush()
+
+    def answer(self, arg, data):
+        script = arg[1] if len(arg) > 1 else ""
+        if "cat /var/lib/fresh-vm/installed" in script:
+            return self.installed
+        if ': > "$1"' in script:
+            self.files[arg[3]] = b""
+        elif 'cat >> "$1"' in script:
+            self.files[arg[3]] += data
+        elif "sha256sum" in script and len(arg) > 3:
+            return hashlib.sha256(self.files[arg[3]]).hexdigest().encode() + b"  " + arg[3].encode()
+        return b""
+
+    def scripts(self):
+        return [a[1] if len(a) > 1 else "" for a, _ in self.execs]
+
+
+class QgaPutTests(unittest.TestCase):
+    def test_put_copies_a_file_in_chunks_and_reports_a_failure(self):
+        function = re.search(r"^qga_exec\(\) \{\n.*?^PY_QGA\n\}", SCRIPT, re.M | re.S)
+        with tempfile.TemporaryDirectory(prefix="vm-qga-") as tmp:
+            source = Path(tmp) / "package.deb"
+            content = os.urandom(2_500_000)
+            source.write_bytes(content)
+            agent = FakeAgent(str(Path(tmp) / "qga.sock"))
+            try:
+                result = subprocess.run(
+                    ["bash", "-c", function[0] + f"\nqga_exec --timeout 20 --put '{source}' /var/tmp/x/pkg/package.deb"],
+                    env=dict(os.environ, QGA_SOCK=agent.path), capture_output=True, text=True, timeout=30)
+            finally:
+                agent.close()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(agent.files["/var/tmp/x/pkg/package.deb"], content)
+            self.assertEqual(len([e for e in agent.execs if e[1]]), 3)  # 1 MiB chunks
+            self.assertNotIn("copied", result.stderr)  # progress lines only for big packages
+
+    def test_put_of_a_missing_file_fails_before_touching_the_guest(self):
+        function = re.search(r"^qga_exec\(\) \{\n.*?^PY_QGA\n\}", SCRIPT, re.M | re.S)
+        with tempfile.TemporaryDirectory(prefix="vm-qga-") as tmp:
+            agent = FakeAgent(str(Path(tmp) / "qga.sock"))
+            try:
+                result = subprocess.run(
+                    ["bash", "-c", function[0] + "\nqga_exec --put /nonexistent/file /x"],
+                    env=dict(os.environ, QGA_SOCK=agent.path), capture_output=True, text=True, timeout=30)
+            finally:
+                agent.close()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("cannot read", result.stderr)
+            self.assertEqual(agent.execs, [])
+
+
+class LocalPackageTests(unittest.TestCase):
+    def pick(self, root, launcher="/nonexistent-launcher"):
+        function = re.search(r"^local_package\(\) \{\n.*?^\}\n", SCRIPT, re.M | re.S)
+        self.assertIsNotNone(function)
+        prelude = ('die() { printf "fresh-vm: %s\\n" "$*" >&2; exit 1; }\n'
+                   'say() { printf "==> %s\\n" "$*"; }\ndev_git() { return 1; }\n'
+                   f"ROOT='{root}'\nLAUNCHER='{launcher}'\n")
+        return subprocess.run(["bash", "-c", prelude + function[0] + "\nlocal_package"],
+                              capture_output=True, text=True)
+
+    def test_the_newest_built_package_wins_and_is_described(self):
+        with tempfile.TemporaryDirectory(prefix="vm-local-") as tmp:
+            bundle = Path(tmp) / "target/release/bundle"
+            files = {"deb/app_0.1.0_amd64.deb": 1000, "appimage/app_0.1.0_amd64.AppImage": 3000,
+                     "deb/app_0.2.0_amd64.deb": 2000, "server/app-server_0.2.0_amd64.deb": 9000}
+            for name, mtime in files.items():
+                path = bundle / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name)
+                os.utime(path, (mtime, mtime))
+            result = self.pick(tmp)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(bundle / "appimage/app_0.1.0_amd64.AppImage"))
+            self.assertIn("current build: " + str(bundle / "appimage/app_0.1.0_amd64.AppImage"), result.stderr)
+            self.assertIn("built 1970-01-01", result.stderr)
+
+    def test_no_package_says_how_to_build_one(self):
+        with tempfile.TemporaryDirectory(prefix="vm-local-") as tmp:
+            result = self.pick(tmp, launcher=tmp)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("npm run tauri:bundle", result.stderr)
+            self.assertIn("never starts a build", result.stderr)
+            self.assertIn("from the checkout", result.stderr)
+
+
+BRAND = subprocess.run(
+    ["bash", "-c", f". '{Path(__file__).parent}/lib/brand.sh'; printf '%s' \"$APP_ENV_PREFIX\""],
+    capture_output=True, text=True).stdout
+
+
+class HostRunTests(unittest.TestCase):
+    """The real script against a fake running VM: pgrep says it runs, a fake
+    guest agent answers on the socket. No QEMU is installed on PATH, so any
+    attempt to start one fails the run."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="fresh-vm-host-")
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.dir = root / "vm"
+        self.dir.mkdir()
+        (self.dir / "base.qcow2").write_bytes(b"base")
+        (self.dir / "vm.qcow2").write_bytes(b"vm")
+        (self.dir / "installed").write_text("old.deb 000000000000\n")
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        pgrep = bin_dir / "pgrep"
+        pgrep.write_text("#!/bin/sh\nexit 0\n")
+        pgrep.chmod(0o755)
+        (root / "home").mkdir()
+        self.package = root / "app_9.9.9_amd64.deb"
+        self.content = os.urandom(1_200_000)
+        self.package.write_bytes(self.content)
+        self.env = dict(os.environ, HOME=str(root / "home"), PATH=f"{bin_dir}:{os.environ['PATH']}",
+                        **{BRAND + "FRESH_VM_DIR": str(self.dir)})
+        self.env.pop("DISPLAY", None)
+
+    def agent(self, **kw):
+        agent = FakeAgent(str(self.dir / "qga.sock"), **kw)
+        self.addCleanup(agent.close)
+        return agent
+
+    def run_script(self, *args):
+        return subprocess.run(["bash", str(Path(__file__).with_name("fresh-vm.sh")), *args],
+                              env=self.env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+
+    def test_running_vm_is_updated_in_place_without_a_question(self):
+        agent = self.agent(installed=b"old.deb 000000000000")
+        result = self.run_script(str(self.package))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        name = self.package.name
+        self.assertEqual(agent.files[f"/var/tmp/fresh-vm-live/pkg/{name}"], self.content)
+        self.assertIn("present()", agent.files["/var/tmp/fresh-vm-live/install.sh"].decode())
+        scripts = agent.scripts()
+        install = next(i for i, c in enumerate(scripts) if "install.sh" in c and "app_pids" in c)
+        launch = next(i for i, c in enumerate(scripts) if "systemd-run" in c)
+        self.assertLess(install, launch)
+        self.assertIn("-> " + stamp_of(name, self.content), result.stdout)
+        self.assertEqual((self.dir / "installed").read_text().strip(), stamp_of(name, self.content))
+        self.assertTrue((self.dir / "vm.qcow2").exists())
+
+    def test_same_file_is_not_copied_again_but_the_app_is_started(self):
+        agent = self.agent(installed=stamp_of(self.package.name, self.content).encode())
+        result = self.run_script(str(self.package))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(agent.files, {})
+        self.assertIn("already installed", result.stdout)
+        self.assertTrue(any("systemd-run" in c for c in agent.scripts()))
+
+    def test_same_name_rebuilt_is_copied_and_installed(self):
+        agent = self.agent(installed=stamp_of(self.package.name, b"the older build").encode())
+        result = self.run_script(str(self.package))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(agent.files[f"/var/tmp/fresh-vm-live/pkg/{self.package.name}"], self.content)
+
+    def test_silent_agent_is_reported_not_hung_and_nothing_is_copied(self):
+        agent = self.agent(mute=True)
+        started = time.monotonic()
+        result = self.run_script(str(self.package))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("guest agent does not answer", result.stderr)
+        self.assertIn("Nothing was changed", result.stderr)
+        self.assertEqual(agent.execs, [])
+        self.assertLess(time.monotonic() - started, 40)
+
+    def test_status_asks_the_running_vm_and_reports_a_silent_agent(self):
+        self.agent(installed=b"live.deb abcdef012345")
+        result = self.run_script("status")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("state      running", result.stdout)
+        self.assertIn("installed  live.deb abcdef012345 (asked of the running VM)", result.stdout)
+
+    def test_status_with_a_silent_agent_falls_back_to_the_recorded_stamp(self):
+        self.agent(mute=True)
+        result = self.run_script("status")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("old.deb 000000000000 (last recorded by the host; the VM is running but its guest agent does not answer", result.stdout)
 
 
 if __name__ == "__main__":

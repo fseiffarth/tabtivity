@@ -1,5 +1,5 @@
-import type { ScaffoldRepairReport } from "./scaffold";
-import { scaffoldRepairIsEmpty } from "./scaffold";
+import type { ScaffoldRepairReport } from "../../lib/projects/scaffold";
+import { scaffoldRepairIsEmpty } from "../../lib/projects/scaffold";
 import type { TranslationKey } from "../../lib/i18n";
 
 /** One step of `project_migration_plan` — mirrors the backend's

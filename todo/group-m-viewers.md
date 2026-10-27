@@ -2982,7 +2982,8 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       - [ ] ❌ Doesn't work on macOS
 
 2425. **Screenshot markup: capture from an agent tab, mark it up, send it
-    there.** 📝 Planned (2026-10-23), not built: `docs/screenshot_markup_plan.md`.
+    there.** 📝 Planned (2026-10-23), not built: `docs/screenshot_markup_plan.md`. (The capture chain it builds on
+    was deleted 2026-10-26 as unreachable: see that plan's note.)
     A 📷 on the agent tab's prompt strip captures the screen (the existing
     `capture_screenshot` staging flow); `ScreenshotSaveOverlay` gets **Mark up**
     beside Save/Discard, which saves into the gitignored screenshots folder and

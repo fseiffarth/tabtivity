@@ -97,7 +97,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { PdfView, PDF_DOC_RELEASE_MS } from "../../components/embed/pdf/PdfViewer";
-import { FileScopeContext, PaneVisibleContext } from "../../components/embed/fileAccess";
+import { FileScopeContext, PaneVisibleContext } from "../../lib/files/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 import { flushViewerState, useTabsStore, type TabEntry } from "../../stores/tabs";
 
@@ -352,5 +352,29 @@ describe("a hidden PDF tab releases its document", () => {
     expect(io.docsDestroyed).toBe(10);
     expect(io.workersDestroyed).toBe(10);
     expect(document.querySelectorAll("[data-sleeping=pdf]").length).toBe(10);
+  });
+});
+
+describe("a build reloading a hidden PDF", () => {
+  it("restores the position the reader left, not the hidden scroller's zero", async () => {
+    // A TeX build finishing while its PDF sits behind the .tex (or in a parked
+    // popout) asks the hidden viewer to reload. WebKitGTK reads a `display:none`
+    // scroller's offset as 0, and the reload used to capture that as the place
+    // to put the reader back — so the PDF came back at the top.
+    const view = await shown();
+    const el = scroller()!;
+    await waitFor(() => expect(el.scrollTop).toBe(640));
+    el.scrollTop = 900;
+    act(() => {
+      el.dispatchEvent(new Event("scroll"));
+    });
+    view.rerender(viewer(false));
+    el.scrollTop = 0;
+    const before = reads();
+    act(() => usePdfSyncStore.getState().requestReload(PATH));
+    await waitFor(() => expect(reads()).toBe(before + 1));
+    await waitFor(() => expect(document.querySelectorAll(".file-viewer-pdf-page").length).toBe(2));
+    view.rerender(viewer(true));
+    await waitFor(() => expect(scroller()?.scrollTop).toBe(900));
   });
 });

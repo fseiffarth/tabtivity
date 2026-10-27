@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
@@ -829,6 +830,119 @@ fn die_with_parent(command: &mut Command) {
             Ok(())
         });
     }
+}
+
+/// Render a (typically canonicalized) path as the string handed to the frontend.
+///
+/// `fs::canonicalize` returns *verbatim* paths on Windows — `\\?\C:\proj\file`
+/// for a drive path, `\\?\UNC\server\share\...` for a network path. The frontend
+/// (`src/lib/paths.ts`) expects NATIVE paths (`C:\proj\file`, `\\server\share`)
+/// and prefix-matches `entry.path` against the project directory (stored without
+/// the verbatim prefix); the `\\?\` prefix would break that match and `file://`
+/// URI building. This strips it. No-op on Unix and for paths lacking the prefix.
+pub(crate) fn display_path(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            // `\\?\UNC\server\share` → `\\server\share`
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+    }
+    s.into_owned()
+}
+
+/// Resolve a path that may not exist yet, for confinement: existing paths
+/// canonicalize; a dangling link resolves to where it points; a missing path
+/// canonicalizes its deepest existing ancestor and applies the rest lexically.
+/// The result never keeps a `..` or a link, so neither `missing/../..` nor a
+/// planted link to a not-yet-existing file outside can pass a `starts_with`
+/// check. Callers write to the returned path, not the one they joined.
+pub(crate) fn canonical_or_new(path: &Path) -> Result<PathBuf, String> {
+    resolve_new(path, 0).ok_or_else(|| format!("cannot resolve '{}'", path.display()))
+}
+
+fn resolve_new(path: &Path, links: u32) -> Option<PathBuf> {
+    // The kernel's own ELOOP bound for a chain of links.
+    if links > 40 {
+        return None;
+    }
+    if let Ok(c) = path.canonicalize() {
+        return Some(c);
+    }
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if !meta.file_type().is_symlink() {
+            // It exists yet will not canonicalize (an unreadable ancestor).
+            return None;
+        }
+        let link = fs::read_link(path).ok()?;
+        let target = match path.parent() {
+            Some(parent) => parent.join(link),
+            None => link,
+        };
+        return resolve_new(&target, links + 1);
+    }
+    let parent = resolve_new(path.parent()?, links)?;
+    match path.components().next_back()? {
+        std::path::Component::Normal(name) => Some(parent.join(name)),
+        std::path::Component::CurDir => Some(parent),
+        std::path::Component::ParentDir => parent.parent().map(Path::to_path_buf),
+        _ => None,
+    }
+}
+
+/// Enforce that `target` is inside `root` (relative-path project confinement).
+pub(crate) fn enforce_confinement(root: &Path, target: &Path) -> Result<(), String> {
+    if !target.starts_with(root) {
+        return Err(format!(
+            "path '{}' escapes project root '{}'",
+            target.display(),
+            root.display()
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn sanitize_name(name: &str) -> String {
+    name.trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Normalise the caller's scan-exclusion list into the same project-relative,
+/// forward-slash spelling the walks build as they descend.
+///
+/// The list is the user's own (`scan_excluded_paths` in `project.json`, set from
+/// the file tree's "Exclude from scans"), so it is whatever they clicked plus
+/// whatever survived a hand edit: tolerate `./x`, `/x`, `x/`, and Windows
+/// separators rather than silently failing to match one of them.
+pub fn excluded_rel_set(excluded: &[String]) -> std::collections::HashSet<String> {
+    excluded
+        .iter()
+        .map(|raw| raw.replace('\\', "/"))
+        .map(|rel| {
+            rel.trim()
+                .trim_matches('/')
+                .trim_start_matches("./")
+                .to_string()
+        })
+        .filter(|rel| !rel.is_empty())
+        .collect()
 }
 
 #[cfg(test)]

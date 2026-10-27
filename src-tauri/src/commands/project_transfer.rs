@@ -895,12 +895,15 @@ pub fn suggested_bundle_name(name: &str) -> String {
 }
 
 /// Size/shape of what an export would carry, for the dialog. Read-only.
-// `(async)`: a full tree stat-walk of a large project is exactly the kind of
-// work that froze the window when run on the main thread (see
-// `app_core::rt::try_blocking`). No `State`/`AppHandle`, so nothing binds it
-// to that thread.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn preview_project_export(project_id: String) -> Result<ExportPreview, String> {
+// A full tree stat-walk of a large project: it runs on the blocking pool
+// (`tauri::command(async)` on the sync fn, as it was, pinned an async-runtime
+// worker for the walk).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn preview_project_export(project_id: String) -> Result<ExportPreview, String> {
+    app_core::rt::try_blocking("export", move || preview_project_export_blocking(project_id)).await
+}
+
+pub fn preview_project_export_blocking(project_id: String) -> Result<ExportPreview, String> {
     validate_project_id(&project_id)?;
     let entry = &crate::services::remote::project_entry(&project_id)?;
 
@@ -1066,8 +1069,13 @@ fn host_tally(spec: &RemoteSpec) -> Result<HostTally, String> {
 /// The host's tree measured, for the export dialog's "the host's copy". Its
 /// own command so the ordinary preview never dials: the dialog asks only once
 /// that copy is picked, and only while the project is connected.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn preview_host_export(project_id: String) -> Result<HostTally, String> {
+/// It dials the host and waits for the measure: on the blocking pool.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn preview_host_export(project_id: String) -> Result<HostTally, String> {
+    app_core::rt::try_blocking("export", move || preview_host_export_blocking(project_id)).await
+}
+
+fn preview_host_export_blocking(project_id: String) -> Result<HostTally, String> {
     validate_project_id(&project_id)?;
     let entry = &crate::services::remote::project_entry(&project_id)?;
     let spec = host_spec(entry)?;
@@ -1925,8 +1933,13 @@ fn open_bundle(path: &str) -> Result<(Bundle, ExportManifest), String> {
 }
 
 /// Read a bundle's manifest without unpacking anything, for the import dialog.
-#[cfg_attr(feature = "desktop", tauri::command(async))]
-pub fn inspect_project_export(bundle_path: String) -> Result<BundleInfo, String> {
+/// It opens a zip of any size the user picked: on the blocking pool.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn inspect_project_export(bundle_path: String) -> Result<BundleInfo, String> {
+    app_core::rt::try_blocking("import", move || inspect_project_export_blocking(bundle_path)).await
+}
+
+pub fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo, String> {
     let (_zip, manifest) = open_bundle(&bundle_path)?;
     let list = read_projects_list()?;
     let id_in_use = list.iter().any(|p| p.id == manifest.entry.id);

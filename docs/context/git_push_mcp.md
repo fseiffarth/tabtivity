@@ -89,9 +89,17 @@ bump, since they would ride into a commit the scan never saw.
 
 Decided on the host from the hardened git's view and `projects.json`; nothing
 from the in-folder `project.json`. The checked-out branch only (`branch` must
-name it), with a same-named upstream (`branch.B.remote` / `.merge`). Never the
-remote's default branch — `ls-remote --symref HEAD`, falling back to
-`refs/remotes/<r>/HEAD` then `main`/`master` — nor a listed `protected` one.
+name it), with a same-named upstream (`branch.B.remote` / `.merge`). Never a
+listed `protected` one. The remote's default branch — `ls-remote --symref
+HEAD`, falling back to `main`/`master` — is pushable but **always staged**,
+whatever the level (`Plan::to_default`, `must_stage`; the card says so). Until
+2026-10-26 it was refused outright, which left the lane useless in every
+project that works on `main` alone: the agent fell back to a fenced
+`git push`, which has no credentials, and handed the push to the user. The
+click keeps the user's decision; a project that wants `main` closed lists it
+under `protected`. `git_push_status` reports `defaultBranch` (the local
+`refs/remotes/<r>/HEAD`), and the server instructions tell the agent that a
+shell `git push` cannot work in its sandbox.
 The remote branch must exist; the push is fast-forward only (`merge-base
 --is-ancestor` against the `ls-remote` SHA, `diverged` otherwise, never
 retried). No tags, no deletes, no `+`. The URL is the raw `remote.<r>.url`,
@@ -107,9 +115,16 @@ is `auth_failed` up front.
 `admit` validates arguments and takes the budget before any git runs: six
 `git_push` calls per tab per rolling hour (`Session::admit_push_rate`), at most
 two pending/running requests per tab. A request that gets staged dismisses the
-tab's older still-pending ones of the same kind (`supersede_older`; the card
+tab's older still-pending ones of the same kind, and every tab's pending
+pushes of the same branch in the same checkout (`supersede_older`; the card
 no longer matches the branch), so a pending push never counts against a new
-push. A `git_push` creates a proposal record
+push. A push that goes out dismisses the branch's other pending cards
+(`dismiss_pushed_branch`), and a card whose commit the branch's
+remote-tracking ref already holds — pushed from a terminal or the git bar —
+is dismissed when the card list or `git_push_status` is read
+(`settle_pushed_elsewhere`; local refs, no network). The ref is in the
+project folder, so an agent can forge it, but that only dismisses a card,
+never sends anything. A `git_push` creates a proposal record
 and runs plan → preflight → stage-or-push on a worker under a per-project lock;
 the call waits up to 18 s (the listener's sockets live 30 s) and otherwise
 answers `running` with the id. **propose** stages after the preflight, so the
@@ -271,8 +286,10 @@ the app.
    card asking to confirm the URL; its commit list should include the bump
    commit. Press "Confirm URL and push"; check GitHub, and that the agent's
    `git_push_status` reports `pushed`.
-3. Ask it to push `main`: expect `branch_protected`. Ask for a force-push or
-   a tag: the tool cannot express either.
+3. In a project that works on `main`, ask it to push `main` at Apply: a card
+   says it is the default branch and waits for Push. List `main` as
+   protected: expect `branch_protected`. Ask for a force-push or a tag: the
+   tool cannot express either.
 4. Make `scripts/privacy-check.sh` exit 1: expect `preflight_failed` with its
    output on the card and in the tool result, nothing pushed. Restore it.
 5. Set Apply: a push lands without a card (the URL is confirmed by now).

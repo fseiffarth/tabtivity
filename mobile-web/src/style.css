@@ -809,6 +809,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .terminal-screen header { padding:0 12px; gap:8px; }
 .terminal-title { display:grid; min-width:0; flex:1; gap:1px; }
 .terminal-title h1,.terminal-title small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Tabby's model dropdown under its CLI's: a caption that stays on a phone,
+   where the other titles' captions go. */
+.terminal-title .tabby-model { justify-self:start; color:var(--ink-muted); font-size:var(--fs-caption); }
 .terminal-view-switch { display:flex; gap:3px; padding:3px; border:1px solid #34384a; border-radius:10px; background:#151822; }
 .terminal-view-switch button { padding:6px 9px; border:0; border-radius:7px; background:transparent; font-size:.76rem; }
 /* An agent tab's Focus opens a list once it is up: where Focus reads from. */
@@ -1087,7 +1090,10 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-list span, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
 .subagent-index-list button.subagent-index-earlier { color:#9da3b6; font-size:.76rem; text-align:center; }
 .sent-index-groups { display:grid; gap:10px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
-.sent-index-head { margin:0 0 5px; padding:0 2px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.sent-index-head, .subagent-index-head { margin:0 0 5px; padding:0 2px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.subagent-index-head { margin:0; color:#8c98b3; }
+.subagent-index-group { display:grid; gap:4px; }
+.subagent-index-group + .subagent-index-group { margin-top:6px; }
 .sent-index-head.phone { color:#a99cf0; }
 .sent-index-head.agent { color:#8fb8ff; }
 .sent-index-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:6px; margin:0; padding:0; list-style:none; }
@@ -1132,6 +1138,12 @@ body.terminal-open { min-height:0; overflow:hidden; }
    does not shuffle the row on every repaint. */
 .transcript-working-facts { margin-left:auto; color:#787f93; font-size:.72rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .transcript-working-facts em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+/* A running shell, under the working row: its `$` where the dots are, and the
+   agent's few words on it cut to one line. */
+.transcript-shell-mark { width:15px; text-align:center; color:#8fb8ff; font:600 .78rem/1 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.transcript-shell-summary { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.transcript-shell-toggle { flex:none; padding:2px 8px; border:0; background:transparent; color:#8fb8ff; font-size:.8rem; }
+.transcript-shell-command { margin:0 10px 6px 33px; padding:6px 8px; max-height:40vh; overflow:auto; border-radius:8px; background:#14161e; color:#c8cde0; font:400 .72rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 @media (prefers-reduced-motion: reduce) { .transcript-working-dots i { animation:none; opacity:.7; } }
 .readable-notice { margin-bottom:10px; padding:8px 10px; border-left:3px solid #747b90; border-radius:8px; background:#14161e; color:#9298aa; font:400 .78rem/1.45 Inter,ui-sans-serif,system-ui,sans-serif; }
 .readable-earlier { display:block; width:100%; margin-bottom:10px; padding:9px 10px; border:1px solid #34384a; border-radius:9px; background:#151823; color:#9da3b6; font:500 .78rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; text-align:center; }
@@ -1749,6 +1761,8 @@ span.files-close { background:transparent; }
 .outbox-viewer-stage { position:relative; min-height:0; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; }
 .outbox-viewer-stage img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; transform-origin:center; -webkit-user-drag:none; }
 .outbox-viewer-stage.zoomed { cursor:grab; }
+.outbox-viewer-status { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); display:grid; justify-items:center; gap:10px; max-width:min(80%,22rem); margin:0; color:#95a6c8; font-size:.85rem; text-align:center; pointer-events:none; }
+.outbox-viewer-status button { pointer-events:auto; }
 .outbox-viewer-stage.zoomed img { will-change:transform; }
 .outbox-step { position:absolute; top:50%; display:grid; place-items:center; width:44px; height:72px; margin-top:-36px; padding:0; border:0; border-radius:10px; background:rgba(15,19,28,.55); color:#e6e9f2; font-size:1.9rem; line-height:1; }
 .outbox-step-previous { left:6px; }

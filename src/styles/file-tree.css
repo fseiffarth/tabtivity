@@ -680,11 +680,19 @@
    Give just those a subtle 3D "pop up" on hover so the drag affordance is
    discoverable; non-embeddable files get no effect, signalling they're not
    draggable (they open on double-click). */
+/* No `transform` anywhere on these rows, not even `translateZ(0)`: in WebKitGTK
+   a transformed row is its own compositing layer, so its text is rasterized
+   soft (washy), and a lifted/scaled one overlapping its neighbours promotes
+   them into layers too, switching their antialiasing — the rest of the panel's
+   text visibly turned bolder while a PDF row was hovered. The lift is a plain
+   `top` offset (whole pixels, normal text path) and `z-index: 0` gives the
+   stacking context `translateZ(0)` used to, without the layer. */
 .file-entry.file.embeddable {
   /* NOTE: `box-shadow` is deliberately NOT transitioned here — see ::before. */
-  transition: transform var(--transition), background-color var(--transition);
-  transform: translateZ(0);
+  transition: background-color var(--transition);
   position: relative;
+  z-index: 0;
+  top: 0;
 }
 /* The lift shadow is painted ONCE on a pseudo-element and faded in with
    `opacity`, rather than transitioned as a blurred `box-shadow` on the row
@@ -693,8 +701,9 @@
    CPU — and since the row also `scale()`s, the blur is a different size each
    frame and cannot be cached either. Sweeping the pointer down the tree started
    an overlapping transition per row, each re-blurring two shadows per frame,
-   which is what made hovering the file viewer crawl. Opacity is compositor-
-   driven, so the same look now costs nothing to animate. */
+   which is what made hovering the file viewer crawl. The shadow is painted
+   once and only toggled — not faded: an opacity animation is composited too,
+   and its layer would flash the neighbouring rows' text bold for the fade. */
 .file-entry.file.embeddable::before {
   content: "";
   position: absolute;
@@ -703,7 +712,6 @@
   border-radius: inherit;
   pointer-events: none;
   opacity: 0;
-  transition: opacity var(--transition);
   box-shadow:
     0 5px 12px rgba(0, 0, 0, 0.35),
     0 1px 3px rgba(0, 0, 0, 0.25);
@@ -714,11 +722,11 @@
 .file-entry.file.embeddable:hover {
   z-index: 2;
   cursor: var(--cur-grab, grab);
-  transform: translateY(-2px) scale(1.02);
+  top: -2px;
 }
 .file-entry.file.embeddable:active {
   cursor: var(--cur-grabbing, grabbing);
-  transform: translateY(0) scale(1.0);
+  top: 0;
 }
 /* Pressed: the row settles back down, so fade the same shadow rather than
    painting a second one over it. */
@@ -1812,57 +1820,6 @@
 .file-delete-actions button.btn-primary:disabled {
   opacity: 0.55;
   cursor: var(--cur-default, default);
-}
-
-/* The screenshot save overlay (ScreenshotSaveOverlay) rides the delete dialog's
-   chrome for the same reason SyncConfirmDialog does, and adds only the preview
-   and the destination fields. Wider than a delete prompt because it carries an
-   image: a shot you cannot recognize is one you cannot decide about. */
-.screenshot-save-dialog {
-  width: min(520px, calc(100vw - 32px));
-}
-
-.screenshot-save-preview {
-  width: 100%;
-  /* Capped so a 4K grab cannot push the fields off screen; the image is a
-     recognition aid, not the document. */
-  max-height: 40vh;
-  object-fit: contain;
-  background: var(--control-bg);
-  border: 1px solid var(--border-subtle);
-}
-
-.screenshot-save-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.screenshot-save-fields label {
-  display: grid;
-  grid-template-columns: 84px 1fr;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.screenshot-save-fields input,
-.screenshot-save-fields select {
-  min-width: 0;
-  padding: 5px 6px;
-  font-family: inherit;
-  font-size: 12px;
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-}
-
-.screenshot-save-fields input:focus,
-.screenshot-save-fields select:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 /* The byte-sync transfer confirmation (SyncConfirmDialog) rides the delete

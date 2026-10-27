@@ -96,7 +96,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { PdfView, PDF_DOC_RELEASE_MS } from "../../components/embed/pdf/PdfViewer";
-import { FileScopeContext, PaneVisibleContext } from "../../components/embed/fileAccess";
+import { FileScopeContext, PaneVisibleContext } from "../../lib/files/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 import { flushViewerState, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { _clearTabCostForTest, loadedPdfCount, pdfCostFor } from "../../lib/tabCost";

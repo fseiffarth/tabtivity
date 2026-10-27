@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { loginIdForCmd, signInLaunch } from "../../lib/agents/signInLaunch";
-import { AGENT_ITEMS, buildSignInTabSpec } from "../../components/tabs/newTabItems";
+import { AGENT_ITEMS, buildSignInTabSpec } from "../../lib/tabs/newTabItems";
 import { isRestorableTab } from "../../stores/tabs";
 import { envName } from "../../lib/brand";
 

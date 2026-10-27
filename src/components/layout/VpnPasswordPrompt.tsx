@@ -7,7 +7,7 @@ import { SavePasswordRow } from "../projects/SavePasswordRow";
 import {
   useSavedCredentialSource,
   type SavedPasswordState,
-} from "../projects/useSavedCredential";
+} from "../../lib/projects/useSavedCredential";
 import { useVpnPromptStore } from "../../stores/remote/vpn/vpnPrompt";
 import { useVpnStatusStore } from "../../stores/remote/vpn/vpnStatus";
 import { ConnectionLog } from "../common/ConnectionLog";

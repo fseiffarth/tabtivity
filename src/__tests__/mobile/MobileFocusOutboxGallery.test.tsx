@@ -111,7 +111,7 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
     const post = within(chat).getByRole("group", { name: "Pictures and files from the agent (1)" });
     expect(post.classList.contains("pictures-only")).toBe(true);
     expect(post.querySelectorAll("img")).toHaveLength(1);
-    expect(post.querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/run12.png");
+    expect(post.querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/run12.png?v=1789448580-48000");
     expect(post.textContent).not.toContain("run12.png");
     expect(screen.queryByRole("region", { name: "Files from the agent" })).toBeNull();
     fireEvent.click(within(post).getByRole("button", { name: "Open run12.png" }));
@@ -121,10 +121,10 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
     fireEvent.click(screen.getByRole("button", { name: "Files from the agent (1)" }));
     const gallery = screen.getByRole("dialog", { name: "Files from the agent" });
     expect(gallery.textContent).toContain("run12.png");
-    expect(gallery.querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/run12.png");
+    expect(gallery.querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/run12.png?v=1789448580-48000");
 
     fireEvent.click(within(gallery).getByRole("button", { name: "Open run12.png" }));
-    expect(screen.getByRole("dialog", { name: "run12.png" }).querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/run12.png");
+    expect(screen.getByRole("dialog", { name: "run12.png" }).querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/run12.png?v=1789448580-48000");
   });
 
   it("posts only what this tab sent in its chat; a file from another tab is in the gallery alone", async () => {
@@ -145,7 +145,7 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
 
     const chat = screen.getByTestId("session-transcript");
     const imgs = Array.from(chat.querySelectorAll("img")).map((img) => img.getAttribute("src"));
-    expect(imgs).toEqual(["/api/v1/tabs/tab-7/outbox/mine.png"]);
+    expect(imgs).toEqual(["/api/v1/tabs/tab-7/outbox/mine.png?v=1789448550-9000"]);
     fireEvent.click(screen.getByRole("button", { name: "Files from the agent (2)" }));
     const gallery = screen.getByRole("dialog", { name: "Files from the agent" });
     expect(gallery.textContent).toContain("theirs.png");
@@ -179,7 +179,7 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
     // The three pictures of one send are one album, oldest first.
     expect(posts[0].querySelector(".outbox-post-album")?.classList.contains("tiles-3")).toBe(true);
     expect(Array.from(posts[0].querySelectorAll("img")).map((img) => img.getAttribute("src")))
-      .toEqual(["a.png", "b.png", "c.png"].map((name) => `/api/v1/tabs/tab-7/outbox/${name}`));
+      .toEqual(["a.png?v=1789448550-9000", "b.png?v=1789448551-9000", "c.png?v=1789448553-9000"].map((name) => `/api/v1/tabs/tab-7/outbox/${name}`));
     // A PDF later on is its own message, a card with its name.
     expect(posts[1].classList.contains("pictures-only")).toBe(false);
     expect(posts[1].textContent).toContain("notes.pdf");
@@ -207,21 +207,21 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
     expect(shown().textContent).toContain("1 / 3");
     expect(within(shown()).queryByRole("button", { name: "Previous picture" })).toBeNull();
     fireEvent.click(within(shown()).getByRole("button", { name: "Next picture" }));
-    expect(src()).toBe("/api/v1/tabs/tab-7/outbox/b.png");
+    expect(src()).toBe("/api/v1/tabs/tab-7/outbox/b.png?v=200-2000");
     expect(shown().textContent).toContain("2 / 3");
 
     // A swipe to the left is the next (older) one; the last has no Next.
     drag(shown(), { x: 300, y: 400 }, { x: 120, y: 410 });
-    expect(src()).toBe("/api/v1/tabs/tab-7/outbox/a.jpg");
+    expect(src()).toBe("/api/v1/tabs/tab-7/outbox/a.jpg?v=100-1000");
     expect(within(shown()).queryByRole("button", { name: "Next picture" })).toBeNull();
 
     // A mostly vertical drag is not a step.
     drag(shown(), { x: 100, y: 100 }, { x: 170, y: 400 });
-    expect(src()).toBe("/api/v1/tabs/tab-7/outbox/a.jpg");
+    expect(src()).toBe("/api/v1/tabs/tab-7/outbox/a.jpg?v=100-1000");
 
     // The arrow keys step as well, and Escape still closes back to the grid.
     fireEvent.keyDown(window, { key: "ArrowLeft" });
-    expect(src()).toBe("/api/v1/tabs/tab-7/outbox/b.png");
+    expect(src()).toBe("/api/v1/tabs/tab-7/outbox/b.png?v=200-2000");
     fireEvent.keyDown(window, { key: "Escape" });
     screen.getByRole("dialog", { name: "Files from the agent" });
   });
@@ -246,7 +246,7 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
 
     // Zoomed in, a sideways drag moves the picture; it does not step.
     drag(shown(), { x: 300, y: 400 }, { x: 120, y: 410 });
-    expect(img().getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/b.png");
+    expect(img().getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/b.png?v=200-2000");
 
     // A second double tap fits the picture again, and a swipe steps once more.
     drag(shown(), { x: 200, y: 300 }, { x: 200, y: 300 });
@@ -266,9 +266,9 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
 
     fireEvent.click(screen.getByRole("button", { name: "Files from the agent (2)" }));
     const gallery = screen.getByRole("dialog", { name: "Files from the agent" });
-    for (const name of ["run12.png", "paper.pdf"]) {
+    for (const [name, v] of [["run12.png", "200-48000"], ["paper.pdf", "100-400"]]) {
       const save = within(gallery).getByRole("link", { name: `Save ${name}` });
-      expect(save.getAttribute("href")).toBe(`/api/v1/tabs/tab-7/outbox/${name}?download=1`);
+      expect(save.getAttribute("href")).toBe(`/api/v1/tabs/tab-7/outbox/${name}?v=${v}&download=1`);
       expect(save.getAttribute("download")).toBe(name);
     }
   });

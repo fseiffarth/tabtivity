@@ -138,7 +138,7 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
   Something an older build may have written under the old name is looked up
   through `brand::PAIR.legacy(Name::…)` and counted with `brand::legacy_hit`;
   nothing is ever *written* under it.
-- All user-facing strings via `src/lib/i18n.ts` (`useT()`); English holds
+- All user-facing strings via `src/lib/i18n` (`useT()`; English in `i18n/en.ts`); English holds
   every key. Never hardcode display text.
 - Tag new, not-live-verified features with the `UntestedTag` pill, and give it
   a row in the register (`src/lib/untested.ts`) — pills carry its id, menu-entry
@@ -168,7 +168,7 @@ Security / data loss:
 - Destructive background git/sync moves record through `services::local_loss`.
 - Local git verbs that can run repo-configured programs (status, diff, add,
   commit, checkout, merge, push, …) never run bare: use
-  `commands::git::hardened_git_command_in` (the `hookless_` variant for
+  `services::git_hardened::hardened_git_command_in` (the `hookless_` variant for
   background work). Project code Tabtivity runs on the
   host (git hooks, `latexmkrc`, a project's prettier) is gated by
   `services::exec_trust`; what runs or where comes from `projects.json`, never
@@ -190,6 +190,13 @@ Security / data loss:
 - `services::mobile_control`: raw project ids, paths, commands, tmux targets
   never cross the browser API.
 - Terminal `kill`/`kill_all` reap the whole child subtree.
+- A project's `.gitignore`/`project.json`/`info/exclude` is opened only
+  through the guarded helpers, never raw `fs::*`. A store never pairs
+  `read_json(..).unwrap_or_default()` with a write of the same file: use
+  `patch_json` or return the read error.
+- A sync `tauri::command` never does `remove_dir_all`/`.output()`/
+  `ollama_http`: make it `async` over a `*_blocking` body (source scans in
+  `commands/git/tests.rs` and `commands/projects/tests.rs`).
 
 Remote & sync:
 - Remoteness is explicit (`remote_target_for{,_dir}` and host-aware variants);
@@ -232,4 +239,8 @@ Frontend:
 - Experimental features use `useExperimental`.
 - Menus/dialogs use the one shared scheme; portaled dialogs set an explicit
   `color` (`body` has none → black text).
+- Components subscribe through `subscribeTauri`/`useTauriListener`, never a
+  bare `listen()`; path leaf/parent via `lib/paths` `basename`/`dirname`,
+  never `.split("/").pop()`/`lastIndexOf("/")`; ask through `useDialogs()`,
+  not plugin-dialog `confirm`/`ask`/`message` (ESLint, `eslint.config.js`).
 - To show the user a file on their phone: `tabtivity-send <file>`.

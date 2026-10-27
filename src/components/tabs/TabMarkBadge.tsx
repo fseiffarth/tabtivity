@@ -13,7 +13,7 @@ import { CheckboxIcon } from "../common/icons/Icon";
  */
 export function TabMarkBadge({ tab, inPopout = false }: { tab: TabEntry; inPopout?: boolean }) {
   const t = useT();
-  const boardOn = useSettingsStore((s) => s.settings?.todo_board ?? false);
+  const boardOn = useSettingsStore((s) => s.settings?.todo_board ?? true);
   const mark = isTabMark(tab.mark) ? tab.mark : null;
   const todoId = boardOn ? tab.todoId : undefined;
   if (!mark && !todoId) return null;

@@ -24,15 +24,20 @@ const BUSY_WINDOW = 24;
  * dialog's footer — a question, not work — so the cancel form needs its
  * elapsed time. Copilot CLI's footer row while it works is a cycling glyph,
  * the verb and its own key hint (`◎ Working  esc esc edit prompt`, 1.0.102 and
- * 1.0.103); idle, the same row reads `← open sidebar · Interactive · …`. */
+ * 1.0.103); idle, the same row reads `← open sidebar · Interactive · …`.
+ * OpenCode 2's `mini` joins its status row's groups with ` · ` behind a
+ * spinner glyph (`🯦 esc interrupt · Build · …`), and says `esc stop` where the
+ * pane is narrow. */
 const BUSY_HINT =
-  /\((?:[^()]*[·•,]\s*)?esc to interrupt\b[^()]*\)|\(esc to cancel, \d+s\)|(?:^|\s)esc (?:again to |to )?interrupt(?:\s*$|\s{2,})|^\s*[○◌●◉◎]\s+\S.*?\s+esc esc edit prompt\b/iu;
+  /\((?:[^()]*[·•,]\s*)?esc to interrupt\b[^()]*\)|\(esc to cancel, \d+s\)|(?:^|\s)esc (?:again to |to )?interrupt(?:\s*$|\s{2,}|\s·\s)|^\s*[^\p{L}\p{N}\s]\s+esc (?:again: )?stop(?:\s·\s|\s*$)|^\s*[○◌●◉◎]\s+\S.*?\s+esc esc edit prompt\b/iu;
 
 /** Claude Code's spinner row without the hint: a spinner glyph, the verb with
- * its ellipsis, then the elapsed time opening the parentheses. The finished
- * row (`✻ Worked for 7m 59s · done 18:36`) has neither, and prose that ends a
- * bullet in an ellipsis has no timer after it. */
-const CLAUDE_SPINNER = /^\s*[·✢✳✶✻✽*]\s+\S[^()]*…\s*\(\d+(?:\.\d+)?[hms]\b/u;
+ * its ellipsis, then the elapsed time in the parentheses — opening them, or
+ * after what it is waiting on (`✢ Orchestrating… (running PostToolUse hook ·
+ * 7s · ↓ 307 tokens)`, 2.1.310). The finished row (`✻ Worked for 7m 59s ·
+ * done 18:36`) has neither, and prose that ends a bullet in an ellipsis has
+ * no timer after it. */
+const CLAUDE_SPINNER = /^\s*[·✢✳✶✻✽*]\s+\S[^()]*…\s*\((?:[^()·]*·\s*)?\d+(?:\.\d+)?[hms]\b/u;
 
 /** What the busy row says about the turn besides the fact that it runs: how
  * long it has been going, and how many tokens it has spent. Both are read

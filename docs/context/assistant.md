@@ -128,7 +128,8 @@ way around the pinned tool set: the help tools read no file and run nothing.
 ## The profiles, as built
 
 Pinned against Claude Code 2.1.300, Codex 0.162.1, OpenCode 1.19.1 and
-Ollama 0.40.3 (A0). All four are offered.
+Ollama 0.40.3 (A0). All four are offered and listed (cloud Claude was
+unlisted on 2026-10-26 and listed again on 2026-10-27, the user's call).
 
 | Profile | What `launch_line` sets | Web |
 |---|---|---|
@@ -227,16 +228,22 @@ fresh chat (`assistant_new_chat`) and then remove every other chat of the
 scope, so the scope holds the chat both surfaces show. A pick whose CLI is
 blocked shows its card and leaves the chat alone.
 
+**Clear is Relaunch.** `/clear` typed into the CLI would go nowhere, so in a
+Tabby chat the Reader's Clear chip and a typed `/clear` call
+`replaceAssistantChat` (`stores/assistantScope`), the head's Relaunch path. The
+composer offers no Plan, Goal or Commit (no slash commands, no files) and is
+drawn as an agent tab's (`.card-composer`), its chips inside the text box.
+
 **The model switches in place.** A chat's slash commands are off, so the
 Reader's usual chips that type `/model`, `/effort` or `/status` cannot reach
-it. In a Tabby chat the Reader's model chip and the head's model dropdown list
+it. A Tabby chat has no facts row (no model, effort or Status chips, on the
+desktop or the phone); the head's model dropdown lists
 `assistantModelRows` instead: Claude's own `/model` rows, Codex's catalog
 (`CliOption.models`, `assistant::codex_offered_models`, read without writing)
 or the installed Ollama models. A pick is `switchAssistantModel`: it rewrites
 the tab's `assistant` launch (and a local chat's label), ends its tmux session,
 waits for the old CLI's exit, and respawns the same tab. The backend resumes
-the conversation on the new `--model`. The effort chip and Claude's Status
-button only show what they read.
+the conversation on the new `--model`.
 
 Claude's rows come from `services::assistant_model_probe`
 (`assistant_claude_models`): a short-lived Claude in the assistant home and
@@ -258,7 +265,9 @@ row is dropped). The `Default` row is `ASSISTANT_DEFAULT_MODEL`: the launch
 loses its model rather than passing `--model default`. A failed probe falls
 back to the aliases.
 
-On the phone the Focus facts row's model chip does the same: `GET
+On the phone the Focus chat's head does the same (`TabbyHead`): the CLI
+dropdown lists one row per CLI (a local CLI's launch on the chat's model),
+and the model line under it opens the model sheet: `GET
 /tabs/{id}/assistant-models` and `POST /tabs/{id}/assistant-model` ride the
 `AssistantModels` / `SwitchAssistantModel` desktop requests, answered by the
 window (`MobileBridgeHost`: `assistantChat`) from the same

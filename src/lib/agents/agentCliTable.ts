@@ -1,4 +1,4 @@
-// Generated from src-tauri/src/commands/agents.rs (`AGENTS`) — do not edit.
+// Generated from src-tauri/src/services/agent/agent_registry.rs (`AGENTS`) — do not edit.
 // Regenerate: UPDATE_AGENT_CLI_TABLE=1 cargo test --manifest-path src-tauri/Cargo.toml -q --lib -- the_generated_agent_cli_table_ts_is_current
 //
 // The built-in agent CLIs in menu order: registry id, the binary a tab

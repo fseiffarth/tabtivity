@@ -6,10 +6,10 @@ import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
 import { en } from "../../lib/i18n";
 import { AGENT_SCROLLBACK_ROWS } from "../../lib/terminal/scrollback";
-import { dict as de } from "../../lib/i18nDicts/de";
-import { dict as es } from "../../lib/i18nDicts/es";
-import { dict as fr } from "../../lib/i18nDicts/fr";
-import { dict as it_ } from "../../lib/i18nDicts/it";
+import { dict as de } from "../../lib/i18n/de";
+import { dict as es } from "../../lib/i18n/es";
+import { dict as fr } from "../../lib/i18n/fr";
+import { dict as it_ } from "../../lib/i18n/it";
 
 // Settings → Power & performance → Shell scrollback (tab cost plan step 2):
 // the help names the agents' fixed cap from `AGENT_SCROLLBACK_ROWS`, never a

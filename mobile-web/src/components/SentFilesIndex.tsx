@@ -50,7 +50,7 @@ export function SentFilesIndex({ tabId, files, open, onToggle, onOpen }: {
   const untested = isUntested("mobile.chat.sentIndex");
   const now = Math.floor(Date.now() / 1000);
   const urlOf = ({ file, from }: SentFile, download = false) => from === "agent"
-    ? outboxFileUrl({ tab: tabId }, file.name, download)
+    ? outboxFileUrl({ tab: tabId }, file, download)
     : inboxFileUrl(tabId, file.name, download);
   return <nav className={`sent-index${open ? " open" : ""}`} aria-label={t("mobile.sentIndex.region")}>
     <button type="button" className="subagent-index-toggle" aria-expanded={open} aria-controls="mobile-sent-list" onClick={onToggle}>

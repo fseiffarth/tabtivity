@@ -429,7 +429,7 @@ pub fn share_refusal(calendar: &Calendar) -> Option<&'static str> {
 /// taken out of `calendar.json` first (in one transaction), then shared; if
 /// the service refuses, put back as it was.
 pub fn share_in(path: &Path, state_dir: &Path, socket: &Path, calendar_id: &str) -> Result<CalInfo, String> {
-    use crate::commands::calendar::transact;
+    use crate::services::calendar_store::transact;
     let (taken, _) = transact(path, |data| {
         let calendar = data.calendars.iter().find(|c| c.id == calendar_id).cloned().ok_or("Unknown calendar")?;
         if let Some(why) = share_refusal(&calendar) {
@@ -508,19 +508,19 @@ pub fn unshare_in(path: &Path, state_dir: &Path, socket: &Path, id: &str) -> Res
 pub const RETURNED_DIR: &str = "shared-calendars-returned";
 
 fn put_back(path: &Path, state_dir: &Path, content: &CalContent) -> Result<(), String> {
-    use crate::commands::calendar::transact;
+    use crate::services::calendar_store::transact;
     let prefs = load_prefs(state_dir);
     transact(path, |data| {
-        let mut cal_id = content.origin.clone().filter(|o| !o.is_empty()).unwrap_or_else(crate::commands::projects::uuid_v4);
+        let mut cal_id = content.origin.clone().filter(|o| !o.is_empty()).unwrap_or_else(crate::storage::uuid_v4);
         if data.calendars.iter().any(|c| c.id == cal_id) {
-            cal_id = crate::commands::projects::uuid_v4();
+            cal_id = crate::storage::uuid_v4();
         }
         data.calendars.push(Calendar { id: cal_id.clone(), name: content.info.name.clone(), color: content.info.color.clone(), visible: true, readonly: false, rev: 0, extra: Default::default() });
         let taken_e: BTreeSet<String> = data.events.iter().map(|e| e.id.clone()).collect();
         for record in &content.events {
             if let Ok(mut event) = serde_json::from_value::<CalendarEvent>(record.clone()) {
                 if taken_e.contains(&event.id) {
-                    event.id = crate::commands::projects::uuid_v4();
+                    event.id = crate::storage::uuid_v4();
                 }
                 event.calendar_id = cal_id.clone();
                 event.rev = 0;
@@ -534,7 +534,7 @@ fn put_back(path: &Path, state_dir: &Path, content: &CalContent) -> Result<(), S
             overlay(&mut record, prefs.kept.get(&id));
             if let Ok(mut task) = serde_json::from_value::<CalendarTask>(record) {
                 if taken_t.contains(&task.id) {
-                    task.id = crate::commands::projects::uuid_v4();
+                    task.id = crate::storage::uuid_v4();
                 }
                 task.calendar_id = cal_id.clone();
                 task.rev = 0;

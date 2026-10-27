@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 
-use crate::commands::apps::{do_launch, WindowRegistryState, ORIGIN_RESTORED};
+use crate::commands::apps::do_launch;
+use crate::services::window_registry::{WindowRegistryState, ORIGIN_RESTORED};
 use crate::schema::project::OpenApp;
 
 /// Launch apps from `open_apps` for the given project, skipping already-running

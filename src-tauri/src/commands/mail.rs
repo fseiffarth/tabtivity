@@ -1958,9 +1958,11 @@ pub async fn mail_pgp_export(
 
 /// Record that the user compared this fingerprint out of band.
 ///
-/// The only path to `MailCryptoState::Verified`, and therefore the only way any
-/// message ever earns positive chrome. There is no heuristic that can stand in
-/// for it, because OpenPGP has no authority to ask.
+/// The only path to `MailCryptoState::Verified` for a correspondent's key (an
+/// own key also gets there by being generated here, or bound by
+/// [`mail_pgp_bind`] while it names only the user's own addresses). There is
+/// no heuristic that can stand in for it, because OpenPGP has no authority to
+/// ask.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_set_verified(
     ctx: Ctx,
@@ -1973,6 +1975,12 @@ pub async fn mail_pgp_set_verified(
         .await
 }
 
+/// Bind one of the user's private keys to an account (or unbind it).
+///
+/// The account's address and every account's address come from the accounts
+/// file here, never from the caller: the keyring refuses a key whose user ids
+/// do not name the account's address, and verifies one only when every address
+/// on it is one of the user's own (`PgpKeyring::bind_account`).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_bind(
     ctx: Ctx,
@@ -1983,7 +1991,18 @@ pub async fn mail_pgp_bind(
     let state = ctx.get::<MailState>();
     let rt = state.clone();
     app_core::rt::try_blocking("mail", move || {
-        keyring_of(&rt)?.bind_account(&fingerprint, &account_id, bind)
+        let (address, own) = if bind {
+            let accounts = read_accounts(&accounts_path())?.accounts;
+            let address = accounts
+                .iter()
+                .find(|a| a.id == account_id)
+                .map(|a| a.address.clone())
+                .ok_or_else(|| format!("mail account '{account_id}' not found"))?;
+            (address, accounts.into_iter().map(|a| a.address).collect())
+        } else {
+            (String::new(), Vec::new())
+        };
+        keyring_of(&rt)?.bind_account(&fingerprint, &account_id, bind, &address, &own)
     })
     .await
 }

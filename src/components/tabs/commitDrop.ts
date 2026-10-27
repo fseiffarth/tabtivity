@@ -2,7 +2,7 @@ import { type TabDrag } from "../../stores/drag/drag";
 import { findGroupOfTab, useTabsStore } from "../../stores/tabs";
 import { useLinkRoutingStore } from "../../stores/linkRouting";
 import { useTabLandStore } from "../../stores/drag/tabLand";
-import { openLinkedFile } from "../embed/FileViewerPane";
+import { openLinkedFile } from "../embed/fileViewer/openLinked";
 import { basename, dirname } from "../../lib/paths";
 
 /**

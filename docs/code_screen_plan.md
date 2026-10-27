@@ -1,6 +1,8 @@
 # Code screen 2026-10-25 — plan
 
-Status: plan only. No code changed. Findings come from five read-only screening
+Status: A–E and G landed on develop 2026-10-25, S1–S5 and S7's frontend
+splits on 2026-10-26 (not run live). S6, S8, S9 and S7's Rust function splits
+stay optional, kept for a later plan (user's call 2026-10-26). Results, flags and click-through: `docs/code_screen_handoff.md`. Findings come from five read-only screening
 agents (Rust services; Rust commands/terminal/platform/crates; frontend
 components; frontend lib/stores/mobile-web; folder structure), run 2026-10-25
 on develop 8953f472 plus the uncommitted tree of that day. Items marked ✔ were

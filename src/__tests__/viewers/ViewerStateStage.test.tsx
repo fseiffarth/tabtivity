@@ -18,8 +18,8 @@ vi.mock("../../stores/settings", () => ({
     sel({ settings: { autosave: false, viewer_prefs: {} } }),
 }));
 
-import { useViewerState } from "../../components/embed/FileViewerPane";
-import { PaneVisibleContext } from "../../components/embed/fileAccess";
+import { useViewerState } from "../../components/embed/fileViewer/viewerState";
+import { PaneVisibleContext } from "../../lib/files/fileAccess";
 import { flushViewerState, pendingViewerState, useTabsStore } from "../../stores/tabs";
 
 function addPdfTab() {

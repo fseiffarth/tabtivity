@@ -15,7 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: () => Promise.resolve(),
 }));
 
-import { FileScopeContext } from "../../components/embed/fileAccess";
+import { FileScopeContext } from "../../lib/files/fileAccess";
 import { viewerErrorText, viewerLimitKey } from "../../lib/viewers/limitError";
 
 const inProject = ({ children }: { children: ReactNode }) => (

@@ -25,8 +25,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { setDetachedWindowContext } from "../../stores/detachedContext";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
-import { openLinkedFile } from "../../components/embed/FileViewerPane";
-import { focusTexWorkspaceForSource } from "../../components/embed/openTexWorkspace";
+import { openLinkedFile } from "../../components/embed/fileViewer/openLinked";
+import { focusTexWorkspaceForSource } from "../../lib/viewers/tex/openTexWorkspace";
 
 const DOC = "/p1/sgd_delta_rule.tex";
 const tabsOf = (scope: string): TabEntry[] => useTabsStore.getState().tabsByScope[scope] ?? [];

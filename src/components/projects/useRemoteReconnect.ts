@@ -21,7 +21,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useRemoteStatusStore, type ConnState } from "../../stores/remote/remoteStatus";
 import { isHpcHost, targetOfSpec } from "../../lib/remote/hpc/hpcHost";
 import { autoConnectEligibility } from "./autoConnectEligibility";
-import { useSavedCredential, type SshConnectOutcome } from "./useSavedCredential";
+import { useSavedCredential, type SshConnectOutcome } from "../../lib/projects/useSavedCredential";
 import {
   markVpnConnected,
   markVpnConnecting,

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readFileText = vi.hoisted(() => vi.fn());
-vi.mock("../../components/embed/fileAccess", () => ({
+vi.mock("../../lib/files/fileAccess", () => ({
   readFileText,
   useFileScope: () => null,
 }));

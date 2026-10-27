@@ -551,3 +551,73 @@ select option {
 .project-pill.timer-paused .pill-folder-icon {
   opacity: 0.7;
 }
+
+/* The privacy curtain (components/layout/PrivacyCurtain, docs/privacy_curtain_plan.md).
+   `cover`: an opaque panel over the window; everything else stops painting.
+   No blur, ever: blurred text can still be read, and a blur over live
+   terminals is repainted every frame on WebKitGTK's software path. */
+html[data-privacy-curtain="cover"] body > *:not(.privacy-curtain) {
+  visibility: hidden !important;
+}
+/* `keep`: the deck presenter (`.deck-presenter`, opaque, fixed, inset 0) stays
+   the speaker's view; lifted above every other layer, it covers the window,
+   and body-level layers (menus, toasts, dialogs) are hidden outright. */
+html[data-privacy-curtain="keep"] [data-curtain-keep] {
+  z-index: 2147483646 !important;
+}
+html[data-privacy-curtain="keep"] body > *:not(#root):not(.privacy-curtain) {
+  visibility: hidden !important;
+}
+.privacy-curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-main, #101624);
+  color: var(--text-primary);
+}
+.privacy-curtain-card {
+  max-width: 420px;
+  padding: 20px 24px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  text-align: center;
+}
+.privacy-curtain-card h2 {
+  margin: 0 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 650;
+}
+.privacy-curtain-card p {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.privacy-curtain-show {
+  padding: 5px 16px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  cursor: var(--cur-pointer, pointer);
+}
+.privacy-curtain-show:hover,
+.privacy-curtain-show:focus-visible {
+  border-color: var(--accent);
+}
+.privacy-curtain.is-corner {
+  inset: auto 12px 12px auto;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  font-size: 12px;
+}

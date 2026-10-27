@@ -28,16 +28,21 @@ import {
   fileMtime,
   fileSize,
   describeFileErrorKey,
-} from "../fileAccess";
+} from "../../../lib/files/fileAccess";
 import { useExperimental } from "../../../lib/experimental";
 import { emptyDeck } from "../../../lib/viewers/deck/model";
 import { deckPathForPdf, serializeDeck } from "../../../lib/viewers/deck/sidecar";
-import { jumpToSource, SaveButton, useViewerState } from "../FileViewerPane";
-import { canRecompileTexSource, recompileTexSource } from "../openTexWorkspace";
+import { jumpToSource } from "../fileViewer/sourceJump";
+import { SaveButton } from "../fileViewer/toolbar";
+import { useViewerState } from "../fileViewer/viewerState";
+import { canRecompileTexSource, recompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
+import { isServerClient } from "../../../lib/transport/linkState";
 import {
   renderPdfPagesToImages,
   printHtmlBody,
+  PDF_PREVIEW_SCALE,
   PDF_PRINT_CSS,
+  PDF_PRINT_SCALE,
   type NativePrint,
 } from "../../../lib/viewers/print";
 import {
@@ -117,11 +122,10 @@ import { readViewerSelection, type ViewerSelection } from "./selection";
 import { scrollIntoPdfBox } from "./scrollBox";
 import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
 import { PdfMarkupLayer } from "./PdfMarkupLayer";
-import { PdfMarkupBar, selectionColors } from "./PdfMarkupBar";
+import { markupStripKey, PdfMarkupBar } from "./PdfMarkupBar";
 import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
 import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
-import { usePdfMarkup, type MarkupEdit, type MarkupTool, type QuestionFocus } from "./usePdfMarkup";
-import { colorsFor } from "../../../../mobile-web/src/markup/pen";
+import { usePdfMarkup, type MarkupEdit, type QuestionFocus } from "./usePdfMarkup";
 import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
 import {
   claimMarkup,
@@ -140,13 +144,8 @@ import {
   pdfPresentLabel,
   pdfPresentSeedEvent,
   readPresentScreen,
-} from "./present";
+} from "../../../lib/viewers/pdfPresent";
 import { openRoutedUri } from "../../../lib/linkTarget";
-import {
-  SCREENSHOT_CAPTURE_EVENT,
-  screenshotFilename,
-  type ScreenshotCaptureDetail,
-} from "../../../lib/window/screenshot";
 import { printPdfNative } from "../../../lib/window/printing";
 import { layoutPrintPdf } from "../../../lib/viewers/pdfPrintLayout";
 import { useSettingsStore } from "../../../stores/settings";
@@ -156,7 +155,6 @@ import { UntestedTag } from "../../common/UntestedTag";
 import { subscribePageDragActive, type PageTransfer } from "../../../stores/drag/pdfDrag";
 import { ContextFilePicker } from "../ContextFilePicker";
 import { useProjectsStore } from "../../../stores/projects";
-import { useScreenshotPendingStore } from "../../../stores/screenshotPending";
 import { BOX_SCOPE_PREFIX, boxMembersOfScope, boxScopeId, useBoxesStore } from "../../../stores/boxes";
 import { resolveProjectDirectory } from "../../../types";
 import { basename, dirname, isPathWithin } from "../../../lib/paths";
@@ -180,9 +178,11 @@ import {
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { pdfRasterRatio } from "./raster";
+import { pdfFitScale } from "./fitScale";
 import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
 import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidden";
-import { isTabInPopout, splitSubPaneKey, useTabsStore } from "../../../stores/tabs";
+import { isTabInPopout, useTabsStore } from "../../../stores/tabs";
+import { splitSubPaneKey } from "../../../stores/tabs/viewerState";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { ArrowUpRightIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
@@ -622,7 +622,6 @@ function PdfPageCanvas({
   noteFocus,
   noteAutosave,
   redacting,
-  copySelecting,
   hiddenHighlights = "",
   selBar,
   textItems,
@@ -632,7 +631,6 @@ function PdfPageCanvas({
   onNoteAdd,
   onNoteUpdate,
   onNoteDelete,
-  onCopySelection,
   markup,
   questionPins,
   tickBadges,
@@ -723,9 +721,6 @@ function PdfPageCanvas({
   onNeedNotes?: () => void;
   /** The blackout tool is armed: a drag over the page marks an area. */
   redacting?: boolean;
-  /** The region-capture mode is armed (by the global Screenshot app): a drag
-   *  copies that page region as a PNG. */
-  copySelecting?: boolean;
   /** The ids of the file's own highlight annotations on this sheet that the viewer
    *  is drawing itself, joined — so the canvas repaints when the set changes. The
    *  suppression itself is a write into the document's annotation storage, made once
@@ -753,8 +748,6 @@ function PdfPageCanvas({
   onRedactAdd?: (rect: Rect) => void;
   /** A mark was clicked while the tool is armed. */
   onRedactRemove?: (markId: string) => void;
-  /** A selected page region has been rasterised into a PNG. */
-  onCopySelection?: (png: Uint8Array) => void;
   /** Markup mode is on (`usePdfMarkup`): the page carries the markup layer over
    *  everything else, and its remarks take no pointer meanwhile. Only ever set on
    *  a pristine arrangement, where this sheet is the file's page `pageNumber`. */
@@ -1292,91 +1285,6 @@ function PdfPageCanvas({
     onRedactAdd?.(textItems ? snapToText(drawn, textItems) : drawn);
   };
 
-  // ── Select a region and copy it as an image ──────────────────────────────
-  // Geometry stays in big points while dragging, just like redaction, but the
-  // copied pixels come from the already-rendered page canvas. That makes the
-  // clipboard image exactly as sharp as the visible page (including DPR) without
-  // asking pdf.js to render a second full page for every selection.
-  const [copyBox, setCopyBox] = useState<Rect | null>(null);
-  const copyStart = useRef<{ x: number; y: number } | null>(null);
-
-  const pointInCanvas = (clientX: number, clientY: number) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return { x: 0, y: 0 };
-    return {
-      x: Math.min(Math.max(clientX - rect.left, 0), rect.width) / scale,
-      y: Math.min(Math.max(clientY - rect.top, 0), rect.height) / scale,
-    };
-  };
-
-  const selectionPng = async (selected: Rect): Promise<Uint8Array | null> => {
-    const canvas = canvasRef.current;
-    if (!canvas || canvas.width === 0 || canvas.height === 0) return null;
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    const pxX = canvas.width / rect.width;
-    const pxY = canvas.height / rect.height;
-    const sx = Math.max(0, Math.floor(selected.x * scale * pxX));
-    const sy = Math.max(0, Math.floor(selected.y * scale * pxY));
-    const sw = Math.min(canvas.width - sx, Math.max(1, Math.ceil(selected.w * scale * pxX)));
-    const sh = Math.min(canvas.height - sy, Math.max(1, Math.ceil(selected.h * scale * pxY)));
-    if (sw <= 0 || sh <= 0) return null;
-
-    const out = document.createElement("canvas");
-    out.width = sw;
-    out.height = sh;
-    const ctx = out.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
-
-    // Pending blackouts are overlays rather than canvas pixels. Burn their
-    // intersection into the clipboard crop so copying a page that visibly hides
-    // sensitive text cannot reveal that text in the pasted image.
-    if (marks?.length) {
-      ctx.fillStyle = "#000000";
-      for (const mark of marks) {
-        const left = Math.max(mark.x, selected.x);
-        const top = Math.max(mark.y, selected.y);
-        const right = Math.min(mark.x + mark.w, selected.x + selected.w);
-        const bottom = Math.min(mark.y + mark.h, selected.y + selected.h);
-        if (right <= left || bottom <= top) continue;
-        ctx.fillRect(
-          (left - selected.x) * scale * pxX,
-          (top - selected.y) * scale * pxY,
-          (right - left) * scale * pxX,
-          (bottom - top) * scale * pxY,
-        );
-      }
-    }
-
-    const blob = await new Promise<Blob | null>((resolve) => out.toBlob(resolve, "image/png"));
-    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
-  };
-
-  const onCopyDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!copySelecting || e.button !== 0) return;
-    e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const start = pointInCanvas(e.clientX, e.clientY);
-    copyStart.current = start;
-    setCopyBox({ ...start, w: 0, h: 0 });
-  };
-  const onCopyMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!copyStart.current) return;
-    setCopyBox(rectFromDrag(copyStart.current, pointInCanvas(e.clientX, e.clientY)));
-  };
-  const onCopyUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const start = copyStart.current;
-    copyStart.current = null;
-    setCopyBox(null);
-    if (!start) return;
-    const selected = rectFromDrag(start, pointInCanvas(e.clientX, e.clientY));
-    if (!isDraggedFar(selected, 3 / scale)) return;
-    void selectionPng(selected).then((png) => {
-      if (png) onCopySelection?.(png);
-    });
-  };
-
   const syncTarget = highlight ? refined ?? highlight.rect : null;
   const syncView = geom?.page ? syncViewports(geom.page, scale, rot) : null;
   const box =
@@ -1554,28 +1462,6 @@ function PdfPageCanvas({
                 top: dragBox.y * scale,
                 width: dragBox.w * scale,
                 height: dragBox.h * scale,
-              }}
-            />
-          )}
-        </div>
-      )}
-      {copySelecting && (
-        <div
-          className="file-viewer-pdf-copy-layer"
-          style={cssSize ? { width: cssSize.w * scale, height: cssSize.h * scale } : undefined}
-          onPointerDown={onCopyDown}
-          onPointerMove={onCopyMove}
-          onPointerUp={onCopyUp}
-          onPointerCancel={onCopyUp}
-        >
-          {copyBox && (
-            <div
-              className="file-viewer-pdf-copy-draft"
-              style={{
-                left: copyBox.x * scale,
-                top: copyBox.y * scale,
-                width: copyBox.w * scale,
-                height: copyBox.h * scale,
               }}
             />
           )}
@@ -2047,7 +1933,7 @@ function PdfCanvas({
       // after both modules have initialised, so deferring it costs nothing and
       // keeps the dependency one-way on paper — the same reason
       // `openProjectFilesTab` lives beside its tab rather than in the view.
-      const { openLinkedFile } = await import("../FileViewerPane");
+      const { openLinkedFile } = await import("../fileViewer/openLinked");
       openLinkedFile(tabKey, dirname(path) || "/", {
         path: deckPath,
         viewer: "eldeck",
@@ -2138,28 +2024,11 @@ function PdfCanvas({
   // all until Save. These four are only the tool's own state.
   /** The blackout tool is armed — a drag over a page marks an area. */
   const [redacting, setRedacting] = useState(false);
-  /** The region-capture mode is armed — a drag over a page writes that crop to
-   *  the native system clipboard (and into the project's tabtivity-screenshots/
-   *  folder).
-   *  Armed by the global Screenshot app rather than a toolbar button: pressing
-   *  Screenshot while a PDF is on screen means this document, at document
-   *  sharpness, not a grab of the screen around it. Mutually exclusive with
-   *  redaction because both modes own the same plain drag gesture. */
-  const [copySelecting, setCopySelecting] = useState(false);
   /** Markup mode (`usePdfMarkup`, `docs/done/pdf_markup_rounds_plan.md` §2.6) — the
    *  third mode that owns the plain drag, so it excludes the two above. */
   const [marking, setMarking] = useState(false);
   const markingRef = useRef(false);
   markingRef.current = marking;
-  const [copyBusy, setCopyBusy] = useState(false);
-  const [copyNotice, setCopyNotice] = useState<string | null>(null);
-  const copyNoticeTimer = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (copyNoticeTimer.current != null) window.clearTimeout(copyNoticeTimer.current);
-    },
-    [],
-  );
   // The project the viewed file belongs to (the longest project directory that is
   // a prefix of `path`), so a capture files its PNG into the right
   // tabtivity-screenshots/ folder and the merge picker lists the right tree even in
@@ -2175,57 +2044,6 @@ function PdfCanvas({
     }
     return best;
   }, [path]);
-  const copySelection = useCallback(
-    async (png: Uint8Array) => {
-      setCopyBusy(true);
-      setCopyNotice(null);
-      try {
-        await invoke("copy_png_bytes_to_clipboard", { png: Array.from(png) });
-        // The clipboard copy is unconditional; filing the PNG is not. The crop
-        // is handed to the save overlay, which asks for a destination before
-        // anything is written — the same consent step an OS-tool capture goes
-        // through, and for the same reason: a PDF's project may well have a
-        // public remote (see `stores/screenshotPending`). The overlay opens on
-        // this PDF's own project, since that is the one it documents.
-        useScreenshotPendingStore.getState().show({
-          kind: "bytes",
-          png,
-          name: screenshotFilename(),
-          hintDir: pdfProjectDir || null,
-        });
-        setCopyNotice(t("pdfViewer.copySelectionDone"));
-        if (copyNoticeTimer.current != null) window.clearTimeout(copyNoticeTimer.current);
-        copyNoticeTimer.current = window.setTimeout(() => setCopyNotice(null), 2500);
-        // One press of Screenshot is one shot, like every OS region tool this
-        // stands in for — disarm rather than wait for an Esc.
-        setCopySelecting(false);
-      } catch (e) {
-        setEditError(t("pdfViewer.copySelectionFailed", { msg: String(e) }));
-      } finally {
-        setCopyBusy(false);
-      }
-    },
-    [t, pdfProjectDir],
-  );
-  // The global Screenshot app offers the shot to visible viewers before it
-  // spawns the OS region tool (see `lib/window/screenshot`). Claim it while this pane
-  // is the one on screen: `paneVisible` is false for every hidden tab, so of
-  // the many mounted viewers only the visible one(s) even listen, and the
-  // `claimed` flag keeps two side-by-side PDFs from both arming.
-  useEffect(() => {
-    if (!paneVisible || !doc) return;
-    const onCapture = (e: Event) => {
-      const detail = (e as CustomEvent<ScreenshotCaptureDetail>).detail;
-      if (!detail || detail.claimed || copyBusy) return;
-      detail.claimed = true;
-      setRedacting(false);
-      setMarking(false);
-      setCopyNotice(null);
-      setCopySelecting(true);
-    };
-    window.addEventListener(SCREENSHOT_CAPTURE_EVENT, onCapture);
-    return () => window.removeEventListener(SCREENSHOT_CAPTURE_EVENT, onCapture);
-  }, [paneVisible, doc, copyBusy]);
   /** Grow each drawn box out to the words it touches. On by default: a box drawn by
    *  eye clips ascenders and word ends, and the burn-in is pixel-exact, so an
    *  unsnapped mark is how a legible sliver of the redacted word survives. */
@@ -2866,7 +2684,6 @@ function PdfCanvas({
     const asking = markupRef.current.askWaiting;
     if (asking) markupRef.current.chooseTarget(asking);
     setRedacting(false);
-    setCopySelecting(false);
     setRailOpen(false);
     setMarking(true);
   }, []);
@@ -2914,6 +2731,15 @@ function PdfCanvas({
   // canvases re-render asynchronously, so the content grows over several frames;
   // the ResizeObserver below re-applies this until the position is reachable.
   const restoreScroll = useRef<{ top: number; left: number } | null>(null);
+  // Where the reader last was while the pane was on screen (every settled scroll
+  // event). A same-path reload landing while the pane is hidden restores to this:
+  // a `display:none` scroller reads scrollTop/scrollLeft 0 in WebKitGTK (measured;
+  // the offset itself survives and comes back on show), so capturing it then — a
+  // TeX build finishing while its PDF sits behind the .tex or in a parked popout —
+  // sent the reader to the top on show and persisted that.
+  const lastScroll = useRef<{ top: number; left: number } | null>(null);
+  const paneVisibleRef = useRef(paneVisible);
+  paneVisibleRef.current = paneVisible;
   // True when the document about to load is a same-path reload (a recompile
   // rewrote this PDF). The fit effect reads it to keep the reader's current zoom
   // instead of snapping back to fit-width. Set at load-start so it reflects the
@@ -3272,7 +3098,10 @@ function PdfCanvas({
       // screen, without having to save it first. Preview sheet n is `sheets[n-1]`.
       const sheets = pages;
       const title = basename(path);
-      const images = await renderPdfPagesToImages(sheets, (id) => sources.get(id)?.doc);
+      // The window's native print sends the vector PDF, so its preview images
+      // need only screen sharpness; the browser client keeps paper's.
+      const scale = isServerClient() ? PDF_PRINT_SCALE : PDF_PREVIEW_SCALE;
+      const images = await renderPdfPagesToImages(sheets, (id) => sources.get(id)?.doc, scale);
       const body = images
         .map((src) => `<div class="print-page"><img src="${src}" alt=""></div>`)
         .join("");
@@ -3904,44 +3733,11 @@ function PdfCanvas({
     [settings, browserEnabled, mailEnabled, t],
   );
 
-  /** The markup strip's bare keys, while marking: P / B / T / M / K / S / E
-   *  arm the pen, box, note, text marks, stamp, select tool and eraser (P
-   *  again steps the pen's style, M the text marks' mode, K the stamp's
-   *  symbol, E switches to the area eraser and back), 1–4 pick the armed
-   *  tool's colours in strip order (a selection's, with marks selected),
-   *  Shift+1–4 a preset, [ and ] step the size, Delete or Backspace delete
-   *  the selected marks. Whether it took the key. */
-  const markupKey = useCallback((e: { key: string; code: string; shiftKey: boolean }): boolean => {
-    const m = markupRef.current;
-    const { key } = e;
-    // By the key's place: Shift turns the digit into a layout's own symbol.
-    const preset = e.shiftKey ? /^Digit([1-4])$/.exec(e.code) : null;
-    if (preset) {
-      m.applyPreset(Number(preset[1]) - 1);
-      return true;
-    }
-    if ((key === "Delete" || key === "Backspace") && m.edit.selection) {
-      m.deleteSelection();
-      return true;
-    }
-    const tools: Record<string, MarkupTool> = { p: "ink", b: "box", t: "text", m: "textmark", k: "stamp", s: "select", e: "eraser" };
-    const lower = key.toLowerCase();
-    if (tools[lower] && !e.shiftKey) {
-      m.pressTool(tools[lower]);
-      return true;
-    }
-    if (key === "[" || key === "]") {
-      m.stepSize(key === "[" ? -1 : 1);
-      return true;
-    }
-    const offered = m.tool === "select" ? selectionColors(m.edit.base, m.edit.selection) : colorsFor(m.tool, m.pen.style, m.pen.textMark);
-    const color = /^[1-4]$/.test(key) ? offered[Number(key) - 1] : undefined;
-    if (color && m.tool !== "eraser") {
-      m.setColor(color);
-      return true;
-    }
-    return false;
-  }, []);
+  /** The markup strip's bare keys, while marking (`markupStripKey`). */
+  const markupKey = useCallback(
+    (e: { key: string; code: string; shiftKey: boolean }): boolean => markupStripKey(markupRef.current, e),
+    [],
+  );
 
   // Ctrl/Cmd+F opens the find bar, Ctrl/Cmd+G opens go-to-page, Ctrl/Cmd+P opens
   // the print preview; Esc closes whichever is open. Bound on the host so it
@@ -4009,9 +3805,6 @@ function PdfCanvas({
         // find bar is up would leave the bar with nothing to close it.
         e.preventDefault();
         setRedacting(false);
-      } else if (e.key === "Escape" && copySelecting) {
-        e.preventDefault();
-        setCopySelecting(false);
       } else if (e.key === "Escape" && marking && markupRef.current.edit.selection && !isTextEntry(e.target)) {
         // Selected marks let go first; the next Escape leaves the mode.
         e.preventDefault();
@@ -4035,7 +3828,6 @@ function PdfCanvas({
       undo,
       redo,
       redacting,
-      copySelecting,
       linkGoBack,
       stepPage,
       handlePrint,
@@ -4133,9 +3925,9 @@ function PdfCanvas({
         });
         return;
       }
-      const src = syncable ? await synctexEdit(path, page, x, y) : null;
+      const src = syncable ? await synctexEdit(path, page, x, y, scope) : null;
       if (src) await jump(src);
-      const status = syncable ? await synctexStatus(path) : null;
+      const status = syncable ? await synctexStatus(path, scope) : null;
       const kind = syncable
         ? syncNoticeKind(status, src != null)
         : ("noMap" satisfies SyncNoticeKind);
@@ -4216,9 +4008,14 @@ function PdfCanvas({
           // on a disk-change reload arriving mid-restore, and was "the PDF forgot
           // where I was" on every dev restart. Once the pending restore has been
           // applied and cleared, a genuine same-path reload (a recompile) falls
-          // through to capturing where the reader actually is.
+          // through to capturing where the reader actually is — read off the
+          // scroller only while it is on screen (`lastScroll`).
           (restoreScroll.current ??
-            (el ? { top: el.scrollTop, left: el.scrollLeft } : null))
+            (el
+              ? paneVisibleRef.current
+                ? { top: el.scrollTop, left: el.scrollLeft }
+                : lastScroll.current
+              : null))
         : null);
     reloadKeepZoom.current = samePathReload;
     loadedPath.current = path;
@@ -4502,7 +4299,12 @@ function PdfCanvas({
     return () => { cancelled = true; };
   }, [pages, sources]);
 
-  // Fit the first page to the viewport width when a document loads.
+  // Fit the first page to the viewport when a document loads: by width, except
+  // a landscape page (a slide) taller than the viewport at that width, which is
+  // fitted whole (`pdfFitScale`). The toolbar button toggles `fitModeRef`; a
+  // load or a resize re-fit keeps whatever the reader last chose.
+  const fitModeRef = useRef<"page" | "width">("page");
+  const [fitNext, setFitNext] = useState<"page" | "width">("width");
   const fitWidth = useCallback(async (d: PDFDocumentProxy) => {
     const el = scrollRef.current;
     if (!el) return;
@@ -4510,7 +4312,11 @@ function PdfCanvas({
     const vp = page.getViewport({ scale: 1 });
     const avail = el.clientWidth - 24; // leave room for page margins
     if (avail > 0 && vp.width > 0) {
-      const nextScale = clampPdfScale(avail / vp.width);
+      const availH = el.clientHeight - 24;
+      const fit = pdfFitScale(avail, availH, vp.width, vp.height, fitModeRef.current === "page");
+      const nextScale = clampPdfScale(fit.scale);
+      // What the button offers next: the whole-page fit, only if it differs.
+      setFitNext(fit.fitsPage || !pdfFitScale(avail, availH, vp.width, vp.height, true).fitsPage ? "width" : "page");
       // Re-express the pending target BEFORE announcing that zoom is ready: the
       // restore layout effect runs before ordinary effects, so leaving this to
       // the scale effect below could apply (and clear) the old-scale offset one
@@ -4750,6 +4556,7 @@ function PdfCanvas({
     reportScrollSync();
     const top = el.scrollTop;
     const left = el.scrollLeft;
+    lastScroll.current = { top, left };
     if (scrollPersistTimer.current != null) window.clearTimeout(scrollPersistTimer.current);
     scrollPersistTimer.current = window.setTimeout(
       () => viewPos.persist({ scrollTop: top, scrollLeft: left }),
@@ -4948,11 +4755,15 @@ function PdfCanvas({
         </button>
         <button
           className="file-viewer-zoom-btn file-viewer-zoom-text"
-          onClick={() => doc && void fitWidth(doc)}
+          onClick={() => {
+            if (!doc) return;
+            fitModeRef.current = fitNext;
+            void fitWidth(doc);
+          }}
           disabled={!doc}
-          title={t("pdfViewer.fitPageWidthTitle")}
+          title={t(fitNext === "page" ? "pdfViewer.fitPageTitle" : "pdfViewer.fitPageWidthTitle")}
         >
-          {t("pdfViewer.fitWidthButton")}
+          {t(fitNext === "page" ? "pdfViewer.fitPageButton" : "pdfViewer.fitWidthButton")}
         </button>
         {doc && (
           pageJumpOpen ? (
@@ -5007,7 +4818,6 @@ function PdfCanvas({
           onClick={() => {
             if (marking) leaveMarkup();
             setRedacting((v) => !v);
-            setCopySelecting(false);
           }}
           disabled={!doc}
           title={t("pdfRedact.toolTitle")}
@@ -5249,21 +5059,6 @@ function PdfCanvas({
         <PdfMarkupBar markup={markup} page={visiblePage} onReload={reloadUnderMarks} onDone={leaveMarkup} />
       )}
       {marking && <PdfMarkupQuestions questions={markup.questions} pinned={pinnedQuestions} />}
-      {/* A successful shot disarms the mode, so the bar outlives it just long
-          enough to carry the busy/"copied" feedback the disarm would otherwise
-          swallow. */}
-      {(copySelecting || copyBusy || copyNotice) && (
-        <div
-          className="file-viewer-pdf-copy-bar"
-          role="status"
-          aria-live="polite"
-        >
-          {copySelecting && <span>{t("pdfViewer.copySelectionHint")}</span>}
-          {copyBusy && <span>{t("pdfViewer.copySelectionWorking")}</span>}
-          {copyNotice && <span className="file-viewer-pdf-copy-success">{copyNotice}</span>}
-          <UntestedTag id="pdfViewer.8" />
-        </div>
-      )}
       {metaOpen && doc && (
         // The metadata panel — the blackout tool's strip, wearing the same class so
         // the two read as the pair they are. It shows the fields BEFORE it offers to
@@ -5589,7 +5384,6 @@ function PdfCanvas({
                     }
                     onNoteDelete={(noteId, baseline) => deletePdfNote(ref.id, noteId, baseline)}
                     redacting={redacting}
-                    copySelecting={copySelecting && !copyBusy}
                     hiddenHighlights={hiddenHl.get(noteKey(ref)) ?? ""}
                     selBar={
                       sel && sel.focusIndex === i
@@ -5609,7 +5403,6 @@ function PdfCanvas({
                     textItems={snap ? pageText?.[i] : undefined}
                     onRedactAdd={(rect) => addRedactMark(ref.id, rect)}
                     onRedactRemove={(markId) => removeRedactMark(ref.id, markId)}
-                    onCopySelection={copySelection}
                     markup={marking ? markup.edit : null}
                     questionPins={
                       marking && ref.src === SELF && questionPins.has(i + 1)

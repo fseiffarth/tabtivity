@@ -23,7 +23,7 @@ import {
   findMatches,
   decorateSearchRanges,
   applyReplacements,
-} from "../../components/embed/FileViewerPane";
+} from "../../components/embed/fileViewer/decorations";
 
 warmFileViewer();
 

@@ -39,7 +39,7 @@ export {
   buildDescriptionFillPrompt,
   buildScaffoldFillPrompt,
   collectScaffoldAgentFills,
-} from "../projects/scaffold";
+} from "../../lib/projects/scaffold";
 
 // Code-split (perf plan §6): Settings (with its sub-panels) and the project
 // dialogs are opened by a click and mounted only while open, so their module

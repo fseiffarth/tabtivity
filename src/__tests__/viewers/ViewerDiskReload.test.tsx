@@ -27,7 +27,7 @@ vi.mock("../../lib/viewers/odt", () => ({
   renderOdtDocument: (xml: string) => `<p>version ${xml}</p>`,
 }));
 
-import { useReadonlyFile } from "../../components/embed/FileViewerPane";
+import { useReadonlyFile } from "../../components/embed/fileViewer/editableFile";
 import { OdtView } from "../../components/embed/OdtView";
 
 let diskText = "v1";

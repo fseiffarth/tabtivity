@@ -192,6 +192,36 @@ export interface SyncPullOutcome {
   skippedTooLarge: SyncSkippedFile[];
 }
 
+/** One file only the host holds (`sync_scan_host_new`). */
+export interface HostNewFile {
+  relPath: string;
+  size: number;
+  mtime: number | null;
+}
+
+/** What an explicit host scan found; `truncated` when its walk hit the cap. */
+export interface HostNewScan {
+  files: HostNewFile[];
+  truncated: boolean;
+}
+
+/** What a batch take-one-side (`resolveAll`) did. */
+export interface SyncResolveOutcome {
+  /** Host files over the cap a "host" batch left on the host. */
+  skipped: SyncSkippedFile[];
+  /** Files that did not transfer. */
+  failed: number;
+  /** The first failure's message, or null when every file went. */
+  firstError: string | null;
+}
+
+/** Why a forced push of named files did not go, or null when it did: a per-file
+ *  failure is not a command error (`SyncPushResult.failed_total`). */
+export function pushFailure(result: SyncPushResult | null | undefined): string | null {
+  if (!result || !result.failed_total) return null;
+  return result.first_error ?? `${result.failed_total} file(s) failed`;
+}
+
 /** Read a pull result defensively: an older backend (or a test double) may
  *  answer with a bare count or nothing at all. */
 function toPullOutcome(raw: unknown): SyncPullOutcome {
@@ -239,17 +269,30 @@ interface SyncStore {
     relPath: string,
     side: "host" | "local",
   ) => Promise<void>;
+  /** `applyDelete` for a batch on one side, refreshing the status once at the
+   *  end. Backs the orange view's "delete for all"; a failed file is counted,
+   *  named in `failedPaths` and skipped, never the whole batch. */
+  applyDeleteAll: (
+    projectId: string,
+    relPaths: string[],
+    side: "host" | "local",
+  ) => Promise<SyncResolveOutcome & { failedPaths: string[] }>;
+  /** List the files only the host holds (`sync_scan_host_new`): a recursive
+   *  host walk, so only on an explicit click. `confirmed` answers the HPC
+   *  guard (`withHpcConfirm`). */
+  scanHostNew: (projectId: string, confirmed: boolean) => Promise<HostNewScan>;
   /** Resolve a batch of diverged files by taking one side for every path at once:
    *  "host" pulls each (host overwrites the mirror), "local" force-pushes each
    *  (the mirror overwrites the host). Refreshes the status once at the end rather
    *  than per file. Backs the orange view's "…for all" buttons. Resolves to the
    *  files over the cap a "host" batch left on the host (gap 35), for the view
-   *  to name; empty for "local". */
+   *  to name (empty for "local"), and the files that failed with the first
+   *  reason — a failed file is skipped, never the whole batch. */
   resolveAll: (
     projectId: string,
     relPaths: string[],
     side: "host" | "local",
-  ) => Promise<SyncSkippedFile[]>;
+  ) => Promise<SyncResolveOutcome>;
   /** Toggle the selected flag for paths without transferring (deselect = stop). */
   markSelected: (
     projectId: string,
@@ -443,6 +486,38 @@ export function splitByNewerSide(
 }
 
 /**
+ * Which side a 🗑 in the orange view would delete: the surviving copy of a file
+ * deleted on exactly one side, or null when no deletion applies. Deleting the
+ * mirror copy is only offered when the host was actually consulted and
+ * positively reported the file gone (`hostChecked`) — a cold pool reports every
+ * host mtime as null without asking. The backend re-verifies either premise
+ * against live state before deleting anything.
+ */
+export function deleteSideOf(e: SyncEntryStatus | undefined): "host" | "local" | null {
+  if (!e) return null;
+  const noHostFile = e.hostMtime == null;
+  const noLocalFile = e.localMtime == null;
+  if (noLocalFile && !noHostFile) return "host";
+  if (noHostFile && !noLocalFile && e.hostChecked) return "local";
+  return null;
+}
+
+/** Splits diverged files by the side a 🗑 would delete (`deleteSideOf`), for the
+ *  orange view's "delete for all"; files no deletion applies to are left out. */
+export function splitByDeleteSide(
+  byPath: Record<string, SyncEntryStatus> | undefined,
+  relPaths: string[],
+): { host: string[]; local: string[] } {
+  const host: string[] = [];
+  const local: string[] = [];
+  for (const rel of relPaths) {
+    const side = deleteSideOf(byPath?.[rel]);
+    if (side) (side === "host" ? host : local).push(rel);
+  }
+  return { host, local };
+}
+
+/**
  * All NEW local-only paths (state `localnew`) — files the mirror holds that
  * were never synced, so the host has no copy. Deliberately a separate list
  * from `amberPaths`: an amber row has content on BOTH sides (merge / pick a
@@ -547,27 +622,57 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     await get().refreshStatus(projectId);
   },
 
+  applyDeleteAll: async (projectId, relPaths, side) => {
+    const failedPaths: string[] = [];
+    let firstError: string | null = null;
+    for (const rel of relPaths) {
+      try {
+        await invoke("sync_apply_delete", { projectId, relPath: rel, side });
+      } catch (e) {
+        console.error(`applyDeleteAll: ${side} failed for ${rel}`, e);
+        failedPaths.push(rel);
+        firstError ??= e instanceof Error ? e.message : String(e);
+      }
+    }
+    await get().refreshStatus(projectId);
+    return { skipped: [], failed: failedPaths.length, firstError, failedPaths };
+  },
+
+  scanHostNew: (projectId, confirmed) => invoke<HostNewScan>("sync_scan_host_new", { projectId, confirmed }),
+
   resolveAll: async (projectId, relPaths, side) => {
     // Iterate per path (each side has its own single-file command) but refresh
     // the cached status only once at the end — refreshing per file would re-stat
     // the whole selection N times. A single failed file is logged and skipped so
     // one bad path doesn't abort the rest of the batch. A host copy over the
     // cap is not pulled; it is collected and returned rather than only logged.
+    // The failures are returned too: logging them only made a batch the backend
+    // refused file by file look exactly like one that went through.
     const skipped: SyncSkippedFile[] = [];
+    let failed = 0;
+    let firstError: string | null = null;
+    const fail = (rel: string, e: unknown) => {
+      console.error(`resolveAll: ${side} failed for ${rel}`, e);
+      failed += 1;
+      firstError ??= e instanceof Error ? e.message : String(e);
+    };
     for (const rel of relPaths) {
       try {
         if (side === "host") {
           const outcome = toPullOutcome(await invoke<unknown>("sync_pull", { projectId, relPath: rel }));
           skipped.push(...outcome.skippedTooLarge);
         } else {
-          await invoke("sync_push", { projectId, relPath: rel, force: true });
+          const why = pushFailure(
+            await invoke<SyncPushResult>("sync_push", { projectId, relPath: rel, force: true }),
+          );
+          if (why) fail(rel, why);
         }
       } catch (e) {
-        console.error(`resolveAll: ${side} failed for ${rel}`, e);
+        fail(rel, e);
       }
     }
     await get().refreshStatus(projectId);
-    return skipped;
+    return { skipped, failed, firstError };
   },
 
   markSelected: async (projectId, relPaths, selected, isDir) => {

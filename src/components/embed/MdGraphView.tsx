@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
-import { readFileText, useFileScope } from "./fileAccess";
+import { readFileText, useFileScope } from "../../lib/files/fileAccess";
 import {
   buildMdGraph,
   layoutMdGraph,

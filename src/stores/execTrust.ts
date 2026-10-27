@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { QUEUED_CONFIRM_DELAY_MS } from "../components/common/PromptDialogs";
+import { QUEUED_CONFIRM_DELAY_MS } from "../lib/queuedConfirm";
 import type { TrustRequest } from "../lib/execTrust";
 
 /**

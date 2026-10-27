@@ -1,18 +1,15 @@
 use std::path::Path;
 use app_core::sync::LockExt;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 #[cfg(feature = "desktop")]
 use tauri::State;
 
-use crate::commands::apps::{opened_windows_for_project, TrackedWindow, WindowRegistryState};
+use crate::commands::apps::{TrackedWindow, WindowRegistryState};
 use crate::platform::{detect_backend, WorkspaceBackend, WorkspaceInfo};
 
-pub struct WorkspaceState {
-    pub backend: Box<dyn WorkspaceBackend>,
-}
-
-pub type WorkspaceStateArc = Arc<Mutex<WorkspaceState>>;
+// The window-manager backend's managed state lives in `crate::platform` (S5).
+pub use crate::platform::{WorkspaceState, WorkspaceStateArc};
 
 impl Default for WorkspaceState {
     fn default() -> Self {
@@ -39,23 +36,33 @@ pub fn workspace_info(state: State<'_, WorkspaceStateArc>) -> WorkspaceInfo {
 /// project's app windows (`WorkspaceBackend::can_park`). A separate command
 /// rather than new `WorkspaceInfo` fields, so no backend constructor (macOS's
 /// among them, uncompilable here) has to change.
+///
+/// `wayland_session` lets the Apps view explain a row it cannot hide: under
+/// Wayland only XWayland windows get a window id, so a parking backend still
+/// leaves a windowless (native Wayland) app on screen. The frontend derives
+/// the per-row answer from this plus the row's `window_id`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WorkspaceCapabilities {
     pub backend: String,
     pub can_park: bool,
+    pub wayland_session: bool,
 }
 
-pub(crate) fn capabilities_of(backend: &dyn WorkspaceBackend) -> WorkspaceCapabilities {
+pub(crate) fn capabilities_of(
+    backend: &dyn WorkspaceBackend,
+    wayland_session: bool,
+) -> WorkspaceCapabilities {
     WorkspaceCapabilities {
         backend: backend.name().to_string(),
         can_park: backend.can_park(),
+        wayland_session,
     }
 }
 
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn workspace_capabilities(state: State<'_, WorkspaceStateArc>) -> WorkspaceCapabilities {
-    capabilities_of(&*state.lock_ok().backend)
+    capabilities_of(&*state.lock_ok().backend, crate::platform::session_is_wayland())
 }
 
 /// Does the desktop shell own the lone Super/Meta key?
@@ -84,15 +91,20 @@ pub fn hide_window(state: State<'_, WorkspaceStateArc>, window_id: u64) -> Resul
 
 #[cfg(feature = "desktop")]
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn get_opened_windows(
-    windows: State<'_, WindowRegistryState>,
+pub async fn get_opened_windows(
+    ctx: crate::tauri_host::Ctx,
     project_id: Option<String>,
-) -> Vec<TrackedWindow> {
-    let mut windows = windows.lock_ok();
+) -> Result<Vec<TrackedWindow>, String> {
+    let registry = ctx.get::<WindowRegistryState>().clone();
     // Backstop for the exit watcher: a read is the moment a stale dead row
-    // would become visible, so sweep the requested scope first.
-    crate::commands::apps::prune_dead_windows(&mut windows, project_id.as_deref());
-    opened_windows_for_project(windows.windows.values(), project_id.as_deref())
+    // would become visible, so sweep the requested scope first. Off the main
+    // thread: the sweep's read-time resolve probes the process table and
+    // scans the X client list (`prune_dead_windows` keeps the registry
+    // unlocked across both).
+    app_core::rt::blocking("apps", move || {
+        crate::commands::apps::prune_dead_windows(&registry, project_id.as_deref())
+    })
+    .await
 }
 
 /// Returns "wlan", "lan", or "disconnected".
@@ -837,9 +849,17 @@ mod tests {
 
     #[test]
     fn null_backend_reports_it_cannot_park() {
-        let caps = capabilities_of(&crate::platform::null::NullBackend);
+        let caps = capabilities_of(&crate::platform::null::NullBackend, false);
         assert_eq!(caps.backend, "null");
         assert!(!caps.can_park);
+        assert!(!caps.wayland_session);
+        // The session flag is passed through as given, and serialized under
+        // the snake_case key the frontend's `workspaceCaps.ts` reads.
+        let caps = capabilities_of(&crate::platform::null::NullBackend, true);
+        assert!(caps.wayland_session);
+        let json = serde_json::to_value(&caps).unwrap();
+        assert_eq!(json["wayland_session"], serde_json::json!(true));
+        assert_eq!(json["can_park"], serde_json::json!(false));
     }
 
     #[test]

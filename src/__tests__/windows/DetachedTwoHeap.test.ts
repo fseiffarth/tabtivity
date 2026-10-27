@@ -179,7 +179,7 @@ describe("Group B — two heaps, one protocol", () => {
     expect(payload?.viewerState?.breakpoints).toEqual([12]);
     // The popout's own seed registry knows it too, so a pane remounting before
     // the next reseed still recovers what it just wrote.
-    expect(popout.tabs.getDetachedViewerState(b.key)?.breakpoints).toEqual([12]);
+    expect(popout.tabViewerState.getDetachedViewerState(b.key)?.breakpoints).toEqual([12]);
   });
 
   it("a TeX workspace sub-pane's position written in a popout survives the dock-back", async () => {
@@ -605,7 +605,7 @@ describe("Group B — two heaps, one protocol", () => {
     // by a webview reload cannot re-mint an id that tree still carries.
     const ids = popout.detached.mintDetachedSplitIds(
       label,
-      popout.tabs.allNodeIds(rec.subtree),
+      popout.tabLayoutTree.allNodeIds(rec.subtree),
     );
     const edit = {
       kind: "split" as const,
@@ -621,7 +621,7 @@ describe("Group B — two heaps, one protocol", () => {
 
     // Same names on both sides — so a drop target the popout reports, and a
     // divider it resizes, address a node the main store actually has.
-    expect(popout.tabs.allNodeIds(popoutTree)).toEqual(main.tabs.allNodeIds(mainTree));
+    expect(popout.tabLayoutTree.allNodeIds(popoutTree)).toEqual(main.tabLayoutTree.allNodeIds(mainTree));
   });
 
   it("a fresh popout heap cannot re-mint an id its tree already carries", async () => {

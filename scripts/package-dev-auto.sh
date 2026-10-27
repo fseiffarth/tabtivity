@@ -42,9 +42,12 @@
 #   package-dev-auto.sh --pause            # until --resume (the dev-build chip's
 #                                          # "Pause auto-builds"); also cancels a
 #                                          # running compile to free the machine
-#   package-dev-auto.sh --build-now        # while paused: one build of HEAD, if
-#                                          # it is newer than the snapshot; stays
-#                                          # paused (the chip's "Build now")
+#   package-dev-auto.sh --stop             # cancel the running pass only (the
+#                                          # chip's "Stop build"); the next
+#                                          # commit builds as usual
+#   package-dev-auto.sh --build-now        # while paused or stopped: one build
+#                                          # of HEAD, if it is newer than the
+#                                          # snapshot (the chip's "Build now")
 #   TABTIVITY_NO_AUTO_DEV_BUILD=1 git commit  # one commit
 # Log: ~/.local/share/tabtivity/package-dev-auto.log (the last build's output).
 set -uo pipefail
@@ -90,6 +93,12 @@ PAUSED="$APP_DIR/package-dev-auto.paused"
 # through it, and drops it after one pass. Never consulted by queue(), so a
 # leftover one cannot make commits build while paused.
 ONCE="$APP_DIR/package-dev-auto.once"
+# Left by `--stop` (the chip's "Stop build"), holding the HEAD it stopped: the
+# running pass cancels itself, and the window's catch-up queue
+# (services::dev_build::queue_if_behind) leaves that HEAD alone instead of
+# starting it again on its next poll. Every queue() drops it, so the next
+# commit — or a resume or "Build now" — builds as usual.
+STOPPED="$APP_DIR/package-dev-auto.stopped"
 FREEZE_TREE="$ROOT/target/freeze-tree"
 # The status build_once returns for a pass it cancelled (128 + SIGTERM).
 CANCELLED=143
@@ -143,6 +152,7 @@ queue() {
     return 0
   fi
   mkdir -p "$APP_DIR" || return 0
+  rm -f "$STOPPED"
   : >"$PENDING"
   # Detached from the committing shell: `git commit` returns now, and closing
   # the terminal (or the editor that ran it) does not take the build with it.
@@ -190,6 +200,11 @@ build_once() {
   while kill -0 "$build" 2>/dev/null; do
     if paused && [ ! -f "$INSTALLING" ]; then
       note "auto-builds paused — cancelling this build"
+      cancel_build "$build"
+      return "$CANCELLED"
+    fi
+    if [ -f "$STOPPED" ] && [ ! -f "$INSTALLING" ]; then
+      note "stopped from the dev-build menu — cancelling this build"
       cancel_build "$build"
       return "$CANCELLED"
     fi
@@ -258,7 +273,9 @@ run() {
     while [ -f "$PENDING" ] \
       && age=$(( $(date +%s) - $(stat -c %Y "$PENDING" 2>/dev/null || echo 0) )) \
       && [ "$age" -lt "$SETTLE_SECONDS" ]; do
-      sleep $(( SETTLE_SECONDS - age ))
+      # A second at a time, so a stop (which drops the marker) ends the wait
+      # at once.
+      sleep 1
     done
     [ -f "$PENDING" ] || break
     if paused; then
@@ -286,6 +303,11 @@ run() {
       rm -f "$PENDING"
       return 0
     fi
+    if [ "$status" -eq "$CANCELLED" ] && [ -f "$STOPPED" ]; then
+      # Nor this: the user stopped it. Auto-builds stay on.
+      note "pass $passes ($built) cancelled — stopped"
+      return 0
+    fi
     note "pass $passes ($built) finished with status $status"
     if [ "$status" -eq 0 ]; then
       rm -f "$FAILED"
@@ -299,8 +321,8 @@ run() {
     fi
   done
 
-  # Paused while settling: nothing was built, nothing to announce.
-  [ "$passes" -eq 0 ] && paused && return 0
+  # Paused or stopped while settling: nothing was built, nothing to announce.
+  [ "$passes" -eq 0 ] && { paused || [ -f "$STOPPED" ]; } && return 0
 
   # Keep target/ under its size cap (it reached 1 TB). After the loop, so the
   # build's own cargo is done; the script itself backs off while any other
@@ -325,7 +347,7 @@ pause() {
 # Undo pause() and catch up: queue HEAD when the installed snapshot is behind
 # it, since the commits made while paused queued nothing.
 resume() {
-  rm -f "$PAUSED"
+  rm -f "$PAUSED" "$STOPPED"
   echo "$APP_DISPLAY (dev): auto-builds resumed"
   local head
   head="$(tree_signature)" || return 0
@@ -334,11 +356,32 @@ resume() {
   await_run
 }
 
-# While paused: build HEAD once, now (no settle wait), when the installed
-# snapshot is not already HEAD — and stay paused. Pausing again cancels it like
-# any other pass. Not paused, it is a plain queue().
+# Cancel the running pass, or the one settling, and nothing else: unlike
+# pause() the next commit builds as usual. An install already under way still
+# finishes (build_once only cancels the compile). Returns once the run has let
+# go of the lock (at most 15 s), so the chip re-reads it idle.
+stop() {
+  local holder
+  holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo 0)"
+  if ! { [ "$holder" -gt 0 ] 2>/dev/null && kill -0 "$holder" 2>/dev/null; }; then
+    echo "$APP_DISPLAY (dev): no build is running"
+    return 0
+  fi
+  tree_signature >"$STOPPED" || : >"$STOPPED"
+  rm -f "$PENDING" "$ONCE"
+  local i
+  for ((i = 0; i < 150; i++)); do
+    kill -0 "$holder" 2>/dev/null || break
+    sleep 0.1
+  done
+  echo "$APP_DISPLAY (dev): build stopped"
+}
+
+# While paused or after a stop: build HEAD once, now (no settle wait), when the
+# installed snapshot is not already HEAD — and stay paused. Pausing again
+# cancels it like any other pass. Otherwise it is a plain queue().
 build_now() {
-  paused || { queue; return 0; }
+  { paused || [ -f "$STOPPED" ]; } || { queue; return 0; }
   local head reason
   head="$(tree_signature)" || { echo "not a git checkout" >&2; return 1; }
   if [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$head" ] && [ -x "$BINARY" ]; then
@@ -350,6 +393,7 @@ build_now() {
     return 1
   fi
   mkdir -p "$APP_DIR" || return 1
+  rm -f "$STOPPED"
   : >"$ONCE"
   : >"$PENDING"
   # Aged past the settle window: the user asked for now.
@@ -357,18 +401,20 @@ build_now() {
   setsid nohup "$SELF" --run </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
   await_run
-  printf '%s (dev): building HEAD once while paused (%s)\n' "$APP_DISPLAY" "$LOG"
+  printf '%s (dev): building HEAD once now (%s)\n' "$APP_DISPLAY" "$LOG"
 }
 
 case "${1:---queue}" in
   --queue) queue ;;
   --run) run ;;
   --pause) pause ;;
+  --stop) stop ;;
   --resume) resume ;;
   --build-now) build_now || exit 1 ;;
   --status)
     if [ -d "$LOCK_DIR" ]; then echo "building (pid $(cat "$LOCK_DIR/pid" 2>/dev/null || echo '?'))"; else echo "idle"; fi
     [ -f "$PENDING" ] && echo "a rebuild is queued"
+    [ -f "$STOPPED" ] && echo "stopped at $(cat "$STOPPED" 2>/dev/null) — the next commit builds again"
     [ -f "$STAMP" ] && echo "installed snapshot signature: $(cat "$STAMP")"
     if [ -f "$FAILED" ]; then
       read -r fcommit fstatus fwhen <"$FAILED"
@@ -380,6 +426,6 @@ case "${1:---queue}" in
     fi
     if reason="$(declined)"; then echo "auto-build declined: $reason"; else echo "auto-build enabled"; fi
     ;;
-  *) echo "usage: $(basename "$0") [--queue|--run|--status|--pause|--resume|--build-now]" >&2; exit 2 ;;
+  *) echo "usage: $(basename "$0") [--queue|--run|--status|--pause|--resume|--stop|--build-now]" >&2; exit 2 ;;
 esac
 exit 0

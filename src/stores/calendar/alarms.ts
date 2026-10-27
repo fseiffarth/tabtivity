@@ -21,6 +21,7 @@ import { translate, useI18nStore } from "../../lib/i18n";
 import { useCalendarStore } from "./calendar";
 import { holdsTimerLease } from "../timerLease";
 import { storageKey } from "../../lib/brand";
+import { notificationsHeld, usePrivacyCurtainStore } from "../../lib/window/privacyCurtain";
 
 /** How often the ticker looks for due reminders. */
 const TICK_MS = 30_000;
@@ -100,7 +101,26 @@ function alarmNotice(alarm: DueAlarm): { title: string; body: string } {
   };
 }
 
+/**
+ * Desktop notices that came due during a talk. A notification pops up on the
+ * shared screen whichever window is shared, so while a presentation runs (and
+ * the privacy curtain is on) they wait, and go out when it ends. The phone's
+ * copy is not held: the phone is not on the call.
+ */
+let heldOs: DueAlarm[] = [];
+usePrivacyCurtainStore.subscribe((s, prev) => {
+  if (prev.presenting && !s.presenting && heldOs.length > 0) {
+    const due = heldOs;
+    heldOs = [];
+    for (const alarm of due) void notifyOs(alarm);
+  }
+});
+
 async function notifyOs(alarm: DueAlarm) {
+  if (notificationsHeld()) {
+    heldOs.push(alarm);
+    return;
+  }
   try {
     if (osPermission === null) {
       osPermission = await isPermissionGranted();

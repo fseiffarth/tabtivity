@@ -16,7 +16,7 @@ import {
 import { formatTime, timePart } from "../../lib/calendar/calendarTime";
 import { useT } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { TodoGlyph } from "./HeaderGlyphs";
 
 const MENU_ID = "todo";
@@ -62,7 +62,7 @@ const SECTION_ROWS = 6;
 export function TodoIndicator() {
   const t = useT();
   const use24h = useUse24h();
-  const enabled = useSettingsStore((s) => s.settings?.todo_board ?? false);
+  const enabled = useSettingsStore((s) => s.settings?.todo_board ?? true);
   const tasks = useCalendarStore((s) => s.tasks);
   const calendars = useCalendarStore((s) => s.calendars);
   const overlayOpen = useTodoStore((s) => s.overlayOpen);
@@ -143,9 +143,9 @@ export function TodoIndicator() {
     window.clearTimeout(closeTimer.current);
     setMenuOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setMenuOpen(false), 250);
+    closeTimer.current = window.setTimeout(() => setMenuOpen(false), headerMenuCloseDelay(e));
   };
 
   /**

@@ -34,10 +34,12 @@ import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stor
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import { hostTabCwd, hostTabId, type TabEntry } from "../../stores/tabs";
+import { type TabEntry } from "../../stores/tabs";
+import { hostTabCwd, hostTabId } from "../../stores/tabs/tabLocation";
 import { useProjectsStore } from "../../stores/projects";
 import { usePaneTab } from "../tabs/paneTabContext";
-import { withAssistantPromptTarget } from "../../lib/assistant";
+import { ASSISTANT_SCOPE, withAssistantPromptTarget } from "../../lib/assistant";
+import { replaceAssistantChat } from "../../stores/assistantScope";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
@@ -66,7 +68,7 @@ import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useReaderVoice } from "./ReaderVoice";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
-import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
+import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
@@ -519,7 +521,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   questionOpen: boolean;
   /** Claude's own suggestion for the next message, read off its empty box. */
   suggestion: string;
-  /** The facts row's end, where the chip row goes; over the text box without it. */
+  /** The facts row's end, where the chip row goes; in the text box without it. */
   chipSlot: HTMLElement | null;
   actionSlot?: HTMLElement | null;
   onEscape: () => void;
@@ -530,6 +532,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   pullRef: MutableRefObject<(() => void) | null>;
 }) {
   const t = useT();
+  const assistantChat = scope === ASSISTANT_SCOPE;
   const [draft, setDraft] = useState(() => readerDraft(scope, tabKey));
   useEffect(() => setReaderDraft(scope, tabKey, draft), [scope, tabKey, draft]);
   const [sending, setSending] = useState(false);
@@ -670,7 +673,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     // dictated words went into the draft.
     const text = draftRef.current.trim();
     if (!current || !text || sending) return;
-    const panel = STATUS_AGENTS[current.cmd] && text === "/status" ? "status"
+    // A Tabby chat has no facts row to open the panel in: the CLI answers.
+    const panel = assistantChat ? null
+      : STATUS_AGENTS[current.cmd] && text === "/status" ? "status"
       : CONTEXT_AGENTS[current.cmd] && text === "/context" ? "context" : null;
     if (panel) {
       onStatus(panel);
@@ -726,10 +731,26 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   /** `/clear` into the tab; false, with the reason said, when it did not go in. */
   const startNewConversation = async (current: TabEntry): Promise<boolean> => {
+    if (assistantChat && current.assistant) return freshAssistantChat(current);
     if (await clearAgentTab(scope, current)) return true;
     // Codex refuses one mid-turn, and says so only in its terminal.
     const busy = agentFamily(agentTabLabel(current)) === "codex" && !!useActivityStore.getState().busyByTab[ptyId];
     setSendError(t(busy ? "terminal.reader.clearBusy" : "terminal.reader.sendFailed"));
+    return false;
+  };
+  /** A Tabby chat's slash commands are off, so `/clear` would never reach its
+   * CLI: Clear is its view's Relaunch — a fresh chat on the same CLI and
+   * model, this one removed with this composer. */
+  const freshAssistantChat = async (current: TabEntry): Promise<boolean> => {
+    if (!current.assistant) return false;
+    try {
+      if (await replaceAssistantChat(current.assistant)) return true;
+      setSendError(t("assistant.newChat.vanished"));
+    } catch (error) {
+      setSendError(isAiOffRefusal(error)
+        ? t("sidePanel.aiOffHint")
+        : t("assistant.newChat.failed", { reason: String(error).replace(/^Error: /, "") }));
+    }
     return false;
   };
   const sendFailure = (error: unknown) =>
@@ -737,7 +758,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
 
   /** The chip row (`ReaderComposerChips`): Plan / Goal only lead the draft,
    * as the phone's do; Clear and Commit act at once and leave the draft alone. */
-  const prefixCommands = draftPrefixes(cli);
+  // A Tabby chat takes no `/plan` or `/goal` and has no files to commit.
+  const prefixCommands = assistantChat ? [] : draftPrefixes(cli);
   const togglePrefix = (command: string) => {
     editDraft(toggleDraftPrefix(draftRef.current, command, prefixCommands));
     composerRef.current?.focus();
@@ -882,7 +904,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     disabled={sending}
     onPrefix={togglePrefix}
     onClear={clearChat}
-    onCommit={commit}
+    onCommit={assistantChat ? undefined : commit}
     actionSlot={actionSlot}
   />;
   return <>
@@ -926,6 +948,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       {historyAt.current !== null && <UntestedTag id="terminal.reader.history" />}
       {undo.current.canUndo() && <UntestedTag id="terminal.reader.undo" />}
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}
+      {assistantChat && <UntestedTag id="assistant.clear" />}
     </div>
     {sendError && (actionSlot && !visible
       ? createPortal(<span className="reader-toolbar-error" role="alert">{sendError}</span>, actionSlot)
@@ -960,7 +983,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * open as the session's do; nothing live — the screen's dialogs, the working
  * row, sending prompts — is drawn under it, since none of that is its.
  */
-export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, onShowChat, navigationSlot, actionSlot }: {
+export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, probeChanges = false, onChangesKnown, onShowChat, navigationSlot, actionSlot }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
   ptyId: string;
@@ -976,6 +999,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** This pane's Diffs tab is selected (`TerminalView`'s own, never another
    * pane's): the chat stays mounted under it, hidden. */
   changesOpen?: boolean;
+  /** Read whether the conversation on screen changed any file, for the
+   * Diffs tab to grey out when it has nothing to show. */
+  probeChanges?: boolean;
+  onChangesKnown?: (has: boolean) => void;
   /** Select this pane's Chat tab — leaving Diffs, or the terminal. */
   onShowChat?: () => void;
   navigationSlot?: HTMLElement | null;
@@ -1371,6 +1398,38 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     };
   }, [visible, scope, cwd, subToken, subLimit, sessionId, chatId, learnPaths, remoteHost]);
 
+  // Whether the Diffs tab has anything to show: one change read, watched like
+  // the chat's. While the tab is open it reads for itself.
+  const onChangesKnownRef = useRef(onChangesKnown);
+  onChangesKnownRef.current = onChangesKnown;
+  useEffect(() => {
+    if (!probeChanges || changesOpen) return;
+    let cancelled = false;
+    let probeVersion: string | undefined;
+    const stop = watchedReads(async (watch) => {
+      const current = tabRef.current;
+      if (!current) return false;
+      const args = readerRequest(scope, current, cwd, probeVersion, 0, subToken, chatId);
+      if (!args) {
+        onChangesKnownRef.current?.(false);
+        return false;
+      }
+      const next = await invoke<{ available: boolean; changes: unknown[]; version?: string; unchanged?: boolean; watched?: boolean }>(
+        "agent_tab_changes", { ...args, limit: 1, watch },
+      ).catch(() => null);
+      if (cancelled) return next?.watched === true;
+      if (next && !next.unchanged) {
+        probeVersion = next.version;
+        onChangesKnownRef.current?.(next.available && next.changes.length > 0);
+      } else if (!next) onChangesKnownRef.current?.(false);
+      return next?.watched === true;
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [probeChanges, changesOpen, scope, cwd, subToken, chatId, sessionId]);
+
   const storedEntries = useMemo(() => (transcript?.available ? transcript.entries : []), [transcript]);
   // A clear (`agentClearUndo`) empties the chat at once, before its card
   // offers it back: what is read now is the cleared conversation, every record
@@ -1437,7 +1496,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const dropPending = useCallback((ids: number[]) => {
     if (sendTarget) forgetSentPrompts(sendTarget, ids);
   }, [sendTarget]);
-  /** The composer's pull, for the last sending bubble's Cancel and edit. */
+  /** The composer's pull, for the sending bubbles' Cancel and edit. */
   const pullQueued = useRef<(() => void) | null>(null);
   /** What ↑ in the composer walks: the session's prompts, as the CLI's box. */
   const history = useMemo(() => composerHistory(entries, pending.map((item) => item.text)), [entries, pending]);
@@ -1656,7 +1715,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     else chatBack();
   };
 
-  /** A list of the session's `agent` entries under a toggle: the chat's own
+  /** A list of the session's `agent` entries under a toggle, the ones at work
+   * grouped above the finished ones: the chat's own
    * Subagents index, or in the top bar Subagents and Workspaces (Claude
    * `Workflow` runs, the orchestrations) side by side. A pick opens it in the
    * chat; from the top bar it also brings the chat back over Diffs or the
@@ -1701,17 +1761,27 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
           buttons[next]?.focus();
         }}>
-          {list.map((entry, index) => (
-            <button type="button" key={`${entry.at ?? ""}:${index}`} disabled={!entry.subagent} onClick={() => { openAgent(entry, true); if (navigationSlot) { setOpen(() => false); onShowChat?.(); } }}>
-              <small>
-                {entry.role ?? subagentLabel}
-                {subagentAtWork(entry, !!live.working) && (
-                  <span className="terminal-reader-working-dots" role="img" aria-label={t("terminal.reader.working")}><i /><i /><i /></span>
-                )}
-              </small>
-              <span>{entry.text}{entry.cut && "…"}</span>
-            </button>
-          ))}
+          {([["running", "mobile.subagent.running"], ["finished", "mobile.subagent.finished"]] as const).map(([group, heading]) => {
+            const rows = splitByWork(list, !!live.working)[group];
+            if (rows.length === 0) return null;
+            const title = t(heading, { count: rows.length });
+            return (
+              <section key={group} className="terminal-reader-subagent-group" aria-label={title}>
+                <h3 className="terminal-reader-subagent-head">{title}</h3>
+                {rows.map((entry, index) => (
+                  <button type="button" key={`${entry.at ?? ""}:${index}`} disabled={!entry.subagent} onClick={() => { openAgent(entry, true); if (navigationSlot) { setOpen(() => false); onShowChat?.(); } }}>
+                    <small>
+                      {entry.role ?? subagentLabel}
+                      {group === "running" && (
+                        <span className="terminal-reader-working-dots" role="img" aria-label={t("terminal.reader.working")}><i /><i /><i /></span>
+                      )}
+                    </small>
+                    <span>{entry.text}{entry.cut && "…"}</span>
+                  </button>
+                ))}
+              </section>
+            );
+          })}
           {earlier > 0 && (
             <button type="button" className="terminal-reader-subagent-earlier" onClick={showEarlier}>
               {t("mobile.subagent.earlier")}
@@ -1758,7 +1828,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   return createPortal(<>
     <div
       ref={regionRef}
-      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}`}
+      className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}`}
       hidden={!shown || changesOpen}
       role="region"
       aria-label={t("terminal.reader.title")}
@@ -1850,12 +1920,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               </Fragment>
             );
           })}
-          {!openStep && !browsed && pending.map((item, index) => (
+          {!openStep && !browsed && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
               {/* Queued behind a busy turn: Esc stops it and Claude sends the
                   queue at once; ↑ in the empty composer takes it back. Both
-                  act on the whole queue, so their buttons go under the last. */}
+                  act on the whole queue; every queued bubble carries them. */}
               {live.working && isClaudeCommand(tab?.cmd) && (
                 <small className="terminal-reader-pending-hint">
                   {t("terminal.reader.sendNowHint")}
@@ -1863,7 +1933,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                   <UntestedTag id="terminal.reader.queuePull" />
                 </small>
               )}
-              {live.working && isClaudeCommand(tab?.cmd) && index === pending.length - 1 && (
+              {live.working && isClaudeCommand(tab?.cmd) && (
                 <div className="terminal-reader-queued-actions">
                   <button type="button" className="terminal-reader-stop" onClick={pressEscape} title={t("terminal.reader.sendNowTitle")}>
                     {t("terminal.reader.sendNow")}
@@ -1955,7 +2025,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           </button>
         )}
       </div>
-      {tab && !browsed && (
+      {/* No facts row in a Tabby chat: the view's own model dropdown says enough. */}
+      {tab && !browsed && scope !== ASSISTANT_SCOPE && (
         <TerminalReaderFacts
           tab={tab}
           ptyId={ptyId}
@@ -2001,7 +2072,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         steering={steering}
         questionOpen={!!shownLive.question}
         suggestion={shownLive.suggestion}
-        chipSlot={actionSlot ? null : chipSlot}
+        chipSlot={actionSlot || scope === ASSISTANT_SCOPE ? null : chipSlot}
         actionSlot={actionSlot}
         onEscape={statusOpen ? closeStatus : openStep ? subagentUp : pressEscape}
         onStatus={requestStatus}

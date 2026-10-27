@@ -1454,6 +1454,9 @@ fn reap_pids(_doomed: Vec<Doomed>, _mode: ReapMode) {}
 
 // ── PtyRegistry ───────────────────────────────────────────────────────────
 
+/// The PTY registry as the app holds it in managed state (`Ctx::get`).
+pub type RegistryState = std::sync::Arc<std::sync::Mutex<PtyRegistry>>;
+
 #[derive(Default)]
 pub struct PtyRegistry {
     entries: HashMap<String, PtyEntry>,

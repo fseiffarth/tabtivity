@@ -368,7 +368,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/clipboard.rs
     ("clipboard_file_paths", Client),
     ("clipboard_has_image", Client),
-    ("copy_png_bytes_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
     ("save_clipboard_image", Client),
     // commands/connect.rs — this desktop as a server's client (plan §7.2):
@@ -408,6 +407,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("dev_build_relaunch", Admin),
     ("dev_build_set_paused", Admin),
     ("dev_build_status", Admin),
+    ("dev_build_stop", Admin),
     // The checkout under `dev_build::SOURCE_ROOT`, a build-time host path.
     ("dev_todo_groups", Admin),
     ("dev_todo_read", Admin),
@@ -437,7 +437,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("create_file", Core),
     ("delete_dir", Core),
     ("delete_file", Core),
-    ("detect_mime", Core),
     ("dir_size", Core),
     ("dir_size_breakdown", Core),
     ("extract_archive", Core),
@@ -748,6 +747,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("presenter_inhibit_sleep", Client),
     ("presenter_next_monitor", Client),
     ("presenter_release_sleep", Client),
+    ("presenting_state", Client),
+    ("privacy_curtain_set", Client),
     // commands/printing.rs
     ("print_job_cancel", Client),
     ("print_jobs_cancel_all", Client),
@@ -865,11 +866,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("root_mcp_session_access", Core),
     ("root_mcp_session_revoke", Core),
     ("root_mcp_status", Core),
-    // commands/screenshot.rs
-    ("capture_screenshot", Client),
-    ("discard_pending_screenshot", Client),
-    ("read_pending_screenshot", Client),
-    ("save_pending_screenshot", Client),
     // commands/search.rs
     ("project_search", Core),
     // commands/settings.rs
@@ -947,6 +943,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_pull", Core),
     ("sync_push", Core),
     ("sync_resolve_if_identical", Core),
+    ("sync_scan_host_new", Core),
     ("sync_set_auto", Core),
     ("sync_set_excluded", Core),
     ("sync_status", Core),
@@ -1137,7 +1134,6 @@ mod tests {
         assert_eq!(class_of("complete_text"), Some(Core));
         assert_eq!(class_of("copilot_complete"), Some(Core));
         assert_eq!(class_of("copy_text_to_clipboard"), Some(Client));
-        assert_eq!(class_of("capture_screenshot"), Some(Client));
         assert_eq!(class_of("openvpn_connect"), Some(Admin));
         assert_eq!(class_of("vm_boot"), Some(Admin));
         assert_eq!(class_of("keyring_unlock"), Some(Off(OffReason::OsKeychain)));

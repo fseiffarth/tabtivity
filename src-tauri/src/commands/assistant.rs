@@ -174,7 +174,7 @@ pub async fn assistant_options() -> Result<AssistantOptions, String> {
     let logins = crate::commands::agents::agent_logins().await;
     app_core::rt::spawn_blocking(move || {
         let settings = storage::load_settings().unwrap_or_default();
-        let (local_models, ollama_reachable) = match crate::commands::ollama::installed_model_names_within(
+        let (local_models, ollama_reachable) = match crate::services::ollama_client::installed_model_names_within(
             std::time::Duration::from_secs(3),
         ) {
             Ok(models) => (models, true),
@@ -398,8 +398,9 @@ mod tests {
     fn the_flag_gates_every_command() {
         assert_eq!(gate(false), Err(OFF.to_string()));
         assert_eq!(gate(true), Ok(()));
-        // An absent settings block is off.
-        assert!(!Settings::default().assistant_enabled());
+        // An absent settings block is on: the assistant ships switched on.
+        assert!(Settings::default().assistant_enabled());
+        assert!(!settings_with(r#"{"assistant": false}"#).assistant_enabled());
     }
 
     #[test]

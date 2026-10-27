@@ -4,39 +4,30 @@ import {
   BLOB_TAB_CMD,
   BROWSER_TAB_CMD,
   PROJECT_FILES_TAB_CMD,
-  PRINTING_TAB_CMD,
-  DISKUSAGE_TAB_CMD,
-  NETWORK_TAB_CMD,
-  MONITOR_TAB_CMD,
-  SKILLSLIBRARY_TAB_CMD,
   PROMPTCHART_TAB_CMD,
   EMPTY_GROUP_ID,
   isPtyTabKind,
   useTabsStore,
   useGroup,
   useGroupTabs,
-  type AddTabOpts,
   type TabEntry,
   type TabKind,
 } from "../../stores/tabs";
+import {
+  PRINTING_TAB_CMD,
+  DISKUSAGE_TAB_CMD,
+  NETWORK_TAB_CMD,
+  MONITOR_TAB_CMD,
+  SKILLSLIBRARY_TAB_CMD,
+} from "../../stores/tabs/tabKinds";
+import type { AddTabOpts } from "../../stores/tabs/types";
 import { useDragStore } from "../../stores/drag/drag";
 import { useTabLandStore } from "../../stores/drag/tabLand";
 import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
-import {
-  AGENT_ITEMS,
-  SHELL_ITEMS,
-  TAB_ACCENT,
-  agentMenuEntries,
-  agentShortcutSlots,
-  buildStaticTabSpec,
-  compactAgentMenuEntries,
-  isFileTabKind,
-  itemLabel,
-  onOwnLogin,
-  type StaticMenuItem,
-} from "./newTabItems";
+import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
+import { agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { AddTabMenuList, type AddMenuEntry, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
@@ -55,7 +46,7 @@ import {
 import { useAgentWorktreePicker } from "./agentWorktrees";
 import type { CloudLaunch } from "../../lib/agents/cloudSessions";
 import { BOX_SCOPE_PREFIX, ROOT_SCOPE } from "../../lib/terminal/ptyId";
-import { CustomAgentDialog } from "./CustomAgentDialog";
+import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { reseedDetached, startDetachedDropSession } from "./detachedDropTargets";
 import { TabHoverCard, shellLaunch } from "./TabHoverCard";
 import { TabStackChip, type StackMember } from "./TabStackChip";
@@ -161,6 +152,12 @@ function canDuplicateTab(tab: TabEntry): boolean {
 }
 
 // Empty activity maps a bar without a tab group subscribes to (see `TabItem`).
+/** The "+" menu's "Add agent…": the Models & agents overlay's Agents & CLIs
+ *  section, where every CLI is installed and custom agents are managed. */
+function openAgentsAndClis(): void {
+  useModelsOverlayStore.getState().openOverlay("agents");
+}
+
 const NO_BUSY: Record<string, boolean> = {};
 const NO_BUSY_KIND: Record<string, BusyKind> = {};
 const NO_ATTENTION: Record<string, AttentionKind> = {};
@@ -658,8 +655,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
   const { promptText, dialogs } = useDialogs();
-  // The manage-custom-agents dialog the "+" menu's "Add custom…" opens.
-  const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   // The tabs live in their own horizontally-scrolling strip; chevrons flank it
@@ -1836,7 +1831,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   agentOrder,
                   onAddCustom: () => {
                     setMenuPos(null);
-                    setAgentDialogOpen(true);
+                    openAgentsAndClis();
                   },
                   t,
                 }),
@@ -1851,7 +1846,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     agentOrder,
                     onAddCustom: () => {
                       setMenuPos(null);
-                      setAgentDialogOpen(true);
+                      openAgentsAndClis();
                     },
                     t,
                   }),
@@ -2064,9 +2059,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             ]}
           />
         </ContextMenuPortal>
-      )}
-      {agentDialogOpen && (
-        <CustomAgentDialog onClose={() => setAgentDialogOpen(false)} />
       )}
       {worktreePicker.dialogs}
       {scheduleDialogKey && (() => {

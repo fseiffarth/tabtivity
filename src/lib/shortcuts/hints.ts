@@ -1,6 +1,7 @@
 import { IS_MAC } from "../platform";
 import { livePanelToggleLabel } from "./shortcutHint";
 import type { TranslationKey } from "../i18n";
+import { FEATURE_HINTS, featureBodyKey, featureTitleKey, type FeatureHintId, type FeatureHintSpec } from "./featureHints";
 
 /** How to enter "focus mode" (panels hidden), translated. The key named is the
  *  one the user has, read live from `livePanelToggleLabel` — the same answer
@@ -40,7 +41,8 @@ export type HintId =
   | "add-tab"
   | "toggle-panels"
   | "file-tree"
-  | "codex-hook-trust";
+  | "codex-hook-trust"
+  | FeatureHintId;
 
 /** Stable id for a hint's optional one-click action. An id rather than a callback
  *  so this module stays pure and store-free (and `HINTS` stays a plain constant);
@@ -63,6 +65,10 @@ export interface HintCtx {
 
 export interface HintDef {
   id: HintId;
+  /** "feature" hints (the `FEATURE_HINTS` catalogue) are paced harder than the
+   *  onboarding ones — a per-session cap and a long gap, see `HintHost` — and
+   *  surface only while their anchor is on screen. Absent means onboarding. */
+  tier?: "feature";
   /** Higher wins when several hints are eligible at once (shown one at a time). */
   priority: number;
   /** `document.querySelector` selector for the element to point at, or null to
@@ -81,7 +87,9 @@ export interface HintDef {
   when: (ctx: HintCtx) => boolean;
 }
 
-export const HINTS: HintDef[] = [
+/** Onboarding and situational hints first, then one per `FEATURE_HINTS` row in
+ *  catalogue order (priority just under the onboarding ones, falling by row). */
+const CORE_HINTS: HintDef[] = [
   {
     // Actionable and situational rather than onboarding filler, so it outranks
     // everything but the empty-workspace prompt.
@@ -132,6 +140,23 @@ export const HINTS: HintDef[] = [
   },
 ];
 
+export const HINTS: HintDef[] = [
+  ...CORE_HINTS,
+  ...(FEATURE_HINTS as readonly FeatureHintSpec[]).map(
+    (spec, i): HintDef => ({
+      id: spec.id as FeatureHintId,
+      tier: "feature",
+      // Tips for what is open right now beat tips for chrome that is always there.
+      priority: (spec.ambient ? 20 : 40) - i * 0.01,
+      anchor: spec.anchor,
+      placement: spec.placement ?? "bottom",
+      titleKey: featureTitleKey(spec.id),
+      bodyKey: featureBodyKey(spec.id),
+      when: () => true,
+    }),
+  ),
+];
+
 /** Resolve a hint's body text. Every hint but "toggle-panels" is a static key;
  *  that one is the per-OS focus-mode tip, computed at read time. */
 export function resolveHintBody(
@@ -141,16 +166,32 @@ export function resolveHintBody(
   return def.bodyKey ? t(def.bodyKey) : focusModeTip(t);
 }
 
+export interface PickOptions {
+  /** Whether a selector's target is on screen right now. Anchored hints are
+   *  eligible only while this says yes; feature hints also need it to be given
+   *  at all (a caller that cannot look at the DOM never gets one). */
+  anchorOnScreen?: (selector: string) => boolean;
+  /** False holds every feature hint back (session cap / gap not yet over). */
+  allowFeature?: boolean;
+}
+
 /** Pure selection: the highest-priority unseen hint eligible for this context,
  *  or null. Returns null when hints are disabled. Exported for unit tests. */
 export function pickHint(
   ctx: HintCtx,
   seen: ReadonlySet<string>,
   enabled: boolean,
+  opts: PickOptions = {},
 ): HintId | null {
   if (!enabled) return null;
+  const { anchorOnScreen, allowFeature = true } = opts;
   const eligible = HINTS.filter((h) => !seen.has(h.id) && h.when(ctx)).sort(
     (a, b) => b.priority - a.priority,
   );
-  return eligible[0]?.id ?? null;
+  for (const h of eligible) {
+    if (h.tier === "feature" && (!allowFeature || !anchorOnScreen)) continue;
+    if (h.anchor && anchorOnScreen && !anchorOnScreen(h.anchor)) continue;
+    return h.id;
+  }
+  return null;
 }

@@ -15,13 +15,12 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
 import {
-  isRestorableKind,
-  isRestorableEmbedTab,
   isRestorableTab,
   pruneSavedTree,
   useTabsStore,
   type SavedLayoutTree,
 } from "../../stores/tabs";
+import { isRestorableKind, isRestorableEmbedTab } from "../../stores/tabs/tabKinds";
 
 const invokeMock = vi.mocked(invoke);
 

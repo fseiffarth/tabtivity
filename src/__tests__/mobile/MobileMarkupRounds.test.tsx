@@ -384,7 +384,7 @@ describe("MarkupView · rounds", () => {
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} refresh={refresh} onClose={() => {}} />);
     await waitFor(() => expect(store.loadLayer).toHaveBeenCalledTimes(1));
     const frame = screen.getByTitle("pdf");
-    await waitFor(() => expect(calls.some((call) => call.url.endsWith(`/outbox/${PDF.name}`))).toBe(true));
+    await waitFor(() => expect(calls.some((call) => call.url.includes(`/outbox/${PDF.name}?`))).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     expect(screen.getByRole("switch", { name: "Show sent marks" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: /Reload PDF/ }));
@@ -395,7 +395,7 @@ describe("MarkupView · rounds", () => {
     expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ name: PDF.name }));
     // A new frame for the new bytes; the layer is not read back over itself.
     await waitFor(() => expect(screen.getByTitle("pdf")).not.toBe(frame));
-    await waitFor(() => expect(calls.some((call) => call.url.endsWith(`/outbox/${NEWER.name}`))).toBe(true));
+    await waitFor(() => expect(calls.some((call) => call.url.includes(`/outbox/${NEWER.name}?`))).toBe(true));
     expect(store.loadLayer).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("This file changed since you marked it.")).toBeNull();
     await waitFor(() => {
@@ -528,9 +528,9 @@ describe("MarkupView · apply rounds and Undo", () => {
     vi.useRealTimers();
     // Auto-reload drew the agent's copy.
     await waitFor(() => expect(store.moveLayer).toHaveBeenCalledWith(`p1:outbox:${PDF.name}`, `p1:outbox:${NEWER.name}`, expect.anything()));
-    await waitFor(() => expect(calls.some((call) => call.url.endsWith(`/outbox/${NEWER.name}`))).toBe(true));
+    await waitFor(() => expect(calls.some((call) => call.url.includes(`/outbox/${NEWER.name}?`))).toBe(true));
     store.moveLayer.mockClear();
-    const copyFetches = () => calls.filter((call) => call.url.endsWith(`/outbox/${PDF.name}`)).length;
+    const copyFetches = () => calls.filter((call) => call.url.includes(`/outbox/${PDF.name}?`)).length;
     const fetchedBefore = copyFetches();
     fireEvent.click(undoButton()!);
     fireEvent.click(within(await screen.findByRole("dialog", { name: "Undo the agent's changes from these marks?" })).getByRole("button", { name: "Undo" }));

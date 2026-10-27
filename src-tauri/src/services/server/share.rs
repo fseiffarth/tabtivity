@@ -224,7 +224,7 @@ pub fn pin(hub: &Path) -> [String; 2] {
 fn git_in(dir: &Path, hub: Option<&Path>, args: &[&str]) -> Result<String, String> {
     let mut all: Vec<String> = hub.map(|h| pin(h).to_vec()).unwrap_or_default();
     all.extend(args.iter().map(|a| a.to_string()));
-    let out = crate::commands::git::hookless_git_command_in(dir, &all).output().map_err(|e| format!("git: {e}"))?;
+    let out = crate::services::git_hardened::hookless_git_command_in(dir, &all).output().map_err(|e| format!("git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -279,7 +279,7 @@ pub fn fetch(dir: &Path, hub: &Path) -> Result<(), String> {
 /// [`git_in`] with `input` on stdin.
 fn git_stdin(dir: &Path, args: &[&str], input: &str) -> Result<(), String> {
     use std::io::Write;
-    let mut child = crate::commands::git::hookless_git_command_in(dir, args)
+    let mut child = crate::services::git_hardened::hookless_git_command_in(dir, args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -430,7 +430,7 @@ pub fn push_in(state_dir: &Path, socket: &Path, link: &Link, user: &str) -> Resu
     }
     let missing = git_in(dir, None, &["rev-list", "-n", "1", &tip, "--not", &not_remotes])?;
     let tmp = tmp_dir(state_dir)?;
-    let bundle = tmp.join(format!("{}.bundle", crate::commands::projects::uuid_v4()));
+    let bundle = tmp.join(format!("{}.bundle", crate::storage::uuid_v4()));
     let _cleanup = Remove(bundle.clone());
     let bytes = if missing.is_empty() {
         0
@@ -527,7 +527,7 @@ pub fn create_in(state_dir: &Path, socket: &Path, project_id: &str, dir: &Path, 
 /// objects (another uid's files) and runs no hook.
 pub fn clone_into(parent: &Path, info: &ShareInfo) -> Result<PathBuf, String> {
     let hub = PathBuf::from(&info.path);
-    let base = crate::commands::projects::sanitize_name(&info.name);
+    let base = crate::paths::sanitize_name(&info.name);
     let base = if base.is_empty() { "shared-project".to_string() } else { base };
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let mut dest = parent.join(&base);

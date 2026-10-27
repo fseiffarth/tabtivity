@@ -34,8 +34,9 @@ pub struct SshTooling {
     pub password_auth: bool,
     /// `openvpn` + `pkexec` — required only for VPN-gated hosts.
     pub openvpn: bool,
-    /// `rsync` on the LOCAL machine — enables the SSH-sync bulk fast-path (the
-    /// SFTP-native floor is always used when it (or the host's rsync) is missing).
+    /// `rsync` on the LOCAL `PATH`. Display only: whether the SSH-sync bulk
+    /// fast path runs is `remote_sync::rsync_fast_path`'s, by the version of the
+    /// copy a pull spawns on each end (3.0 or later; else the SFTP floor).
     pub rsync: bool,
 }
 

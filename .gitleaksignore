@@ -71,3 +71,27 @@ f49778aa6513650ebe03570fe61375f8f6f527b0:src/__tests__/mobile/MobileSecretsRelea
 f37b64c04c0916c8d9be4960026a4e1cf41e6adb:src-tauri/src/services/mobile_control/host.rs:generic-api-key:10040
 # remote-machine create test: idempotency_key fixture "0123456789abcdef"
 945a878d8e40b7dcb9291abc785ed2a38331cd46:src/__tests__/mobile/MobileHostMachines.test.tsx:generic-api-key:60
+# tests moved into tests.rs files (14a2af4e): openvpn fake encrypted-key headers with "base64==" body
+14a2af4e70896c9ff2d51b5a5456babb44910026:src-tauri/src/services/openvpn/tests.rs:private-key:899
+14a2af4e70896c9ff2d51b5a5456babb44910026:src-tauri/src/services/openvpn/tests.rs:private-key:910
+14a2af4e70896c9ff2d51b5a5456babb44910026:src-tauri/src/services/openvpn/tests.rs:private-key:925
+14a2af4e70896c9ff2d51b5a5456babb44910026:src-tauri/src/services/openvpn/tests.rs:private-key:948
+# tests moved into tests.rs files (14a2af4e): mail_store test asserting an IMAP folder name ("INBOX/Personnel")
+14a2af4e70896c9ff2d51b5a5456babb44910026:src-tauri/src/services/mail_store/tests.rs:generic-api-key:2455
+14a2af4e70896c9ff2d51b5a5456babb44910026:src-tauri/src/services/mail_store/tests.rs:generic-api-key:2473
+# tests moved into tests.rs files (c87ad388): mobile_control idempotency_key / key fixtures "0123456789abcdef"
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/protocol/tests.rs:generic-api-key:950
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:602
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:1346
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:1648
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:1709
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:1762
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:2351
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:2530
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:2911
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:2978
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:3474
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:3796
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:3808
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:3824
+c87ad3888e17c0ecb80fb487cacc477428271581:src-tauri/src/services/mobile_control/host/tests.rs:generic-api-key:5675

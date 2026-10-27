@@ -65,11 +65,11 @@ describe("Mobile outbox — the name a file was sent under", () => {
     expect(gallery.textContent).not.toContain("20260930");
     const save = within(gallery).getByRole("link", { name: "Save IMG_4711.jpg" });
     expect(save.getAttribute("download")).toBe("IMG_4711.jpg");
-    expect(save.getAttribute("href")).toBe(`/api/v1/projects/p1/outbox/${LEAF}?download=1`);
+    expect(save.getAttribute("href")).toBe(`/api/v1/projects/p1/outbox/${LEAF}?v=1770000000-4&download=1`);
 
     fireEvent.click(within(gallery).getByRole("button", { name: "Share IMG_4711.jpg" }));
     await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
     expect((share.mock.calls[0] as unknown as [{ files: File[] }])[0].files[0].name).toBe("IMG_4711.jpg");
-    expect(fetch).toHaveBeenCalledWith(`/api/v1/projects/p1/outbox/${LEAF}`);
+    expect(fetch).toHaveBeenCalledWith(`/api/v1/projects/p1/outbox/${LEAF}?v=1770000000-4`);
   });
 });

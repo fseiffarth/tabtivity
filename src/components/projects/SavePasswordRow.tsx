@@ -3,7 +3,7 @@ import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { unlockKeyring } from "../../lib/keyring";
 import { useT } from "../../lib/i18n";
-import type { SavedCredentialHandle } from "./useSavedCredential";
+import type { SavedCredentialHandle } from "../../lib/projects/useSavedCredential";
 
 /**
  * **The one "Save password" row** — the switch, the hint that says what it will

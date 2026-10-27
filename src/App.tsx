@@ -2,7 +2,7 @@ import { Suspense, lazy } from "react";
 import { AppShell } from "./components/layout/AppShell";
 import { parseDetachedParam } from "./stores/detached";
 import { parsePresentParam } from "./lib/viewers/deck/present";
-import { isPdfPresentLabel } from "./components/embed/pdf/present";
+import { isPdfPresentLabel } from "./lib/viewers/pdfPresent";
 import { TooltipHost } from "./components/common/TooltipHost";
 
 // Code-split (§5.1 startup size): a static import would pull the deck renderer
@@ -13,7 +13,7 @@ const DeckAudienceApp = lazy(() =>
 );
 
 // The other kind of `?present=` window: one PDF, fullscreen, and nothing else
-// (`components/embed/pdf/present.ts`). Split for the same reason — it pulls
+// (`lib/viewers/pdfPresent.ts`). Split for the same reason — it pulls
 // pdfjs-dist, which no other window's startup should pay for.
 const PdfPresentApp = lazy(() =>
   import("./components/embed/pdf/PdfPresentApp").then((m) => ({ default: m.PdfPresentApp })),

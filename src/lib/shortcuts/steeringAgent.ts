@@ -21,11 +21,13 @@
 import { agentDraftPrefixes, agentFamily } from "../../../shared/agentComposer";
 import {
   SessionPickerOpenError,
+  pressScheduledAgentSubmit,
   scheduledAgentInput,
   sessionPickerOpen,
   submitScheduledAgentCommand,
   submitScheduledAgentMessage,
 } from "../agents/scheduledAgentInput";
+import { confirmFreshSubmit, freshClaude } from "../agents/freshSubmit";
 import { noteSentPrompt } from "../agents/sentPrompts";
 import { noteInputFrom } from "../agents/inputFrom";
 import { useActivityStore } from "../../stores/activity";
@@ -150,8 +152,21 @@ export async function sendSteeringPrompt(tab: TabEntry, text: string): Promise<v
     if (!input || (input.started ?? input.ready)() || Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, START_POLL_MS));
   }
+  const input = scheduledAgentInput(target);
+  // A Claude still starting can take the Enter as a newline or drop it
+  // (`freshSubmit.ts`); a slash command begins no turn for a hook to confirm.
+  const fresh = !!input && freshClaude(input.agent, input.ptyId) && !text.trimStart().startsWith("/");
+  const since = Date.now();
   await submitScheduledAgentMessage(target, text, { whileBusy: true });
   noteSentPrompt(target, text);
   const ptyId = scheduledAgentInput(target)?.ptyId;
   if (ptyId) noteInputFrom(ptyId, "desktop");
+  if (fresh && input) {
+    void confirmFreshSubmit(
+      input.ptyId,
+      since,
+      () => pressScheduledAgentSubmit(target),
+      () => scheduledAgentInput(target) === input,
+    );
+  }
 }

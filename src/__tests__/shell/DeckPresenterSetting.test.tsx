@@ -5,10 +5,10 @@ import { SettingsDialog } from "../../components/layout/SettingsPanel";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
 import { en } from "../../lib/i18n";
-import { dict as de } from "../../lib/i18nDicts/de";
-import { dict as es } from "../../lib/i18nDicts/es";
-import { dict as fr } from "../../lib/i18nDicts/fr";
-import { dict as it_ } from "../../lib/i18nDicts/it";
+import { dict as de } from "../../lib/i18n/de";
+import { dict as es } from "../../lib/i18n/es";
+import { dict as fr } from "../../lib/i18n/fr";
+import { dict as it_ } from "../../lib/i18n/it";
 
 // Settings → Experimental after tab cost plan step 3: Debug mode no longer turns
 // experiments on, so the deck presenter — which had no switch while Debug mode

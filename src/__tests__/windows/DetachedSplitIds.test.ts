@@ -20,11 +20,11 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({ WebviewWindow: {} }));
 import { applyEditToSubtree, mintDetachedSplitIds, type DetachedEdit } from "../../stores/detached";
 import {
   findGroupOfTab,
-  splitSubtree,
   useTabsStore,
   type GroupNode,
   type SplitNode,
 } from "../../stores/tabs";
+import { splitSubtree } from "../../stores/tabs/layoutTree";
 
 function shell(label: string) {
   return { label, cmd: "bash", cwd: "/p", kind: "shell" as const };

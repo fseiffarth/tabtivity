@@ -76,8 +76,10 @@ outside the agent's sandbox, so the agent never sees it.
 
 - **git_push** pushes the checked-out branch, fast-forward only, to its
   existing upstream. Never a force-push, a delete, a tag, a new remote branch,
-  or the remote's default branch. The repository's `pre-push` hook runs first
-  inside the sandbox, without the token.
+  or a branch you listed as protected. A push to the remote's default branch
+  (usually `main`) is allowed but always waits for your click, even at
+  **Push immediately**. The repository's `pre-push` hook runs first inside the
+  sandbox, without the token.
 - **git_release** proposes an annotated release tag on the branch's pushed
   tip. A release **always** waits for you to press **Release** on its card.
 - **ci_runs**, **ci_run** and **ci_security_alerts** read the repository's
@@ -88,7 +90,8 @@ outside the agent's sandbox, so the agent never sees it.
 Per project, on the project pill's menu (**Agent pushes**): **Off**,
 **Propose for approval** (the default — every push is a card you click) or
 **Push immediately**. The first push to a new URL always asks. Optionally list
-**protected branches** an agent may never push. The cards show the agent's
+**protected branches** an agent may never push (list `main` to keep agents
+off it entirely). The cards show the agent's
 note, the state (waiting for you, pushed, failed, dismissed, expired) and the
 output. The whole feature can be switched off in **Settings → Agents → Manage
 CLIs** (under Advanced): **Let project agents ask Tabtivity to push, tag

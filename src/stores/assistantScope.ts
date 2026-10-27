@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isDetachedWindow } from "./detachedContext";
 import { hydrateScopeFromDisk, refreshWorkspaceScope, useTabsStore, type TabEntry } from "./tabs";
-import { ASSISTANT_DEFAULT_MODEL, ASSISTANT_SCOPE, assistantCurrentModel } from "../lib/assistant";
+import { ASSISTANT_DEFAULT_MODEL, ASSISTANT_SCOPE, assistantCurrentModel, assistantNewChat, type AssistantLaunch } from "../lib/assistant";
+import { useAssistantViewStore } from "./assistantView";
 import { useOverlayAgentStore } from "./overlayAgent";
 import { onTerminalExit, onTerminalReady } from "../lib/terminal/terminalBus";
 import { IS_HOST_WINDOWS } from "../lib/platform";
@@ -166,6 +167,34 @@ export async function mountAssistantChat(tabId: string): Promise<TabEntry | null
   // Mounting is asking for the chat to run (a new chat, the phone opening one).
   if (tab) startAssistantChat(tab.key);
   return tab;
+}
+
+/**
+ * A fresh chat on `launch`, selected in the Tabby view, and every other chat
+ * of the scope removed, so the scope holds the one chat both surfaces show:
+ * the view's Relaunch and CLI pick, and the Reader's Clear in a chat (its
+ * slash commands are off, so `/clear` never reaches the CLI). Resolves null
+ * when the new chat was gone before it mounted; a refused
+ * `assistant_new_chat` rejects.
+ */
+export async function replaceAssistantChat(launch: AssistantLaunch): Promise<TabEntry | null> {
+  // The scope first: a created tab arriving at an unhydrated scope is only
+  // picked up by the hydrate (the restored chats would then be missed).
+  await ensureAssistantScopeHydrated();
+  const made = await assistantNewChat(launch.cli, launch.model);
+  const tab = await mountAssistantChat(made.tabId);
+  if (!tab) return null;
+  useAssistantViewStore.getState().select(tab.key);
+  for (const old of assistantTabs().filter((c) => c.key !== tab.key)) deleteAssistantChat(old);
+  return tab;
+}
+
+/** Like closing any tab: the pane unmounts and its PTY is reaped. The persist
+ *  host saves the shorter list. */
+function deleteAssistantChat(chat: TabEntry): void {
+  useAssistantViewStore.getState().forget(chat.key);
+  forgetAssistantChat(chat.key);
+  useTabsStore.getState().removeTabInScope(ASSISTANT_SCOPE, chat.key);
 }
 
 async function refreshIfMissing(tabId: string): Promise<void> {

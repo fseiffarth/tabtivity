@@ -86,7 +86,7 @@ pub fn choices(host_key: &[u8], options: &AssistantOptions) -> Vec<Choice> {
     let models: Vec<&String> = options
         .local_models
         .iter()
-        .filter(|model| crate::commands::ollama::model_name_ok(model))
+        .filter(|model| crate::services::local_drivers::model_name_ok(model))
         .take(MAX_MODELS)
         .collect();
     for option in &options.clis {

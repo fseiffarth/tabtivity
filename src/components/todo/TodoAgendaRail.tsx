@@ -52,7 +52,7 @@ export function TodoAgendaRail({ tasks, defaultCalendarId, intakeColumnId }: Pro
   const use24h = useUse24h();
   const events = useCalendarStore((s) => s.events);
   const calendars = useCalendarStore((s) => s.calendars);
-  const calendarApp = useSettingsStore((s) => s.settings?.calendar_global_app ?? false);
+  const calendarApp = useSettingsStore((s) => s.settings?.calendar_global_app ?? true);
   const overlayOpen = useTodoStore((s) => s.overlayOpen);
   const [tick, setTick] = useState(0);
 

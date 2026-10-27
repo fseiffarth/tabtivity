@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ViewerHeader,
-  useViewerState,
-  useNonPassiveWheel,
-  zoomOffset,
-  clampScale,
-  MIN_SCALE,
-  MAX_SCALE,
-  ZOOM_STEP,
-} from "./FileViewerPane";
-import { useFileScope, usePaneVisible, readFileBytes } from "./fileAccess";
+import { ViewerHeader } from "./fileViewer/ViewerHeader";
+import { useNonPassiveWheel } from "./fileViewer/fontZoom";
+import { zoomOffset, clampScale, MIN_SCALE, MAX_SCALE, ZOOM_STEP } from "./fileViewer/ImageView";
+import { useViewerState } from "./fileViewer/viewerState";
+import { useFileScope, usePaneVisible, readFileBytes } from "../../lib/files/fileAccess";
 import { useDiskReloadPoll } from "../../lib/useDiskReloadPoll";
 import { openGif, effectiveDelayMs } from "../../lib/viewers/gif";
 import { Dropdown } from "../common/Dropdown";

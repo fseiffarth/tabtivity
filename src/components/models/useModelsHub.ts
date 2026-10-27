@@ -73,6 +73,49 @@ export interface MachineLoad {
   mem_temp_c?: number | null;
 }
 
+/** Machine readings shared by the hover menu and overlay; only poll while visible. */
+export function useMachineMeters(active: boolean) {
+  const quiesce = useQuiesce();
+  /** The machine's GPUs; empty when none can be read, and then no headroom line. */
+  const [gpus, setGpus] = useState<GpuSample[]>([]);
+  /** The machine's CPU + RAM; null until the first sample, and on a platform
+      with no aggregate backend (`supported: false`) the block stays hidden. */
+  const [machine, setMachine] = useState<MachineLoad | null>(null);
+
+  // The GPU's own memory AND the machine's CPU/RAM, polled only while the surface
+  // is on screen: the question it raises is "will the next model fit, and is
+  // there anything left to run it with?" — which each model's `size_vram` (its
+  // own share) cannot answer; only the device's free headroom and the machine
+  // load can. Both are machine-wide (Ollama is a separate process, so Tabtivity's
+  // own figures say nothing about it) and both carry no process table, so a tick
+  // is a handful of small reads. They share ONE interval — same cadence, same
+  // gating — rather than two timers firing a frame apart for no benefit.
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    const check = () => {
+      void invoke<GpuSample[]>("gpu_memory_snapshot")
+        .then((g) => {
+          if (!cancelled) setGpus(g);
+        })
+        .catch(() => {});
+      void invoke<MachineLoad>("machine_load_snapshot")
+        .then((m) => {
+          if (!cancelled) setMachine(m);
+        })
+        .catch(() => {});
+    };
+    check();
+    const id = window.setInterval(check, saverInterval(2000, quiesce));
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [active, quiesce]);
+
+  return { gpus, machine };
+}
+
 /** Subset of the backend `AgentInfo` the menu lists (installed agent CLIs). */
 export interface HubAgentInfo {
   id: string;
@@ -116,11 +159,7 @@ export function useModelsHub(active: boolean) {
   // For the "server stopped" hint under an empty list. The app-wide shared poll
   // (`lib/ollamaStatus`), so a second subscriber costs nothing.
   const status = useOllamaStatus(installed, saverInterval(5000, quiesce));
-  /** The machine's GPUs; empty when none can be read, and then no headroom line. */
-  const [gpus, setGpus] = useState<GpuSample[]>([]);
-  /** The machine's CPU + RAM; null until the first sample, and on a platform
-      with no aggregate backend (`supported: false`) the block stays hidden. */
-  const [machine, setMachine] = useState<MachineLoad | null>(null);
+  const { gpus, machine } = useMachineMeters(active);
   // Installed agent CLIs (from list_agents), shown in the Agents section so the
   // ones already available are visible without opening "Manage agents".
   const [agents, setAgents] = useState<HubAgentInfo[]>([]);
@@ -146,37 +185,6 @@ export function useModelsHub(active: boolean) {
   useEffect(() => {
     if (modelsLoading) setError(null);
   }, [modelsLoading]);
-
-  // The GPU's own memory AND the machine's CPU/RAM, polled only while the surface
-  // is on screen: the question it raises is "will the next model fit, and is
-  // there anything left to run it with?" — which each model's `size_vram` (its
-  // own share) cannot answer; only the device's free headroom and the machine
-  // load can. Both are machine-wide (Ollama is a separate process, so Tabtivity's
-  // own figures say nothing about it) and both carry no process table, so a tick
-  // is a handful of small reads. They share ONE interval — same cadence, same
-  // gating — rather than two timers firing a frame apart for no benefit.
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    const check = () => {
-      void invoke<GpuSample[]>("gpu_memory_snapshot")
-        .then((g) => {
-          if (!cancelled) setGpus(g);
-        })
-        .catch(() => {});
-      void invoke<MachineLoad>("machine_load_snapshot")
-        .then((m) => {
-          if (!cancelled) setMachine(m);
-        })
-        .catch(() => {});
-    };
-    check();
-    const id = window.setInterval(check, saverInterval(2000, quiesce));
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [active, quiesce]);
 
   // Whether Ollama is using that GPU at all — read **once per activation**, not
   // on the poll above, because it spawns processes (`systemctl`, `ollama serve

@@ -1354,7 +1354,7 @@ fn reap_if_still_parked(state: &WebClientState, client: &ClientId) {
 /// left alone.
 fn reap_client(state: &WebClientState, client: &ClientId) {
     crate::terminal::route_drop_window_views(client.as_str());
-    if let Some(registry) = state.ctx.state.try_get::<crate::commands::terminal::RegistryState>() {
+    if let Some(registry) = state.ctx.state.try_get::<crate::terminal::RegistryState>() {
         let taken = registry.lock_ok().release_client(client);
         for pty in &taken {
             // As `pty_kill` does: a login marking must not bless a later PTY
@@ -1462,7 +1462,7 @@ async fn handle_raw_call(ctx: &CoreCtx, role: Role, id: u64, header: RawCallHead
         return Answer::Text(ret_frame(id, &Err(Value::String("write_file_bytes: missing path".into()))));
     };
     let project_id = decode(crate::brand::FILE_PROJECT_HEADER).filter(|p| !p.is_empty());
-    let own_folder_unlinked = decode(crate::commands::fs::NO_FOLDER_LINK_HEADER).as_deref() == Some("1");
+    let own_folder_unlinked = decode(crate::services::fs_confine::NO_FOLDER_LINK_HEADER).as_deref() == Some("1");
     let out = crate::commands::fs::write_file_bytes_for(ctx, path, body, project_id, own_folder_unlinked)
         .await
         .map(|()| Value::Null)
@@ -2241,7 +2241,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pty_ownership_lives_in_the_registry_and_a_resume_keeps_it() {
-        use crate::commands::terminal::RegistryState;
+        use crate::terminal::RegistryState;
         use crate::terminal::{insert_test_pty, PtyMeta};
         let dir = tempfile::tempdir().unwrap();
         let events = Arc::new(WebEvents::default());

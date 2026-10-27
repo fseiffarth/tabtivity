@@ -418,7 +418,7 @@ fn run(mut cmd: Command, stdin: Option<Vec<u8>>, limit: usize) -> Result<Output,
 /// A hardened git command in `dir` that reads the repo as the user's own git
 /// would (its config unpinned), the caller's own git variables dropped.
 fn repo_git(dir: &Path, args: &[&str]) -> Command {
-    let mut cmd = crate::commands::git::hardened_git_command_in(dir, args);
+    let mut cmd = crate::services::git_hardened::hardened_git_command_in(dir, args);
     for name in FOREIGN_GIT_ENV {
         cmd.env_remove(name);
     }
@@ -444,7 +444,7 @@ fn output_of(cmd: Command, limit: usize) -> Result<Vec<u8>, RunError> {
 
 /// A path as git reads it from the environment (no Windows `\\?\`).
 fn env_path(path: &Path) -> String {
-    crate::commands::fs::display_path(path)
+    crate::paths::display_path(path)
 }
 
 /// `GIT_ALTERNATE_OBJECT_DIRECTORIES` holding one directory: quoted (git's
@@ -1854,7 +1854,7 @@ mod tests {
         let git_dir = base.join("planted.git");
         // As a user's repo names them: without the `\\?\` prefix Windows'
         // `canonicalize` puts on them.
-        let plain = |p: &Path| crate::commands::fs::display_path(p);
+        let plain = |p: &Path| crate::paths::display_path(p);
         git(&base, &["init", "-q", "--separate-git-dir", &plain(&git_dir), "planted"]);
         git(&base, &["--git-dir", &plain(&git_dir), "config", "core.worktree", &plain(&elsewhere)]);
         assert_eq!(begin(&state, &root, phone(), None), Err(NoUndo::NotGit));

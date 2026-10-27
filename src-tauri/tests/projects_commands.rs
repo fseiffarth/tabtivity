@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use app_lib::commands::project_transfer::{
-    export_project_blocking, import_project_export_blocking, inspect_project_export,
-    preview_project_export, ExportProjectRequest, ImportBundleRequest, MirrorSource,
+    export_project_blocking, import_project_export_blocking, inspect_project_export_blocking,
+    preview_project_export_blocking, ExportProjectRequest, ImportBundleRequest, MirrorSource,
 };
 use app_lib::commands::projects::{
     archive_project_blocking, clear_archive, create_project_blocking, delete_archived_project_blocking, get_projects,
@@ -854,7 +854,7 @@ fn export_import_roundtrip_carries_files_settings_and_tabs() {
         )
         .expect("save layout");
 
-        let preview = preview_project_export(id.clone()).expect("preview");
+        let preview = preview_project_export_blocking(id.clone()).expect("preview");
         assert!(preview.blocked.is_none());
         assert!(preview.files > 0, "the seeded tree has files");
         assert_eq!(preview.tabs, 1);
@@ -868,7 +868,7 @@ fn export_import_roundtrip_carries_files_settings_and_tabs() {
         assert_eq!(report.path, bundle.to_string_lossy());
 
         // The dialog's pre-read: name, shape and "this id is already here".
-        let info = inspect_project_export(bundle.to_string_lossy().to_string()).expect("inspect");
+        let info = inspect_project_export_blocking(bundle.to_string_lossy().to_string()).expect("inspect");
         assert_eq!(info.name, "transfer-project");
         assert_eq!(info.project_id, id);
         assert!(info.contents.dir);
@@ -1046,14 +1046,14 @@ fn agent_conversations_travel_on_request_and_follow_the_folder() {
         // Configuration an agent tab would run: never carried.
         fs::write(source_home.join(".claude").join("settings.json"), b"{\"hooks\":{}}").unwrap();
 
-        let preview = preview_project_export(id.clone()).expect("preview");
+        let preview = preview_project_export_blocking(id.clone()).expect("preview");
         assert_eq!(preview.agent_history_files, 5);
 
         // Off by default: the bundle stays format 1 and carries none of it.
         let plain = home.join(concat!("plain.", app_lib::app_slug!(), "proj"));
         let report = export_project_blocking(full_export(&id, &plain), &mut |_, _| {}).expect("export");
         assert_eq!(report.agent_files, 0);
-        let info = inspect_project_export(plain.to_string_lossy().to_string()).expect("inspect");
+        let info = inspect_project_export_blocking(plain.to_string_lossy().to_string()).expect("inspect");
         assert_eq!(info.format, 1);
         assert!(!info.contents.agent_history);
 
@@ -1063,7 +1063,7 @@ fn agent_conversations_travel_on_request_and_follow_the_folder() {
         let report = export_project_blocking(req, &mut |_, _| {}).expect("export");
         assert_eq!(report.agent_files, 5);
         assert_eq!(report.skipped_count, 0, "{:?}", report.skipped);
-        let info = inspect_project_export(bundle.to_string_lossy().to_string()).expect("inspect");
+        let info = inspect_project_export_blocking(bundle.to_string_lossy().to_string()).expect("inspect");
         assert_eq!(info.format, 2);
         assert!(info.contents.agent_history);
 
@@ -1138,7 +1138,7 @@ fn an_export_names_what_it_left_out() {
         // SAFETY: a valid C string.
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
 
-        let preview = preview_project_export(id.clone()).expect("preview");
+        let preview = preview_project_export_blocking(id.clone()).expect("preview");
         assert_eq!(preview.skipped, 1);
         assert!(preview.rebuildable_dirs.is_empty(), "a bare build/ is the user's");
 
@@ -1146,7 +1146,7 @@ fn an_export_names_what_it_left_out() {
         let report = export_project_blocking(full_export(&id, &bundle), &mut |_, _| {}).expect("export");
         assert_eq!(report.skipped_count, 1);
         assert_eq!(report.skipped[0].path, "pipe");
-        let info = inspect_project_export(bundle.to_string_lossy().to_string()).expect("inspect");
+        let info = inspect_project_export_blocking(bundle.to_string_lossy().to_string()).expect("inspect");
         assert_eq!(info.contents.skipped, 1);
 
         let landing = tempdir_in_test_projects("transfer-skips-landing");
@@ -1210,7 +1210,7 @@ fn export_refuses_vm_projects() {
         }
         fs::write(&registry, serde_json::to_string_pretty(&list).unwrap()).unwrap();
 
-        let preview = preview_project_export(id.clone()).expect("preview");
+        let preview = preview_project_export_blocking(id.clone()).expect("preview");
         assert_eq!(preview.blocked.as_deref(), Some("vm"));
 
         let bundle = home.join(concat!("vm.", app_lib::app_slug!(), "proj"));

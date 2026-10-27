@@ -56,6 +56,16 @@ export function subagentAtWork(ref: Pick<SubagentRef, "running" | "background">,
   return ref.running === true && (sessionBusy || ref.background === true);
 }
 
+/** A subagent list split into its Running and Finished groups, each in the
+ * list's own order: running are the ones at work ([`subagentAtWork`]); the
+ * rest have reported back or will not (the session died mid-turn). */
+export function splitByWork<T extends Pick<SubagentRef, "running" | "background">>(list: readonly T[], sessionBusy: boolean): { running: T[]; finished: T[] } {
+  const running: T[] = [];
+  const finished: T[] = [];
+  for (const item of list) (subagentAtWork(item, sessionBusy) ? running : finished).push(item);
+  return { running, finished };
+}
+
 /** Whether the open subagent of `path` is still at work, by the session's
  * own `entries`, read live: its outermost subagent is at work
  * ([`subagentAtWork`]), and — one nested inside it, whose parent conversation

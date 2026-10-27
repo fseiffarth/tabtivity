@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -20,10 +20,22 @@ import { useImportDrop } from "./importDrop";
 import { logoutRemote, useProjectsStore } from "../../stores/projects";
 import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
-import { useSyncStore, amberPaths, localNewPaths, splitByNewerSide, type SyncSkippedFile } from "../../stores/remote/sync";
+import {
+  useSyncStore,
+  amberPaths,
+  localNewPaths,
+  pushFailure,
+  splitByNewerSide,
+  deleteSideOf,
+  splitByDeleteSide,
+  type SyncResolveOutcome,
+  type SyncSkippedFile,
+} from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
-import { openLinkedFile, viewerForPath } from "../embed/FileViewerPane";
+import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
 import { useWindowsStore } from "../../stores/windows";
+import { rowStaysVisible, useWorkspaceCaps } from "../../lib/workspaceCaps";
+import { IS_LINUX } from "../../lib/platform";
 import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtyState } from "../../stores/gitDirty";
 import { coalescedRun, type CoalescedRun } from "../../lib/coalescedRun";
 import { usePoll, type PollRun } from "../../lib/usePoll";
@@ -35,12 +47,14 @@ import {
   type GitStatus,
 } from "../../lib/projects/fileViewSnapshots";
 import { basename, dirname } from "../../lib/paths";
+import { readDownloadsShown, writeDownloadsShown, type DownloadsHost } from "../../lib/projects/downloadsShown";
 import { projectTypeTags } from "../projects/projectTypeTags";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
 import { IdeHeaderButton } from "../projects/IdeMenuItems";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncSkippedLarge } from "./SyncSkippedLarge";
+import { SyncHostOnlyFiles } from "./SyncHostOnlyFiles";
 import { AgentSchedulesView } from "../agents/AgentSchedulesView";
 import { useDialogs } from "../common/PromptDialogs";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -369,6 +383,12 @@ export interface ProjectFilesViewProps {
    *  view at a time (`assistantShownKeys` is a set, not a count), so a Files
    *  tab beside the panel must not draw a second one. */
   assistant?: boolean;
+
+  /** Which host kind's remembered Downloads-section state this viewer seeds
+   *  from and writes back (`lib/projects/downloadsShown`; shown by default).
+   *  Unset (the docked compact column) → hidden, not remembered: that column
+   *  has no toolbar to bring the section back once closed. */
+  downloadsHost?: DownloadsHost;
 }
 
 export function ProjectFilesView({
@@ -394,6 +414,7 @@ export function ProjectFilesView({
   view: hostView,
   onViewChange,
   assistant,
+  downloadsHost,
 }: ProjectFilesViewProps) {
   const t = useT();
   // Sessions/Jobs/workspaces ask their questions in the panel's own chrome, the
@@ -410,6 +431,8 @@ export function ProjectFilesView({
         .sort((a, b) => a.opened_at - b.opened_at),
     [windows, projectId],
   );
+  // Whether a project switch hides these apps (one fetch per session).
+  const workspaceCaps = useWorkspaceCaps();
   const remarksEnabled = useExperimental("project_remarks");
   // The checkout's todo groups; only a dev build has a checkout to read.
   const devTodo = useDevTodoAvailable();
@@ -466,7 +489,14 @@ export function ProjectFilesView({
   const [showSettings, setShowSettings] = useState(false);
   // Toggles the Downloads section stacked below the file tree (fast-copy of
   // recent downloads into the project). Toolbar ⬇⬇ button; files view only.
-  const [showDownloads, setShowDownloads] = useState(false);
+  // Remembered per host kind, so a project switch or relaunch keeps it.
+  const [showDownloads, setShowDownloadsState] = useState(() =>
+    downloadsHost ? readDownloadsShown(downloadsHost) : false,
+  );
+  const setShowDownloads = (shown: boolean) => {
+    setShowDownloadsState(shown);
+    if (downloadsHost) writeDownloadsShown(downloadsHost, shown);
+  };
   // The in-tree search box's fold, hoisted out of FileTree so its 🔍 can live in
   // the toolbar row beside Files/Git/Apps: closed (the default) the tree spends
   // no row at all on search chrome, which in the side panel's width is the
@@ -549,6 +579,14 @@ export function ProjectFilesView({
   // Files over the 64 MiB cap a "take host" in the diverged view left on the
   // host (gap 35): named in a result line instead of a log line only.
   const [orangeSkipped, setOrangeSkipped] = useState<SyncSkippedFile[] | null>(null);
+  // Why a take-a-side in the diverged view did not transfer: the backend's
+  // refusal used to reach only the console, so the click read as doing nothing.
+  const [orangeError, setOrangeError] = useState<string | null>(null);
+  const noteResolveFailures = (...outcomes: SyncResolveOutcome[]) => {
+    const failed = outcomes.reduce((n, o) => n + o.failed, 0);
+    const first = outcomes.find((o) => o.firstError)?.firstError ?? "";
+    if (failed > 0) setOrangeError(t("projectFilesView.resolveFailed", { count: failed, error: first }));
+  };
   // Whether the project is missing scaffold files — drives the "no scaffold"
   // type tag shown beside its name, mirroring ProjectPill's hover tags.
   const [scaffoldMissing, setScaffoldMissing] = useState(false);
@@ -706,6 +744,7 @@ export function ProjectFilesView({
   const syncMap = useSyncStore((s) => (projectId ? s.byProject[projectId] : undefined));
   const orangeFiles = useMemo(() => amberPaths(syncMap), [syncMap]);
   const newerSplit = useMemo(() => splitByNewerSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
+  const deleteSplit = useMemo(() => splitByDeleteSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
   // NEW local-only files (never synced — the host has no copy). A separate list
   // from the amber one on purpose: these have nothing to merge and no remote
   // side to take, so their whole vocabulary is "upload" or "leave local".
@@ -1886,7 +1925,7 @@ export function ProjectFilesView({
             className={`toolbar-btn toolbar-btn--sm${showDownloads ? " active" : ""}`}
             aria-pressed={showDownloads}
             onClick={() => {
-              setShowDownloads((v) => !v);
+              setShowDownloads(!showDownloads);
               // The section lives in the files view; jump there when revealing it.
               if (!showDownloads) setView("files");
             }}
@@ -2083,6 +2122,19 @@ export function ProjectFilesView({
               </button>
             </div>
           )}
+          {orangeError && (
+            <div className="project-files-sync-result" role="alert">
+              <ErrorNote as="span" error={orangeError} />
+              <button
+                className="file-tree-up"
+                onClick={() => setOrangeError(null)}
+                title={t("common.close")}
+                aria-label={t("common.close")}
+              >
+                ×
+              </button>
+            </div>
+          )}
           {orangeFiles.length === 0 && newLocalFiles.length === 0 ? (
             <div className="side-panel-orange-empty">{t("projectFilesView.noDivergedFiles")}</div>
           ) : (
@@ -2120,10 +2172,12 @@ export function ProjectFilesView({
                         });
                         if (!ok) return;
                         setOrangeSkipped(null);
-                        const skipped = await useSyncStore
+                        setOrangeError(null);
+                        const outcome = await useSyncStore
                           .getState()
                           .resolveAll(projectId, orangeFiles, "host");
-                        setOrangeSkipped(skipped);
+                        setOrangeSkipped(outcome.skipped);
+                        noteResolveFailures(outcome);
                       })();
                     }}
                   >
@@ -2148,9 +2202,10 @@ export function ProjectFilesView({
                           force: true,
                         });
                         if (!ok) return;
-                        await useSyncStore
-                          .getState()
-                          .resolveAll(projectId, orangeFiles, "local");
+                        setOrangeError(null);
+                        noteResolveFailures(
+                          await useSyncStore.getState().resolveAll(projectId, orangeFiles, "local"),
+                        );
                       })();
                     }}
                   >
@@ -2168,6 +2223,8 @@ export function ProjectFilesView({
                         // One confirmation per direction, each naming the files
                         // that side's copy would overwrite.
                         setOrangeSkipped(null);
+                        setOrangeError(null);
+                        const outcomes: SyncResolveOutcome[] = [];
                         if (newerSplit.host.length > 0) {
                           const ok = await confirmSyncTransfer({
                             projectId,
@@ -2179,9 +2236,11 @@ export function ProjectFilesView({
                             force: true,
                           });
                           if (ok) {
-                            setOrangeSkipped(
-                              await useSyncStore.getState().resolveAll(projectId, newerSplit.host, "host"),
-                            );
+                            const outcome = await useSyncStore
+                              .getState()
+                              .resolveAll(projectId, newerSplit.host, "host");
+                            setOrangeSkipped(outcome.skipped);
+                            outcomes.push(outcome);
                           }
                         }
                         if (newerSplit.local.length > 0) {
@@ -2194,14 +2253,55 @@ export function ProjectFilesView({
                             relPaths: newerSplit.local,
                             force: true,
                           });
-                          if (ok) await useSyncStore.getState().resolveAll(projectId, newerSplit.local, "local");
+                          if (ok)
+                            outcomes.push(
+                              await useSyncStore.getState().resolveAll(projectId, newerSplit.local, "local"),
+                            );
                         }
+                        noteResolveFailures(...outcomes);
                       })();
                     }}
                   >
                     <ArrowsHorizontalIcon />
                   </button>
                   <UntestedTag id="projectFilesView.takeNewerAll" />
+                  <button
+                    type="button"
+                    className="orange-file-act orange-file-act--icon orange-file-act--delete"
+                    aria-label={t("projectFilesView.deleteAllAria")}
+                    title={t("projectFilesView.deleteAllTitle")}
+                    disabled={remoteBlocked || deleteSplit.host.length + deleteSplit.local.length === 0}
+                    // Every row's 🗑 at once: each file deleted on one side loses
+                    // its surviving copy too. One confirmation per side, each
+                    // naming the files whose last copy it removes.
+                    onClick={() => {
+                      if (!projectId) return;
+                      void (async () => {
+                        setOrangeError(null);
+                        const outcomes: SyncResolveOutcome[] = [];
+                        for (const side of ["host", "local"] as const) {
+                          const relPaths = deleteSplit[side];
+                          if (relPaths.length === 0) continue;
+                          const ok = await confirmSyncTransfer({
+                            projectId,
+                            deleteSide: side,
+                            relPath: "",
+                            isDir: true,
+                            label: project?.name ?? projectId,
+                            relPaths,
+                          });
+                          if (ok)
+                            outcomes.push(
+                              await useSyncStore.getState().applyDeleteAll(projectId, relPaths, side),
+                            );
+                        }
+                        noteResolveFailures(...outcomes);
+                      })();
+                    }}
+                  >
+                    <TrashIcon />
+                  </button>
+                  <UntestedTag id="projectFilesView.deleteAll" />
                 </div>
               </div>
               )}
@@ -2227,17 +2327,8 @@ export function ProjectFilesView({
                 const noHostFile = rowHostMtime == null;
                 const noLocalFile = rowLocalMtime == null;
                 // Which side a 🗑 would delete: the surviving copy of a file
-                // deleted on exactly one side. Deleting the mirror copy is only
-                // offered when the host was actually consulted and positively
-                // reported the file gone (`hostChecked`) — a cold pool reports
-                // every host mtime as null without asking. The backend re-verifies
-                // either premise against live state before deleting anything.
-                const deleteSide: "host" | "local" | null =
-                  noLocalFile && !noHostFile
-                    ? "host"
-                    : noHostFile && !noLocalFile && rowHostChecked
-                      ? "local"
-                      : null;
+                // deleted on exactly one side (`deleteSideOf`).
+                const deleteSide = deleteSideOf(syncMap?.[rel]);
                 // Deleted on BOTH sides since the last sync: nothing to
                 // transfer, nothing to merge — the only sensible action left is
                 // to stop tracking the entry.
@@ -2320,8 +2411,13 @@ export function ProjectFilesView({
                         });
                         if (!ok) return;
                         setOrangeSkipped(null);
-                        const outcome = await useSyncStore.getState().pull(projectId, rel);
-                        setOrangeSkipped(outcome.skippedTooLarge);
+                        setOrangeError(null);
+                        try {
+                          const outcome = await useSyncStore.getState().pull(projectId, rel);
+                          setOrangeSkipped(outcome.skippedTooLarge);
+                        } catch (e) {
+                          setOrangeError(String(e));
+                        }
                       })();
                     }}
                   >
@@ -2344,7 +2440,14 @@ export function ProjectFilesView({
                           label: basename(rel) || rel,
                           force: true,
                         });
-                        if (ok) await useSyncStore.getState().push(projectId, rel, true);
+                        if (!ok) return;
+                        setOrangeError(null);
+                        try {
+                          const why = pushFailure(await useSyncStore.getState().push(projectId, rel, true));
+                          if (why) setOrangeError(why);
+                        } catch (e) {
+                          setOrangeError(String(e));
+                        }
                       })();
                     }}
                   >
@@ -2495,6 +2598,14 @@ export function ProjectFilesView({
                 </>
               )}
             </>
+          )}
+          {projectId && project?.remote && (
+            <SyncHostOnlyFiles
+              projectId={projectId}
+              label={project.name ?? projectId}
+              remoteBlocked={remoteBlocked}
+              syncMap={syncMap}
+            />
           )}
         </div>
       )}
@@ -2855,24 +2966,41 @@ export function ProjectFilesView({
           <div className="file-tree-empty" style={{ paddingBottom: 4 }}>
             <UntestedTag id="projectFilesView.7" />
           </div>
+          {/* A desktop that parks nothing is said once for the list; a
+              parking desktop under Wayland explains each row it still can't
+              hide (no window id = not an XWayland window). Linux only: the
+              Windows/macOS backends always park, and an older backend or the
+              browser client gives no usable answer (null → silence). */}
+          {scopedWindows.length > 0 && workspaceCaps?.canPark === false && IS_LINUX && (
+            <div className="file-tree-empty" style={{ paddingBottom: 4 }}>
+              {t("projectFilesView.noParkingNote")} <UntestedTag id="projectFilesView.noParkingNote" />
+            </div>
+          )}
           {scopedWindows.length === 0 ? (
             <div className="file-tree-empty">{t("projectFilesView.noOpenedWindows")}</div>
           ) : (
             scopedWindows.map((w) => (
-              <div key={w.id} className="file-entry">
-                <span className="file-icon"><WindowIcon /></span>
-                <span className="file-name" title={w.exec}>
-                  {basename(w.exec) || w.exec}
-                  {w.file && <span style={{ color: "var(--text-muted)" }}> {basename(w.file)}</span>}
-                </span>
-                <button
-                  className="tab-close"
-                  onClick={() => closeApp(w.id)}
-                  title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
-                >
-                  ×
-                </button>
-              </div>
+              <Fragment key={w.id}>
+                <div className="file-entry">
+                  <span className="file-icon"><WindowIcon /></span>
+                  <span className="file-name" title={w.exec}>
+                    {basename(w.exec) || w.exec}
+                    {w.file && <span style={{ color: "var(--text-muted)" }}> {basename(w.file)}</span>}
+                  </span>
+                  <button
+                    className="tab-close"
+                    onClick={() => closeApp(w.id)}
+                    title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
+                  >
+                    ×
+                  </button>
+                </div>
+                {rowStaysVisible(workspaceCaps, w.window_id) === "wayland" && (
+                  <div className="file-tree-empty" style={{ paddingTop: 0 }}>
+                    {t("projectFilesView.waylandStaysVisible")} <UntestedTag id="projectFilesView.waylandStaysVisible" />
+                  </div>
+                )}
+              </Fragment>
             ))
           )}
         </div>

@@ -179,7 +179,7 @@ say "files named after the app"
 for path in "scripts/$OLD_SLUG-send.sh" "scripts/$OLD_SLUG-send.ps1" "scripts/$OLD_SLUG-send.cmd"; do
   three_forms "$(renamed_path "$path")"
 done
-sed -i -e "s|scripts/$OLD_SLUG-send\.|scripts/$NEW_SLUG-send.|g" src-tauri/src/services/agent_bin.rs
+sed -i -e "s|scripts/$OLD_SLUG-send\.|scripts/$NEW_SLUG-send.|g" src-tauri/src/services/agent/agent_bin.rs
 
 # The launchers: renamed, with a forwarding stub under the old name for the
 # desktop entries and habits that still point there.

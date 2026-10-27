@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 
-import { onImageDragStart } from "../../components/embed/FileViewerPane";
+import { onImageDragStart } from "../../components/embed/fileViewer/ImageView";
 
 /** A minimal DataTransfer stand-in recording setData calls. */
 class MockDataTransfer {

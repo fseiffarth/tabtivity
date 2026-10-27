@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
-import { AgentsPanel } from "../../components/layout/SettingsSubPanels";
+import { AgentsPanel } from "../../components/settings/AgentsPanel";
 
 const agent = (id: string, label: string) => ({
   id,

@@ -3,8 +3,8 @@ use app_core::sync::LockExt;
 use serde::{Deserialize, Serialize};
 use app_core::CoreCtx;
 
-use crate::commands::apps::WindowRegistryState;
-use crate::commands::workspace::WorkspaceStateArc;
+use crate::services::window_registry::WindowRegistryState;
+use crate::platform::WorkspaceStateArc;
 use crate::schema::project::TabEntry;
 use crate::schema::session::{FileTabSession, LayoutSession, ProjectState};
 use crate::services::terminal_service::app_sessions_dir;
@@ -148,7 +148,7 @@ pub fn switch_session(
     //     opened before the warm-up completes, and sandbox's lifecycle lock
     //     serializes rapid switches. Best-effort by design.
     {
-        let registry = ctx.get::<crate::commands::terminal::RegistryState>().clone();
+        let registry = ctx.get::<crate::terminal::RegistryState>().clone();
         let prev = previous_project_id.map(String::from);
         let next = project_id.map(String::from);
         std::thread::spawn(move || {
@@ -199,26 +199,29 @@ pub fn switch(
     //    Acquire WindowRegistry before WorkspaceState (lock order).
     {
         let prev_wids = {
-            // `mut` is only exercised on Windows/macOS (the cfg'd re-resolve
-            // below); other targets bind it immutably.
-            #[cfg_attr(
-                not(any(target_os = "windows", target_os = "macos")),
-                allow(unused_mut)
-            )]
             let mut wins = win_registry.lock_ok();
-            // Windows/macOS: re-resolve any project-owned window whose id was never
-            // captured at launch time (the visible top-level often belongs to a
-            // CHILD of the spawned pid). Runs while holding ONLY the registry lock,
-            // before the WorkspaceState lock below — lock order preserved. The
-            // back-populated ids make this hide AND the switch-back show (step 8)
-            // work through the existing id-based primitives. No-op on Linux,
-            // where launch-time `_NET_WM_PID` resolution already fills the id.
+            // Re-resolve any project-owned window whose id was never captured
+            // at launch time (the visible top-level often belongs to a CHILD of
+            // the spawned pid; a JVM maps its window after the launch's 2 s
+            // budget; a hand-off's launcher exits before the instance shows the
+            // project). Runs while holding ONLY the registry lock, before the
+            // WorkspaceState lock below — lock order preserved. The
+            // back-populated ids make this hide AND the switch-back show
+            // (step 8) work through the existing id-based primitives.
+            // Windows/macOS resolve by pid; Linux by the launch marker's
+            // processes and, for an IDE row, the project's title — one
+            // no-sleep window scan, made only when a row needs it.
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             window_service::resolve_missing_window_ids(
                 &mut wins.windows,
                 previous_project_id,
-                crate::commands::apps::resolve_window_id_for_pid,
+                |w| match w.pid {
+                    0 => None,
+                    pid => crate::commands::apps::resolve_window_id_for_pid(pid),
+                },
             );
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            crate::commands::apps::resolve_missing_launch_windows(&mut wins, previous_project_id);
             window_service::project_window_ids(&wins.windows, previous_project_id)
         };
         let ws = workspace.lock_ok();

@@ -56,7 +56,7 @@ class FakeWebSocket {
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { SubagentsSheet } from "../../../mobile-web/src/screens/SubagentsSheet";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
-import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, stepSibling, subagentAtWork, subagentsIn, workingElapsed, workingModelName } from "../../../mobile-web/src/terminal/subagents";
+import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, subagentsIn, workingElapsed, workingModelName } from "../../../mobile-web/src/terminal/subagents";
 import { BRAND, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, agent_label: "Claude Code", available: true, viewer_busy: false };
@@ -165,6 +165,13 @@ describe("the pure path through subagents", () => {
     expect(subagentAtWork({ running: true, background: true }, false)).toBe(true);
     expect(subagentAtWork({ running: true }, false)).toBe(false);
     expect(subagentAtWork({ background: true }, true)).toBe(false);
+  });
+
+  it("splits a subagent list into Running and Finished, each in its own order", () => {
+    const list = [{ task: "a", running: true }, { task: "b" }, { task: "c", running: true, background: true }, { task: "d", running: true }];
+    expect(splitByWork(list, true)).toEqual({ running: [list[0], list[2], list[3]], finished: [list[1]] });
+    // The session's turn is over: only the background one is still at work.
+    expect(splitByWork(list, false)).toEqual({ running: [list[2]], finished: [list[0], list[1], list[3]] });
   });
 
   it("names a working model by its family", () => {
@@ -356,6 +363,13 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     expect(within(index).getByRole("button", { name: "general-purpose · Find the tests" }).querySelector(".agent-status.working")).not.toBeNull();
     expect(within(index).getByRole("button", { name: "Explore · Map the backend" }).querySelector(".agent-status.done")).not.toBeNull();
     expect(within(index).getByRole("button", { name: "Plan · Still starting" }).querySelector(".agent-status")).toBeNull();
+    // The one at work sits under Running, above the rest under Finished.
+    const running = within(index).getByRole("region", { name: "Running (1)" });
+    within(running).getByRole("button", { name: "general-purpose · Find the tests" });
+    const finished = within(index).getByRole("region", { name: "Finished (2)" });
+    within(finished).getByRole("button", { name: "Explore · Map the backend" });
+    within(finished).getByRole("button", { name: "Plan · Still starting" });
+    expect(running.compareDocumentPosition(finished) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("can fetch older turns from the list when the visible tail has no subagents", async () => {
@@ -489,6 +503,8 @@ describe("a tab card's subagent pill opens a subagent directly", () => {
     expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual(["general-purpose · Find the tests", "Explore · Map the backend"]);
     expect(rows[0].textContent).toContain("at work");
     expect(rows[1].textContent).not.toContain("at work");
+    within(within(dialog).getByRole("region", { name: "Running (1)" })).getByRole("button", { name: "general-purpose · Find the tests" });
+    within(within(dialog).getByRole("region", { name: "Finished (1)" })).getByRole("button", { name: "Explore · Map the backend" });
     fireEvent.click(rows[1]);
     expect(onOpen).toHaveBeenCalledTimes(1);
     const step = onOpen.mock.calls[0][0];

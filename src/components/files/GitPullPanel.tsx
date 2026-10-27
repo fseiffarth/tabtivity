@@ -4,7 +4,7 @@ import { invokeTrusted } from "../../lib/execTrust";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
-import { openLinkedFile } from "../embed/FileViewerPane";
+import { openLinkedFile } from "../embed/fileViewer/openLinked";
 import { WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";

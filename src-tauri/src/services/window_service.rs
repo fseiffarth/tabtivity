@@ -1,7 +1,7 @@
 use crate::brand::SLUG;
 use std::collections::HashMap;
 
-use crate::commands::apps::{TrackedWindow, ORIGIN_DETACHED_SUBWINDOW};
+use crate::services::window_registry::{TrackedWindow, ORIGIN_DETACHED_SUBWINDOW};
 use crate::platform::WorkspaceBackend;
 use crate::schema::session::WindowSession;
 use crate::services::terminal_service::app_sessions_dir;
@@ -55,6 +55,36 @@ pub fn windows_closed_with_main<'a>(labels: impl IntoIterator<Item = &'a str>) -
         .collect();
     out.sort();
     out
+}
+
+/// What is being presented, for the privacy curtain
+/// (`docs/privacy_curtain_plan.md`): `None` while no presentation window
+/// (`present-*`) is open, else `"deck"` when a deck audience window is among
+/// them and `"pdf"` when only PDF present windows (`present-pdf-*`) are.
+///
+/// Derived from the open windows, never stored, so a crash cannot leave a
+/// stale "presenting" behind. A deck outranks a PDF because its speaker view
+/// lives in an app window that must stay visible.
+pub fn presenting_kind<'a>(labels: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+    let mut kind = None;
+    for label in labels {
+        let Some(rest) = label.strip_prefix("present-") else {
+            continue;
+        };
+        if rest.starts_with("pdf-") {
+            kind.get_or_insert("pdf");
+        } else {
+            return Some("deck");
+        }
+    }
+    kind
+}
+
+/// Whether a window is a live browser page (`browser-*`): an external page
+/// with no app IPC, so the privacy curtain can't be drawn in it and it is
+/// capture-protected from Rust instead.
+pub fn is_browser_window(label: &str) -> bool {
+    label.starts_with("browser-")
 }
 
 pub fn hide_windows(backend: &dyn WorkspaceBackend, window_ids: &[u64]) {
@@ -172,11 +202,19 @@ pub fn load_window_session(local_file: &str) -> WindowSession {
 
 /// Back-populate `window_id` for project-owned windows whose id was never
 /// resolved at launch time. For each window matching `project_id` that is
-/// project-owned and currently has no `window_id`, call `resolve(pid)` and store
-/// the result. Used on Windows just before the project-switch hide so a
-/// launch-time miss (the visible top-level belonging to a child of the spawned
-/// pid, or a cold-start race) is no longer permanent — the resolved id then
-/// flows through the unchanged id-based hide AND switch-back show paths.
+/// project-owned and currently has no `window_id`, call `resolve(row)` and
+/// store the result. Used just before the project-switch hide (and, on Linux,
+/// on every Apps-view read) so a launch-time miss (the visible top-level
+/// belonging to a child of the spawned pid, a JVM window mapped after the
+/// launch gave up, a cold-start race) is no longer permanent — the resolved
+/// id then flows through the unchanged id-based hide AND switch-back show
+/// paths.
+///
+/// The resolver gets the whole row, not a pid: a demoted pid-0 row (its
+/// launcher handed off and exited) is still resolvable through its launch
+/// marker (`TrackedWindow::launch_id`) or, for an IDE row, its project title
+/// (`commands::apps::resolve_missing_launch_windows`). Windows/macOS resolve
+/// by pid (`commands::apps::resolve_window_id_for_pid`).
 ///
 /// Pure over its inputs (the resolver is injected), so it is unit-tested with a
 /// fake resolver on any OS. Only the `None`-id case is touched, so windows that
@@ -193,7 +231,7 @@ pub fn load_window_session(local_file: &str) -> WindowSession {
 pub fn resolve_missing_window_ids(
     windows: &mut HashMap<String, TrackedWindow>,
     project_id: Option<&str>,
-    resolve: impl Fn(u32) -> Option<u64>,
+    mut resolve: impl FnMut(&TrackedWindow) -> Option<u64>,
 ) {
     for w in windows.values_mut() {
         if w.project_id.as_deref() == project_id
@@ -201,7 +239,7 @@ pub fn resolve_missing_window_ids(
             && w.origin != ORIGIN_DETACHED_SUBWINDOW
             && w.window_id.is_none()
         {
-            w.window_id = resolve(w.pid);
+            w.window_id = resolve(w);
         }
     }
 }
@@ -210,7 +248,7 @@ pub fn resolve_missing_window_ids(
 /// project switch, plus detached subwindows — which park but are never listed
 /// (they are Tabtivity's own windows, not launched apps).
 fn is_project_owned(origin: &str) -> bool {
-    crate::commands::apps::is_project_opened_origin(origin) || origin == ORIGIN_DETACHED_SUBWINDOW
+    crate::services::window_registry::is_project_opened_origin(origin) || origin == ORIGIN_DETACHED_SUBWINDOW
 }
 
 fn project_owned_windows<'a, 'b>(
@@ -226,7 +264,7 @@ fn project_owned_windows<'a, 'b>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::apps::{
+    use crate::services::window_registry::{
         ORIGIN_DETACHED_SUBWINDOW, ORIGIN_GLOBAL_APP, ORIGIN_SIDE_FILE_TREE,
     };
 
@@ -241,6 +279,7 @@ mod tests {
             opened_at: 0.0,
             window_id: wid,
             origin: origin.to_string(),
+            launch_id: None,
         }
     }
 
@@ -275,6 +314,27 @@ mod tests {
     }
 
     #[test]
+    fn presenting_kind_follows_the_open_present_windows() {
+        assert_eq!(presenting_kind(["main", "detached-p1-g1", "browser-2"]), None);
+        assert_eq!(presenting_kind([]), None);
+        assert_eq!(presenting_kind(["main", "present-pdf-1x2"]), Some("pdf"));
+        assert_eq!(presenting_kind(["main", "present-abc"]), Some("deck"));
+        // A deck's speaker view must stay visible, so it outranks a PDF either way round.
+        assert_eq!(presenting_kind(["present-pdf-1", "present-abc"]), Some("deck"));
+        assert_eq!(presenting_kind(["present-abc", "present-pdf-1"]), Some("deck"));
+        // Only the exact prefix counts.
+        assert_eq!(presenting_kind(["presenter", "xpresent-pdf-1"]), None);
+    }
+
+    #[test]
+    fn only_browser_labels_are_browser_windows() {
+        assert!(is_browser_window("browser-2"));
+        assert!(!is_browser_window("main"));
+        assert!(!is_browser_window("detached-p1-g1"));
+        assert!(!is_browser_window("present-pdf-1"));
+    }
+
+    #[test]
     fn detached_subwindow_origin_is_project_owned() {
         assert!(is_project_owned(ORIGIN_DETACHED_SUBWINDOW));
         assert!(is_project_owned(ORIGIN_SIDE_FILE_TREE));
@@ -285,7 +345,7 @@ mod tests {
     fn apps_view_origins_all_park_on_project_switch() {
         // The parking set is the Apps-view set plus detached subwindows, so
         // everything the view lists is hidden/shown with its project.
-        use crate::commands::apps::{
+        use crate::services::window_registry::{
             ORIGIN_BLOB_FILE_VIEWER, ORIGIN_DOWNLOADS, ORIGIN_MANUAL_LAUNCH,
             ORIGIN_MIDDLE_FILE_BROWSER, ORIGIN_RESTORED,
         };
@@ -351,7 +411,7 @@ mod tests {
         wins.get_mut("c").unwrap().pid = 12;
         wins.get_mut("d").unwrap().pid = 13;
 
-        resolve_missing_window_ids(&mut wins, Some("p1"), |pid| Some(pid as u64 * 100));
+        resolve_missing_window_ids(&mut wins, Some("p1"), |w| Some(w.pid as u64 * 100));
 
         // (a) unresolved + project-owned + this project → back-populated.
         assert_eq!(wins["a"].window_id, Some(1000));
@@ -364,10 +424,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_missing_window_ids_hands_the_resolver_the_row_so_pid_0_rows_resolve() {
+        // A demoted hand-off row has no pid to resolve by; its launch marker
+        // still names the launch, so a row resolver finds its window.
+        let mut wins = registry(vec![
+            tracked("handed", Some("p1"), ORIGIN_SIDE_FILE_TREE, None),
+            tracked("plain", Some("p1"), ORIGIN_SIDE_FILE_TREE, None),
+        ]);
+        for w in wins.values_mut() {
+            w.pid = 0;
+        }
+        wins.get_mut("handed").unwrap().launch_id = Some("tok".into());
+        let mut asked = Vec::new();
+        resolve_missing_window_ids(&mut wins, Some("p1"), |w| {
+            asked.push(w.id.clone());
+            (w.launch_id.as_deref() == Some("tok")).then_some(77)
+        });
+        asked.sort();
+        assert_eq!(asked, ["handed", "plain"]);
+        assert_eq!(wins["handed"].window_id, Some(77));
+        assert_eq!(wins["plain"].window_id, None);
+    }
+
+    #[test]
     fn resolve_missing_window_ids_leaves_none_when_resolver_fails() {
         let mut wins = registry(vec![tracked("a", Some("p1"), ORIGIN_SIDE_FILE_TREE, None)]);
         // A window the OS could not map (e.g. opener::open pid=0) stays unparked.
-        resolve_missing_window_ids(&mut wins, Some("p1"), |_pid| None);
+        resolve_missing_window_ids(&mut wins, Some("p1"), |_| None);
         assert_eq!(wins["a"].window_id, None);
     }
 
@@ -384,7 +467,7 @@ mod tests {
             ORIGIN_DETACHED_SUBWINDOW,
             None,
         )]);
-        resolve_missing_window_ids(&mut wins, Some("p1"), |pid| Some(pid as u64 * 100));
+        resolve_missing_window_ids(&mut wins, Some("p1"), |w| Some(w.pid as u64 * 100));
         assert_eq!(
             wins["detached-p1-g1"].window_id, None,
             "a detached subwindow must never be pid-resolved at hide time"

@@ -23,12 +23,11 @@ import {
   findGroup,
   allGroups,
   orderedTabKeys,
-  serializeTree,
   pruneSavedTree,
-  withHiddenDocked,
   type GroupNode,
   type SplitNode,
 } from "../../stores/tabs";
+import { serializeTree, withHiddenDocked } from "../../stores/tabs/savedLayout";
 
 function tab(label: string) {
   return { label, cmd: "bash", cwd: "/p", kind: "shell" as const };

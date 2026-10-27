@@ -21,7 +21,8 @@ import {
   type DuProgress,
   type DuScan,
 } from "../../lib/projects/diskUsage";
-import { FILES_TAB_CMD, useTabsStore } from "../../stores/tabs";
+import { useTabsStore } from "../../stores/tabs";
+import { FILES_TAB_CMD } from "../../stores/tabs/tabKinds";
 import { useWindowsStore } from "../../stores/windows";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";

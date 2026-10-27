@@ -22,7 +22,8 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
   disabled: boolean;
   onPrefix: (command: string) => void;
   onClear: () => void;
-  onCommit: (choice: CommitChoice) => void;
+  /** Unset: no Commit chip (a Tabby chat has no files). */
+  onCommit?: (choice: CommitChoice) => void;
   /** Clear and Commit stay in the toolbar while the view below changes. */
   actionSlot?: HTMLElement | null;
 }) {
@@ -78,7 +79,7 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
       >
         {t("mobile.composer.clearChip")}
       </button>
-      <button
+      {onCommit && <button
         type="button"
         className={`terminal-reader-chip${commitOpen ? " active" : ""}`}
         disabled={disabled}
@@ -89,8 +90,8 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
         title={t("mobile.commit.open")}
       >
         {t("mobile.commit.open")} <UntestedTag id="terminal.reader.chips" />
-      </button>
-      {commitOpen && (
+      </button>}
+      {onCommit && commitOpen && (
         <div className="terminal-reader-commit-menu" role="menu" aria-label={t("mobile.commit.title")}>
           {COMMIT_CHOICES.map((choice) => (
             <button

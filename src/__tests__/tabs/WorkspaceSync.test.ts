@@ -10,7 +10,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) 
 
 import { invoke } from "@tauri-apps/api/core";
 import { LEGACY_NAMES, NAMES } from "../../lib/brand";
-import { MONITOR_TAB_CMD, _resetSyncBaseForTest, adoptSyncOutcome, applyWorkspacePatch, hydrateScopeFromDisk, refreshWorkspaceScope, useTabsStore, type TabEntry } from "../../stores/tabs";
+import { _resetSyncBaseForTest, adoptSyncOutcome, applyWorkspacePatch, hydrateScopeFromDisk, refreshWorkspaceScope, useTabsStore, type TabEntry } from "../../stores/tabs";
+import { MONITOR_TAB_CMD } from "../../stores/tabs/tabKinds";
 
 // What a window last sent is remembered per scope and tab key, and these
 // cases reuse both.

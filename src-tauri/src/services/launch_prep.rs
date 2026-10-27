@@ -817,8 +817,8 @@ pub async fn prepare(
         // project's root, or a remote member's local mirror — the co-accessible
         // set the box exists to create. An unknown box fails closed, same
         // posture as an unknown project below.
-        if let Some(box_id) = crate::commands::boxes::box_id_of_scope(&pid) {
-            let roots = crate::commands::boxes::box_allowed_roots(box_id)
+        if let Some(box_id) = crate::services::box_store::box_id_of_scope(&pid) {
+            let roots = crate::services::box_store::box_allowed_roots(box_id)
                 .ok_or_else(|| format!("terminal: unknown box scope '{pid}'"))?;
             if !roots.iter().any(|root| cwd_within(&opts.cwd, root)) {
                 return Err(format!(
@@ -857,8 +857,8 @@ pub async fn prepare(
     // (`services::agent_shim`): its project or box, else the root console.
     let scope = crate::services::agent_home::scope_of(opts.project_id.as_deref());
     let project_dir = opts.project_id.as_deref().filter(|_| !assistant).map(|pid| {
-        let box_folder = crate::commands::boxes::box_id_of_scope(pid).and_then(|id|
-            crate::commands::boxes::get_boxes().ok()?.into_iter().find(|b| b.id == id)?.folder);
+        let box_folder = crate::services::box_store::box_id_of_scope(pid).and_then(|id|
+            crate::services::box_store::read_boxes().ok()?.into_iter().find(|b| b.id == id)?.folder);
         let remote = crate::services::remote::remote_target_for(pid);
         let local = crate::services::sandbox::project_dir_for(pid).unwrap_or_default();
         let mirror = crate::services::remote_sync::mirror_dir(pid).to_string_lossy().into_owned();
@@ -881,7 +881,7 @@ pub async fn prepare(
         // the file for 1.x): probe first, so the resolve lists the one this
         // binary loads even right after an upgrade. The check below reuses it.
         if opts.cmd == "opencode" {
-            crate::commands::agents::opencode_is_v2().await;
+            crate::services::agent_registry::opencode_is_v2().await;
         }
         let resolving = opts.clone();
         opts = match tokio::task::spawn_blocking(move || crate::services::agent_session::resolve_agent_session_bounded(resolving)).await {
@@ -975,7 +975,7 @@ pub async fn prepare(
     let push_token = opts.env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned();
 
     // A local OpenCode is offered exactly the models Ollama has loaded (see
-    // `commands::ollama::opencode_loaded_models_config`) — handed over as an
+    // `services::local_drivers::opencode_loaded_models_config`) — handed over as an
     // inline config, never written into OpenCode's own. A remote run's OpenCode
     // talks to the far host's Ollama, and an inline config the user set wins.
     const OPENCODE_INLINE: &str = "OPENCODE_CONFIG_CONTENT";
@@ -986,9 +986,9 @@ pub async fn prepare(
         && !opts.env.contains_key(OPENCODE_INLINE)
         && std::env::var_os(OPENCODE_INLINE).is_none()
     {
-        if let Some(requested) = crate::commands::ollama::opencode_spawn_model(&opts.cmd, &opts.args) {
+        if let Some(requested) = crate::services::local_drivers::opencode_spawn_model(&opts.cmd, &opts.args) {
             if let Some(cfg) =
-                crate::commands::ollama::opencode_loaded_models_config(requested.as_deref())
+                crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref())
             {
                 opts.env.insert(OPENCODE_INLINE.into(), cfg);
             }
@@ -1007,7 +1007,7 @@ pub async fn prepare(
         .await?;
         let provider = match (plan.launch.cli, plan.launch.model.as_deref()) {
             (crate::services::assistant::AssistantCli::OpenCodeLocal, Some(model)) => {
-                Some(crate::commands::ollama::opencode_assistant_provider(model))
+                Some(crate::services::local_drivers::opencode_assistant_provider(model))
             }
             _ => None,
         };
@@ -1018,7 +1018,7 @@ pub async fn prepare(
     // The first v2 launch needs its new flags too; do not defer this probe to
     // the next tab. Remote/container binaries have their own release.
     if opts.cmd == "opencode" && !remote_agent_run && !opts.sandbox
-        && crate::commands::agents::opencode_is_v2().await
+        && crate::services::agent_registry::opencode_is_v2().await
     {
         crate::services::opencode_session::v2_launch_args(&mut opts.args);
     }
@@ -1199,7 +1199,7 @@ pub async fn prepare(
     let named = opts.cmd == "claude"
         && session_name.is_some()
         && !crate::services::agent_fence::runs_subcommand(&opts.args)
-        && crate::commands::agents::claude_takes_name_flag()
+        && crate::services::agent_registry::claude_takes_name_flag()
         && append_claude_name(&mut opts.args, session_name.as_deref());
 
     // A compatible host Codex TUI stays in-process: its detached app-server
@@ -1208,7 +1208,7 @@ pub async fn prepare(
     if opts.cmd == "codex"
         && crate::services::agent_versions::codex_runs_tui(&opts.args)
         && !opts.args.iter().any(|a| a == "--no-daemon")
-        && crate::commands::agents::codex_takes_no_daemon()
+        && crate::services::agent_registry::codex_takes_no_daemon()
     {
         opts.args.push("--no-daemon".to_string());
     }

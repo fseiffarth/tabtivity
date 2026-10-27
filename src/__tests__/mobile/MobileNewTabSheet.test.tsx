@@ -169,7 +169,7 @@ describe("Mobile project screen — the ＋'s tap and hold", () => {
     await screen.findByText("claude 1");
     fireEvent.click(screen.getByRole("button", { name: "New tab" }));
     await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
-    expect(opened).toHaveBeenCalledWith(NEW_TAB, { launchHint: true });
+    expect(opened).toHaveBeenCalledWith(NEW_TAB, undefined);
     expect(screen.queryByRole("dialog", { name: "New tab" })).toBeNull();
     expect(posted()).toHaveLength(1);
     expect(posted()[0]).toMatchObject({ kind: "agent", agent_id: "codex" });

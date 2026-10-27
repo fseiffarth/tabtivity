@@ -1,13 +1,17 @@
 //! WorkspaceBackend trait and auto-detect factory.
 //!
-//! Detection (`detect_backend`):
+//! Detection (`detect_backend`; the Linux decision is the pure [`route`]):
 //!   - Windows → `windows`; macOS → `macos` (one backend each, always).
 //!   - Linux, KDE/Plasma in a Wayland session ([`session_is_wayland`]) →
 //!     `kde-wayland`, which reports workspace info but cannot park windows.
 //!   - Linux, KDE/Plasma (or a failed `kde-wayland` connect) → `x11`.
-//!   - Linux, Cinnamon → `x11`.
-//!   - Everything else — GNOME, XFCE, sway, …, or an `x11` connect that failed
-//!     → `null`, which parks nothing. There is no GNOME backend.
+//!   - Linux, Cinnamon → `x11`, with Cinnamon's workspace settings.
+//!   - Linux, GNOME (an `XDG_CURRENT_DESKTOP` segment `GNOME`), X11 *and*
+//!     Wayland → `x11`, with GNOME's workspace settings
+//!     ([`workspace_settings`]). Under Wayland it parks XWayland windows only;
+//!     native Wayland windows never get an X id, so they stay where they are.
+//!   - Everything else — XFCE, sway, …, or an `x11` connect that failed (no
+//!     `DISPLAY`, XWayland disabled) → `null`, which parks nothing.
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +31,9 @@ pub mod windows;
 /// `#[cfg]`-gated) so its safety-critical unit tests run on any platform; the
 /// Win32 FFI that consumes it lives in `windows.rs`.
 pub mod windows_park;
+/// The desktop workspace settings the `x11` backend takes over while it runs.
+/// Pure (injected `gsettings`), compiled on every OS so its tests run on all.
+pub mod workspace_settings;
 #[cfg(all(target_os = "linux", feature = "desktop"))]
 pub mod x11;
 
@@ -171,6 +178,64 @@ pub trait WorkspaceBackend: Send + Sync {
 
 // ── Factory ────────────────────────────────────────────────────────────────
 
+/// The window-manager backend as the app holds it in managed state.
+pub struct WorkspaceState {
+    pub backend: Box<dyn WorkspaceBackend>,
+}
+
+pub type WorkspaceStateArc = std::sync::Arc<std::sync::Mutex<WorkspaceState>>;
+
+/// The desktop an `x11` backend runs on: which workspace settings it takes
+/// over ([`X11Desktop::settings`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum X11Desktop {
+    /// KDE/Plasma: no settings table (KWin honours `_NET_NUMBER_OF_DESKTOPS`).
+    Kde,
+    Cinnamon,
+    Gnome,
+}
+
+impl X11Desktop {
+    /// The GSettings this desktop's workspaces live in, if the backend has to
+    /// take them over (and so must not restore the count by EWMH request).
+    pub fn settings(self) -> Option<&'static workspace_settings::DesktopSettings> {
+        match self {
+            X11Desktop::Kde => None,
+            X11Desktop::Cinnamon => Some(&workspace_settings::CINNAMON),
+            X11Desktop::Gnome => Some(&workspace_settings::GNOME),
+        }
+    }
+}
+
+/// Which backend a Linux desktop gets, before any connection is tried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// KDE under Wayland: `kde-wayland`, then `x11` (KDE) if that fails.
+    KdeWayland,
+    /// `x11` for this desktop.
+    X11(X11Desktop),
+    /// Nothing parks here.
+    Null,
+}
+
+/// The Linux routing table, pure so every CI leg tests it. `desktop` is
+/// `XDG_CURRENT_DESKTOP` (`:`-separated, any case); `wayland` is
+/// [`session_is_wayland`]. A failed connect falls back to `null` in
+/// [`detect_backend`].
+pub fn route(desktop: &str, wayland: bool) -> Route {
+    let d = desktop.to_lowercase();
+    if d.contains("kde") || d.contains("plasma") {
+        return if wayland { Route::KdeWayland } else { Route::X11(X11Desktop::Kde) };
+    }
+    if d.contains("cinnamon") {
+        return Route::X11(X11Desktop::Cinnamon);
+    }
+    if d.split(':').any(|segment| segment.trim() == "gnome") {
+        return Route::X11(X11Desktop::Gnome);
+    }
+    Route::Null
+}
+
 pub fn detect_backend() -> Box<dyn WorkspaceBackend> {
     #[cfg(target_os = "windows")]
     {
@@ -181,27 +246,22 @@ pub fn detect_backend() -> Box<dyn WorkspaceBackend> {
     // server parks nothing.
     #[cfg(all(target_os = "linux", feature = "desktop"))]
     {
-        let desktop = std::env::var("XDG_CURRENT_DESKTOP")
-            .unwrap_or_default()
-            .to_lowercase();
-        let wayland = x11::session_is_wayland();
-
-        if wayland && (desktop.contains("kde") || desktop.contains("plasma")) {
-            match wayland_kde::KdeWaylandBackend::try_new() {
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+        let x11_desktop = match route(&desktop, x11::session_is_wayland()) {
+            Route::KdeWayland => match wayland_kde::KdeWaylandBackend::try_new() {
                 Ok(b) => return Box::new(b),
-                Err(e) => eprintln!("workspace backend kde-wayland unavailable: {e}"),
-            }
-        }
-
-        if desktop.contains("kde") || desktop.contains("plasma") {
-            match x11::X11Backend::try_new() {
-                Ok(b) => return Box::new(b),
-                Err(e) => eprintln!("workspace backend x11 unavailable: {e}"),
-            }
-        }
-
-        if desktop.contains("cinnamon") || desktop.contains("x-cinnamon") {
-            match x11::X11Backend::try_new() {
+                Err(e) => {
+                    eprintln!("workspace backend kde-wayland unavailable: {e}");
+                    Some(X11Desktop::Kde)
+                }
+            },
+            Route::X11(d) => Some(d),
+            Route::Null => None,
+        };
+        // Under Wayland this X connection starts an on-demand XWayland if
+        // none runs yet, and keeps it while the app runs.
+        if let Some(d) = x11_desktop {
+            match x11::X11Backend::try_new(d) {
                 Ok(b) => return Box::new(b),
                 Err(e) => eprintln!("workspace backend x11 unavailable: {e}"),
             }
@@ -285,7 +345,12 @@ pub fn desktop_owns_super_key() -> bool {
 mod tests {
     use super::*;
 
+    // The `detect_backend` tests never run on a Linux desktop build: there the
+    // factory may connect to the session's X server and take over its
+    // workspace settings (gsettings) — the test suite must never touch the
+    // developer's desktop. `route`'s table test covers the decision.
     #[test]
+    #[cfg(not(all(target_os = "linux", feature = "desktop")))]
     fn detect_backend_always_returns_a_backend() {
         let b = detect_backend();
         let name = b.name();
@@ -296,12 +361,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(all(target_os = "linux", feature = "desktop")))]
     fn detected_backend_info_does_not_panic() {
         let b = detect_backend();
         let _ = b.info(); // must not panic
     }
 
     #[test]
+    #[cfg(not(all(target_os = "linux", feature = "desktop")))]
     fn detected_backend_show_hide_window_zero_does_not_panic() {
         let b = detect_backend();
         // 0 is an invalid window ID — backend must handle it gracefully.
@@ -343,6 +410,39 @@ mod tests {
     }
 
     #[test]
+    fn routes_each_desktop_to_its_backend() {
+        use X11Desktop::*;
+        let table = [
+            ("ubuntu:GNOME", true, Route::X11(Gnome)),
+            ("ubuntu:GNOME", false, Route::X11(Gnome)),
+            ("GNOME", false, Route::X11(Gnome)),
+            ("pop:GNOME", true, Route::X11(Gnome)),
+            ("budgie:GNOME", false, Route::X11(Gnome)),
+            ("KDE", false, Route::X11(Kde)),
+            ("KDE", true, Route::KdeWayland),
+            ("plasma", true, Route::KdeWayland),
+            ("X-Cinnamon", false, Route::X11(Cinnamon)),
+            ("XFCE", false, Route::Null),
+            ("sway", true, Route::Null),
+            // A segment must *be* GNOME, not merely contain it.
+            ("GNOME-Classic-ish", false, Route::Null),
+            ("Unity", false, Route::Null),
+            ("", false, Route::Null),
+        ];
+        for (desktop, wayland, want) in table {
+            assert_eq!(route(desktop, wayland), want, "{desktop} wayland={wayland}");
+        }
+    }
+
+    #[test]
+    fn only_gnome_and_cinnamon_take_settings_over() {
+        assert!(X11Desktop::Kde.settings().is_none());
+        assert_eq!(X11Desktop::Cinnamon.settings().unwrap().desktop, "cinnamon");
+        assert_eq!(X11Desktop::Gnome.settings().unwrap().desktop, "gnome");
+    }
+
+    #[test]
+    #[cfg(not(all(target_os = "linux", feature = "desktop")))]
     fn workspace_info_label_is_not_empty() {
         let b = detect_backend();
         let info = b.info();

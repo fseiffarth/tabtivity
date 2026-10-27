@@ -13,7 +13,7 @@ import { useUse24h } from "../../lib/timeFormat";
 import { conferenceLink } from "../../lib/calendar/conference";
 import { joinConference } from "../../lib/linkTarget";
 import { useT } from "../../lib/i18n";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { CalendarGlyph } from "./HeaderGlyphs";
 import { mutedCalendarIds } from "../../lib/calendar/alarms";
 import { VideoIcon } from "../common/icons/Icon";
@@ -32,7 +32,7 @@ const TICK_MS = 60_000;
  * happen to be looking at. One button in the header, always in the same place,
  * opening the same `CalendarPane` as an overlay (`CalendarOverlayHost`).
  *
- * Off by default (`calendar_global_app`), with **no experimental gate above it**
+ * On by default (`calendar_global_app`), with **no experimental gate above it**
  * — unlike mail, the calendar is shipped and its store reads one local file, so
  * there is nothing to withdraw and nothing to keep off the network.
  *
@@ -62,7 +62,7 @@ const TICK_MS = 60_000;
 export function CalendarIndicator() {
   const t = useT();
   const use24h = useUse24h();
-  const enabled = useSettingsStore((s) => s.settings?.calendar_global_app ?? false);
+  const enabled = useSettingsStore((s) => s.settings?.calendar_global_app ?? true);
   const events = useCalendarStore((s) => s.events);
   const calendars = useCalendarStore((s) => s.calendars);
   const overlayOpen = useCalendarStore((s) => s.overlayOpen);
@@ -163,9 +163,9 @@ export function CalendarIndicator() {
     window.clearTimeout(closeTimer.current);
     setMenuOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setMenuOpen(false), 250);
+    closeTimer.current = window.setTimeout(() => setMenuOpen(false), headerMenuCloseDelay(e));
   };
 
   return (

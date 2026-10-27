@@ -128,8 +128,15 @@ pub async fn dev_build_set_paused(paused: bool) -> Result<(), String> {
         .await
 }
 
+/// Cancel the running background "Tabtivity (dev)" build without pausing
+/// auto-builds, from the dev-build chip's "Stop build". User-clicked only.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn dev_build_stop() -> Result<(), String> {
+    app_core::rt::try_blocking("debug", crate::services::dev_build::stop).await
+}
+
 /// Build HEAD once while the background "Tabtivity (dev)" auto-builds stay
-/// paused, from the dev-build chip's "Build now"; a no-op when the installed
+/// paused or after a stop, from the dev-build chip's "Build now"; a no-op when the installed
 /// snapshot already is HEAD. User-clicked only.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dev_build_now() -> Result<(), String> {

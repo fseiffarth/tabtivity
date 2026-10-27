@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { currentPlatform, shellQuote } from "./pythonRun";
 import type { TranslationKey } from "../i18n";
-import type { DroppedFile } from "../../components/files/importDrop";
+import type { DroppedFile } from "../files/droppedFiles";
 
 /**
  * Files dropped from the OS file manager onto a terminal tab

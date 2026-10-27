@@ -21,15 +21,15 @@ import {
   EMPTY_GROUP_ID,
   ROOT_SCOPE,
   allGroups,
-  dividerFraction,
   findGroupOfTab,
   isPtyTabKind,
-  isSingletonTabKind,
   useTabsStore,
   type DropEdge,
   type LayoutNode,
   type TabEntry,
 } from "../../stores/tabs";
+import { dividerFraction } from "../../stores/tabs/layoutTree";
+import { isSingletonTabKind } from "../../stores/tabs/tabKinds";
 import {
   clampFilesWidth,
   DEFAULT_GROUP_FILES_WIDTH,
@@ -43,7 +43,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { NewTabMenu } from "../tabs/NewTabMenu";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
-import { TabScopeContext } from "../tabs/tabScopeContext";
+import { TabScopeContext } from "../../lib/tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
 import { TabAgentModeMarks, TabContinueButton, TabStatusMark, statusMarkSlots } from "../tabs/TabLocalityBadges";
 import { pickEdge, previewInset } from "../tabs/dragGeometry";

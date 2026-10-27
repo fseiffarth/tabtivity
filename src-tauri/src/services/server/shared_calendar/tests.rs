@@ -96,7 +96,7 @@ fn the_p4c_exit_holds_through_the_daemons() {
 
     // Sharing is a move: out of Alice's calendar.json, into the service.
     let info = share_in(&path, &alice_state, &alice_sock, "lab").unwrap();
-    let local = crate::commands::calendar::read_data(&path).unwrap();
+    let local = crate::services::calendar_store::read_data(&path).unwrap();
     assert!(!local.calendars.iter().any(|c| c.id == "lab") && local.events.len() == 1 && local.tasks.is_empty(), "only the private event stays");
     grant(&alice_sock, &info.id, "bob", Some(Role::Viewer), None);
     grant(&alice_sock, &info.id, "carol", None, Some(Role::Editor));
@@ -146,7 +146,7 @@ fn the_p4c_exit_holds_through_the_daemons() {
 
     // Unshare: everything comes home, links included.
     unshare_in(&path, &alice_state, &alice_sock, &info.id).unwrap();
-    let local = crate::commands::calendar::read_data(&path).unwrap();
+    let local = crate::services::calendar_store::read_data(&path).unwrap();
     assert!(local.calendars.iter().any(|c| c.id == "lab"));
     let back = local.tasks.iter().find(|t| t.id == "t1").unwrap();
     assert_eq!((back.title.as_str(), back.mail.is_some(), back.file.is_some()), ("Order reagents (2x)", true, true));
@@ -182,7 +182,7 @@ fn some_calendars_are_never_shared_and_a_refusal_puts_it_back() {
     assert!(share_in(&path, &state, &state.join("none.sock"), DEFAULT_CALENDAR_ID).unwrap_err().contains("default"));
     // No service: the move is undone, nothing is lost.
     assert!(share_in(&path, &state, &state.join("none.sock"), "lab").is_err());
-    let local = crate::commands::calendar::read_data(&path).unwrap();
+    let local = crate::services::calendar_store::read_data(&path).unwrap();
     assert!(local.calendars.iter().any(|c| c.id == "lab") && local.events.iter().any(|e| e.id == "e1") && local.tasks.iter().any(|t| t.id == "t1"));
     let caldav = Calendar { id: "dav".into(), name: "x".into(), color: "#000".into(), visible: true, readonly: false, rev: 0, extra: [("caldav_account_id".to_string(), serde_json::json!("acct"))].into_iter().collect() };
     assert!(share_refusal(&caldav).unwrap().contains("CalDAV"));
@@ -190,9 +190,9 @@ fn some_calendars_are_never_shared_and_a_refusal_puts_it_back() {
     let mut doc = local.clone();
     doc.calendars.push(Calendar { id: "shared:x".into(), name: "s".into(), color: "#000".into(), visible: true, readonly: true, rev: 1, extra: Default::default() });
     doc.events.push(CalendarEvent { id: "s1".into(), calendar_id: "shared:x".into(), ..Default::default() });
-    assert!(crate::commands::calendar::refuses_shared_rows(&doc), "an agent's proposal naming a shared calendar is refused");
+    assert!(crate::services::calendar_store::refuses_shared_rows(&doc), "an agent's proposal naming a shared calendar is refused");
     strip_shared(&mut doc);
-    assert!(!crate::commands::calendar::refuses_shared_rows(&doc), "a whole-document save never writes one");
+    assert!(!crate::services::calendar_store::refuses_shared_rows(&doc), "a whole-document save never writes one");
 }
 
 #[test]

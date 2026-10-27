@@ -2800,6 +2800,22 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   margin-top: 6px;
   overflow-y: auto;
 }
+/* Running above Finished, each under its own small heading. */
+.terminal-reader-subagent-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.terminal-reader-subagent-group + .terminal-reader-subagent-group { margin-top: 6px; }
+.terminal-reader-subagent-head {
+  margin: 0;
+  padding: 0 2px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
 .terminal-reader-subagent-list button {
   display: flex;
   flex-direction: column;
@@ -3303,6 +3319,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-view-tabs { display: inline-flex; align-items: center; flex: none; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--bg-subtle); }
 .reader-view-tabs > button { padding: 5px 11px; font: inherit; color: var(--text-secondary); border: none; border-radius: var(--radius); background: transparent; cursor: var(--cur-pointer, pointer); }
 .reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--accent); }
+.reader-view-tabs > button:disabled { opacity: 0.45; cursor: var(--cur-not-allowed, not-allowed); }
 .reader-topbar .prompt-strip-reader { border-color: transparent; border-radius: var(--radius); }
 .reader-topbar .prompt-strip-panel { top: calc(100% + 6px); bottom: auto; height: min(560px, 65vh); max-height: 65vh; }
 .reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
@@ -3317,11 +3334,11 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-topbar-actions .terminal-reader-chip { border-color: transparent; border-radius: var(--radius); }
 .reader-topbar-actions .terminal-reader-chip[aria-haspopup="menu"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, var(--border-color)); background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel)); }
 .reader-topbar-actions .terminal-reader-commit-menu { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; z-index: 3; }
-.terminal-reader.has-topbar .terminal-reader-composer { border-top: none; padding: 8px 18px 18px; }
-.terminal-reader.has-topbar .terminal-reader-input textarea { padding: 12px 72px 42px 14px; min-height: 108px; }
-.terminal-reader.has-topbar .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
-.terminal-reader.has-topbar .terminal-reader-send { right: 10px; bottom: 10px; }
-.terminal-reader.has-topbar .terminal-reader-mic { right: 42px; bottom: 12px; }
+.terminal-reader.card-composer .terminal-reader-composer { border-top: none; padding: 8px 18px 18px; }
+.terminal-reader.card-composer .terminal-reader-input textarea { padding: 12px 72px 42px 14px; min-height: 108px; }
+.terminal-reader.card-composer .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
+.terminal-reader.card-composer .terminal-reader-send { right: 10px; bottom: 10px; }
+.terminal-reader.card-composer .terminal-reader-mic { right: 42px; bottom: 12px; }
 .terminal-reader-error {
   flex: none;
   padding: 0 14px 8px;

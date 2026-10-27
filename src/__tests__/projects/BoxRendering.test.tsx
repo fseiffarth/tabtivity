@@ -188,9 +188,9 @@ describe("box chip rendering (slice model)", () => {
     const container = await renderSwitcher();
     expect(chip(container)).toBeTruthy();
     expect(container.querySelector(".root-pill")).toBeNull();
-    // Naming the scope it is in: root, with the app's own mark.
-    expect(chip(container)!.querySelector(".box-chip-star")).toBeTruthy();
-    expect(chip(container)!.textContent).toContain("Root");
+    // The app's logo alone, in the root scope too: no "Root" label.
+    expect(chip(container)!.querySelector(".box-chip-icon")).toBeTruthy();
+    expect(chip(container)!.querySelector(".box-chip-label")).toBeNull();
   });
 
   it("lists root in the dropdown, ahead of the boxes", async () => {

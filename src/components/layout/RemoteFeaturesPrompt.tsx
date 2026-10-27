@@ -7,9 +7,8 @@ import { useT } from "../../lib/i18n";
 /**
  * First-run ask for the two machine-wide remote surfaces that live in the
  * header — OpenVPN tunnel control and the global SSH machines list. Both
- * default OFF (most projects are local-only), so this is what lets someone
- * who *does* use them opt in once instead of discovering the toggles buried
- * in Settings. Shown once (`Settings.remote_features_prompted`, marked seen
+ * default ON, so this is what lets someone who does not use them switch them
+ * off once instead of hunting for the toggles in Settings. Shown once (`Settings.remote_features_prompted`, marked seen
  * by the caller before this ever mounts); re-toggleable any time from
  * Settings' main panel. Reuses the `.modal-backdrop` + `.settings-dialog`
  * chrome, like `HowToStart`.
@@ -17,11 +16,11 @@ import { useT } from "../../lib/i18n";
 export function RemoteFeaturesPrompt({ onClose }: { onClose: () => void }) {
   const t = useT();
   const updateSettings = useSettingsStore((s) => s.updateSettings);
-  const [vpn, setVpn] = useState(false);
-  const [machines, setMachines] = useState(false);
+  const [vpn, setVpn] = useState(true);
+  const [machines, setMachines] = useState(true);
 
   // Escape saves the switches as they are now, like the backdrop. (The old
-  // mount-time listener saved the ones it was mounted with: both off.)
+  // mount-time listener saved the ones it was mounted with.)
   const modalRef = useModalFocus(() => finish());
 
   const finish = () => {

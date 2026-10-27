@@ -8,7 +8,7 @@ import { formatRrule, parseIcs, parseRrule, sameRule, serializeIcs } from "../..
 import { describeRrule, expandEvent, nthWeekdayOfMonth } from "../../lib/calendar/recurrence";
 import { translate, type TranslationKey } from "../../lib/i18n";
 // Registers the lazy dictionaries, so `translate("de", …)` answers in German.
-import "../../lib/i18nDicts/all";
+import "../../lib/i18n/all";
 import type { CalendarEvent, Rrule } from "../../types";
 import { BRAND } from "../../lib/brand";
 

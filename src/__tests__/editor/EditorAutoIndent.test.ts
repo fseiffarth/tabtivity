@@ -14,7 +14,7 @@ import {
   decorateIndentGuides,
   detectIndentUnit,
   type IndentUnit,
-} from "../../components/embed/FileViewerPane";
+} from "../../components/embed/fileViewer/indent";
 
 const FOUR: IndentUnit = { text: "    ", width: 4 };
 const TWO: IndentUnit = { text: "  ", width: 2 };

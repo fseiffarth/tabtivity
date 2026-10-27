@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { isAiOffRefusal } from "../../lib/aiSwitch";
-import { ASSISTANT_DEFAULT_MODEL, ASSISTANT_SCOPE, assistantModelRows, assistantNewChat, type AssistantModelRow } from "../../lib/assistant";
+import { ASSISTANT_DEFAULT_MODEL, ASSISTANT_SCOPE, assistantModelRows, type AssistantModelRow } from "../../lib/assistant";
 import { useT } from "../../lib/i18n";
 import { useAssistantViewStore } from "../../stores/assistantView";
 import {
-  assistantTabs,
   ensureAssistantScopeHydrated,
-  forgetAssistantChat,
-  mountAssistantChat,
+  replaceAssistantChat,
   startAssistantChat,
   switchAssistantModel,
 } from "../../stores/assistantScope";
@@ -20,7 +18,7 @@ import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { AttachedAgentPane } from "../layout/AttachedAgentPane";
 import { CliBlockCard, SearchSetupCard } from "./AssistantCards";
-import { cliBlock, defaultCliOf, defaultModelOf, useAssistantOptions, type AssistantOptionsHandle } from "./useAssistantOptions";
+import { cliBlock, defaultCliOf, defaultModelOf, orderedClis, useAssistantOptions, type AssistantOptionsHandle } from "./useAssistantOptions";
 
 /** A CLI and, for a local one, the model it drives. */
 interface Launch {
@@ -52,7 +50,8 @@ export function AssistantView() {
   const t = useT();
   const handle = useAssistantOptions(true);
   const { options } = handle;
-  const stored = useSettingsStore((s) => s.settings?.assistant_settings);
+  const settings = useSettingsStore((s) => s.settings);
+  const stored = settings?.assistant_settings;
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
     let alive = true;
@@ -109,17 +108,8 @@ export function AssistantView() {
     setBusy(true);
     setError(null);
     try {
-      // The scope first: a created tab arriving at an unhydrated scope is only
-      // picked up by the hydrate (the restored chats would then be missed).
-      await ensureAssistantScopeHydrated();
-      const made = await assistantNewChat(next.cli, next.model);
-      const tab = await mountAssistantChat(made.tabId);
-      if (!tab) {
-        setError(t("assistant.newChat.vanished"));
-        return;
-      }
-      useAssistantViewStore.getState().select(tab.key);
-      for (const old of assistantTabs().filter((c) => c.key !== tab.key)) deleteChat(old);
+      const tab = await replaceAssistantChat(next);
+      if (!tab) setError(t("assistant.newChat.vanished"));
     } catch (err) {
       setError(isAiOffRefusal(err)
         ? t("sidePanel.aiOffHint")
@@ -225,7 +215,10 @@ export function AssistantView() {
           value={current?.cli ?? ""}
           ariaLabel={t("assistant.newChat.cli")}
           title={t("assistant.newChat.cli")}
-          options={options?.clis.map((c) => ({ value: c.id, label: c.label })) ?? []}
+          options={orderedClis(options?.clis ?? [], settings).map((c) => ({
+            value: c.id,
+            label: c.local ? t("assistant.newChat.cliLocal", { cli: c.label }) : c.label,
+          }))}
           placeholder={t("assistant.loading")}
           disabled={!options || busy || switching}
           onChange={pickCli}
@@ -242,6 +235,7 @@ export function AssistantView() {
             onChange={pickModel}
           />
         )}
+        {currentCli && (currentCli.local || modelChoices.length > 0) && <UntestedTag id="assistant.modelSwitch" />}
         <button
           type="button"
           className="settings-btn sm assistant-relaunch"
@@ -256,14 +250,6 @@ export function AssistantView() {
       <section className="assistant-chat-main">{body}</section>
     </div>
   );
-}
-
-/** Like closing any tab: the pane unmounts and its PTY is reaped. The persist
- *  host saves the shorter list. */
-function deleteChat(chat: TabEntry) {
-  useAssistantViewStore.getState().forget(chat.key);
-  forgetAssistantChat(chat.key);
-  useTabsStore.getState().removeTabInScope(ASSISTANT_SCOPE, chat.key);
 }
 
 /** One chat: the cards its CLI may need above, the attach-only view below. */

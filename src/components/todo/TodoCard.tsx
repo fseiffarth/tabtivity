@@ -25,7 +25,7 @@ import { useT } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import { useListReorder } from "../../hooks/useListReorder";
 import { resolveRemarkAbsPath } from "../../lib/projects/projectRemarks";
-import { jumpToSource } from "../embed/FileViewerPane";
+import { jumpToSource } from "../embed/fileViewer/sourceJump";
 import { basename } from "../../lib/paths";
 import { ClockIcon, MailIcon, PinIcon } from "../common/icons/Icon";
 import { useArrived } from "../../stores/calendar/arrivals";

@@ -190,6 +190,16 @@ describe(`${BRAND.display} Mobile Send now`, () => {
     expect(escapes()).toBe(0);
   });
 
+  it("puts the pair under every queued prompt, not only the last", async () => {
+    await queuePrompt();
+    fireEvent.change(screen.getByRole("textbox", { name: "Message agent" }), { target: { value: "and the tests" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await tick(50);
+    await paint(THINKING);
+    expect(screen.getAllByRole("button", { name: "Send now" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Cancel and edit" })).toHaveLength(2);
+  });
+
   it("offers no Send now where the desktop's bridge cannot check the queue", async () => {
     await queuePrompt(false);
     await paint(THINKING);

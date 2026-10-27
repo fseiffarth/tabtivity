@@ -20,7 +20,7 @@ const { mockInvoke, mockOpenFileEntry } = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
-vi.mock("../../components/files/openFileEntry", () => ({ openFileEntry: mockOpenFileEntry }));
+vi.mock("../../lib/files/openFileEntry", () => ({ openFileEntry: mockOpenFileEntry }));
 
 import { SidePanel } from "../../components/layout/SidePanel";
 import { useProjectsStore } from "../../stores/projects";

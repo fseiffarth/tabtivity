@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import { configure } from "@testing-library/react";
 import {
   installTestGuards,
@@ -72,3 +73,12 @@ if (!cssObj || typeof cssObj.escape !== "function") {
 // every machine — not just on the CI runner slow enough to see the fallout.
 globalThis.fetch = unmockedFetch;
 installTestGuards();
+
+// The file view's Downloads section is shown by default in the app, and it
+// scans the OS Downloads dir on mount — a backend call every side panel / Files
+// tab test would otherwise have to mock. Tests start with it hidden;
+// `DownloadsShown.test.ts` unmocks the real module.
+vi.mock("./lib/projects/downloadsShown", () => ({
+  readDownloadsShown: () => false,
+  writeDownloadsShown: () => {},
+}));

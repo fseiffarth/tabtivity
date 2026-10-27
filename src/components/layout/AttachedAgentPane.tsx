@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { ROOT_SCOPE, type TabEntry } from "../../stores/tabs";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useProjectsStore } from "../../stores/projects";
-import { TabScopeContext } from "../tabs/tabScopeContext";
+import { TabScopeContext } from "../../lib/tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
 
 interface Props {

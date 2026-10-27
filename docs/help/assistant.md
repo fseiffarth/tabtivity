@@ -9,11 +9,12 @@ Tabby is a chat assistant that can search and read the web and look things up
 in Tabtivity's own help, and cannot see anything on your computer: no files, no
 projects, no mail or calendar, no MCP servers of yours. Use it for questions
 that need no project ("what does this error mean", "find me the paper on X",
-"how do I sync a remote project?"). It is experimental and off by default.
+"how do I sync a remote project?"). It is experimental and on by default.
 
 ## Turn it on
 
-1. **Settings → System → Experimental**: switch **Tabby** on.
+1. Tabby is on in a new install. If it was switched off, switch **Tabby** on
+   again in **Settings → System → Experimental**.
 2. A small Tabtivity-mark icon (a ring with a tree and two hexagons) appears
    on the side panel's edge bar, below Files, Git, Apps and Agents (and as a
    button in the panel's own row of views), and **Settings → Agents** gets a
@@ -29,8 +30,10 @@ web access.
 ## Choose a CLI and model
 
 The dropdown at the top of the Tabby view lists the CLIs you have installed;
-for a local one a second dropdown picks the Ollama model. Picking another one
-starts a fresh chat on it in place of the current chat. **Relaunch** beside it
+a second dropdown picks the model (Claude's and Codex's own models, or the
+Ollama model for a local one). Picking another CLI starts a fresh chat on it in
+place of the current chat; picking another model restarts the same chat on it
+and keeps the conversation. **Relaunch** beside it
 starts a fresh session of the same CLI (the current conversation ends).
 
 | Choice | Runs on | Web search |
@@ -96,16 +99,17 @@ With the experimental switch on, **Settings → Mobile → Tabby from the phone*
 phone's tab bar on Home; Tabby is not listed among the projects. Tap it for the
 same one chat as on the desktop: the last chat, started again if the desktop
 restarted, or a new one on the default CLI. In the chat, tap the CLI name at the
-top to pick another CLI or local model (dimmed when not signed in on the
-desktop), or the ↻ button to relaunch a fresh session. The phone's chat has no
+top to pick another CLI (dimmed when not signed in on the desktop), the model
+name under it to switch the chat's model, or the ↻ button to relaunch a fresh
+session. The phone's chat has no
 files, outbox, upload or Commit buttons. Tabby works from the phone with the
 desktop window closed as long as Tabtivity is running. Turning the phone switch
 off removes the button. There is no phone chat on Windows (it needs tmux).
 
 ## Troubleshooting
 
-- **No Tabby icon on the side panel's edge bar**: the Experimental switch is
-  off. With no project open the side panel (and its bar) is not shown at all;
+- **No Tabby icon on the side panel's edge bar**: the Experimental switch was
+  turned off. With no project open the side panel (and its bar) is not shown at all;
   open a project or the root folder first.
 - **A model says it cannot search**: local models need a search service set up.
 - **`not_public` on a page you can open in your browser**: the address is on

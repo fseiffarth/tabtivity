@@ -11,7 +11,7 @@
  * call site in FileViewerPane.tsx.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useFileScope, writeFileBytes } from "./fileAccess";
+import { useFileScope, writeFileBytes } from "../../lib/files/fileAccess";
 import { useT } from "../../lib/i18n";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
 import "./ImageAnnotator.css";

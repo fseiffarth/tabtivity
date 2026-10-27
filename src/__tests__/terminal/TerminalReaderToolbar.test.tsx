@@ -8,7 +8,7 @@ const openFile = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn(() => Promise.resolve()) }));
 vi.mock("../../lib/shortcuts/steeringAgent", () => ({ sendSteeringPrompt: (...args: unknown[]) => send(...args), clearAgentTab: vi.fn(() => Promise.resolve(true)) }));
-vi.mock("../../components/files/openFileEntry", () => ({ openFileEntry: (...args: unknown[]) => openFile(...args) }));
+vi.mock("../../lib/files/openFileEntry", () => ({ openFileEntry: (...args: unknown[]) => openFile(...args) }));
 
 import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStrip";
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";

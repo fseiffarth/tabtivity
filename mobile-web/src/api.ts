@@ -999,9 +999,8 @@ export interface SessionTranscript {
   /** The tokens its newest request carried (context plus answer), the count
    * Claude Code's own subagent row shows — read off a subagent's own file. */
   tokens?: number;
-  /** Desktop Reader only (the phone's API strips it): the shell commands the
-   * agent is running now — Claude's `Bash` calls still without a result, and
-   * background ones still running. */
+  /** The shells the agent is running now — Claude's `Bash` calls still
+   * without a result, and background ones still running. */
   shells?: RunningShell[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
@@ -1292,9 +1291,13 @@ export async function listOutbox(scope: OutboxScope, signal?: AbortSignal): Prom
 }
 
 /** The URL an `<img>` loads one outbox image from — same origin, so the
- * session cookie rides along and the CSP's `img-src 'self'` lets it render. */
-export function outboxFileUrl(scope: OutboxScope, name: string, download = false): string {
-  return `${outboxBase(scope)}/${encodeURIComponent(name)}${download ? "?download=1" : ""}`;
+ * session cookie rides along and the CSP's `img-src 'self'` lets it render.
+ * `v` names this version of the file (time and size): the sidecar lets the
+ * phone keep a versioned picture, so the chat's album, the viewer, its Share
+ * and a remounted chat read the bytes over the radio once, and a file
+ * rewritten under the same name is a new URL. */
+export function outboxFileUrl(scope: OutboxScope, file: Pick<OutboxFile, "name" | "modified" | "size">, download = false): string {
+  return `${outboxBase(scope)}/${encodeURIComponent(file.name)}?v=${file.modified}-${file.size}${download ? "&download=1" : ""}`;
 }
 
 /** Which side of the file browser: this computer's folder, or (`host`) a
@@ -1333,7 +1336,7 @@ export function viewerFileUrl(scope: ViewerScope, file: OutboxFile, download = f
   if ("files" in scope) {
     return `/api/v1/projects/${encodeURIComponent(scope.files)}/files/raw?f=${encodeURIComponent(file.ref ?? "")}${download ? "&download=1" : ""}${scope.on === "host" ? "&on=host" : ""}`;
   }
-  return outboxFileUrl(scope, file.name, download);
+  return outboxFileUrl(scope, file, download);
 }
 
 /** Open one of the file URLs above in the browser's own tab (its PDF viewer).
@@ -1376,8 +1379,10 @@ export interface ProjectFileEntry {
 }
 /** `uploads`: whether **Upload here** may add files to this folder — the
  * desktop's "Phone may add files to projects" switch is on and no folder on
- * the way down starts with a dot. An older desktop omits it (no uploads). */
-export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean }
+ * the way down starts with a dot. An older desktop omits it (no uploads).
+ * `remarks`: whether the PDF reader's **Annotate** may write into a PDF of the
+ * project ("Phone may write remarks into PDFs"); omitted by an older desktop. */
+export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean; remarks?: boolean }
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of
  * the project; no `dir` is the project's root. Answers only while the
@@ -1435,6 +1440,26 @@ export function refreshProjectFile(projectId: string, folder: string | undefined
     const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
     return entry ? { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token } : null;
   };
+}
+
+/** One page of **Annotate**'s remarks, in the page's displayed units (the
+ * markup layer's own): highlights (`box`) and notes (`text`) only. */
+export interface RemarksPageBody { n: number; size: [number, number]; marks: Mark[] }
+
+/** `POST /api/v1/projects/{id}/files/remarks?f=<token>` — the PDF reader's
+ * **Annotate → Save**: the remarks go into the project PDF itself, appended as
+ * the desktop's own remarks are kept (`remarks.rs`). `size` and `modified`
+ * are the file as the phone opened it; a PDF changed since is refused with
+ * `409 file_changed`, the switch off with `remarks_off`. Answers the file's
+ * fresh row. */
+export async function saveRemarks(projectId: string, token: string, body: { size: number; modified: number; pages: RemarksPageBody[] }): Promise<ProjectFileEntry> {
+  const answer = await api<{ file?: ProjectFileEntry }>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/files/remarks?f=${encodeURIComponent(token)}`,
+    { method: "POST", body: JSON.stringify(body) },
+    MARKUP_TIMEOUT,
+  );
+  if (!answer.file?.token) throw new ApiError(200, "malformed_response");
+  return answer.file;
 }
 
 /** `DELETE …/outbox/{name}` — drop one of those files. The sidecar deletes

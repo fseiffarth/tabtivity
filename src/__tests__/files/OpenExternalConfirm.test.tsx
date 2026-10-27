@@ -14,10 +14,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { useWindowsStore, type TrackedWindow } from "../../stores/windows";
 import { useOpenExternalStore } from "../../stores/openExternal";
 import { OpenExternalHost } from "../../components/common/OpenExternalHost";
-import { QUEUED_CONFIRM_DELAY_MS } from "../../components/common/PromptDialogs";
+import { QUEUED_CONFIRM_DELAY_MS } from "../../lib/queuedConfirm";
 import { EmbedPane } from "../../components/embed/EmbedPane";
 import { adaptClientCommand } from "../../lib/transport/clientAdapters";
-import { describeFileErrorKey } from "../../components/embed/fileAccess";
+import { describeFileErrorKey } from "../../lib/files/fileAccess";
 import { openErrorText } from "../../lib/openExternal";
 import type { WsClient } from "../../lib/transport/wsClient";
 

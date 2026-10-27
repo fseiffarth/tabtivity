@@ -11,7 +11,7 @@ import { PasswordInput } from "../common/PasswordInput";
 import { UntestedTag } from "../common/UntestedTag";
 import { TerminalSignInToggle } from "./TerminalSignInToggle";
 import { SavePasswordRow } from "./SavePasswordRow";
-import { rememberArg } from "./useSavedCredential";
+import { rememberArg } from "../../lib/projects/useSavedCredential";
 import { CarefulHostToggle } from "./CarefulHostToggle";
 import { HpcHostToggle } from "./HpcHostToggle";
 import { primaryTargetOf, targetOfSpec } from "../../lib/remote/carefulHost";

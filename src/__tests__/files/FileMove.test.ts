@@ -194,7 +194,8 @@ describe("FileTree source tripwires", () => {
     // Folders used to keep only the HTML5 drag (an OS export), so dragging one
     // over a crumb neither spring-opened it nor moved the folder there.
     expect(SRC).toContain("onPointerDown={(ev) => rows.pointerDown(ev, e, dragTarget)}");
-    expect(SRC).toContain("draggedDirRels,");
+    // The gesture itself lives beside the tree, in `fileTreeDrag.ts`.
+    expect(readFileSync("src/components/files/fileTreeDrag.ts", "utf8")).toContain("draggedDirRels,");
   });
 
   it("the move commit routes to the TARGET root, not the source tree's", () => {

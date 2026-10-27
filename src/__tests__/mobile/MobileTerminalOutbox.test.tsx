@@ -94,13 +94,13 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     // The thumbnails load from the sidecar's own route — same origin, the
     // session cookie is the credential — never from a path.
     const thumbs = Array.from(gallery.querySelectorAll("img")).map((img) => img.getAttribute("src"));
-    expect(thumbs).toEqual(["/api/v1/tabs/tab-7/outbox/plot.png", "/api/v1/tabs/tab-7/outbox/shot-1.jpg"]);
+    expect(thumbs).toEqual(["/api/v1/tabs/tab-7/outbox/plot.png?v=1788609510-48000", "/api/v1/tabs/tab-7/outbox/shot-1.jpg?v=1788602400-1300000"]);
     expect(gallery.textContent).toContain("2 min ago");
     expect(gallery.textContent).toContain("2 h ago");
 
     fireEvent.click(screen.getByRole("button", { name: "Open plot.png" }));
     const viewer = screen.getByRole("dialog", { name: "plot.png" });
-    expect(viewer.querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/plot.png");
+    expect(viewer.querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/plot.png?v=1788609510-48000");
     expect(viewer.textContent).toContain("46.9 KB");
     // Closing the picture lands back on the grid it was opened from.
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
@@ -128,7 +128,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     await settle();
     const gallery = openGallery(2);
     expect(Array.from(gallery.querySelectorAll("img")).map((img) => img.getAttribute("src")))
-      .toEqual(["/api/v1/tabs/tab-7/outbox/diagram.png", "/api/v1/tabs/tab-7/outbox/plot.png"]);
+      .toEqual(["/api/v1/tabs/tab-7/outbox/diagram.png?v=1788609595-9000", "/api/v1/tabs/tab-7/outbox/plot.png?v=1788609510-48000"]);
   });
 
   it("opens text as inert text, PDFs in the app's page view, and binary files as downloads", async () => {
@@ -155,7 +155,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     expect(open).not.toHaveBeenCalled();
     fireEvent.click(within(viewer).getByRole("button", { name: "Close" }));
     const link = screen.getByRole("link", { name: "Open data.zip" });
-    expect(link.getAttribute("href")).toBe("/api/v1/tabs/tab-7/outbox/data.zip?download=1");
+    expect(link.getAttribute("href")).toBe("/api/v1/tabs/tab-7/outbox/data.zip?v=1788609600-400&download=1");
     expect(link.getAttribute("download")).toBe("data.zip");
   });
 
@@ -213,7 +213,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     await settle();
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     fireEvent.click(screen.getByRole("button", { name: "Open the whole file" }));
-    await waitFor(() => expect(open).toHaveBeenCalledWith("/api/v1/tabs/tab-7/outbox/huge.log", "_blank", "noopener"));
+    await waitFor(() => expect(open).toHaveBeenCalledWith("/api/v1/tabs/tab-7/outbox/huge.log?v=1788609600-9437184", "_blank", "noopener"));
   });
 
   it("never sends a text out of the iPad's Home Screen app, where there is no way back", async () => {

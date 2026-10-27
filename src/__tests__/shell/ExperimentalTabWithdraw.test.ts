@@ -27,12 +27,11 @@ import { withdrawnTabKinds } from "../../lib/experimental";
 import { useSettingsStore } from "../../stores/settings";
 import {
   BROWSER_TAB_CMD,
-  MAIL_TAB_CMD,
-  RETIRED_TAB_CMDS,
   orderedTabKeys,
   useTabsStore,
   type TabEntry,
 } from "../../stores/tabs";
+import { MAIL_TAB_CMD, RETIRED_TAB_CMDS } from "../../stores/tabs/tabKinds";
 import type { Settings } from "../../types";
 
 const s = (o: Partial<Settings>): Settings => o as Settings;

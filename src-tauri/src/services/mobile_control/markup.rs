@@ -789,7 +789,17 @@ pub struct LocalPage {
 /// Whether `bytes` is a PNG of sane size: the signature, then the `IHDR`
 /// chunk first with a width and height in `1..=MAX_LAYER_SIDE`.
 pub fn check_layer_png(bytes: &[u8]) -> Result<(), MarkupError> {
-    if bytes.len() > MAX_LAYER_BYTES || bytes.len() < 33 || !bytes.starts_with(PNG_MAGIC) || &bytes[8..16] != b"\0\0\0\x0dIHDR" {
+    check_png(bytes, MAX_LAYER_BYTES)
+}
+
+/// `check_layer_png` for a picture source's composed copy: the picture at its
+/// own size (`MAX_COMPOSED` a side), bounded by what the inbox stores.
+pub fn check_picture_png(bytes: &[u8]) -> Result<(), MarkupError> {
+    check_png(bytes, inbox::MAX_INBOX_FILE)
+}
+
+fn check_png(bytes: &[u8], max: usize) -> Result<(), MarkupError> {
+    if bytes.len() > max || bytes.len() < 33 || !bytes.starts_with(PNG_MAGIC) || &bytes[8..16] != b"\0\0\0\x0dIHDR" {
         return Err(MarkupError::InvalidLayer);
     }
     let side = |at: usize| u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
@@ -814,7 +824,7 @@ pub fn resolve_local_source(root: &Path, path: &Path) -> Result<ResolvedSource, 
     let canonical = root.canonicalize().map_err(|_| MarkupError::Files(files::FilesError::Unavailable))?;
     // Windows canonicalises to `\\?\C:\…`, which never prefixes the `C:/…` an
     // agent writes: the same root without the verbatim prefix does.
-    let plain = std::path::PathBuf::from(crate::commands::fs::display_path(&canonical));
+    let plain = std::path::PathBuf::from(crate::paths::display_path(&canonical));
     let rest = path
         .strip_prefix(root)
         .or_else(|_| path.strip_prefix(&canonical))
@@ -853,9 +863,10 @@ pub fn resolve_local_source(root: &Path, path: &Path) -> Result<ResolvedSource, 
 /// `tabtivity-send` line: the viewer reloads the file from disk. The
 /// instruction is the desktop's own setting (`Settings::pdf_markup_instruction`,
 /// passed in by the viewer, bounded like the phone's), `DEFAULT_INSTRUCTION`
-/// when unset; `ask` is its dial (`Settings::pdf_markup_ask`). PDFs only —
-/// the desktop marks no pictures. Always a `list` round
-/// (`submit_local_with_undo` takes the **Apply marks directly** switch).
+/// when unset; `ask` is its dial (`Settings::pdf_markup_ask`). A PDF here;
+/// a picture goes through `submit_local_with_undo` with its composed copy.
+/// Always a `list` round (`submit_local_with_undo` takes the **Apply marks
+/// directly** switch).
 pub fn submit_local(
     root: &Path,
     path: &Path,
@@ -865,7 +876,7 @@ pub fn submit_local(
     round: Option<String>,
 ) -> Result<Submitted, MarkupError> {
     let list = UndoRequest { mode: Mode::List, target: Err(NoUndo::Failed) };
-    submit_local_with_undo(root, path, pages, instruction, ask, round, list)
+    submit_local_with_undo(root, path, pages, None, instruction, ask, round, list)
 }
 
 /// What a desktop Submit asks of its undo: the mode its switch asked for and
@@ -878,10 +889,17 @@ pub struct UndoRequest<'a> {
 /// `submit_local` with the **Apply marks directly** switch: an `apply`
 /// round's snapshot is taken after the layers and the marked copy are in the
 /// inbox, before the prompt is built (`bake_and_prompt`).
+///
+/// `picture_png`: for a picture source (the desktop image viewer's Mark up),
+/// the picture with its marks drawn on — the phone's `picture` upload, stored
+/// into the inbox here as `<stem>-marked.png`. Required for a picture, refused
+/// for a PDF; a picture is one page, `n` 1, in its pixels.
+#[allow(clippy::too_many_arguments)]
 pub fn submit_local_with_undo(
     root: &Path,
     path: &Path,
     pages: Vec<LocalPage>,
+    picture_png: Option<Vec<u8>>,
     instruction: Option<String>,
     ask: Option<u8>,
     round: Option<String>,
@@ -924,9 +942,16 @@ pub fn submit_local_with_undo(
     if total > MAX_LAYERS_TOTAL {
         return Err(MarkupError::InvalidLayer);
     }
+    if let Some(png) = &picture_png {
+        check_picture_png(png)?;
+    }
     speakable(&source)?;
     let (bytes, kind) = read_source(root, &source)?;
-    if kind != "application/pdf" {
+    // A PDF bakes its own marked copy; a picture brings its composed one.
+    let pdf = kind == "application/pdf" && picture_png.is_none();
+    // Checked before the first write, as `bake_and_prompt` will again.
+    let picture = kind.starts_with("image/") && picture_png.is_some() && request.pages.len() == 1 && request.pages[0].n == 1;
+    if !(pdf || picture) {
         return Err(MarkupError::Unsupported);
     }
     let stem = source.stem();
@@ -934,6 +959,9 @@ pub fn submit_local_with_undo(
         let kind = if page.composed { "marked" } else { "layer" };
         let stored = inbox::store(root, &format!("{stem}-p{}-{kind}.png", page.n), png).map_err(MarkupError::Inbox)?;
         page.layer = stored.reference;
+    }
+    if let Some(png) = &picture_png {
+        request.picture = Some(inbox::store(root, &format!("{stem}-marked.png"), png).map_err(MarkupError::Inbox)?.reference);
     }
     layers_present(root, &request)?;
     bake_and_prompt(root, &source, &request, false, bytes, kind, undo.target)
@@ -1280,14 +1308,14 @@ fn probe(mark: &Mark) -> (f64, f64) {
 /// a wrong line sends the agent to the wrong place) or one whose name could
 /// speak in the prompt is left out.
 /// Marks are in the page's displayed points from its top left, as reverse
-/// search clicks are (`commands::synctex`).
+/// search clicks are (`services::synctex`).
 fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> BTreeMap<(u32, usize), String> {
     let mut found = BTreeMap::new();
     let ResolvedSource::Files(rel) = source else {
         return found;
     };
     let pdf = root.join(rel);
-    let status = crate::commands::synctex::status(&pdf);
+    let status = crate::services::synctex::status(&pdf);
     if !status.has_map || status.pdf_newer_than_map {
         return found;
     }
@@ -1307,18 +1335,18 @@ fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> B
             asked.entry(page.n).or_default().push(index);
         }
     }
-    for (page, answers) in crate::commands::synctex::resolve_pages(&pdf, &points) {
+    for (page, answers) in crate::services::synctex::resolve_pages(&pdf, &points) {
         for (index, answer) in asked.get(&page).into_iter().flatten().zip(answers) {
             let Some((input, line)) = answer else { continue };
             if edited.contains(input.as_str()) {
                 continue;
             }
             // SyncTeX spells a source under the PDF's folder as given
-            // (`commands::synctex`), and `pdf` is `root.join(rel)`, so a
+            // (`services::synctex`), and `pdf` is `root.join(rel)`, so a
             // source in the project strips against `root` as given — minus
             // Windows' `\\?\` prefix, which SyncTeX never hands back.
             let input = Path::new(&input);
-            let Ok(inside) = input.strip_prefix(root).or_else(|_| input.strip_prefix(crate::commands::fs::display_path(root))) else { continue };
+            let Ok(inside) = input.strip_prefix(root).or_else(|_| input.strip_prefix(crate::paths::display_path(root))) else { continue };
             // A map naming a file that is gone comes back un-canonicalised, so
             // a `..` in it could still climb out of the project.
             if inside.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
@@ -1753,7 +1781,7 @@ mod tests {
         for tex in ["docs/main.tex", "docs/chapters/intro.tex"] {
             fs::write(root.join(tex), "x").unwrap();
         }
-        // Two lines as `commands::synctex`'s fixture has them — main.tex:3 at
+        // Two lines as `services::synctex`'s fixture has them — main.tex:3 at
         // y ≈ 134.8 bp, intro.tex:4 at y ≈ 201 bp — and a third from a class
         // file outside the project, at y ≈ 300 bp.
         let map = format!(
@@ -1764,7 +1792,7 @@ mod tests {
              (6,9:8799518,19735000:22609920,455111,0\nx6,9:8799518,19735000\n)\n}}1\nPostamble:\n",
             // As TeX writes it: no `\\?\` prefix, under which Windows would
             // read `/` as part of a name and never find the file.
-            r = crate::commands::fs::display_path(root)
+            r = crate::paths::display_path(root)
         );
         fs::write(root.join("docs/draft.synctex"), map).unwrap();
         let strike = Mark::Ink { color: Color::Red, width: 1.5, points: vec![[140.0, 131.0, 0.5], [190.0, 132.0, 0.5]], style: PenStyle::Pen, comment: None };
@@ -1816,13 +1844,13 @@ mod tests {
         let map = format!(
             "SyncTeX Version:1\nInput:1:{r}/docs/../../x.tex\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n{{1\n\
              [1,7:4736286,46220574:26673152,41484288,0\n(1,3:8799518,8865054:22609920,455111,0\nx1,3:11218261,8865054\n)\n]\n}}1\n",
-            r = crate::commands::fs::display_path(root)
+            r = crate::paths::display_path(root)
         );
         fs::write(root.join("docs/draft.synctex"), map).unwrap();
         let mut page = page(1, &layer(root, "a-p1-marked.png"));
         page.marks = vec![Mark::Text { color: Color::Blue, at: [150.0, 133.0], size: 12.0, text: "here".into() }];
         // SyncTeX does answer the mark; only the name is refused.
-        let (input, _) = crate::commands::synctex::resolve(&root.join("docs/draft.pdf"), 1, 150.0, 133.0).unwrap();
+        let (input, _) = crate::services::synctex::resolve(&root.join("docs/draft.pdf"), 1, 150.0, 133.0).unwrap();
         assert!(input.ends_with("x.tex"), "{input}");
         let lines = source_lines(root, &ResolvedSource::Files("docs/draft.pdf".into()), &[page]);
         assert!(lines.is_empty(), "{lines:?}");

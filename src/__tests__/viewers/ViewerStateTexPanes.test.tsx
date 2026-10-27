@@ -24,15 +24,15 @@ vi.mock("../../stores/settings", () => {
   };
 });
 
-import { useViewerState } from "../../components/embed/FileViewerPane";
+import { useViewerState } from "../../components/embed/fileViewer/viewerState";
 import {
-  TEX_PANES_CAP,
   flushViewerState,
   pendingViewerState,
   persistedViewerState,
   toSavedTabEntry,
   useTabsStore,
 } from "../../stores/tabs";
+import { TEX_PANES_CAP } from "../../stores/tabs/viewerState";
 
 function addWorkspaceTab() {
   const store = useTabsStore.getState();

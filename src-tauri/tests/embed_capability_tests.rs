@@ -113,14 +113,7 @@ fn null_backend_via_trait_object_does_not_support_embedding() {
     assert!(!b.supports_embedding());
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn x11_backend_supports_embedding_when_available() {
-    // X11Backend::try_new requires a live X server; only assert when present so
-    // the test is robust on headless CI. The trait default (false) is covered by
-    // the null tests above; this confirms X11's override is true.
-    use app_lib::platform::x11::X11Backend;
-    if let Ok(backend) = X11Backend::try_new() {
-        assert!(backend.supports_embedding());
-    }
-}
+// The `x11` backend's answer (`true` on a real X server, `false` under
+// Wayland) is the pure `embeds` predicate, unit-tested in `platform::x11`. No
+// test constructs an `X11Backend`: on a developer's desktop that would take
+// over the session's workspace settings and its restore file.

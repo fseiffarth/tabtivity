@@ -32,165 +32,21 @@
 //! - **Other OSes** fall back to empty/no-op results so the commands never fail
 //!   to build or error at runtime.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use app_core::sync::LockExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "desktop")]
 use tauri::{Emitter, State};
 
-// ── Types ─────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrackedWindow {
-    pub id: String,
-    pub exec: String,
-    pub file: Option<String>,
-    pub pid: u32,
-    pub project_id: Option<String>,
-    pub role: Option<String>,
-    pub opened_at: f64,
-    pub window_id: Option<u64>,
-    #[serde(default = "default_window_origin")]
-    pub origin: String,
-}
-
-/// A detached popout's last on-screen geometry in PHYSICAL desktop px (#42).
-///
-/// Captured by the project-switch path just BEFORE it hides an inactive
-/// project's popout, and re-applied right after it re-shows it on switch-back —
-/// `hide()`/`show()` lets the WM re-place the window (typically onto the primary
-/// monitor), so switch-back must put it back explicitly or a multi-monitor
-/// popout jumps to the wrong screen. Physical px are scale-invariant for
-/// placement, so no per-monitor scale conversion is needed on re-apply.
-/// Transient (not persisted): the *restart* path restores popouts from the
-/// frontend's saved bounds instead.
-///
-/// Native Wayland has no position to capture, so a retired popout records the
-/// screen it was on instead (`monitor`, GDK's own logical rect for it) and is
-/// rebuilt onto that screen when its scope returns.
-#[derive(Debug, Clone, Copy)]
-pub struct DetachedBounds {
-    pub x: i32,
-    pub y: i32,
-    pub w: u32,
-    pub h: u32,
-    pub monitor: Option<crate::services::window_state::MonitorRect>,
-}
-
-/// Called with the changed row's `project_id` whenever the registry mutates
-/// outside a frontend-initiated command (a launched child exiting). Installed
-/// once in `lib.rs` setup to emit `app-windows-changed`; `None` in tests and
-/// AppHandle-free service paths, where the mutation simply goes unannounced.
-pub type WindowsChangedNotifier = Arc<dyn Fn(Option<String>) + Send + Sync>;
-
-#[derive(Default)]
-pub struct WindowRegistry {
-    pub windows: HashMap<String, TrackedWindow>,
-    pub notify: Option<WindowsChangedNotifier>,
-    /// Detached-subwindow display numbers, keyed by the window's stable label.
-    /// Assigned in `detach_subwindow` (lowest free positive int) so each popout's
-    /// OS title reads "Tabtivity win-N", and freed on dock-back/close
-    /// (`attach_subwindow`) and on any other window destruction (the
-    /// `WindowEvent::Destroyed` hook in `lib.rs`) so numbers stay small and
-    /// reuse freed slots — a lone popout is always "win-1".
-    pub detached_seqs: HashMap<String, u32>,
-    /// Last on-screen geometry of each detached popout, keyed by its stable label
-    /// (see [`DetachedBounds`]). Written just before a switch-away hides the
-    /// popout; read just after switch-back re-shows it, to restore its monitor.
-    pub detached_bounds: HashMap<String, DetachedBounds>,
-    /// Popouts that were minimized when a switch-away hid them, so the
-    /// switch-back shows them minimized again instead of restoring them.
-    pub detached_minimized: std::collections::HashSet<String>,
-    /// Wayland popouts parked without unmapping their compositor-owned surfaces.
-    /// Only the fallback now: a popout holding unsaved work (or one that never
-    /// answered the retire request) is minimized instead of closed.
-    pub detached_parking: crate::services::window_state::DetachedParking,
-    /// Wayland retire bookkeeping (close on scope-out, respawn on scope-in).
-    pub detached_retire: crate::services::window_state::DetachedRetire,
-    /// Labels a `detach_subwindow` call is building right now. Reserved under
-    /// this lock before `build()`, so a second call for the same label returns
-    /// instead of racing the build — and a failed build releases only its own
-    /// reservation, never a live window's entry.
-    pub detached_building: std::collections::HashSet<String>,
-    /// The tab scope the main window shows, as last told by
-    /// `sync_detached_scope` (`None` until the first scope change). A popout
-    /// built for another scope retires as soon as its build completes.
-    pub detached_active_scope: Option<String>,
-}
-
-pub type WindowRegistryState = Arc<Mutex<WindowRegistry>>;
-
-/// Opened from the side panel's file tree (or a viewer reached from it).
-///
-/// Renamed from `right_file_tree` along with the panel, which no value on disk
-/// depends on: the registry is `WindowRegistry::default()`ed at every startup
-/// (`lib.rs`) and the one persisted window record, [`schema::project::OpenApp`],
-/// carries no origin — so the token only ever travels in memory and over IPC
-/// between the two halves of one build. The one skew that exists is the ordinary
-/// `src/` hot-reload one: a frontend sending the new spelling to a backend that
-/// predates it leaves the window unrecognized (and so unparked on a project
-/// switch) until `src-tauri/` is rebuilt.
-pub const ORIGIN_SIDE_FILE_TREE: &str = "side_file_tree";
-pub const ORIGIN_MIDDLE_FILE_BROWSER: &str = "middle_file_browser";
-pub const ORIGIN_GLOBAL_APP: &str = "global_app";
-pub const ORIGIN_MANUAL_LAUNCH: &str = "manual_launch";
-pub const ORIGIN_RESTORED: &str = "restored";
-/// Opened from the Downloads section below the file tree
-/// (`DownloadsSection.tsx`).
-pub const ORIGIN_DOWNLOADS: &str = "downloads";
-/// Opened from the blob/file viewer's "open externally" affordance
-/// (`ProjectBlobPane.tsx`).
-pub const ORIGIN_BLOB_FILE_VIEWER: &str = "blob_file_viewer";
-/// A tiling subwindow popped out into its own borderless Tauri WebviewWindow
-/// (#42). Project-owned: it follows the same project-switch hide/show parking
-/// path as the other project-owned window origins.
-pub const ORIGIN_DETACHED_SUBWINDOW: &str = "detached_subwindow";
-/// The project opened in the IDE its tree carries markers for ("Open in
-/// <IDE>" on the pill / file-tree root menu — `commands::ide`). Project-owned:
-/// listed in the Apps view and parked on project switch like a file opened
-/// from the tree.
-pub const ORIGIN_PROJECT_IDE: &str = "project_ide";
-
-fn default_window_origin() -> String {
-    ORIGIN_MANUAL_LAUNCH.to_string()
-}
-
-/// Origins that belong to a project's Apps view (and, together with
-/// [`ORIGIN_DETACHED_SUBWINDOW`], to project-switch parking — see
-/// `window_service::is_project_owned`). Global launches (`global_app`,
-/// `manual_launch`) stay out: they are the machine's, not a project's.
-pub fn is_project_opened_origin(origin: &str) -> bool {
-    matches!(
-        origin,
-        ORIGIN_SIDE_FILE_TREE
-            | ORIGIN_MIDDLE_FILE_BROWSER
-            | ORIGIN_RESTORED
-            | ORIGIN_DOWNLOADS
-            | ORIGIN_BLOB_FILE_VIEWER
-            | ORIGIN_PROJECT_IDE
-    )
-}
-
-pub fn is_project_opened_window(window: &TrackedWindow) -> bool {
-    is_project_opened_origin(&window.origin)
-}
-
-pub fn opened_windows_for_project<'a>(
-    windows: impl Iterator<Item = &'a TrackedWindow>,
-    project_id: Option<&str>,
-) -> Vec<TrackedWindow> {
-    windows
-        .filter(|window| window.project_id.as_deref() == project_id)
-        .filter(|window| is_project_opened_window(window))
-        .cloned()
-        .collect()
-}
+// The window registry's types and the launch origins live in
+// `services::window_registry` (S5); re-exported for the commands and callers.
+pub use crate::services::window_registry::*;
 
 // ── Core launch helper ────────────────────────────────────────────────────
 
@@ -203,8 +59,49 @@ pub fn do_launch(
     role: Option<&str>,
     origin: &str,
 ) -> Result<TrackedWindow, String> {
+    launch_tracked(registry, exec, args, file, project_id, role, origin, None)
+}
+
+/// [`do_launch`] for "Open in <IDE>" (`commands::ide`): an
+/// [`ORIGIN_PROJECT_IDE`] row whose launch knows the IDE and the names its
+/// window titles the project with ([`LaunchTrack::ide_project`]) — recorded
+/// before the exit watcher starts, so even a launcher that hands the folder to
+/// a running instance and exits at once is judged with them.
+pub fn do_launch_project_ide(
+    registry: &WindowRegistryState,
+    exec: &str,
+    args: &[String],
+    target: &str,
+    project_id: &str,
+    ide: crate::services::ide_detect::IdeId,
+    names: Vec<String>,
+) -> Result<TrackedWindow, String> {
+    launch_tracked(
+        registry,
+        exec,
+        args,
+        Some(target),
+        Some(project_id),
+        Some("ide"),
+        ORIGIN_PROJECT_IDE,
+        Some((ide, names)),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_tracked(
+    registry: &WindowRegistryState,
+    exec: &str,
+    args: &[String],
+    file: Option<&str>,
+    project_id: Option<&str>,
+    role: Option<&str>,
+    origin: &str,
+    ide_project: Option<(crate::services::ide_detect::IdeId, Vec<String>)>,
+) -> Result<TrackedWindow, String> {
     let launch_exec = resolve_launch_exec(exec);
-    let mut cmd = launch_command(&launch_exec, args, file);
+    let launch_id = new_launch_id();
+    let mut cmd = launch_command(&launch_exec, args, file, launch_id.as_deref());
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -212,6 +109,9 @@ pub fn do_launch(
     let before = list_window_ids();
     let child = cmd.spawn().map_err(|e| format!("launch {launch_exec}: {e}"))?;
     let pid = child.id();
+    // Read before the watcher reaps it: an exited, unreaped launcher still
+    // answers as a zombie.
+    let since = crate::services::proc_table::start_time(pid).unwrap_or(0);
     let window_id = find_window_for_pid(pid, 20);
 
     let opened_at = SystemTime::now()
@@ -231,13 +131,94 @@ pub fn do_launch(
         opened_at,
         window_id,
         origin: origin.to_string(),
+        launch_id,
     };
-    registry
-        .lock_ok()
-        .windows
-        .insert(id.clone(), win.clone());
+    {
+        let mut reg = registry.lock_ok();
+        reg.windows.insert(id.clone(), win.clone());
+        record_launch(&mut reg, &id, since, ide_project);
+    }
     watch_child_exit(child, registry.clone(), id, before);
     Ok(win)
+}
+
+/// A fresh launch marker: 32 hex characters of OS randomness, never a path,
+/// a project id or anything else a process could be traced back by. `None`
+/// (an unmarked launch, judged as before) when the OS has no randomness.
+fn new_launch_id() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(crate::digest::hex(&bytes))
+}
+
+/// Start the launch bookkeeping of row `id` once it is in the registry, when
+/// its launch was marked. `ide_project`: see [`LaunchTrack::ide_project`].
+fn record_launch(
+    reg: &mut WindowRegistry,
+    id: &str,
+    since: u64,
+    ide_project: Option<(crate::services::ide_detect::IdeId, Vec<String>)>,
+) {
+    if reg.windows.get(id).is_some_and(|w| w.launch_id.is_some()) {
+        reg.launches.insert(
+            id.to_string(),
+            LaunchTrack { since, family: None, ide_project },
+        );
+    }
+}
+
+/// How much the window list can say about a row's window (`window_id`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WindowList {
+    /// Every window an app can open is listed (X11, Windows, macOS).
+    Complete(Vec<u64>),
+    /// A Wayland session: only XWayland windows are listed. Authoritative
+    /// for a row holding a window id (one only an XWayland window can
+    /// have), silent about a row without one — its window may be native.
+    /// Built only by the Linux window list.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    XWaylandOnly(Vec<u64>),
+    /// The enumeration failed: it says nothing about any row.
+    Unknown,
+}
+
+impl WindowList {
+    /// `Some(true)`: the row's window is listed; `Some(false)`: it provably
+    /// has none on screen; `None`: the list cannot tell.
+    fn shows(&self, window_id: Option<u64>) -> Option<bool> {
+        match (self, window_id) {
+            (Self::Unknown, _) | (Self::XWaylandOnly(_), None) => None,
+            (Self::Complete(ids) | Self::XWaylandOnly(ids), Some(wid)) => Some(ids.contains(&wid)),
+            (Self::Complete(_), None) => Some(false),
+        }
+    }
+}
+
+/// The family member a kept row is owned by — its oldest (the app the
+/// launcher handed over to, before anything that app started) — or `None`
+/// for an empty family.
+fn family_lead(family: &[FamilyMember]) -> Option<u32> {
+    family.iter().min_by_key(|m| (m.start, m.pid)).map(|m| m.pid)
+}
+
+/// The lead of `family`'s members that still run (same pid, same start).
+fn live_family_lead(family: &[FamilyMember]) -> Option<u32> {
+    let live: Vec<FamilyMember> = family
+        .iter()
+        .copied()
+        .filter(|m| crate::services::proc_table::start_time(m.pid) == Some(m.start))
+        .collect();
+    family_lead(&live)
+}
+
+/// The marked processes of launch `id` alive right now (a fresh walk of the
+/// process table), as family members. Empty off Linux.
+fn launch_family_now(id: &str, since: u64) -> Vec<FamilyMember> {
+    let snap = crate::services::proc_table::snapshot_within(std::time::Duration::ZERO);
+    crate::services::proc_table::marked_procs(&snap, id, since)
+        .into_iter()
+        .map(|p| FamilyMember { pid: p.pid, start: p.start })
+        .collect()
 }
 
 /// What happens to a tracked window's registry row when the child Tabtivity
@@ -251,30 +232,79 @@ enum ExitAction {
     /// pid-0, delist-only entry, adopting the given window id when the launch
     /// never resolved one.
     KeepDemoted(Option<u64>),
+    /// The launcher exited but processes of its launch family live on (a
+    /// wrapper that forked the app, `flatpak run`): keep the row, now owned
+    /// by `lead` ([`family_lead`]), adopting `adopt` when the launch never
+    /// resolved a window.
+    KeepFamily { lead: u32, adopt: Option<u64> },
 }
 
 /// Pure keep-vs-remove decision for a launched child's exit, so the policy is
 /// unit-testable apart from the wait-thread that applies it.
+///
+/// A live launch family keeps the row whatever the window list says. Without
+/// one, the window decides: an adopted or still-listed window keeps the row
+/// delist-only, a window provably gone removes it. A list that cannot tell
+/// (Wayland, for a row without an XWayland window id; a failed enumeration)
+/// never removes a project-opened row — it is kept delist-only for the user
+/// to remove — while a machine-wide launch (`global_app`, `manual_launch`)
+/// goes as before.
 fn launched_exit_action(
     entry_window_id: Option<u64>,
-    live_window_ids: &[u64],
+    windows: &WindowList,
     adopted_window: Option<u64>,
+    family: &[FamilyMember],
+    project_opened: bool,
 ) -> ExitAction {
-    match entry_window_id {
-        Some(wid) if live_window_ids.contains(&wid) => ExitAction::KeepDemoted(None),
-        Some(_) => ExitAction::Remove,
-        None => match adopted_window {
-            Some(wid) => ExitAction::KeepDemoted(Some(wid)),
-            None => ExitAction::Remove,
-        },
+    let adopt = adopted_window.filter(|_| entry_window_id.is_none());
+    if let Some(lead) = family_lead(family) {
+        return ExitAction::KeepFamily { lead, adopt };
+    }
+    if adopt.is_some() {
+        return ExitAction::KeepDemoted(adopt);
+    }
+    match windows.shows(entry_window_id) {
+        Some(true) => ExitAction::KeepDemoted(None),
+        Some(false) => ExitAction::Remove,
+        None if project_opened => ExitAction::KeepDemoted(None),
+        None => ExitAction::Remove,
+    }
+}
+
+/// The window a launch row without one adopts when its launcher exits, from
+/// one scan's `windows`: the window of a family member
+/// ([`resolve_window_for_launch`]) — and, when no family is left (a hand-off
+/// to a running instance), a guess. For an IDE row that knows its project
+/// (`ide`), the guess is the IDE's window showing the project
+/// ([`adopt_project_window`]); for any other row it is `new_window` ("any
+/// window that appeared since the launch"). A live family that shows no
+/// window has not mapped it yet: no guess.
+fn exit_adoption(
+    row: &TrackedWindow,
+    windows: &[ClientWindow],
+    family_pids: &[u32],
+    held: &HashSet<u64>,
+    ide: Option<(crate::services::ide_detect::IdeId, &[String])>,
+    new_window: impl FnOnce() -> Option<u64>,
+) -> Option<u64> {
+    let resolved = resolve_window_for_launch(row, windows, family_pids, held, ide);
+    if resolved.is_some() || !family_pids.is_empty() {
+        return resolved;
+    }
+    match ide {
+        Some((ide, names)) if row.origin == ORIGIN_PROJECT_IDE => {
+            adopt_project_window(windows, held, ide, names)
+        }
+        _ => new_window(),
     }
 }
 
 /// Wait on a launched child from a background thread (which also keeps
 /// `spawn_reaped`'s zombie-reaping duty) and reconcile the registry when it
 /// exits: remove the row — the fix for dead apps sitting in the Apps view
-/// forever — unless a window survives the launcher (hand-off), then notify the
-/// frontend via the registry's `notify` hook.
+/// forever — unless its launch family or a window survives the launcher
+/// ([`launched_exit_action`]), then notify the frontend via the registry's
+/// `notify` hook.
 fn watch_child_exit(
     mut child: std::process::Child,
     registry: WindowRegistryState,
@@ -283,20 +313,36 @@ fn watch_child_exit(
 ) {
     std::thread::spawn(move || {
         let _ = child.wait();
-        let entry_window_id = match registry.lock_ok().windows.get(&id) {
+        let (entry, track, held) = {
+            let reg = registry.lock_ok();
             // Already closed/untracked while the app ran: nothing to reconcile.
-            None => return,
-            Some(entry) => entry.window_id,
+            let Some(entry) = reg.windows.get(&id).cloned() else {
+                return;
+            };
+            (entry, reg.launches.get(&id).cloned(), held_window_ids(&reg, &id))
         };
-        // Window probes run OUTSIDE the lock: each is an X11/OS enumeration and
-        // `find_new_window` sleeps between attempts.
-        let live = list_window_ids();
-        let adopted = if entry_window_id.is_none() {
-            find_new_window(&before, 1)
+        // Probes run OUTSIDE the lock: a walk of the process table and one
+        // X11/OS window enumeration.
+        let family = match (&entry.launch_id, &track) {
+            (Some(launch_id), Some(track)) => launch_family_now(launch_id, track.since),
+            _ => Vec::new(),
+        };
+        let (windows, clients) = window_scan();
+        let adopted = if entry.window_id.is_none() {
+            let pids: Vec<u32> = family.iter().map(|m| m.pid).collect();
+            let ide_project = track.as_ref().and_then(|t| t.ide_project.as_ref());
+            let ide = ide_project.map(|(ide, names)| (*ide, names.as_slice()));
+            exit_adoption(&entry, &clients, &pids, &held, ide, || find_new_window(&before, 1))
         } else {
             None
         };
-        let action = launched_exit_action(entry_window_id, &live, adopted);
+        let action = launched_exit_action(
+            entry.window_id,
+            &windows,
+            adopted,
+            &family,
+            is_project_opened_window(&entry),
+        );
         let (project_id, notify) = {
             let mut reg = registry.lock_ok();
             let Some(project_id) = reg.windows.get(&id).map(|e| e.project_id.clone()) else {
@@ -305,6 +351,7 @@ fn watch_child_exit(
             match action {
                 ExitAction::Remove => {
                     reg.windows.remove(&id);
+                    reg.launches.remove(&id);
                 }
                 ExitAction::KeepDemoted(adopt) => {
                     if let Some(entry) = reg.windows.get_mut(&id) {
@@ -312,6 +359,20 @@ fn watch_child_exit(
                         if adopt.is_some() {
                             entry.window_id = adopt;
                         }
+                    }
+                    if let Some(track) = reg.launches.get_mut(&id) {
+                        track.family = Some(Vec::new());
+                    }
+                }
+                ExitAction::KeepFamily { lead, adopt } => {
+                    if let Some(entry) = reg.windows.get_mut(&id) {
+                        entry.pid = lead;
+                        if adopt.is_some() {
+                            entry.window_id = adopt;
+                        }
+                    }
+                    if let Some(track) = reg.launches.get_mut(&id) {
+                        track.family = Some(family);
                     }
                 }
             }
@@ -346,7 +407,20 @@ fn split_exec_command(exec: &str) -> (&str, Vec<&str>) {
     (program, parts.collect())
 }
 
-fn launch_command(exec: &str, args: &[String], file: Option<&str>) -> Command {
+/// The `Command` that launches `exec`, carrying `launch_id` (when the launch
+/// has one) as `TABTIVITY_LAUNCH_ID` — inherited by every process the app
+/// starts, so its windows and liveness are found after the launcher exits
+/// (`proc_table::launch_id`). The token is not a secret: it names one launch
+/// and nothing else.
+fn launch_command(exec: &str, args: &[String], file: Option<&str>, launch_id: Option<&str>) -> Command {
+    let mut cmd = unmarked_launch_command(exec, args, file);
+    if let Some(launch_id) = launch_id {
+        cmd.env(crate::app_env!("LAUNCH_ID"), launch_id);
+    }
+    cmd
+}
+
+fn unmarked_launch_command(exec: &str, args: &[String], file: Option<&str>) -> Command {
     #[cfg(target_os = "macos")]
     if Path::new(exec)
         .extension()
@@ -615,7 +689,8 @@ fn open_file_blocking(
     // default below, which the caller has already judged.
     if let Some(exec) = effective {
         let launch_exec = resolve_launch_exec(&exec);
-        let mut cmd = launch_command(&launch_exec, &[], Some(&path));
+        let launch_id = new_launch_id();
+        let mut cmd = launch_command(&launch_exec, &[], Some(&path), launch_id.as_deref());
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -623,9 +698,10 @@ fn open_file_blocking(
             .spawn()
             .map_err(|e| format!("open with {launch_exec}: {e}"))?;
         let pid = child.id();
+        let since = crate::services::proc_table::start_time(pid).unwrap_or(0);
         let window_id = find_window_for_pid(pid, 20).or_else(|| find_new_window(&before, 20));
         place(window_id);
-        let win = track_opened_file(
+        let mut win = track_opened_file(
             registry,
             launch_exec,
             path,
@@ -634,6 +710,14 @@ fn open_file_blocking(
             window_id,
             origin,
         )?;
+        if let Some(launch_id) = launch_id {
+            let mut reg = registry.lock_ok();
+            if let Some(row) = reg.windows.get_mut(&win.id) {
+                row.launch_id = Some(launch_id.clone());
+            }
+            record_launch(&mut reg, &win.id, since, None);
+            win.launch_id = Some(launch_id);
+        }
         watch_child_exit(child, registry.clone(), win.id.clone(), before);
         return Ok(win);
     }
@@ -2139,39 +2223,219 @@ pub fn close_tracked_window(
 }
 
 /// Backstop for the exit watcher: drop Apps-view rows in the given scope whose
-/// spawned process is gone AND whose window (when one was resolved) is no
-/// longer on screen. Catches any wait-thread miss; PID reuse can keep a dead
-/// row listed (documented limitation, `docs/CODE_REVIEW_SECURITY.md`). pid-0
-/// rows are never pruned — there is no liveness signal for them, and on
-/// Wayland the window list reads empty, which must not delete live rows.
-pub fn prune_dead_windows(reg: &mut WindowRegistry, project_id: Option<&str>) {
+/// app is gone AND whose window (when one was resolved) is no longer on
+/// screen. Catches any wait-thread miss; PID reuse can keep a dead row listed
+/// (documented limitation, `docs/CODE_REVIEW_SECURITY.md`).
+///
+/// A row's app is its pid until the launcher exits, then its launch family
+/// (any member alive; the row moves to the oldest live one). A row whose
+/// launcher died but whose exit watcher has not decided yet is left to the
+/// watcher. When the window list cannot tell — Wayland, for a row without an
+/// XWayland window id — a dead row is demoted to pid 0 (delist-only) instead
+/// of removed; a failed enumeration changes nothing. A pid-0 row holding a
+/// window id (a hand-off that adopted one, a raised IDE window) lives while
+/// that window does, on Linux, whose X client list keeps a parked window
+/// listed; elsewhere, and without a window id, a pid-0 row has no liveness
+/// signal and is never pruned.
+///
+/// Every windowless row of the scope also gets one try at its window
+/// ([`resolve_missing_launch_windows`]), so the view sees a late window
+/// without waiting for a project switch. The two share one window scan, made
+/// only when either needs it.
+///
+/// The Apps-view read (`get_opened_windows`, off the main thread): the
+/// registry is locked only to pick the candidates and to apply the answers —
+/// the marked-process lookups and the window scan (an X round trip; under
+/// Wayland it may start XWayland) run unlocked, so a launch, an exit watcher
+/// or a project switch never waits on them behind a read. A row that changed
+/// in between is left for the next read. Returns the scope's Apps-view rows.
+pub fn prune_dead_windows(registry: &WindowRegistryState, project_id: Option<&str>) -> Vec<TrackedWindow> {
     // An unprobeable pid (`EPERM`) is not dead: its window stays tracked.
     let alive = |pid| crate::services::proc_table::pid_state(pid) != crate::services::proc_table::PidState::Gone;
-    prune_dead_windows_with(reg, project_id, alive, list_window_ids)
+    let resolve = cfg!(all(target_os = "linux", feature = "desktop"));
+    prune_dead_windows_unlocked(
+        registry,
+        project_id,
+        resolve,
+        alive,
+        live_family_lead,
+        marked_pids_now,
+        window_scan,
+    )
 }
 
+/// [`prune_dead_windows`] with every probe injected: `resolve` turns the
+/// read-time window resolve on (Linux desktop), `marked` and `scan` are only
+/// ever called with the registry unlocked.
+fn prune_dead_windows_unlocked(
+    registry: &WindowRegistryState,
+    project_id: Option<&str>,
+    resolve: bool,
+    alive: impl Fn(u32) -> bool,
+    live_lead: impl Fn(&[FamilyMember]) -> Option<u32>,
+    marked: impl Fn(&str, u64) -> Vec<u32>,
+    scan: impl FnOnce() -> (WindowList, Vec<ClientWindow>),
+) -> Vec<TrackedWindow> {
+    // 1. Locked: what the resolve asks about, and the prune's candidates.
+    let (asks, dead) = {
+        let mut reg = registry.lock_ok();
+        let asks = if resolve { resolve_asks(&reg, project_id) } else { Vec::new() };
+        let dead = prune_candidates(&mut reg, project_id, alive, live_lead, PID0_WINDOW_LIVENESS);
+        (asks, dead)
+    };
+    // 2. Unlocked: the marked processes per launch, and the one scan.
+    let mut marked_by_launch: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut resolve_needs_scan = false;
+    for ask in &asks {
+        let pids = match &ask.launch {
+            Some((launch_id, since)) => marked_by_launch
+                .entry(launch_id.clone())
+                .or_insert_with(|| marked(launch_id, *since))
+                .clone(),
+            None => Vec::new(),
+        };
+        resolve_needs_scan |= ask.pid != 0 || ask.adopt || !pids.is_empty();
+    }
+    let scanned = (resolve_needs_scan || !dead.is_empty()).then(scan);
+    // 3. Locked: apply. A row new since step 1 resolves next read.
+    let mut reg = registry.lock_ok();
+    if let Some((list, clients)) = &scanned {
+        if resolve {
+            resolve_missing_launch_windows_with(
+                &mut reg,
+                project_id,
+                || clients.as_slice(),
+                |launch_id, _| marked_by_launch.get(launch_id).cloned().unwrap_or_default(),
+            );
+        }
+        apply_prune(&mut reg, dead, list);
+    }
+    opened_windows_for_project(reg.windows.values(), project_id)
+}
+
+/// One windowless row the read-time resolve may look up: its launch marker
+/// and floor (for `proc_table::marked_procs`), its pid, and whether it is a
+/// pid-0 IDE row that adopts by project title.
+struct ResolveAsk {
+    launch: Option<(String, u64)>,
+    pid: u32,
+    adopt: bool,
+}
+
+/// The rows [`resolve_missing_launch_windows_with`] would try in `project_id`,
+/// read without touching the registry.
+fn resolve_asks(reg: &WindowRegistry, project_id: Option<&str>) -> Vec<ResolveAsk> {
+    reg.windows
+        .values()
+        // `window_service::resolve_missing_window_ids`'s row filter.
+        .filter(|w| {
+            w.project_id.as_deref() == project_id && is_project_opened_window(w) && w.window_id.is_none()
+        })
+        .map(|w| {
+            let track = reg.launches.get(&w.id);
+            ResolveAsk {
+                launch: w.launch_id.clone().zip(track.map(|t| t.since)),
+                pid: w.pid,
+                adopt: w.pid == 0
+                    && w.origin == ORIGIN_PROJECT_IDE
+                    && track.is_some_and(|t| t.ide_project.is_some()),
+            }
+        })
+        .collect()
+}
+
+/// Whether a pid-0 row with a window id is judged by its window alone. Only
+/// the X client list (Linux) lists a window the parking backend hid; Windows
+/// and macOS enumerate visible windows, which would prune a parked one.
+const PID0_WINDOW_LIVENESS: bool = cfg!(target_os = "linux");
+
+/// The prune alone, over one registry already in hand — [`prune_candidates`]
+/// then [`apply_prune`] with the window list fetched only for a candidate.
+/// The tests' seam; [`prune_dead_windows`] splits the two around its scan.
+#[cfg(test)]
 fn prune_dead_windows_with(
     reg: &mut WindowRegistry,
     project_id: Option<&str>,
     alive: impl Fn(u32) -> bool,
-    live_windows: impl FnOnce() -> Vec<u64>,
+    live_lead: impl Fn(&[FamilyMember]) -> Option<u32>,
+    window_list: impl FnOnce() -> WindowList,
+    pid0_window_liveness: bool,
 ) {
-    let dead: Vec<(String, Option<u64>)> = reg
-        .windows
-        .values()
-        .filter(|w| w.project_id.as_deref() == project_id)
-        .filter(|w| is_project_opened_window(w))
-        .filter(|w| w.pid > 0 && !alive(w.pid))
-        .map(|w| (w.id.clone(), w.window_id))
-        .collect();
+    let dead = prune_candidates(reg, project_id, alive, live_lead, pid0_window_liveness);
     if dead.is_empty() {
         return;
     }
-    // Paid only when a dead-pid candidate exists — one OS window enumeration.
-    let live = live_windows();
-    for (id, wid) in dead {
-        if wid.is_none_or(|w| !live.contains(&w)) {
-            reg.windows.remove(&id);
+    // Paid only when a dead candidate exists — one OS window enumeration.
+    apply_prune(reg, dead, &window_list());
+}
+
+/// A row [`prune_candidates`] found dead: its id, and the window id and pid it
+/// had then — [`apply_prune`] leaves a row that has changed since alone.
+type DeadRow = (String, Option<u64>, u32);
+
+/// The first half of the prune: sweeps launch tracks without a row, moves a
+/// family-kept row to its live lead, and returns the rows whose app is gone
+/// (and, with `pid0_window_liveness`, every pid-0 row holding a window id),
+/// for [`apply_prune`] to judge by the window list.
+fn prune_candidates(
+    reg: &mut WindowRegistry,
+    project_id: Option<&str>,
+    alive: impl Fn(u32) -> bool,
+    live_lead: impl Fn(&[FamilyMember]) -> Option<u32>,
+    pid0_window_liveness: bool,
+) -> Vec<DeadRow> {
+    let WindowRegistry { windows, launches, .. } = reg;
+    launches.retain(|id, _| windows.contains_key(id));
+    let mut dead: Vec<DeadRow> = Vec::new();
+    for w in windows.values_mut() {
+        if w.project_id.as_deref() != project_id || !is_project_opened_window(w) {
+            continue;
+        }
+        if w.pid == 0 {
+            if pid0_window_liveness && w.window_id.is_some() {
+                dead.push((w.id.clone(), w.window_id, 0));
+            }
+            continue;
+        }
+        match launches.get(&w.id) {
+            // The exit watcher owns a launcher that just died.
+            Some(LaunchTrack { family: None, .. }) => {}
+            Some(LaunchTrack { family: Some(family), .. }) => match live_lead(family) {
+                Some(lead) => w.pid = lead,
+                None => dead.push((w.id.clone(), w.window_id, w.pid)),
+            },
+            None if !alive(w.pid) => dead.push((w.id.clone(), w.window_id, w.pid)),
+            None => {}
+        }
+    }
+    dead
+}
+
+/// The second half of the prune: each `dead` row still as it was found is
+/// removed when `list` proves its window gone, demoted to pid 0 when the list
+/// cannot tell, and kept when its window is listed. An `Unknown` list changes
+/// nothing.
+fn apply_prune(reg: &mut WindowRegistry, dead: Vec<DeadRow>, list: &WindowList) {
+    if *list == WindowList::Unknown {
+        return;
+    }
+    let WindowRegistry { windows, launches, .. } = reg;
+    for (id, wid, pid) in dead {
+        let unchanged = windows.get(&id).is_some_and(|w| w.window_id == wid && w.pid == pid);
+        if !unchanged {
+            continue;
+        }
+        match list.shows(wid) {
+            Some(true) => {}
+            Some(false) => {
+                windows.remove(&id);
+                launches.remove(&id);
+            }
+            None => {
+                if let Some(w) = windows.get_mut(&id) {
+                    w.pid = 0;
+                }
+            }
         }
     }
 }
@@ -2201,21 +2465,251 @@ fn track_opened_file(
         opened_at,
         window_id,
         origin,
+        launch_id: None,
     };
     registry.lock_ok().windows.insert(id, win.clone());
     Ok(win)
 }
 
+/// One client window as launch tracking sees it: its id (X11 window id /
+/// Windows `HWND`), `_NET_WM_PID`, whether its class is protected
+/// (`platform::x11::is_protected_class`), its `WM_CLASS` (raw,
+/// NUL-separated) and its `_NET_WM_NAME` title.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ClientWindow {
+    pub id: u64,
+    pub pid: Option<u32>,
+    pub protected: bool,
+    pub class: String,
+    pub title: String,
+}
+
+/// The window ids rows other than `own` hold.
+fn held_window_ids(reg: &WindowRegistry, own: &str) -> HashSet<u64> {
+    reg.windows
+        .values()
+        .filter(|w| w.id != own)
+        .filter_map(|w| w.window_id)
+        .collect()
+}
+
+/// The window launch row `row` shows, among one scan's `windows`: a
+/// non-protected client window whose `_NET_WM_PID` is one of `marked` (the
+/// launch's marked processes) and that no other row holds (`held`). For an
+/// `ORIGIN_PROJECT_IDE` row the window must also show the row's project
+/// (`ide`: the IDE and its project-window names; `None` resolves nothing for
+/// such a row) — one JVM can host several projects' windows, and the marker
+/// leaks into whatever the app starts, so a marked pid alone does not make a
+/// window the row's. Native Wayland windows are never listed, so never found.
+pub(crate) fn resolve_window_for_launch(
+    row: &TrackedWindow,
+    windows: &[ClientWindow],
+    marked: &[u32],
+    held: &HashSet<u64>,
+    ide: Option<(crate::services::ide_detect::IdeId, &[String])>,
+) -> Option<u64> {
+    let ide_row = row.origin == ORIGIN_PROJECT_IDE;
+    windows
+        .iter()
+        .filter(|w| !w.protected && !held.contains(&w.id))
+        .filter(|w| w.pid.is_some_and(|pid| marked.contains(&pid)))
+        .find(|w| {
+            !ide_row
+                || ide.is_some_and(|(ide, names)| {
+                    crate::services::ide_detect::window_shows_project(ide, &w.class, &w.title, names)
+                })
+        })
+        .map(|w| w.id)
+}
+
+/// The window of `ide` that shows the project (`names`, see
+/// `ide_detect::window_shows_project`) among one scan's `windows`, skipping
+/// protected windows and those another row holds — what an IDE hand-off
+/// adopts, since its window belongs to the running instance, not to a
+/// process of the launch.
+fn adopt_project_window(
+    windows: &[ClientWindow],
+    held: &HashSet<u64>,
+    ide: crate::services::ide_detect::IdeId,
+    names: &[String],
+) -> Option<u64> {
+    windows
+        .iter()
+        .filter(|w| !w.protected && !held.contains(&w.id))
+        .find(|w| crate::services::ide_detect::window_shows_project(ide, &w.class, &w.title, names))
+        .map(|w| w.id)
+}
+
+/// One-pass resolve of every window id `project_id`'s project-owned rows
+/// still lack (`window_service::resolve_missing_window_ids`), from one window
+/// scan: a JVM window mapped after the launch's own 2 s budget, or an XWayland
+/// window that appeared later. Run at project-switch time (before the hide)
+/// and on every Apps-view read ([`prune_dead_windows`]). Linux only — Windows
+/// and macOS resolve by pid (`resolve_window_id_for_pid`); a no-op elsewhere.
+/// The scan runs only when a row has something to resolve by.
+pub fn resolve_missing_launch_windows(reg: &mut WindowRegistry, project_id: Option<&str>) {
+    if !cfg!(all(target_os = "linux", feature = "desktop")) {
+        return;
+    }
+    let scan = std::cell::OnceCell::new();
+    resolve_missing_launch_windows_with(
+        reg,
+        project_id,
+        || scan.get_or_init(window_scan).1.as_slice(),
+        marked_pids_now,
+    );
+}
+
+/// The pids of launch `launch_id`'s marked processes, from the cached process
+/// table (`proc_table::snapshot`). Empty off Linux.
+fn marked_pids_now(launch_id: &str, since: u64) -> Vec<u32> {
+    let snap = crate::services::proc_table::snapshot();
+    crate::services::proc_table::marked_procs(&snap, launch_id, since)
+        .into_iter()
+        .map(|p| p.pid)
+        .collect()
+}
+
+/// [`resolve_missing_launch_windows`] with the scan (`windows`, called only
+/// when a row has pids or an IDE project to resolve by) and the marked-process
+/// lookup (`marked(launch_id, since)`) injected. A row resolves through
+/// [`resolve_window_for_launch`] over its marked pids plus its own pid (none
+/// for a pid-0 row); a pid-0 IDE row that knows its project (a hand-off, a
+/// launch whose family died) adopts the IDE's window showing the project
+/// ([`adopt_project_window`]). A window one row takes is held for the rest.
+fn resolve_missing_launch_windows_with<'a>(
+    reg: &mut WindowRegistry,
+    project_id: Option<&str>,
+    windows: impl Fn() -> &'a [ClientWindow],
+    marked: impl Fn(&str, u64) -> Vec<u32>,
+) {
+    let WindowRegistry { windows: rows, launches, .. } = reg;
+    let mut held: HashSet<u64> = rows.values().filter_map(|w| w.window_id).collect();
+    crate::services::window_service::resolve_missing_window_ids(rows, project_id, |row| {
+        let track = launches.get(&row.id);
+        let mut pids = match (&row.launch_id, track) {
+            (Some(launch_id), Some(track)) => marked(launch_id, track.since),
+            _ => Vec::new(),
+        };
+        if row.pid != 0 && !pids.contains(&row.pid) {
+            pids.push(row.pid);
+        }
+        let ide = track
+            .and_then(|t| t.ide_project.as_ref())
+            .map(|(ide, names)| (*ide, names.as_slice()));
+        let adopt = row.pid == 0 && row.origin == ORIGIN_PROJECT_IDE && ide.is_some();
+        if pids.is_empty() && !adopt {
+            return None;
+        }
+        let clients = windows();
+        let found = resolve_window_for_launch(row, clients, &pids, &held, ide).or_else(|| {
+            ide.filter(|_| adopt)
+                .and_then(|(ide, names)| adopt_project_window(clients, &held, ide, names))
+        });
+        if let Some(id) = found {
+            held.insert(id);
+        }
+        found
+    });
+}
+
+/// The row "Open in <IDE>" records for a window it raised instead of
+/// launching — one this run never launched (the IDE was open before Tabtivity
+/// started, or was opened outside it): a pid-0 [`ORIGIN_PROJECT_IDE`] row
+/// holding that window, so the window is listed in the project's Apps view
+/// and parked on a switch. It lives while the window does
+/// ([`prune_dead_windows`]). `exec` is the IDE's launcher, `target` what it
+/// is handed.
+pub fn row_for_raised_window(
+    window_id: u64,
+    exec: &str,
+    target: &str,
+    project_id: &str,
+    opened_at: f64,
+) -> TrackedWindow {
+    TrackedWindow {
+        id: format!("ide-window-{window_id}"),
+        exec: exec.to_string(),
+        file: Some(target.to_string()),
+        pid: 0,
+        project_id: Some(project_id.to_string()),
+        role: Some("ide".to_string()),
+        opened_at,
+        window_id: Some(window_id),
+        origin: ORIGIN_PROJECT_IDE.to_string(),
+        launch_id: None,
+    }
+}
+
+/// The registry row holding `window_id`, or — when none does — a new
+/// [`row_for_raised_window`] inserted for it. The raise path of "Open in
+/// <IDE>" (`commands::ide`).
+pub fn track_raised_window(
+    reg: &mut WindowRegistry,
+    window_id: u64,
+    exec: &str,
+    target: &str,
+    project_id: &str,
+) -> TrackedWindow {
+    if let Some(row) = reg.windows.values().find(|w| w.window_id == Some(window_id)) {
+        return row.clone();
+    }
+    let opened_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    let row = row_for_raised_window(window_id, exec, target, project_id, opened_at);
+    reg.windows.insert(row.id.clone(), row.clone());
+    row
+}
+
+/// How many passes a window scan with a budget of `attempts` makes. Under
+/// Wayland a scan sees only XWayland windows and most launched apps are
+/// native, so it is one pass and never the retry loop's 100 ms sleeps (the
+/// stall 5a0b51c1 removed); X11 keeps the loop.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+fn scan_attempts(attempts: usize) -> usize {
+    if crate::platform::x11::session_is_wayland() {
+        attempts.min(1)
+    } else {
+        attempts
+    }
+}
+
+/// One window enumeration: what the list can say ([`WindowList`]) and, where
+/// the platform reports them, each window's pid, class and title.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+fn window_scan() -> (WindowList, Vec<ClientWindow>) {
+    match x11_client_windows() {
+        Ok(windows) => {
+            let ids = windows.iter().map(|w| w.id).collect();
+            let list = if crate::platform::x11::session_is_wayland() {
+                WindowList::XWaylandOnly(ids)
+            } else {
+                WindowList::Complete(ids)
+            };
+            (list, windows)
+        }
+        Err(_) => (WindowList::Unknown, Vec::new()),
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn window_scan() -> (WindowList, Vec<ClientWindow>) {
+    (WindowList::Complete(list_window_ids()), Vec::new())
+}
+
+#[cfg(any(not(any(target_os = "linux", target_os = "windows", target_os = "macos")), all(target_os = "linux", not(feature = "desktop"))))]
+fn window_scan() -> (WindowList, Vec<ClientWindow>) {
+    (WindowList::Unknown, Vec::new())
+}
+
 #[cfg(all(target_os = "linux", feature = "desktop"))]
 fn list_window_ids() -> Vec<u64> {
-    // Under Wayland the X client list holds nothing a launch could add to it
-    // (see `platform::x11::session_is_wayland`), so `find_new_window` has no
-    // baseline to diff against either — return the empty one directly.
-    if crate::platform::x11::session_is_wayland() {
-        return Vec::new();
-    }
+    // Under Wayland this lists the XWayland clients only — still the
+    // baseline `find_new_window` diffs against.
     x11_client_windows()
-        .map(|windows| windows.into_iter().map(|w| w.id as u64).collect())
+        .map(|windows| windows.into_iter().map(|w| w.id).collect())
         .unwrap_or_default()
 }
 
@@ -2236,22 +2730,18 @@ fn list_window_ids() -> Vec<u64> {
 
 #[cfg(all(target_os = "linux", feature = "desktop"))]
 fn find_window_for_pid(pid: u32, attempts: usize) -> Option<u64> {
-    // Wayland: the scan cannot see a native window and nothing consumes the id
-    // (`platform::x11::session_is_wayland`) — don't spend `attempts` × 100 ms
-    // per launch finding that out.
-    if crate::platform::x11::session_is_wayland() {
-        return None;
-    }
-    for _ in 0..attempts {
+    for attempt in 0..scan_attempts(attempts) {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         if let Ok(windows) = x11_client_windows() {
             if let Some(window) = windows
                 .into_iter()
                 .find(|w| w.pid == Some(pid) && !w.protected)
             {
-                return Some(window.id as u64);
+                return Some(window.id);
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     None
 }
@@ -2292,22 +2782,20 @@ fn find_window_for_pid(_pid: u32, _attempts: usize) -> Option<u64> {
 
 #[cfg(all(target_os = "linux", feature = "desktop"))]
 fn find_new_window(before: &[u64], attempts: usize) -> Option<u64> {
-    // Same Wayland short-circuit as `find_window_for_pid`, and for the same
-    // reason: `open_file` chains the two, so this is the second half of the
-    // up-to-4 s stall.
-    if crate::platform::x11::session_is_wayland() {
-        return None;
-    }
-    for _ in 0..attempts {
+    // One pass under Wayland, as in `find_window_for_pid`: `open_file` chains
+    // the two, so the loop here was the second half of the up-to-4 s stall.
+    for attempt in 0..scan_attempts(attempts) {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         if let Ok(windows) = x11_client_windows() {
             if let Some(window) = windows
                 .into_iter()
-                .find(|w| !before.contains(&(w.id as u64)) && !w.protected)
+                .find(|w| !before.contains(&w.id) && !w.protected)
             {
-                return Some(window.id as u64);
+                return Some(window.id);
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     None
 }
@@ -2327,16 +2815,12 @@ fn find_new_window(_before: &[u64], _attempts: usize) -> Option<u64> {
     None
 }
 
-#[cfg(target_os = "linux")]
-#[derive(Debug)]
-struct X11ClientWindow {
-    id: u32,
-    pid: Option<u32>,
-    protected: bool,
-}
-
+/// Every `_NET_CLIENT_LIST` window with its pid, class and title, the
+/// property requests for all windows sent before any reply is awaited (one
+/// round trip, not three per window). Under Wayland the list holds the
+/// XWayland clients.
 #[cfg(all(target_os = "linux", feature = "desktop"))]
-fn x11_client_windows() -> Result<Vec<X11ClientWindow>, String> {
+fn x11_client_windows() -> Result<Vec<ClientWindow>, String> {
     use xcb::x::{self, Window};
     use xcb::{Connection, Xid};
 
@@ -2349,6 +2833,8 @@ fn x11_client_windows() -> Result<Vec<X11ClientWindow>, String> {
         .root();
     let net_client_list = crate::platform::x11::intern_atom(&conn, b"_NET_CLIENT_LIST")?;
     let net_wm_pid = crate::platform::x11::intern_atom(&conn, b"_NET_WM_PID")?;
+    let net_wm_name = crate::platform::x11::intern_atom(&conn, b"_NET_WM_NAME")?;
+    let utf8_string = crate::platform::x11::intern_atom(&conn, b"UTF8_STRING")?;
     let reply = conn
         .wait_for_reply(conn.send_request(&x::GetProperty {
             delete: false,
@@ -2360,52 +2846,58 @@ fn x11_client_windows() -> Result<Vec<X11ClientWindow>, String> {
         }))
         .map_err(|e| e.to_string())?;
 
-    Ok(reply
-        .value::<Window>()
-        .iter()
-        .map(|&window| X11ClientWindow {
-            id: window.resource_id(),
-            pid: window_pid(&conn, window, net_wm_pid),
-            protected: is_protected_window(&conn, window),
-        })
-        .collect())
-}
-
-#[cfg(all(target_os = "linux", feature = "desktop"))]
-fn window_pid(conn: &xcb::Connection, window: xcb::x::Window, atom: xcb::x::Atom) -> Option<u32> {
-    conn.wait_for_reply(conn.send_request(&xcb::x::GetProperty {
-        delete: false,
-        window,
-        property: atom,
-        r#type: xcb::x::ATOM_CARDINAL,
-        long_offset: 0,
-        long_length: 1,
-    }))
-    .ok()
-    .and_then(|r| r.value::<u32>().first().copied())
-}
-
-#[cfg(all(target_os = "linux", feature = "desktop"))]
-fn is_protected_window(conn: &xcb::Connection, window: xcb::x::Window) -> bool {
-    let class = conn
-        .wait_for_reply(conn.send_request(&xcb::x::GetProperty {
+    let property = |window: Window, property: x::Atom, r#type: x::Atom, long_length: u32| {
+        conn.send_request(&x::GetProperty {
             delete: false,
             window,
-            property: xcb::x::ATOM_WM_CLASS,
-            r#type: xcb::x::ATOM_STRING,
+            property,
+            r#type,
             long_offset: 0,
-            long_length: 64,
-        }))
-        .ok()
-        .map(|r| String::from_utf8_lossy(r.value::<u8>()).into_owned())
-        .unwrap_or_default();
-
-    crate::platform::x11::is_protected_class(&class)
+            long_length,
+        })
+    };
+    let pending: Vec<_> = reply
+        .value::<Window>()
+        .iter()
+        .map(|&window| {
+            (
+                window,
+                property(window, net_wm_pid, x::ATOM_CARDINAL, 1),
+                property(window, x::ATOM_WM_CLASS, x::ATOM_STRING, 64),
+                property(window, net_wm_name, utf8_string, 128),
+            )
+        })
+        .collect();
+    let text = |reply: Result<x::GetPropertyReply, xcb::Error>| {
+        reply
+            .ok()
+            .map(|r| String::from_utf8_lossy(r.value::<u8>()).into_owned())
+            .unwrap_or_default()
+    };
+    Ok(pending
+        .into_iter()
+        .map(|(window, pid, class, title)| {
+            let pid = conn
+                .wait_for_reply(pid)
+                .ok()
+                .and_then(|r| r.value::<u32>().first().copied());
+            let class = text(conn.wait_for_reply(class));
+            let title = text(conn.wait_for_reply(title));
+            ClientWindow {
+                id: u64::from(window.resource_id()),
+                pid,
+                protected: crate::platform::x11::is_protected_class(&class),
+                class,
+                title,
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn tracked(project_id: Option<&str>, origin: &str, window_id: Option<u64>) -> TrackedWindow {
@@ -2419,6 +2911,7 @@ mod tests {
             opened_at: 1.0,
             window_id,
             origin: origin.to_string(),
+            launch_id: None,
         }
     }
 
@@ -2571,28 +3064,98 @@ mod tests {
 
     // ── launched_exit_action ───────────────────────────────────────────────
 
+    fn member(pid: u32, start: u64) -> FamilyMember {
+        FamilyMember { pid, start }
+    }
+
     #[test]
     fn exit_of_app_whose_window_is_gone_removes_the_row() {
-        assert_eq!(
-            launched_exit_action(Some(10), &[20, 30], None),
-            ExitAction::Remove
-        );
-        // No window ever resolved and none appeared: nothing left to manage.
-        assert_eq!(launched_exit_action(None, &[20], None), ExitAction::Remove);
+        let x11 = WindowList::Complete(vec![20, 30]);
+        assert_eq!(launched_exit_action(Some(10), &x11, None, &[], true), ExitAction::Remove);
+        // No window ever resolved and none appeared: on X11 the list is the
+        // whole truth, so nothing is left to manage.
+        assert_eq!(launched_exit_action(None, &x11, None, &[], true), ExitAction::Remove);
+        // Under Wayland the list is still the truth for an XWayland id.
+        let wayland = WindowList::XWaylandOnly(vec![20]);
+        assert_eq!(launched_exit_action(Some(10), &wayland, None, &[], true), ExitAction::Remove);
     }
 
     #[test]
     fn exit_with_surviving_window_demotes_to_pid_zero() {
         // Hand-off (browser, `code`): the launcher exited but its window lives.
+        let list = WindowList::Complete(vec![10, 20]);
         assert_eq!(
-            launched_exit_action(Some(10), &[10, 20], None),
+            launched_exit_action(Some(10), &list, None, &[], true),
             ExitAction::KeepDemoted(None)
         );
         // Unresolved launch that produced a new window: keep and adopt it.
         assert_eq!(
-            launched_exit_action(None, &[20], Some(42)),
+            launched_exit_action(None, &list, Some(42), &[], false),
             ExitAction::KeepDemoted(Some(42))
         );
+    }
+
+    #[test]
+    fn a_live_launch_family_keeps_the_row_under_its_oldest_member() {
+        // A wrapper that forked the app and exited: the app runs on.
+        let family = [member(301, 90), member(300, 80), member(302, 80)];
+        let gone = WindowList::Complete(Vec::new());
+        assert_eq!(
+            launched_exit_action(Some(10), &gone, None, &family, true),
+            ExitAction::KeepFamily { lead: 300, adopt: None }
+        );
+        // A global launch is kept by its family too.
+        assert_eq!(
+            launched_exit_action(None, &gone, Some(7), &family, false),
+            ExitAction::KeepFamily { lead: 300, adopt: Some(7) }
+        );
+        // A row that already has a window keeps it: nothing is adopted over it.
+        assert_eq!(
+            launched_exit_action(Some(10), &gone, Some(7), &family, true),
+            ExitAction::KeepFamily { lead: 300, adopt: None }
+        );
+    }
+
+    #[test]
+    fn an_unknowable_window_list_never_removes_a_project_row() {
+        // Wayland, no XWayland window id, family dead, nothing adopted: the
+        // app may well be a native window nobody can list.
+        let wayland = WindowList::XWaylandOnly(vec![1, 2]);
+        assert_eq!(
+            launched_exit_action(None, &wayland, None, &[], true),
+            ExitAction::KeepDemoted(None)
+        );
+        // A machine-wide launch goes as before.
+        assert_eq!(launched_exit_action(None, &wayland, None, &[], false), ExitAction::Remove);
+        // A failed enumeration says nothing about any row.
+        assert_eq!(
+            launched_exit_action(Some(10), &WindowList::Unknown, None, &[], true),
+            ExitAction::KeepDemoted(None)
+        );
+        assert_eq!(
+            launched_exit_action(Some(10), &WindowList::Unknown, None, &[], false),
+            ExitAction::Remove
+        );
+    }
+
+    #[test]
+    fn window_list_tells_what_it_can() {
+        assert_eq!(WindowList::Complete(vec![1]).shows(Some(1)), Some(true));
+        assert_eq!(WindowList::Complete(vec![1]).shows(Some(2)), Some(false));
+        assert_eq!(WindowList::Complete(vec![1]).shows(None), Some(false));
+        assert_eq!(WindowList::XWaylandOnly(vec![1]).shows(Some(1)), Some(true));
+        assert_eq!(WindowList::XWaylandOnly(vec![1]).shows(Some(2)), Some(false));
+        assert_eq!(WindowList::XWaylandOnly(vec![1]).shows(None), None);
+        assert_eq!(WindowList::Unknown.shows(Some(1)), None);
+        assert_eq!(WindowList::Unknown.shows(None), None);
+    }
+
+    #[test]
+    fn family_lead_is_the_oldest_member() {
+        assert_eq!(family_lead(&[]), None);
+        assert_eq!(family_lead(&[member(9, 50), member(5, 70)]), Some(9));
+        // Same start tick: the lower pid.
+        assert_eq!(family_lead(&[member(9, 50), member(5, 50)]), Some(5));
     }
 
     // ── prune_dead_windows ─────────────────────────────────────────────────
@@ -2606,6 +3169,15 @@ mod tests {
         reg
     }
 
+    /// `prune_dead_windows_with` for scope p1, with no family member alive.
+    fn prune(reg: &mut WindowRegistry, alive: impl Fn(u32) -> bool, list: WindowList) {
+        prune_dead_windows_with(reg, Some("p1"), alive, |_| None, move || list, false);
+    }
+
+    fn with_family(reg: &mut WindowRegistry, id: &str, family: Option<Vec<FamilyMember>>) {
+        reg.launches.insert(id.to_string(), LaunchTrack { since: 1, family, ide_project: None });
+    }
+
     #[test]
     fn prune_drops_dead_pid_rows_and_keeps_live_and_pid_zero_ones() {
         let mut dead = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
@@ -2616,7 +3188,7 @@ mod tests {
         opener.pid = 0; // OS-default open: no liveness signal, never pruned.
         let mut reg = registry_of(vec![dead, alive, opener]);
 
-        prune_dead_windows_with(&mut reg, Some("p1"), |pid| pid == 200, Vec::new);
+        prune(&mut reg, |pid| pid == 200, WindowList::Complete(Vec::new()));
 
         let pids: Vec<u32> = reg.windows.values().map(|w| w.pid).collect();
         assert_eq!(reg.windows.len(), 2);
@@ -2630,9 +3202,9 @@ mod tests {
         let mut w = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(55));
         w.pid = 100;
         let mut reg = registry_of(vec![w]);
-        prune_dead_windows_with(&mut reg, Some("p1"), |_| false, || vec![55]);
+        prune(&mut reg, |_| false, WindowList::Complete(vec![55]));
         assert_eq!(reg.windows.len(), 1);
-        prune_dead_windows_with(&mut reg, Some("p1"), |_| false, Vec::new);
+        prune(&mut reg, |_| false, WindowList::Complete(Vec::new()));
         assert!(reg.windows.is_empty(), "window gone too → pruned");
     }
 
@@ -2641,8 +3213,484 @@ mod tests {
         let mut other = tracked(Some("p2"), ORIGIN_SIDE_FILE_TREE, None);
         other.pid = 100;
         let mut reg = registry_of(vec![other]);
-        prune_dead_windows_with(&mut reg, Some("p1"), |_| false, Vec::new);
+        prune(&mut reg, |_| false, WindowList::Complete(Vec::new()));
         assert_eq!(reg.windows.len(), 1, "p2's row is not p1's to prune");
+    }
+
+    #[test]
+    fn prune_judges_a_launched_row_by_its_family_once_the_launcher_exited() {
+        let mut w = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        w.pid = 100; // the launcher, dead
+        let mut reg = registry_of(vec![w]);
+        with_family(&mut reg, "w0", Some(vec![member(300, 5), member(301, 6)]));
+        // Only 301 still runs: the row stays and moves to it.
+        let world = [member(301, 6)];
+        let live_lead = |family: &[FamilyMember]| {
+            let live: Vec<FamilyMember> = family.iter().copied().filter(|m| world.contains(m)).collect();
+            family_lead(&live)
+        };
+        let list = || WindowList::Complete(Vec::new());
+        prune_dead_windows_with(&mut reg, Some("p1"), |_| false, live_lead, list, false);
+        assert_eq!(reg.windows["w0"].pid, 301);
+        // Family dead, no window: gone.
+        prune_dead_windows_with(&mut reg, Some("p1"), |_| true, |_| None, list, false);
+        assert!(reg.windows.is_empty());
+        assert!(reg.launches.is_empty(), "its launch bookkeeping goes with it");
+    }
+
+    #[test]
+    fn a_later_marked_process_does_not_keep_a_row_alive() {
+        // A Gradle daemon the IDE started after the launcher exited carries
+        // the marker and runs on — but it is not in the family.
+        let mut w = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        w.pid = 300;
+        let mut reg = registry_of(vec![w]);
+        with_family(&mut reg, "w0", Some(vec![member(300, 5)]));
+        let daemon = member(400, 9);
+        let live_lead = |family: &[FamilyMember]| {
+            let live: Vec<FamilyMember> = family.iter().copied().filter(|m| *m == daemon).collect();
+            family_lead(&live)
+        };
+        // Even a pid probe that calls the daemon's pid alive is not asked.
+        let alive = |pid| pid == 400;
+        prune_dead_windows_with(&mut reg, Some("p1"), alive, live_lead, || WindowList::Complete(Vec::new()), false);
+        assert!(reg.windows.is_empty());
+    }
+
+    #[test]
+    fn prune_leaves_a_just_exited_launcher_to_its_watcher() {
+        let mut w = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        w.pid = 100;
+        let mut reg = registry_of(vec![w]);
+        with_family(&mut reg, "w0", None);
+        prune(&mut reg, |_| false, WindowList::Complete(Vec::new()));
+        assert_eq!(reg.windows["w0"].pid, 100, "the watcher decides, not the read");
+    }
+
+    #[test]
+    fn under_wayland_a_dead_row_without_a_window_id_is_demoted_not_removed() {
+        let mut windowless = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        windowless.pid = 100;
+        let mut xwayland = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(55));
+        xwayland.pid = 101;
+        let mut reg = registry_of(vec![windowless, xwayland]);
+        prune(&mut reg, |_| false, WindowList::XWaylandOnly(vec![9]));
+        // No id: the list cannot tell → delist-only, still listed.
+        assert_eq!(reg.windows["w0"].pid, 0);
+        // An XWayland id the list no longer shows: gone.
+        assert!(!reg.windows.contains_key("w1"));
+    }
+
+    #[test]
+    fn a_failed_window_enumeration_prunes_nothing() {
+        let mut w = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(55));
+        w.pid = 100;
+        let mut windowless = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        windowless.pid = 101;
+        let mut reg = registry_of(vec![w, windowless]);
+        prune(&mut reg, |_| false, WindowList::Unknown);
+        assert_eq!(reg.windows["w0"].pid, 100);
+        assert_eq!(reg.windows["w1"].pid, 101);
+    }
+
+    #[test]
+    fn prune_sweeps_launch_bookkeeping_of_rows_gone_elsewhere() {
+        let mut reg = registry_of(vec![tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None)]);
+        with_family(&mut reg, "w0", None);
+        with_family(&mut reg, "closed", Some(Vec::new()));
+        prune(&mut reg, |_| true, WindowList::Unknown);
+        assert!(reg.launches.contains_key("w0"));
+        assert!(!reg.launches.contains_key("closed"));
+    }
+
+    // ── resolve_window_for_launch ──────────────────────────────────────────
+
+    fn client(id: u64, pid: Option<u32>, class: &str, title: &str) -> ClientWindow {
+        ClientWindow { id, pid, protected: false, class: class.to_string(), title: title.to_string() }
+    }
+
+    fn pycharm_windows() -> Vec<ClientWindow> {
+        let class = "jetbrains-pycharm\0jetbrains-pycharm\0";
+        vec![
+            client(1, Some(999), class, "proj – main.py"),
+            ClientWindow { protected: true, ..client(2, Some(300), "plasmashell\0plasmashell\0", "") },
+            client(3, Some(300), class, "other – util.py"),
+            client(4, Some(301), class, "proj – main.py"),
+        ]
+    }
+
+    #[test]
+    fn resolver_takes_a_marked_pid_window_no_other_row_holds() {
+        let row = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        let windows = pycharm_windows();
+        let none = HashSet::new();
+        // 1 is unmarked, 2 protected: the first marked one is 3.
+        assert_eq!(resolve_window_for_launch(&row, &windows, &[300, 301], &none, None), Some(3));
+        // Another row holds 3.
+        let held: HashSet<u64> = [3].into();
+        assert_eq!(resolve_window_for_launch(&row, &windows, &[300, 301], &held, None), Some(4));
+        // No marked process: nothing.
+        assert_eq!(resolve_window_for_launch(&row, &windows, &[], &none, None), None);
+    }
+
+    #[test]
+    fn resolver_takes_only_a_window_showing_the_project_for_an_ide_row() {
+        use crate::services::ide_detect::IdeId;
+        let row = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        let windows = pycharm_windows();
+        let names = vec!["proj".to_string()];
+        let none = HashSet::new();
+        let ide = Some((IdeId::PyCharm, names.as_slice()));
+        // 3 is the same JVM's window on another project.
+        assert_eq!(resolve_window_for_launch(&row, &windows, &[300, 301], &none, ide), Some(4));
+        let held: HashSet<u64> = [4].into();
+        assert_eq!(resolve_window_for_launch(&row, &windows, &[300, 301], &held, ide), None);
+        // Unmarked even though it shows the project.
+        assert_eq!(resolve_window_for_launch(&row, &windows, &[300], &none, ide), None);
+        // No IDE facts for the row: nothing is resolved.
+        assert_eq!(resolve_window_for_launch(&row, &windows, &[300, 301], &none, None), None);
+    }
+
+    // ── IDE hand-off adoption at launcher exit ─────────────────────────────
+
+    fn no_new_window() -> Option<u64> {
+        panic!("the any-new-window guess must not be asked")
+    }
+
+    #[test]
+    fn an_ide_hand_off_adopts_the_window_showing_the_project() {
+        use crate::services::ide_detect::IdeId;
+        // The launcher handed the folder to a running PyCharm (pid 999) and
+        // exited: no family, so no marked pid owns the window.
+        let row = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        let windows = pycharm_windows();
+        let names = vec!["proj".to_string()];
+        let ide = Some((IdeId::PyCharm, names.as_slice()));
+        let none = HashSet::new();
+        let adopted = exit_adoption(&row, &windows, &[], &none, ide, no_new_window);
+        assert_eq!(adopted, Some(1), "the project window, not 'any new window'");
+        // The row is kept delist-only, holding the adopted window.
+        let list = WindowList::XWaylandOnly(vec![1, 2, 3, 4]);
+        assert_eq!(
+            launched_exit_action(None, &list, adopted, &[], true),
+            ExitAction::KeepDemoted(Some(1))
+        );
+        // A window another row holds is skipped.
+        let held: HashSet<u64> = [1].into();
+        assert_eq!(exit_adoption(&row, &windows, &[], &held, ide, no_new_window), Some(4));
+        // No window shows the project: nothing adopted, and still no guess.
+        let other = vec!["elsewhere".to_string()];
+        let ide = Some((IdeId::PyCharm, other.as_slice()));
+        assert_eq!(exit_adoption(&row, &windows, &[], &none, ide, no_new_window), None);
+    }
+
+    #[test]
+    fn exit_adoption_guesses_only_without_a_family_and_without_ide_facts() {
+        let windows = pycharm_windows();
+        let none = HashSet::new();
+        let plain = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        // No family, not an IDE row: the old any-new-window guess.
+        assert_eq!(exit_adoption(&plain, &windows, &[], &none, None, || Some(42)), Some(42));
+        // An IDE row that does not know its project falls back to it too.
+        let ide_row = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        assert_eq!(exit_adoption(&ide_row, &windows, &[], &none, None, || Some(42)), Some(42));
+        // A live family's window: resolved by pid.
+        assert_eq!(exit_adoption(&plain, &windows, &[301], &none, None, no_new_window), Some(4));
+        // A live family that has not mapped a window yet: no guess.
+        assert_eq!(exit_adoption(&plain, &windows, &[555], &none, None, no_new_window), None);
+    }
+
+    // ── read-time / switch-time resolve ────────────────────────────────────
+
+    #[test]
+    fn missing_windows_resolve_by_marker_and_by_ide_project_from_one_scan() {
+        use crate::services::ide_detect::IdeId;
+        use std::cell::Cell;
+        // w0: a marked launch whose family member 300 mapped window 3 late.
+        let mut marked = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        marked.pid = 100;
+        marked.launch_id = Some("tok".into());
+        // w1: a demoted IDE hand-off (pid 0) that knows its project.
+        let mut handed = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        handed.pid = 0;
+        handed.launch_id = Some("ide-tok".into());
+        // w2: another row already holds window 1 (also titled "proj").
+        let holder = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(1));
+        // w3: a pid-0 OS-default open: nothing to resolve by.
+        let mut opener = tracked(Some("p1"), ORIGIN_DOWNLOADS, None);
+        opener.pid = 0;
+        let mut reg = registry_of(vec![marked, handed, holder, opener]);
+        with_family(&mut reg, "w0", None);
+        reg.launches.get_mut("w0").unwrap().since = 40;
+        reg.launches.insert(
+            "w1".into(),
+            LaunchTrack { since: 1, family: Some(Vec::new()), ide_project: Some((IdeId::PyCharm, vec!["proj".into()])) },
+        );
+        let windows = pycharm_windows();
+        let scans = Cell::new(0);
+        let marked_for = |id: &str, since: u64| match (id, since) {
+            ("tok", 40) => vec![300],
+            _ => Vec::new(),
+        };
+        resolve_missing_launch_windows_with(
+            &mut reg,
+            Some("p1"),
+            || {
+                scans.set(scans.get() + 1);
+                windows.as_slice()
+            },
+            marked_for,
+        );
+        assert_eq!(reg.windows["w0"].window_id, Some(3), "family member's window");
+        assert_eq!(reg.windows["w1"].window_id, Some(4), "the project window no row holds");
+        assert_eq!(reg.windows["w2"].window_id, Some(1));
+        assert_eq!(reg.windows["w3"].window_id, None);
+        assert!(scans.get() >= 1);
+    }
+
+    #[test]
+    fn missing_window_resolve_scans_only_when_a_row_can_resolve() {
+        let mut opener = tracked(Some("p1"), ORIGIN_DOWNLOADS, None);
+        opener.pid = 0;
+        // An IDE pid-0 row without project facts has nothing to go by either.
+        let mut ide_row = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        ide_row.pid = 0;
+        let mut reg = registry_of(vec![opener, ide_row]);
+        resolve_missing_launch_windows_with(
+            &mut reg,
+            Some("p1"),
+            || -> &'static [ClientWindow] { panic!("no row needs a scan") },
+            |_, _| Vec::new(),
+        );
+        assert!(reg.windows.values().all(|w| w.window_id.is_none()));
+    }
+
+    #[test]
+    fn two_rows_never_resolve_the_same_window() {
+        // Both launches' marked processes include 301 (the marker leaked):
+        // whichever row asks first takes window 4, the other gets nothing.
+        let mut a = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        a.pid = 301;
+        let mut b = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        b.pid = 301;
+        let mut reg = registry_of(vec![a, b]);
+        let windows: Vec<ClientWindow> = pycharm_windows().into_iter().filter(|w| w.id == 4).collect();
+        resolve_missing_launch_windows_with(&mut reg, Some("p1"), || windows.as_slice(), |_, _| Vec::new());
+        let ids: Vec<Option<u64>> = reg.windows.values().map(|w| w.window_id).collect();
+        assert_eq!(ids.iter().filter(|id| **id == Some(4)).count(), 1);
+        assert_eq!(ids.iter().filter(|id| id.is_none()).count(), 1);
+    }
+
+    // ── the Apps-view read: probes run with the registry unlocked ──────────
+
+    #[test]
+    fn the_apps_view_read_scans_and_probes_with_the_registry_unlocked() {
+        // w0: windowless marked launch whose family member 300 shows window 3.
+        let mut marked = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        marked.pid = 299;
+        marked.launch_id = Some("tok".into());
+        // w1: dead app whose window is gone → removed.
+        let mut dead = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(9));
+        dead.pid = 100;
+        // w2: another scope, untouched and not returned.
+        let other = tracked(Some("p2"), ORIGIN_SIDE_FILE_TREE, None);
+        let mut reg = registry_of(vec![marked, dead, other]);
+        with_family(&mut reg, "w0", None);
+        reg.launches.get_mut("w0").unwrap().since = 40;
+        let registry: WindowRegistryState = Arc::new(Mutex::new(reg));
+        let unlocked = |what: &str| assert!(registry.try_lock().is_ok(), "{what} ran under the registry lock");
+        let windows = pycharm_windows();
+        let scans = std::cell::Cell::new(0);
+        let rows = prune_dead_windows_unlocked(
+            &registry,
+            Some("p1"),
+            true,
+            |pid| pid != 100,
+            |_| None,
+            |id, since| {
+                unlocked("the marked-process lookup");
+                if (id, since) == ("tok", 40) { vec![300] } else { Vec::new() }
+            },
+            || {
+                unlocked("the window scan");
+                scans.set(scans.get() + 1);
+                (WindowList::Complete(windows.iter().map(|w| w.id).collect()), windows.clone())
+            },
+        );
+        assert_eq!(scans.get(), 1, "one scan for the resolve and the prune");
+        let reg = registry.lock_ok();
+        assert_eq!(reg.windows["w0"].window_id, Some(3), "resolved by its marked process");
+        assert!(!reg.windows.contains_key("w1"), "dead and its window gone");
+        assert!(reg.windows.contains_key("w2"));
+        let ids: Vec<&str> = rows.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(ids, ["w0"], "the scope's rows, after the sweep");
+    }
+
+    #[test]
+    fn the_apps_view_read_makes_no_scan_without_a_question() {
+        // A live row with its window, and a pid-0 open without one: nothing
+        // to resolve, nothing dead.
+        let mut live = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(5));
+        live.pid = 200;
+        let mut opener = tracked(Some("p1"), ORIGIN_DOWNLOADS, None);
+        opener.pid = 0;
+        let registry: WindowRegistryState = Arc::new(Mutex::new(registry_of(vec![live, opener])));
+        let rows = prune_dead_windows_unlocked(
+            &registry,
+            Some("p1"),
+            true,
+            |_| true,
+            |_| None,
+            |_, _| Vec::new(),
+            || panic!("no row needs a scan"),
+        );
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn a_row_that_changed_during_the_unlocked_scan_is_left_for_the_next_read() {
+        let mut dead = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, Some(9));
+        dead.pid = 100;
+        let registry: WindowRegistryState = Arc::new(Mutex::new(registry_of(vec![dead])));
+        prune_dead_windows_unlocked(
+            &registry,
+            Some("p1"),
+            false,
+            |_| false,
+            |_| None,
+            |_, _| Vec::new(),
+            || {
+                // The exit watcher demoted it meanwhile (adopting window 4).
+                let mut reg = registry.lock_ok();
+                let w = reg.windows.get_mut("w0").unwrap();
+                w.pid = 0;
+                w.window_id = Some(4);
+                (WindowList::Complete(Vec::new()), Vec::new())
+            },
+        );
+        assert!(registry.lock_ok().windows.contains_key("w0"), "judged on what it was, not removed");
+    }
+
+    // ── raise path + window-only liveness ──────────────────────────────────
+
+    #[test]
+    fn a_raised_ide_window_gets_a_pid_0_project_row() {
+        let row = row_for_raised_window(77, "pycharm", "/work/proj", "p1", 5.0);
+        assert_eq!(row.pid, 0, "nothing of ours to signal");
+        assert_eq!(row.window_id, Some(77));
+        assert_eq!(row.origin, ORIGIN_PROJECT_IDE);
+        assert_eq!(row.project_id.as_deref(), Some("p1"));
+        assert_eq!(row.file.as_deref(), Some("/work/proj"));
+        assert_eq!(row.role.as_deref(), Some("ide"));
+        assert!(row.launch_id.is_none());
+        assert!(is_project_opened_window(&row), "listed and parked");
+
+        let mut reg = WindowRegistry::default();
+        let first = track_raised_window(&mut reg, 77, "pycharm", "/work/proj", "p1");
+        assert_eq!(reg.windows.len(), 1);
+        // Raised again: the same row, not a second one.
+        let again = track_raised_window(&mut reg, 77, "pycharm", "/work/proj", "p1");
+        assert_eq!(again.id, first.id);
+        assert_eq!(reg.windows.len(), 1);
+        // A window a launched row already holds is answered with that row.
+        let mut launched = tracked(Some("p1"), ORIGIN_PROJECT_IDE, Some(88));
+        launched.id = "launched".into();
+        launched.pid = 300;
+        reg.windows.insert(launched.id.clone(), launched);
+        assert_eq!(track_raised_window(&mut reg, 88, "pycharm", "/work/proj", "p1").id, "launched");
+        assert_eq!(reg.windows.len(), 2);
+    }
+
+    #[test]
+    fn a_pid_0_row_with_a_window_lives_while_the_window_does() {
+        let raised = row_for_raised_window(77, "pycharm", "/work/proj", "p1", 5.0);
+        let mut windowless = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        windowless.pid = 0;
+        windowless.id = "windowless".into();
+        let mut reg = WindowRegistry::default();
+        for w in [raised.clone(), windowless] {
+            reg.windows.insert(w.id.clone(), w);
+        }
+        let run = |reg: &mut WindowRegistry, list: WindowList, liveness: bool| {
+            prune_dead_windows_with(reg, Some("p1"), |_| false, |_| None, move || list, liveness);
+        };
+        // Still listed (XWayland lists it: authoritative for an id).
+        run(&mut reg, WindowList::XWaylandOnly(vec![77]), true);
+        assert!(reg.windows.contains_key(&raised.id));
+        // A failed enumeration says nothing.
+        run(&mut reg, WindowList::Unknown, true);
+        assert!(reg.windows.contains_key(&raised.id));
+        // Off Linux the visible-window list cannot judge it (parked = hidden).
+        run(&mut reg, WindowList::Complete(Vec::new()), false);
+        assert!(reg.windows.contains_key(&raised.id));
+        // The window left the client list: the row goes.
+        run(&mut reg, WindowList::XWaylandOnly(vec![9]), true);
+        assert!(!reg.windows.contains_key(&raised.id));
+        // A pid-0 row without a window stays delist-only.
+        assert_eq!(reg.windows["windowless"].pid, 0);
+    }
+
+    #[test]
+    fn an_adopted_hand_off_row_is_pruned_once_its_window_closes() {
+        let mut row = tracked(Some("p1"), ORIGIN_PROJECT_IDE, Some(4));
+        row.pid = 0; // KeepDemoted(Some(4)) at launcher exit
+        let mut reg = registry_of(vec![row]);
+        with_family(&mut reg, "w0", Some(Vec::new()));
+        prune_dead_windows_with(&mut reg, Some("p1"), |_| false, |_| None, || WindowList::Complete(vec![4]), true);
+        assert!(reg.windows.contains_key("w0"));
+        prune_dead_windows_with(&mut reg, Some("p1"), |_| false, |_| None, || WindowList::Complete(Vec::new()), true);
+        assert!(reg.windows.is_empty());
+        assert!(reg.launches.is_empty());
+    }
+
+    #[test]
+    fn record_launch_keeps_the_ide_project() {
+        use crate::services::ide_detect::IdeId;
+        let mut row = tracked(Some("p1"), ORIGIN_PROJECT_IDE, None);
+        row.launch_id = Some("0f3a".into());
+        let mut reg = registry_of(vec![row]);
+        record_launch(&mut reg, "w0", 5, Some((IdeId::PyCharm, vec!["proj".into()])));
+        let (ide, names) = reg.launches["w0"].ide_project.clone().expect("IDE facts");
+        assert_eq!(ide, IdeId::PyCharm);
+        assert_eq!(names, ["proj"]);
+    }
+
+    #[test]
+    fn record_launch_tracks_only_marked_rows() {
+        let mut marked = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        marked.launch_id = Some("0f3a".into());
+        let mut reg = registry_of(vec![marked, tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None)]);
+        record_launch(&mut reg, "w0", 77, None);
+        record_launch(&mut reg, "w1", 77, None);
+        assert_eq!(reg.launches.len(), 1);
+        assert_eq!(reg.launches["w0"].since, 77);
+        assert!(reg.launches["w0"].family.is_none());
+    }
+
+    #[test]
+    fn the_launch_marker_is_opaque_and_never_serialized() {
+        let a = new_launch_id().expect("OS randomness");
+        let b = new_launch_id().expect("OS randomness");
+        assert_eq!(a.len(), 32);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b);
+        let mut row = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        row.launch_id = Some(a.clone());
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(!json.contains(&a) && !json.contains("launch"), "{json}");
+        // An older payload without the field still reads.
+        let back: TrackedWindow = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.launch_id, None);
+    }
+
+    #[test]
+    fn launch_command_sets_the_marker_only_when_there_is_one() {
+        let var = std::ffi::OsStr::new(crate::app_env!("LAUNCH_ID"));
+        let marked = launch_command("editor", &[], None, Some("0f3a"));
+        let value = marked.get_envs().find(|(k, _)| *k == var).and_then(|(_, v)| v);
+        assert_eq!(value, Some(std::ffi::OsStr::new("0f3a")));
+        let unmarked = launch_command("editor", &[], None, None);
+        assert!(unmarked.get_envs().all(|(k, _)| k != var));
     }
 
     #[test]

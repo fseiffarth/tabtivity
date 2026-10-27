@@ -160,8 +160,11 @@ land on an existing one, and **by name** the receiving-side files whose content
 exists nowhere else. "Not now" is always available.
 
 **Pull** (`sync_pull`, *Sync all* in the Remote tree): host bytes over the
-mirror's. For a folder, rsync is used when present on both ends, fed the exact
-file list the host walker produced; otherwise per-file SFTP. rsync lands only
+mirror's. For a folder, rsync is used when both ends run rsync 3.0 or later
+(it needs `--protect-args`; `rsync --version` is asked once per process
+locally and once per host, `remote_sync::rsync_fast_path`), fed the exact file
+list the host walker produced; otherwise per-file SFTP — macOS's
+`/usr/bin/rsync` (2.6.9 or openrsync) always takes SFTP. rsync lands only
 what SFTP would: `-t -c --no-links --no-devices --no-specials
 --max-size=<64 MiB>`, no `-a` and no recursion past the list
 (`remote_sync::rsync_pull_flags`), files over the cap left out of the list, and

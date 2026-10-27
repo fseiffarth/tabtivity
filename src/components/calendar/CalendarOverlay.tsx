@@ -31,7 +31,7 @@ const CalendarPane = lazy(() => import("./CalendarPane").then((m) => ({ default:
  */
 export function CalendarOverlayHost() {
   const t = useT();
-  const enabled = useSettingsStore((s) => s.settings?.calendar_global_app ?? false);
+  const enabled = useSettingsStore((s) => s.settings?.calendar_global_app ?? true);
   const open = useCalendarStore((s) => s.overlayOpen);
 
   // Turning the setting off takes the surface away rather than leaving it on

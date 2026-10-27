@@ -3,13 +3,13 @@ import { translate, normalizeLang, dateLocale, LANGUAGES, enSource, type Transla
 import { BRAND } from "../../lib/brand";
 // The aggregator also registers every lazy dictionary, so `translate` below
 // answers in all five languages without awaiting a chunk.
-import { TRANSLATIONS } from "../../lib/i18nDicts/all";
+import { TRANSLATIONS } from "../../lib/i18n/all";
 // The raw dictionaries, `{app}`/`{slug}` still unfilled — the placeholder
 // parity check needs them (see below).
-import { dict as de } from "../../lib/i18nDicts/de";
-import { dict as es } from "../../lib/i18nDicts/es";
-import { dict as fr } from "../../lib/i18nDicts/fr";
-import { dict as it_ } from "../../lib/i18nDicts/it";
+import { dict as de } from "../../lib/i18n/de";
+import { dict as es } from "../../lib/i18n/es";
+import { dict as fr } from "../../lib/i18n/fr";
+import { dict as it_ } from "../../lib/i18n/it";
 
 const RAW_DICTS = { de, es, fr, it: it_ };
 

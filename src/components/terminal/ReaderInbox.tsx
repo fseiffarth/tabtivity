@@ -8,7 +8,7 @@ import { NAMES } from "../../lib/brand";
 import { resolvePath } from "../../lib/paths";
 import { internalViewerFor, type FileEntry, type InternalViewer } from "../../lib/viewers/fileUtils";
 import { UntestedTag } from "../common/UntestedTag";
-import { readFileBytes } from "../embed/fileAccess";
+import { readFileBytes } from "../../lib/files/fileAccess";
 
 /**
  * The Chat's mirror of the phone's inbox previews (`InboxAlbum`): a prompt

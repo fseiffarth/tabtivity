@@ -69,6 +69,9 @@ export interface SyncTransferRequest extends SyncConfirmBase {
 export interface SyncDeleteRequest extends SyncConfirmBase {
   deleteSide: "host" | "local";
   direction?: undefined;
+  /** The host copy is the file's only one because it was never synced (the
+   *  orange view's remote-only rows), not because the mirror's was deleted. */
+  hostOnly?: boolean;
 }
 
 /** What the dialog is being asked about. */
@@ -130,9 +133,13 @@ export const useSyncConfirmStore = create<SyncConfirmState>((set, get) => ({
         resolve(false);
         return;
       }
+      // A batch delete (`relPaths`) names its files instead of pricing one
+      // copy, so there is nothing to load.
+      const batchDelete = !!req.deleteSide && !!req.relPaths;
       set({
-        pending: { ...req, preview: null, doomed: null, loading: true, error: null, resolve },
+        pending: { ...req, preview: null, doomed: null, loading: !batchDelete, error: null, resolve },
       });
+      if (batchDelete) return;
       // Price it in the background. The dialog is already up and already
       // requires a click, so a slow or failing preview costs information, never
       // the gate itself. A delete ask is priced with the doomed copy's own

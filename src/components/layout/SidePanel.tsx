@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ProjectFilesView } from "../files/ProjectFilesView";
 import { useFileSource } from "../files/ProjectFilesPane";
-import { openProjectFilesTab } from "../files/ProjectFilesTab";
+import { openProjectFilesTab } from "../../lib/tabs/openProjectFilesTab";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import {
@@ -486,6 +486,7 @@ export function SidePanel({
       footer={versionFooter}
       view={panelView}
       assistant
+      downloadsHost="sidePanel"
       onViewChange={(view: FilesPanelView) => {
         // Both keys: this scope's own view, and the seed the next scope with no
         // entry of its own opens on. Same patch the closed panel's edge rail

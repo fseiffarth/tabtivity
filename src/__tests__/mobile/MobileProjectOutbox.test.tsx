@@ -73,12 +73,12 @@ describe("Mobile project — the files the agent sent", () => {
     expect(gallery.textContent).toContain("2 files in the project's outbox");
     expect(Array.from(gallery.querySelectorAll(".outbox-entry strong")).map((name) => name.textContent))
       .toEqual(["plot.png", "notes.txt"]);
-    expect(gallery.querySelector("img")?.getAttribute("src")).toBe("/api/v1/projects/p1/outbox/plot.png");
+    expect(gallery.querySelector("img")?.getAttribute("src")).toBe("/api/v1/projects/p1/outbox/plot.png?v=1770000000-48000");
 
     // The picture opens full screen, from the same project-scoped URL.
     fireEvent.click(within(gallery).getByRole("button", { name: "Open plot.png" }));
     expect(screen.getByRole("dialog", { name: "plot.png" }).querySelector("img")?.getAttribute("src"))
-      .toBe("/api/v1/projects/p1/outbox/plot.png");
+      .toBe("/api/v1/projects/p1/outbox/plot.png?v=1770000000-48000");
   });
 
   it("lists every file, and opens a PDF in the app's own page view", async () => {
@@ -115,10 +115,10 @@ describe("Mobile project — the files the agent sent", () => {
     // A thumbnail carries no ⋯, so saving a picture meant opening it full
     // screen first and finding Save in there.
     const save = within(gallery).getByRole("link", { name: "Save plot.png" });
-    expect(save.getAttribute("href")).toBe("/api/v1/projects/p1/outbox/plot.png?download=1");
+    expect(save.getAttribute("href")).toBe("/api/v1/projects/p1/outbox/plot.png?v=1770000000-48000&download=1");
     expect(save.getAttribute("download")).toBe("plot.png");
     expect(within(gallery).getByRole("link", { name: "Save notes.txt" }).getAttribute("href"))
-      .toBe("/api/v1/projects/p1/outbox/notes.txt?download=1");
+      .toBe("/api/v1/projects/p1/outbox/notes.txt?v=1769999000-900&download=1");
   });
 
   it("deletes a file from its tile, after asking, and drops the tile without waiting for a poll", async () => {

@@ -3,14 +3,16 @@ import { create } from "zustand";
 import { screenModelTag, shortModelName, textScreenModelTag, textScreenModeMarks, transcriptModelTag, type AgentModeMarks } from "../../lib/agents/agentModel";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { envName } from "../../lib/brand";
-import { AGENT_ITEMS } from "../../components/tabs/newTabItems";
+import { AGENT_ITEMS } from "../../lib/tabs/newTabItems";
 import { adoptTranscriptPrompts, adoptTypedPrompt, type TranscriptPrompt } from "../../lib/agents/prompt/adopt";
 import { lastPromptEcho } from "../../lib/agents/prompt/echo";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { splitPtyId, projectIdOfScope } from "../../lib/terminal/ptyId";
 import { useActivityStore } from "../activity";
 import { isDetachedWindow } from "../detachedContext";
+import { useProjectsStore } from "../projects";
 import { useTabsStore, type TabEntry } from "../tabs";
+import { hostTabId } from "../tabs/tabLocation";
 
 /**
  * Which model each agent tab last answered with, and the last prompt it was
@@ -225,11 +227,16 @@ export const useAgentModelsStore = create<AgentModelsStore>((set, get) => ({
     const asked = askedAt[ptyId];
     if (!force && asked !== undefined && now - asked < REFRESH_FLOOR_MS) return;
     askedAt[ptyId] = now;
-    const args = { agent: tab.cmd, projectId: projectIdOfScope(scope), sessionId: tab.sessionId };
+    const projectId = projectIdOfScope(scope);
+    const args = { agent: tab.cmd, projectId, sessionId: tab.sessionId };
+    // A tab on a remote project's host keeps its transcript there; the backend
+    // reads its copy of it (`services::remote_transcript`).
+    const project = projectId ? useProjectsStore.getState().projects.find((entry) => entry.id === projectId) : undefined;
+    const tailArgs = { ...args, remoteHost: tab.kind === "agent" ? hostTabId(tab, project) : null };
     // Reads of the same tail; a failure of one must not cost the others.
     const [model, recent, goal] = await Promise.all([
-      invoke("agent_tab_model", args).catch(() => null),
-      invoke("agent_tab_recent_prompts", args).catch(() => null),
+      invoke("agent_tab_model", tailArgs).catch(() => null),
+      invoke("agent_tab_recent_prompts", tailArgs).catch(() => null),
       invoke("agent_tab_goal", args).catch(() => null),
     ]);
     if (typeof goal === "boolean" ? get().goalByTab[ptyId] !== goal : ptyId in get().goalByTab) {
@@ -248,7 +255,7 @@ export const useAgentModelsStore = create<AgentModelsStore>((set, get) => ({
     const timed = Array.isArray(recent) ? (recent as TranscriptPrompt[]) : null;
     const prompt = timed?.length
       ? timed[timed.length - 1].text
-      : await invoke("agent_tab_last_prompt", args).catch(() => null);
+      : await invoke("agent_tab_last_prompt", tailArgs).catch(() => null);
     const label = typeof model === "string" && model.trim() ? shortModelName(model) : "";
     let text = typeof prompt === "string" ? prompt.trim() : "";
     if (!text) {

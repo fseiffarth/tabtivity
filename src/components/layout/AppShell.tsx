@@ -36,7 +36,6 @@ import { HeaderBar } from "./HeaderBar";
 import { SidePanel } from "./SidePanel";
 import { LogoIcon } from "./LogoIcon";
 import { MobileBridgeHost } from "../mobile/MobileBridgeHost";
-import { ScreenshotSaveOverlay } from "./ScreenshotSaveOverlay";
 import { VpnPasswordPrompt } from "./VpnPasswordPrompt";
 import { AlarmPopup } from "../calendar/AlarmPopup";
 import { SteeringLegend } from "./SteeringLegend";
@@ -103,7 +102,7 @@ import { initMachineSync } from "../../lib/remote/machineSync";
 import { installWindowsEvents } from "../../stores/windows";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
 import { listenTexCenter } from "../../stores/viewers/texCenter";
-import { listenSourceJump } from "../embed/FileViewerPane";
+import { listenSourceJump } from "../embed/fileViewer/sourceJump";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
 import { listenSettingsChanged, useSettingsStore } from "../../stores/settings";
 import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../stores/tabs";
@@ -116,6 +115,7 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { flushUsage } from "../../stores/usage";
 import { useKeyboard } from "../../hooks/useKeyboard";
+import { PrivacyCurtain } from "./PrivacyCurtain";
 import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { useT, useI18nStore, translate } from "../../lib/i18n";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
@@ -1504,12 +1504,6 @@ export function AppShell() {
         )}
       </div>
       <VpnPasswordPrompt />
-      {/* "Where should this screenshot go?" — the consent step between a capture
-          and any project write. At the shell because the capture can come from the
-          header's global-app menu or from any visible PDF viewer, and because the
-          backend reports OS-tool captures as an app-wide event with no component of
-          its own to land in. */}
-      <ScreenshotSaveOverlay />
       {/* The Machines overlay — a click on the header's Machines button: the
           global machines as a grid of tiles. Mounted here, BEFORE the host-key
           prompt, the HPC guard, the connect dialogs and the machine monitor
@@ -1650,6 +1644,8 @@ export function AppShell() {
       <QuickOpen />
       <HintHost />
       <TourHost />
+      {/* Covers this window while a PDF or deck is presented. */}
+      <PrivacyCurtain />
       <StatsRecapHost />
       {/* Dev-only floating perf monitor (Ctrl+Alt+P). Main window only, like
           the renderer watchdog; null in production builds by construction. */}

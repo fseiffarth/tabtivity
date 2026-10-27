@@ -1204,7 +1204,9 @@
   font-size: var(--text-md);
 }
 .settings-navigation-search:focus { outline: none; border-color: var(--accent); }
-.settings-navigation-links { display: flex; flex-direction: column; gap: 10px; }
+/* Only the page list scrolls: the search box above it stays pinned at the top of
+   the rail (a scrolling nav carried it away with the list). */
+.settings-navigation-links { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 /* One topic group: a small-caps title (the section-header voice, one size
    down) over its entries. */
 .settings-navigation-group { display: flex; flex-direction: column; gap: 4px; }
@@ -2596,7 +2598,7 @@
 
 /* ── Models overlay: Agents section redesign ── */
 /* The Agents & CLIs section (`AgentsPanel`, in Settings too): a short lead, the
-   installed CLIs as an equal-height card grid, a search for the rest, and the
+   installed CLIs as an equal-height card grid, a collapsible searchable install list, and the
    rarely-touched settings as closed groups. Status is a dot and a word, the
    version is plain text — neither has a border or a fill, so nothing but a
    button looks like one. Buttons are the settings button: one filled primary

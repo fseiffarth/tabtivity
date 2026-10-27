@@ -2,7 +2,7 @@
  * The project screen's layout after the Home/project redesign: ＋ New tab is
  * a floating button rather than a header control, a card's rarer actions sit
  * behind its ⋯, the gesture hints are one line that stays gone once
- * dismissed, Recently closed is folded under one row, and a project with no
+ * dismissed, the tips are cards shown one at a time, Recently closed is folded under one row, and a project with no
  * tabs says so once.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -77,10 +77,20 @@ describe("Mobile project screen — layout", () => {
 
   it("says a hold of ＋ reaches the other agents, until it is held or dismissed", async () => {
     serve([agent("a", "claude 1")], { agents: [{ id: "claude", label: "Claude", modes: [], default: true }] });
+    const early = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    // The screen's tips share one spot, one card at a time: the ☰ one leads,
+    // and closing it with × leaves the spot empty for the visit.
+    expect(await screen.findByText(/Tap ☰ to open/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Never show this message again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close tip" }));
+    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
+    early.unmount();
     const first = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     expect(await screen.findByText(/Tapping ＋ opens Claude; hold ＋ to start a different agent/)).toBeTruthy();
     fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
     expect(screen.queryByText(/hold ＋ to start a different agent/)).toBeNull();
+    // Held once, the next tip — the cards' ⋯ — takes its place.
+    expect(screen.getByText(/The ⋯ on a tab's card/)).toBeTruthy();
     first.unmount();
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     await screen.findByText("claude 1");

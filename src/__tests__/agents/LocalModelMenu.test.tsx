@@ -43,8 +43,10 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),
 }));
 // The overlay's Settings-hosted panes are not what this suite is about.
-vi.mock("../../components/layout/SettingsSubPanels", () => ({
+vi.mock("../../components/settings/AgentsPanel", () => ({
   AgentsPanel: () => <div data-testid="agents-panel" />,
+}));
+vi.mock("../../components/settings/OllamaPanel", () => ({
   OllamaPanel: () => <div data-testid="ollama-panel" />,
 }));
 vi.mock("../../components/skills/SkillsLibraryView", () => ({

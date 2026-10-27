@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import { ExecTrustHost } from "../../components/common/ExecTrustHost";
 import { OpenExternalHost } from "../../components/common/OpenExternalHost";
-import { QUEUED_CONFIRM_DELAY_MS } from "../../components/common/PromptDialogs";
+import { QUEUED_CONFIRM_DELAY_MS } from "../../lib/queuedConfirm";
 import { useExecTrustStore } from "../../stores/execTrust";
 import { useOpenExternalStore } from "../../stores/openExternal";
 import type { TrustRequest } from "../../lib/execTrust";

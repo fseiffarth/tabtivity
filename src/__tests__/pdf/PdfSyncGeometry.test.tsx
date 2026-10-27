@@ -119,7 +119,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { PdfView, SYNC_HIGHLIGHT_MS } from "../../components/embed/pdf/PdfViewer";
-import { FileScopeContext, FileSourceContext, PaneVisibleContext, type FileSource } from "../../components/embed/fileAccess";
+import { FileScopeContext, FileSourceContext, PaneVisibleContext, type FileSource } from "../../lib/files/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { flushViewerState, useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -230,7 +230,7 @@ describe("SyncTeX on the PDF side", () => {
       fireEvent.click(wrap, { ctrlKey: true, clientX: 686, clientY: 172 });
     });
     await waitFor(() =>
-      expect(io.invoke).toHaveBeenCalledWith("synctex_edit", { pdf: PATH, page: 1, x: 172, y: 106 }),
+      expect(io.invoke).toHaveBeenCalledWith("synctex_edit", { pdf: PATH, page: 1, x: 172, y: 106, projectId: "p1" }),
     );
   });
 

@@ -25,7 +25,8 @@ vi.mock("../../components/tabs/TabPane", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { useTabsStore, type DetachedGroup, type TabEntry } from "../../stores/tabs";
+import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import type { DetachedGroup } from "../../stores/tabs/types";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";

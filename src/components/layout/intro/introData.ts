@@ -210,7 +210,7 @@ export function writeIntroGoals(goals: readonly IntroGoal[]): void {
  *  the + menu shows compact by default (`DEFAULT_COMPACT_AGENT_IDS`). Ids are
  *  the backend registry's (`commands::agents::AGENTS`); every other CLI stays
  *  one click away in Settings → Manage CLIs. */
-export const FEATURED_AGENT_IDS = ["claude", "codex", "gemini"] as const;
+export const FEATURED_AGENT_IDS = ["claude", "codex", "opencode", "antigravity", "gemini"] as const;
 export type FeaturedAgentId = (typeof FEATURED_AGENT_IDS)[number];
 
 /** What the optional "sign in now" button runs in a terminal tab: each CLI's
@@ -220,12 +220,14 @@ export type FeaturedAgentId = (typeof FEATURED_AGENT_IDS)[number];
 export const AGENT_SIGN_IN_CMD: Record<FeaturedAgentId, string> = {
   claude: "claude",
   codex: "codex login",
+  opencode: "opencode auth login",
+  antigravity: "agy",
   gemini: "gemini",
 };
 
 /** How to leave the session a "sign in now" command opens — `claude` and
  *  `gemini` stay open as a full session in the root folder once signed in;
- *  `codex login` is a one-shot and needs none. */
+ *  `codex login` and `opencode auth login` are one-shots and need none. */
 export const AGENT_SIGN_IN_EXIT: Partial<Record<FeaturedAgentId, string>> = {
   claude: "/exit",
   gemini: "/quit",
@@ -234,6 +236,8 @@ export const AGENT_SIGN_IN_EXIT: Partial<Record<FeaturedAgentId, string>> = {
 export const AGENT_SIGN_IN_KEYS: Record<FeaturedAgentId, TranslationKey> = {
   claude: "intro.agents.signIn.claude",
   codex: "intro.agents.signIn.codex",
+  opencode: "intro.agents.signIn.opencode",
+  antigravity: "intro.agents.signIn.antigravity",
   gemini: "intro.agents.signIn.gemini",
 };
 

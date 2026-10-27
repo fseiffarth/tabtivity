@@ -126,13 +126,13 @@ describe("Mobile bridge — the chat assistant", () => {
   });
 
   it("is refused unless the flag is on and the Mobile switch is not off", async () => {
+    // The flag is on by default, so only an explicit `false` (or the Mobile
+    // switch off) refuses.
     for (const settings of [
-      {},
-      { [MOBILE_HOST_KEY]: host() },
       { assistant: false, [MOBILE_HOST_KEY]: host() },
+      { assistant: false, debug: true, [MOBILE_HOST_KEY]: host() },
       { assistant: true, [MOBILE_HOST_KEY]: host(false) },
-      // A profile marked explicit follows the flag alone, not Debug mode.
-      { debug: true, experimental_explicit: true, [MOBILE_HOST_KEY]: host() },
+      { [MOBILE_HOST_KEY]: host(false) },
     ] as Settings[]) {
       await mount(settings);
       expect(await seen(), JSON.stringify(settings)).toMatchObject({ status: "error", code: "project_ineligible" });

@@ -591,6 +591,9 @@ export function DeckPresenter({
       className={`deck-presenter${audience ? " is-dual" : ""}`}
       ref={rootRef}
       tabIndex={-1}
+      // The speaker's view stays visible under the privacy curtain
+      // (`components/layout/PrivacyCurtain`'s `keep` mode).
+      data-curtain-keep=""
     >
       <div className="deck-presenter-main">
         {/* PresentationOverlay needs a position:relative host; giving it the

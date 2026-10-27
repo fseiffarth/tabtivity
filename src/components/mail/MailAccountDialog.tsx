@@ -8,7 +8,7 @@ import {
   rememberArg,
   useSavedCredentialSource,
   type SavedPasswordState,
-} from "../projects/useSavedCredential";
+} from "../../lib/projects/useSavedCredential";
 import { mailAccountTest, mailAccountUpsert, mailForgetPassword, mailPasswordState } from "../../lib/mail";
 import type { KeyringState } from "../../lib/keyring";
 import { useT } from "../../lib/i18n";

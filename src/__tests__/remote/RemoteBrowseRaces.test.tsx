@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { useRemoteBrowse } from "../../components/projects/useRemoteBrowse";
 import type { RemoteEntry } from "../../types";
-import type { ParsedSshAddress } from "../../components/projects/scaffold";
+import type { ParsedSshAddress } from "../../lib/projects/scaffold";
 import { resolveRemoteStartDir } from "../../lib/remote/remoteConnect";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));

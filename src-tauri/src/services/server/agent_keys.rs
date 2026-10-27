@@ -225,7 +225,7 @@ pub fn fetch_at(socket: &Path, cli: &str) -> Result<Option<AdminKey>, String> {
 }
 
 fn label(cli: &str) -> String {
-    crate::commands::agents::agent_label_for_id(cli).unwrap_or(cli).to_string()
+    crate::services::agent_registry::agent_label_for_id(cli).unwrap_or(cli).to_string()
 }
 
 /// The spawn error of a key that is no longer this user's to use.
@@ -244,7 +244,7 @@ fn unfetchable_message(cli: &str, error: &str) -> String {
 /// administrator's key.
 fn chosen_cli(state_dir: &Path, cmd: &str) -> Option<&'static str> {
     let bin = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
-    let cli = crate::commands::agents::agent_id_for_bin(bin)?;
+    let cli = crate::services::agent_registry::agent_id_for_bin(bin)?;
     chosen_in(state_dir).contains(cli).then_some(cli)
 }
 

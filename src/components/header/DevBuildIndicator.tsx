@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
+import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useHeaderStatusReport, type HeaderStatusReport } from "../../stores/headerStatus";
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { useProjectsStore } from "../../stores/projects";
@@ -20,10 +20,12 @@ import { PauseIcon } from "../common/icons/Icon";
  * knowable from a release `cargo build`).
  *
  * `dev_build_status` reads the script's own state files, and one action opens
- * a root-console tab tailing its log. The only build control is the user's
+ * a root-console tab tailing its log. The main build control is the user's
  * pause switch (`dev_build_set_paused`): pausing hands the machine back —
  * nothing queues and a running compile is cancelled — and resuming queues
- * HEAD if the snapshot fell behind meanwhile. While paused, "Build now"
+ * HEAD if the snapshot fell behind meanwhile. "Stop build" (`dev_build_stop`)
+ * cancels only the running pass: auto-builds stay on and the next commit
+ * builds as usual. While paused or after a stop, "Build now"
  * (`dev_build_now`) builds HEAD once when it is newer than the snapshot and
  * stays paused. The other action is the user's own relaunch:
  * in the frozen window, once a newer snapshot is installed or built, "Relaunch
@@ -56,6 +58,7 @@ interface DevBuildStatus {
   adoptable: string | null;
   canRelaunch: boolean;
   paused: boolean;
+  stopped: boolean;
   logPath: string;
 }
 
@@ -120,7 +123,9 @@ export function DevBuildIndicator() {
   const [pauseError, setPauseError] = useState<string | null>(null);
   const [startingBuild, setStartingBuild] = useState(false);
   const [buildNowError, setBuildNowError] = useState<string | null>(null);
-  // Bumped after a pause/resume/build-now so the poll re-reads at once.
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+  // Bumped after a pause/resume/stop/build-now so the poll re-reads at once.
   const [refresh, setRefresh] = useState(0);
   const closeTimer = useRef<number | undefined>(undefined);
 
@@ -199,9 +204,9 @@ export function DevBuildIndicator() {
     window.clearTimeout(closeTimer.current);
     openMenu(MENU_ID);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), 250);
+    closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), headerMenuCloseDelay(e));
   };
 
   const followLog = () => {
@@ -240,6 +245,20 @@ export function DevBuildIndicator() {
       });
   };
 
+  const stopBuild = () => {
+    setStopping(true);
+    setStopError(null);
+    invoke("dev_build_stop")
+      .catch((e: unknown) => setStopError(String(e)))
+      .finally(() => {
+        setStopping(false);
+        setRefresh((n) => n + 1);
+      });
+  };
+  // Past the compile the install runs to the end: killing it halfway would
+  // leave a truncated binary installed, so the script does not cancel it.
+  const installing = building && status.phase === "install";
+
   const buildNow = () => {
     setStartingBuild(true);
     setBuildNowError(null);
@@ -250,9 +269,9 @@ export function DevBuildIndicator() {
         setRefresh((n) => n + 1);
       });
   };
-  // Paused and idle with HEAD ahead of the snapshot (or no snapshot to compare
-  // against: the script itself skips a HEAD that is already installed).
-  const canBuildNow = status.paused && !active && status.behind !== 0;
+  // Paused or stopped, idle, with HEAD ahead of the snapshot (or no snapshot to
+  // compare against: the script itself skips a HEAD that is already installed).
+  const canBuildNow = (status.paused || status.stopped) && !active && status.behind !== 0;
 
   let detail: string | null = null;
   if (building && elapsed !== null) {
@@ -267,6 +286,8 @@ export function DevBuildIndicator() {
     detail = t("devBuild.waitingDetail");
   } else if (status.paused) {
     detail = t("devBuild.pausedDetail");
+  } else if (status.stopped) {
+    detail = t("devBuild.stoppedDetail");
   }
 
   return (
@@ -350,6 +371,7 @@ export function DevBuildIndicator() {
             {relaunchError && <ErrorNote className="mobile-indicator-error" error={relaunchError} />}
             {pauseError && <ErrorNote className="mobile-indicator-error" error={pauseError} />}
             {buildNowError && <ErrorNote className="mobile-indicator-error" error={buildNowError} />}
+            {stopError && <ErrorNote className="mobile-indicator-error" error={stopError} />}
             <div className="mobile-indicator-actions">
               {status.canRelaunch && (
                 <button
@@ -361,6 +383,17 @@ export function DevBuildIndicator() {
                 >
                   {relaunching ? t("devBuild.relaunching") : t("devBuild.relaunchNow")}{" "}
                   <UntestedTag id="devBuild.relaunchNow" />
+                </button>
+              )}
+              {active && (
+                <button
+                  type="button"
+                  className="vpn-indicator-connect"
+                  disabled={stopping || installing}
+                  title={t(installing ? "devBuild.stopInstallingHint" : "devBuild.stopHint")}
+                  onClick={stopBuild}
+                >
+                  {stopping ? t("devBuild.stopping") : t("devBuild.stop")} <UntestedTag id="devBuild.stop" />
                 </button>
               )}
               <button

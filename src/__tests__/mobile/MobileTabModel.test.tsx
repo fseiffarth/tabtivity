@@ -113,7 +113,9 @@ describe("Mobile bridge — the model beside a tab", () => {
   afterEach(() => {
     liveScreen = null;
     cleanup();
-    vi.mocked(invoke).mockReset();
+    // A turn start leaves a recheck timer in `agentModels` (2.5 s) that can
+    // fire after this test under load: it must find an invoke that resolves.
+    vi.mocked(invoke).mockReset().mockResolvedValue(null);
     vi.mocked(listen).mockReset();
     useActivityStore.setState({ busyByTab: {}, attentionByTab: {}, attentionByScope: {} });
     useAgentModelsStore.setState({ byTab: {}, promptByTab: {}, recentByTab: {}, screenByTab: {}, modeByTab: {}, goalByTab: {} });

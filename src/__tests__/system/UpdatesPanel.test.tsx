@@ -46,6 +46,9 @@ function check(overrides: Partial<UpdateCheck> = {}): UpdateCheck {
     publishedAt: "2026-08-20T10:00:00Z",
     htmlUrl: `https://github.com/fseiffarth/Project${BRAND.display}/releases/tag/v0.1.53`,
     updateAvailable: true,
+    buildCommit: null,
+    releaseCommit: null,
+    otherBuild: false,
     asset: {
       name: `${BRAND.slug}_0.1.53_amd64.AppImage`,
       url: `https://github.com/fseiffarth/Project${BRAND.display}/releases/download/v0.1.53/${BRAND.slug}_0.1.53_amd64.AppImage`,
@@ -120,6 +123,22 @@ describe("UpdatesPanel", () => {
 
     await screen.findByText(/up to date/i);
     expect(screen.queryByRole("button", { name: /^Download/ })).toBeNull();
+  });
+
+  it("names the build and offers the release when only the code differs, not the number", async () => {
+    backend({
+      check_app_update: check({
+        current: "0.1.53",
+        buildCommit: "1234567",
+        releaseCommit: "d2d6083cd4e",
+        otherBuild: true,
+      }),
+    });
+    render(<UpdatesPanel onBack={() => {}} />);
+
+    await screen.findByText(/compiled from different code/i);
+    expect(screen.getByText(/0\.1\.53 · 1234567/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Download/ })).toBeTruthy();
   });
 
   it("offers no install for a package-managed copy, only where the file went", async () => {

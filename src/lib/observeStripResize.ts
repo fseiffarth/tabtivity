@@ -8,11 +8,26 @@
  * turned on while the last item sat half hidden. Children added later are
  * observed too (MutationObserver), so this also covers items arriving.
  *
+ * A strip that sits at its far end stays there while its content resizes:
+ * closing the rightmost tab clamps the scroll position, and the new last tab
+ * (now active, so bolder and wider, with a `max-width` transition) keeps
+ * growing afterwards — without this it ends up half hidden past the edge.
+ * Scrolling away from the end by any means lifts the pin.
+ *
  * Returns a cleanup. No-op where ResizeObserver is absent (jsdom).
  */
 export function observeStripResize(el: HTMLElement, onChange: () => void): () => void {
   if (typeof ResizeObserver === "undefined") return () => {};
-  const ro = new ResizeObserver(() => onChange());
+  const isAtEnd = () => el.scrollLeft + el.clientWidth >= el.scrollWidth - 1;
+  let pinnedToEnd = isAtEnd();
+  const onScroll = () => {
+    pinnedToEnd = isAtEnd();
+  };
+  el.addEventListener("scroll", onScroll, { passive: true });
+  const ro = new ResizeObserver(() => {
+    if (pinnedToEnd && !isAtEnd()) el.scrollLeft = el.scrollWidth;
+    onChange();
+  });
   ro.observe(el);
   for (const child of Array.from(el.children)) ro.observe(child);
   const mo =
@@ -31,6 +46,7 @@ export function observeStripResize(el: HTMLElement, onChange: () => void): () =>
         });
   mo?.observe(el, { childList: true });
   return () => {
+    el.removeEventListener("scroll", onScroll);
     mo?.disconnect();
     ro.disconnect();
   };

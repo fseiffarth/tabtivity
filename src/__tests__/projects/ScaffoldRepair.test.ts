@@ -4,7 +4,7 @@ import {
   scaffoldRepairIsEmpty,
   summarizeScaffoldRepair,
   type ProjectScaffoldRepair,
-} from "../../components/projects/scaffold";
+} from "../../lib/projects/scaffold";
 import { BRAND } from "../../lib/brand";
 
 describe("scaffold repair summaries", () => {

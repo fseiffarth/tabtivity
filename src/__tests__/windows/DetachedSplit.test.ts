@@ -12,12 +12,12 @@ import {
   useTabsStore,
   allGroups,
   orderedTabKeys,
-  splitSubtree,
-  withDetachedDocked,
   type GroupNode,
   type SplitNode,
   type SavedLayoutTree,
 } from "../../stores/tabs";
+import { splitSubtree } from "../../stores/tabs/layoutTree";
+import { withDetachedDocked } from "../../stores/tabs/savedLayout";
 import { applyEditToSubtree } from "../../stores/detached";
 
 /** Collect every tab key referenced by a serialized tree. */

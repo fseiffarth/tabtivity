@@ -20,7 +20,7 @@
 //! call for the commands that reach the shared Ollama, and then, for a
 //! [`Role::User`], the path confinement: every path-named argument of every
 //! `core` command is classified in one table (`USER_CONFINED`) and held to the
-//! user's roots (`commands::fs::user_roots`) before the body runs — a project
+//! user's roots (`services::fs_confine::user_roots`) before the body runs — a project
 //! folder, an absolute path, a project's `project.json` — or is named as
 //! confined by its body, remote, refused or not a path. A test fails when a
 //! command grows a path-named argument the table does not classify.
@@ -250,7 +250,7 @@ enum Kind {
     ProjectDir,
     /// A project's `project.json`: must be a known project's `local_file`.
     LocalFile,
-    /// The body confines it already (`open_confined`, `confine_abs_read`,
+    /// The body confines it already (`open_confined`,
     /// `confine_project_path`, `sqlite::confine`, `enforce_confinement`
     /// within a held [`Kind::ProjectDir`], a worktree root) or never touches
     /// the filesystem with it. Listed so the coverage test knows it was looked at.
@@ -430,10 +430,9 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("workspace_sync", "localFile", LocalFileOpt),
     // ── Confined by the body ────────────────────────────────────────────
     // Viewer I/O by absolute path, scoped to the viewer's project
-    // (`open_confined` / `confine_abs_read` / `confine_project_path` /
+    // (`open_confined` / `confine_project_path` /
     // `sqlite::confine`; a remote project's path is held to its remote root).
     ("copilot_complete", "path", BodyConfined), // `policy::authorize_document` under the project root
-    ("detect_mime", "path", BodyConfined),
     ("file_mtime", "path", BodyConfined),
     ("file_size", "path", BodyConfined),
     ("file_source", "path", BodyConfined), // only says which side holds it
@@ -682,7 +681,7 @@ fn confine_arg(cmd: &str, args: &mut Value, key: &str, kind: Kind) -> Result<(),
         }
         LocalFileOpt if value.is_empty() => Ok(()),
         LocalFile | LocalFileOpt => {
-            if crate::commands::fs::is_project_local_file(&value) {
+            if crate::services::fs_confine::is_project_local_file(&value) {
                 Ok(())
             } else {
                 Err(format!("'{value}' is not the file of any of your projects"))
@@ -724,7 +723,7 @@ fn hold_path(path: &str) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("an empty path is not one of your folders".to_string());
     }
-    crate::commands::fs::confine_user_path(std::path::Path::new(path))
+    crate::services::fs_confine::confine_user_path(std::path::Path::new(path))
 }
 
 /// A path a user may list or hand out: empty → the root work dir (the

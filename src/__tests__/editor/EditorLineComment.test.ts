@@ -8,7 +8,7 @@
  * must land at the block's shallowest indent so nested code keeps its shape.
  */
 import { describe, expect, it } from "vitest";
-import { applyLineComment } from "../../components/embed/FileViewerPane";
+import { applyLineComment } from "../../components/embed/fileViewer/indent";
 import { lineCommentMarker } from "../../lib/viewers/highlight";
 
 /** A real jsdom textarea carrying a value + selection, as the key handler sees it. */

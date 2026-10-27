@@ -104,15 +104,44 @@ export function SyncConfirmDialog() {
       <div className="modal-backdrop" onMouseDown={cancel}>
         <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="file-delete-dialog" onMouseDown={(e) => e.stopPropagation()}>
           <h2>
-            {t(host ? "syncConfirm.deleteHostTitle" : "syncConfirm.deleteLocalTitle")}{" "}
+            {t(
+              pending.hostOnly
+                ? "syncConfirm.deleteHostOnlyTitle"
+                : host
+                  ? "syncConfirm.deleteHostTitle"
+                  : "syncConfirm.deleteLocalTitle",
+            )}{" "}
             <UntestedTag id="syncConfirmDialog.1" />
           </h2>
           <p>
-            {t(host ? "syncConfirm.deleteHostBody" : "syncConfirm.deleteLocalBody", {
-              name: label,
-            })}
+            {pending.hostOnly
+              ? relPaths
+                ? t("syncConfirm.deleteHostOnlySelectedBody", { count: relPaths.length })
+                : t("syncConfirm.deleteHostOnlyBody", { name: label })
+              : relPaths
+                ? t(host ? "syncConfirm.deleteHostSelectedBody" : "syncConfirm.deleteLocalSelectedBody", {
+                    count: relPaths.length,
+                  })
+                : t(host ? "syncConfirm.deleteHostBody" : "syncConfirm.deleteLocalBody", {
+                    name: label,
+                  })}
           </p>
-          <div className="file-delete-path">{relPath}</div>
+          {relPaths ? (
+            <div className="sync-confirm-loss">
+              <ul>
+                {relPaths.slice(0, 20).map((rel) => (
+                  <li key={rel}>{rel}</li>
+                ))}
+              </ul>
+              {relPaths.length > 20 && (
+                <span className="sync-confirm-note">
+                  {t("syncConfirm.andMore", { count: (relPaths.length - 20).toLocaleString() })}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="file-delete-path">{relPath}</div>
+          )}
           {loading && <p className="sync-confirm-note">{t("syncConfirm.checking")}</p>}
           {error && <p className="sync-confirm-note">{t("syncConfirm.previewFailed", { error })}</p>}
           {doomed &&

@@ -255,7 +255,7 @@ function PdfPenStyleMenu({ chosen, onPick, keyHint }: { chosen: PenStyle | null;
  *  settings (shape snapping, the pressure curve) and the presets, out of the
  *  strip's way — the shared dropdown (`.context-menu.dropdown-menu`), closed
  *  by a click outside or Escape. */
-function PdfMarkupMore({ markup, page, busy }: { markup: PdfMarkup; page: number; busy: boolean }) {
+function PdfMarkupMore({ markup, page, busy, picture }: { markup: PdfMarkup; page: number; busy: boolean; picture: boolean }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
@@ -281,9 +281,12 @@ function PdfMarkupMore({ markup, page, busy }: { markup: PdfMarkup; page: number
       </button>
       {open && (
         <div className="context-menu dropdown-menu" role="menu">
-          <button type="button" role="menuitem" onClick={pick(() => markup.clearPage(page))} disabled={!pageMarked || busy}>
-            {t("mobile.markup.clearPage", { n: page })}
-          </button>
+          {/* A picture is its one page: Clear all marks says it. */}
+          {!picture && (
+            <button type="button" role="menuitem" onClick={pick(() => markup.clearPage(page))} disabled={!pageMarked || busy}>
+              {t("mobile.markup.clearPage", { n: page })}
+            </button>
+          )}
           <button type="button" role="menuitem" onClick={pick(markup.clearAll)} disabled={!markup.canClearAll || busy}>
             {t("mobile.markup.clearAll")}
           </button>
@@ -527,11 +530,51 @@ function PdfMarkupPresets({ markup }: { markup: PdfMarkup }) {
   );
 }
 
+/** The markup strip's bare keys, while marking: P / B / T / M / K / S / E
+ *  arm the pen, box, note, text marks, stamp, select tool and eraser (P
+ *  again steps the pen's style, M the text marks' mode, K the stamp's
+ *  symbol, E switches to the area eraser and back), 1–4 pick the armed
+ *  tool's colours in strip order (a selection's, with marks selected),
+ *  Shift+1–4 a preset, [ and ] step the size, Delete or Backspace delete
+ *  the selected marks. Whether it took the key. Shared by the PDF and the
+ *  image viewer. */
+export function markupStripKey(m: PdfMarkup, e: { key: string; code: string; shiftKey: boolean }): boolean {
+  const { key } = e;
+  // By the key's place: Shift turns the digit into a layout's own symbol.
+  const preset = e.shiftKey ? /^Digit([1-4])$/.exec(e.code) : null;
+  if (preset) {
+    m.applyPreset(Number(preset[1]) - 1);
+    return true;
+  }
+  if ((key === "Delete" || key === "Backspace") && m.edit.selection) {
+    m.deleteSelection();
+    return true;
+  }
+  const tools: Record<string, MarkupTool> = { p: "ink", b: "box", t: "text", m: "textmark", k: "stamp", s: "select", e: "eraser" };
+  const lower = key.toLowerCase();
+  if (tools[lower] && !e.shiftKey) {
+    m.pressTool(tools[lower]);
+    return true;
+  }
+  if (key === "[" || key === "]") {
+    m.stepSize(key === "[" ? -1 : 1);
+    return true;
+  }
+  const offered = m.tool === "select" ? selectionColors(m.edit.base, m.edit.selection) : colorsFor(m.tool, m.pen.style, m.pen.textMark);
+  const color = /^[1-4]$/.test(key) ? offered[Number(key) - 1] : undefined;
+  if (color && m.tool !== "eraser") {
+    m.setColor(color);
+    return true;
+  }
+  return false;
+}
+
 export function PdfMarkupBar({
   markup,
   page,
   onReload,
   onDone,
+  picture = false,
 }: {
   markup: PdfMarkup;
   /** The page on screen, for Clear page. */
@@ -540,15 +583,18 @@ export function PdfMarkupBar({
   onReload: () => void;
   /** Leave markup mode. */
   onDone: () => void;
+  /** The image viewer's strip: the words say picture, not PDF. */
+  picture?: boolean;
 }) {
   const t = useT();
+  const said = (pdf: TranslationKey, image: TranslationKey) => (picture ? image : pdf);
   const chordHint = useChordHint();
   const { round, target, targets, roundUndo } = markup;
   const busy = markup.sending;
   const canSubmit = markup.sendable.length > 0 && target !== null && !busy && markup.edit.note === null;
   const roundWords = round
     ? round.phase === "finished"
-      ? t(markup.stale ? "mobile.markup.round.finishedChanged" : "mobile.markup.round.finished")
+      ? t(markup.stale ? said("mobile.markup.round.finishedChanged", "pdfMarkup.picture.finishedChanged") : "mobile.markup.round.finished")
       : round.phase === "question" && markup.questions.asks.length > 0
         ? t("pdfMarkup.round.asks")
         : round.phase === "working" && markup.targetModel
@@ -591,7 +637,7 @@ export function PdfMarkupBar({
               type="button"
               className={`file-viewer-zoom-btn${markup.tool === tool ? " active" : ""}`}
               aria-pressed={markup.tool === tool}
-              title={chordHint(tool === "ink" ? `${t(label)} — ${t("pdfMarkup.hint")}` : t(label), { key })}
+              title={chordHint(tool === "ink" ? `${t(label)} — ${t(said("pdfMarkup.hint", "pdfMarkup.picture.hint"))}` : t(label), { key })}
               aria-label={t(label)}
               onClick={() => markup.setTool(tool)}
             >
@@ -629,7 +675,7 @@ export function PdfMarkupBar({
         >
           ↷
         </button>
-        <PdfMarkupMore markup={markup} page={page} busy={busy} />
+        <PdfMarkupMore markup={markup} page={page} busy={busy} picture={picture} />
         {hint && (
           <span className={`file-viewer-pdf-redact-hint${hint === "mobile.markup.noText" ? " file-viewer-pdf-redact-warn" : ""}`}>
             {t(hint)}
@@ -723,10 +769,10 @@ export function PdfMarkupBar({
             </>
           )}
           <PdfTicksStatus count={markup.ticks.groups.length} disabled={busy} onApproveAll={markup.ticks.approveAll} />
-          {markup.stale && !(round?.phase === "finished") && <span>{t("pdfMarkup.stale")}</span>}
+          {markup.stale && !(round?.phase === "finished") && <span>{t(said("pdfMarkup.stale", "pdfMarkup.picture.stale"))}</span>}
           {markup.autoReloaded && !markup.stale && (
             <span className="file-viewer-pdf-markup-auto-reloaded">
-              {t("pdfMarkup.autoReloaded")} <UntestedTag id="desktop.markup.autoReload" />
+              {t(said("pdfMarkup.autoReloaded", "pdfMarkup.picture.autoReloaded"))} <UntestedTag id="desktop.markup.autoReload" />
             </span>
           )}
           {markup.canApply && (
@@ -767,7 +813,7 @@ export function PdfMarkupBar({
               onClick={onReload}
               disabled={busy}
             >
-              {t("mobile.markup.reload")}
+              {t(said("mobile.markup.reload", "pdfMarkup.picture.reload"))}
             </button>
           )}
           {round && <UntestedTag id="desktop.markup" />}
@@ -786,7 +832,7 @@ export function PdfMarkupBar({
             </span>
           )}
           {busy && <span>{t("mobile.markup.sendingMarks")}</span>}
-          {markup.storage === "unsaved" && <span>{t("pdfMarkup.unsaved")}</span>}
+          {markup.storage === "unsaved" && <span>{t(said("pdfMarkup.unsaved", "pdfMarkup.picture.unsaved"))}</span>}
           {markup.changed && <span>{t("mobile.markup.changed")}</span>}
           {markup.leftOut > 0 && (
             <span>

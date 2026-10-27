@@ -7,15 +7,8 @@
  */
 import { describe, it, expect } from "vitest";
 
-import {
-  AGENT_ITEMS,
-  agentMenuEntries,
-  buildStaticTabSpec,
-  customAgentToItem,
-  enabledInstalledAgentBins,
-  rootAllowedAgentBins,
-  installedAgentBins,
-} from "../../components/tabs/newTabItems";
+import { AGENT_ITEMS, buildStaticTabSpec, customAgentToItem, enabledInstalledAgentBins, rootAllowedAgentBins, installedAgentBins } from "../../lib/tabs/newTabItems";
+import { agentMenuEntries } from "../../components/tabs/agentMenuEntries";
 import { isResumableAgentTab } from "../../stores/tabs";
 import { translate, type TranslationKey } from "../../lib/i18n";
 import type { CustomAgent } from "../../types";

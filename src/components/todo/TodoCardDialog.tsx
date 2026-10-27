@@ -72,7 +72,7 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
   const isNew = !task.id;
   const mailClient = useExperimental("mail_client");
   const calendars = useCalendarStore((s) => s.calendars);
-  const calendarApp = useSettingsStore((s) => s.settings?.calendar_global_app ?? false);
+  const calendarApp = useSettingsStore((s) => s.settings?.calendar_global_app ?? true);
   const projects = useProjectsStore((s) => s.projects);
 
   const [draft, setDraft] = useState<CalendarTask>(task);

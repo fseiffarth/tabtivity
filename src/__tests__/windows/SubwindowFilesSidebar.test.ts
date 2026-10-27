@@ -11,13 +11,13 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 import {
   useTabsStore,
-  serializeTree,
   pruneSavedTree,
   findGroup,
   allGroups,
   type GroupNode,
   type LayoutNode,
 } from "../../stores/tabs";
+import { serializeTree } from "../../stores/tabs/savedLayout";
 import { applyEditToSubtree } from "../../stores/detached";
 import {
   clampFilesWidth,

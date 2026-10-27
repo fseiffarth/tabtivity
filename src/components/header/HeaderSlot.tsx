@@ -65,6 +65,23 @@ function dropTarget(id: HeaderItemId, x: number, order: readonly string[] | unde
 }
 
 /**
+ * A drag over the ‹ chevron folds the icon, at the end of the folded stretch.
+ * Collapsed, that stretch has no boxes to drop between, so the chevron is the
+ * only way into it — and reaching it opens the stretch for the rest of the drag
+ * (`foldPeek`), so the pointer can go on to a spot among the folded icons. The
+ * gear never folds, so for it the chevron is just the end of the bar.
+ */
+function overFoldToggle(id: HeaderItemId, x: number): Target | null {
+  if (id === "settings") return null;
+  const r = document.querySelector(".status-cluster-toggle")?.getBoundingClientRect();
+  if (!r || r.width === 0 || x < r.left || x > r.right) return null;
+  const folded = Array.from(document.querySelectorAll<HTMLElement>(".header-status-cluster [data-header-slot]"))
+    .filter((el) => el.dataset.headerSlot !== id && el.dataset.pinned !== "true" && el.getBoundingClientRect().width > 0);
+  const last = folded[folded.length - 1]?.dataset.headerSlot as HeaderItemId | undefined;
+  return { beforeId: null, afterId: last ?? null, group: "status", pin: false };
+}
+
+/**
  * One top-bar item and its place: pinned in the bar, or folded behind the ‹
  * chevron of `StatusCluster`. Right-clicking the item chooses (the setting is
  * `header_pins`, defaults in `lib/headerPins`).
@@ -72,7 +89,9 @@ function dropTarget(id: HeaderItemId, x: number, order: readonly string[] | unde
  * Dragging an icon sideways reorders it (`header_order`), also across the
  * bar's stretches: into the cluster's folded stretch it folds, out of it it
  * pins (`header_pins`), and between the bar's run and the cluster it changes
- * group. It is pointer-based like the tab drag: HTML5 DnD is unreliable on
+ * group. The ‹ chevron is the folded stretch's door: a drag that reaches it
+ * opens the folded icons until the drag ends, and a drop on it folds the icon
+ * (`overFoldToggle`). It is pointer-based like the tab drag: HTML5 DnD is unreliable on
  * WebKitGTK, and the release is handled by a listener bound at pointerdown, the
  * only kind that reliably sees it there.
  *
@@ -89,6 +108,7 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
   const order = useSettingsStore((s) => s.settings?.header_order);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const dragInfo = useHeaderSlotsStore((s) => s.drag);
+  const foldPeek = useHeaderSlotsStore((s) => s.foldPeek);
   const setPresent = useHeaderSlotsStore((s) => s.setPresent);
   const ref = useRef<HTMLSpanElement | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -103,11 +123,13 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
     const startX = e.clientX;
     const startY = e.clientY;
     let engaged = false;
-    const { setDrag } = useHeaderSlotsStore.getState();
+    const { setDrag, setFoldPeek } = useHeaderSlotsStore.getState();
     const move = (ev: PointerEvent) => {
       if (!engaged && Math.hypot(ev.clientX - startX, ev.clientY - startY) < DRAG_THRESHOLD) return;
       engaged = true;
-      const target = dropTarget(id, ev.clientX, order);
+      const fold = overFoldToggle(id, ev.clientX);
+      if (fold) setFoldPeek(true);
+      const target = fold ?? dropTarget(id, ev.clientX, order);
       setDrag(target && { id, ...target });
     };
     const end = (ev: PointerEvent) => {
@@ -116,6 +138,7 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
       window.removeEventListener("pointercancel", end);
       const drop = useHeaderSlotsStore.getState().drag;
       setDrag(null);
+      setFoldPeek(false);
       if (!engaged) return;
       // The release after a drag is not a click on the icon under it.
       const swallow = (c: MouseEvent) => c.stopPropagation();
@@ -154,7 +177,7 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
         className="header-slot"
         data-header-slot={id}
         data-pinned={pinned}
-        data-folded={!pinned && !expanded}
+        data-folded={!pinned && !expanded && !foldPeek}
         data-dragging={dragging || undefined}
         data-drop={dropHere ? "before" : dropEnd ? "after" : undefined}
         onPointerDown={onPointerDown}

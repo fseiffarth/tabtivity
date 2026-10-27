@@ -24,7 +24,6 @@ import { Home } from "./screens/Home";
 import { Project } from "./screens/Project";
 import { Terminal } from "./screens/Terminal";
 import { TabbyOpen } from "./screens/TabbyOpen";
-import { HintMessage } from "./components/HintMessage";
 import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
@@ -252,7 +251,7 @@ export function App() {
     if (hiddenSections.includes(tab)) setTab("projects");
   }, [hiddenSections, tab]);
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
-  const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack; launchHint?: boolean } | null>(null);
+  const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
   /** Home's Tabby FAB was tapped: the assistant scope's id while its one chat
    * comes up (`TabbyOpen`), which then hands over to the Focus chat. */
@@ -594,7 +593,7 @@ export function App() {
     else if (tab !== "projects") { setTodoCard(undefined); setTab("projects"); }
     else setProjectView({ kind: "home" });
   }, auth === "paired" && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
-  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack, launchHint = false) => setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack, launchHint });
+  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
   // A card named by an alert opens on the To-do tab; switching tabs by hand
   // clears it, so returning to the board later does not re-open the editor a
   // reader already closed.
@@ -660,7 +659,7 @@ export function App() {
     markupBack={terminal.markupBack}
     openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
     back={() => setTerminal(null)}
-  />{terminal.launchHint && <HintMessage key={terminal.tab.id} hint="agentHold" floating />}</BackNest>;
+  /></BackNest>;
   if (tabby) return <BackNest><TabbyOpen
     key={tabby}
     id={tabby}
@@ -672,7 +671,7 @@ export function App() {
       : tab === "mail" ? <Mail key={reseed} />
         : tab === "calendar" ? <Calendar key={reseed} />
           : projectView.kind === "project"
-            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack, opts?.launchHint)} />
+            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
             : <Home
               open={(id) => setProjectView({ kind: "project", id })}
               // Straight into the session, leaving the Projects tab on its

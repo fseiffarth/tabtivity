@@ -29,8 +29,8 @@ import {
 } from "../../stores/headerStatus";
 import { useT } from "../../lib/i18n";
 
-// Code-split (perf plan §6): the Machines menu is off by default (Settings'
-// "Remote features") and renders nothing while off, so its module graph loads
+// Code-split (perf plan §6): the Machines menu renders nothing while switched
+// off (Settings' "Remote features"; on by default), so its module graph loads
 // only once `machines_enabled` is on. Once mounted it stays mounted: switching
 // the feature off is its own `!enabled` branch (no menu, header report
 // cleared), and a "sign in in a terminal" add/edit still waiting keeps its
@@ -91,9 +91,9 @@ export function StatusCluster() {
   const onBattery = usePowerStore((s) => s.onBattery);
   const expanded = useSettingsStore((s) => s.settings?.header_status_expanded ?? false);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
-  // Off by default; the lazy Machines menu is mounted from its first switch-on
+  // On by default; the lazy Machines menu is mounted from its first switch-on
   // and then kept (above).
-  const machinesEnabled = useSettingsStore((s) => s.settings?.machines_enabled ?? false);
+  const machinesEnabled = useSettingsStore((s) => s.settings?.machines_enabled ?? true);
   const [machinesMounted, setMachinesMounted] = useState(machinesEnabled);
   if (machinesEnabled && !machinesMounted) setMachinesMounted(true);
   const reports = useHeaderStatusStore((s) => s.reports);
@@ -101,6 +101,11 @@ export function StatusCluster() {
   const pinDefaults = useHeaderPinDefaults();
   const order = useSettingsStore((s) => s.settings?.header_order);
   const present = useHeaderSlotsStore((s) => s.present);
+  // A drag that reached the chevron shows the folded icons until it ends
+  // (`HeaderSlot`); a drag of a foldable icon needs the chevron as its way in
+  // even when nothing is folded yet.
+  const foldPeek = useHeaderSlotsStore((s) => s.foldPeek);
+  const dragFoldable = useHeaderSlotsStore((s) => s.drag != null && s.drag.id !== "settings");
   const [resourcePeek, setResourcePeek] = useState(0);
 
   useEffect(() => {
@@ -171,8 +176,8 @@ export function StatusCluster() {
   // that drew something and are not pinned. An item whose feature is off (empty
   // slot) is not counted, or the toggle would unfold nothing.
   const foldable = HEADER_ITEM_IDS.filter((id) => present[id] && !isHeaderPinned(pins, id, pinDefaults)).length;
-  const hasToggle = foldable >= 1;
-  const collapsed = !expanded && hasToggle;
+  const hasToggle = foldable >= 1 || dragFoldable;
+  const collapsed = !expanded && !foldPeek && hasToggle;
 
   // Alerts leads the row by default: it is the one member that is a *control*
   // rather than a readout, so it takes the row's head — the slot nearest the

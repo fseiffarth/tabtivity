@@ -5,7 +5,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
 import type { LoginTarget } from "../../lib/remote/loginTarget";
 import { needsSeparateKeyPassphrase, type VpnAuthNeeds } from "../../types";
-import { useSavedCredential } from "./useSavedCredential";
+import { useSavedCredential } from "../../lib/projects/useSavedCredential";
 
 /**
  * "Paste it for me" for a **login terminal** — the row of buttons above the embedded

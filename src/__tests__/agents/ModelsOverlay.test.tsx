@@ -39,7 +39,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
   emit: vi.fn(() => Promise.resolve()),
 }));
-vi.mock("../../components/layout/SettingsSubPanels", async () => {
+vi.mock("../../components/settings/AgentsPanel", async () => {
   const { useEffect } = await import("react");
   return {
     AgentsPanel: ({ installedExtras }: { installedExtras?: (a: unknown) => unknown }) => {
@@ -52,9 +52,11 @@ vi.mock("../../components/layout/SettingsSubPanels", async () => {
         </div>
       );
     },
-    OllamaPanel: () => <div data-testid="ollama-panel" />,
   };
 });
+vi.mock("../../components/settings/OllamaPanel", () => ({
+  OllamaPanel: () => <div data-testid="ollama-panel" />,
+}));
 vi.mock("../../components/skills/SkillsLibraryView", () => ({
   SkillsLibraryView: ({ visible }: { visible?: boolean }) => {
     h.skillsVisible.push(visible !== false);

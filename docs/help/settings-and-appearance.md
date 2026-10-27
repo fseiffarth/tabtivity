@@ -54,8 +54,9 @@ theme, accent, colours and corners) to **Load** later.
 - **What open tabs hold** estimates each tab's memory, largest first; **Show**
   jumps to one.
 
-**Resource monitor** chooses whether the header shows CPU, RAM and GPU use,
-and can collapse the header's status indicators.
+**Resource monitor** chooses whether the header shows CPU, RAM and GPU use
+(all three are off until you switch them on), and can collapse the header's
+status indicators.
 
 ## Experimental
 

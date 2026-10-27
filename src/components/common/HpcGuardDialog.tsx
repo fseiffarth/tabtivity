@@ -29,6 +29,11 @@ const COPY: Record<HpcGuardKind, { title: TranslationKey; body: TranslationKey; 
     body: "hpcGuard.census.body",
     go: "hpcGuard.census.go",
   },
+  "host-scan": {
+    title: "hpcGuard.hostScan.title",
+    body: "hpcGuard.hostScan.body",
+    go: "hpcGuard.hostScan.go",
+  },
   connect: {
     title: "hpcGuard.connect.title",
     body: "hpcGuard.connect.body",

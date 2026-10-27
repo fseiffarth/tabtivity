@@ -1,98 +1,43 @@
-pub mod agent_prompts;
-pub mod agent_session;
-pub mod agent_sqlite;
-// The turn state an agent's own hooks report (working / decision / done),
-// relayed from the hook script's per-tab record to the window's activity
-// store — the authority for the tab's working and finished marks.
-pub mod agent_turn;
+// Groups of modules in subfolders (docs/filemap_backend.md). Every module is
+// re-exported under its old name, so `crate::services::agent_fence` and
+// friends still resolve; `remote` and `root_mcp` are their own group's root file.
+pub mod agent;
+pub use agent::{
+    agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_exec,
+    agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
+    agent_install, agent_latest, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
+    agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,
+    assistant_model_probe, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
+    model_rows, opencode_models, opencode_session, opencode_store, transcript_watch,
+};
+pub mod api;
+pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
+pub mod calendar;
+pub use calendar::{caldav, calendar_alarms, calendar_recurrence, calendar_store, todo_board};
+pub mod git;
+pub use git::{git_bounded, git_ci, git_credentials, git_guard, git_hardened, git_hosting, git_init, git_peer, git_release, git_worktrees};
+pub mod mail;
+pub use mail::{
+    mail_ai, mail_attach, mail_authres, mail_contacts, mail_crypt, mail_crypto, mail_engine,
+    mail_filters, mail_pgp, mail_reader, mail_rekey, mail_sanitize, mail_store,
+    mail_thunderbird,
+};
+pub mod mcp;
+pub use mcp::{git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
-// The stored conversation behind an agent tab (Claude's session log, Codex's
-// rollout) as the prompt/answer entries the phone's Focus view lays out.
-pub mod agent_transcript;
-pub mod agent_chats;
-// An agent tab's conversation taken along to another worktree (the Reader's
-// branch chip).
-pub mod agent_relocate;
-pub mod google_chat;
-// The files that conversation changed, as the diffs its CLI recorded — the
-// desktop Reader's Changes panel.
-pub mod agent_changes;
-// Change notifications for the transcripts the desktop Reader shows.
-pub mod transcript_watch;
-pub mod agent_bin;
-pub mod agent_tasks;
-pub mod schedule_mcp;
-// Agent-requested pushes: the `/mcp/git` lane, its policy, the fenced
-// tokenless preflight and the hooks-off host transport.
-pub mod git_push_mcp;
-pub mod git_release;
-pub mod git_ci;
-pub mod help_mcp;
-// The chat assistant's guarded web lane (docs/assistant_plan.md, A2).
-pub mod web_lane;
 pub use app_core::services::schedule_usage;
 pub use app_core::services::agent_usage;
-pub mod markup_mcp;
 // The Undo of a PDF markup round that applied the marks directly: git-tree
 // snapshots of the work tree in the round's own object store under the state
 // dir, reverse-applied only when nothing changed since.
 pub mod markup_rounds;
-// Which release of each agent CLI is installed vs. the one Tabtivity's parsers
-// were checked against: the version recipes, the "verified against" notes from
-// docs/third_party_update_checklist.md as data, and the day-long probe cache.
-pub mod agent_versions;
-pub mod agent_latest;
-// Default-on Linux filesystem boundary for local agent tabs.  The authority
-// decision and root computation stay AppHandle-free; terminal spawn only applies
-// the resulting bubblewrap argv.
-pub mod agent_fence;
 // Landlock's abstract-socket scope (X11, D-Bus) the fence enters before bwrap.
 #[cfg(target_os = "linux")]
 pub use app_core::services::fence_scope;
-// `--agent-exec`: an agent's secrets mapped from their app-named carriers to
-// the CLI's own variable names, just before the agent runs (no common name on
-// the user's tmux server).
-pub mod agent_exec;
-// The Claude credential mirror: one Tabtivity-owned inode mounted into every
-// fenced/contained tab in place of `~/.claude/.credentials.json`, kept in step
-// with the host file by in-place writes — a file bind mount pins an inode, and
-// Claude rotates that file by rename.
-pub mod agent_auth;
-// Provider API keys (keychain) handed to the CLIs the user switched on, at spawn.
-pub mod agent_api_keys;
-pub mod api_proxy;
-pub mod api_meter;
-pub mod api_prices;
-pub mod api_usage;
-pub mod agent_global;
-// What a live agent tab was handed (sandbox, MCP servers, skills, API key),
-// for the tab hover card.
-pub mod agent_features;
-pub mod agent_hint;
-pub mod agent_home;
-// The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
-pub mod assistant;
-// Claude's own `/model` list for the assistant's chats, read by a short-lived probe.
-pub mod assistant_model_probe;
-// The rows each CLI's own model picker last drew, per installed build.
-pub mod model_rows;
-// Where each CLI keeps its conversations in an agent home, for export/import.
-pub mod agent_history;
-// Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.
-pub mod tar_stream;
-pub mod agent_install;
-pub mod agent_shim;
 // The AI switch: the side panel's power button, read by every AI gate.
 pub mod ai_switch;
-// Copilot CLI sign-in for fenced tabs: Tabtivity keeps the token in its own
-// keyring entry (the fence hides the keyring) and hands it to each fenced
-// Copilot as COPILOT_GITHUB_TOKEN.
-pub mod copilot_auth;
-// Copilot CLI's own session store: the tab's pinned session, its events, its
-// folder's chats (the Reader's chat, Diffs and Resume menu).
-pub mod copilot_session;
 // "Check for a new Tabtivity" against the GitHub releases page: version compare,
 // per-platform asset pick, staged download, per-platform install.
 pub mod app_update;
@@ -104,14 +49,6 @@ pub mod exec_trust;
 // registry, and download quarantine. See docs/browser_plan_{b,c}.md.
 pub mod brand_migration;
 pub mod browser_engine;
-// CalDAV accounts (docs/caldav_plan.md): the WebDAV transport half. Hand-rolled
-// on reqwest + roxmltree; iCalendar itself is still parsed by src/lib/calendar/ics.ts.
-pub mod caldav;
-// Recurrence expansion and to-do board routing, the backend twins of
-// `src/lib/calendar/recurrence.ts` and `src/lib/todoBoard.ts`, so the Mobile
-// sidecar answers a month and the board with no window (headless owner, H0).
-pub mod calendar_recurrence;
-pub mod todo_board;
 // What the phone's composer may attach from the desktop: recent screenshots and
 // pictures by opaque id, copied into the project inbox on request.
 pub mod desktop_images;
@@ -121,22 +58,7 @@ pub mod desktop_images;
 pub mod dev_build;
 // The checkout's `todo/*.md` groups for the dev build's side-panel Todo view.
 pub mod dev_todo;
-pub mod codex_bind;
-// Codex's own SQLite thread store (`~/.codex/state_<n>.sqlite`), read
-// read-only for the model a Codex tab is running now that its releases
-// no longer write the JSONL rollout the model tag used to come from.
-pub mod codex_store;
 pub mod copilot;
-pub mod git_credentials;
-// The `.git` control files a sandbox keeps its occupant from writing (#158);
-// back in this crate since #2347 gave it `home_io`.
-pub mod git_guard;
-// Bounded local git runs: FIFO pre-check + timeout that reaps the subtree (#2349).
-pub mod git_bounded;
-// The default branch (`main`) for repositories Tabtivity creates, and the
-// unpublished-`master` rename that runs just before a publish.
-pub mod git_init;
-pub mod git_peer;
 // Directory-handle-relative I/O inside agent-writable homes: what every
 // unfenced write into a scope home goes through.
 pub mod home_io;
@@ -152,9 +74,6 @@ pub mod local_loss;
 // proxy's remembered port and the phone's sign-in relay judge the owner, not
 // the address.
 pub mod loopback_owner;
-// The API proxy's remembered port when someone else holds it: who, which keyed
-// tmux agents name it (ended), and the notice the window shows once.
-pub mod api_proxy_port;
 // Hosted plan §3.3: every registered Tauri command's class (core / client /
 // admin / off) and the test that fails when one is added without a row.
 pub mod command_class;
@@ -170,56 +89,38 @@ pub mod model_allowlist;
 pub mod pick_grants;
 // Server mode: the per-user daemon behind the gateway (hosted plan §10 P3).
 pub mod server;
-// Local-model mail assistant (Group Q, #203–#208): the loopback-only /api/chat
-// helper, prompt builders and defensive JSON parsers. AI never touches the net.
-pub mod mail_ai;
-// A root agent's `attach` on a mail draft: project files resolved under the
-// same-roots rule and read without following a link (`docs/mail_mcp_attachments_plan.md`).
-pub mod mail_attach;
-pub mod mail_authres;
-// The mail client's address book: cards, lists, collected addresses, vCard.
-pub mod mail_contacts;
-pub mod mail_crypt;
 // Who may touch a file on Windows: `restrict_to_owner` (icacls, the Windows
 // spelling of a 0600 key/state file) and `admin_locked` (the trusted-helper
 // check of `paths::system_executable`). Pure SID/ACL decisions, tested
 // everywhere.
 pub mod private_file;
-pub mod mail_crypto;
-pub mod mail_engine;
 // Connect to a server (hosted plan §7.2, P5): pairing, sign-in and the
 // desktop socket a Connect window is bridged to.
 pub mod connect;
-pub mod mail_filters;
-pub mod mail_pgp;
-pub mod mail_rekey;
-pub mod mail_reader;
-pub mod mail_sanitize;
-pub mod mail_store;
-// Thunderbird address books (abook/history.sqlite), read from a temp copy.
-pub mod mail_thunderbird;
 pub mod mobile_control;
 pub mod net_usage;
-pub mod opencode_models;
-pub mod opencode_session;
-pub mod opencode_store;
+// The Ollama client: endpoint, listener owner gate, bounded HTTP, capability
+// and locality reads (moved down from `commands::ollama`, S5).
+pub mod ollama_client;
+// The local-model coding agents and the launch lines a local-model tab runs.
+pub mod local_drivers;
 pub mod openvpn;
 pub mod process_lease;
 pub mod project_runtime;
+// The projects.json write side: serialized read-modify-write + entry patches.
+pub mod project_registry;
+// The boxes.json store and the box tab scope (`box:<id>`, its allowed roots).
+pub mod box_store;
+// Which roots the absolute-path file commands may touch, and the
+// handle-based open that holds them to it.
+pub mod fs_confine;
 pub mod prompt_blame;
 pub mod remote;
+pub use remote::{remote_credentials, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
 pub use app_core::services::remote_agents;
-pub mod remote_credentials;
-pub mod remote_sync;
-// A host tab's conversation, copied from the host over the pooled SFTP session.
-pub mod remote_transcript;
-pub mod remote_usage;
 pub mod restore_service;
 pub mod root_mcp;
-pub mod root_mcp_security;
-pub mod root_mcp_import;
-pub mod root_mcp_mail;
-pub mod root_mcp_review;
+pub use root_mcp::{root_mcp_import, root_mcp_mail, root_mcp_review, root_mcp_security};
 // The project container bind-mounts host paths straight into a Linux container
 // and maps the host uid/gid, so it is Unix-only today *at runtime*: Windows
 // refuses at the `pty_spawn` call site (and `up_for_project` no-ops) rather
@@ -227,17 +128,16 @@ pub mod root_mcp_review;
 // kill/lifecycle seams (PtyRegistry, project switch, app exit) call into it
 // unconditionally.
 pub mod sandbox;
-pub mod sftp;
 // Spreadsheet parsing in a limited child process of the main binary.
 pub mod sheet_reader;
 pub mod skills;
+// SyncTeX read natively: reverse and forward search, page anchors, map freshness.
+pub mod synctex;
+// The tracked external-app windows and their launch origins (managed state).
+pub mod window_registry;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;
-pub mod ssh_common;
-pub mod ssh_exec;
 pub mod state_gc;
-pub mod sync_auto;
-pub mod sync_op;
 pub mod terminal_service;
 pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share
@@ -249,10 +149,6 @@ pub mod workspace;
 // The single-client timer lease (headless owner plan, H2, interim): one
 // window fires schedules, alarms and syncs at a time.
 pub mod timer_lease;
-// Calendar reminders' due set and their cross-process fired record (headless
-// owner plan, H2): the window claims before showing, the sidecar pushes with
-// no window open.
-pub mod calendar_alarms;
 pub mod token_stats;
 // The UI's main threads (this process's, each renderer's) asked to rtkit for
 // nice -10, so the work agent tabs start cannot outrank typing.
@@ -286,7 +182,6 @@ pub mod webkit_gpu;
 pub mod win_links;
 pub mod window_service;
 pub mod window_state;
-pub mod worker_sync;
 
 pub use app_core::services::text_completion;
 // One FIFO worker thread: the state-file commands' way off the GTK thread.

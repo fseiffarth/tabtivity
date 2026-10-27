@@ -15,7 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { startPoll, usePoll } from "../../lib/usePoll";
 import { usePowerStore } from "../../stores/power";
 import { useSettingsStore } from "../../stores/settings";
-import { PaneVisibleContext } from "../../components/embed/fileAccess";
+import { PaneVisibleContext } from "../../lib/files/fileAccess";
 import type { Settings } from "../../types";
 
 let visibility: DocumentVisibilityState = "visible";

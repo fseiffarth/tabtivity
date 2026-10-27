@@ -88,7 +88,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { PdfView, PDF_ZOOM_COMMIT_MS } from "../../components/embed/pdf/PdfViewer";
-import { FileScopeContext } from "../../components/embed/fileAccess";
+import { FileScopeContext } from "../../lib/files/fileAccess";
 import { useTabsStore, type TabEntry, type ViewerState } from "../../stores/tabs";
 
 const PATH = "/home/u/paper/paper.pdf";

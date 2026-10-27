@@ -1261,11 +1261,13 @@ struct Singletons {
 }
 
 impl Singletons {
-    fn new() -> Self {
+    /// `workspace` is the caller's: only the desktop window detects the
+    /// desktop's backend (which may take over its workspace settings).
+    fn new(workspace: WorkspaceState) -> Self {
         Self {
             pty_registry: Arc::new(Mutex::new(PtyRegistry::default())),
             win_registry: Arc::new(Mutex::new(WindowRegistry::default())),
-            workspace: Arc::new(Mutex::new(WorkspaceState::new())),
+            workspace: Arc::new(Mutex::new(workspace)),
             fs_watch: commands::fs_watch::new_state(),
             remote_pool: services::remote::new_pool(),
             sync_manifest: services::remote_sync::new_manifest_state(),
@@ -1309,8 +1311,16 @@ impl Singletons {
 /// type `lib.rs` manages for Tauri is here too, so a converted command's
 /// `ctx.get::<T>()` finds what it would in the window (`CoreState::get`
 /// panics for an unmanaged type).
+///
+/// Its workspace backend is `null`: the window's process parks the windows,
+/// and a second `x11` backend here (the sidecar runs on the same desktop)
+/// would take the workspace GSettings over again, record the window's values
+/// as the user's and race the window's restore.
 pub fn standalone_core_state() -> app_core::CoreState {
-    Singletons::new().core_state()
+    Singletons::new(WorkspaceState {
+        backend: Box::new(platform::null::NullBackend),
+    })
+    .core_state()
 }
 
 #[cfg(feature = "desktop")]
@@ -1398,7 +1408,7 @@ pub fn run() {
     // app: Tauri's `State` and the core's `CoreState` (clones of one `Arc`
     // each, never two values). Also what `standalone_core_state` builds for
     // a host that is not this window.
-    let s = Singletons::new();
+    let s = Singletons::new(WorkspaceState::new());
     let core_state = s.core_state();
     let Singletons {
         pty_registry,
@@ -2128,6 +2138,7 @@ pub fn run() {
             commands::sync::sync_big_folders,
             commands::sync::sync_set_excluded,
             commands::sync::sync_status,
+            commands::sync::sync_scan_host_new,
             commands::sync::sync_file_meta,
             commands::sync::sync_resolve_if_identical,
             commands::sync::sync_apply_delete,
@@ -2196,7 +2207,6 @@ pub fn run() {
             commands::clipboard::clipboard_has_image,
             commands::clipboard::save_clipboard_image,
             commands::clipboard::clipboard_file_paths,
-            commands::clipboard::copy_png_bytes_to_clipboard,
             commands::clipboard::copy_text_to_clipboard,
             commands::connect::connect_status,
             commands::connect::connect_pair,
@@ -2206,11 +2216,7 @@ pub fn run() {
             commands::connect::connect_ws_send,
             commands::connect::connect_ws_close,
             commands::connect::connect_open_download,
-            commands::screenshot::capture_screenshot,
             commands::projects::project_generated_dir,
-            commands::screenshot::read_pending_screenshot,
-            commands::screenshot::save_pending_screenshot,
-            commands::screenshot::discard_pending_screenshot,
             commands::fs::delete_file,
             commands::fs::delete_dir,
             commands::fs::create_file,
@@ -2218,7 +2224,6 @@ pub fn run() {
             commands::fs::write_project_file_bytes,
             commands::fs::update_gitignore_rule,
             commands::fs::create_dir,
-            commands::fs::detect_mime,
             commands::fs::file_source,
             commands::fs::read_file_text,
             commands::fs::write_file_text,
@@ -2331,6 +2336,9 @@ pub fn run() {
             commands::presenter::presenter_next_monitor,
             commands::presenter::presenter_inhibit_sleep,
             commands::presenter::presenter_release_sleep,
+            // The privacy curtain (docs/privacy_curtain_plan.md)
+            commands::presenter::presenting_state,
+            commands::presenter::privacy_curtain_set,
             commands::workspace::network_conn_type,
             commands::workspace::network_wifi_ssid,
             commands::workspace::network_identity,
@@ -2422,6 +2430,7 @@ pub fn run() {
             commands::debug::dev_build_relaunch,
             commands::debug::dev_build_set_paused,
             commands::debug::dev_build_now,
+            commands::debug::dev_build_stop,
             commands::debug::dev_todo_groups,
             commands::debug::dev_todo_read,
             commands::debug::dev_todo_write,
@@ -2613,6 +2622,11 @@ pub fn run() {
                 }
                 // A mic whose window is gone has nothing left to show it is on.
                 services::voice::stop_for_window(&tauri_host::system_ctx(_app), label);
+                // A presentation ending (or a deck's audience window closing
+                // under a PDF one) changes what the privacy curtains cover.
+                if label.starts_with("present-") {
+                    commands::presenter::announce_presenting(_app, Some(label));
+                }
                 if label.starts_with("detached-") {
                     // Guard against a same-label window already re-created
                     // (rapid destroy → re-detach): only clean up when no live
@@ -2663,6 +2677,20 @@ pub fn run() {
                 // listener with nothing behind it. Bounded (admin-socket
                 // timeouts), best-effort, and a no-op when Mobile is off.
                 tauri::async_runtime::block_on(commands::mobile_control::stop_host_for_exit());
+                // The workspace backend: parked windows back to desktop 0 and
+                // the desktop's workspace settings (Cinnamon, GNOME) restored.
+                // Its `Drop` would do the same, but Tauri never drops managed
+                // state at exit (tao ends in `process::exit`), so without this
+                // call nothing was ever restored. Idempotent; quick (a few
+                // `gsettings` calls), so before the long teardowns below.
+                if let Err(e) = _app
+                    .state::<commands::workspace::WorkspaceStateArc>()
+                    .lock_ok()
+                    .backend
+                    .cleanup()
+                {
+                    eprintln!("workspace backend: quit cleanup: {e}");
+                }
                 // The root MCP listener: stop accepting, drain in-flight
                 // workers briefly, and drop every per-tab calendar copy so
                 // nothing of the endpoint outlives the quit.

@@ -1,6 +1,7 @@
 import { relativePathWithin } from "../paths";
 import { shellQuote as quoteFor } from "./pythonRun";
-import { isRemoteLocation, type TabLocation } from "../../stores/tabs";
+import { type TabLocation } from "../../stores/tabs";
+import { isRemoteLocation } from "../../stores/tabs/tabLocation";
 import type { ProjectEntry } from "../../types";
 
 export type ScriptShell = "bash" | "zsh" | "fish" | "ksh" | "powershell" | "cmd";

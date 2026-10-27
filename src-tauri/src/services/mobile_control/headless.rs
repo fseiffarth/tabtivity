@@ -51,7 +51,7 @@ const MOBILE_CALENDAR_EVENTS: usize = 400;
 const CATEGORY_KEYS: &[&str] = &["work", "personal", "meeting", "travel", "birthday", "holiday", "important"];
 
 fn calendar_data(state_dir: &Path) -> Result<CalendarData, String> {
-    crate::commands::calendar::read_data(&state_dir.join("calendar.json"))
+    crate::services::calendar_store::read_data(&state_dir.join("calendar.json"))
 }
 
 /// `boundedText`: at most `max_bytes`, cut on a character boundary.
@@ -403,8 +403,8 @@ pub fn agents(state_dir: &Path, host_key: &[u8], installed: &dyn Fn(&str) -> boo
     super::discovery::resumable_builtins()
         .into_iter()
         .filter_map(|bin| {
-            let label = crate::commands::agents::agent_label_for_bin(bin)?;
-            let id = crate::commands::agents::agent_id_for_bin(bin)?;
+            let label = crate::services::agent_registry::agent_label_for_bin(bin)?;
+            let id = crate::services::agent_registry::agent_id_for_bin(bin)?;
             if disabled.contains(id) || disabled.contains(bin) || !installed(bin) {
                 return None;
             }
@@ -736,7 +736,7 @@ async fn create_chat(
     }
     let chosen = super::assistant::resolve(choices, handle).ok_or(CreateRefusal::UnknownAgent)?;
     let request_hash = key_id(host_key, "request", &[&request.idempotency_key]);
-    let uid = crate::commands::projects::uuid_v4();
+    let uid = crate::storage::uuid_v4();
     let record = crate::services::assistant::new_chat_record(state_dir, &chosen, &uid, Some(&request_hash))
         .map_err(|refusal| CreateRefusal::Assistant(refusal.code()))?;
     let path = session_file(state_dir, &project.raw_id);
@@ -762,7 +762,7 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
     let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
     let (label, cmd, session_id) = match (kind, agent) {
         (CreateTabKind::Agent, Some(agent)) => {
-            let uuid = crate::commands::projects::uuid_v4();
+            let uuid = crate::storage::uuid_v4();
             let args = if matches!(agent.bin, "claude" | "gemini") {
                 vec!["--session-id".to_string(), uuid.clone()]
             } else {
@@ -785,7 +785,7 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
     };
     extra.insert("mobileRequestHash".into(), json!(request_hash));
     TabEntry {
-        key: format!("headless-{}", crate::commands::projects::uuid_v4()),
+        key: format!("headless-{}", crate::storage::uuid_v4()),
         label,
         cmd,
         cwd: cwd.to_string_lossy().into_owned(),
@@ -1049,12 +1049,12 @@ pub fn closed_tabs(state_dir: &Path, raw_id: &str) -> Vec<super::protocol::Close
 }
 
 /// The launch args that bring a resumable agent tab's conversation back — the
-/// registry's `Resume` (`commands::agents`, the frontend's `RESUMABLE_AGENTS`).
+/// registry's `Resume` (`services::agent_registry`, the frontend's `RESUMABLE_AGENTS`).
 /// Claude's `--resume <launch id>` is upgraded to the live id by `launch_prep`
 /// as at every restart; Codex resolves its own from `<UPPER>_TAB_UID`; the
 /// rest continue their latest.
 pub(super) fn resume_args(cmd: &str, session_id: &str) -> Vec<String> {
-    crate::commands::agents::resume_args_for_bin(cmd, session_id).unwrap_or_default()
+    crate::services::agent_registry::resume_args_for_bin(cmd, session_id).unwrap_or_default()
 }
 
 /// `ReopenTab` with no window: the closed record comes back as a new tab
@@ -1203,7 +1203,7 @@ pub fn record_prompt(state_dir: &Path, project_id: &str, tab: &ResolvedTab, mess
         state_dir,
         project_id,
         RecordedAgentPromptInput {
-            id: crate::commands::projects::uuid_v4(),
+            id: crate::storage::uuid_v4(),
             message: text.to_string(),
             created_at: None,
             sent: SentAgentPromptInput {
@@ -1341,7 +1341,7 @@ pub fn schedule_mutate(
         }
         ScheduleMutation::Create { schedule } => {
             let prompt = ScheduledAgentPrompt {
-                id: crate::commands::projects::uuid_v4(),
+                id: crate::storage::uuid_v4(),
                 enabled: schedule.enabled,
                 message: schedule.message,
                 rule: schedule.rule,
@@ -1408,7 +1408,7 @@ pub fn prompt_mutate(
             state_dir,
             project_id,
             ProjectAgentPromptInput {
-                id: crate::commands::projects::uuid_v4(),
+                id: crate::storage::uuid_v4(),
                 message: prompt.message,
                 tags: None,
                 target: None,
@@ -1682,7 +1682,7 @@ mod tests {
         let at = state.path().to_path_buf();
         assert_eq!(crate::services::home_io::within_deadline(move || turn_record(&at, "p", uid)), None);
     }
-    use crate::commands::calendar::{create_event_at, create_task_at};
+    use crate::services::calendar_store::{create_event_at, create_task_at};
     use crate::schema::calendar::{CalendarEvent, CalendarTask, Freq, Rrule};
 
     const KEY: [u8; 32] = [7u8; 32];
@@ -1759,7 +1759,7 @@ mod tests {
             },
         )
         .unwrap();
-        let hidden = crate::commands::calendar::create_calendar_at(
+        let hidden = crate::services::calendar_store::create_calendar_at(
             &calendar,
             Calendar { id: String::new(), name: "Hidden".into(), color: "#000".into(), visible: false, readonly: false, rev: 0, extra: Default::default() },
         )

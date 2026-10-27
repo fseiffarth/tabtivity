@@ -1,7 +1,13 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use app_core::sync::LockExt;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
+
+// The Ollama client (endpoint, owner gate, HTTP, capability and locality
+// reads) lives in `services::ollama_client`, the local-driver launch lines in
+// `services::local_drivers` (S5); re-exported for the commands and their tests.
+pub(crate) use crate::services::local_drivers::*;
+pub(crate) use crate::services::ollama_client::*;
 
 // ── Detailed model info ───────────────────────────────────────────────────
 
@@ -49,354 +55,6 @@ pub struct OllamaModelInfo {
     pub remote: bool,
 }
 
-// ── Where the server is ───────────────────────────────────────────────────
-
-/// The endpoint every request here uses when `Settings::ollama_host` says
-/// nothing — which is what it said for every install that predates #201a.
-const DEFAULT_OLLAMA_ADDR: &str = "127.0.0.1:11434";
-const DEFAULT_OLLAMA_PORT: u16 = 11434;
-
-/// The `host:port` this module connects to, per `Settings::ollama_host`.
-///
-/// Read on every call rather than cached: a settings write is not an event this
-/// module hears, and the alternative is a stale endpoint that survives until
-/// relaunch. It is one small JSON read against a file the app already keeps hot.
-fn ollama_addr() -> Result<String, String> {
-    let settings = crate::storage::load_settings().unwrap_or_default();
-    let (host, allow_remote) = host_setting(&settings);
-    resolve_ollama_addr(host, allow_remote)
-}
-
-/// `Settings::ollama_host` and `ollama_allow_remote_host` as this process
-/// honours them. On a hosted server neither is a user's to set (final review
-/// A2): the endpoint is the one shared Ollama on loopback that the admin runs,
-/// so a user's `settings.json` can neither send the daemon's prompts to a
-/// host of their choosing, nor aim it at another account's loopback listener,
-/// nor make the model allowlist's "installed" list come from a server of
-/// their own. The desktop — window and sidecar alike — keeps both settings.
-pub(crate) fn host_setting(settings: &crate::schema::Settings) -> (Option<&str>, bool) {
-    if crate::services::server::is_server() {
-        return (None, false);
-    }
-    (settings.ollama_host.as_deref(), settings.ollama_allow_remote_host.unwrap_or(false))
-}
-
-/// The user's chosen `OLLAMA_MODELS` directory (`Settings::ollama_models_path`),
-/// trimmed and dropped when empty. Read on every use for `ollama_addr`'s reason:
-/// a settings write is not an event this module hears.
-fn configured_models_dir() -> Option<std::path::PathBuf> {
-    crate::storage::load_settings()
-        .and_then(|s| s.ollama_models_path)
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .map(std::path::PathBuf::from)
-}
-
-/// The pure core of [`ollama_addr`]: what the user wrote → what we dial.
-///
-/// Liberal about spelling (Ollama's own `OLLAMA_HOST` accepts most of these, and
-/// the value is usually copied from there) and strict about the two things that
-/// change what the feature *is*:
-///
-/// * **`https://` is an error, never a downgrade.** This transport is a raw
-///   `TcpStream` speaking HTTP/1.0; it has no TLS and cannot grow one here.
-///   Connecting in the clear to an endpoint the user wrote as TLS would put
-///   their prompts on the wire unencrypted while the setting says otherwise —
-///   the one failure worth refusing to start for.
-/// * **A non-loopback host needs `allow_remote`.** Judged on the literal, not on
-///   a resolution: the question is what the user stated, and a name that
-///   resolves to loopback today is not a promise about tomorrow. The
-///   conservative direction is the safe one — the worst it costs is an opt-in
-///   for a hostname that was local anyway.
-///
-/// `0.0.0.0`/`::` are *bind* addresses, and are the likeliest thing to be pasted
-/// in from an `OLLAMA_HOST` that was written for the server side; they are read
-/// as loopback rather than refused, since that is both what they mean here and
-/// what dialling them would do anyway.
-///
-/// The result is interpolated into a request line and a `Host:` header, so a
-/// host carrying a control character is rejected outright — this builds HTTP by
-/// string concatenation, and that is header injection.
-pub(crate) fn resolve_ollama_addr(raw: Option<&str>, allow_remote: bool) -> Result<String, String> {
-    let raw = raw.map(str::trim).unwrap_or("");
-    if raw.is_empty() {
-        return Ok(DEFAULT_OLLAMA_ADDR.to_string());
-    }
-
-    let rest = if let Some(r) = raw.strip_prefix("http://") {
-        r
-    } else if let Some(r) = raw.strip_prefix("https://") {
-        let _ = r;
-        return Err(format!(
-            "Ollama host `{raw}` asks for HTTPS, which {app}'s Ollama transport \
-             cannot speak — it would have to connect in the clear instead, and \
-             sending prompts unencrypted to an address written as `https://` is \
-             not something to do quietly. Use `http://` (or drop the scheme) for \
-             a server on this machine.", app = crate::brand::DISPLAY
-        ));
-    } else if let Some((scheme, _)) = raw.split_once("://") {
-        return Err(format!(
-            "Ollama host `{raw}` names the `{scheme}` scheme; only `http://` (or \
-             no scheme at all) is supported."
-        ));
-    } else {
-        raw
-    };
-
-    // Drop a path or trailing slash — `http://127.0.0.1:11434/` is what a browser
-    // hands you when you copy the address of a running server.
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("").trim();
-
-    // A bare number is a port, not a host — `OLLAMA_HOST=11500` is a spelling
-    // Ollama itself documents, so it is the one most likely to be copied across.
-    if let Ok(port) = authority.parse::<u16>() {
-        return Ok(format!("127.0.0.1:{port}"));
-    }
-
-    let (host, port) = split_host_port(authority)
-        .ok_or_else(|| format!("Ollama host `{raw}` is not a `host:port` address."))?;
-
-    let host = match host {
-        "" => "127.0.0.1",
-        // Bind-all pasted into a connect field.
-        "0.0.0.0" => "127.0.0.1",
-        "::" => "::1",
-        h => h,
-    };
-
-    if host.is_empty()
-        || host
-            .chars()
-            .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
-    {
-        return Err(format!(
-            "Ollama host `{raw}` contains characters a host cannot have."
-        ));
-    }
-
-    if !host_is_loopback(host) && !allow_remote {
-        return Err(format!(
-            "Ollama host `{host}` is another machine, so every prompt and every \
-             file an agent reads would leave this one. That is off by default for \
-             a local-model feature — set `ollama_allow_remote_host` to true in \
-             settings.json if it is what you want."
-        ));
-    }
-
-    Ok(if host.contains(':') {
-        // IPv6 literal — the brackets are what keep the port unambiguous.
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    })
-}
-
-/// Split an authority into host and port, understanding the bracketed IPv6 form.
-/// `None` when the port is present but not a port.
-fn split_host_port(authority: &str) -> Option<(&str, u16)> {
-    if let Some(rest) = authority.strip_prefix('[') {
-        let (host, after) = rest.split_once(']')?;
-        return match after {
-            "" => Some((host, DEFAULT_OLLAMA_PORT)),
-            p => Some((host, p.strip_prefix(':')?.parse().ok()?)),
-        };
-    }
-    // An unbracketed value with more than one colon is a bare IPv6 literal;
-    // there is no port in it to find.
-    if authority.matches(':').count() > 1 {
-        return Some((authority, DEFAULT_OLLAMA_PORT));
-    }
-    match authority.split_once(':') {
-        None => Some((authority, DEFAULT_OLLAMA_PORT)),
-        Some((host, "")) => Some((host, DEFAULT_OLLAMA_PORT)),
-        Some((host, port)) => Some((host, port.parse().ok()?)),
-    }
-}
-
-/// How long to wait for the TCP handshake. Nothing to do with the 600 s *read*
-/// timeout beside it, which covers a model pull between chunks.
-///
-/// It exists because `ollama_host` can now name another machine, and a bare
-/// `TcpStream::connect` at a host that is off, firewalled or simply mistyped
-/// blocks for the OS TCP timeout — minutes — inside a `#[tauri::command]`,
-/// which is the window-freeze this repo has already paid for twice (a locked
-/// keyring, a disconnected remote project's git reads). A loopback port that
-/// nothing is listening on refuses instantly and never reaches this bound, so
-/// the default configuration is unchanged.
-const OLLAMA_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
-
-/// Open a connection to an already-resolved `host:port`, bounded.
-fn connect_ollama(addr: &str) -> Result<TcpStream, String> {
-    use std::net::ToSocketAddrs;
-    // `not_running` for every failure, resolution included: it is the sentinel
-    // the whole 🧠 surface already branches on, and "the name does not resolve"
-    // and "nothing answers" are the same thing to a caller that wants a model.
-    addr.to_socket_addrs()
-        .ok()
-        .and_then(|mut it| {
-            it.find_map(|sa| TcpStream::connect_timeout(&sa, OLLAMA_CONNECT_TIMEOUT).ok())
-        })
-        .ok_or_else(|| "not_running".to_string())
-}
-
-/// Whether a host *literal* names this machine. Deliberately no DNS: see
-/// [`resolve_ollama_addr`].
-pub(crate) fn host_is_loopback(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    match host.parse::<std::net::IpAddr>() {
-        Ok(ip) => ip.is_loopback() || ip.is_unspecified(),
-        // `foo.localhost` resolves to loopback by convention (RFC 6761).
-        Err(_) => host.to_ascii_lowercase().ends_with(".localhost"),
-    }
-}
-
-// ── Whose listener it is ──────────────────────────────────────────────────
-
-/// The error (prefix) of a loopback listener nobody here vouches for. Judged by
-/// [`owner_gate`] before a byte is sent, and told apart from "not running" by
-/// [`model_is_local_in`]: the answer would have been another process's.
-pub(crate) const LISTENER_REFUSED: &str = "ollama_listener_refused";
-
-/// The uid the user (`Settings::ollama_listener_uid`) or, on a hosted server,
-/// the administrator (the server policy file) names as running Ollama.
-fn named_listener_uid() -> Option<u32> {
-    if crate::services::server::is_server() {
-        return crate::services::server::server_policy().and_then(|p| p.ollama_listener_uid);
-    }
-    crate::storage::load_settings().and_then(|s| s.ollama_listener_uid)
-}
-
-/// Refuse a loopback `addr` whose listening socket belongs to someone Ollama
-/// would not be: another account, a fenced agent's process, or one that cannot
-/// be identified (`services::loopback_owner`, gap 50a). Asked after the
-/// connection and before anything is written, and by every "is it local?" gate,
-/// so a squatter on the port gets neither prompts, mail nor a say in whether
-/// the model is local. No listener, or an address on another machine: nothing
-/// to judge. Linux only; elsewhere address-only trust remains.
-pub(crate) fn owner_gate(addr: &str) -> Result<(), String> {
-    let Some((host, port)) = split_host_port(addr).filter(|(host, _)| host_is_loopback(host)) else { return Ok(()) };
-    let policy = crate::services::loopback_owner::Policy::current(named_listener_uid());
-    let ours: Vec<u32> = match OWNED_SERVER.lock().ok().as_deref() {
-        Some(Some(OwnedServer::Process(pid))) => vec![*pid],
-        _ => Vec::new(),
-    };
-    crate::services::loopback_owner::check(host, port, &policy, &ours)
-        .map_err(|refusal| format!("{LISTENER_REFUSED}: {}", refusal.describe(addr)))
-}
-
-// ── HTTP helper ───────────────────────────────────────────────────────────
-
-/// Send a request to the local Ollama REST API and return the response body.
-/// Uses HTTP/1.0 to avoid chunked transfer encoding.
-pub(crate) fn ollama_http(
-    method: &str,
-    path: &str,
-    json_body: Option<&str>,
-) -> Result<String, String> {
-    // 10-minute timeout accommodates large model pulls
-    ollama_http_within(method, path, json_body, Duration::from_secs(600))
-}
-
-/// How long a status read (`/api/tags`, `/api/ps`) waits for its answer once
-/// connected. Both are answered from what the server already holds, so a
-/// server that takes longer is wedged, and the 🧠 lamp, the model list and the
-/// phone must say so instead of holding a thread for [`ollama_http`]'s ten
-/// minutes (code screen B2). The locality check asks within the same bound.
-const STATUS_READ_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// `GET path` against the configured server within [`STATUS_READ_TIMEOUT`].
-fn ollama_status_read(path: &str) -> Result<String, String> {
-    ollama_http_within("GET", path, None, STATUS_READ_TIMEOUT)
-}
-
-/// [`ollama_http`] with its own read timeout, for a quick question that must
-/// not hold its thread for a pull's ten minutes.
-fn ollama_http_within(
-    method: &str,
-    path: &str,
-    json_body: Option<&str>,
-    read_timeout: Duration,
-) -> Result<String, String> {
-    ollama_http_at(&ollama_addr()?, method, path, json_body, read_timeout)
-}
-
-/// [`ollama_http_within`] against an endpoint the caller already resolved —
-/// one a tab was spawned with, which today's `ollama_host` may no longer name,
-/// or the one the mail assistant's local-model check asked (gap 25).
-pub(crate) fn ollama_http_at(
-    addr: &str,
-    method: &str,
-    path: &str,
-    json_body: Option<&str>,
-    read_timeout: Duration,
-) -> Result<String, String> {
-    #[cfg(test)]
-    if let Some(answer) = test_http::answer(addr, method, path) {
-        return answer;
-    }
-    let mut stream = connect_ollama(addr)?;
-    owner_gate(addr)?;
-    stream
-        .set_read_timeout(Some(read_timeout))
-        .map_err(|e| format!("set timeout: {e}"))?;
-
-    let req = match json_body {
-        Some(body) => format!(
-            "{method} {path} HTTP/1.0\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        ),
-        None => format!("{method} {path} HTTP/1.0\r\nHost: {addr}\r\n\r\n"),
-    };
-
-    stream
-        .write_all(req.as_bytes())
-        .map_err(|e| format!("write: {e}"))?;
-
-    let mut raw = String::new();
-    stream
-        .read_to_string(&mut raw)
-        .map_err(|e| format!("read: {e}"))?;
-
-    let status: u16 = raw
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(200);
-
-    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
-
-    if status >= 400 {
-        let msg = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| v["error"].as_str().map(String::from))
-            .unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(friendly_ollama_error(&msg));
-    }
-
-    Ok(body)
-}
-
-/// Rewrite a raw Ollama error into a clearer, actionable message for the failure
-/// modes that otherwise surface as an opaque HTTP 500 / "internal server error"
-/// (e.g. when driven through vibe). Currently detects a broken install whose
-/// inference runner (`llama-server`) is missing: Ollama answers API requests but
-/// cannot load any model, so every generate/chat call 500s. Unrecognised errors
-/// pass through unchanged. Pure + tested.
-fn friendly_ollama_error(raw: &str) -> String {
-    let lower = raw.to_ascii_lowercase();
-    if lower.contains("llama-server") && lower.contains("not found") {
-        let cmd = ollama_install_cmd();
-        return format!(
-            "Ollama's inference runner (llama-server) is missing, so Ollama can \
-            serve its API but cannot load any model — the install is incomplete. \
-            Reinstall Ollama with `{cmd}`."
-        );
-    }
-    raw.to_string()
-}
 
 // ── New management commands ───────────────────────────────────────────────
 
@@ -438,19 +96,6 @@ fn ollama_installed() -> bool {
 /// The manual download page, offered as a last-resort fallback on every OS.
 pub const OLLAMA_DOWNLOAD_URL: &str = "https://ollama.com/download";
 
-/// The recommended Ollama install command for the host OS. Kept here so the
-/// backend installer, the error messages, and the UI's copy-to-clipboard
-/// fallback all stay in sync with whatever the installer actually runs.
-///
-/// - Windows: winget (present on all supported Windows 10/11 builds).
-/// - Linux/macOS: the official distro-agnostic install script.
-pub fn ollama_install_cmd() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "winget install --id Ollama.Ollama -e --silent --accept-source-agreements --accept-package-agreements"
-    } else {
-        "curl -fsSL https://ollama.com/install.sh | sh"
-    }
-}
 
 /// Install Ollama using the host OS's native package mechanism, streaming its
 /// combined stdout+stderr to the frontend line-by-line via
@@ -811,143 +456,6 @@ pub async fn vibe_install_strategy() -> VibeInstallStrategy {
     }
 }
 
-/// Capability lists keyed by *manifest digest*, not by model name. A model's
-/// capabilities are fixed by its manifest, so a digest that has been read once
-/// can never need re-reading — and a re-pull (the one thing that changes them)
-/// changes the digest, which misses the cache by construction. Without this,
-/// `list_ollama_models_detailed` — called on every hover of the 🧠 menu, by the
-/// editor's autocomplete and by the autoload store — would spend one `/api/show`
-/// round trip per installed model per call.
-static CAPABILITY_CACHE: std::sync::OnceLock<
-    std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>,
-> = std::sync::OnceLock::new();
-
-/// Ollama's capability list for `model`, cached against `digest`.
-///
-/// An empty vec is returned for every failure — an unreachable server, an
-/// Ollama predating the `capabilities` field, a malformed body. That is
-/// deliberate and every caller must honour it: **empty means "we could not
-/// ask", never "this model supports nothing"**. Treating the two alike is what
-/// would make a transient probe failure silently hide every agent in the
-/// new-tab menu.
-fn model_capabilities(model: &str, digest: &str) -> Vec<String> {
-    match ollama_addr() {
-        Ok(addr) => model_capabilities_at(&addr, model, digest),
-        Err(_) => Vec::new(),
-    }
-}
-
-/// [`model_capabilities`] asked of `addr`, an endpoint the caller resolved.
-fn model_capabilities_at(addr: &str, model: &str, digest: &str) -> Vec<String> {
-    let cache = CAPABILITY_CACHE.get_or_init(Default::default);
-    if !digest.is_empty() {
-        if let Ok(map) = cache.lock() {
-            if let Some(hit) = map.get(digest) {
-                return hit.clone();
-            }
-        }
-    }
-
-    let body = serde_json::json!({ "model": model }).to_string();
-    let caps: Vec<String> = ollama_http_at(addr, "POST", "/api/show", Some(&body), Duration::from_secs(600))
-        .ok()
-        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["capabilities"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|c| c.as_str().map(String::from))
-        .collect();
-
-    // Only a positive answer is cached: caching an empty list would freeze a
-    // transient failure in for the rest of the session.
-    if !digest.is_empty() && !caps.is_empty() {
-        if let Ok(mut map) = cache.lock() {
-            map.insert(digest.to_string(), caps.clone());
-        }
-    }
-    caps
-}
-
-/// The installed models that *do* support tool calls, for the "pick one of
-/// these instead" half of a refusal. Read off this machine rather than a
-/// hardcoded example list, which would age as the registry moves.
-fn tool_capable_models() -> Vec<String> {
-    ollama_status_read("/api/tags")
-        .ok()
-        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["models"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|m| {
-            let name = m["name"].as_str()?;
-            let digest = m["digest"].as_str().unwrap_or("");
-            model_capabilities(name, digest)
-                .iter()
-                .any(|c| c == "tools")
-                .then(|| name.to_string())
-        })
-        .collect()
-}
-
-/// Whether `model` carries `cap` — `Some(false)` only when Ollama positively
-/// said so. `None` is "could not tell", which every caller reads as "let it
-/// through": see [`model_capabilities`].
-fn model_has_capability(model: &str, cap: &str) -> Option<bool> {
-    let digest = ollama_status_read("/api/tags")
-        .ok()
-        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["models"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .find(|m| m["name"].as_str() == Some(model))
-        .and_then(|m| m["digest"].as_str().map(String::from))
-        .unwrap_or_default();
-
-    let caps = model_capabilities(model, &digest);
-    if caps.is_empty() {
-        return None;
-    }
-    Some(caps.iter().any(|c| c == cap))
-}
-
-/// Ollama's capability list for `model`, resolved through one `/api/tags` read
-/// for the manifest digest and the digest-keyed [`model_capabilities`] cache.
-///
-/// **Empty means "could not ask", never "supports nothing"** — the same rule
-/// [`model_capabilities`] documents. `services::mail_ai` reads it to refuse an
-/// embedding-only model, and honours the empty-is-unknown contract by allowing
-/// through anything it cannot classify.
-///
-/// Asked of `addr`, the endpoint the caller already resolved and judged
-/// (`services::mail_ai` passes the one its local-model check used, so a
-/// settings change in between cannot send the probe elsewhere).
-pub(crate) fn capabilities_of_at(addr: &str, model: &str) -> Vec<String> {
-    let digest = ollama_http_at(addr, "GET", "/api/tags", None, STATUS_READ_TIMEOUT)
-        .ok()
-        .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
-        .and_then(|v| v["models"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .find(|m| m["name"].as_str() == Some(model))
-        .and_then(|m| m["digest"].as_str().map(String::from))
-        .unwrap_or_default();
-    model_capabilities_at(addr, model, &digest)
-}
-
-/// Whether `model` can drive tool/function calls.
-fn model_supports_tools(model: &str) -> Option<bool> {
-    model_has_capability(model, "tools")
-}
-
-/// Whether `model` can *think* — i.e. Ollama will accept a request carrying a
-/// reasoning field. A model without it is not merely non-reasoning: Ollama
-/// **rejects the whole request** with `"<model>" does not support thinking`, so
-/// an agent that sends a reasoning effort by default (Codex does — its
-/// `model_reasoning_effort` defaults to `medium`, and the user's own
-/// `~/.codex/config.toml` usually sets it explicitly) dies on its first turn.
-fn model_supports_thinking(model: &str) -> Option<bool> {
-    model_has_capability(model, "thinking")
-}
 
 /// Return detailed info for every locally installed model, cross-referenced
 /// with the running-models list from /api/ps.
@@ -1065,251 +573,6 @@ fn keep_alive_of(
     }
 }
 
-/// Whether an `/api/tags` entry is an Ollama cloud model: one that names the
-/// remote it runs on, or whose tag says so ([`is_cloud_name`]). Nothing about
-/// it is on this machine to load. Pure + tested.
-fn is_remote_entry(entry: &serde_json::Value) -> bool {
-    ["remote_host", "remote_model"]
-        .iter()
-        .any(|k| entry[*k].as_str().is_some_and(|s| !s.trim().is_empty()))
-        || entry["name"].as_str().is_some_and(is_cloud_name)
-}
-
-/// Whether a model *name* is one of Ollama's cloud models by its tag
-/// (`gpt-oss:120b-cloud`, `qwen3-coder:cloud`): a second opinion beside the
-/// list's own `remote_*` fields, so a list that ever stops carrying them
-/// still refuses the name. A copy under another name (`ollama cp`) carries
-/// no such tag — the list's fields catch that one. Pure + tested.
-pub(crate) fn is_cloud_name(model: &str) -> bool {
-    let leaf = model.trim().rsplit('/').next().unwrap_or(model);
-    let tag = leaf.split('@').next().unwrap_or(leaf).split_once(':').map_or("", |(_, t)| t);
-    let tag = tag.to_ascii_lowercase();
-    tag == "cloud" || tag.ends_with("-cloud")
-}
-
-/// The verdict of [`model_is_local_in`] when `/api/tags` could not be read for
-/// want of a server: the 🧠 surface's own sentinel.
-pub(crate) const MODEL_NOT_RUNNING: &str = "not_running";
-
-/// Whether `model` runs on this machine, judged from the `/api/tags` answer
-/// of the endpoint that will run it (gap 25): `Ok` only for a listed model
-/// with no remote — [`installed_match`]'s rule, plus [`is_cloud_name`] before
-/// anything is asked. `Err("model_not_local")` for an Ollama cloud model
-/// (a loopback Ollama forwards it to ollama.com), `Err("model_not_installed")`
-/// for an unlisted name or an unreadable list (fail closed),
-/// `Err(MODEL_NOT_RUNNING)` when nothing answered. Pure + tested.
-pub(crate) fn model_is_local_in(
-    tags: Result<&str, &str>,
-    model: &str,
-) -> Result<(), &'static str> {
-    if is_cloud_name(model) {
-        return Err("model_not_local");
-    }
-    match tags {
-        Ok(body) => installed_match(body, model).map(|_| ()),
-        // No answer at all — nothing listening, or the connection failed or
-        // timed out mid-read — is "not running", never "not installed": the
-        // list was not read, so nothing is known about the model (step 5
-        // review). An error the server answered (`HTTP 500`) still is.
-        Err(e) if e.starts_with(LISTENER_REFUSED) => Err(LISTENER_REFUSED),
-        Err(e) if is_transport_failure(e) => Err(MODEL_NOT_RUNNING),
-        Err(_) => Err("model_not_installed"),
-    }
-}
-
-/// Whether an [`ollama_http_at`] error is the transport's — nothing answered,
-/// or the exchange broke off (`connect_ollama`'s sentinel, the `write:` /
-/// `read:` / `set timeout:` failures) — rather than an error the server sent.
-fn is_transport_failure(err: &str) -> bool {
-    err == MODEL_NOT_RUNNING || ["read: ", "write: ", "set timeout: "].iter().any(|p| err.starts_with(p))
-}
-
-/// The refusal for a tab's model whose alias another installed model shares.
-pub(crate) const MODEL_ALIAS_SHARED: &str = "model_alias_shared";
-
-/// [`model_is_local_in`] for a local-model **tab** (`services::root_mcp`):
-/// also refuses ([`MODEL_ALIAS_SHARED`]) when another model the endpoint lists
-/// has the same alias ([`sanitize_alias`]; `a:b-c` and `a-b:c` share
-/// `a-b-c`). A tab's Vibe home and its read-mail taint are keyed by the alias,
-/// and the home's `config.toml` names whichever of the two was prepared last,
-/// so the tab could be running the other one (step 5 review). Pure + tested.
-pub(crate) fn tab_model_is_local_in(tags: Result<&str, &str>, model: &str) -> Result<(), &'static str> {
-    model_is_local_in(tags, model)?;
-    match tags {
-        Ok(body) if alias_shared_in(body, model) => Err(MODEL_ALIAS_SHARED),
-        _ => Ok(()),
-    }
-}
-
-/// Whether a listed model other than the one `model` names answers to
-/// `model`'s alias — by its full name, or, for a `:latest` entry, by its bare
-/// name (a tab may name `x:latest` as `x`).
-fn alias_shared_in(tags_body: &str, model: &str) -> bool {
-    let model = model.trim();
-    let Ok(matched) = installed_match(tags_body, model) else { return false };
-    let alias = sanitize_alias(model);
-    let Some(entries) = serde_json::from_str::<serde_json::Value>(tags_body)
-        .ok()
-        .and_then(|v| v["models"].as_array().cloned())
-    else {
-        return false;
-    };
-    entries.iter().filter_map(|m| m["name"].as_str()).filter(|n| *n != matched).any(|name| {
-        sanitize_alias(name) == alias || name.strip_suffix(":latest").is_some_and(|bare| sanitize_alias(bare) == alias)
-    })
-}
-
-/// How long a [`model_is_local_at`] verdict is reused. Auto-classify asks for
-/// every new mail; a minute keeps that to one `/api/tags` read per burst.
-const LOCALITY_TTL: Duration = Duration::from_secs(60);
-
-/// [`model_is_local_at`]'s (and [`tab_model_is_local_at`]'s: `tab`) answers per
-/// `(endpoint, model)`, with when they were read. Only a definite verdict is
-/// kept (`Ok`, `model_not_local`): a failed or empty read is asked again next
-/// time, so a server that comes up is seen at once. Pure + tested.
-#[derive(Default)]
-struct LocalityCache(std::collections::HashMap<(String, String, bool), (Instant, Locality)>);
-
-/// One [`model_is_local_in`] verdict.
-type Locality = Result<(), &'static str>;
-
-impl LocalityCache {
-    fn get(&self, addr: &str, model: &str, tab: bool, now: Instant) -> Option<Locality> {
-        self.0
-            .get(&(addr.to_owned(), model.to_owned(), tab))
-            .filter(|(at, _)| now.saturating_duration_since(*at) < LOCALITY_TTL)
-            .map(|(_, verdict)| *verdict)
-    }
-    fn put(&mut self, addr: &str, model: &str, tab: bool, now: Instant, verdict: Locality) {
-        if matches!(verdict, Ok(()) | Err("model_not_local")) {
-            self.0.retain(|_, (at, _)| now.saturating_duration_since(*at) < LOCALITY_TTL);
-            self.0.insert((addr.to_owned(), model.to_owned(), tab), (now, verdict));
-        }
-    }
-}
-
-fn locality_cache() -> &'static std::sync::Mutex<LocalityCache> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<LocalityCache>> = std::sync::OnceLock::new();
-    CACHE.get_or_init(Default::default)
-}
-
-/// [`model_is_local_in`] against the live `/api/tags` of `addr` — an endpoint
-/// the caller already resolved and judged loopback — cached for
-/// [`LOCALITY_TTL`]. The one gate between mail text and a model: the mail
-/// assistant (`services::mail_ai::chat`) and a local-model tab's mail reads
-/// (`services::root_mcp_mail`) both ask it before anything is sent.
-pub(crate) fn model_is_local_at(addr: &str, model: &str) -> Result<(), &'static str> {
-    locality_at(addr, model, false)
-}
-
-/// [`model_is_local_at`] for a local-model tab's recorded model:
-/// [`tab_model_is_local_in`]'s rule (no other installed model shares its
-/// alias), cached the same way.
-pub(crate) fn tab_model_is_local_at(addr: &str, model: &str) -> Result<(), &'static str> {
-    locality_at(addr, model, true)
-}
-
-fn locality_at(addr: &str, model: &str, tab: bool) -> Result<(), &'static str> {
-    let model = model.trim();
-    let judge = if tab { tab_model_is_local_in } else { model_is_local_in };
-    #[cfg(test)]
-    if let Some(tags) = test_tags::current() {
-        return judge(tags.as_deref().map_err(String::as_str), model);
-    }
-    // Before the cache, which would otherwise vouch for a listener that has
-    // since been replaced.
-    if owner_gate(addr).is_err() {
-        return Err(LISTENER_REFUSED);
-    }
-    let now = Instant::now();
-    if let Some(verdict) = locality_cache().lock().unwrap_or_else(|p| p.into_inner()).get(addr, model, tab, now) {
-        return verdict;
-    }
-    let tags = ollama_http_at(addr, "GET", "/api/tags", None, STATUS_READ_TIMEOUT);
-    let verdict = judge(tags.as_deref().map_err(String::as_str), model);
-    locality_cache().lock().unwrap_or_else(|p| p.into_inner()).put(addr, model, tab, now, verdict);
-    verdict
-}
-
-/// What [`model_is_local_at`] reads in place of a live `/api/tags` inside a
-/// test: unset reads as no server (fail closed), so no test ever asks a real
-/// Ollama on the developer's machine. Per thread, like the tests themselves.
-#[cfg(test)]
-pub(crate) mod test_tags {
-    use std::cell::RefCell;
-    thread_local! {
-        static TAGS: RefCell<Option<Result<String, String>>> = const { RefCell::new(None) };
-    }
-    pub(crate) fn current() -> Option<Result<String, String>> {
-        Some(TAGS.with(|t| t.borrow().clone()).unwrap_or_else(|| Err(super::MODEL_NOT_RUNNING.to_owned())))
-    }
-    /// Answer `/api/tags` with `body` on this thread (`None`: nothing answers).
-    pub(crate) fn set(body: Option<&str>) {
-        TAGS.with(|t| *t.borrow_mut() = Some(body.map(str::to_owned).ok_or_else(|| super::MODEL_NOT_RUNNING.to_owned())));
-    }
-    /// Fail `/api/tags` with the transport error `err` on this thread.
-    pub(crate) fn fail(err: &str) {
-        TAGS.with(|t| *t.borrow_mut() = Some(Err(err.to_owned())));
-    }
-}
-
-/// A stand-in for the Ollama HTTP transport inside a test: while a handler is
-/// set on the thread, [`ollama_http_at`] asks it instead of dialing, and every
-/// request is recorded with the address it was sent to. Unset: the transport
-/// behaves as it always does.
-#[cfg(test)]
-pub(crate) mod test_http {
-    use std::cell::RefCell;
-    type Handler = Box<dyn Fn(&str, &str, &str) -> Result<String, String>>;
-    thread_local! {
-        static HANDLER: RefCell<Option<Handler>> = const { RefCell::new(None) };
-        static SEEN: RefCell<Vec<(String, String, String)>> = const { RefCell::new(Vec::new()) };
-    }
-    /// Answer `(addr, method, path)` with `handler` on this thread (`None`: stop).
-    pub(crate) fn set(handler: Option<Handler>) {
-        HANDLER.with(|h| *h.borrow_mut() = handler);
-        SEEN.with(|s| s.borrow_mut().clear());
-    }
-    pub(crate) fn answer(addr: &str, method: &str, path: &str) -> Option<Result<String, String>> {
-        HANDLER.with(|h| {
-            let handler = h.borrow();
-            let handler = handler.as_ref()?;
-            SEEN.with(|s| s.borrow_mut().push((addr.to_owned(), method.to_owned(), path.to_owned())));
-            Some(handler(addr, method, path))
-        })
-    }
-    /// The requests answered so far: `(addr, method, path)`.
-    pub(crate) fn seen() -> Vec<(String, String, String)> {
-        SEEN.with(|s| s.borrow().clone())
-    }
-}
-
-/// The installed model `wanted` names, as `/api/tags` lists it: an exact match,
-/// or `wanted:latest` for an untagged name — never a prefix (`qwen3` is not
-/// `qwen3.5:9b`). `Err("model_not_installed")` when nothing matches (an
-/// unreadable body included: fail closed), `Err("model_not_local")` for a cloud
-/// entry. Returning the *listed* spelling matters: it is the key the load's
-/// progress events carry. Pure + tested.
-fn installed_match(tags_body: &str, wanted: &str) -> Result<String, &'static str> {
-    let tags = serde_json::from_str::<serde_json::Value>(tags_body)
-        .map_err(|_| "model_not_installed")?;
-    let entries = tags["models"].as_array().ok_or("model_not_installed")?;
-    // Untagged means no `:` in the last path segment — a registry's port
-    // (`reg:5000/ns/m`) is not a tag, and a digest ref (`m@sha256:…`) is never
-    // given one.
-    let leaf = wanted.rsplit('/').next().unwrap_or(wanted);
-    let latest = (!leaf.contains(':')).then(|| format!("{wanted}:latest"));
-    let found = entries.iter().find(|m| {
-        m["name"]
-            .as_str()
-            .is_some_and(|n| n == wanted || latest.as_deref() == Some(n))
-    });
-    match found {
-        None => Err("model_not_installed"),
-        Some(m) if is_remote_entry(m) => Err("model_not_local"),
-        Some(m) => Ok(m["name"].as_str().unwrap_or(wanted).to_owned()),
-    }
-}
 
 /// Unload a model from memory without deleting it (sets keep_alive=0).
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2348,8 +1611,8 @@ const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
 /// and bounded by [`REGISTRY_TIMEOUT`]. The `curl` this replaced had no time
 /// limit, so a stalled server held its caller for as long as TCP kept the
 /// connection (code screen B2). `Ok(None)` is an HTTP error status, what
-/// `curl -f` failed on.
-async fn registry_get(url: &str, accept: Option<&str>) -> Result<Option<Vec<u8>>, String> {
+/// `curl -f` failed on. `headers` are sent as given (fixed names and values).
+async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<u8>>, String> {
     crate::services::mail_engine::install_crypto_provider();
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -2359,8 +1622,8 @@ async fn registry_get(url: &str, accept: Option<&str>) -> Result<Option<Vec<u8>>
         .build()
         .map_err(|e| format!("failed to query registry: {e}"))?;
     let mut request = client.get(url);
-    if let Some(accept) = accept {
-        request = request.header(reqwest::header::ACCEPT, accept);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
     }
     let response = request
         .send()
@@ -2384,7 +1647,7 @@ async fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, Strin
     // `validate_model_name` (inside) already restricts the characters that
     // reach the URL.
     let url = registry_manifest_url(model)?;
-    let body = registry_get(&url, Some("application/vnd.docker.distribution.manifest.v2+json"))
+    let body = registry_get(&url, &[("accept", "application/vnd.docker.distribution.manifest.v2+json")])
         .await?
         .ok_or_else(|| format!("registry returned no manifest for {model}"))?;
     serde_json::from_slice(&body).map_err(|e| format!("manifest json: {e}"))
@@ -2400,7 +1663,7 @@ async fn fetch_registry_blob(repo: &str, digest: &str) -> Result<serde_json::Val
         .filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or_else(|| "invalid config digest".to_string())?;
     let url = format!("https://registry.ollama.ai/v2/{repo}/blobs/sha256:{hex}");
-    let body = registry_get(&url, None)
+    let body = registry_get(&url, &[])
         .await?
         .ok_or_else(|| "registry returned no config blob".to_string())?;
     serde_json::from_slice(&body).map_err(|e| format!("config json: {e}"))
@@ -2473,19 +1736,25 @@ pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, S
 // ── Live registry browse (ollama.com/search) ─────────────────────────────────
 //
 // Ollama exposes no JSON catalog API, only its server-rendered search page. It
-// used to carry `x-test-*` hooks, but a 2026 redesign dropped them, so we now
-// key off the one anchor the page has always had: each result card's title
-// links to `/library/<name>`. We fetch it with [`registry_get`] (as
-// `fetch_registry_manifest` does) and parse that. This surfaces *every*
-// model in the registry and
-// supports Ollama's own filters: free-text query, capability filter, sort, and
-// pagination for lazy loading. NB: Ollama provides no country/year metadata, so
-// "recency" comes only from its relative `updated` label and the `newest` sort.
+// used to carry `x-test-*` hooks, but a 2026 redesign dropped them, so we key
+// off the one anchor every result card has: its title links to the model page,
+// `/library/<name>` for an official model or `/<user>/<name>` for a community
+// one, as `<a href="/…" class="group …">`. We fetch it with [`registry_get`]
+// (as `fetch_registry_manifest` does) and parse that. Filtering and ordering
+// are ollama.com's own (`c=` capabilities, all of them; `s=` download size;
+// `o=` sort), so every page arrives already filtered and in order and the
+// frontend can lazy-load page after page. Later pages are served only to an
+// htmx request (`HX-Request: true`); without that header every `page=N` is
+// page 1 again.
 
 /// One model row parsed from an ollama.com/search results page.
 #[derive(serde::Serialize, Clone, PartialEq, Debug)]
 pub struct RegistryModel {
+    /// The pullable name: `gemma4` for an official model, `<user>/<name>` for a
+    /// community one.
     pub name: String,
+    /// A community upload (`<user>/<name>`), not one of Ollama's library models.
+    pub community: bool,
     pub description: String,
     /// Capability badges: e.g. "tools", "vision", "thinking", "embedding", "audio".
     pub capabilities: Vec<String>,
@@ -2493,8 +1762,17 @@ pub struct RegistryModel {
     pub sizes: Vec<String>,
     /// Human pull count as shown, e.g. "65.8K".
     pub pulls: String,
-    /// Relative update label as shown, e.g. "1 week ago".
+    /// Relative update label, e.g. "1 week ago".
     pub updated: String,
+}
+
+/// One page of ollama.com/search results.
+#[derive(serde::Serialize, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistrySearchPage {
+    pub models: Vec<RegistryModel>,
+    /// The page ends in the "load the next page" placeholder: there is more.
+    pub has_more: bool,
 }
 
 /// Percent-encode a search query for safe inclusion in the URL's query string.
@@ -2513,15 +1791,46 @@ fn percent_encode_query(s: &str) -> String {
 }
 
 /// Minimal HTML-entity unescape for the text fragments we extract (names,
-/// descriptions). Covers the entities Ollama's templates actually emit.
+/// descriptions): the named entities Ollama's templates emit and every numeric
+/// one (`&#43;`, `&#x27;`). One pass, so `&amp;lt;` stays `&lt;`.
 fn html_unescape(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&#x27;", "'")
-        .replace("&nbsp;", " ")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let decoded = rest.find(';').filter(|&semi| semi <= 10).and_then(|semi| {
+            let entity = &rest[1..semi];
+            let c = match entity {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some(' '),
+                _ => {
+                    let code = match entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X")) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                        None => entity.strip_prefix('#').and_then(|dec| dec.parse().ok()),
+                    };
+                    code.and_then(char::from_u32)
+                }
+            };
+            c.map(|c| (c, semi))
+        });
+        match decoded {
+            Some((c, semi)) => {
+                out.push(c);
+                rest = &rest[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Text content right after an attribute marker: find `marker`, then the next
@@ -2595,69 +1904,159 @@ fn value_after_label(card: &str, label: &str) -> Option<String> {
     Some(html_unescape(rest[gt + 1..gt + 1 + lt].trim()))
 }
 
-/// Parse the ollama.com/search HTML into model rows. Pure + tested: each result
-/// card's title links to `/library/<name>`, so we split on that href — the one
-/// anchor the page has always had, unlike the `x-test-*` hooks it dropped in a
-/// 2026 redesign. The first chunk is the page chrome before any card, so skip it.
-fn parse_search_html(html: &str) -> Vec<RegistryModel> {
-    html.split("href=\"/library/")
+/// The pull count of a card. The current page carries it as
+/// `<span title="27,871,499 downloads"><svg…/><span >27.9M</span></span>`; the
+/// layout before it as `<span >65.8K</span><span>&nbsp;Pulls</span>`.
+fn card_pulls(card: &str) -> Option<String> {
+    let marker = ["downloads\"", "download\""]
+        .into_iter()
+        .find_map(|m| card.find(m).map(|i| i + m.len()));
+    match marker {
+        Some(i) => {
+            let rest = &card[i..];
+            let close = rest.find("</span>")?;
+            let gt = rest[..close].rfind('>')?;
+            Some(html_unescape(rest[gt + 1..close].trim()))
+        }
+        None => value_before_label(card, "Pulls"),
+    }
+}
+
+/// The update label of a card, in the long form the frontend sorts by
+/// ("1 week ago"). The current page shows a short one (`1w`, `2mo`) inside
+/// `<span title="Updated October 12, 2026">`; the layout before it the long form
+/// after an `Updated` label.
+fn card_updated(card: &str) -> Option<String> {
+    match tag_text_after(card, "title=\"Updated ") {
+        Some(short) => Some(long_age_label(&short)),
+        None => value_after_label(card, "Updated"),
+    }
+}
+
+/// `1w` → "1 week ago", `2mo` → "2 months ago"; anything else unchanged.
+fn long_age_label(short: &str) -> String {
+    let digits = short.chars().take_while(|c| c.is_ascii_digit()).count();
+    let (num, unit) = short.split_at(digits);
+    let unit = match unit.trim() {
+        "s" => "second",
+        "m" | "min" => "minute",
+        "h" => "hour",
+        "d" => "day",
+        "w" => "week",
+        "mo" => "month",
+        "y" => "year",
+        _ => return short.to_string(),
+    };
+    match num.parse::<u32>() {
+        Ok(1) => format!("1 {unit} ago"),
+        Ok(n) => format!("{n} {unit}s ago"),
+        Err(_) => short.to_string(),
+    }
+}
+
+/// The model path a result card's title links to — `library/gemma4`,
+/// `someone/gemma4-coder` — taken from `<a href="/<path>" class="group …">`.
+/// Only a two-part path counts: a link to one of the page's own pages
+/// (`/search`, `/pricing`) is not a model.
+fn card_path(chunk: &str) -> Option<&str> {
+    let end = chunk.find('"')?;
+    let path = &chunk[..end];
+    let rest = chunk[end + 1..].trim_start();
+    if !rest.starts_with("class=\"group") {
+        return None;
+    }
+    let (owner, name) = path.split_once('/')?;
+    let part_ok = |p: &str| {
+        !p.is_empty()
+            && p != "."
+            && p != ".."
+            && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    (part_ok(owner) && part_ok(name)).then_some(path)
+}
+
+/// Parse an ollama.com/search page (or the htmx fragment a later page is) into
+/// model rows. Pure + tested. A card is a list item, cut at its `</li>` so no
+/// card takes in the badges of the cards after it, whose first link is a
+/// [`card_path`] anchor.
+fn parse_search_html(html: &str) -> RegistrySearchPage {
+    let models = html
+        .split("<li")
         .skip(1)
-        .filter_map(|card| {
-            // The name is the href slug, up to the closing quote.
-            let name_end = card.find('"')?;
-            let name = html_unescape(card[..name_end].trim());
-            if name.is_empty() {
-                return None;
-            }
-            // Description is the first <p> with the max-w-lg class.
-            let description = tag_text_after(card, "class=\"max-w-lg").unwrap_or_default();
+        .filter_map(|item| {
+            let card = item.split("</li>").next().unwrap_or(item);
+            let (_, anchor) = card.split_once("<a href=\"/")?;
+            let path = card_path(anchor)?;
+            let (name, community) = match path.strip_prefix("library/") {
+                Some(official) => (official.to_string(), false),
+                None => (path.to_string(), true),
+            };
+            // The description is the card's first <p> (the `max-w-lg` one in
+            // the layout before the current one).
+            let description = tag_text_after(card, "class=\"max-w-lg")
+                .or_else(|| tag_text_after(card, "<p "))
+                .unwrap_or_default();
             let (sizes, capabilities): (Vec<String>, Vec<String>) = badge_texts(card)
                 .into_iter()
                 .partition(|b| looks_like_size(b));
             Some(RegistryModel {
                 name,
+                community,
                 description,
                 capabilities,
                 sizes,
-                pulls: value_before_label(card, "Pulls").unwrap_or_default(),
-                updated: value_after_label(card, "Updated").unwrap_or_default(),
+                pulls: card_pulls(card).unwrap_or_default(),
+                updated: card_updated(card).unwrap_or_default(),
             })
         })
-        .collect()
+        .collect();
+    RegistrySearchPage {
+        models,
+        has_more: html.contains("hx-get=\"/search?page="),
+    }
 }
 
-/// Browse the full Ollama registry via its search page. Returns one page
-/// (~20 rows) of results so the frontend can lazy-load; an empty vec means no
-/// more pages. `capability` filters by a single capability ("" = any);
-/// `sort` is "newest" or anything else (popular, the default). `page` is 1-based.
+/// The ollama.com/search URL for one page. Only values ollama.com offers pass
+/// through, so nothing else reaches the query string: `capabilities` are its
+/// `c=` filters (a model must have all of them; `local`/`cloud` say where it
+/// runs), `size` its download-size cap (`s=`), `sort` its order (`o=`).
+fn search_url(query: &str, capabilities: &[String], size: &str, sort: &str, page: u32) -> String {
+    const CAPS: [&str; 7] = ["tools", "vision", "thinking", "embedding", "audio", "local", "cloud"];
+    const SIZES: [&str; 5] = ["8", "16", "32", "64", "over64"];
+    const SORTS: [&str; 2] = ["newest", "name"];
+    let mut url = format!(
+        "https://ollama.com/search?q={}&page={}",
+        percent_encode_query(query.trim()),
+        page.max(1)
+    );
+    for cap in CAPS.iter().filter(|c| capabilities.iter().any(|w| w == *c)) {
+        url.push_str(&format!("&c={cap}"));
+    }
+    if SIZES.contains(&size) {
+        url.push_str(&format!("&s={size}"));
+    }
+    if SORTS.contains(&sort) {
+        url.push_str(&format!("&o={sort}"));
+    }
+    url
+}
+
+/// Browse the full Ollama registry via its search page, one page (~20 rows) at
+/// a time so the frontend can lazy-load. See [`search_url`] for the filters;
+/// `page` is 1-based.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn search_ollama_registry(
     query: String,
-    capability: String,
+    capabilities: Vec<String>,
+    size: String,
     sort: String,
     page: u32,
-) -> Result<Vec<RegistryModel>, String> {
-    let page = page.max(1);
-    let mut url = format!(
-        "https://ollama.com/search?q={}&page={page}",
-        percent_encode_query(query.trim())
-    );
-    // Only forward a capability we recognise, so we never inject arbitrary params.
-    const CAPS: [&str; 6] = ["tools", "vision", "thinking", "embedding", "audio", "cloud"];
-    if CAPS.contains(&capability.as_str()) {
-        url.push_str(&format!("&c={capability}"));
-    }
-    if sort == "newest" {
-        url.push_str("&o=newest");
-    }
-
-    // The URL is built only from a validated capability/sort and a
-    // percent-encoded query.
-    let body = registry_get(&url, None)
+) -> Result<RegistrySearchPage, String> {
+    let url = search_url(&query, &capabilities, &size, &sort, page);
+    let body = registry_get(&url, &[("hx-request", "true")])
         .await?
         .ok_or_else(|| "ollama.com search request failed".to_string())?;
-    let html = String::from_utf8_lossy(&body);
-    Ok(parse_search_html(&html))
+    Ok(parse_search_html(&String::from_utf8_lossy(&body)))
 }
 
 /// Three-state health of the local Ollama server for the header status lamp:
@@ -3016,72 +2415,6 @@ fn ollama_listening() -> bool {
 
 // ── What Tabtivity started, and therefore may stop ───────────────────────────
 
-/// How the Ollama server currently answering came to be running — recorded by
-/// [`ensure_ollama_running`] and read by nothing but [`shutdown_owned_server`].
-///
-/// The whole point is the *absence* of a third variant: a server that was
-/// already listening when Tabtivity asked, or one running on another machine, is
-/// never recorded, so exit-time teardown cannot reach it. Ollama is a machine
-/// service as often as it is a Tabtivity detail — a terminal running `ollama run`,
-/// another editor's completion plugin, a unit the user enabled at boot — and
-/// killing one Tabtivity merely *used* would take those down with it.
-enum OwnedServer {
-    /// An `ollama serve` this process spawned (`spawn_reaped`, so the pid is
-    /// ours and its subtree is walkable).
-    Process(u32),
-    /// The systemd unit, which was **inactive** until this run started it. Only
-    /// recorded on Linux and only for the default address — the same two
-    /// conditions under which it is started.
-    #[cfg(target_os = "linux")]
-    SystemdUnit,
-}
-
-static OWNED_SERVER: std::sync::Mutex<Option<OwnedServer>> = std::sync::Mutex::new(None);
-
-fn record_owned_server(owned: OwnedServer) {
-    if let Ok(mut slot) = OWNED_SERVER.lock() {
-        // A previous entry can only be a server that has since died (we reach
-        // the start paths at all only when nothing is listening), so replacing
-        // it is right: the live one is the one worth stopping.
-        *slot = Some(owned);
-    }
-}
-
-/// Stop the Ollama server **this run started**, if any. Called once from
-/// `RunEvent::Exit`; a server Tabtivity only talked to is left alone (see
-/// [`OwnedServer`]).
-///
-/// A spawned server is TERMed with its whole subtree — the `ollama runner` child
-/// holding the weights is a separate process, and it is the one actually sitting
-/// on several GB of VRAM — and given a short blocking grace before SIGKILL, so
-/// the ordinary case is a clean shutdown rather than a killed server that leaves
-/// its runner behind. The unit is stopped with `--no-block`: exit must not wait
-/// on systemd's job queue, and the elevation was already granted on the start
-/// that this undoes.
-pub fn shutdown_owned_server() {
-    let owned = match OWNED_SERVER.lock() {
-        Ok(mut slot) => slot.take(),
-        Err(_) => return,
-    };
-    match owned {
-        None => {}
-        Some(OwnedServer::Process(pid)) => {
-            crate::terminal::reap_child_subtree(
-                pid,
-                crate::terminal::ReapMode::GracefulBlocking(Duration::from_millis(1500)),
-            );
-        }
-        #[cfg(target_os = "linux")]
-        Some(OwnedServer::SystemdUnit) => {
-            let _ = std::process::Command::new("systemctl")
-                .args(["stop", "--no-block", "ollama"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-        }
-    }
-}
-
 /// Whether the systemd unit is already active. Asked *before* `systemctl start`
 /// so ownership is recorded only when this run genuinely brought the unit up: a
 /// unit that was active but not answering at the address we were waiting on (a
@@ -3310,23 +2643,6 @@ fn system_ollama_models_dir() -> Option<std::path::PathBuf> {
     None
 }
 
-/// The names `/api/tags` lists, synchronously, answered within `read_timeout`
-/// (after the bounded connect), or an error — the dispatcher's model allowlist
-/// (`services::model_allowlist`) asks before a request is forwarded.
-pub(crate) fn installed_model_names_within(read_timeout: Duration) -> Result<Vec<String>, String> {
-    let body = ollama_http_within("GET", "/api/tags", None, read_timeout)?;
-    let v: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("ollama json: {e}"))?;
-
-    let models = v["models"]
-        .as_array()
-        .ok_or("no models field in ollama response")?;
-
-    Ok(models
-        .iter()
-        .filter_map(|m| Some(m["name"].as_str()?.to_owned()))
-        .collect())
-}
 
 // ── Local code/text autocomplete (TODO Group M #45) ──────────────────────────
 //
@@ -4085,427 +3401,7 @@ pub async fn ensure_vibe_ollama_model(model: String) -> Result<String, String> {
     Ok(alias)
 }
 
-// ── Local-model coding agents (ollama launch + fallbacks) ─────────────────────
-//
-// Beyond Mistral's `vibe` (see `prepare_local_agent`), the single active local
-// Ollama model can drive other coding agents. The preferred path is Ollama's own
-// `ollama launch <agent> --model <model>` (shipped v0.15): it wires Claude Code,
-// Codex, Droid, OpenClaw, Pi and Cline to the local server — including Claude Code's
-// Anthropic-compatible endpoint, which we can't hand-roll the way vibe gets an
-// OpenAI one. When `ollama launch` is unavailable we fall back to a direct
-// invocation for the agents that natively accept a local Ollama endpoint.
 
-/// A coding agent that can drive the local Ollama model.
-#[derive(Clone, Copy)]
-struct LocalDriver {
-    /// Stable id used by the frontend picker and `prepare_local_launch`.
-    id: &'static str,
-    /// Human-readable label.
-    label: &'static str,
-    /// The agent's own binary name. The driver is only offered when this is
-    /// actually installed — `ollama launch <sub>` still drives the agent's CLI,
-    /// so a missing binary means the tab can't run regardless of `launch`.
-    bin: &'static str,
-    /// `ollama launch <sub> --model <model>` subcommand, when supported.
-    launch_sub: Option<&'static str>,
-    /// Direct fallback when `ollama launch` is unavailable: the binary to spawn
-    /// and its args (with the `{model}` placeholder substituted). `None` means
-    /// the agent can only be wired up by `ollama launch` itself.
-    fallback: Option<(&'static str, &'static [&'static str])>,
-    /// True when the agent drives the model through **tool/function calls**, so
-    /// a model with no `tools` capability cannot run it at all — Ollama refuses
-    /// the very first request with `does not support tools` and the tab is dead
-    /// on arrival. Every entry below is `true`, because every entry is a coding
-    /// agent; the flag is explicit rather than assumed because `vibe` — which is
-    /// deliberately *not* in this list — takes the opposite route and turns
-    /// tools off (`enabled_tools = ["__no_tools__"]` in `prepare_local_agent`),
-    /// which is exactly why it still works on a completion-only model.
-    needs_tools: bool,
-    /// Extra **fallback** args that switch the agent's reasoning off, for the
-    /// agents that send a reasoning effort whether or not the model can take
-    /// one. `Some` carries a second meaning that matters more than the args:
-    /// this driver must **bypass `ollama launch`** on a model with no
-    /// `thinking` capability. An older `ollama launch <agent>` forwarded
-    /// nothing — it rejected any extra flag with `unknown shorthand flag` (0.34
-    /// passes args after `--`, which nothing here relies on yet) — so the
-    /// override rides only the direct invocation, and `launch`'s own wiring (a
-    /// generated `~/.codex/model.json` + profile) does not turn reasoning off
-    /// on the user's behalf. `None` means the agent sends no reasoning field
-    /// and runs on a non-thinking model unchanged.
-    non_thinking_args: Option<&'static [&'static str]>,
-    /// True when the agent needs a **model-metadata catalog** written for it on
-    /// the direct-invocation path — the other thing `ollama launch` was doing
-    /// (it generates `~/.codex/model.json` and points Codex at it). Without one
-    /// Codex falls back to built-in metadata and reasons about the context
-    /// window from a guess. See [`write_local_catalog`].
-    wants_local_catalog: bool,
-    /// True when the agent wraps every turn in a **large system prompt built for
-    /// a frontier model** — tool schemas, sandbox and patch policy, the user's
-    /// own `~/.codex` / `~/.claude` configuration and any MCP servers declared
-    /// there. It is not a capability the model reports and there is no probe for
-    /// it; it is a property of the *agent*, which is why it lives in this
-    /// registry beside the launch wiring rather than being derived.
-    ///
-    /// It exists because the `tools` gate above is a gate against a tab that
-    /// **cannot start**, and this is the other failure — a tab that starts and
-    /// then answers badly. Measured on `qwen3-coder:latest`, which reports
-    /// `tools` and passes every other check here: the plain Ollama chat endpoint
-    /// answers `"test"` sensibly in 27 tokens, while Codex's harness put 5128
-    /// tokens in front of the same model and it ran away past 4100 tokens
-    /// without stopping. Nothing about the model's advertised capabilities
-    /// predicts that.
-    ///
-    /// It is deliberately **not** a reason to withhold the driver. Which local
-    /// models cope is a fact about the model, the machine and the task, and the
-    /// only honest thing to do with an unprobeable risk is to say so and let the
-    /// user try it — the alternative, hiding the agent, is what the `thinking`
-    /// capability was considered for and rejected: no model on the reporting
-    /// machine carried both `tools` and `thinking`, so gating on it would have
-    /// emptied the group entirely rather than steered anyone to a better model.
-    ///
-    /// Most entries are `true`: general-purpose coding-agent CLIs written
-    /// against hosted frontier models. OpenCode is `false` — it is
-    /// provider-agnostic and drives local models well, which is also why it
-    /// heads the picker, ahead of Mistral's `vibe` (built for local models, and
-    /// *not* in this list because it keeps its own launch path).
-    heavy_harness: bool,
-}
-
-/// Registry of local-model coding agents, in picker order (the light-harness
-/// ones are offered ahead of Mistral, the rest after it). `vibe` is intentionally
-/// absent — it keeps its bespoke per-model VIBE_HOME path in `prepare_local_agent`.
-const LOCAL_DRIVERS: &[LocalDriver] = &[
-    LocalDriver {
-        id: "opencode",
-        label: "OpenCode",
-        bin: "opencode",
-        // Never `ollama launch`: it sets its own `OPENCODE_CONFIG_CONTENT`
-        // (clobbering the loaded-models list `pty_spawn` hands every OpenCode —
-        // see `opencode_loaded_models_config`) and appends each launched model
-        // to the user's opencode.jsonc for good.
-        launch_sub: None,
-        // The `ollama` provider — named by the user's config or by the inline
-        // one `pty_spawn` injects; `--model ollama/<model>` selects it.
-        fallback: Some(("opencode", &["--model", "ollama/{model}"])),
-        needs_tools: true,
-        non_thinking_args: None,
-        wants_local_catalog: false,
-        heavy_harness: false,
-    },
-    LocalDriver {
-        id: "pi",
-        label: "Pi",
-        bin: "pi",
-        // `ollama launch pi` writes Pi's `models.json` provider (with
-        // `reasoning` only for a thinking model) into the tab's local-model
-        // home; no hand-rolled fallback, since none could be verified.
-        launch_sub: Some("pi"),
-        fallback: None,
-        needs_tools: true,
-        non_thinking_args: None,
-        wants_local_catalog: false,
-        // A short system prompt and four tools: built to cope with small models.
-        heavy_harness: false,
-    },
-    LocalDriver {
-        id: "claude",
-        label: "Claude Code",
-        bin: "claude",
-        launch_sub: Some("claude"),
-        // Claude Code needs an Anthropic-compatible endpoint, which only
-        // `ollama launch` stands up — no reliable hand-rolled fallback.
-        fallback: None,
-        needs_tools: true,
-        non_thinking_args: None,
-        wants_local_catalog: false,
-        heavy_harness: true,
-    },
-    LocalDriver {
-        id: "codex",
-        label: "Codex",
-        bin: "codex",
-        launch_sub: Some("codex"),
-        // `codex --oss -m <model>` talks to the local Ollama server directly.
-        // `oss_provider` is named because Codex ≥0.146 refuses `--oss` with
-        // "No default OSS provider configured" unless one is set; it goes
-        // through `-c` rather than the `--local-provider` flag that error
-        // suggests, because an unknown *config key* is ignored by an older
-        // Codex while an unknown *flag* is a hard argv error.
-        fallback: Some((
-            "codex",
-            &["--oss", "-c", "oss_provider=\"ollama\"", "-m", "{model}"],
-        )),
-        needs_tools: true,
-        non_thinking_args: Some(&["-c", "model_reasoning_effort=\"none\""]),
-        wants_local_catalog: true,
-        heavy_harness: true,
-    },
-    LocalDriver {
-        id: "droid",
-        label: "Droid",
-        bin: "droid",
-        launch_sub: Some("droid"),
-        // Droid is configured via ~/.factory/config.json; only `ollama launch`
-        // writes that wiring for us.
-        fallback: None,
-        needs_tools: true,
-        non_thinking_args: None,
-        wants_local_catalog: false,
-        heavy_harness: true,
-    },
-    LocalDriver {
-        id: "openclaw",
-        label: "OpenClaw",
-        bin: "openclaw",
-        launch_sub: Some("openclaw"),
-        // Launch-only: `ollama launch openclaw` installs OpenClaw if missing and
-        // stands up its gateway against the local Ollama endpoint. There's no
-        // documented standalone flag to point `openclaw` at a local server, so
-        // no hand-rolled fallback.
-        fallback: None,
-        needs_tools: true,
-        non_thinking_args: None,
-        wants_local_catalog: false,
-        heavy_harness: true,
-    },
-    LocalDriver {
-        id: "cline",
-        label: "Cline",
-        bin: "cline",
-        // `ollama launch cline` merges an `ollama` provider into Cline's
-        // `providers.json` — its login file, per scope since 2026-10-08; a
-        // local-model home still never feeds the login store
-        // (`agent_auth::reconcile_file`).
-        launch_sub: Some("cline"),
-        fallback: None,
-        needs_tools: true,
-        non_thinking_args: None,
-        wants_local_catalog: false,
-        heavy_harness: true,
-    },
-];
-
-/// True when the installed Ollama exposes the `launch` subcommand (v0.15+).
-/// Cheap probe: `ollama launch --help` exits 0 only when the subcommand exists.
-fn ollama_has_launch() -> bool {
-    crate::paths::command_no_window("ollama")
-        .args(["launch", "--help"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Build the fallback launch spec for a driver, substituting `{model}` and
-/// appending `extra` (the reasoning-off override, when one is needed). Pure +
-/// tested; `prepare_local_launch` uses it when `ollama launch` is missing — or
-/// when `extra` is non-empty, since `launch` cannot carry it.
-fn fallback_spec(driver: &LocalDriver, model: &str, extra: &[&str]) -> Option<LocalLaunchSpec> {
-    driver.fallback.map(|(bin, args)| LocalLaunchSpec {
-        cmd: bin.to_string(),
-        args: args
-            .iter()
-            .chain(extra.iter())
-            .map(|a| a.replace("{model}", model))
-            .collect(),
-    })
-}
-
-/// Whether `cmd args` is a launch line [`prepare_local_launch`] can have
-/// produced for `driver` and `model` — the check a persisted local-model tab
-/// (`localLaunch` in `terminals.json`) passes before a restore may run it again
-/// (`services::terminal_service`), and before the phone may attach to it
-/// (`services::mobile_control::discovery`).
-///
-/// It enumerates the forms instead of re-resolving: `ollama launch`, the direct
-/// fallback with or without the reasoning-off override, and Codex's catalog
-/// pair after either. So it probes nothing, and a line written while
-/// `ollama launch` existed stays valid after a downgrade — it then fails at
-/// spawn, exactly as a fresh launch would. A model that could read as a flag
-/// is refused although `validate_model_name` lets a leading `-` through.
-pub(crate) fn local_launch_line_ok(driver: &str, model: &str, cmd: &str, args: &[String]) -> bool {
-    let Some(driver) = LOCAL_DRIVERS.iter().find(|d| d.id == driver) else {
-        return false;
-    };
-    if validate_model_name(model).is_err() || model != model.trim() || model.starts_with('-') {
-        return false;
-    }
-    if let Some(sub) = driver.launch_sub {
-        if cmd == "ollama" && args == ["launch", sub, "--model", model] {
-            return true;
-        }
-        // No `--` tail is accepted here, whatever the scope: the chat
-        // assistant's pinned tail (`services::assistant::claude_local_tail_ok`)
-        // is built and checked by the assistant's own launch path, against the
-        // lane that spawn was granted. A persisted `localLaunch` of a project
-        // tab must match the plain line exactly.
-    }
-    let catalog = driver
-        .wants_local_catalog
-        .then(|| catalog_arg_pair(&local_catalog_path(model)));
-    [&[][..], driver.non_thinking_args.unwrap_or(&[])]
-        .iter()
-        .filter_map(|extra| fallback_spec(driver, model, extra))
-        .any(|spec| {
-            spec.cmd == cmd
-                && (args == spec.args
-                    || catalog.as_ref().is_some_and(|pair| {
-                        args.len() == spec.args.len() + pair.len()
-                            && args[..spec.args.len()] == spec.args[..]
-                            && args[spec.args.len()..] == pair[..]
-                    }))
-        })
-}
-
-/// The CLI a local driver runs (`claude` for `"claude"`), for naming the agent
-/// of a persisted local-model tab whose own `cmd` may be `ollama`.
-pub(crate) fn local_driver_bin(driver: &str) -> Option<&'static str> {
-    LOCAL_DRIVERS.iter().find(|d| d.id == driver).map(|d| d.bin)
-}
-
-/// The launch line of local `driver` for `model` as [`prepare_local_launch`]
-/// builds it, without its probes (installed `ollama launch`, the model's tool
-/// and thinking capabilities): `ollama launch <sub> --model <m>` for a driver
-/// that has one, else the direct fallback with no reasoning override. `None`
-/// for an unknown driver, one with neither form, or a model
-/// [`local_launch_line_ok`] would refuse. The chat assistant builds its line
-/// from this instead of copying the driver table (`services::assistant`).
-pub(crate) fn pinned_local_line(driver: &str, model: &str) -> Option<LocalLaunchSpec> {
-    let driver = LOCAL_DRIVERS.iter().find(|d| d.id == driver)?;
-    if !model_name_ok(model) {
-        return None;
-    }
-    if let Some(sub) = driver.launch_sub {
-        return Some(LocalLaunchSpec {
-            cmd: "ollama".to_string(),
-            args: ["launch", sub, "--model", model].map(str::to_string).to_vec(),
-        });
-    }
-    fallback_spec(driver, model, &[])
-}
-
-/// Whether `model` is a name Tabtivity passes to an agent CLI as a discrete
-/// argument: [`validate_model_name`]'s character set, no surrounding space
-/// and no leading `-` (which a CLI would read as a flag).
-pub(crate) fn model_name_ok(model: &str) -> bool {
-    validate_model_name(model).is_ok() && model == model.trim() && !model.starts_with('-')
-}
-
-/// The extra args this driver needs for `model`, and whether they force the
-/// direct invocation. Pure so the rule is testable without an Ollama:
-/// `thinking` is the already-narrowed [`model_supports_thinking`] answer, so
-/// "could not tell" arrives as `None` and changes nothing — an agent that
-/// errors is recoverable, one silently stripped of reasoning is not.
-fn non_thinking_override(driver: &LocalDriver, thinking: Option<bool>) -> &[&'static str] {
-    match (driver.non_thinking_args, thinking) {
-        (Some(args), Some(false)) => args,
-        _ => &[],
-    }
-}
-
-// ── OpenCode: the loaded Ollama models, handed over at launch ─────────────────
-//
-// OpenCode's `ollama` provider lists whatever models its config names — a list
-// that goes stale the moment another model is loaded (`ollama launch opencode`
-// appends to it and never prunes). Tabtivity never edits OpenCode's config, so an
-// OpenCode spawn gets `OPENCODE_CONFIG_CONTENT` instead: an inline config
-// OpenCode deep-merges over the user's own, naming the models resident in
-// Ollama right now and whitelisting only those.
-
-/// The model an OpenCode spawn asks for, or `None` when `cmd`/`args` do not
-/// start OpenCode at all. The inner `Option` is the requested **Ollama** model
-/// — `opencode --model ollama/<m>` (the direct fallback) or `ollama launch
-/// opencode --model <m>` — which is whitelisted even when not loaded yet, since
-/// Ollama loads it on the first request and hiding it would kill the tab.
-pub(crate) fn opencode_spawn_model(cmd: &str, args: &[String]) -> Option<Option<String>> {
-    let bin = std::path::Path::new(cmd)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(cmd);
-    let via_launch = match bin {
-        "opencode" => false,
-        "ollama" if args.first().map(String::as_str) == Some("launch")
-            && args.get(1).map(String::as_str) == Some("opencode") =>
-        {
-            true
-        }
-        _ => return None,
-    };
-    let model = args.iter().enumerate().find_map(|(i, a)| {
-        a.strip_prefix("--model=")
-            .map(str::to_string)
-            .or_else(|| (a == "--model" || a == "-m").then(|| args.get(i + 1).cloned()).flatten())
-    });
-    Some(model.and_then(|m| {
-        if via_launch {
-            Some(m)
-        } else {
-            m.strip_prefix("ollama/").map(str::to_string)
-        }
-    }))
-}
-
-/// Model names from an `/api/ps` body, or `None` when the body is not one.
-fn loaded_model_names(ps_body: &str) -> Option<Vec<String>> {
-    let v = serde_json::from_str::<serde_json::Value>(ps_body).ok()?;
-    Some(
-        v["models"]
-            .as_array()?
-            .iter()
-            .filter_map(|m| m["name"].as_str().or_else(|| m["model"].as_str()))
-            .map(str::to_string)
-            .collect(),
-    )
-}
-
-/// The inline OpenCode config: the `ollama` provider pointed at `addr`, carrying
-/// `loaded` (plus `requested`) as its models and whitelisting exactly those, so
-/// models the user's config names but Ollama has not loaded drop out of the
-/// picker. An empty list is kept deliberately: nothing loaded means no Ollama
-/// models to offer. Pure + tested.
-fn opencode_ollama_config(addr: &str, loaded: &[String], requested: Option<&str>) -> String {
-    let mut names: Vec<&str> = loaded.iter().map(String::as_str).collect();
-    if let Some(r) = requested.filter(|r| !r.is_empty() && !names.contains(r)) {
-        names.push(r);
-    }
-    let models: serde_json::Map<String, serde_json::Value> = names
-        .iter()
-        .map(|n| (n.to_string(), serde_json::json!({ "name": n })))
-        .collect();
-    serde_json::json!({
-        "provider": {
-            "ollama": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "Ollama (local)",
-                "options": { "baseURL": format!("http://{addr}/v1") },
-                "models": models,
-                "whitelist": names,
-            }
-        }
-    })
-    .to_string()
-}
-
-/// `OPENCODE_CONFIG_CONTENT` for an OpenCode spawn asking for `requested`, or
-/// `None` when Ollama cannot be asked — an unreachable server leaves the user's
-/// own config alone rather than emptying its model list on a guess.
-pub(crate) fn opencode_loaded_models_config(requested: Option<&str>) -> Option<String> {
-    let loaded = loaded_model_names(&ollama_status_read("/api/ps").ok()?)?;
-    let addr = ollama_addr().ok()?;
-    Some(opencode_ollama_config(&addr, &loaded, requested))
-}
-
-/// The inline OpenCode config an assistant chat merges its own settings into:
-/// [`opencode_loaded_models_config`], or — when Ollama cannot be asked — the
-/// same `ollama` provider block with no loaded models and `requested` alone,
-/// since the assistant home holds no config of the user's to fall back on.
-pub(crate) fn opencode_assistant_provider(requested: &str) -> String {
-    opencode_loaded_models_config(Some(requested)).unwrap_or_else(|| {
-        let addr = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
-        opencode_ollama_config(&addr, &[], Some(requested))
-    })
-}
 
 /// One local-model driver plus whether Tabtivity currently has a way to launch it.
 #[derive(serde::Serialize)]
@@ -4607,12 +3503,6 @@ fn driver_verdict(needs_tools: bool, wireable: bool, model_lacks_tools: bool) ->
     (wireable && !blocked_by_model, wireable && blocked_by_model)
 }
 
-/// The command + args to spawn for a local-model agent tab.
-#[derive(serde::Serialize)]
-pub struct LocalLaunchSpec {
-    pub cmd: String,
-    pub args: Vec<String>,
-}
 
 /// Resolve how to drive the local Ollama `model` through `agent` (one of the
 /// [`LOCAL_DRIVERS`] ids). Prefers `ollama launch <agent> --model <model>`; falls
@@ -4701,171 +3591,7 @@ fn local_launch(agent: String, model: String) -> Result<LocalLaunchSpec, String>
     Ok(spec)
 }
 
-/// The catalog `-c` args for a direct Codex launch, or nothing if we couldn't
-/// write one. See [`write_local_catalog`].
-fn local_catalog_args(model: &str, thinking: Option<bool>) -> Vec<String> {
-    match write_local_catalog(model, thinking) {
-        Ok(path) => catalog_arg_pair(&path),
-        Err(_) => Vec::new(),
-    }
-}
 
-/// `-c model_catalog_json=<toml string>` for `path`. A JSON string literal is
-/// a valid TOML basic string, and serde does the escaping — the path is
-/// Tabtivity's own but it descends from `$HOME`, which we do not get to assume is
-/// free of quotes or backslashes.
-pub(crate) fn catalog_arg_pair(path: &std::path::Path) -> Vec<String> {
-    vec![
-        "-c".to_string(),
-        format!(
-            "model_catalog_json={}",
-            serde_json::Value::from(path.to_string_lossy().as_ref())
-        ),
-    ]
-}
-
-/// Where [`write_local_catalog`] keeps `model`'s catalog.
-fn local_catalog_path(model: &str) -> std::path::PathBuf {
-    crate::storage::home_share_dir()
-        .join("codex_local")
-        .join(sanitize_alias(model))
-        .join("model.json")
-}
-
-/// Write the model-metadata catalog Codex asks for, into **Tabtivity's own** state
-/// dir — never `~/.codex`, which is another application's to manage.
-///
-/// Without it Codex prints `Model metadata for '<model>' not found. Defaulting
-/// to fallback metadata` and then reasons about the context window from a
-/// built-in guess: it does not know that `qwen3-coder` holds 262 144 tokens, so
-/// it compacts against the wrong number — either throwing away context that
-/// still fit, or overrunning the model's window and getting a truncation Ollama
-/// never reports back as one. `ollama launch` generates exactly this file
-/// (`~/.codex/model.json`); the direct invocation that a non-thinking model
-/// forces us onto is what left the agent without it.
-///
-/// The field set is Ollama's own for that generated file — the shape its
-/// authors established Codex accepts — with the two model-dependent facts read
-/// off `/api/show` rather than assumed: the context window, and whether any
-/// reasoning level may be offered at all.
-fn write_local_catalog(model: &str, thinking: Option<bool>) -> Result<std::path::PathBuf, String> {
-    validate_model_name(model)?;
-    let path = local_catalog_path(model);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("catalog dir: {e}"))?;
-    }
-
-    let body = local_catalog_json(
-        model,
-        thinking,
-        model_context_length(model),
-        model_has_capability(model, "vision") == Some(true),
-    );
-    std::fs::write(&path, body).map_err(|e| format!("catalog write: {e}"))?;
-    Ok(path)
-}
-
-/// The catalog document itself — pure, so the shape Codex is handed is a unit
-/// test rather than a thing only observable by launching an agent.
-fn local_catalog_json(
-    model: &str,
-    thinking: Option<bool>,
-    context_window: Option<u64>,
-    vision: bool,
-) -> String {
-    // A model positively known to lack `thinking` gets an empty level list, so
-    // Codex has the fact rather than only the `-c model_reasoning_effort` order
-    // to obey. "Could not tell" leaves the standard levels, matching the rest
-    // of the capability rules: absence of an answer never removes a capability.
-    let levels: Vec<serde_json::Value> = if thinking == Some(false) {
-        Vec::new()
-    } else {
-        ["low", "medium", "high"]
-            .iter()
-            .map(|e| serde_json::json!({ "effort": e }))
-            .collect()
-    };
-    let mut modalities = vec!["text"];
-    if vision {
-        modalities.push("image");
-    }
-
-    let mut entry = serde_json::json!({
-        "slug": model,
-        "display_name": model,
-        "base_instructions": "",
-        "default_verbosity": "low",
-        "support_verbosity": true,
-        "experimental_supported_tools": [],
-        "input_modalities": modalities,
-        "priority": 0,
-        "shell_type": "default",
-        "supported_in_api": true,
-        "supported_reasoning_levels": levels,
-        "supports_parallel_tool_calls": false,
-        "supports_reasoning_summaries": false,
-        "truncation_policy": { "mode": "bytes", "limit": 10000 },
-        "visibility": "list",
-    });
-    // Omitted rather than guessed when Ollama won't say: a wrong context window
-    // is worse than the fallback, because it is wrong with confidence.
-    if let Some(ctx) = context_window {
-        entry["context_window"] = serde_json::json!(ctx);
-    }
-    serde_json::json!({ "models": [entry] }).to_string()
-}
-
-/// The model's trained context window, per Ollama's own `/api/show`. The key is
-/// architecture-prefixed (`qwen3moe.context_length`, `llama.context_length`, …),
-/// so it is found by suffix rather than by a table of architectures that would
-/// need an entry per new model family.
-fn model_context_length(model: &str) -> Option<u64> {
-    let body = serde_json::json!({ "model": model }).to_string();
-    let v: serde_json::Value =
-        serde_json::from_str(&ollama_http("POST", "/api/show", Some(&body)).ok()?).ok()?;
-    v["model_info"]
-        .as_object()?
-        .iter()
-        .find(|(k, _)| k.ends_with(".context_length"))
-        .and_then(|(_, v)| v.as_u64())
-        .filter(|n| *n > 0)
-}
-
-pub(crate) fn sanitize_alias(model: &str) -> String {
-    model.replace(':', "-")
-}
-
-/// Reject model names that could break out of — or inject keys into — the TOML we
-/// write into vibe's `config.toml`. `model` is interpolated raw inside a basic
-/// TOML string (`name = "{model}"`); a `"` would close that string and a newline
-/// would let an attacker append arbitrary TOML keys/tables. Control chars are
-/// also illegal in TOML basic strings. We allow only the characters that appear
-/// in real Ollama model refs (`<namespace>/<name>:<tag>`): ASCII alphanumerics
-/// and `. _ - : /` plus `@` (digest refs). Empty names are rejected too.
-///
-/// The name also becomes a path: the model's Vibe home is
-/// `vibe_local/<alias>` ([`app_vibe_local_dir_for`]), which
-/// `prepare_local_agent` writes and "Clear conversations" deletes from. So
-/// every `/`-separated part must be a real name — no empty part (a leading
-/// `/` would make the home absolute, and `Path::join` would drop
-/// `vibe_local` altogether), no `.` and no `..`. No Ollama ref has one; a
-/// listed name that does (a remote Ollama names its own models) is refused.
-fn validate_model_name(model: &str) -> Result<(), String> {
-    let model = model.trim();
-    if model.is_empty() {
-        return Err("model name must not be empty".to_string());
-    }
-    if let Some(bad) = model
-        .chars()
-        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/' | '@')))
-    {
-        return Err(format!("invalid character {bad:?} in model name '{model}'"));
-    }
-    if model.split('/').any(|part| matches!(part, "" | "." | "..")) {
-        return Err(format!("invalid path part in model name '{model}'"));
-    }
-    Ok(())
-}
 
 /// Return the per-model VIBE_HOME path: `~/.local/share/tabtivity/vibe_local/{alias}/`.
 /// Each Ollama tab gets its own subdirectory so the configs are independent
@@ -4966,1528 +3692,7 @@ mod owned_server_tests {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// An interrupted-pull list that does not parse keeps its entries: a new
-    /// pull fails to record itself rather than replacing them with its own.
-    #[test]
-    fn a_pending_pull_never_replaces_an_unreadable_list() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("ollama_pending_pulls.json");
-        std::fs::write(&path, "[\"llama3\", ").unwrap();
-        assert!(mark_pending_pull_in(&path, "qwen3", true).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[\"llama3\", ");
-
-        std::fs::remove_file(&path).unwrap();
-        mark_pending_pull_in(&path, "llama3", true).unwrap();
-        mark_pending_pull_in(&path, "qwen3", true).unwrap();
-        mark_pending_pull_in(&path, "qwen3", true).unwrap();
-        mark_pending_pull_in(&path, "llama3", false).unwrap();
-        let list: Vec<String> = crate::storage::read_json(&path).unwrap();
-        assert_eq!(list, vec!["qwen3"]);
-    }
-
-    #[test]
-    fn prose_sentence_stops_preserve_language_punctuation_and_decimals() {
-        assert_eq!(completion_stop(" kostet 3.14 Euro. Weiter", true, false), Some(" kostet 3.14 Euro.".len()));
-        assert_eq!(completion_stop(" kostet 3.", true, false), None);
-        assert_eq!(completion_stop(" fertig!", true, true), Some(" fertig!".len()));
-        assert_eq!(completion_stop("一文。次", true, false), Some("一文。".len()));
-        assert_eq!(completion_stop("call().next()\nother()", false, false), Some("call().next()".len()));
-        for language in ["markdown", "tex", "text", ""] {
-            let prompt = completion_prompt("% Ein deutscher Absatz", "", language, CompletionMode::Sentence, "English reference");
-            assert!(prompt.contains("Do not translate or switch to English"));
-            assert!(!prompt.contains("code that implements"));
-        }
-    }
-
-    #[test]
-    fn completion_fim_uses_native_suffix_and_preserves_whitespace() {
-        let body = completion_body(
-            "fn f() {",
-            "\n}",
-            "coder",
-            "rust",
-            CompletionMode::Sentence,
-            "",
-            true,
-        );
-        assert_eq!(body["prompt"], "fn f() {");
-        assert_eq!(body["suffix"], "\n}");
-        assert!(body.get("messages").is_none());
-        assert_eq!(body["options"]["stop"], serde_json::json!(["\n"]));
-        assert_eq!(body["stream"], true);
-        assert_eq!(body["think"], false);
-        assert_eq!(
-            completion_preview("\n    return 1;\n", true, true, "", ""),
-            "\n    return 1;\n"
-        );
-    }
-
-    #[test]
-    fn completion_chat_keeps_reference_context_and_language_instruction() {
-        let body = completion_body(
-            "Ein Satz",
-            ".",
-            "chat",
-            "markdown",
-            CompletionMode::Block,
-            "notes",
-            false,
-        );
-        assert!(body.get("suffix").is_none());
-        assert!(body["messages"][1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("notes"));
-        assert!(body["messages"][0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("never translate"));
-        assert_eq!(
-            body["options"]["num_predict"],
-            CompletionMode::Block.num_predict()
-        );
-    }
-
-    #[test]
-    fn completion_stream_withholds_partial_wrappers() {
-        assert_eq!(completion_preview("```py", false, false, "", ""), "");
-        assert_eq!(completion_preview("Here is the", false, false, "", ""), "");
-        assert_eq!(
-            completion_preview(
-                "Here is the continuation:\n```py\nreturn",
-                false,
-                false,
-                "",
-                ""
-            ),
-            "return"
-        );
-        assert_eq!(
-            completion_preview("return a + b", false, true, "return ", ""),
-            "a + b"
-        );
-        assert_eq!(completion_preview("x\nnext", false, true, "", "next"), "x");
-    }
-
-    #[test]
-    fn completion_backend_window_is_utf8_safe() {
-        let text = "界".repeat(10_000);
-        let tail = bounded_completion_prefix(&text);
-        assert!(tail.len() <= 16_384);
-        assert!(text.ends_with(&tail));
-    }
-
-    #[test]
-    fn partial_file_match_takes_the_layer_and_its_chunks_only() {
-        let main = "sha256-ab12-partial";
-        assert!(is_partial_file_of("sha256-ab12-partial", main));
-        assert!(is_partial_file_of("sha256-ab12-partial-0", main));
-        assert!(is_partial_file_of("sha256-ab12-partial-15", main));
-        assert!(!is_partial_file_of("sha256-ab12-partial-", main));
-        assert!(!is_partial_file_of("sha256-ab12-partial-x", main));
-        assert!(!is_partial_file_of("sha256-ab12", main));
-        assert!(!is_partial_file_of("sha256-ab123-partial", main));
-    }
-
-    #[test]
-    fn remove_blob_files_ignores_already_gone_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let kept = dir.path().join("sha256-ab12-partial");
-        std::fs::write(&kept, b"x").unwrap();
-        let gone = dir.path().join("sha256-ab12-partial-0");
-        assert!(remove_blob_files(&[kept.clone(), gone]).is_ok());
-        assert!(!kept.exists());
-    }
-    use std::io::Write;
-
-    // ── Helper: simulate prepare_local_agent using a tmp base dir ─────────────
-
-    fn write_agent_config(base: &std::path::Path, model: &str) -> (std::path::PathBuf, String) {
-        let alias = sanitize_alias(model);
-        let vibe_home = base.join(&alias);
-        std::fs::create_dir_all(&vibe_home).unwrap();
-        let config_path = vibe_home.join("config.toml");
-        let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
-        cfg.push_str(&ollama_provider_block());
-        cfg.push_str(&ollama_model_block(model, &alias));
-        std::fs::write(&config_path, &cfg).unwrap();
-        (vibe_home, alias)
-    }
-
-    // ── model-name validation (TOML injection defense) ───────────────────────
-
-    #[test]
-    fn validate_model_name_accepts_real_refs() {
-        for ok in [
-            "llama3.2:1b",
-            "qwen2.5-coder:7b",
-            "library/llama3:latest",
-            "registry.example.com/ns/model:tag",
-            "model@sha256",
-            "phi-4",
-        ] {
-            assert!(validate_model_name(ok).is_ok(), "{ok} should be accepted");
-        }
-    }
-
-    #[test]
-    fn validate_model_name_rejects_toml_injection() {
-        // A `"` closes the TOML basic string; a newline lets the attacker append
-        // arbitrary keys/tables. Both — and other shell/TOML metacharacters and
-        // control chars — must be rejected.
-        for bad in [
-            "model\"\nmalicious_key = \"x",
-            "model\nenabled_tools = []",
-            "a\"b",
-            "back`tick",
-            "with space",
-            "tab\tinside",
-            "",
-            "   ",
-        ] {
-            assert!(
-                validate_model_name(bad).is_err(),
-                "{bad:?} should be rejected"
-            );
-        }
-    }
-
-    /// Step 9 review: the name is also the Vibe home's folder, which "Clear
-    /// conversations" deletes from and `prepare_local_agent` writes. A name
-    /// that is absolute or climbs out (`/home/u/.vibe`, `../../.vibe`) would
-    /// point both at a folder outside `vibe_local` — the user's own Vibe's.
-    #[test]
-    fn validate_model_name_rejects_path_escapes() {
-        for bad in ["/home/u/.vibe", "../../../.vibe", "a/../../b", "./x", "a//b", "a/", "..", "."] {
-            assert!(validate_model_name(bad).is_err(), "{bad:?} should be rejected");
-        }
-        for ok in ["hf.co/user/repo:Q4_K_M", "a..b:c", ".hidden-ish:1", "x/y.z:latest"] {
-            assert!(validate_model_name(ok).is_ok(), "{ok:?} should be accepted");
-        }
-        // Refused before anything is read or deleted (`prepare_local_agent`
-        // validates first too; not called here, as a regression would write
-        // into the real share dir's neighbourhood). Neither path exists, so
-        // the old code answered `Ok` here.
-        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        for bad in ["/nonexistent-vibe-home-for-a-test", "../../../nonexistent-vibe-home-for-a-test"] {
-            assert!(rt.block_on(clear_local_model_conversations(bad.to_string())).is_err(), "{bad}");
-        }
-    }
-
-    // ── local-driver registry (ollama launch + fallbacks) ────────────────────
-
-    // ── the tool-capability gate ─────────────────────────────────────────────
-
-    #[test]
-    fn a_completion_only_model_withholds_every_tool_calling_agent() {
-        // The bug this exists for: picking a completion-only model (`llama3`) in
-        // the 🧠 menu left Codex in the + menu, and the tab it opened died on its
-        // first request with `does not support tools`.
-        for d in LOCAL_DRIVERS {
-            let (available, blocked) = driver_verdict(d.needs_tools, true, true);
-            assert!(!available, "{} should be withheld", d.id);
-            assert!(blocked, "{} should say the model is why", d.id);
-        }
-    }
-
-    #[test]
-    fn an_unreadable_capability_list_never_hides_an_agent() {
-        // `model_supports_tools` answers `None` when Ollama is down or too old
-        // to report capabilities, which reaches the verdict as `false`. A probe
-        // failure must not empty the menu — an agent that errors is recoverable,
-        // an agent that silently vanished is not diagnosable.
-        for d in LOCAL_DRIVERS {
-            let (available, blocked) = driver_verdict(d.needs_tools, true, false);
-            assert!(available, "{} should still be offered", d.id);
-            assert!(!blocked);
-        }
-    }
-
-    #[test]
-    fn a_missing_binary_is_not_reported_as_a_model_problem() {
-        // Two different failures with two different fixes: the menu says
-        // "install the agent" for one and "pick another model" for the other,
-        // and an uninstalled agent must never claim the latter.
-        let (available, blocked) = driver_verdict(true, false, true);
-        assert!(!available);
-        assert!(!blocked);
-    }
-
-    #[test]
-    fn every_local_driver_needs_tools() {
-        // vibe is the deliberate exception and is deliberately not in this
-        // list — it turns tools off (`enabled_tools = ["__no_tools__"]`), which
-        // is exactly why it still runs on a completion-only model. If an entry
-        // here ever stops needing tools, this assertion is where to say so.
-        assert!(LOCAL_DRIVERS.iter().all(|d| d.needs_tools));
-    }
-
-    // ── update checks ────────────────────────────────────────────────────────
-
-    #[test]
-    fn the_manifest_url_defaults_the_namespace_and_the_tag() {
-        assert_eq!(
-            registry_manifest_url("deepcoder").unwrap(),
-            "https://registry.ollama.ai/v2/library/deepcoder/manifests/latest"
-        );
-        assert_eq!(
-            registry_manifest_url("qwen3-coder:30b").unwrap(),
-            "https://registry.ollama.ai/v2/library/qwen3-coder/manifests/30b"
-        );
-        // An explicit namespace is kept rather than nested under `library/`.
-        assert_eq!(
-            registry_manifest_url("hf.co/someone/model:q4").unwrap(),
-            "https://registry.ollama.ai/v2/hf.co/someone/model/manifests/q4"
-        );
-    }
-
-    #[test]
-    fn the_digest_header_is_read_case_insensitively_and_last_wins() {
-        // HTTP/2 lowercases header names and HTTP/1.1 does not, and a redirect
-        // leaves several head blocks in curl's output — the manifest came with
-        // the last one.
-        let head = "HTTP/1.1 301 Moved\r\n\
-                    Ollama-Content-Digest: sha256:old\r\n\
-                    \r\n\
-                    HTTP/2 200\r\n\
-                    ollama-content-digest: sha256:new\r\n\
-                    ollama-push-time: 1744152652\r\n\r\n";
-        assert_eq!(
-            header_value(head, "ollama-content-digest").as_deref(),
-            Some("sha256:new")
-        );
-        assert_eq!(
-            header_value(head, "OLLAMA-PUSH-TIME").as_deref(),
-            Some("1744152652")
-        );
-        assert_eq!(header_value(head, "etag"), None);
-    }
-
-    // ── the Ollama server's own version ──────────────────────────────────────
-
-    #[test]
-    fn the_installed_version_is_found_whatever_else_the_command_printed() {
-        assert_eq!(
-            parse_version("ollama version is 0.14.3\n").as_deref(),
-            Some("0.14.3")
-        );
-        // The real output when the server isn't running: a warning line first,
-        // which is why this scans rather than taking a fixed field.
-        assert_eq!(
-            parse_version(
-                "Warning: could not connect to a running Ollama instance\n\
-                 ollama version is 0.32.5\n"
-            )
-            .as_deref(),
-            Some("0.32.5")
-        );
-        // A release tag, straight out of the API's JSON.
-        assert_eq!(
-            parse_version("\"tag_name\": \"v0.32.5\",").as_deref(),
-            Some("0.32.5")
-        );
-        assert_eq!(parse_version("no version here").as_deref(), None);
-    }
-
-    #[test]
-    fn versions_compare_numerically_not_lexically() {
-        // The bug a string compare would have: "0.9.0" > "0.14.3" as text, so
-        // most of Ollama's history would have reported a downgrade as an update.
-        assert_eq!(version_is_newer("0.14.3", "0.9.0"), Some(true));
-        assert_eq!(version_is_newer("0.9.0", "0.14.3"), Some(false));
-        assert_eq!(version_is_newer("0.32.5", "0.14.3"), Some(true));
-        assert_eq!(version_is_newer("0.14.3", "0.14.3"), Some(false));
-        // A missing component is zero — 0.15 and 0.15.0 are one version.
-        assert_eq!(version_is_newer("0.15", "0.15.0"), Some(false));
-        assert_eq!(version_is_newer("0.15.1", "0.15"), Some(true));
-        // The leading `v` of a tag, and a pre-release suffix, are both handled.
-        assert_eq!(version_is_newer("v0.16.0", "0.15.9"), Some(true));
-        assert_eq!(version_is_newer("0.16.0-rc1", "0.15.9"), Some(true));
-        // Unparseable on either side is "couldn't tell", never an update.
-        assert_eq!(version_is_newer("dev", "0.14.3"), None);
-        assert_eq!(version_is_newer("0.14.3", ""), None);
-    }
-
-    #[test]
-    fn an_unreachable_registry_is_not_an_up_to_date_verdict() {
-        // The whole point of carrying `error` per model: "couldn't check" and
-        // "current" must never render the same, and neither may raise a badge.
-        let out = wanted_updates(vec![("no-such-model-xyz".into(), "sha256:local".into())]);
-        assert_eq!(out.len(), 1);
-        assert!(!out[0].update_available);
-        assert!(out[0].error.is_some(), "a failure must say so");
-    }
-
-    #[test]
-    fn codex_fallback_substitutes_model_for_oss_mode() {
-        let d = LOCAL_DRIVERS.iter().find(|d| d.id == "codex").unwrap();
-        let spec = fallback_spec(d, "qwen2.5-coder:7b", &[]).expect("codex has a fallback");
-        assert_eq!(spec.cmd, "codex");
-        // `oss_provider` rides every codex fallback, not just the non-thinking
-        // one: codex ≥0.146 refuses a bare `--oss` with "No default OSS
-        // provider configured", i.e. the tab dies before it reaches Ollama.
-        assert_eq!(
-            spec.args,
-            vec![
-                "--oss",
-                "-c",
-                "oss_provider=\"ollama\"",
-                "-m",
-                "qwen2.5-coder:7b"
-            ]
-        );
-    }
-
-    #[test]
-    fn opencode_fallback_prefixes_the_ollama_provider() {
-        let d = LOCAL_DRIVERS.iter().find(|d| d.id == "opencode").unwrap();
-        let spec = fallback_spec(d, "llama3.2", &[]).expect("opencode has a fallback");
-        assert_eq!(spec.cmd, "opencode");
-        assert_eq!(spec.args, vec!["--model", "ollama/llama3.2"]);
-        // Direct only: `ollama launch` would override the injected model list.
-        assert!(d.launch_sub.is_none());
-    }
-
-    fn argv(a: &[&str]) -> Vec<String> {
-        a.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn opencode_spawn_model_recognises_every_opencode_launch_shape() {
-        assert_eq!(opencode_spawn_model("opencode", &[]), Some(None));
-        assert_eq!(
-            opencode_spawn_model("/home/u/.opencode/bin/opencode", &argv(&["--model", "ollama/qwen3:8b"])),
-            Some(Some("qwen3:8b".into()))
-        );
-        assert_eq!(
-            opencode_spawn_model("opencode", &argv(&["--model=ollama/qwen3:8b"])),
-            Some(Some("qwen3:8b".into()))
-        );
-        // Another provider's model is not an Ollama request.
-        assert_eq!(
-            opencode_spawn_model("opencode", &argv(&["-m", "anthropic/claude"])),
-            Some(None)
-        );
-        assert_eq!(
-            opencode_spawn_model("ollama", &argv(&["launch", "opencode", "--model", "qwen3:8b"])),
-            Some(Some("qwen3:8b".into()))
-        );
-        assert_eq!(opencode_spawn_model("ollama", &argv(&["launch", "codex"])), None);
-        assert_eq!(opencode_spawn_model("codex", &[]), None);
-    }
-
-    #[test]
-    fn loaded_model_names_reads_api_ps() {
-        let body = r#"{"models":[{"name":"nemotron:30b","model":"nemotron:30b"},{"model":"qwen3:8b"}]}"#;
-        assert_eq!(
-            loaded_model_names(body),
-            Some(vec!["nemotron:30b".to_string(), "qwen3:8b".to_string()])
-        );
-        assert_eq!(loaded_model_names(r#"{"models":[]}"#), Some(vec![]));
-        assert_eq!(loaded_model_names("garbage"), None);
-    }
-
-    #[test]
-    fn opencode_config_whitelists_the_loaded_models_plus_the_requested_one() {
-        let cfg: serde_json::Value = serde_json::from_str(&opencode_ollama_config(
-            "127.0.0.1:11434",
-            &["nemotron:30b".to_string()],
-            Some("qwen3:8b"),
-        ))
-        .unwrap();
-        let p = &cfg["provider"]["ollama"];
-        assert_eq!(p["options"]["baseURL"], "http://127.0.0.1:11434/v1");
-        assert_eq!(p["whitelist"], serde_json::json!(["nemotron:30b", "qwen3:8b"]));
-        assert_eq!(p["models"]["nemotron:30b"]["name"], "nemotron:30b");
-        assert!(p["models"]["qwen3:8b"].is_object());
-
-        // Nothing loaded: an empty whitelist, so stale config models drop out.
-        let cfg: serde_json::Value =
-            serde_json::from_str(&opencode_ollama_config("h:1", &[], None)).unwrap();
-        assert_eq!(cfg["provider"]["ollama"]["whitelist"], serde_json::json!([]));
-    }
-
-    #[test]
-    fn launch_only_drivers_have_no_fallback() {
-        // These need `ollama launch`; there is no hand-rolled spec.
-        for id in ["claude", "droid", "openclaw", "pi", "cline"] {
-            let d = LOCAL_DRIVERS.iter().find(|d| d.id == id).unwrap();
-            assert!(
-                fallback_spec(d, "any:model", &[]).is_none(),
-                "{id} must be launch-only"
-            );
-            assert!(d.launch_sub.is_some(), "{id} must support ollama launch");
-        }
-    }
-
-    // ── the thinking gate ────────────────────────────────────────────────────
-
-    #[test]
-    fn codex_turns_reasoning_off_only_for_a_non_thinking_model() {
-        // The bug this exists for: `qwen3-coder` reports `tools` but not
-        // `thinking`, so it passed the tool gate and then died on its first
-        // turn with `"qwen3-coder:latest" does not support thinking` — Codex
-        // sends `model_reasoning_effort` (default `medium`, and usually set
-        // outright in the user's ~/.codex/config.toml) and Ollama rejects the
-        // whole request rather than ignoring the field.
-        let d = LOCAL_DRIVERS.iter().find(|d| d.id == "codex").unwrap();
-
-        let off = non_thinking_override(d, Some(false));
-        assert_eq!(off, ["-c", "model_reasoning_effort=\"none\""]);
-        let spec = fallback_spec(d, "qwen3-coder:latest", off).expect("codex has a fallback");
-        assert_eq!(
-            spec.args.last().map(String::as_str),
-            Some("model_reasoning_effort=\"none\"")
-        );
-
-        // A thinking model keeps its reasoning: forcing it off would silently
-        // downgrade every reasoning-capable local model to a worse agent.
-        assert!(non_thinking_override(d, Some(true)).is_empty());
-        // And "could not tell" changes nothing — same rule as the tool gate.
-        assert!(non_thinking_override(d, None).is_empty());
-    }
-
-    #[test]
-    fn pi_leads_with_opencode_and_cline_is_cautioned() {
-        // Light-harness drivers lead the menu ahead of Mistral; Pi is built
-        // for small models, Cline's prompt for a frontier one.
-        let ids: Vec<&str> = LOCAL_DRIVERS.iter().filter(|d| !d.heavy_harness).map(|d| d.id).collect();
-        assert_eq!(ids, ["opencode", "pi"]);
-        let cline = LOCAL_DRIVERS.iter().find(|d| d.id == "cline").unwrap();
-        assert!(cline.heavy_harness);
-        assert_eq!(local_driver_bin("pi"), Some("pi"));
-        assert_eq!(local_driver_bin("cline"), Some("cline"));
-    }
-
-    #[test]
-    fn an_agent_that_sends_no_reasoning_is_left_alone() {
-        for id in ["claude", "opencode", "droid", "openclaw", "pi", "cline"] {
-            let d = LOCAL_DRIVERS.iter().find(|d| d.id == id).unwrap();
-            assert!(
-                non_thinking_override(d, Some(false)).is_empty(),
-                "{id} must not be rewritten for a non-thinking model"
-            );
-        }
-    }
-
-    #[test]
-    fn the_local_catalog_carries_the_two_facts_only_ollama_knows() {
-        let doc: serde_json::Value = serde_json::from_str(&local_catalog_json(
-            "qwen3-coder:latest",
-            Some(false),
-            Some(262_144),
-            false,
-        ))
-        .expect("catalog is valid JSON");
-        let m = &doc["models"][0];
-        assert_eq!(m["slug"], "qwen3-coder:latest");
-        // The whole point of writing one: Codex's fallback metadata does not
-        // know this number, so it compacts against a guess.
-        assert_eq!(m["context_window"], 262_144);
-        assert_eq!(m["supported_reasoning_levels"].as_array().unwrap().len(), 0);
-        assert_eq!(m["input_modalities"].as_array().unwrap().len(), 1);
-
-        // A thinking model keeps its levels, and a vision model its modality.
-        let doc: serde_json::Value =
-            serde_json::from_str(&local_catalog_json("m:latest", Some(true), None, true)).unwrap();
-        let m = &doc["models"][0];
-        assert!(!m["supported_reasoning_levels"]
-            .as_array()
-            .unwrap()
-            .is_empty());
-        assert!(m["input_modalities"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "image"));
-        // An unknown window is absent, never a plausible-looking default.
-        assert!(m.get("context_window").is_none());
-
-        // "Could not tell" must not strip a capability, same as the tool gate.
-        let doc: serde_json::Value =
-            serde_json::from_str(&local_catalog_json("m:latest", None, None, false)).unwrap();
-        assert!(!doc["models"][0]["supported_reasoning_levels"]
-            .as_array()
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn a_persisted_local_launch_line_must_be_one_app_builds() {
-        let v = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
-        let m = "qwen3-coder:30b";
-        // `ollama launch`, for a driver that has it.
-        assert!(local_launch_line_ok("claude", m, "ollama", &v(&["launch", "claude", "--model", m])));
-        assert!(local_launch_line_ok("droid", m, "ollama", &v(&["launch", "droid", "--model", m])));
-        assert!(local_launch_line_ok("pi", m, "ollama", &v(&["launch", "pi", "--model", m])));
-        assert!(local_launch_line_ok("cline", m, "ollama", &v(&["launch", "cline", "--model", m])));
-        assert!(!local_launch_line_ok("pi", m, "pi", &v(&["--model", m])));
-        // Direct fallbacks, with and without the reasoning-off override.
-        assert!(local_launch_line_ok("opencode", m, "opencode", &v(&["--model", &format!("ollama/{m}")])));
-        let codex = fallback_spec(
-            LOCAL_DRIVERS.iter().find(|d| d.id == "codex").unwrap(),
-            m,
-            &["-c", "model_reasoning_effort=\"none\""],
-        )
-        .unwrap();
-        assert!(local_launch_line_ok("codex", m, "codex", &codex.args));
-        // Codex's catalog pair rides after either form, and only the path
-        // Tabtivity writes it to.
-        let mut with_catalog = codex.args.clone();
-        with_catalog.extend(catalog_arg_pair(&local_catalog_path(m)));
-        assert!(local_launch_line_ok("codex", m, "codex", &with_catalog));
-        let mut elsewhere = codex.args.clone();
-        elsewhere.extend(catalog_arg_pair(std::path::Path::new("/tmp/x.json")));
-        assert!(!local_launch_line_ok("codex", m, "codex", &elsewhere));
-
-        // Anything else is refused: another sub, another model, an extra
-        // flag, a driver without a fallback run directly, an unknown driver,
-        // a model that reads as a flag, and a line of another driver.
-        assert!(!local_launch_line_ok("claude", m, "ollama", &v(&["launch", "codex", "--model", m])));
-        assert!(!local_launch_line_ok("claude", m, "ollama", &v(&["launch", "claude", "--model", "other"])));
-        assert!(!local_launch_line_ok("claude", m, "ollama", &v(&["launch", "claude", "--model", m, "--yes"])));
-        assert!(!local_launch_line_ok("claude", m, "claude", &v(&["--model", m])));
-        assert!(!local_launch_line_ok("vibe", m, "vibe", &[]));
-        let flag = "--dangerously-skip-permissions";
-        assert!(!local_launch_line_ok("claude", flag, "ollama", &v(&["launch", "claude", "--model", flag])));
-        assert!(!local_launch_line_ok("opencode", m, "ollama", &v(&["launch", "claude", "--model", m])));
-        assert_eq!(local_driver_bin("opencode"), Some("opencode"));
-        assert_eq!(local_driver_bin("nope"), None);
-    }
-
-    /// The chat assistant builds its local lines from the driver table, not a
-    /// copy of it, and takes a model name only as a plain argument.
-    #[test]
-    fn the_pinned_local_line_is_the_drivers_own_and_takes_only_plain_names() {
-        let m = "qwen3-coder:30b";
-        let claude = pinned_local_line("claude", m).unwrap();
-        assert_eq!((claude.cmd.as_str(), claude.args.as_slice()), ("ollama", ["launch", "claude", "--model", m].map(String::from).as_slice()));
-        let opencode = pinned_local_line("opencode", m).unwrap();
-        assert_eq!(opencode.cmd, "opencode");
-        assert_eq!(opencode.args, ["--model", &format!("ollama/{m}")]);
-        for spec in [&claude, &opencode] {
-            let driver = if spec.cmd == "ollama" { "claude" } else { "opencode" };
-            assert!(local_launch_line_ok(driver, m, &spec.cmd, &spec.args));
-        }
-        // Codex has the direct form only with its catalog, so the plain line
-        // here is the fallback's; an unknown driver has none.
-        assert!(pinned_local_line("nope", m).is_none());
-        for bad in ["--yes", "-m", "", " m", "m ", "a b", "m\"x", "../m", "a//b"] {
-            assert!(pinned_local_line("claude", bad).is_none(), "{bad:?}");
-            assert!(!model_name_ok(bad), "{bad:?}");
-        }
-        assert!(model_name_ok("hf.co/org/model-GGUF:Q4_K_M") && model_name_ok("llama3:latest"));
-        // The provider block always names the requested model, Ollama up or not.
-        let config: serde_json::Value = serde_json::from_str(&opencode_assistant_provider(m)).unwrap();
-        assert!(config["provider"]["ollama"]["models"][m].is_object());
-    }
-
-    #[test]
-    fn only_a_driver_with_a_fallback_asks_for_a_catalog() {
-        // The catalog rides the direct invocation's argv; `ollama launch`
-        // generates its own and is not trusted to forward args, so a launch-only driver
-        // asking for one would silently get nothing.
-        for d in LOCAL_DRIVERS {
-            if d.wants_local_catalog {
-                assert!(d.fallback.is_some(), "{} needs a fallback", d.id);
-            }
-        }
-    }
-
-    #[test]
-    fn a_reasoning_override_requires_a_fallback_to_ride() {
-        // An older `ollama launch` forwards nothing — it rejects an extra flag
-        // with `unknown shorthand flag` — so a driver that needs the override and
-        // has no direct invocation would report the launch-only error message,
-        // which names the wrong problem and an update that wouldn't fix it.
-        for d in LOCAL_DRIVERS {
-            if d.non_thinking_args.is_some() {
-                assert!(
-                    d.fallback.is_some(),
-                    "{} needs a fallback to carry its reasoning override",
-                    d.id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn model_block_with_validated_name_has_no_stray_quotes_or_newlines_in_value() {
-        // Defense in depth: once validated, the interpolated name can never break
-        // out of its `name = "<...>"` TOML string.
-        let model = "qwen2.5-coder:7b";
-        assert!(validate_model_name(model).is_ok());
-        let block = ollama_model_block(model, &sanitize_alias(model));
-        let name_line = block
-            .lines()
-            .find(|l| l.starts_with("name = "))
-            .expect("name line");
-        assert_eq!(name_line, "name = \"qwen2.5-coder:7b\"");
-    }
-
-    // ── active_model is always the first line of the per-model config ─────────
-
-    #[test]
-    fn prepare_local_agent_config_has_active_model_first() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let (vibe_home, alias) = write_agent_config(tmp.path(), "llama3:latest");
-
-        let written = std::fs::read_to_string(vibe_home.join("config.toml")).unwrap();
-        let first_line = written.lines().next().unwrap_or("");
-        assert_eq!(first_line, format!("active_model = \"{alias}\""),
-            "active_model must be the first config line so it is not shadowed by the global ~/.vibe/config.toml");
-    }
-
-    // ── each model gets its own directory so configs never collide ────────────
-
-    #[test]
-    fn prepare_local_agent_uses_per_alias_directory() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let (home_a, alias_a) = write_agent_config(tmp.path(), "llama3:latest");
-        let (home_b, alias_b) = write_agent_config(tmp.path(), "qwen2:7b");
-
-        // Directories are distinct.
-        assert_ne!(home_a, home_b);
-        assert!(home_a.ends_with(&alias_a));
-        assert!(home_b.ends_with(&alias_b));
-
-        // Each config's active_model matches its own alias — not the other's.
-        let cfg_a = std::fs::read_to_string(home_a.join("config.toml")).unwrap();
-        let cfg_b = std::fs::read_to_string(home_b.join("config.toml")).unwrap();
-        assert!(cfg_a.contains(&format!("active_model = \"{alias_a}\"")));
-        assert!(!cfg_a.contains(&format!("active_model = \"{alias_b}\"")));
-        assert!(cfg_b.contains(&format!("active_model = \"{alias_b}\"")));
-        assert!(!cfg_b.contains(&format!("active_model = \"{alias_a}\"")));
-    }
-
-    // ── config contains exactly the requested model, provider, and no-tools ──
-
-    #[test]
-    fn prepare_local_agent_config_structure() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let model = "mistral:latest";
-        let (vibe_home, alias) = write_agent_config(tmp.path(), model);
-
-        let cfg = std::fs::read_to_string(vibe_home.join("config.toml")).unwrap();
-        assert!(
-            cfg.contains("enabled_tools = [\"__no_tools__\"]"),
-            "tool calls must be disabled for local models"
-        );
-        assert!(
-            cfg.contains("name = \"ollama\""),
-            "ollama provider block required"
-        );
-        assert!(
-            cfg.contains(&format!("name = \"{model}\"")),
-            "model name must appear"
-        );
-        assert!(
-            cfg.contains(&format!("alias = \"{alias}\"")),
-            "model alias must appear"
-        );
-    }
-
-    // ── friendly error mapping: broken Ollama runner (#vibe 500) ─────────────
-
-    #[test]
-    fn friendly_ollama_error_detects_missing_runner() {
-        // The exact shape Ollama returns when its llama-server binary is absent —
-        // this is what surfaces through vibe as an "internal server error".
-        let raw = "error starting llama-server: llama-server binary not found \
-            (checked: /usr/local/lib/ollama/llama-server, ...). Run 'cmake -S \
-            llama/server --preset cpu && cmake --build --preset cpu' first";
-        let msg = friendly_ollama_error(raw);
-        assert!(
-            msg.contains("inference runner") && msg.contains("incomplete"),
-            "missing-runner error should be rewritten to an actionable message, got: {msg}"
-        );
-        // It points the user at the reinstall command.
-        assert!(msg.contains(ollama_install_cmd()));
-        // And it no longer leaks the raw cmake/build hint.
-        assert!(!msg.contains("cmake"));
-    }
-
-    #[test]
-    fn friendly_ollama_error_is_case_insensitive() {
-        let msg = friendly_ollama_error("LLAMA-SERVER binary NOT FOUND");
-        assert!(msg.contains("inference runner"));
-    }
-
-    #[test]
-    fn friendly_ollama_error_passes_through_unrelated() {
-        // Errors we don't special-case must be returned verbatim, not swallowed.
-        for raw in [
-            "model 'foo' not found, try pulling it first",
-            "out of memory",
-            "HTTP 500",
-        ] {
-            assert_eq!(friendly_ollama_error(raw), raw);
-        }
-    }
-
-    // ── registry search HTML parsing ─────────────────────────────────────────
-
-    // Trimmed-down but structurally faithful fixture of two ollama.com/search
-    // result cards, matching the post-2026-redesign markup (no `x-test-*`
-    // hooks): the title links to `/library/<name>`, badges are colour-coded
-    // `rounded-md bg-…` spans, and the pull count / updated label sit in the
-    // meta row. nomic deliberately carries no size badge (embedding models omit
-    // one on the live page), exercising the empty-sizes path.
-    const SEARCH_FIXTURE: &str = r#"
-      <ul role="list">
-      <li  class="flex items-baseline border-b border-neutral-200 py-6">
-        <a href="/library/glm-5.2" class="group w-full">
-          <div class="flex flex-col mb-1" title="glm-5.2">
-            <h2 class="truncate text-xl"><span >glm-5.2</span></h2>
-            <p class="max-w-lg break-words text-neutral-800 text-md">GLM-5.2 is Z.ai&#39;s flagship model &amp; more.</p>
-          </div>
-          <div class="flex flex-col">
-            <div class="flex flex-wrap space-x-2">
-              <span  class="inline-flex my-1 items-center rounded-md bg-indigo-50 px-2 py-[2px] text-xs text-indigo-600">tools</span>
-              <span  class="inline-flex my-1 items-center rounded-md bg-indigo-50 px-2 py-[2px] text-xs text-indigo-600">thinking</span>
-              <span  class="inline-flex my-1 items-center rounded-md bg-[#ddf4ff] px-2 py-[2px] text-xs text-blue-600">8b</span>
-              <span  class="inline-flex my-1 items-center rounded-md bg-[#ddf4ff] px-2 py-[2px] text-xs text-blue-600">355b</span>
-            </div>
-            <p class="my-1 flex space-x-5 text-[13px] text-neutral-500">
-              <span class="flex items-center"><svg></svg><span >65.8K</span><span class="hidden sm:flex">&nbsp;Pulls</span></span>
-              <span class="flex items-center"><svg></svg><span >93</span><span class="hidden sm:flex">&nbsp;Tags</span></span>
-              <span class="flex items-center" title="Sep 30, 2026 10:34 PM UTC"><svg></svg><span class="hidden sm:flex">Updated&nbsp;</span><span >1 week ago</span></span>
-            </p>
-          </div>
-        </a>
-      </li>
-      <li  class="flex items-baseline border-b border-neutral-200 py-6">
-        <a href="/library/nomic-embed-text" class="group w-full">
-          <div class="flex flex-col mb-1" title="nomic-embed-text">
-            <h2 class="truncate text-xl"><span >nomic-embed-text</span></h2>
-            <p class="max-w-lg break-words text-neutral-800 text-md">High-quality text embeddings.</p>
-          </div>
-          <div class="flex flex-col">
-            <div class="flex flex-wrap space-x-2">
-              <span  class="inline-flex my-1 items-center rounded-md bg-indigo-50 px-2 py-[2px] text-xs text-indigo-600">embedding</span>
-            </div>
-            <p class="my-1 flex space-x-5 text-[13px] text-neutral-500">
-              <span class="flex items-center"><svg></svg><span >30M</span><span class="hidden sm:flex">&nbsp;Pulls</span></span>
-              <span class="flex items-center" title="Feb 21, 2024 5:26 PM UTC"><svg></svg><span class="hidden sm:flex">Updated&nbsp;</span><span >1 year ago</span></span>
-            </p>
-          </div>
-        </a>
-      </li>
-      </ul>"#;
-
-    #[test]
-    fn parse_search_html_extracts_all_fields() {
-        let models = parse_search_html(SEARCH_FIXTURE);
-        assert_eq!(models.len(), 2);
-
-        let glm = &models[0];
-        assert_eq!(glm.name, "glm-5.2");
-        // HTML entities are unescaped.
-        assert_eq!(glm.description, "GLM-5.2 is Z.ai's flagship model & more.");
-        assert_eq!(glm.capabilities, vec!["tools", "thinking"]);
-        assert_eq!(glm.sizes, vec!["8b", "355b"]);
-        assert_eq!(glm.pulls, "65.8K");
-        assert_eq!(glm.updated, "1 week ago");
-
-        let nomic = &models[1];
-        assert_eq!(nomic.name, "nomic-embed-text");
-        assert_eq!(nomic.capabilities, vec!["embedding"]);
-        assert!(nomic.sizes.is_empty());
-        assert_eq!(nomic.pulls, "30M");
-        assert_eq!(nomic.updated, "1 year ago");
-    }
-
-    #[test]
-    fn parse_search_html_empty_when_no_cards() {
-        assert!(parse_search_html("<html><body>no results</body></html>").is_empty());
-    }
-
-    #[test]
-    fn percent_encode_query_escapes_unsafe_chars() {
-        assert_eq!(percent_encode_query("llama 3.2"), "llama%203.2");
-        assert_eq!(percent_encode_query("a&b=c"), "a%26b%3Dc");
-        assert_eq!(percent_encode_query("qwen2.5-coder"), "qwen2.5-coder");
-    }
-
-    // ── completion prompt construction (#45) ──────────────────────────────────
-
-    #[test]
-    fn completion_prompt_includes_prefix_suffix_and_language() {
-        let p = completion_prompt("let x =", " + 1;", "rust", CompletionMode::Sentence, "");
-        assert!(p.contains("let x ="), "prefix must be embedded");
-        assert!(p.contains(" + 1;"), "suffix must be embedded");
-        assert!(p.contains("rust"), "language must be named");
-        // Prefix appears before suffix so the model fills in the middle.
-        assert!(p.find("let x =").unwrap() < p.find(" + 1;").unwrap());
-    }
-
-    #[test]
-    fn completion_prompt_defaults_empty_language_to_text() {
-        let p = completion_prompt("a", "b", "", CompletionMode::Sentence, "");
-        assert!(
-            p.contains("Language: text"),
-            "empty language defaults to text"
-        );
-    }
-
-    #[test]
-    fn completion_prompt_labels_before_and_after_sections() {
-        // The BEFORE/AFTER framing is what stops a chat model rewriting the doc.
-        let p = completion_prompt("pre", "post", "rust", CompletionMode::Sentence, "");
-        assert!(p.contains("BEFORE:\npre"));
-        assert!(p.contains("AFTER:\npost"));
-        assert!(p.find("BEFORE:").unwrap() < p.find("AFTER:").unwrap());
-    }
-
-    #[test]
-    fn build_context_block_labels_files_and_skips_empty() {
-        let files = vec![
-            ContextFile {
-                name: "util.rs".into(),
-                content: "fn helper() {}".into(),
-            },
-            ContextFile {
-                name: "blank.rs".into(),
-                content: "   \n  ".into(),
-            },
-            ContextFile {
-                name: "types.rs".into(),
-                content: "struct Foo;".into(),
-            },
-        ];
-        let block = build_context_block(&files);
-        assert!(block.contains("--- util.rs ---\nfn helper() {}"));
-        assert!(block.contains("--- types.rs ---\nstruct Foo;"));
-        // Whitespace-only files contribute nothing.
-        assert!(!block.contains("blank.rs"));
-        // No files → empty string, so the prompt omits the section.
-        assert_eq!(build_context_block(&[]), "");
-    }
-
-    #[test]
-    fn build_context_block_caps_total_size() {
-        let big = "x".repeat(20_000);
-        let files = vec![
-            ContextFile {
-                name: "a".into(),
-                content: big.clone(),
-            },
-            ContextFile {
-                name: "b".into(),
-                content: big.clone(),
-            },
-            ContextFile {
-                name: "c".into(),
-                content: big,
-            },
-        ];
-        let block = build_context_block(&files);
-        // Each file is per-file capped and the total is bounded; allow for the
-        // labels/separators on top of the included bytes.
-        assert!(
-            block.len() <= MAX_CONTEXT_TOTAL + 256,
-            "total context stays bounded"
-        );
-        // The first file always makes it in.
-        assert!(block.contains("--- a ---"));
-    }
-
-    #[test]
-    fn truncate_chars_respects_utf8_boundaries() {
-        // Cutting mid-multibyte must back off to a valid boundary, never panic.
-        let s = "a\u{00e9}b"; // 'é' is 2 bytes → byte index 2 splits it
-        assert_eq!(truncate_chars(s, 2), "a");
-        assert_eq!(truncate_chars(s, 100), s);
-    }
-
-    #[test]
-    fn completion_prompt_embeds_reference_files_before_the_cursor_sections() {
-        let ctx = build_context_block(&[ContextFile {
-            name: "lib.rs".into(),
-            content: "pub fn answer() -> i32 { 42 }".into(),
-        }]);
-        let p = completion_prompt("let x = ", "", "rust", CompletionMode::Sentence, &ctx);
-        assert!(p.contains("REFERENCE FILES"));
-        assert!(p.contains("pub fn answer"));
-        // Reference context precedes the BEFORE/AFTER framing.
-        assert!(p.find("REFERENCE FILES").unwrap() < p.find("BEFORE:").unwrap());
-        // With no context the section is omitted entirely.
-        let plain = completion_prompt("let x = ", "", "rust", CompletionMode::Sentence, "");
-        assert!(!plain.contains("REFERENCE FILES"));
-    }
-
-    #[test]
-    fn completion_mode_parse_and_caps_scale_by_mode() {
-        assert_eq!(CompletionMode::parse("block"), CompletionMode::Block);
-        assert_eq!(CompletionMode::parse("scope"), CompletionMode::Scope);
-        // Unknown / absent → the conservative default.
-        assert_eq!(CompletionMode::parse("sentence"), CompletionMode::Sentence);
-        assert_eq!(CompletionMode::parse("bogus"), CompletionMode::Sentence);
-        // Caps grow with scope so bigger modes have room to finish.
-        assert!(
-            CompletionMode::Sentence.num_predict() < CompletionMode::Block.num_predict()
-                && CompletionMode::Block.num_predict() < CompletionMode::Scope.num_predict()
-        );
-    }
-
-    #[test]
-    fn completion_prompt_block_and_scope_drop_the_single_sentence_bias() {
-        // Block/scope allow multi-line output; they must NOT carry the sentence
-        // mode's "do not begin a new paragraph" restriction.
-        let mid = "fn add(a: i32, b: i32) {\n    ";
-        let block = completion_prompt(mid, "\n}", "rust", CompletionMode::Block, "");
-        assert!(block.contains("block"));
-        assert!(!block.contains("middle of a sentence"));
-
-        let scope = completion_prompt(mid, "\n}", "rust", CompletionMode::Scope, "");
-        assert!(scope.contains("function") && scope.contains("scope"));
-        assert!(!scope.contains("middle of a sentence"));
-    }
-
-    #[test]
-    fn trailing_comment_intent_detects_comment_above_a_fresh_line() {
-        // Caret on a fresh indented line directly below a `//` comment.
-        let p = "fn main() {\n    // new for loop to compute the sum\n    ";
-        assert_eq!(
-            trailing_comment_intent(p, "rust").as_deref(),
-            Some("new for loop to compute the sum")
-        );
-        // Caret at the end of the comment line itself (no newline yet).
-        let p2 = "# compute the average of the list";
-        assert_eq!(
-            trailing_comment_intent(p2, "python").as_deref(),
-            Some("compute the average of the list")
-        );
-    }
-
-    #[test]
-    fn trailing_comment_intent_merges_consecutive_comment_lines() {
-        let p = "    // compute the sum of all even numbers\n    /// and return the result\n    ";
-        assert_eq!(
-            trailing_comment_intent(p, "rust").as_deref(),
-            Some("compute the sum of all even numbers and return the result")
-        );
-        // Single-line block comment is recognised in C-family languages.
-        let blk = "/* build the lookup table */\n";
-        assert_eq!(
-            trailing_comment_intent(blk, "typescript").as_deref(),
-            Some("build the lookup table")
-        );
-    }
-
-    #[test]
-    fn trailing_comment_intent_ignores_non_instructions_and_prose() {
-        // Real code on the caret line → not an intent comment.
-        assert_eq!(trailing_comment_intent("let x = 1;\n", "rust"), None);
-        // Dividers / lone tokens don't read as instructions.
-        assert_eq!(trailing_comment_intent("// ----\n", "rust"), None);
-        assert_eq!(trailing_comment_intent("//\n", "rust"), None);
-        // Comment is no longer adjacent to the caret (intervening code line).
-        let gap = "// describe the loop\nlet y = 2;\n";
-        assert_eq!(trailing_comment_intent(gap, "rust"), None);
-        // Markdown headings must never be treated as code-intent comments.
-        assert_eq!(trailing_comment_intent("# My Heading\n", "markdown"), None);
-        // Shebang line is not a natural-language instruction.
-        assert_eq!(trailing_comment_intent("#!/bin/bash\n", "bash"), None);
-    }
-
-    #[test]
-    fn completion_prompt_switches_to_implement_mode_for_intent_comments() {
-        let p = "fn main() {\n    // new for loop to compute the sum\n    ";
-        let prompt = completion_prompt(p, "\n}", "rust", CompletionMode::Sentence, "");
-        // Implements the comment as code rather than continuing prose.
-        assert!(prompt.contains("implements that description"));
-        assert!(prompt.contains("new for loop to compute the sum"));
-        assert!(!prompt.contains("middle of a sentence"));
-        // Without a trailing comment it keeps the ordinary sentence behaviour.
-        let plain = completion_prompt("let x = ", "", "rust", CompletionMode::Sentence, "");
-        assert!(!plain.contains("implements that description"));
-    }
-
-    #[test]
-    fn is_mid_sentence_detects_unfinished_sentences() {
-        // Mid-sentence: ends on a word, comma, or trailing space after a word.
-        assert!(is_mid_sentence("The main advantages are"));
-        assert!(is_mid_sentence("I am writing to "));
-        assert!(is_mid_sentence("a, b,"));
-        // Not mid-sentence: terminator, newline, or empty (start of document).
-        assert!(!is_mid_sentence("Done."));
-        assert!(!is_mid_sentence("Why?"));
-        assert!(!is_mid_sentence("Header:"));
-        assert!(!is_mid_sentence("paragraph end.\n"));
-        assert!(!is_mid_sentence(""));
-    }
-
-    #[test]
-    fn completion_prompt_biases_to_finishing_the_sentence_when_mid_sentence() {
-        let mid = completion_prompt(
-            "I am writing to ",
-            " Best regards",
-            "text",
-            CompletionMode::Sentence,
-            "",
-        );
-        assert!(mid.contains("middle of a sentence"));
-        assert!(mid.contains("complete") || mid.contains("completes"));
-        // At a sentence boundary it switches to the plain-continuation hint.
-        let cont = completion_prompt("First line.\n", "", "text", CompletionMode::Sentence, "");
-        assert!(!cont.contains("middle of a sentence"));
-        assert!(cont.contains("Continue"));
-    }
-
-    #[test]
-    fn clean_completion_strips_code_fences() {
-        assert_eq!(clean_completion("foo()\n"), "foo()");
-        assert_eq!(clean_completion("```rust\nfoo()\n```"), "foo()\n");
-        // No fence → unchanged (bar a trailing newline trim).
-        assert_eq!(clean_completion("plain"), "plain");
-    }
-
-    #[test]
-    fn clean_completion_strips_conversational_preamble() {
-        // The exact failure the user hit: a chat model prefacing the answer.
-        assert_eq!(
-            clean_completion("Here is the reformatted version of the text:\nreturn a + b"),
-            "return a + b",
-        );
-        assert_eq!(clean_completion("Sure, here you go:\nx = 1"), "x = 1");
-        // A real first line that merely ends in ':' is NOT a preamble — keep it.
-        assert_eq!(
-            clean_completion("def foo():\n    return 1"),
-            "def foo():\n    return 1",
-        );
-        // A normal multi-line completion is untouched.
-        assert_eq!(clean_completion("a + b\nc + d"), "a + b\nc + d");
-    }
-
-    #[test]
-    fn trim_context_overlap_drops_echoed_prefix_tail() {
-        // The exact case from llama3.2:3b: BEFORE ends with "return ", model echoes it.
-        assert_eq!(
-            trim_context_overlap("    return ", "\n\nprint(x)", "return a + b"),
-            "a + b",
-        );
-        // Repeated trailing word.
-        assert_eq!(
-            trim_context_overlap("The quick brown fox", " over the dog", "fox jumps"),
-            "jumps",
-        );
-    }
-
-    #[test]
-    fn trim_context_overlap_drops_echoed_suffix_head() {
-        // Model pre-echoes the start of AFTER at the end of its insertion.
-        assert_eq!(
-            trim_context_overlap("a = ", " + 1", "compute() + 1"),
-            "compute()",
-        );
-    }
-
-    #[test]
-    fn trim_context_overlap_keeps_unrelated_completion() {
-        // No overlap → returned unchanged.
-        assert_eq!(
-            trim_context_overlap("I am writing to ", " Best regards", "express my thanks"),
-            "express my thanks",
-        );
-        // A 1–2 char incidental match is below the threshold, so it is NOT trimmed.
-        assert_eq!(
-            trim_context_overlap("foo a", "", "a list of items"),
-            "a list of items"
-        );
-    }
-
-    #[test]
-    fn overlap_len_finds_seam() {
-        assert_eq!(overlap_len("    return", "return a"), 6);
-        assert_eq!(overlap_len("brown fox", "fox jumps"), 3);
-        assert_eq!(overlap_len("hello", "world"), 0);
-    }
-
-    // ── sanitize_alias turns ':' into '-' ─────────────────────────────────────
-
-    #[test]
-    fn sanitize_alias_replaces_colon() {
-        assert_eq!(sanitize_alias("llama3:latest"), "llama3-latest");
-        assert_eq!(sanitize_alias("qwen2:7b"), "qwen2-7b");
-        assert_eq!(sanitize_alias("noname"), "noname");
-    }
-
-    // ── "Clear conversations" (gap 33 follow-up (c)) ─────────────────────────
-
-    /// A model home as Vibe leaves it: config and logins beside the session
-    /// store (unified and legacy) and the debug log.
-    fn vibe_home_with_sessions(root: &std::path::Path) -> std::path::PathBuf {
-        let home = root.join("vibe_local").join("llama3-latest");
-        let unified = home.join("logs").join("session").join("unified").join("abc");
-        std::fs::create_dir_all(&unified).unwrap();
-        std::fs::write(unified.join("CURRENT"), b"x").unwrap();
-        let legacy = home.join("logs").join("session").join("session_20261013_1");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("meta.json"), b"{}").unwrap();
-        std::fs::write(home.join("logs").join("vibe.log"), b"log").unwrap();
-        for keep in ["config.toml", "hooks.toml", ".env", "vibehistory"] {
-            std::fs::write(home.join(keep), b"keep").unwrap();
-        }
-        home
-    }
-
-    fn none_live() -> Vec<String> {
-        Vec::new()
-    }
-
-    /// Step 9 review: a tab of the model that starts while the store is being
-    /// deleted keeps the marker — its conversation may hold mail.
-    #[test]
-    fn a_tab_starting_during_the_clear_keeps_the_marker() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = vibe_home_with_sessions(tmp.path());
-        let marker = tmp.path().join("marker");
-        std::fs::write(&marker, b"").unwrap();
-        let asked = std::cell::Cell::new(0);
-        let live = || {
-            asked.set(asked.get() + 1);
-            if asked.get() == 1 { Vec::new() } else { vec!["late-tab".to_string()] }
-        };
-        // A refusal of its own: the conversations are gone, the mark is kept.
-        assert_eq!(clear_conversations_in(&home, &marker, &live).unwrap_err(), LOCAL_MODEL_TAB_STARTED);
-        assert_eq!(asked.get(), 2);
-        assert!(marker.exists(), "the marker outlives a clear a new tab overlapped");
-        assert!(!home.join("logs").join("session").exists(), "the conversations were cleared");
-    }
-
-    #[test]
-    fn clearing_deletes_the_conversations_then_the_marker_and_nothing_else() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = vibe_home_with_sessions(tmp.path());
-        let marker = tmp.path().join("root_mcp").join("read_mail_model").join("h");
-        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
-        std::fs::write(&marker, b"").unwrap();
-        clear_conversations_in(&home, &marker, &none_live).unwrap();
-        assert!(!home.join("logs").join("session").exists());
-        assert!(!marker.exists());
-        for keep in ["config.toml", "hooks.toml", ".env", "vibehistory"] {
-            assert!(home.join(keep).is_file(), "{keep}");
-        }
-        assert!(home.join("logs").join("vibe.log").is_file());
-        // Again: nothing left to clear is not an error; nor is a model never run.
-        clear_conversations_in(&home, &marker, &none_live).unwrap();
-        clear_conversations_in(&tmp.path().join("vibe_local").join("never"), &marker, &none_live).unwrap();
-    }
-
-    #[test]
-    fn clearing_is_refused_while_a_tab_of_the_model_runs_and_keeps_the_marker() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = vibe_home_with_sessions(tmp.path());
-        let marker = tmp.path().join("marker");
-        std::fs::write(&marker, b"").unwrap();
-        let err = clear_conversations_in(&home, &marker, &|| vec!["tab-1".to_string()]).unwrap_err();
-        assert_eq!(err, LOCAL_MODEL_TAB_OPEN);
-        assert!(home.join("logs").join("session").join("unified").is_dir());
-        assert!(marker.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn clearing_never_follows_a_planted_link_and_keeps_the_marker_on_failure() {
-        let tmp = tempfile::tempdir().unwrap();
-        let outside = tmp.path().join("outside");
-        std::fs::create_dir_all(outside.join("session")).unwrap();
-        std::fs::write(outside.join("session").join("precious"), b"x").unwrap();
-        // `logs` a link out of the home: the link goes, the target stays.
-        let home = tmp.path().join("vibe_local").join("m");
-        std::fs::create_dir_all(&home).unwrap();
-        std::os::unix::fs::symlink(&outside, home.join("logs")).unwrap();
-        let marker = tmp.path().join("marker");
-        std::fs::write(&marker, b"").unwrap();
-        clear_conversations_in(&home, &marker, &none_live).unwrap();
-        assert!(std::fs::symlink_metadata(home.join("logs")).is_err());
-        assert!(outside.join("session").join("precious").is_file());
-        // `session` a link: the same.
-        std::fs::create_dir_all(home.join("logs")).unwrap();
-        std::os::unix::fs::symlink(outside.join("session"), home.join("logs").join("session")).unwrap();
-        clear_conversations_in(&home, &marker, &none_live).unwrap();
-        assert!(outside.join("session").join("precious").is_file());
-        // A link deeper in the store is unlinked, its target untouched.
-        assert!(std::fs::symlink_metadata(home.join("logs").join("session")).is_err());
-        std::fs::create_dir_all(home.join("logs").join("session").join("s1")).unwrap();
-        std::os::unix::fs::symlink(&outside, home.join("logs").join("session").join("s1").join("out")).unwrap();
-        clear_conversations_in(&home, &marker, &none_live).unwrap();
-        assert!(!home.join("logs").join("session").exists());
-        assert!(outside.join("session").join("precious").is_file());
-        // A home that is itself a link is refused, and the marker stays.
-        let linked = tmp.path().join("vibe_local").join("linked");
-        std::os::unix::fs::symlink(&outside, &linked).unwrap();
-        std::fs::write(&marker, b"").unwrap();
-        assert!(clear_conversations_in(&linked, &marker, &none_live).is_err());
-        assert!(marker.exists());
-        assert!(outside.join("session").join("precious").is_file());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_store_that_cannot_be_looked_at_keeps_the_marker() {
-        // A home the model's tab took the search permission from: `logs`
-        // cannot be stat'ed. That is not "nothing to clear" — the clear fails
-        // and the marker stays with the conversations it guards.
-        use std::os::unix::fs::PermissionsExt;
-        if unsafe { libc::geteuid() } == 0 {
-            return; // root ignores the permission bits
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("vibe_local").join("m");
-        std::fs::create_dir_all(home.join("logs").join("session")).unwrap();
-        std::fs::write(home.join("logs").join("session").join("s.json"), b"{}").unwrap();
-        let marker = tmp.path().join("marker");
-        std::fs::write(&marker, b"").unwrap();
-        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let result = clear_conversations_in(&home, &marker, &none_live);
-        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(result.is_err(), "{result:?}");
-        assert!(marker.exists(), "the marker went while the conversations stayed");
-        assert!(home.join("logs").join("session").join("s.json").is_file());
-        // Put right, the same clear goes through.
-        clear_conversations_in(&home, &marker, &none_live).unwrap();
-        assert!(!marker.exists());
-        assert!(!home.join("logs").join("session").exists());
-    }
-
-    // ── reload regression: writing the same model twice is idempotent ─────────
-
-    #[test]
-    fn prepare_local_agent_idempotent_on_same_model() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let model = "llama3:latest";
-        let (vibe_home, alias) = write_agent_config(tmp.path(), model);
-        // Write again — should produce identical content (no duplicated blocks).
-        write_agent_config(tmp.path(), model);
-
-        let cfg = std::fs::read_to_string(vibe_home.join("config.toml")).unwrap();
-        let model_block_count = cfg.matches("[[models]]").count();
-        assert_eq!(
-            model_block_count, 1,
-            "calling prepare_local_agent twice must not duplicate the model block"
-        );
-        // active_model appears exactly once.
-        let active_model_count = cfg.matches(&format!("active_model = \"{alias}\"")).count();
-        assert_eq!(active_model_count, 1);
-    }
-
-    #[test]
-    fn model_directory_candidates_are_os_specific() {
-        let home = std::path::Path::new("/home/alice");
-        for os in [crate::paths::OsKind::Windows, crate::paths::OsKind::Macos] {
-            let dirs = ollama_model_dir_candidates(os, home, None);
-            assert_eq!(dirs, vec![home.join(".ollama/models")]);
-        }
-        let linux = ollama_model_dir_candidates(crate::paths::OsKind::Unix, home, None);
-        assert!(linux.contains(&home.join(".ollama/models")));
-        assert!(linux.contains(&std::path::PathBuf::from(
-            "/usr/share/ollama/.ollama/models"
-        )));
-    }
-
-    // ── models-download-location (Settings::ollama_models_path) ──────────────
-
-    #[test]
-    fn models_path_safety_gates_the_service_command_only() {
-        assert!(models_path_is_safe("/data/ollama/models"));
-        assert!(models_path_is_safe("/mnt/big disk/models")); // a space is fine
-        assert!(!models_path_is_safe("")); // nothing to point at
-        assert!(!models_path_is_safe("/data/\"quoted\"")); // breaks Environment="…"
-        assert!(!models_path_is_safe("/data/50%")); // a systemd specifier
-        assert!(!models_path_is_safe("/data/back\\slash"));
-        assert!(!models_path_is_safe("/data/\nnewline"));
-    }
-
-    #[test]
-    fn service_command_is_a_drop_in_only_under_systemd() {
-        let path = "/data/ollama/models";
-        // No service to reconfigure → nothing to run (a Tabtivity-spawned server
-        // already honours the setting).
-        assert_eq!(
-            models_dir_service_command(path, false),
-            (String::new(), String::new())
-        );
-
-        let (cmd, shell) = models_dir_service_command(path, true);
-        assert_eq!(shell, "bash");
-        assert!(cmd.contains(concat!("ollama.service.d/", crate::app_slug!(), "-models.conf")));
-        assert!(cmd.contains("OLLAMA_MODELS=%s")); // path arrives as a printf arg
-        assert!(cmd.contains(&crate::quote::posix(path)));
-        assert!(cmd.contains("systemctl restart ollama"));
-        // The dir is created and handed to whoever the unit runs as.
-        assert!(cmd.contains("systemctl show -p User"));
-        assert!(cmd.contains("chown"));
-    }
-
-    #[test]
-    fn service_command_withheld_for_an_unsafe_path_even_under_systemd() {
-        assert_eq!(
-            models_dir_service_command("/data/\"x\"", true),
-            (String::new(), String::new())
-        );
-    }
-
-    // ── #201a: `ollama_host` actually reaches the transport ──────────────────
-
-    fn addr(raw: &str) -> Result<String, String> {
-        resolve_ollama_addr(Some(raw), false)
-    }
-
-    #[test]
-    fn unset_ollama_host_is_the_address_it_always_was() {
-        // The whole compatibility promise: every install that predates this
-        // change keeps dialling exactly what it dialled before.
-        assert_eq!(
-            resolve_ollama_addr(None, false).unwrap(),
-            DEFAULT_OLLAMA_ADDR
-        );
-        assert_eq!(addr("").unwrap(), DEFAULT_OLLAMA_ADDR);
-        assert_eq!(addr("   ").unwrap(), DEFAULT_OLLAMA_ADDR);
-    }
-
-    #[test]
-    fn a_port_is_the_case_this_exists_for() {
-        assert_eq!(addr("127.0.0.1:11500").unwrap(), "127.0.0.1:11500");
-        assert_eq!(addr(":11500").unwrap(), "127.0.0.1:11500");
-        // Ollama's own documented bare-port spelling.
-        assert_eq!(addr("11500").unwrap(), "127.0.0.1:11500");
-        assert_eq!(addr("localhost").unwrap(), "localhost:11434");
-    }
-
-    #[test]
-    fn spellings_that_get_copied_in_are_understood() {
-        assert_eq!(addr("http://127.0.0.1:11434").unwrap(), "127.0.0.1:11434");
-        assert_eq!(addr("http://localhost:11500/").unwrap(), "localhost:11500");
-        assert_eq!(
-            addr("http://localhost:11500/v1").unwrap(),
-            "localhost:11500"
-        );
-        // `0.0.0.0` is what you write to make the *server* listen everywhere; as
-        // a connect address it means this machine.
-        assert_eq!(addr("0.0.0.0:11500").unwrap(), "127.0.0.1:11500");
-        assert_eq!(addr("::").unwrap(), "[::1]:11434");
-        assert_eq!(addr("::1").unwrap(), "[::1]:11434");
-        assert_eq!(addr("[::1]:11500").unwrap(), "[::1]:11500");
-    }
-
-    #[test]
-    fn https_is_refused_rather_than_downgraded() {
-        // The transport is plaintext HTTP/1.0 over a raw TcpStream. Connecting
-        // in the clear to an address written as TLS is the one outcome that must
-        // not be silent.
-        let err = addr("https://127.0.0.1:11434").unwrap_err();
-        assert!(err.contains("HTTPS"), "{err}");
-        assert!(addr("ftp://127.0.0.1").is_err());
-    }
-
-    #[test]
-    fn another_machine_needs_saying_so() {
-        // RFC 5737 documentation addresses, not RFC 1918 ones: these are
-        // guaranteed unroutable and reserved for exactly this, and the privacy
-        // scan still flags a real `10.x`/`192.168.x` so a leaked internal
-        // address cannot hide among test fixtures.
-        for host in ["192.0.2.9:11434", "nas.example:11434", "203.0.113.5"] {
-            assert!(
-                resolve_ollama_addr(Some(host), false).is_err(),
-                "{host} must not be reachable without the opt-in"
-            );
-            assert!(
-                resolve_ollama_addr(Some(host), true).is_ok(),
-                "{host} must be reachable with it"
-            );
-        }
-        // Loopback never needs the opt-in, whatever it is spelled as.
-        for host in [
-            "127.0.0.1",
-            "127.1.2.3",
-            "localhost",
-            "dev.localhost",
-            "::1",
-        ] {
-            assert!(resolve_ollama_addr(Some(host), false).is_ok(), "{host}");
-        }
-    }
-
-    #[test]
-    fn a_host_that_could_inject_a_header_is_refused() {
-        // The result is interpolated into a request line and a `Host:` header.
-        assert!(addr("local\r\nX-Evil: 1").is_err());
-        assert!(addr("local host").is_err());
-        assert!(addr("127.0.0.1:not-a-port").is_err());
-        assert!(addr("127.0.0.1:99999").is_err());
-    }
-
-    #[test]
-    fn ensure_running_only_starts_a_server_it_could_own() {
-        assert!(addr_is_loopback("127.0.0.1:11434"));
-        assert!(addr_is_loopback("localhost:11500"));
-        assert!(addr_is_loopback("[::1]:11434"));
-        assert!(!addr_is_loopback("192.0.2.9:11434"));
-    }
-
-    #[test]
-    fn the_vibe_provider_points_at_the_same_server() {
-        // Not a strong assertion about the address (that depends on this
-        // machine's settings.json) — only that the stanza is still well-formed
-        // and names an `http://` base, which is what the agent parses.
-        let block = ollama_provider_block();
-        assert!(block.contains("api_base = \"http://"), "{block}");
-        assert!(block.ends_with("/v1\"\napi_key_env_var = \"\"\napi_style = \"openai\"\nbackend = \"generic\"\nreasoning_field_name = \"reasoning_content\"\nproject_id = \"\"\nregion = \"\"\n\n[providers.extra_headers]\n"), "{block}");
-    }
-
-    /// Integration test: only runs when Ollama is reachable and has models.
-    #[test]
-    fn prepare_local_agent_integration_if_ollama_running() {
-        if TcpStream::connect_timeout(
-            &"127.0.0.1:11434".parse().unwrap(),
-            Duration::from_millis(300),
-        )
-        .is_err()
-        {
-            eprintln!("Ollama not running — skipping integration test");
-            return;
-        }
-
-        let model = match first_available_model() {
-            Some(m) => m,
-            None => {
-                eprintln!("No Ollama models found — skipping integration test");
-                return;
-            }
-        };
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let (vibe_home, alias) = write_agent_config(tmp.path(), &model);
-
-        let cfg = std::fs::read_to_string(vibe_home.join("config.toml")).unwrap();
-        assert_eq!(
-            cfg.lines().next().unwrap_or(""),
-            format!("active_model = \"{alias}\""),
-            "active_model must be first so global config cannot shadow it"
-        );
-        assert!(cfg.contains(&format!("alias = \"{alias}\"")));
-    }
-
-    fn first_available_model() -> Option<String> {
-        let mut stream = TcpStream::connect("127.0.0.1:11434").ok()?;
-        stream
-            .write_all(b"GET /api/tags HTTP/1.0\r\nHost: localhost\r\n\r\n")
-            .ok()?;
-        let mut response = String::new();
-        std::io::Read::read_to_string(&mut stream, &mut response).ok()?;
-        let body = response.split("\r\n\r\n").nth(1)?;
-        let v: serde_json::Value = serde_json::from_str(body).ok()?;
-        v["models"]
-            .as_array()?
-            .iter()
-            .find_map(|m| Some(m["name"].as_str()?.to_owned()))
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod phone_control_tests {

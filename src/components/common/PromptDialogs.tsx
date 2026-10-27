@@ -3,6 +3,7 @@ import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useStat
 import { UntestedTag } from "./UntestedTag";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
+import { QUEUED_CONFIRM_DELAY_MS } from "../../lib/queuedConfirm";
 import type { UntestedId } from "../../lib/untested";
 import { ErrorNote } from "./ErrorNote";
 
@@ -91,11 +92,6 @@ export type MessageSpec = {
   /** Reports a failure (the message rides the error box). */
   error?: boolean;
 };
-
-/** How long a queued question's confirm button ignores activation after the
- *  dialog appears — and how soon after an answer a new question counts as
- *  following it (the stores' `queued`). */
-export const QUEUED_CONFIRM_DELAY_MS = 400;
 
 /**
  * Whether question `id`'s confirm button may act yet. A question that waited in

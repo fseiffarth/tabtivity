@@ -26,11 +26,16 @@ Popped-out subwindows of a project park and come back with it too. Global apps
 
 | System | How windows are parked |
 |---|---|
-| Linux, X11 | Moved to a second, hidden desktop |
-| Linux, KDE Plasma (Wayland) | One virtual desktop per project (KDE 5 and 6) |
-| Linux, other Wayland (GNOME, …) | No parking: the compositor does not allow it. Tabs and files work |
+| Linux, KDE Plasma (X11) and Cinnamon | Moved to a second, hidden desktop |
+| Linux, GNOME (X11 and Wayland) | Moved to the hidden workspace on the right (Ctrl+Alt+→). Under Wayland only XWayland windows can be moved; a native Wayland window stays on screen, and the Apps view says so on its row |
+| Linux, KDE Plasma (Wayland), XFCE and other desktops | No parking: the compositor does not allow it, and Settings → Layout says so. Tabs and files work |
 | Windows | Hidden and shown again; virtual-desktop pinning where possible |
 | macOS | Whole **applications** are hidden and shown: one window of a multi-window app cannot be parked alone |
+
+On GNOME and Cinnamon, Tabtivity keeps a fixed pair of workspaces while it
+runs (dynamic workspaces off; on GNOME, workspaces on every monitor rather than
+the primary one only, so windows on a second screen park too) and puts your
+own workspace settings back when it quits.
 
 ## Open a project in its IDE
 

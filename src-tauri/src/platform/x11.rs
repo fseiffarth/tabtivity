@@ -7,9 +7,17 @@
 //! - Protected WM_CLASS names are never moved.
 //! - All window management uses ClientMessage events (proper EWMH), not
 //!   ChangeProperty, so KWin intercepts and honors the requests.
+//!
+//! Runs on KDE, Cinnamon (Muffin) and GNOME (Mutter), X11 and — for GNOME and
+//! a KDE whose `kde-wayland` connect failed — Wayland, where it reaches the
+//! XWayland clients only (`super::route`). On Cinnamon and GNOME the workspace
+//! GSettings are taken over while it runs and given back in `cleanup`
+//! (`super::workspace_settings`). Under Wayland it embeds nothing and
+//! positions nothing ([`embeds`], [`positions`]).
 
 use std::collections::HashSet;
 use app_core::sync::LockExt;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 use std::thread;
@@ -18,7 +26,8 @@ use std::time::Duration;
 use xcb::x::{self, Atom, Window};
 use xcb::{Connection, Xid, XidNew};
 
-use super::{WorkspaceBackend, WorkspaceInfo};
+use super::workspace_settings::{self, DesktopSettings, Op, Recorded};
+use super::{WorkspaceBackend, WorkspaceInfo, X11Desktop};
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -37,7 +46,14 @@ pub struct X11Backend {
     screen_num: i32,
     atoms: Atoms,
     original_desktop_count: u32,
-    cinnamon: Option<CinnamonWorkspaceState>,
+    /// The desktop's workspace settings table (Cinnamon, GNOME); `None` on KDE.
+    settings: Option<&'static DesktopSettings>,
+    /// What the table changed, for `cleanup` to give back.
+    settings_record: Vec<Recorded>,
+    /// `<state_dir>/workspace_settings_restore.json`.
+    restore_file: PathBuf,
+    /// A Wayland session: only XWayland windows are reachable.
+    wayland: bool,
     cleaned_up: Mutex<bool>,
     /// Tabtivity-owned window ids that are explicitly opted in to project-switch
     /// parking despite carrying the protected `tabtivity` WM_CLASS (#42 detached
@@ -83,34 +99,61 @@ struct Atoms {
     wm_state: Atom,
 }
 
-struct CinnamonWorkspaceState {
-    original_num_workspaces: Option<String>,
-    original_workspace_names: Option<String>,
-    original_dynamic_workspaces: Option<String>,
+/// Whether the backend may reparent a foreign window into a Tabtivity one:
+/// never under Wayland, where Tabtivity's own windows are native.
+fn embeds(wayland: bool) -> bool {
+    !wayland
+}
+
+/// Whether `position_window` may move a window: never under Wayland, where
+/// the drop point the frontend sends is no global coordinate and Mutter would
+/// honour the `ConfigureWindow` on an XWayland window — moving the app to a
+/// wrong place.
+fn positions(wayland: bool) -> bool {
+    !wayland
 }
 
 impl X11Backend {
-    pub fn try_new() -> Result<Self, String> {
+    pub fn try_new(desktop: X11Desktop) -> Result<Self, String> {
         let (conn, screen_num) =
             xcb::Connection::connect(None).map_err(|e| format!("xcb connect: {e}"))?;
 
         let atoms = intern_atoms(&conn)?;
         let original_desktop_count =
             get_cardinal(&conn, screen_num, atoms.net_number_of_desktops).unwrap_or(1);
-        let cinnamon = if is_cinnamon_desktop() {
-            Some(configure_cinnamon_workspaces()?)
-        } else {
-            None
-        };
+        // Before `ensure_desktop_count`: with the count raised in GSettings
+        // that call finds two desktops and sends nothing.
+        let settings = desktop.settings();
+        let restore_file = crate::storage::state_dir().join(workspace_settings::RESTORE_FILE);
+        let settings_record =
+            workspace_settings::take_over(settings, &restore_file, gsettings_get, gsettings_run)?;
+        // The window manager applies a GSettings write asynchronously. Asking
+        // for the count by EWMH before it has would, on Mutter, write
+        // `num-workspaces` itself — a value nothing recorded — so give the
+        // settings a second to land first.
+        if !settings_record.is_empty() {
+            for _ in 0..20 {
+                if get_cardinal(&conn, screen_num, atoms.net_number_of_desktops).unwrap_or(1) >= 2 {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
 
-        ensure_desktop_count(&conn, screen_num, &atoms, 2)?;
+        if let Err(e) = ensure_desktop_count(&conn, screen_num, &atoms, 2) {
+            workspace_settings::give_back(&settings_record, &restore_file, gsettings_run);
+            return Err(e);
+        }
 
         Ok(X11Backend {
             conn,
             screen_num,
             atoms,
             original_desktop_count,
-            cinnamon,
+            settings,
+            settings_record,
+            restore_file,
+            wayland: session_is_wayland(),
             cleaned_up: Mutex::new(false),
             parkable: Mutex::new(ParkableState::default()),
         })
@@ -124,8 +167,9 @@ impl WorkspaceBackend for X11Backend {
 
     fn supports_embedding(&self) -> bool {
         // X11 is the only backend that can reparent an external app's top-level
-        // into a Tabtivity-owned container for frameless in-tab embedding.
-        true
+        // into a Tabtivity-owned container for frameless in-tab embedding — on a
+        // real X server only.
+        embeds(self.wayland)
     }
 
     fn info(&self) -> WorkspaceInfo {
@@ -207,6 +251,9 @@ impl WorkspaceBackend for X11Backend {
     }
 
     fn position_window(&self, window_id: u64, x: i32, y: i32) -> Result<(), String> {
+        if !positions(self.wayland) {
+            return Ok(());
+        }
         let wid = window_from_u64(window_id)
             .ok_or_else(|| format!("invalid x11 window id {window_id}"))?;
         // Geometry only — root-window pixels map to whichever monitor contains
@@ -258,7 +305,12 @@ impl WorkspaceBackend for X11Backend {
             }
         }
 
-        if self.original_desktop_count < 2 {
+        // KDE only: on a desktop with a settings table the window manager
+        // turns this request into a write of its own count setting (Mutter;
+        // under dynamic workspaces the original count was just the momentary
+        // one), so there the table's restore is the only thing that restores
+        // the count.
+        if self.settings.is_none() && self.original_desktop_count < 2 {
             request_desktop_count(
                 &self.conn,
                 self.screen_num,
@@ -267,9 +319,7 @@ impl WorkspaceBackend for X11Backend {
             )
             .ok();
         }
-        if let Some(cinnamon) = &self.cinnamon {
-            cinnamon.restore();
-        }
+        workspace_settings::give_back(&self.settings_record, &self.restore_file, gsettings_run);
         self.conn.flush().ok();
         Ok(())
     }
@@ -291,7 +341,7 @@ impl X11Backend {
             thread::sleep(Duration::from_millis(30));
         }
 
-        if self.cinnamon.is_some() {
+        if self.settings.is_some_and(|s| s.property_fallback) {
             set_window_desktop_property(&self.conn, wid, &self.atoms, desktop)?;
             self.conn.flush().map_err(|e| e.to_string())?;
             for _ in 0..5 {
@@ -602,20 +652,18 @@ pub fn is_wayland_session(wayland_display: Option<&std::ffi::OsStr>) -> bool {
     wayland_display.is_some_and(|d| !d.is_empty())
 }
 
-/// Whether an X connection from this process can see the session's windows at
-/// all — i.e. whether any of the `_NET_CLIENT_LIST` scans below are worth
-/// running.
+/// Whether this process runs in a Wayland session, where an X connection sees
+/// only the XWayland clients.
 ///
 /// Under Wayland, `DISPLAY` is still set (XWayland), so `xcb` connects fine and
-/// the scans *run* — but the client list holds only XWayland clients. Tabtivity's
-/// own windows are native Wayland toplevels, and so is nearly every app it
-/// launches, so every scan runs to its retry cap and answers `None`: 3 s at
-/// startup, **2 s of unpainted black popout inside every `detach_subwindow`**,
-/// and up to 4 s before the Apps view learns about a launched app (user,
-/// 2026-09-07, first session on GNOME/Wayland). And an id, had it been found,
-/// would have no consumer: the Wayland backends (KDE, and `null` for GNOME)
-/// neither park nor position by window id. So the scans skip themselves here,
-/// leaving `window_id` `None` — the same outcome, minus the wait.
+/// the scans *run* — but the client list holds only XWayland clients.
+/// Tabtivity's own windows are native Wayland toplevels, so
+/// [`find_window_for_title`] (which looks for them) answers `None` at once
+/// here instead of running to its retry cap — 2 s of unpainted black popout
+/// inside every `detach_subwindow` otherwise (user, 2026-09-07). The app
+/// launcher's scans (`commands::apps`) run one pass without sleeping, which
+/// gives an XWayland app (JetBrains, VS Code) its window id for parking. The
+/// `x11` backend asks it once at startup to gate embedding and positioning.
 pub fn session_is_wayland() -> bool {
     is_wayland_session(std::env::var_os("WAYLAND_DISPLAY").as_deref())
 }
@@ -783,137 +831,29 @@ pub fn frontmost_window_under_pointer() -> Option<u64> {
     None
 }
 
-fn is_cinnamon_desktop() -> bool {
-    std::env::var("XDG_CURRENT_DESKTOP")
-        .unwrap_or_default()
-        .to_lowercase()
-        .contains("cinnamon")
-}
-
-fn configure_cinnamon_workspaces() -> Result<CinnamonWorkspaceState, String> {
-    let state = CinnamonWorkspaceState {
-        original_num_workspaces: gsettings_get(
-            "org.cinnamon.desktop.wm.preferences",
-            "num-workspaces",
-        ),
-        original_workspace_names: gsettings_get(
-            "org.cinnamon.desktop.wm.preferences",
-            "workspace-names",
-        ),
-        original_dynamic_workspaces: gsettings_get("org.cinnamon.muffin", "dynamic-workspaces"),
-    };
-
-    let current_num = state
-        .original_num_workspaces
-        .as_deref()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .unwrap_or(1);
-    if current_num < 2 {
-        gsettings_set("org.cinnamon.desktop.wm.preferences", "num-workspaces", "2")?;
-    }
-
-    let names = state
-        .original_workspace_names
-        .as_deref()
-        .map(cinnamon_workspace_names)
-        .unwrap_or_default();
-    let desired_names = cinnamon_workspace_names_value(&names);
-    gsettings_set(
-        "org.cinnamon.desktop.wm.preferences",
-        "workspace-names",
-        &desired_names,
-    )?;
-
-    if state.original_dynamic_workspaces.as_deref() == Some("true") {
-        gsettings_set("org.cinnamon.muffin", "dynamic-workspaces", "false")?;
-    }
-
-    Ok(state)
-}
-
-impl CinnamonWorkspaceState {
-    fn restore(&self) {
-        if let Some(value) = &self.original_workspace_names {
-            gsettings_set(
-                "org.cinnamon.desktop.wm.preferences",
-                "workspace-names",
-                value,
-            )
-            .ok();
-        }
-        if let Some(value) = &self.original_num_workspaces {
-            gsettings_set(
-                "org.cinnamon.desktop.wm.preferences",
-                "num-workspaces",
-                value,
-            )
-            .ok();
-        }
-        if let Some(value) = &self.original_dynamic_workspaces {
-            gsettings_set("org.cinnamon.muffin", "dynamic-workspaces", value).ok();
-        }
-    }
-}
+// ── Workspace GSettings ─────────────────────────────────────────────────────
 
 use crate::commands::os_clock::gsettings_get;
 
-fn gsettings_set(schema: &str, key: &str, value: &str) -> Result<(), String> {
+/// Run one `gsettings` call for [`workspace_settings`].
+fn gsettings_run(op: &Op) -> Result<(), String> {
+    let (args, schema, key) = match op {
+        Op::Set { schema, key, value } => {
+            (vec!["set", schema.as_str(), key.as_str(), value.as_str()], schema, key)
+        }
+        Op::Reset { schema, key } => (vec!["reset", schema.as_str(), key.as_str()], schema, key),
+    };
     let output = Command::new("gsettings")
-        .args(["set", schema, key, value])
+        .args(&args)
+        .stdin(std::process::Stdio::null())
         .output()
-        .map_err(|e| format!("gsettings set {schema} {key}: {e}"))?;
+        .map_err(|e| format!("gsettings {} {schema} {key}: {e}", args[0]))?;
     if output.status.success() {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("gsettings set {schema} {key}: {}", stderr.trim()))
+        Err(format!("gsettings {} {schema} {key}: {}", args[0], stderr.trim()))
     }
-}
-
-fn cinnamon_workspace_names(value: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut current = String::new();
-    let mut in_string = false;
-    let mut escaped = false;
-
-    for ch in value.chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => escaped = true,
-            '\'' if in_string => {
-                names.push(current.clone());
-                current.clear();
-                in_string = false;
-            }
-            '\'' => in_string = true,
-            _ if in_string => current.push(ch),
-            _ => {}
-        }
-    }
-
-    names
-}
-
-fn cinnamon_workspace_names_value(original: &[String]) -> String {
-    let mut names = original.to_vec();
-    if names.is_empty() {
-        names.push(crate::brand::WM_CLASS.to_string());
-    }
-    if names.len() == 1 {
-        names.push(crate::brand::WM_CLASS_HIDDEN.to_string());
-    }
-    names[0] = crate::brand::WM_CLASS.to_string();
-    names[1] = crate::brand::WM_CLASS_HIDDEN.to_string();
-    let values = names
-        .into_iter()
-        .map(|name| format!("'{}'", name.replace('\\', "\\\\").replace('\'', "\\'")))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{values}]")
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -1071,43 +1011,12 @@ mod tests {
         assert!(window_from_u64(u64::MAX).is_none());
     }
 
-    // ── cinnamon_workspace_names ───────────────────────────────────────────
+    // ── Wayland gates ──────────────────────────────────────────────────────
 
     #[test]
-    fn parses_cinnamon_workspace_names() {
-        let raw = "['Work', 'Play']";
-        let names = cinnamon_workspace_names(raw);
-        assert_eq!(names, vec!["Work", "Play"]);
-    }
-
-    #[test]
-    fn parses_escaped_quote_in_workspace_name() {
-        // gsettings emits \' for an embedded single-quote inside a '-delimited value.
-        let raw = "['Can\\'t', 'Other']";
-        let names = cinnamon_workspace_names(raw);
-        assert_eq!(names[0], "Can't");
-        assert_eq!(names[1], "Other");
-    }
-
-    #[test]
-    fn cinnamon_names_value_always_sets_first_two_slots() {
-        let result = cinnamon_workspace_names_value(&[]);
-        assert!(result.contains(concat!("'", crate::app_name!(), "'")), concat!("first slot must be ", crate::app_name!()));
-        assert!(
-            result.contains(concat!("'", crate::app_name!(), "-Hidden'")),
-            concat!("second slot must be ", crate::app_name!(), "-Hidden")
-        );
-    }
-
-    #[test]
-    fn cinnamon_names_value_preserves_extra_workspaces() {
-        let original = vec![
-            "Old".to_string(),
-            "Also-Old".to_string(),
-            "Extra".to_string(),
-        ];
-        let result = cinnamon_workspace_names_value(&original);
-        assert!(result.contains("'Extra'"), "extra workspaces must be kept");
-        assert!(result.starts_with(concat!("['", crate::app_name!(), "', '", crate::app_name!(), "-Hidden',")));
+    fn wayland_embeds_and_positions_nothing() {
+        assert!(embeds(false) && positions(false), "a real X server does both");
+        assert!(!embeds(true), "no reparenting into a native Wayland window");
+        assert!(!positions(true), "the drop point is no global coordinate there");
     }
 }

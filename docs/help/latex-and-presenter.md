@@ -1,7 +1,7 @@
 ---
 id: latex-and-presenter
 title: LaTeX workspaces and the deck presenter
-keywords: [latex, tex, compile, pdflatex, xelatex, lualatex, latexmk, synctex, input, include, bibtex, cite, ref, label, beamer, overlay, preview, structure, presenter, presentation, deck, slides, speaker notes, eldeck, second screen]
+keywords: [latex, tex, compile, pdflatex, xelatex, lualatex, latexmk, synctex, input, include, bibtex, cite, ref, label, beamer, overlay, preview, structure, presenter, presentation, deck, slides, speaker notes, eldeck, second screen, screen sharing, privacy, hide windows, curtain]
 related: [pdf-and-markup, files-and-viewers, keyboard]
 ---
 
@@ -80,3 +80,26 @@ Switch on **Deck presenter** in **Settings → System → Experimental**. Then:
 
 For a plain PDF without editing, **Fullscreen** in the PDF toolbar is enough
 (see `pdf-and-markup`).
+
+## Hiding the other windows while you present
+
+While a PDF is shown fullscreen or a deck's audience window is open, every
+other Tabtivity window is covered by a plain panel, "Hidden while
+presenting". If you share the wrong window, or the wrong screen, in a video
+call, the call shows that panel instead of your mail or terminals. During a
+deck talk the main window keeps your presenter view (notes, timer, next
+slide), and the panel is only a small chip in its corner.
+
+- Click **Show** in a covered window to see it again. Each window comes back
+  on its own click. The panel stays when the presentation ends, because you
+  may still be sharing.
+- On Windows and macOS the covered windows, and any open browser windows, are
+  also hidden from screen capture, so a share shows them black. Linux has no
+  way to do that, so there the panel is the only cover.
+- Desktop calendar reminders wait until the presentation ends. Reminders on
+  your phone still arrive at once.
+- **Ctrl+Shift+Alt+H** covers every window without presenting, for calls
+  where you share something else. Pressed in a covered window, it shows that
+  window again. You can rebind it under **Settings → Keyboard**.
+- Turn the automatic panel off with **Hide other windows while presenting**
+  in **Settings → General**. The shortcut still works.

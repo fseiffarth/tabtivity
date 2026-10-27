@@ -18,7 +18,7 @@ import {
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
-import { DEFAULT_COMPACT_AGENT_IDS } from "../tabs/newTabItems";
+import { DEFAULT_COMPACT_AGENT_IDS } from "../../lib/tabs/newTabItems";
 import { useAutoloadNotice, type HubAgentInfo, type ModelsHub } from "./useModelsHub";
 
 /**
@@ -1219,12 +1219,12 @@ export function LocalModelsSection({
                 stays silent when it is current, so without this a good
                 result was indistinguishable from a dead button) and a failed
                 one, which speaks in the reason the check itself gave. */}
-            {!checkingUpdates && checkResult && !(checkResult.ok && checkResult.updates > 0) && (
-              <span className="local-model-update-note">
-                {checkResult.ok ? t("localModel.updatesNone") : checkResult.reason}
-              </span>
-            )}
           </button>
+          {!checkingUpdates && checkResult && !(checkResult.ok && checkResult.updates > 0) && (
+            <span className="local-model-update-note">
+              {checkResult.ok ? t("localModel.updatesNone") : checkResult.reason}
+            </span>
+          )}
           {/* The version pair, and the whole reason this row is a `div` with
               two children rather than one button: what the check found is
               `v0.14.3 → v0.15.2`, and the *new number is the upgrade*. A
@@ -1641,9 +1641,9 @@ export function LocalModelsSection({
  * The Machine group: CPU, RAM and GPU, each the *device's* figure. Its own
  * group, and the dropdown's last, because it is neither an agent nor a model:
  * it is what the machine has left for whichever of them you pick. The overlay
- * shows it as the strip above its Local models tab.
+ * shows it below the overview tiles and above its Local models tab.
  */
-export function MachineMeters({ hub, layout = "menu" }: { hub: ModelsHub; layout?: "menu" | "overlay" }) {
+export function MachineMeters({ hub, layout = "menu" }: { hub: Pick<ModelsHub, "gpus" | "machine">; layout?: "menu" | "overlay" }) {
   const t = useT();
   const { gpus, machine } = hub;
   const { used: gpuUsed, total: gpuTotal } = gpuTotals(gpus);

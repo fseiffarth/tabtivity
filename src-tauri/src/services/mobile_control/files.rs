@@ -224,7 +224,7 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
     // A project folder reached through a link planted inside another registered
     // root is not the user's root (the rule `commands::fs` applies to every
     // registry): refused, not followed to where the link now points.
-    if crate::commands::fs::is_planted_root(root) {
+    if crate::services::fs_confine::is_planted_root(root) {
         return Err(FilesError::Unavailable);
     }
     let canonical = root.canonicalize().map_err(|_| FilesError::Unavailable)?;
@@ -250,7 +250,7 @@ fn canonical_root(root: &Path) -> Result<PathBuf, FilesError> {
 /// [`ProjectDir::lookup_dir`], [`ProjectDir::create_dir`],
 /// [`ProjectDir::create_file`], [`ProjectDir::remove_file`]). So do the
 /// desktop viewers' absolute-path reads and saves
-/// (`commands::fs::open_confined`, [`ProjectDir::lookup_file`],
+/// (`services::fs_confine::open_confined`, [`ProjectDir::lookup_file`],
 /// [`ProjectDir::open_existing_for_write`]) and mail's "Save to project"
 /// (`commands::mail`), hence the crate-wide visibility.
 #[cfg(unix)]
@@ -390,8 +390,20 @@ impl ProjectDir {
     /// refused, never followed, and so is anything but a regular file; the
     /// file is truncated only after its own descriptor proved it regular.
     pub(crate) fn open_existing_for_write(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        self.open_existing(name, true)
+    }
+
+    /// [`Self::open_existing_for_write`] for reading and appending: the same
+    /// refusals, and the file is left as it is (the phone's PDF remarks,
+    /// `remarks.rs`, append an incremental update).
+    pub(crate) fn open_existing_for_update(&self, name: &str) -> Result<Option<fs::File>, WriteRefusal> {
+        self.open_existing(name, false)
+    }
+
+    fn open_existing(&self, name: &str, truncate: bool) -> Result<Option<fs::File>, WriteRefusal> {
         // Non-blocking, so a FIFO swapped in is refused below, not waited on.
-        let flags = libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        let access = if truncate { libc::O_WRONLY } else { libc::O_RDWR };
+        let flags = access | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
         let file = match self.openat(name, flags, 0) {
             Ok(file) => file,
             Err(error) => {
@@ -409,7 +421,9 @@ impl ProjectDir {
         if !meta.is_file() {
             return Err(WriteRefusal::NotFile);
         }
-        file.set_len(0).map_err(WriteRefusal::Io)?;
+        if truncate {
+            file.set_len(0).map_err(WriteRefusal::Io)?;
+        }
         Ok(Some(file))
     }
 
@@ -592,7 +606,7 @@ pub(crate) fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) ->
     // way would stall both ends), and bounded (#2349): a FIFO `.gitignore`
     // must not hang the phone's listing.
     let ran = crate::services::git_bounded::run(
-        &mut crate::commands::git::hardened_git_command_in(root, &["check-ignore", "-z", "--stdin"]),
+        &mut crate::services::git_hardened::hardened_git_command_in(root, &["check-ignore", "-z", "--stdin"]),
         crate::services::git_bounded::Opts { stdin: Some(input), ..Default::default() },
     );
     // Exit 0: some are ignored; 1: none; 128: not a repo, or git refused.
@@ -795,7 +809,7 @@ fn git_paths(root: &Path) -> Option<(Vec<String>, bool)> {
     // Bounded (#2349): stopped at the cap, or at the timeout when a FIFO
     // ignore file blocks it.
     let ran = crate::services::git_bounded::run(
-        &mut crate::commands::git::hardened_git_command_in(
+        &mut crate::services::git_hardened::hardened_git_command_in(
             root,
             &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         ),

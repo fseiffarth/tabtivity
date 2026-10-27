@@ -810,6 +810,8 @@ pub fn iso_now() -> String {
 /// Convert a Unix timestamp to UTC calendar fields:
 /// (year, month, day, hour, minute, second). Allocation-free, so the crash
 /// handler may call it; a timestamp chrono cannot represent reads as the epoch.
+/// Only the Unix crash handler (`lib.rs`) calls it.
+#[cfg(any(unix, test))]
 pub(crate) fn epoch_to_utc(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     use chrono::{Datelike, Timelike};
     let t = i64::try_from(secs)
@@ -827,6 +829,26 @@ pub(crate) fn epoch_to_utc(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
+
+/// Mint a random RFC 4122 v4 UUID (36 chars, `8-4-4-4-12`). It must be a real
+/// UUID: it is passed as `claude --session-id` and checked by
+/// `agent_session::is_uuid_shaped`. Ids minted by older builds repeat a
+/// nanosecond timestamp in every group (85 chars); they stay valid as ids.
+/// Should the system RNG fail, the bytes fall back to the clock, so callers
+/// that mint several ids back-to-back keep their collision guards (see
+/// `commands::boxes::create_box`).
+pub(crate) fn uuid_v4() -> String {
+    let mut b = [0u8; 16];
+    if getrandom::fill(&mut b).is_err() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        b = ts.to_le_bytes();
+    }
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = crate::digest::hex(&b);
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+}
 
 #[cfg(test)]
 mod tests {

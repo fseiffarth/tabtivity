@@ -29,6 +29,7 @@ const idle = {
   adoptable: null,
   canRelaunch: false,
   paused: false,
+  stopped: false,
   logPath: `/h/.local/share/${BRAND.slug}/package-dev-auto.log`,
 };
 
@@ -178,6 +179,44 @@ describe("DevBuildIndicator", () => {
     fireEvent.click(screen.getByText("Build now"));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("dev_build_now"));
     expect(invokeMock).not.toHaveBeenCalledWith("dev_build_set_paused", expect.anything());
+  });
+
+  it("stops a running build without pausing auto-builds", async () => {
+    const building = {
+      ...idle,
+      state: "building",
+      phase: "cargo",
+      commit: "30ed347",
+      startedAt: Math.floor(Date.now() / 1000) - 65,
+    };
+    answer(building);
+    render(<DevBuildIndicator />);
+    fireEvent.click(await screen.findByLabelText("Dev build: Building 30ed347: Compiling", undefined, { timeout: 5000 }));
+    fireEvent.click(await screen.findByText("Stop build"));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("dev_build_stop"));
+    expect(invokeMock).not.toHaveBeenCalledWith("dev_build_set_paused", expect.anything());
+  });
+
+  it("cannot stop an install, nor an idle build", async () => {
+    answer({ ...idle, state: "building", phase: "install", commit: "30ed347", startedAt: Math.floor(Date.now() / 1000) - 65 });
+    render(<DevBuildIndicator />);
+    fireEvent.click(await screen.findByLabelText(/^Dev build: Building 30ed347/, undefined, { timeout: 5000 }));
+    expect((await screen.findByText("Stop build")).closest("button")?.disabled).toBe(true);
+    cleanup();
+    answer(idle);
+    render(<DevBuildIndicator />);
+    fireEvent.click(await screen.findByLabelText("Dev build: Up to date (99e2c74)", undefined, { timeout: 5000 }));
+    await screen.findByText("Pause auto-builds");
+    expect(screen.queryByText("Stop build")).toBeNull();
+  });
+
+  it("offers build now after a stop left HEAD unbuilt", async () => {
+    answer({ ...idle, stopped: true, behind: 1 });
+    render(<DevBuildIndicator />);
+    fireEvent.click(await screen.findByLabelText("Dev build: Behind HEAD by 1", undefined, { timeout: 5000 }));
+    expect(await screen.findByText("Build stopped. The next commit builds again.")).toBeTruthy();
+    fireEvent.click(screen.getByText("Build now"));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("dev_build_now"));
   });
 
   it("offers no build now when nothing is newer or auto-builds run", async () => {

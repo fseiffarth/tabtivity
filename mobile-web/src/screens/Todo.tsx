@@ -12,6 +12,7 @@ import { todayStr } from "../../../src/lib/calendar/calendarTime";
 import { fallbackColumnId } from "../../../shared/todoColumns";
 import { ConfirmSheet, NameSheet, type Confirm, type NameAsk } from "../components/ConfirmSheet";
 import { useBackLayer } from "../backStack";
+import { HintQueue, type HintKey } from "../components/HintMessage";
 
 type Editing = TodoCard | "new" | null;
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
@@ -76,6 +77,9 @@ function blankTask(board: TodoBoard): TodoTaskInput {
     calendar_id: board.calendars[0]?.id ?? "", project_id: null, tags: [], subtasks: [],
   };
 }
+
+/** The board's tips, each its own card, one at a time (`HintQueue`). */
+const TODO_TIPS: readonly HintKey[] = ["todoCards", "todoBoard"];
 
 export function Todo({ card }: { card?: string }) {
   const t = useT();
@@ -186,6 +190,7 @@ export function Todo({ card }: { card?: string }) {
         that says the same sentence every visit. That notice is now the last
         thing on the screen, where it is still there to explain an empty board
         but costs nothing at the top. */}
+    <HintQueue hints={TODO_TIPS} />
     <input className="todo-mobile-search" type="search" value={search} placeholder={t("todoBoard.searchPlaceholder")} onChange={(event) => setSearch(event.target.value)} />
     <div className="todo-mobile-filters"><select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="">{t("todoBoard.filterAnyProject")}</option><option value="none">{t("todoBoard.filterNoProject")}</option>{board?.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}><option value="">{t("todoBoard.filterAnyTag")}</option>{tags.map((tag) => <option key={tag} value={tag}>#{tag}</option>)}</select><label className="todo-inline-check"><input type="checkbox" checked={hideDone} onChange={(event) => toggleHideDone(event.target.checked)} /> {t("todoBoard.hideDone")}</label><label className="todo-inline-check"><input type="checkbox" checked={hideArchived} onChange={(event) => toggleHideArchived(event.target.checked)} /> {t("mobile.todo.hideArchived")}</label></div>
     {/* The fold is a gesture with no affordance of its own beyond the caret, so

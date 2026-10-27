@@ -2,7 +2,7 @@ import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { sanitizeName } from "../projects/scaffold";
+import { sanitizeName } from "../../lib/projects/scaffold";
 import { useT } from "../../lib/i18n";
 import { isPathWithin } from "../../lib/paths";
 import { ArrowUpIcon, FolderIcon } from "./icons/Icon";

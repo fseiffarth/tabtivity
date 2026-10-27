@@ -20,7 +20,7 @@ import { WsInternals } from "../../lib/transport/wsInternals";
 import { pausePollersWhileDown, socketUrl } from "../../lib/transport/installWeb";
 import { setDialogAdapter } from "../../lib/transport/dialogAdapter";
 import { registerDict, useI18nStore } from "../../lib/i18n";
-import { dict as de } from "../../lib/i18nDicts/de";
+import { dict as de } from "../../lib/i18n/de";
 
 class FakeSocket implements SocketLike {
   static instances: FakeSocket[] = [];
@@ -147,7 +147,7 @@ describe("the browser transport", () => {
 
   it("refuses client and off commands locally, by the generated class table", async () => {
     const { socket, invoke } = connected();
-    await expect(invoke("capture_screenshot", {})).rejects.toMatchObject({ code: "client", command: "capture_screenshot" });
+    await expect(invoke("save_clipboard_image", {})).rejects.toMatchObject({ code: "client", command: "save_clipboard_image" });
     await expect(invoke("save_settings", {})).rejects.toMatchObject({ code: "off", reason: "whole-document-save" });
     expect(socket.textFrames()).toEqual([]);
     // A client command with a browser form is answered here.

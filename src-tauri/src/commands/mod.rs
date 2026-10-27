@@ -67,9 +67,6 @@ pub mod projects;
 pub mod python;
 pub mod remote;
 pub mod root_mcp;
-// Window/OS-only (`client`): not in the server daemon's build.
-#[cfg(feature = "desktop")]
-pub mod screenshot;
 pub mod search;
 pub mod settings;
 pub mod share;

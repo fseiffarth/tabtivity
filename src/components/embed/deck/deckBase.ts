@@ -11,7 +11,7 @@
 
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { invoke } from "@tauri-apps/api/core";
-import { readFileBytes } from "../fileAccess";
+import { readFileBytes } from "../../../lib/files/fileAccess";
 import type { BasePage } from "../../../lib/viewers/deck/sidecar";
 import { loadPdf } from "../../../lib/viewers/pdfLoad";
 
@@ -47,7 +47,7 @@ export async function loadBase(path: string, scope: string | null): Promise<Load
   const bytes = await readFileBytes(path, scope);
   const doc = await loadPdf(new Uint8Array(bytes));
 
-  const linesByPage = await pageLines(path);
+  const linesByPage = await pageLines(path, scope);
 
   const pages: BasePage[] = [];
   for (let n = 1; n <= doc.numPages; n += 1) {
@@ -83,10 +83,11 @@ export async function loadBase(path: string, scope: string | null): Promise<Load
 
 /** SyncTeX's page → source-line map for `pdfPath`, or an empty map. Never throws:
  *  the anchor is an optimisation over the fingerprint, not a requirement. */
-async function pageLines(pdfPath: string): Promise<Map<number, number[]>> {
+async function pageLines(pdfPath: string, projectId: string | null): Promise<Map<number, number[]>> {
   try {
     const rows = await invoke<Array<{ page: number; lines: number[] }>>("synctex_page_lines", {
       pdf: pdfPath,
+      projectId,
     });
     return new Map(rows.map((r) => [r.page, r.lines]));
   } catch {

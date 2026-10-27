@@ -352,7 +352,7 @@ fn watch_pruned(
 
 /// The user's own scan-exclusion list for `project_id` — `scan_excluded_paths` on
 /// the trusted `projects.json` entry, the same list the file tree writes and the
-/// size walk reads (`commands::fs::excluded_rel_set`). Never the in-folder
+/// size walk reads (`paths::excluded_rel_set`). Never the in-folder
 /// `project.json` copy, which anything working in the tree can rewrite.
 fn user_excluded_dirs(project_id: &str) -> std::collections::HashSet<String> {
     let Ok(entry) = crate::services::remote::project_entry(project_id) else {
@@ -368,7 +368,7 @@ fn user_excluded_dirs(project_id: &str) -> std::collections::HashSet<String> {
                 .collect()
         })
         .unwrap_or_default();
-    crate::commands::fs::excluded_rel_set(&list)
+    crate::paths::excluded_rel_set(&list)
 }
 
 /// Watch `project_id`'s tree (recursively), replacing any previous watch. An

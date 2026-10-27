@@ -72,6 +72,9 @@ pub enum VoiceError {
     DeviceBusy,
     /// The capture failed for another reason.
     DeviceFailed,
+    /// The mic is open but delivers only silence (muted, or the wrong input).
+    /// A warning: the session keeps listening.
+    MicSilent,
     /// The model would not load, or whisper failed.
     ModelFailed,
     /// The session named is not the active one.
@@ -94,6 +97,7 @@ impl VoiceError {
             Self::PermissionDenied => "permission-denied",
             Self::DeviceBusy => "device-busy",
             Self::DeviceFailed => "device-failed",
+            Self::MicSilent => "mic-silent",
             Self::ModelFailed => "model-failed",
             Self::NotActive => "not-active",
             Self::NoSpeechServer => "no-speech-server",
@@ -467,6 +471,7 @@ mod tests {
             VoiceError::PermissionDenied,
             VoiceError::DeviceBusy,
             VoiceError::DeviceFailed,
+            VoiceError::MicSilent,
             VoiceError::ModelFailed,
             VoiceError::NotActive,
             VoiceError::NoSpeechServer,

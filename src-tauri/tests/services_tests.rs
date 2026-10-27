@@ -70,6 +70,7 @@ fn tracked(
         opened_at: 1.0,
         window_id,
         origin: origin.to_string(),
+        launch_id: None,
     }
 }
 

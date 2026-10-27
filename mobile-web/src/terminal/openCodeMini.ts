@@ -64,9 +64,12 @@ export function isOpenCodeTab(agentLabel?: string): boolean {
 /** The two rows of the start-up banner that carry text beside their block
  * glyphs (`readableScreen` drops the stroke-only third row itself). */
 const BANNER = /^[█▀▄▌▐]+\s/u;
+/** OpenCode 2's banner, one row: `▪ oc mini v2.1.3 · ~/project` (`[O] oc
+ * mini` when it draws without Unicode). */
+const BANNER_V2 = /^\s*(?:▪|\[O\]) oc mini\b/u;
 
 export function isOpenCodeBanner(text: string): boolean {
-  return BANNER.test(text);
+  return BANNER.test(text) || BANNER_V2.test(text);
 }
 
 /** The hint OpenCode draws inside its *empty* input box, in three shapes:
@@ -109,9 +112,13 @@ export interface OpenCodeTurnFooter {
  * with. It is the only place a mini session prints the model's display name,
  * which is why `statusLine` reads the chip out of it. */
 const TURN_FOOTER = /^\s*▣\s+(\S.*)$/u;
+/** OpenCode 2 dropped the `▣`: `Build · gemma4:e4b · 16.9s` (2.1.3). Without
+ * the glyph only its shape tells it from prose — an agent in title case, a
+ * model, and a duration to close it. */
+const TURN_FOOTER_V2 = /^\s*([A-Z][\w-]*(?: [A-Z][\w-]*){0,2} · \S.*? · \d+(?:\.\d+)?(?:ms|s|m(?: \d+(?:\.\d+)?s)?|h(?: \d+m)?))\s*$/u;
 
 export function openCodeTurnFooter(text: string): OpenCodeTurnFooter | null {
-  const match = TURN_FOOTER.exec(text);
+  const match = TURN_FOOTER.exec(text) ?? TURN_FOOTER_V2.exec(text);
   if (!match) return null;
   const [agent, model, duration] = match[1].split(" · ").map((part) => part.trim());
   if (!agent) return null;
@@ -171,6 +178,80 @@ export function openCodeStatusRow(text: string): OpenCodeStatus | null {
     if (model) status.model = model[1];
   }
   return status;
+}
+
+/*
+ * OpenCode 2's `mini` (what a tab launched with a model runs, `opencode_session
+ * ::v2_launch_args`) draws its live area differently: a `┃` box, and under it
+ * one row of ` · `-joined groups in a fixed order (`ur` in the 2.1.3 bundle) —
+ * spinner, status, escape, queued, subagents, background, agent, model,
+ * context, provider, cost, menu — as many as the width holds:
+ *
+ *   `Build · gemma4:26b · Ollama (local) · ctrl+p menu`             idle
+ *   `Build · gemma4:e4b · 7.8K (6%) · Ollama · ctrl+p menu`         idle, after a turn
+ *   `🯦 esc interrupt · Build · gemma4:e4b · Ollama · ctrl+p menu`   working (the
+ *                                                                  spinner glyph cycles)
+ *   `🯧 esc stop · Build · gemma4:e4b · Ollama`                      working, 40 columns
+ *   `Build · gemma4:e4b · Ollama`                                   idle, 30 columns
+ *
+ * Captured from 2.1.3 at 30, 40, 60 and 120 columns. The model carries its
+ * variant as ` [high]`; a narrow pane may cut it with `…`.
+ */
+
+export interface OpenCodeMiniRow {
+  /** The agent, lower-cased (`build`), when the row had room for it. */
+  mode?: string;
+  /** The model as the row names it, its variant cut off. */
+  model?: string;
+  /** The model variant (`high`), from the model's ` [high]`. */
+  variant?: string;
+  /** Context left, from the share the row prints used. */
+  context?: string;
+  /** The row leads with the spinner: a turn is running. */
+  busy: boolean;
+}
+
+/** A spinner glyph, then the status: the interrupt key's hint, or a word. */
+const MINI_BUSY = /^[^\p{L}\p{N}\s]\s+(?:[^·]*?\b(?:interrupt|stop)|Running|reconnecting|Stop pending)(?: · |$)/u;
+const MINI_MENU = /^\S+ menu$/u;
+/** `7.8K (6%)`, or `6% ctx` where the row is short of room. */
+const MINI_CONTEXT = /^(?:\d+(?:\.\d+)?[KM]? \((\d{1,3})%\)|(\d{1,3})% ctx)$/u;
+const MINI_COST = /^\$\d/u;
+/** The agent's name as OpenCode prints it (`Build`, `Plan`, `Default`). */
+const MINI_AGENT = /^[A-Z][\w-]*(?: [A-Z][\w-]*){0,2}$/u;
+const MINI_VARIANT = /^(.*?) \[([\w.-]+)\]$/u;
+
+/** OpenCode 2's mini status row, or `null` when `text` is not one. */
+export function openCodeMiniRow(text: string): OpenCodeMiniRow | null {
+  const row = text.trim();
+  if (!row || BANNER_V2.test(row)) return null;
+  const busy = MINI_BUSY.exec(row);
+  const rest = busy ? row.slice(busy[0].length) : row;
+  if (busy && !rest) return { busy: true };
+  const groups = rest.split(" · ").map((group) => group.trim());
+  if (groups.some((group) => !group)) return null;
+  const menu = MINI_MENU.test(groups[groups.length - 1]);
+  if (menu) groups.pop();
+  if (groups.length > 0 && MINI_COST.test(groups[groups.length - 1])) groups.pop();
+  const at = groups.findIndex((group) => MINI_CONTEXT.test(group));
+  const used = at < 0 ? undefined : MINI_CONTEXT.exec(groups[at])!.slice(1).find(Boolean);
+  // Agent and model come first, the provider after them.
+  const core = at < 0 ? groups : groups.slice(0, at);
+  const agent = core.length > 1 && MINI_AGENT.test(core[0]) ? core[0] : undefined;
+  if (core.length === 0 || core.length > (agent ? 3 : 2)) return null;
+  // Without the spinner, the menu or the context, the row is only its shape;
+  // a turn's own footer (`Build · gemma4:e4b · 16.9s`) is that shape too.
+  if (!busy && !menu && used === undefined && (!agent || openCodeTurnFooter(row))) return null;
+  const parsed: OpenCodeMiniRow = { busy: busy !== null };
+  if (agent) parsed.mode = agent.toLowerCase();
+  const model = core[agent ? 1 : 0];
+  if (model) {
+    const variant = MINI_VARIANT.exec(model);
+    parsed.model = variant ? variant[1] : model;
+    if (variant) parsed.variant = variant[2];
+  }
+  if (used !== undefined) parsed.context = `${Math.max(0, 100 - Number(used))}%`;
+  return parsed;
 }
 
 /*
