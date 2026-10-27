@@ -630,6 +630,11 @@ pub struct Settings {
     /// `ai_off` means off until switched back on (`ai_switch::off_now`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_off_until: Option<u64>,
+    /// The privacy curtain (`docs/privacy_curtain_plan.md`): while a PDF or deck
+    /// is presented, the other app windows are covered and capture-protected.
+    /// Unset is on; `false` leaves only the manual shortcut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy_curtain_on_present: Option<bool>,
     /// Let a fenced **root** agent read every project (local directories, box
     /// folders, remote mirrors) read-only. Default off: one poisoned project can
     /// then reach the others through an agent with open network access.

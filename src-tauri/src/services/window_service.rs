@@ -57,6 +57,36 @@ pub fn windows_closed_with_main<'a>(labels: impl IntoIterator<Item = &'a str>) -
     out
 }
 
+/// What is being presented, for the privacy curtain
+/// (`docs/privacy_curtain_plan.md`): `None` while no presentation window
+/// (`present-*`) is open, else `"deck"` when a deck audience window is among
+/// them and `"pdf"` when only PDF present windows (`present-pdf-*`) are.
+///
+/// Derived from the open windows, never stored, so a crash cannot leave a
+/// stale "presenting" behind. A deck outranks a PDF because its speaker view
+/// lives in an app window that must stay visible.
+pub fn presenting_kind<'a>(labels: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+    let mut kind = None;
+    for label in labels {
+        let Some(rest) = label.strip_prefix("present-") else {
+            continue;
+        };
+        if rest.starts_with("pdf-") {
+            kind.get_or_insert("pdf");
+        } else {
+            return Some("deck");
+        }
+    }
+    kind
+}
+
+/// Whether a window is a live browser page (`browser-*`): an external page
+/// with no app IPC, so the privacy curtain can't be drawn in it and it is
+/// capture-protected from Rust instead.
+pub fn is_browser_window(label: &str) -> bool {
+    label.starts_with("browser-")
+}
+
 pub fn hide_windows(backend: &dyn WorkspaceBackend, window_ids: &[u64]) {
     for &wid in window_ids {
         if let Err(e) = backend.hide_window(wid) {
@@ -281,6 +311,27 @@ mod tests {
         // A lone main window leaves nothing to close.
         assert!(windows_closed_with_main(["main"]).is_empty());
         assert!(windows_closed_with_main([]).is_empty());
+    }
+
+    #[test]
+    fn presenting_kind_follows_the_open_present_windows() {
+        assert_eq!(presenting_kind(["main", "detached-p1-g1", "browser-2"]), None);
+        assert_eq!(presenting_kind([]), None);
+        assert_eq!(presenting_kind(["main", "present-pdf-1x2"]), Some("pdf"));
+        assert_eq!(presenting_kind(["main", "present-abc"]), Some("deck"));
+        // A deck's speaker view must stay visible, so it outranks a PDF either way round.
+        assert_eq!(presenting_kind(["present-pdf-1", "present-abc"]), Some("deck"));
+        assert_eq!(presenting_kind(["present-abc", "present-pdf-1"]), Some("deck"));
+        // Only the exact prefix counts.
+        assert_eq!(presenting_kind(["presenter", "xpresent-pdf-1"]), None);
+    }
+
+    #[test]
+    fn only_browser_labels_are_browser_windows() {
+        assert!(is_browser_window("browser-2"));
+        assert!(!is_browser_window("main"));
+        assert!(!is_browser_window("detached-p1-g1"));
+        assert!(!is_browser_window("present-pdf-1"));
     }
 
     #[test]

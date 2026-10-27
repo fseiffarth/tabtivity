@@ -64,6 +64,7 @@ stores stay at the top. No `index.ts` barrels.
 | `src/lib/window/fullscreenMode.ts` | The window's own fullscreen mode (F11 / `WindowControls` button, main + popouts); records the request so the stray guard spares it. Per window, never persisted. |
 | `src/lib/window/strayFullscreen.ts` | Clears a stray OS fullscreen (it silently makes a popout unmovable). `isFullscreen()` can't be trusted, so it clears unconditionally; judgement in pure `mayClearStrayFullscreen`. |
 | `src/lib/window/closePdfPresent.ts` | Closes every PDF present window (`present-pdf-*`) on a scope change (`tabs.setScope`), releasing the sleep inhibitor first; closed, not parked like popouts. Tests: `PdfPresentScopeClose.test.ts`. |
+| `src/lib/window/privacyCurtain.ts` + `layout/PrivacyCurtain.tsx` | Privacy curtain (`docs/privacy_curtain_plan.md`): per-window store raised on `presenting-changed` start (or `presenting_state` at mount), lifted only by Show/the shortcut; `cover` (opaque panel, rest `visibility: hidden`) or `keep` (a deck presenter `[data-curtain-keep]` stays, corner chip); window-capture key filter (`curtainKeyVerdict`); `alarms.ts` holds OS notices on `notificationsHeld`. CSS in `shell.css`. Tests: `PrivacyCurtain.test.tsx`, `CalendarAlarmPresentHold.test.ts`. |
 | `src/types/index.ts` | Shared TypeScript types. |
 
 **Layout (`src/components/layout/`)**

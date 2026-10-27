@@ -1553,6 +1553,13 @@ export function SettingsDialog({
             />
 
             <ToggleCard
+              label={<>{t("settings.privacyCurtain")} <UntestedTag id="settings.privacyCurtain" /></>}
+              help={t("settings.privacyCurtain.help")}
+              checked={settings?.privacy_curtain_on_present ?? true}
+              onChange={(e) => void updateSettings({ privacy_curtain_on_present: e.target.checked })}
+            />
+
+            <ToggleCard
               label={t("settings.runScriptsBg")}
               checked={settings?.run_scripts_in_background ?? true}
               onChange={(e) => void updateSettings({ run_scripts_in_background: e.target.checked })}

@@ -2335,6 +2335,9 @@ pub fn run() {
             commands::presenter::presenter_next_monitor,
             commands::presenter::presenter_inhibit_sleep,
             commands::presenter::presenter_release_sleep,
+            // The privacy curtain (docs/privacy_curtain_plan.md)
+            commands::presenter::presenting_state,
+            commands::presenter::privacy_curtain_set,
             commands::workspace::network_conn_type,
             commands::workspace::network_wifi_ssid,
             commands::workspace::network_identity,
@@ -2617,6 +2620,11 @@ pub fn run() {
                 }
                 // A mic whose window is gone has nothing left to show it is on.
                 services::voice::stop_for_window(&tauri_host::system_ctx(_app), label);
+                // A presentation ending (or a deck's audience window closing
+                // under a PDF one) changes what the privacy curtains cover.
+                if label.starts_with("present-") {
+                    commands::presenter::announce_presenting(_app, Some(label));
+                }
                 if label.starts_with("detached-") {
                     // Guard against a same-label window already re-created
                     // (rapid destroy → re-detach): only clean up when no live

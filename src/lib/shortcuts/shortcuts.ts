@@ -67,6 +67,7 @@ export type ShortcutAction =
   | "texBack"
   | "texCompile"
   | "osFullscreen"
+  | "privacyCurtain"
   | "togglePanels"
   | "toggleSidePanel"
   | "exitFullscreen"
@@ -388,6 +389,15 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     labelKey: "shortcut.zoomReset",
     group: "view",
     default: { key: "0", ctrl: true },
+  },
+  // The privacy curtain (`components/layout/PrivacyCurtain`): covers every
+  // app window; pressed again in a covered window, shows that one.
+  {
+    action: "privacyCurtain",
+    labelKey: "shortcut.privacyCurtain",
+    group: "view",
+    default: { key: "h", ctrl: true, shift: true, alt: true },
+    untested: "shortcut.privacyCurtain",
   },
   // A terminal's own keys (`TerminalView`): copy the selection, paste, and
   // keyboard select. Not `useKeyboard`'s — only a focused terminal answers

@@ -115,6 +115,7 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { flushUsage } from "../../stores/usage";
 import { useKeyboard } from "../../hooks/useKeyboard";
+import { PrivacyCurtain } from "./PrivacyCurtain";
 import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { useT, useI18nStore, translate } from "../../lib/i18n";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
@@ -1643,6 +1644,8 @@ export function AppShell() {
       <QuickOpen />
       <HintHost />
       <TourHost />
+      {/* Covers this window while a PDF or deck is presented. */}
+      <PrivacyCurtain />
       <StatsRecapHost />
       {/* Dev-only floating perf monitor (Ctrl+Alt+P). Main window only, like
           the renderer watchdog; null in production builds by construction. */}

@@ -746,6 +746,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("presenter_inhibit_sleep", Client),
     ("presenter_next_monitor", Client),
     ("presenter_release_sleep", Client),
+    ("presenting_state", Client),
+    ("privacy_curtain_set", Client),
     // commands/printing.rs
     ("print_job_cancel", Client),
     ("print_jobs_cancel_all", Client),

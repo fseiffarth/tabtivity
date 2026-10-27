@@ -78,6 +78,7 @@ import { SyncConfirmDialog } from "../common/SyncConfirmDialog";
 import { HpcGuardDialog } from "../common/HpcGuardDialog";
 import { UnfencedPlatformDialog } from "../common/UnfencedPlatformDialog";
 import { DetachedCloseChoice } from "./DetachedCloseChoice";
+import { PrivacyCurtain } from "./PrivacyCurtain";
 
 interface Props {
   param: DetachedParam;
@@ -753,6 +754,8 @@ export function DetachedApp({ param }: Props) {
           emits browser events to every window — so it needs its own single
           download-consent host for the same reason AppShell does. */}
       <BrowserDownloadHost />
+      {/* Its own privacy curtain: each window is covered, and lifted, on its own. */}
+      <PrivacyCurtain />
       {/* A popout's viewer can Build or Format, so its exec-trust question
           renders here, in this window's own store. */}
       <ExecTrustHost />

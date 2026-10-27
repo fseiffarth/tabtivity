@@ -1008,6 +1008,27 @@ annotation plus animation (already built, and unique), and then #133–#138.*
 > local-only (no remote dispatch), so a remote project must compile on its local
 > mirror — which means the HPC story and the deck story do not currently meet.
 
+## V.4 — Privacy while presenting
+
+142. ✅ **Privacy curtain** (`docs/privacy_curtain_plan.md`, 2026-10-27,
+     uncommitted, never live). Presenting a PDF fullscreen or opening a deck's
+     audience window covers the main window and every popout with an opaque
+     "Hidden while presenting" panel, so a share of the wrong window or screen
+     shows nothing; a deck keeps its presenter view with a corner Show chip.
+     Lifted only by Show (per window) or Ctrl+Shift+Alt+H; Windows/macOS also
+     capture-protect the covered windows and browser windows; desktop calendar
+     reminders wait until the talk ends. Setting: Settings → General.
+- [x] 🤖 Automated test — `PrivacyCurtain.test.tsx`, `CalendarAlarmPresentHold.test.ts`, `window_service` `presenting_kind` tests.
+- [ ] 🖐️ Manual test — the click-through in the plan's Verification section.
+- [ ] ✅ Works on Linux (X11)
+- [ ] ❌ Doesn't work on Linux (X11)
+- [ ] ✅ Works on Linux (Wayland)
+- [ ] ❌ Doesn't work on Linux (Wayland)
+- [ ] ✅ Works on Windows
+- [ ] ❌ Doesn't work on Windows
+- [ ] ✅ Works on macOS
+- [ ] ❌ Doesn't work on macOS
+
 ---
 
 ## Suggested order

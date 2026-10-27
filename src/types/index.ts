@@ -674,6 +674,9 @@ export interface Settings {
   /** With `ai_off`: the instant (Unix ms) AI is on again by itself; unset or
    *  `null` means off until switched back on. */
   ai_off_until?: number | null;
+  /** The privacy curtain (`lib/window/privacyCurtain`): while a PDF or deck is
+   *  presented, cover the other app windows. Unset → on. */
+  privacy_curtain_on_present?: boolean;
   /** A fenced root-console agent sees every project, box folder and remote
    *  mirror read-only (default off: a widening). The mail `attach` argument
    *  needs it; recorded per root tab at spawn. */

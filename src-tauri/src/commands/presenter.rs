@@ -193,6 +193,8 @@ pub async fn open_presenter_window(
     let win = builder
         .build()
         .map_err(|e| format!("build presenter window: {e}"))?;
+    // The other windows raise their privacy curtains on this.
+    announce_presenting(&app, None);
 
     // Physical setters, never the builder's logical ones: a monitor's origin/size
     // are PHYSICAL px, and feeding those to a logical setter multiplies them by
@@ -624,6 +626,114 @@ fn audience_monitor(app: &AppHandle, pick: Option<&MonitorPick>) -> Option<(usiz
         .map(|m| monitor_rect(&m));
     let index = choose_audience_monitor_index(&monitors, main)?;
     Some((index, monitors[index]))
+}
+
+// ── The privacy curtain ───────────────────────────────────────────────────────
+//
+// While a presentation window is open, every other app window draws an opaque
+// curtain (`src/lib/window/privacyCurtain.ts`), so sharing the wrong window or
+// the wrong screen in a call shares nothing (`docs/privacy_curtain_plan.md`).
+// This side tells the windows when a presentation starts and ends, and sets the
+// OS capture protection: Windows' `WDA_EXCLUDEFROMCAPTURE` and macOS'
+// `NSWindowSharingNone` make a window black in any capture, the share picker's
+// thumbnail included. tao has no Linux equivalent (none exists on X11 or
+// Wayland), so there the call does nothing and the curtain is the only cover.
+//
+// An app window's protection follows its own curtain (`privacy_curtain_set`):
+// on while it is up, off when the user lifts it. A live browser window
+// (`browser-*`) has no app IPC to draw a curtain with, so it is protected for
+// as long as the presentation runs.
+
+/// The event every window hears when presenting starts, ends or changes kind.
+pub const PRESENTING_CHANGED: &str = "presenting-changed";
+
+/// What `presenting_state` answers and `PRESENTING_CHANGED` carries.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentingState {
+    pub presenting: bool,
+    /// `"pdf"` or `"deck"` (`window_service::presenting_kind`).
+    pub kind: Option<&'static str>,
+    /// The setting `privacy_curtain_on_present` (unset is on).
+    pub curtain: bool,
+}
+
+/// Whether the automatic curtain is on. An unreadable settings file reads as
+/// on: the curtain is a cover, and a cover that drops on a bad file is no use.
+pub fn curtain_on_present() -> bool {
+    crate::storage::load_settings()
+        .and_then(|s| s.privacy_curtain_on_present)
+        .unwrap_or(true)
+}
+
+/// The state from the open windows; `excluding` is a window being destroyed,
+/// which may still be listed.
+fn presenting_state_of(app: &AppHandle, excluding: Option<&str>) -> PresentingState {
+    let windows = app.webview_windows();
+    let kind = crate::services::window_service::presenting_kind(
+        windows
+            .keys()
+            .map(String::as_str)
+            .filter(|l| Some(*l) != excluding),
+    );
+    PresentingState {
+        presenting: kind.is_some(),
+        kind,
+        curtain: curtain_on_present(),
+    }
+}
+
+/// Protect (or release) every live browser window from capture.
+fn protect_browser_windows(app: &AppHandle, protected: bool) {
+    for (label, win) in app.webview_windows() {
+        if crate::services::window_service::is_browser_window(&label) {
+            let _ = win.set_content_protected(protected);
+        }
+    }
+}
+
+/// Tell every window what is being presented now, and match the browser
+/// windows' protection to it. Called when a present window opens, and from the
+/// `Destroyed` hook in `lib.rs` when one goes (`excluding` is that window).
+pub fn announce_presenting(app: &AppHandle, excluding: Option<&str>) {
+    use tauri::Emitter;
+    let state = presenting_state_of(app, excluding);
+    protect_browser_windows(app, state.presenting && state.curtain);
+    let _ = app.emit(PRESENTING_CHANGED, state);
+}
+
+/// Whether a window opening now should start capture-protected: a popout
+/// built mid-talk, before its renderer can raise its own curtain.
+pub fn protect_new_window(app: &AppHandle) -> bool {
+    let state = presenting_state_of(app, None);
+    state.presenting && state.curtain
+}
+
+/// For a window that mounts mid-talk (a popout opened while presenting, a
+/// reloaded renderer): what is being presented right now.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn presenting_state(app: AppHandle) -> PresentingState {
+    presenting_state_of(&app, None)
+}
+
+/// The calling window raised (`up`) or lifted its curtain: match its capture
+/// protection. The label is the CALLING webview's (`Ctx`), never a payload
+/// value, and a presentation window is never protected — it is the one window
+/// meant to be shared.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn privacy_curtain_set(app: AppHandle, ctx: crate::tauri_host::Ctx, up: bool) -> Result<(), String> {
+    let app_core::Caller::Local(client) = &ctx.caller else {
+        return Err("privacy_curtain_set: not a window".into());
+    };
+    let label = client.as_str();
+    if label.starts_with("present-") {
+        return Ok(());
+    }
+    let Some(win) = app.get_webview_window(label) else {
+        return Ok(());
+    };
+    win.set_content_protected(up)
+        .map_err(|e| format!("set capture protection: {e}"))
 }
 
 #[cfg(test)]

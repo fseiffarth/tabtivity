@@ -522,6 +522,8 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["presenter_inhibit_sleep", "client"],
   ["presenter_next_monitor", "client"],
   ["presenter_release_sleep", "client"],
+  ["presenting_state", "client"],
+  ["privacy_curtain_set", "client"],
   ["print_job_cancel", "client"],
   ["print_jobs_cancel_all", "client"],
   ["print_set_default", "client"],
