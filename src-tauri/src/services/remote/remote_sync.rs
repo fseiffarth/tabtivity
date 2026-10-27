@@ -785,6 +785,32 @@ pub fn local_new_candidates(
     out
 }
 
+/// The host-side counterpart of [`local_new_candidates`]: of the files an
+/// explicit host scan found, the ones the host holds alone — no manifest entry
+/// and no mirror copy (`in_mirror`; a file on both sides with no record is
+/// already a local-new row). Lockstep-tracked and effectively excluded paths
+/// drop out for the same reasons as there. Sorted by path and capped.
+pub fn host_new_candidates(
+    manifest: &Manifest,
+    host: Vec<HostFile>,
+    tracked: &HashSet<String>,
+    lockstep_enabled: bool,
+    in_mirror: impl Fn(&str) -> bool,
+    cap: usize,
+) -> Vec<HostFile> {
+    let mut out: Vec<HostFile> = host
+        .into_iter()
+        .filter(|f| !f.rel.is_empty())
+        .filter(|f| !manifest.contains_key(&f.rel))
+        .filter(|f| !(lockstep_enabled && tracked.contains(&f.rel)))
+        .filter(|f| !is_excluded(manifest, &f.rel, ""))
+        .filter(|f| !in_mirror(&f.rel))
+        .collect();
+    out.sort_by(|a, b| a.rel.cmp(&b.rel));
+    out.truncate(cap);
+    out
+}
+
 /// Borrow (loading from disk on first touch) the project's manifest from the
 /// single-writer cache. Shared by the command layer and the auto-sync engine.
 pub fn ensure_loaded<'a>(
@@ -883,17 +909,34 @@ pub async fn walk_host_files(
     remote_root: &str,
     rel: &str,
 ) -> Result<Vec<HostFile>, String> {
-    let mut out = Vec::new();
-    walk_inner(sftp, remote_root, rel, &mut out).await?;
-    Ok(out)
+    Ok(walk_host_files_bounded(sftp, remote_root, rel, &|_| false, usize::MAX).await?.0)
 }
 
+/// [`walk_host_files`] that never descends into a directory `skip_dir` names
+/// (project-relative) and stops once `cap` files are collected. The bool is
+/// whether the cap cut the walk short — the explicit host scans' bound on a
+/// tree that turns out to hold a venv or a dataset.
+pub async fn walk_host_files_bounded(
+    sftp: &openssh_sftp_client::Sftp,
+    remote_root: &str,
+    rel: &str,
+    skip_dir: &(dyn Fn(&str) -> bool + Sync),
+    cap: usize,
+) -> Result<(Vec<HostFile>, bool), String> {
+    let mut out = Vec::new();
+    let truncated = walk_inner(sftp, remote_root, rel, skip_dir, cap, &mut out).await?;
+    Ok((out, truncated))
+}
+
+/// Walks `rel` into `out`; true once `cap` stopped it.
 async fn walk_inner(
     sftp: &openssh_sftp_client::Sftp,
     remote_root: &str,
     rel: &str,
+    skip_dir: &(dyn Fn(&str) -> bool + Sync),
+    cap: usize,
     out: &mut Vec<HostFile>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let abs = join_remote(remote_root, rel);
     let entries = sftp::list_dir_raw_on(sftp, &abs).await?;
     // #23 D2: a directory holding a `.git` entry of EITHER kind is somebody else's
@@ -904,7 +947,7 @@ async fn walk_inner(
     // and landing on the peer as a plain directory with no `.git` at all. The project
     // root itself of course has one, so this is a check on *sub*directories only.
     if !rel.is_empty() && entries.iter().any(|e| e.name == ".git") {
-        return Ok(());
+        return Ok(false);
     }
     for entry in entries {
         // Skip Tabtivity's internal runtime dir, mirroring the local/remote listers.
@@ -914,10 +957,17 @@ async fn walk_inner(
         if crate::brand::is_project_dir(&entry.name) || entry.name == ".git" {
             continue;
         }
+        if out.len() >= cap {
+            return Ok(true);
+        }
         let child_rel = join_rel(rel, &entry.name);
         match entry.kind {
             SyncKind::Dir => {
-                Box::pin(walk_inner(sftp, remote_root, &child_rel, out)).await?;
+                if !skip_dir(&child_rel)
+                    && Box::pin(walk_inner(sftp, remote_root, &child_rel, skip_dir, cap, out)).await?
+                {
+                    return Ok(true);
+                }
             }
             SyncKind::File => out.push(HostFile {
                 rel: child_rel,
@@ -929,7 +979,7 @@ async fn walk_inner(
             SyncKind::Symlink | SyncKind::Other => {}
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Pull one host file into the mirror: read it over SFTP (size-guarded, G8) and

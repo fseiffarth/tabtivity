@@ -17,9 +17,9 @@ import { create } from "zustand";
  */
 
 /** What is being asked about. Mirrors the slugs `services::hpc_mode`'s refusals
- *  carry (`du-scan`, `census`, `connect`), plus the one the frontend raises on
+ *  carry (`du-scan`, `census`, `connect`, `host-scan`), plus the one the frontend raises on
  *  its own (`login-node-run`). */
-export type HpcGuardKind = "du-scan" | "census" | "login-node-run" | "connect";
+export type HpcGuardKind = "du-scan" | "census" | "host-scan" | "login-node-run" | "connect";
 
 interface Pending {
   kind: HpcGuardKind;

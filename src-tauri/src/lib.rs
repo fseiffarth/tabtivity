@@ -2138,6 +2138,7 @@ pub fn run() {
             commands::sync::sync_big_folders,
             commands::sync::sync_set_excluded,
             commands::sync::sync_status,
+            commands::sync::sync_scan_host_new,
             commands::sync::sync_file_meta,
             commands::sync::sync_resolve_if_identical,
             commands::sync::sync_apply_delete,

@@ -1042,6 +1042,51 @@ fn local_new_candidates_filters_manifest_tracked_and_excluded() {
 }
 
 #[test]
+fn host_new_candidates_keeps_only_files_the_host_holds_alone() {
+    let mut m = Manifest::new();
+    m.insert(
+        "synced.txt".into(),
+        SyncEntry {
+            selected: true,
+            ..Default::default()
+        },
+    );
+    m.insert("data".into(), excluded_dir());
+    let f = |rel: &str| HostFile {
+        rel: rel.to_string(),
+        size: 1,
+        mtime: Some(1),
+        mode: None,
+    };
+    let host = vec![
+        f("logs/run_b.log"),     // genuinely host-only
+        f("synced.txt"),         // manifest'd → has a row already
+        f("src/lib.rs"),         // tracked → lockstep's
+        f("data/cache.bin"),     // under an excluded folder marker
+        f("both/untracked.txt"), // in the mirror too → a local-new row
+        f("logs/run_a.log"),
+    ];
+    let tracked: HashSet<String> = ["src/lib.rs".to_string()].into_iter().collect();
+    let got = host_new_candidates(&m, host, &tracked, true, |rel| rel == "both/untracked.txt", 100);
+    let rels: Vec<&str> = got.iter().map(|f| f.rel.as_str()).collect();
+    assert_eq!(rels, vec!["logs/run_a.log", "logs/run_b.log"]);
+}
+
+#[test]
+fn host_new_candidates_caps_after_sorting() {
+    let m = Manifest::new();
+    let f = |rel: &str| HostFile {
+        rel: rel.to_string(),
+        size: 1,
+        mtime: None,
+        mode: None,
+    };
+    let got = host_new_candidates(&m, vec![f("c"), f("a"), f("b")], &HashSet::new(), true, |_| false, 2);
+    let rels: Vec<&str> = got.iter().map(|f| f.rel.as_str()).collect();
+    assert_eq!(rels, vec!["a", "b"]);
+}
+
+#[test]
 fn local_new_candidates_sorts_and_caps() {
     let m = Manifest::new();
     let all = vec!["b".to_string(), "c".to_string(), "a".to_string()];

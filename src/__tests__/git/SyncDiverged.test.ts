@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve([])
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import { mtimeDivergenceCue } from "../../components/files/ProjectFilesView";
-import { splitByNewerSide } from "../../stores/remote/sync";
+import { splitByDeleteSide, splitByNewerSide } from "../../stores/remote/sync";
 import type { TranslationKey } from "../../lib/i18n";
 
 // The cue's text is asserted as the raw key — the wording is i18n's business.
@@ -94,5 +94,23 @@ describe("splitByNewerSide", () => {
     const out = splitByNewerSide(map, [...Object.keys(map), "unknown.txt"]);
     expect(out.host).toEqual(["host.txt", "both-host.txt"]);
     expect(out.local).toEqual(["local.txt", "both-local.txt"]);
+  });
+});
+
+describe("splitByDeleteSide", () => {
+  const e = (hostMtime: number | null, localMtime: number | null, hostChecked: boolean) =>
+    ({ state: "amber", selected: true, isDir: false, auto: false, excluded: false, hostMtime, localMtime, hostDiverged: false, localDiverged: true, hostChecked }) as never;
+
+  it("deleted locally → host, deleted on a checked host → local; unchecked host, both sides and both gone are skipped", () => {
+    const map = {
+      "gone-local.txt": e(100, null, true),
+      "gone-host.txt": e(null, 100, true),
+      "cold-pool.txt": e(null, 100, false), // host never asked: no deletion to complete
+      "both.txt": e(100, 200, true),
+      "gone-both.txt": e(null, null, true),
+    };
+    const out = splitByDeleteSide(map, [...Object.keys(map), "unknown.txt"]);
+    expect(out.host).toEqual(["gone-local.txt"]);
+    expect(out.local).toEqual(["gone-host.txt"]);
   });
 });

@@ -26,6 +26,8 @@ import {
   localNewPaths,
   pushFailure,
   splitByNewerSide,
+  deleteSideOf,
+  splitByDeleteSide,
   type SyncResolveOutcome,
   type SyncSkippedFile,
 } from "../../stores/remote/sync";
@@ -52,6 +54,7 @@ import { IdeHeaderButton } from "../projects/IdeMenuItems";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncSkippedLarge } from "./SyncSkippedLarge";
+import { SyncHostOnlyFiles } from "./SyncHostOnlyFiles";
 import { AgentSchedulesView } from "../agents/AgentSchedulesView";
 import { useDialogs } from "../common/PromptDialogs";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -741,6 +744,7 @@ export function ProjectFilesView({
   const syncMap = useSyncStore((s) => (projectId ? s.byProject[projectId] : undefined));
   const orangeFiles = useMemo(() => amberPaths(syncMap), [syncMap]);
   const newerSplit = useMemo(() => splitByNewerSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
+  const deleteSplit = useMemo(() => splitByDeleteSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
   // NEW local-only files (never synced — the host has no copy). A separate list
   // from the amber one on purpose: these have nothing to merge and no remote
   // side to take, so their whole vocabulary is "upload" or "leave local".
@@ -2261,6 +2265,43 @@ export function ProjectFilesView({
                     <ArrowsHorizontalIcon />
                   </button>
                   <UntestedTag id="projectFilesView.takeNewerAll" />
+                  <button
+                    type="button"
+                    className="orange-file-act orange-file-act--icon orange-file-act--delete"
+                    aria-label={t("projectFilesView.deleteAllAria")}
+                    title={t("projectFilesView.deleteAllTitle")}
+                    disabled={remoteBlocked || deleteSplit.host.length + deleteSplit.local.length === 0}
+                    // Every row's 🗑 at once: each file deleted on one side loses
+                    // its surviving copy too. One confirmation per side, each
+                    // naming the files whose last copy it removes.
+                    onClick={() => {
+                      if (!projectId) return;
+                      void (async () => {
+                        setOrangeError(null);
+                        const outcomes: SyncResolveOutcome[] = [];
+                        for (const side of ["host", "local"] as const) {
+                          const relPaths = deleteSplit[side];
+                          if (relPaths.length === 0) continue;
+                          const ok = await confirmSyncTransfer({
+                            projectId,
+                            deleteSide: side,
+                            relPath: "",
+                            isDir: true,
+                            label: project?.name ?? projectId,
+                            relPaths,
+                          });
+                          if (ok)
+                            outcomes.push(
+                              await useSyncStore.getState().applyDeleteAll(projectId, relPaths, side),
+                            );
+                        }
+                        noteResolveFailures(...outcomes);
+                      })();
+                    }}
+                  >
+                    <TrashIcon />
+                  </button>
+                  <UntestedTag id="projectFilesView.deleteAll" />
                 </div>
               </div>
               )}
@@ -2286,17 +2327,8 @@ export function ProjectFilesView({
                 const noHostFile = rowHostMtime == null;
                 const noLocalFile = rowLocalMtime == null;
                 // Which side a 🗑 would delete: the surviving copy of a file
-                // deleted on exactly one side. Deleting the mirror copy is only
-                // offered when the host was actually consulted and positively
-                // reported the file gone (`hostChecked`) — a cold pool reports
-                // every host mtime as null without asking. The backend re-verifies
-                // either premise against live state before deleting anything.
-                const deleteSide: "host" | "local" | null =
-                  noLocalFile && !noHostFile
-                    ? "host"
-                    : noHostFile && !noLocalFile && rowHostChecked
-                      ? "local"
-                      : null;
+                // deleted on exactly one side (`deleteSideOf`).
+                const deleteSide = deleteSideOf(syncMap?.[rel]);
                 // Deleted on BOTH sides since the last sync: nothing to
                 // transfer, nothing to merge — the only sensible action left is
                 // to stop tracking the entry.
@@ -2566,6 +2598,14 @@ export function ProjectFilesView({
                 </>
               )}
             </>
+          )}
+          {projectId && project?.remote && (
+            <SyncHostOnlyFiles
+              projectId={projectId}
+              label={project.name ?? projectId}
+              remoteBlocked={remoteBlocked}
+              syncMap={syncMap}
+            />
           )}
         </div>
       )}

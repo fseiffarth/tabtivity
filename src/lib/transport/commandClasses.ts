@@ -700,6 +700,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["sync_pull", "core"],
   ["sync_push", "core"],
   ["sync_resolve_if_identical", "core"],
+  ["sync_scan_host_new", "core"],
   ["sync_set_auto", "core"],
   ["sync_set_excluded", "core"],
   ["sync_status", "core"],

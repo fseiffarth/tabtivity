@@ -391,6 +391,91 @@ pub async fn sync_auto_preview(
     })
 }
 
+/// Files a host scan visits before it stops (`HostNewScan::truncated`): a
+/// project root on the host can hold a venv or a dataset nobody excluded.
+const HOST_NEW_WALK_CAP: usize = 50_000;
+
+/// One file only the host holds (never synced, no mirror copy).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostNewFile {
+    pub rel_path: String,
+    pub size: u64,
+    pub mtime: Option<u64>,
+}
+
+/// What [`sync_scan_host_new`] found.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostNewScan {
+    pub files: Vec<HostNewFile>,
+    /// The walk stopped at its cap, so the list may be missing files.
+    pub truncated: bool,
+}
+
+/// List the files only the HOST holds — the counterpart of `sync_status`'s
+/// local-new pass, which can only see the mirror. Nothing else ever lists the
+/// host, so a file created there after the last transfer (a finished run's
+/// log) had no row anywhere. Read-only, and only on an explicit click: it is a
+/// recursive SFTP walk of the project root (excluded folders skipped, bounded
+/// by [`HOST_NEW_WALK_CAP`]), far too costly for the 15 s status refresh. On a
+/// host tagged HPC it refuses with the `HPC_GUARD` sentinel until `confirmed`,
+/// like `sync_big_folders`' host half.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn sync_scan_host_new(
+    ctx: Ctx,
+    project_id: String,
+    confirmed: Option<bool>,
+) -> Result<HostNewScan, String> {
+    let pool = ctx.get::<RemotePoolState>();
+    let manifest = ctx.get::<SyncManifestState>();
+    let target =
+        remote_target_for(&project_id).ok_or_else(|| "not a remote project".to_string())?;
+    if crate::services::hpc_mode::is_hpc_spec(&target.spec) && confirmed != Some(true) {
+        return Err(crate::services::hpc_mode::guard_error("host-scan", &target.spec));
+    }
+    let (target, sftp) = resolve(&project_id, pool).await?;
+    let snapshot: Manifest = {
+        let mut guard = manifest.lock().await;
+        ensure_loaded(&mut guard, &project_id).clone()
+    };
+    let skip = |rel: &str| remote_sync::is_excluded(&snapshot, rel, "");
+    let (host, truncated) = remote_sync::walk_host_files_bounded(
+        &sftp,
+        &target.spec.remote_path,
+        "",
+        &skip,
+        HOST_NEW_WALK_CAP,
+    )
+    .await?;
+    let pid = project_id.clone();
+    let files = app_core::rt::spawn_blocking(move || {
+        // Display only, as in the local-new pass: an unlisted set hides nothing.
+        let tracked = crate::services::git_peer::tracked_paths(&pid).unwrap_or_default();
+        let lockstep = crate::services::git_peer::load_state(&pid).enabled;
+        let mirror = remote_sync::mirror_dir(&pid);
+        // Anything but a positive "missing" counts as present: a row offers to
+        // delete the host copy, so an unreadable mirror path must not get one.
+        let in_mirror = |rel: &str| {
+            !matches!(remote_sync::mirror_lstat(&mirror, rel), Ok(remote_sync::MirrorStat::Missing))
+        };
+        remote_sync::host_new_candidates(&snapshot, host, &tracked, lockstep, in_mirror, LOCAL_NEW_ROWS_CAP)
+    })
+    .await
+    .unwrap_or_default();
+    Ok(HostNewScan {
+        files: files
+            .into_iter()
+            .map(|f| HostNewFile {
+                rel_path: f.rel,
+                size: f.size,
+                mtime: f.mtime,
+            })
+            .collect(),
+        truncated,
+    })
+}
+
 /// One folder big enough to be worth a question before the first sync pass, with
 /// what each side holds. A folder that exists on only one side reports zeros for
 /// the other — which is itself the answer to "is this the host's data or mine?".
