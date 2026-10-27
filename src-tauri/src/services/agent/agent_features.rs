@@ -86,8 +86,11 @@ pub struct Features {
     pub sandbox: Option<Sandbox>,
     /// Tabtivity's servers this tab holds a live token for.
     pub app_mcp: Vec<String>,
-    /// The servers the user configured for this CLI in the tab's home.
+    /// The servers the user configured for this CLI in the tab's home and
+    /// left on for this folder.
     pub own_mcp: Vec<String>,
+    /// The ones configured there that the CLI won't start for this folder.
+    pub own_mcp_off: Vec<String>,
     pub skills: Vec<String>,
     pub api_keys: Vec<&'static str>,
 }
@@ -102,10 +105,9 @@ pub fn features(tab: &str) -> Option<Features> {
     let mut out = Features { app_mcp, ..Default::default() };
     if let Some(spawn) = spawn {
         if let Some(home) = spawn.home.as_deref() {
-            out.own_mcp = own_mcp_servers(&spawn.cli, home, &spawn.cwd)
-                .into_iter()
-                .filter(|name| !out.app_mcp.contains(name))
-                .collect();
+            let (on, off) = own_mcp_servers(&spawn.cli, home, &spawn.cwd);
+            out.own_mcp = on.into_iter().filter(|name| !out.app_mcp.contains(name)).collect();
+            out.own_mcp_off = off.into_iter().filter(|name| !out.app_mcp.contains(name)).collect();
             out.skills = skills(&spawn.cli, home);
         }
         out.sandbox = spawn.sandbox;
@@ -148,32 +150,53 @@ fn json_keys(value: Option<&serde_json::Value>) -> Vec<String> {
     value.and_then(|v| v.as_object()).map(|o| o.keys().cloned().collect()).unwrap_or_default()
 }
 
-/// The MCP servers the user set up for `cli` in `home`: Claude's user-scope
-/// and this folder's local-scope servers (`.claude.json`), Codex's
-/// `mcp_servers` tables (`.codex/config.toml`), Gemini's `mcpServers`
-/// (`.gemini/settings.json`). A project's own `.mcp.json` is not read — it is
-/// the project folder's, and Claude asks before it uses one.
-pub fn own_mcp_servers(cli: &str, home: &Path, cwd: &str) -> Vec<String> {
-    let names = match cli {
+fn json_strings(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// The MCP servers the user set up for `cli` in `home`, as (on, off): Claude's
+/// user-scope and this folder's local-scope servers (`.claude.json`), off when
+/// this folder's `disabledMcpServers` names them; Codex's `mcp_servers` tables
+/// (`.codex/config.toml`), off with `enabled = false`; Gemini's `mcpServers`
+/// (`.gemini/settings.json`), off when `mcp.excluded` names them. A project's
+/// own `.mcp.json` is not read — it is the project folder's, and Claude asks
+/// before it uses one.
+pub fn own_mcp_servers(cli: &str, home: &Path, cwd: &str) -> (Vec<String>, Vec<String>) {
+    let (names, off): (Vec<String>, Vec<String>) = match cli {
         "claude" => {
             let Some(doc) = read_small(&home.join(".claude.json")).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
-                return Vec::new();
+                return Default::default();
             };
+            let folder = doc.get("projects").and_then(|p| p.get(cwd));
             let mut names = json_keys(doc.get("mcpServers"));
-            names.extend(json_keys(doc.get("projects").and_then(|p| p.get(cwd)).and_then(|p| p.get("mcpServers"))));
-            names
+            names.extend(json_keys(folder.and_then(|p| p.get("mcpServers"))));
+            (names, json_strings(folder.and_then(|p| p.get("disabledMcpServers"))))
         }
         "codex" => read_small(&home.join(".codex").join("config.toml"))
             .and_then(|t| t.parse::<toml_edit::DocumentMut>().ok())
-            .and_then(|doc| doc.get("mcp_servers").and_then(|t| t.as_table_like()).map(|t| t.iter().map(|(k, _)| k.to_string()).collect()))
+            .and_then(|doc| {
+                doc.get("mcp_servers").and_then(|t| t.as_table_like()).map(|t| {
+                    let names = t.iter().map(|(k, _)| k.to_string()).collect();
+                    let off = t
+                        .iter()
+                        .filter(|(_, s)| s.get("enabled").and_then(|e| e.as_bool()) == Some(false))
+                        .map(|(k, _)| k.to_string())
+                        .collect();
+                    (names, off)
+                })
+            })
             .unwrap_or_default(),
         "gemini" => read_small(&home.join(".gemini").join("settings.json"))
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .map(|doc| json_keys(doc.get("mcpServers")))
+            .map(|doc| (json_keys(doc.get("mcpServers")), json_strings(doc.get("mcp").and_then(|m| m.get("excluded")))))
             .unwrap_or_default(),
-        _ => Vec::new(),
+        _ => Default::default(),
     };
-    clean_names(names)
+    let (off, on): (Vec<String>, Vec<String>) = names.into_iter().partition(|n| off.contains(n));
+    (clean_names(on), clean_names(off))
 }
 
 /// The skills `cli` finds in `home`: a folder with a `SKILL.md` under
@@ -210,7 +233,7 @@ mod tests {
             "projects": {cwd: {"mcpServers": {"db": {}}}, "/other": {"mcpServers": {"elsewhere": {}}}},
         });
         std::fs::write(h.path().join(".claude.json"), doc.to_string()).unwrap();
-        assert_eq!(own_mcp_servers("claude", h.path(), cwd), vec!["db", "docs"]);
+        assert_eq!(own_mcp_servers("claude", h.path(), cwd).0, vec!["db", "docs"]);
     }
 
     #[test]
@@ -220,9 +243,33 @@ mod tests {
         std::fs::write(h.path().join(".codex").join("config.toml"), "model = \"x\"\n[mcp_servers.docs]\ncommand = \"d\"\n").unwrap();
         std::fs::create_dir_all(h.path().join(".gemini")).unwrap();
         std::fs::write(h.path().join(".gemini").join("settings.json"), r#"{"mcpServers":{"g":{}}}"#).unwrap();
-        assert_eq!(own_mcp_servers("codex", h.path(), "/p"), vec!["docs"]);
-        assert_eq!(own_mcp_servers("gemini", h.path(), "/p"), vec!["g"]);
-        assert!(own_mcp_servers("opencode", h.path(), "/p").is_empty());
+        assert_eq!(own_mcp_servers("codex", h.path(), "/p").0, vec!["docs"]);
+        assert_eq!(own_mcp_servers("gemini", h.path(), "/p").0, vec!["g"]);
+        assert_eq!(own_mcp_servers("opencode", h.path(), "/p"), (vec![], vec![]));
+    }
+
+    #[test]
+    fn servers_the_cli_wont_start_are_listed_as_off() {
+        let h = home();
+        let cwd = if cfg!(windows) { r"C:\p" } else { "/p" };
+        let doc = serde_json::json!({
+            "mcpServers": {"docs": {}, "kicad": {}},
+            "projects": {cwd: {"disabledMcpServers": ["kicad"]}, "/other": {"disabledMcpServers": ["docs"]}},
+        });
+        std::fs::write(h.path().join(".claude.json"), doc.to_string()).unwrap();
+        assert_eq!(own_mcp_servers("claude", h.path(), cwd), (vec!["docs".to_string()], vec!["kicad".to_string()]));
+
+        std::fs::create_dir_all(h.path().join(".codex")).unwrap();
+        std::fs::write(
+            h.path().join(".codex").join("config.toml"),
+            "[mcp_servers.on]\ncommand = \"a\"\n[mcp_servers.off]\ncommand = \"b\"\nenabled = false\n",
+        )
+        .unwrap();
+        assert_eq!(own_mcp_servers("codex", h.path(), cwd), (vec!["on".to_string()], vec!["off".to_string()]));
+
+        std::fs::create_dir_all(h.path().join(".gemini")).unwrap();
+        std::fs::write(h.path().join(".gemini").join("settings.json"), r#"{"mcpServers":{"g":{},"x":{}},"mcp":{"excluded":["x"]}}"#).unwrap();
+        assert_eq!(own_mcp_servers("gemini", h.path(), cwd), (vec!["g".to_string()], vec!["x".to_string()]));
     }
 
     #[test]

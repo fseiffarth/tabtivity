@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -74,6 +74,8 @@ interface AgentTabFeatures {
   sandbox: "fenced" | "host_session" | "unfenced" | null;
   appMcp: string[];
   ownMcp: string[];
+  /** Configured in the tab's home but switched off for this folder. */
+  ownMcpOff?: string[];
   skills: string[];
   apiKeys: ("anthropic" | "gemini" | "openai")[];
 }
@@ -270,12 +272,32 @@ export function TabHoverCard({
     list.length > MAX_SHOWN_NAMES
       ? `${list.slice(0, MAX_SHOWN_NAMES).join(", ")} ${t("tabHoverCard.moreNames", { count: list.length - MAX_SHOWN_NAMES })}`
       : list.join(", ");
-  const featureRows: { label: string; value: string }[] = [];
+  const featureRows: { label: string; value: ReactNode }[] = [];
   if (features?.sandbox) {
     featureRows.push({ label: t("tabHoverCard.sandboxLabel"), value: t(`tabHoverCard.sandbox.${features.sandbox}`) });
   }
-  const mcp = [...(features?.appMcp ?? []), ...(features?.ownMcp ?? [])];
-  if (mcp.length) featureRows.push({ label: t("tabHoverCard.mcpLabel"), value: names(mcp) });
+  // Each server green when the CLI starts it, red when it is switched off.
+  const mcp = [
+    ...[...(features?.appMcp ?? []), ...(features?.ownMcp ?? [])].map((name) => ({ name, on: true })),
+    ...(features?.ownMcpOff ?? []).map((name) => ({ name, on: false })),
+  ];
+  if (mcp.length) {
+    const shown = mcp.slice(0, MAX_SHOWN_NAMES);
+    featureRows.push({
+      label: t("tabHoverCard.mcpLabel"),
+      value: (
+        <>
+          {shown.map((s, i) => (
+            <span key={s.name}>
+              {i > 0 && ", "}
+              <span className={`tab-popup-mcp ${s.on ? "on" : "off"}`}>{s.name}</span>
+            </span>
+          ))}
+          {mcp.length > shown.length && ` ${t("tabHoverCard.moreNames", { count: mcp.length - shown.length })}`}
+        </>
+      ),
+    });
+  }
   if (features?.skills?.length) featureRows.push({ label: t("tabHoverCard.skillsLabel"), value: names(features.skills) });
   if (features?.apiKeys?.length) {
     const providers = features.apiKeys.map((p) => t(`tabHoverCard.provider.${p}`)).join(", ");

@@ -1,6 +1,7 @@
 /**
  * The tab hover card's feature rows: an agent tab lists what its spawn was
- * handed (`agent_tab_features`) — sandbox, MCP servers (Tabtivity's first),
+ * handed (`agent_tab_features`) — sandbox, MCP servers (Tabtivity's first,
+ * switched-off ones last and marked off),
  * skills past six collapsed, API key — and a tab the backend did not spawn,
  * or a non-agent tab, shows none of them.
  */
@@ -42,6 +43,7 @@ describe("tab hover card feature rows", () => {
               sandbox: "fenced",
               appMcp: ["app-help", "app-git"],
               ownMcp: ["docs"],
+              ownMcpOff: ["kicad"],
               skills: ["a", "b", "c", "d", "e", "f", "g", "h"],
               apiKeys: ["anthropic"],
             }
@@ -51,7 +53,11 @@ describe("tab hover card feature rows", () => {
     render(<TabHoverCard tab={tab({})} scope="p1" anchorX={0} anchorY={0} />);
     await waitFor(() => expect(row("sandbox")).toBe("inside the agent sandbox"));
     expect(invoke).toHaveBeenCalledWith("agent_tab_features", { id: "p1:agent-1" });
-    expect(row("MCP")).toBe("app-help, app-git, docs");
+    expect(row("MCP")).toBe("app-help, app-git, docs, kicad");
+    const state = (name: string) =>
+      [...document.querySelectorAll(".tab-popup-mcp")].find((el) => el.textContent === name)?.className;
+    expect(state("docs")).toBe("tab-popup-mcp on");
+    expect(state("kicad")).toBe("tab-popup-mcp off");
     expect(row("skills")).toBe("a, b, c, d, e, f +2 more");
     expect(row("API key")).toBe("Anthropic — stored key, through the proxy");
   });

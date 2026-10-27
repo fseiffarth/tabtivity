@@ -1200,6 +1200,14 @@
   color: var(--success);
 }
 
+/* The hover card's MCP row: a server the CLI starts, one switched off. */
+.tab-popup-mcp.on {
+  color: var(--success);
+}
+.tab-popup-mcp.off {
+  color: var(--danger);
+}
+
 /* ── Tab bar (lives inside .header-center) ───────────────────────────── */
 .tab-bar {
   display: flex;
