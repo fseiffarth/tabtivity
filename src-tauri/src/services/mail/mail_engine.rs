@@ -907,12 +907,10 @@ fn decode_mutf7_run(run: &[u8]) -> Option<String> {
 fn authentication_results_values(msg: &mail_parser::Message<'_>, raw: &[u8]) -> Vec<String> {
     msg.headers()
         .iter()
-        .filter(|h| match &h.name {
-            mail_parser::HeaderName::Other(name) => {
-                name.eq_ignore_ascii_case("authentication-results")
-            }
-            _ => false,
-        })
+        // By name, not by variant: newer `mail-parser` releases give this
+        // header its own `HeaderName` variant instead of `Other`, and a match
+        // on `Other` alone would then find none and show no verdicts.
+        .filter(|h| h.name.as_str().eq_ignore_ascii_case("authentication-results"))
         .filter_map(|h| {
             let (start, end) = (h.offset_start as usize, h.offset_end as usize);
             if start >= end || end > raw.len() {
