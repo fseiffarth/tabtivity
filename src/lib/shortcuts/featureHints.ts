@@ -71,6 +71,7 @@ export const FEATURE_HINTS = [
   { id: "tab-cross-window", anchor: ".tab-strip", ambient: true },
   { id: "tab-restore", anchor: ".tab-strip", ambient: true },
   { id: "tab-chat", anchor: ".reader-view-tabs", ambient: true },
+  { id: "tab-attach", anchor: ".reader-view-tabs", ambient: true },
   { id: "prompt-strip", anchor: ".prompt-strip", ambient: true },
   { id: "steering-enter", anchor: ".tab-strip", ambient: true },
   { id: "steering-jumps", anchor: ".tab-strip", ambient: true },

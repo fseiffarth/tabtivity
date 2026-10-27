@@ -4,7 +4,7 @@
 // `data-hint-anchor` the catalogue names still exists in the source.
 import { describe, expect, it } from "vitest";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { enSource } from "../../lib/i18n";
 import { FEATURE_HINTS, type FeatureHintSpec } from "../../lib/shortcuts/featureHints";
 import { HINTS, pickHint, type HintCtx } from "../../lib/shortcuts/hints";
@@ -12,14 +12,16 @@ import { HINTS, pickHint, type HintCtx } from "../../lib/shortcuts/hints";
 // vitest runs from the repo root (the untested-register gate relies on that too).
 const SRC = "src";
 
+type Entry = { name: string; isDirectory: () => boolean };
+
 function sourceText(): string {
   const parts: string[] = [];
   const walk = (dir: string) => {
-    for (const name of readdirSync(dir) as string[]) {
-      if (name === "__tests__" || name === "i18n") continue;
-      const full = `${dir}/${name}`;
-      if (statSync(full).isDirectory()) walk(full);
-      else if (/\.(tsx?|css)$/.test(name)) parts.push(readFileSync(full, "utf8") as string);
+    for (const entry of readdirSync(dir, { withFileTypes: true }) as Entry[]) {
+      if (entry.name === "__tests__" || entry.name === "i18n") continue;
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(tsx?|css)$/.test(entry.name)) parts.push(readFileSync(full, "utf8") as string);
     }
   };
   walk(SRC);
