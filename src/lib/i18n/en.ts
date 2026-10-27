@@ -7208,6 +7208,8 @@ export const enSource = {
   "projectFilesView.keepLocalAllTitle": "Keep the local copy for every diverged file (force-push over the host)",
   "projectFilesView.takeNewerAllAria": "Take the newer copy for all",
   "projectFilesView.takeNewerAllTitle": "Take the newer copy for every diverged file (remote where the host is newer, local where the mirror is newer; files deleted on one side are skipped)",
+  "projectFilesView.excludeBothChanged": "Exclude changed on both",
+  "projectFilesView.excludeBothChangedTitle": "Leave files both sides changed out of the take-remote, keep-local and take-newer for all; resolve those one by one",
   "projectFilesView.deleteAllAria": "Delete for all files deleted on one side",
   "projectFilesView.deleteAllTitle": "Every file deleted on one side: delete its surviving copy too, so the deletion applies on both sides",
   "projectFilesView.hostOnlyCount": "{count} remote only",

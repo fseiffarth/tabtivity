@@ -6909,6 +6909,8 @@ export const dict: Dict = {
   "projectFilesView.keepLocalAllTitle": "Conserver la copie locale pour chaque fichier divergent (force-push sur l'hôte)",
   "projectFilesView.takeNewerAllAria": "Prendre la copie la plus récente pour tous",
   "projectFilesView.takeNewerAllTitle": "Prendre la copie la plus récente pour chaque fichier divergent (distante si l'hôte est plus récent, locale si le miroir l'est ; les fichiers supprimés d'un côté sont ignorés)",
+  "projectFilesView.excludeBothChanged": "Exclure les modifiés des deux côtés",
+  "projectFilesView.excludeBothChangedTitle": "Laisser les fichiers modifiés des deux côtés hors de « prendre la distante », « garder la locale » et « prendre la plus récente » pour tous ; les résoudre un par un",
   "projectFilesView.deleteAllAria": "Supprimer pour tous les fichiers supprimés d'un côté",
   "projectFilesView.deleteAllTitle": "Chaque fichier supprimé d'un côté : supprimer aussi sa copie restante, pour que la suppression s'applique des deux côtés",
   "projectFilesView.hostOnlyCount": "{count} distant(s) uniquement",

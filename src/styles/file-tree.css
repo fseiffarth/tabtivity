@@ -993,6 +993,12 @@
   border-bottom: 1px solid var(--border-color);
 }
 
+/* The bar's "exclude changed on both" tick: the shared tmux-scope toggle,
+   flush with the bar's own padding. */
+.orange-bulk-exclude {
+  padding: 0;
+}
+
 .orange-bulk-count {
   font-size: 10px;
   color: var(--text-muted);

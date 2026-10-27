@@ -223,6 +223,7 @@ export const UNTESTED = {
   "projectFilesView.2": { area: "files", what: "ProjectFilesView · Remote machines…" },
   "projectFilesView.3": { area: "files", what: "ProjectFilesView · {count} diverged" },
   "projectFilesView.takeNewerAll": { area: "files", what: "ProjectFilesView · diverged view, take the newer copy for all (each file by its newer side; one confirmation per direction)" },
+  "projectFilesView.excludeBothChanged": { area: "files", what: "ProjectFilesView · diverged view, \"Exclude changed on both\" tick (default on): take remote / keep local / take newer for all skip files both sides changed" },
   "projectFilesView.deleteAll": { area: "files", what: "ProjectFilesView · diverged view, delete for all (every one-sided deletion completed; one confirmation per side, listing the files)" },
   "syncHostOnlyFiles.scan": { area: "files", what: "Diverged view · find remote-only files (host scan, HPC guard), download / delete on host per file and for all" },
   "projectFilesView.4": { area: "files", what: "ProjectFilesView · {count} new local (not on the host)" },

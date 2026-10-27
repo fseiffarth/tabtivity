@@ -486,6 +486,22 @@ export function splitByNewerSide(
 }
 
 /**
+ * Diverged files minus the ones BOTH sides changed since their recorded base
+ * (the backend's per-side flags, both copies present) — the orange view's
+ * "exclude changed on both" tick, so a bulk take-a-side never silently drops
+ * one side's edits of a true conflict; those are resolved per row.
+ */
+export function withoutChangedOnBoth(
+  byPath: Record<string, SyncEntryStatus> | undefined,
+  relPaths: string[],
+): string[] {
+  return relPaths.filter((rel) => {
+    const e = byPath?.[rel];
+    return !(e && e.hostMtime != null && e.localMtime != null && e.hostDiverged && e.localDiverged);
+  });
+}
+
+/**
  * Which side a 🗑 in the orange view would delete: the surviving copy of a file
  * deleted on exactly one side, or null when no deletion applies. Deleting the
  * mirror copy is only offered when the host was actually consulted and

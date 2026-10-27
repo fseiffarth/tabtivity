@@ -28,6 +28,7 @@ import {
   splitByNewerSide,
   deleteSideOf,
   splitByDeleteSide,
+  withoutChangedOnBoth,
   type SyncResolveOutcome,
   type SyncSkippedFile,
 } from "../../stores/remote/sync";
@@ -743,7 +744,15 @@ export function ProjectFilesView({
   // need a human to pick a side.
   const syncMap = useSyncStore((s) => (projectId ? s.byProject[projectId] : undefined));
   const orangeFiles = useMemo(() => amberPaths(syncMap), [syncMap]);
-  const newerSplit = useMemo(() => splitByNewerSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
+  // The bulk take-a-side bar's files. "Exclude changed on both" (default on)
+  // leaves out every file both sides edited, so a "…for all" never throws away
+  // one side's edits of a true conflict; those are resolved row by row.
+  const [excludeBothChanged, setExcludeBothChanged] = useState(true);
+  const bulkFiles = useMemo(
+    () => (excludeBothChanged ? withoutChangedOnBoth(syncMap, orangeFiles) : orangeFiles),
+    [excludeBothChanged, syncMap, orangeFiles],
+  );
+  const newerSplit = useMemo(() => splitByNewerSide(syncMap, bulkFiles), [syncMap, bulkFiles]);
   const deleteSplit = useMemo(() => splitByDeleteSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
   // NEW local-only files (never synced — the host has no copy). A separate list
   // from the amber one on purpose: these have nothing to merge and no remote
@@ -2151,13 +2160,25 @@ export function ProjectFilesView({
                   {t("projectFilesView.divergedCount", { count: orangeFiles.length })}
                 </span>
                 <UntestedTag id="projectFilesView.3" />
+                <label
+                  className="tmux-scope-toggle orange-bulk-exclude"
+                  title={t("projectFilesView.excludeBothChangedTitle")}
+                >
+                  <input
+                    type="checkbox"
+                    checked={excludeBothChanged}
+                    onChange={(e) => setExcludeBothChanged(e.target.checked)}
+                  />
+                  {t("projectFilesView.excludeBothChanged")}
+                  <UntestedTag id="projectFilesView.excludeBothChanged" />
+                </label>
                 <div className="orange-file-actions">
                   <button
                     type="button"
                     className="orange-file-act orange-file-act--icon orange-file-act--remote"
                     aria-label={t("projectFilesView.takeRemoteAllAria")}
                     title={t("projectFilesView.takeRemoteAllTitle")}
-                    disabled={remoteBlocked}
+                    disabled={remoteBlocked || bulkFiles.length === 0}
                     onClick={() => {
                       if (!projectId) return;
                       void (async () => {
@@ -2167,7 +2188,7 @@ export function ProjectFilesView({
                           relPath: "",
                           isDir: true,
                           label: project?.name ?? projectId,
-                          relPaths: orangeFiles,
+                          relPaths: bulkFiles,
                           force: true,
                         });
                         if (!ok) return;
@@ -2175,7 +2196,7 @@ export function ProjectFilesView({
                         setOrangeError(null);
                         const outcome = await useSyncStore
                           .getState()
-                          .resolveAll(projectId, orangeFiles, "host");
+                          .resolveAll(projectId, bulkFiles, "host");
                         setOrangeSkipped(outcome.skipped);
                         noteResolveFailures(outcome);
                       })();
@@ -2188,7 +2209,7 @@ export function ProjectFilesView({
                     className="orange-file-act orange-file-act--icon orange-file-act--local"
                     aria-label={t("projectFilesView.keepLocalAllAria")}
                     title={t("projectFilesView.keepLocalAllTitle")}
-                    disabled={remoteBlocked}
+                    disabled={remoteBlocked || bulkFiles.length === 0}
                     onClick={() => {
                       if (!projectId) return;
                       void (async () => {
@@ -2198,13 +2219,13 @@ export function ProjectFilesView({
                           relPath: "",
                           isDir: true,
                           label: project?.name ?? projectId,
-                          relPaths: orangeFiles,
+                          relPaths: bulkFiles,
                           force: true,
                         });
                         if (!ok) return;
                         setOrangeError(null);
                         noteResolveFailures(
-                          await useSyncStore.getState().resolveAll(projectId, orangeFiles, "local"),
+                          await useSyncStore.getState().resolveAll(projectId, bulkFiles, "local"),
                         );
                       })();
                     }}

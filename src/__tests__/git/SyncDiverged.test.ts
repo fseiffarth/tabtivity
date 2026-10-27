@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve([])
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import { mtimeDivergenceCue } from "../../components/files/ProjectFilesView";
-import { splitByDeleteSide, splitByNewerSide } from "../../stores/remote/sync";
+import { splitByDeleteSide, splitByNewerSide, withoutChangedOnBoth } from "../../stores/remote/sync";
 import type { TranslationKey } from "../../lib/i18n";
 
 // The cue's text is asserted as the raw key — the wording is i18n's business.
@@ -94,6 +94,28 @@ describe("splitByNewerSide", () => {
     const out = splitByNewerSide(map, [...Object.keys(map), "unknown.txt"]);
     expect(out.host).toEqual(["host.txt", "both-host.txt"]);
     expect(out.local).toEqual(["local.txt", "both-local.txt"]);
+  });
+});
+
+describe("withoutChangedOnBoth", () => {
+  const e = (hostMtime: number | null, localMtime: number | null, hostDiverged: boolean, localDiverged: boolean) =>
+    ({ state: "amber", selected: true, isDir: false, auto: false, excluded: false, hostMtime, localMtime, hostDiverged, localDiverged, hostChecked: true }) as never;
+
+  it("drops only files both sides changed with both copies present, keeping order", () => {
+    const map = {
+      "a-host.txt": e(100, 200, true, false),
+      "b-both.txt": e(100, 200, true, true),
+      "c-local.txt": e(100, 200, false, true),
+      "d-gone-host.txt": e(null, 200, true, true), // a deletion, not an edit on both
+      "e-neither.txt": e(100, 100, false, false),
+    };
+    expect(withoutChangedOnBoth(map, [...Object.keys(map), "unknown.txt"])).toEqual([
+      "a-host.txt",
+      "c-local.txt",
+      "d-gone-host.txt",
+      "e-neither.txt",
+      "unknown.txt",
+    ]);
   });
 });
 
