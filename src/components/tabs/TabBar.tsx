@@ -12,6 +12,7 @@ import {
   useGroupTabs,
   type TabEntry,
   type TabKind,
+  type TabLocation,
 } from "../../stores/tabs";
 import {
   PRINTING_TAB_CMD,
@@ -27,7 +28,7 @@ import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
 import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
-import { agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
+import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { AddTabMenuList, type AddMenuEntry, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
@@ -538,6 +539,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // subscribing to the references is fine.
   const primaryHost = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.remote?.host);
   const computeHosts = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.compute_hosts);
+  // A VM project's tabs are pinned to the VM, so its agents get no machine list.
+  const isVmScope = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.vm?.enabled);
   // Per-tab file source (remote-native vs local mirror), published by the file
   // viewers. Lets the Remote/Local badge ride on the viewer tab itself rather
   // than costing a whole viewer header row. Only meaningful on remote projects.
@@ -799,6 +802,10 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     if (tabEl) revealTab(tabEl);
   }, [activeKey, tabs.length, revealTab]);
 
+  // A remote project's "+" agent rows each get a ▾ to start on a machine.
+  const addMenuMachines =
+    menuOpen && isRemoteScope && !isVmScope ? agentMachines({ primaryHost, computeHosts, t }) : undefined;
+
   function openAddMenu() {
     if (menuPos) { setMenuPos(null); return; }
     const r = addBtnRef.current?.getBoundingClientRect();
@@ -808,7 +815,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     setMenuPos({ x: r.left, y: r.bottom + 4 });
   }
 
-  function handleAdd(item: StaticMenuItem) {
+  function handleAdd(item: StaticMenuItem, location?: TabLocation) {
     // addTab/ensureTab insert into the focused group; focus this one first.
     focusGroup(groupId);
     // Both file panes are one-per-cwd: a second identical view of the same
@@ -834,7 +841,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     void worktreePicker.specFor(item).then((spec) => {
       if (!spec) return;
       focusGroup(groupId);
-      addTab(spec, place);
+      addTab(location ? { ...spec, location } : spec, place);
     });
   }
 
@@ -1827,6 +1834,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   customAgents,
                   pick: handleAdd,
                   pickCloud: handleAddCloud,
+                  machines: addMenuMachines,
                   defaultAgentBin,
                   agentOrder,
                   onAddCustom: () => {
@@ -1842,6 +1850,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     customAgents,
                     pick: handleAdd,
                     pickCloud: handleAddCloud,
+                    machines: addMenuMachines,
                     defaultAgentBin,
                     agentOrder,
                     onAddCustom: () => {

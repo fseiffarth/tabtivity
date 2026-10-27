@@ -3,7 +3,9 @@ import type { CustomAgent } from "../../types";
 import type { TranslationKey } from "../../lib/i18n";
 import { AGENT_TAB_ACTIONS, type AgentTabAction } from "../../lib/shortcuts/shortcuts";
 import { cloudLaunchesFor, type CloudLaunch } from "../../lib/agents/cloudSessions";
-import { CloudIcon } from "../common/icons/Icon";
+import { CloudIcon, HomeIcon } from "../common/icons/Icon";
+import type { TabLocation } from "../../stores/tabs";
+import { localityHostLabel, workerRunnable, type LocalityHost } from "../../stores/tabs/tabLocation";
 import type { AddMenuEntry } from "./AddTabMenuList";
 import {
   AGENT_ITEMS,
@@ -32,6 +34,35 @@ export function compactAgentMenuEntries(
 /** The Agents group's "Cloud session" row — kept in the compact menu too. */
 export const CLOUD_SESSION_KEY = "__cloud_session__";
 
+/** One machine an agent row's ▾ list offers on a remote project. */
+export interface AgentMachine {
+  location: TabLocation;
+  label: string;
+  /** A worker holding no code (not shared-fs, sync off) cannot run a tab. */
+  disabled?: boolean;
+}
+
+/** The machines a remote project's new agent tab can start on — the tab
+ *  locality menu's list, in its order and wording: the local mirror, the
+ *  primary, then each worker (one without the code offered disabled). */
+export function agentMachines(opts: {
+  primaryHost?: string;
+  computeHosts?: LocalityHost[];
+  t: (key: TranslationKey, vars?: Record<string, string>) => string;
+}): AgentMachine[] {
+  const names = { primaryHost: opts.primaryHost, computeHosts: opts.computeHosts };
+  return [
+    { location: "local", label: localityHostLabel("local", names) },
+    { location: "remote", label: localityHostLabel("remote", names) },
+    ...(opts.computeHosts ?? []).map((h): AgentMachine => {
+      const label = localityHostLabel(`host:${h.id}`, names);
+      return workerRunnable(h)
+        ? { location: `host:${h.id}`, label }
+        : { location: `host:${h.id}`, label: `${label} (${opts.t("tabLocality.syncOff")})`, disabled: true };
+    }),
+  ];
+}
+
 
 /**
  * Build the "Agents" group's rows for the add-tab menu, shared by the main-window
@@ -50,7 +81,12 @@ export function agentMenuEntries(opts: {
   installedBuiltins: Set<string> | null;
   installedCmds: Set<string> | null;
   customAgents: CustomAgent[];
-  pick: (item: StaticMenuItem) => void;
+  /** Start the agent; `location` set when it was picked from the row's ▾
+   *  machine list, else the kind's default. */
+  pick: (item: StaticMenuItem, location?: TabLocation) => void;
+  /** A remote project's machines (`agentMachines`): every agent row then gets
+   *  a ▾ list to start it on one of them directly. Unset → no list. */
+  machines?: AgentMachine[];
   /** Start one of an installed built-in's cloud launches. Unset → no
    *  "Cloud session" row (a scope where no cloud session makes sense). */
   pickCloud?: (item: StaticMenuItem, launch: CloudLaunch) => void;
@@ -62,6 +98,22 @@ export function agentMenuEntries(opts: {
   agentOrder?: readonly string[];
   t: (key: TranslationKey, vars?: Record<string, string>) => string;
 }): AddMenuEntry[] {
+  // The ▾ fly-out under an agent row: the same agent, started on a machine.
+  const machinesFor = (label: string, item: () => StaticMenuItem) =>
+    opts.machines?.length
+      ? {
+          machineTitle: opts.t("newTabMenu.chooseMachine", { agent: label }),
+          machineEntries: opts.machines.map((m): AddMenuEntry => ({
+            key: `${label}@${m.location}`,
+            label: m.label,
+            dot: createElement(m.location === "local" ? HomeIcon : CloudIcon),
+            color: "var(--accent)",
+            disabled: m.disabled,
+            untested: "newTabMenu.chooseMachine",
+            onPick: () => opts.pick(item(), m.location),
+          })),
+        }
+      : {};
   const chordByKey = new Map<string, AgentTabAction>();
   if (opts.defaultAgentBin !== undefined) {
     agentShortcutSlots({ ...opts, defaultAgentBin: opts.defaultAgentBin }).forEach((slot, i) => {
@@ -78,6 +130,7 @@ export function agentMenuEntries(opts: {
     color: TAB_ACCENT[item.kind],
     shortcut: chordByKey.get(item.cmd),
     onPick: () => opts.pick(onOwnLogin(item)),
+    ...machinesFor(item.label, () => onOwnLogin(item)),
   }));
   // One row whose fly-out holds every installed built-in's cloud launches,
   // rather than a cloud twin per agent: most agents have none, and the plain
@@ -117,6 +170,7 @@ export function agentMenuEntries(opts: {
       disabled: missing,
       shortcut: chordByKey.get(`custom:${ca.id}`),
       onPick: () => opts.pick(onOwnLogin(customAgentToItem(ca))),
+      ...(missing ? {} : machinesFor(ca.label, () => onOwnLogin(customAgentToItem(ca)))),
     };
   });
   return [

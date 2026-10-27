@@ -59,6 +59,7 @@ import { WindowControls } from "../header/WindowControls";
 import { DragGhost, SplitPreviewOverlay } from "./CenterPanel";
 import { TabDropPlaceholder } from "../tabs/TabDropPlaceholder";
 import { NewTabMenu } from "../tabs/NewTabMenu";
+import { agentMachines } from "../tabs/agentMenuEntries";
 import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { TabColorPicker } from "../tabs/TabColorPicker";
 import { TabMarkBadge } from "../tabs/TabMarkBadge";
@@ -1906,6 +1907,11 @@ export function DetachedCenterPanel({
               onPick={(tab) => onAddTab(tab, addMenu.groupId)}
               onClose={() => setAddMenu(null)}
               onManageAgents={() => setAgentDialogOpen(true)}
+              machines={
+                isRemote && !remoteInfo?.project?.vm?.enabled
+                  ? agentMachines({ primaryHost, computeHosts, t })
+                  : undefined
+              }
             />
           );
         })()}

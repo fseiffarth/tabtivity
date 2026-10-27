@@ -3,6 +3,7 @@ import {
   BROWSER_TAB_CMD,
   PROMPTCHART_TAB_CMD,
   type TabEntry,
+  type TabLocation,
 } from "../../stores/tabs";
 import {
   PRINTING_TAB_CMD,
@@ -15,7 +16,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { PROJECT_FILES_TAB_CMD, ROOT_SCOPE } from "../../stores/tabs";
 import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
-import { agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
+import { agentMenuEntries, compactAgentMenuEntries, type AgentMachine } from "./agentMenuEntries";
 import { AddTabMenuList } from "./AddTabMenuList";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useAddTabMenuData } from "./useAddTabMenuData";
@@ -51,6 +52,9 @@ interface Props {
   /** Open the manage-custom-agents dialog. Hosted by the parent (this menu
    *  unmounts on `onClose`, so it can't own the dialog itself). */
   onManageAgents: () => void;
+  /** A remote project's machines (`agentMachines`, from the popout's streamed
+   *  remote info): each agent row gets a ▾ to start on one. Unset → none. */
+  machines?: AgentMachine[];
 }
 
 /**
@@ -60,7 +64,7 @@ interface Props {
  * `onPick`; the caller decides how to create the tab (the main window calls
  * `addTab`; the popout streams an "add" edit to the main window).
  */
-export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onClose, onManageAgents }: Props) {
+export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onClose, onManageAgents, machines }: Props) {
   const t = useT();
 
   // Experimental — off until ticked. This menu is the DETACHED
@@ -106,9 +110,9 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
   // read as an outside click, unmount this menu, and take the pending answer
   // (and the tab) with it. The dialog owns Escape for that stretch.
 
-  const pickStatic = (item: StaticMenuItem) => {
+  const pickStatic = (item: StaticMenuItem, location?: TabLocation) => {
     void worktreePicker.specFor(item).then((spec) => {
-      if (spec) onPick(spec);
+      if (spec) onPick(location ? { ...spec, location } : spec);
       onClose();
     });
   };
@@ -175,6 +179,7 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
               agentOrder,
               pick: pickStatic,
               pickCloud,
+              machines,
               onAddCustom: () => {
                 onClose();
                 onManageAgents();
@@ -189,6 +194,7 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
                 agentOrder,
                 pick: pickStatic,
                 pickCloud,
+                machines,
                 onAddCustom: () => {
                   onClose();
                   onManageAgents();

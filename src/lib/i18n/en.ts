@@ -5909,6 +5909,7 @@ export const enSource = {
   "newTabMenu.moreAgents": "More agents & CLIs…",
   "newTabMenu.agentWorktreeLabel": "{agent} · {branch}",
   "newTabMenu.cloudSession": "Cloud session",
+  "newTabMenu.chooseMachine": "Start {agent} on…",
   "newTabMenu.cloudNew": "{agent}: new cloud session…",
   "newTabMenu.cloudOpen": "{agent}: open a cloud session",
   "newTabMenu.cloudTabLabel": "{agent} (cloud)",

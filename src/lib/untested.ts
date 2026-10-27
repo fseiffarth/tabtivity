@@ -869,6 +869,7 @@ export const UNTESTED = {
   "tabStack.newGroup": { area: "tabs", what: "TabBar · tab right-click New tab group… / Add to group / Remove from group: grouped tabs fold into one chip, kept after a relaunch" },
   "tabStackChip.1": { area: "tabs", what: "TabStackChip · hovering a tab-group chip lists its tabs; a click on one activates it, × closes it; right-click the chip to rename, ungroup or close the group" },
   "tabLocalityBadges.1": { area: "tabs", what: "TabLocalityBadges · Run on machine" },
+  "newTabMenu.chooseMachine": { area: "tabs", what: "Remote project \"+\" menu · ▾ beside each agent row starts it straight on the local mirror, the primary or a worker (main bar and popouts)" },
 
   // --- todo — The to-do board ---------------------------------------
   "todo.overlayTitle": { area: "todo", what: "TodoOverlay · To-do board" },

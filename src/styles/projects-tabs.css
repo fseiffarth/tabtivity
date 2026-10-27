@@ -2595,6 +2595,31 @@ button.tab-todo-link {
   border-color: transparent;
 }
 
+/* A row with a second choice beside it (an agent row's ▾ machine list on a
+   remote project): the row keeps its whole look and width, the ▾ is a narrow
+   row-styled button after it. */
+.tab-new-menu-split {
+  display: flex;
+  gap: 1px;
+}
+.tab-new-menu-split > .tab-new-menu-item:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tab-new-menu-split-caret {
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 7px 8px;
+  color: var(--text-muted);
+}
+.tab-new-menu-split-caret:hover,
+.tab-new-menu-split-caret.open {
+  color: var(--text-primary);
+}
+.tab-new-menu-split-caret.open {
+  background-color: var(--control-hover-bg);
+}
+
 .tab-new-menu-dot { font-size: var(--text-xs); flex-shrink: 0; }
 /* The only two colours these glyphs take: accent for an action, danger for a
    close. Modifiers, so the call sites stop repeating an inline style object. */

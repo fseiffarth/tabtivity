@@ -5712,6 +5712,7 @@ export const dict: Dict = {
   "newTabMenu.moreAgents": "Altri agenti e CLI…",
   "newTabMenu.agentWorktreeLabel": "{agent} · {branch}",
   "newTabMenu.cloudSession": "Sessione cloud",
+  "newTabMenu.chooseMachine": "Avvia {agent} su…",
   "newTabMenu.cloudNew": "{agent}: nuova sessione cloud…",
   "newTabMenu.cloudOpen": "{agent}: apri una sessione cloud",
   "newTabMenu.cloudTabLabel": "{agent} (cloud)",
