@@ -1000,8 +1000,7 @@ export interface SessionTranscript {
    * Claude Code's own subagent row shows — read off a subagent's own file. */
   tokens?: number;
   /** The shells the agent is running now — Claude's `Bash` calls still
-   * without a result, and background ones still running. The phone's API
-   * empties each `command` (command lines never cross it). */
+   * without a result, and background ones still running. */
   shells?: RunningShell[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
