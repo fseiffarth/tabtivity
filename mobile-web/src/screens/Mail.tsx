@@ -20,6 +20,7 @@ import { installFocusSwipe } from "../terminal/focusSwipe";
 import { isUntested } from "../../../src/lib/untested";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
+import { HintQueue, type HintKey } from "../components/HintMessage";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -78,6 +79,9 @@ function accountOption(account: MobileMailAccount, t: Translate) {
 }
 
 const isAccountId = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
+/** The mail screen's tips, each its own card, one at a time (`HintQueue`). */
+const MAIL_TIPS: readonly HintKey[] = ["mailMove", "mailWrite"];
 
 export function Mail() {
   const t = useT();
@@ -257,6 +261,7 @@ export function Mail() {
         t("mobile.mail.noticeLimits"),
       ].filter(Boolean).join(" ")
       : t("mobile.mail.noticeReadOnly")}</p>
+    <HintQueue hints={MAIL_TIPS} />
     {error && <p className="error">{error}</p>}
     {busy && !accounts && <p className="mail-mobile-empty">{t("common.loading")}</p>}
 

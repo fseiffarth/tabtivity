@@ -1,7 +1,7 @@
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
-import { HintMessage } from "../components/HintMessage";
+import { HintQueue, type HintKey } from "../components/HintMessage";
 import { RunningShells, shownShells } from "../components/RunningShells";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
@@ -541,6 +541,10 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
  * and a question turned down saying so. It is one record, so it is drawn once
  * and never changes.
  */
+/** An agent chat's tips, in the order they come (`HintQueue`). */
+const CHAT_TIPS: readonly HintKey[] = ["chatTools", "statusLine", "sendHold", "chatMenu", "sentFiles", "markup", "chatSwipe"];
+const TABBY_TIPS: readonly HintKey[] = ["sendHold", "chatMenu", "chatSwipe"];
+
 function AskedCard({ questions, label, notAnswered, untested, time, press }: {
   questions: readonly AskedQuestion[];
   label: string;
@@ -580,7 +584,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
  * model picker already up — once, as soon as the session has drawn.
  * `subagent`: one was picked off the tab card's subagent list, so the session
  * opens in Focus on that subagent's own conversation. */
-export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab, markupBack, launchHint = false }: {
+export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab, markupBack }: {
   tab: TabRow;
   /** The project the tab belongs to, for the files drawer a swipe from the
    * left of the output opens (`ProjectFiles`). */
@@ -597,9 +601,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** Opened from a markup view's Open tab: that view, marking, is kept here
    * tucked away under the bar over the composer, which brings it back. */
   markupBack?: MarkupBack;
-  /** Opened by a plain tap on ＋: the hint that holding it picks another
-   * agent. In Chat it opens the conversation, above the first prompt. */
-  launchHint?: boolean;
 }) {
   // From the tab list, or after the PWA reloaded on the way back from the
   // sign-in page, only the row knows — and without it the sheet lost its
@@ -701,7 +702,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   // A subagent picked off the card is read in Focus, whatever the reader's
   // choice — without making it their choice.
   const subagentTab = useRef(subagent && tab.kind === "agent" ? tab.id : null);
-  const [launchHintShown, setLaunchHintShown] = useState(launchHint);
   const [view, setView] = useState<TerminalViewChoice>(() => subagentTab.current === tab.id ? "focus" : initialView(tab));
   const chooseView = (next: TerminalViewChoice) => {
     setView(next);
@@ -1215,6 +1215,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       modeWalk.current += 1;
     };
   }, [tab.id]);
+
+  // A Tabby chat's head names its model: read the rows once per chat, quietly
+  // (the sheet asks again when it opens, and says what went wrong).
+  useEffect(() => {
+    if (!bare) return;
+    let live = true;
+    getAssistantModels(tab.id).then((models) => {
+      if (live) setAssistantModels((now) => now ?? models);
+    }, () => undefined);
+    return () => { live = false; };
+  }, [bare, tab.id]);
 
   useTerminalViewport({ setViewportHeight });
 
@@ -2236,7 +2247,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {/* The stored session does not depend on the screen, so a full-screen
           agent (OpenCode's TUI) still reads as a chat in Focus. */}
       {view === "focus" && altScreen && !sessionFocus && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span><button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}
-      {launchHintShown && (view !== "focus" || (altScreen && !sessionFocus)) && <HintMessage hint="agentHold" floating onClose={() => setLaunchHintShown(false)} />}
       {view === "focus" && (!altScreen || sessionFocus) && <>
         <section ref={readableHost} className="readable-output" aria-label={t("mobile.focus.output")} aria-live="polite"
           onScroll={(event) => {
@@ -2276,8 +2286,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             </nav>}
             {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} files={chatFiles} open={sentListOpen} onToggle={() => { setSubagentListOpen(false); setSentListOpen((open) => !open); }} onOpen={openSentFile} />}
           </div>}
-          {launchHintShown && <HintMessage hint="agentHold" onClose={() => setLaunchHintShown(false)} />}
-          {!launchHintShown && tab.kind === "agent" && !bare && <HintMessage hint="chatTools" />}
           {sessionFocus && openStep
             ? subagentView
             : sessionFocus
@@ -2452,9 +2460,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {tab.kind === "agent" && <>
           <button className="fact-action" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="fact-action-label">{t("terminal.reader.status.button")}</span></button>
           {/* A local-model tab keeps the model it was launched on: the
-              driver's list would only offer to move it off. A chat of the
-              assistant scope runs with its slash commands off, so `/model`
-              cannot reach it (the desktop switches its model by restarting it). */}
+              driver's list would only offer to move it off. */}
           {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
             : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
@@ -2475,6 +2481,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {(shownLimits.session || shownLimits.week) && isUntested("mobile.facts.limitBars") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
       </div>}
+      {/* The chat's tips, each its own card, one at a time right over the
+          composer (the cards' ⋯ and ＋ have theirs on the tab list). A Tabby
+          chat has no files, markup, Commit or status line. */}
+      {tab.kind === "agent" && <HintQueue hints={bare ? TABBY_TIPS : CHAT_TIPS} />}
       <div className={`prompt-composer${penWriting ? " pen-writing" : ""}`}>
         {slashMenu.length > 0 && <div className="slash-menu" role="group" aria-label={t("mobile.slash.title")}>
           <div className="slash-menu-head">{t("mobile.slash.title")} {isUntested("mobile.composer.slash") && <em>{t("mobile.focus.untested")}</em>}</div>

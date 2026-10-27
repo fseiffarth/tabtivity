@@ -8,6 +8,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
 import { useBackLayer } from "../backStack";
+import { HintQueue, type HintKey } from "../components/HintMessage";
 
 const NAMES: TranslationKey[] = ["agentSchedule.sun", "agentSchedule.mon", "agentSchedule.tue", "agentSchedule.wed", "agentSchedule.thu", "agentSchedule.fri", "agentSchedule.sat"];
 const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; };
@@ -56,6 +57,9 @@ export const storedAllDayEnd = (day: string) => addDays(day, 1);
 export const defaultEnd = (stamp: string) => { const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/.exec(stamp); if (!m) return null; const total = Number(m[2]) * 60 + Number(m[3]) + 60; return `${addDays(m[1], Math.floor(total / 1440))}T${String(Math.floor((total % 1440) / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`; };
 type Editing = { event?: MobileCalendarEvent; draft: MobileCalendarEventInput } | null;
 
+/** The calendar's tips, each its own card, one at a time (`HintQueue`). */
+const CALENDAR_TIPS: readonly HintKey[] = ["calendarViews", "calendarManage"];
+
 export function Calendar() {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
@@ -92,6 +96,7 @@ export function Calendar() {
     <header><h1>{t("mobile.calendar.title")}</h1><button onClick={() => void load()} disabled={busy}>↻</button></header>
     <div className="mobile-calendar-actions"><button className="primary" disabled={busy || !canWrite} onClick={() => createAt(selected)}>{t("mobile.calendar.addEvent")}</button><button disabled={busy} onClick={() => setManage(true)}>{t("calendarSidebar.calendarsTitle")}</button><button onClick={() => setReminders(true)}>{t("mobile.push.reminders")}{isUntested("mobile.calendar.push") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</button></div>
     {error && <p className="error">{error}</p>}
+    <HintQueue hints={CALENDAR_TIPS} />
     {data?.desktop_available === false && <p className="notice">{t("mobile.headless.owner")} {isUntested("mobile.headless.calendar") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     <div className="mobile-calendar-actions" role="group" aria-label={t("mobile.calendar.title")}>{VIEWS.map((v) => <button key={v} className={view === v ? "primary" : undefined} aria-pressed={view === v} disabled={busy} onClick={() => setView(v)}>{t(`mobile.calendar.${v}` as "mobile.calendar.day")}</button>)}<button disabled={busy} onClick={goToday}>{t("mobile.calendar.today")}</button>{isUntested("mobile.calendar.views") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>
     <div className="mobile-calendar-nav"><button onClick={() => step(-1)} disabled={busy}>‹</button><strong>{navLabel}</strong><button onClick={() => step(1)} disabled={busy}>›</button></div>

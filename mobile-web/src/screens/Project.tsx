@@ -18,7 +18,7 @@ import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActions, type TabAction } from "../components/TabCard";
 import { OptionSheet } from "../components/OptionSheet";
-import { HintMessage } from "../components/HintMessage";
+import { HintQueue, type HintKey } from "../components/HintMessage";
 import { lastWorkedAt } from "../components/AgentModeMarks";
 import { draftPreview } from "../agentPrompts";
 import { readDrafts } from "../drafts";
@@ -131,7 +131,7 @@ function cardViewerFile(file: FileTab, outbox: readonly OutboxFile[]): OutboxFil
     ?? { name: file.name, kind: file.kind, size: file.size, modified: file.modified, ...(file.label ? { original: file.label } : {}) };
 }
 
-export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack; launchHint?: boolean }) => void }) {
+export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack }) => void }) {
   const t = useT();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [creating, setCreating] = useState(false);
@@ -441,7 +441,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     } : undefined,
     [detail?.agents.length, creates, id, terminal],
   );
-  const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch, launchHint = false) => {
+  const create = async (kind: "shell" | "agent", agent?: AgentRow, mode?: string, launch?: NewTabLaunch) => {
     setCreating(true); setError("");
     const action = `${kind}:${agent?.id ?? ""}:${mode ?? ""}:${launch?.worktree ?? ""}:${launch?.cloud ?? ""}:${launch?.task ?? ""}:${launch?.sign_in ?? ""}:${launch?.local ?? ""}:${launch?.api_key ? "api" : ""}:${launch?.host ?? ""}`;
     const idempotencyKey = pendingKeys.current.get(action) ?? crypto.randomUUID();
@@ -449,7 +449,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     try {
       const body = await api<{ tab: TabRow }>(`/api/v1/projects/${encodeURIComponent(id)}/tabs`, { method: "POST", body: JSON.stringify({ project_id: id, kind, agent_id: agent?.id, mode, ...launch, idempotency_key: idempotencyKey }) }, TAB_CREATE_TIMEOUT);
       pendingKeys.current.delete(action);
-      terminal(body.tab, launch?.sign_in ? { signIn: true } : launchHint ? { launchHint: true } : undefined);
+      terminal(body.tab, launch?.sign_in ? { signIn: true } : undefined);
     } catch (reason) { setError(describeFailure(reason)); void load(); } finally { setCreating(false); }
   };
   /** A tap on ＋ starts the default agent here at once (`newTabDefault.ts`);
@@ -459,7 +459,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const quickTarget = creates ? newTabTarget(detail?.agents ?? [], starredAgent, starredLabel) : undefined;
   const quickLabel = quickTarget?.kind === "api" ? t("newTabMenu.apiKeyEntry", { label: quickTarget.label }) : quickTarget?.label;
   const fabPress = useTapHold(
-    () => { if (!quickTarget) setNewTabOpen(true); else if (!creating) void create("agent", quickTarget.agent, undefined, quickTarget.launch, true); },
+    () => { if (!quickTarget) setNewTabOpen(true); else if (!creating) void create("agent", quickTarget.agent, undefined, quickTarget.launch); },
     () => { dropHint("hold"); setNewTabOpen(true); },
   );
   /** The tab being started, by tab id: an agent tab the desktop is
@@ -632,8 +632,15 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const closedRows = createVerdict === "none" ? [] : detail?.closed ?? [];
   const showReorderHint = canReorder && !hintsGone.reorder;
   const showSwipeHint = tabs.length > 0 && !hintsGone.swipe;
-  // Only while a tap starts one agent: the sheet of the others sits behind a hold.
-  const showHoldHint = !!quickTarget && tabs.length > 0 && !hintsGone.hold;
+  // Only while a tap starts one agent: the sheet of the others sits behind a
+  // hold. Gone for good once the hold has been used.
+  const showHoldHint = !!quickTarget && !hintsGone.hold;
+  /** The screen's tips, each its own card, one at a time at the top. */
+  const tips: HintKey[] = [
+    ...(drawerOffered ? ["projectFiles" as const] : []),
+    ...(showHoldHint ? ["agentHold" as const] : []),
+    ...(tabs.length > 0 ? ["tabCard" as const] : []),
+  ];
   return <main className="screen project-screen" ref={screenRef}>
     {/* One dense row, shaped like an agent tab's header: chevron, the name
         (ellipsized) with the order it sorts by under it, then the drawer's ☰
@@ -698,7 +705,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       folderless ? (hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[detail.project.host ?? "local"]) : undefined,
     ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {error && <p className="error">{error}</p>}
-    {drawerOffered && <HintMessage hint="projectFiles" />}
+    <HintQueue hints={tips} vars={{ agentHold: { agent: quickLabel ?? "" } }} />
     {projectInbox.view}
     {/* An inactive project is activated before anything else here is worth
         doing, so the button leads the list rather than trailing it. */}
@@ -745,14 +752,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     />)}</section>
     {/* The list's gestures, said once under it in one muted line: gone for
         good once dismissed, and each half once its gesture has been used. */}
-    {(showReorderHint || showSwipeHint || showHoldHint) && <p className="project-hint">
+    {(showReorderHint || showSwipeHint) && <p className="project-hint">
       <span>
         {showReorderHint && <><GripHint text={t("mobile.project.reorderHint")} /> {isUntested("mobile.project.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>} </>}
         {showSwipeHint && <>{t("mobile.project.swipeCloseHint")}{isUntested("mobile.project.swipeClose") && <span className="untested">{t("mobile.newTab.untested")}</span>} </>}
-        {showHoldHint && <>{t("mobile.project.fabHoldHint", { agent: quickLabel ?? "" })}{isUntested("mobile.project.fabHoldHint") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>}
         {isUntested("mobile.project.hintDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       </span>
-      <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); if (showHoldHint) dropHint("hold"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
+      <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
     </p>}
     <div className="project-foot">
       {/* Agent tabs closed on either surface, newest first, folded under one
