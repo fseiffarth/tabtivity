@@ -1850,7 +1850,9 @@
   background: transparent;
   cursor: var(--cur-pointer, pointer);
 }
-.header-conn-lamps:hover {
+/* The pill's own lamp button only — Machines' lamps are a span inside its
+   header button, which already lights up as a whole. */
+button.header-conn-lamps:hover {
   background: color-mix(in srgb, var(--text-secondary) 16%, transparent);
 }
 
@@ -1918,9 +1920,9 @@
 .machines-indicator-btn,
 .mobile-indicator-btn,
 .dev-build-btn {
-  /* Unlike the other .global-apps-menu-btn siblings, this one reads as a
-     quiet status readout (lamp + label), not a button — so its inherited
-     button box (background/border) is stripped back to plain text/icon.
+  /* A lamp/glyph readout, but its rest and hover chrome is
+     `.global-apps-menu-btn`'s own, so every top-bar icon lights up the same
+     way. Only the layout differs (room for lamps beside the glyph).
      Height is the bar's 40px, the same box as the icon launchers beside it:
      every top-bar icon shares one size, pinned or folded behind the chevron.
      The dropdowns line up regardless — they hang off the header's bottom edge
@@ -1931,9 +1933,6 @@
   min-width: 0;
   height: 40px;
   padding: 2px 4px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
 }
 
 /* Kept as an explicit marker on the right-cluster anchors (VPN, Machines,
@@ -1992,7 +1991,17 @@
    is a pseudo-element so no layout moves while the pointer travels. */
 .header-slot[data-dragging] {
   opacity: 0.45;
-  cursor: var(--cur-grabbing, grabbing);
+}
+/* The grabbing hand follows the pointer for the whole drag, not only over the
+   dimmed icon, and nothing under it selects. */
+html[data-header-drag],
+html[data-header-drag] * {
+  cursor: var(--cur-grabbing, grabbing) !important;
+  user-select: none !important;
+}
+/* A readout has no click of its own: the hand says the drag is all it does. */
+.header-slot[data-readout] {
+  cursor: var(--cur-grab, grab);
 }
 .header-slot[data-drop] {
   position: relative;
@@ -2026,13 +2035,6 @@
   min-width: 0;
   padding-inline: 5px;
 }
-.status-cluster-toggle:hover,
-.status-cluster-toggle[aria-expanded="true"] {
-  /* The reveal-on-touch highlight its neighbours use (+, VPN, Machines), rather
-     than `.global-apps-menu-btn`'s bordered one — this button sits among them. */
-  background: var(--pill-hover-bg);
-  border-color: transparent;
-}
 .status-cluster-chevron {
   font-size: 13px;
   line-height: 1;
@@ -2065,20 +2067,6 @@
   .project-switcher-separator { margin-inline: 1px; }
   .project-search-wrap { width: 108px; }
 }
-.vpn-indicator-btn:hover,
-.vpn-indicator-btn[aria-expanded="true"],
-.machines-indicator-btn:hover,
-.machines-indicator-btn[aria-expanded="true"],
-.mobile-indicator-btn:hover,
-.mobile-indicator-btn[aria-expanded="true"],
-.dev-build-btn:hover,
-.dev-build-btn[aria-expanded="true"] {
-  /* Same accent-tinted highlight as .tab-new-btn:hover (the + button), so the
-     header's three "quiet until touched" controls (+, VPN, Machines) all light
-     up the same way instead of these two staying flat while the + brightens. */
-  background: var(--pill-hover-bg);
-  border-color: transparent;
-}
 .vpn-indicator-btn:hover .vpn-indicator-label,
 .vpn-indicator-btn[aria-expanded="true"] .vpn-indicator-label,
 .machines-indicator-btn:hover .vpn-indicator-label,
@@ -2087,20 +2075,14 @@
 .dev-build-btn[aria-expanded="true"] .vpn-indicator-label {
   color: var(--text-primary);
 }
-/* VPN and Machines carry a drawn glyph after their lamps instead of a word;
-   it dims and lights like the label it replaced. */
+/* VPN and Machines carry a drawn glyph after their lamps instead of a word.
+   Like ✉ 🗓 ☑, it takes the button's colour (dim at rest, bright on hover);
+   only a state tone below overrides that. */
 .header-status-glyph {
   width: 20px;
   height: 20px;
   flex: none;
-  color: var(--text-secondary);
   transition: color var(--transition);
-}
-.vpn-indicator-btn:hover .header-status-glyph,
-.vpn-indicator-btn[aria-expanded="true"] .header-status-glyph,
-.machines-indicator-btn:hover .header-status-glyph,
-.machines-indicator-btn[aria-expanded="true"] .header-status-glyph {
-  color: var(--text-primary);
 }
 .vpn-indicator-label {
   font-size: var(--text-xs);
@@ -2121,16 +2103,12 @@
   width: 20px;
   height: 20px;
   flex: none;
-  color: var(--text-secondary);
+  transition: color var(--transition);
 }
 .mobile-indicator-icon.connected,
-.vpn-indicator-glyph.connected,
-.vpn-indicator-btn:hover .vpn-indicator-glyph.connected,
-.vpn-indicator-btn[aria-expanded="true"] .vpn-indicator-glyph.connected { color: var(--success); }
+.vpn-indicator-glyph.connected { color: var(--success); }
 .mobile-indicator-icon.connecting,
 .vpn-indicator-glyph.connecting,
-.vpn-indicator-btn:hover .vpn-indicator-glyph.connecting,
-.vpn-indicator-btn[aria-expanded="true"] .vpn-indicator-glyph.connecting,
 .dev-build-icon.active { color: var(--warning); }
 .mobile-indicator-icon.error,
 .dev-build-icon.error { color: var(--danger); }

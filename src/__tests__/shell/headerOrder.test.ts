@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { moveHeaderItem, orderedHeaderIds, placedGroupOf, resetHeaderGroup, setHeaderPin } from "../../lib/headerPins";
+import { isHeaderPinned, moveHeaderItem, orderedHeaderIds, placedGroupOf, resetHeaderGroup, setHeaderPin } from "../../lib/headerPins";
 
 describe("header icon order", () => {
   it("follows the built-in order until the user drags", () => {
@@ -43,6 +43,20 @@ describe("header icon order", () => {
     expect(orderedHeaderIds("status", order)[0]).toBe("mail");
     expect(orderedHeaderIds("status", resetHeaderGroup(order, "status"))).not.toContain("mail");
     expect(orderedHeaderIds("apps", resetHeaderGroup(order, "status"))[0]).toBe("mail");
+  });
+
+  it("keeps the connection and battery readouts out of the apps run", () => {
+    const order = moveHeaderItem(undefined, "battery", "mail", "apps");
+    expect(orderedHeaderIds("apps", order)).not.toContain("battery");
+    expect(placedGroupOf("battery", order)).toBe("status");
+    // An order saved by a build that let them across reads back in status.
+    expect(placedGroupOf("conn", ["apps:conn"])).toBe("status");
+    expect(orderedHeaderIds("status", ["apps:conn"])[0]).toBe("conn");
+  });
+
+  it("folds the settings gear like any other icon", () => {
+    expect(isHeaderPinned(undefined, "settings")).toBe(true);
+    expect(isHeaderPinned(setHeaderPin(undefined, "settings", false), "settings")).toBe(false);
   });
 
   it("setHeaderPin only changes what differs", () => {

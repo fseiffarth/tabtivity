@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderSlotsStore, type HeaderSlotsDrag } from "../../stores/headerSlots";
+import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import {
   isHeaderPinned,
+  isHeaderReadout,
   moveHeaderItem,
   placedGroupOf,
   resetHeaderGroup,
@@ -32,19 +34,20 @@ type Target = Omit<NonNullable<HeaderSlotsDrag>, "id">;
  * lands in, so dragging across a boundary moves the icon between the stretches:
  * into the folded one it folds, out of it it pins. Between two stretches the
  * pointer picks the nearer side of the gap. Folded-away slots have no box and
- * are skipped; the gear stays pinned, so it has no folded stretch to drop in.
+ * are skipped. A readout (`isHeaderReadout`) only ever lands among the status
+ * group's slots, so the apps-and-menus run is not a place it can be dropped.
  */
 function dropTarget(id: HeaderItemId, x: number, order: readonly string[] | undefined): Target | null {
+  const readout = isHeaderReadout(id);
   const slots = Array.from(document.querySelectorAll<HTMLElement>("[data-header-slot]"))
     .map((el) => ({ el, id: el.dataset.headerSlot as HeaderItemId, r: el.getBoundingClientRect() }))
-    .filter((sl) => sl.id !== id && sl.r.width > 0)
+    .filter((sl) => sl.id !== id && sl.r.width > 0 && (!readout || placedGroupOf(sl.id, order) === "status"))
     .sort((p, q) => p.r.left - q.r.left);
   type Slot = (typeof slots)[number];
   const area = (sl: Slot) =>
     !sl.el.closest(".header-status-cluster") ? "bar" : sl.el.dataset.pinned === "true" ? "pinned" : "folded";
-  const place = (sl: Slot, before: boolean): Target | null => {
+  const place = (sl: Slot, before: boolean): Target => {
     const a = area(sl);
-    if (a === "folded" && id === "settings") return null;
     const group: HeaderGroup =
       a === "bar" ? "apps" : a === "pinned" || !before ? "status" : placedGroupOf(sl.id, order);
     return {
@@ -68,11 +71,9 @@ function dropTarget(id: HeaderItemId, x: number, order: readonly string[] | unde
  * A drag over the ‹ chevron folds the icon, at the end of the folded stretch.
  * Collapsed, that stretch has no boxes to drop between, so the chevron is the
  * only way into it — and reaching it opens the stretch for the rest of the drag
- * (`foldPeek`), so the pointer can go on to a spot among the folded icons. The
- * gear never folds, so for it the chevron is just the end of the bar.
+ * (`foldPeek`), so the pointer can go on to a spot among the folded icons.
  */
 function overFoldToggle(id: HeaderItemId, x: number): Target | null {
-  if (id === "settings") return null;
   const r = document.querySelector(".status-cluster-toggle")?.getBoundingClientRect();
   if (!r || r.width === 0 || x < r.left || x > r.right) return null;
   const folded = Array.from(document.querySelectorAll<HTMLElement>(".header-status-cluster [data-header-slot]"))
@@ -93,7 +94,8 @@ function overFoldToggle(id: HeaderItemId, x: number): Target | null {
  * opens the folded icons until the drag ends, and a drop on it folds the icon
  * (`overFoldToggle`). It is pointer-based like the tab drag: HTML5 DnD is unreliable on
  * WebKitGTK, and the release is handled by a listener bound at pointerdown, the
- * only kind that reliably sees it there.
+ * only kind that reliably sees it there. While a drag runs the header's hover
+ * menus are held shut (`headerHoverMenu.hold`): every icon it crosses has one.
  *
  * Folding is `display: none`, never unmounting, for the reason the cluster
  * gives: a folded readout keeps polling and a folded mail button keeps its
@@ -124,9 +126,15 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
     const startY = e.clientY;
     let engaged = false;
     const { setDrag, setFoldPeek } = useHeaderSlotsStore.getState();
+    const { hold } = useHeaderHoverMenuStore.getState();
     const move = (ev: PointerEvent) => {
       if (!engaged && Math.hypot(ev.clientX - startX, ev.clientY - startY) < DRAG_THRESHOLD) return;
+      if (!engaged) {
+        hold(true);
+        document.documentElement.dataset.headerDrag = "";
+      }
       engaged = true;
+      ev.preventDefault();
       const fold = overFoldToggle(id, ev.clientX);
       if (fold) setFoldPeek(true);
       const target = fold ?? dropTarget(id, ev.clientX, order);
@@ -140,6 +148,8 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
       setDrag(null);
       setFoldPeek(false);
       if (!engaged) return;
+      hold(false);
+      delete document.documentElement.dataset.headerDrag;
       // The release after a drag is not a click on the icon under it.
       const swallow = (c: MouseEvent) => c.stopPropagation();
       window.addEventListener("click", swallow, { capture: true, once: true });
@@ -177,6 +187,7 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
         className="header-slot"
         data-header-slot={id}
         data-pinned={pinned}
+        data-readout={isHeaderReadout(id) || undefined}
         data-folded={!pinned && !expanded && !foldPeek}
         data-dragging={dragging || undefined}
         data-drop={dropHere ? "before" : dropEnd ? "after" : undefined}
@@ -193,18 +204,16 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
         <ContextMenuPortal x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <div className="context-menu-group">
             <div className="context-menu-group-label">{t(`headerPins.item.${id}` as "headerPins.item.mail")}</div>
-            {id !== "settings" && (
-              <button
-                className="untested"
-                onClick={() => {
-                  setMenu(null);
-                  void updateSettings({ header_pins: toggleHeaderPin(pins, id, pinDefaults) });
-                }}
-              >
-                {pinned ? t("headerPins.fold") : t("headerPins.pin")}
-                <UntestedTag id="headerPins.menu" />
-              </button>
-            )}
+            <button
+              className="untested"
+              onClick={() => {
+                setMenu(null);
+                void updateSettings({ header_pins: toggleHeaderPin(pins, id, pinDefaults) });
+              }}
+            >
+              {pinned ? t("headerPins.fold") : t("headerPins.pin")}
+              <UntestedTag id="headerPins.menu" />
+            </button>
             {resetHeaderGroup(order, group).length !== (order ?? []).length && (
               <button
                 className="untested"

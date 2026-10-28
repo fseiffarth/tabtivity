@@ -1016,42 +1016,10 @@
    glow. Scoped to `[data-theme="fancy_*"]` so the plain themes are
    untouched. Only color/shadow/transform are themed — sizing and layout
    stay owned by the base component rules above.
-   The header's icon buttons (Local Model, Global Apps, the settings gear,
-   the add-project +) are deliberately NOT themed here — they stay the same
-   flat, transparent-at-rest style in every theme, like the VPN/Machines
-   status readouts below. */
-
-/* The VPN and Machines indicators opt back out of the fancy gradient-button
-   treatment this section otherwise applies (they're status readouts, not
-   buttons — see the plain-theme rule on .vpn-indicator-btn/.machines-indicator-btn
-   for why): no glow border, lift or shadow. Their hover/expanded state still
-   gets the flat .pill-hover-bg tint (set above, same as .tab-new-btn:hover) —
-   only the rest state is forced transparent here, and only shadow/transform/
-   border stay suppressed on hover, so a future gradient rule added above can't
-   silently start theming them again. */
-[data-theme="fancy_dark"] .vpn-indicator-btn,
-[data-theme="fancy_light"] .vpn-indicator-btn,
-[data-theme="fancy_dark"] .machines-indicator-btn,
-[data-theme="fancy_light"] .machines-indicator-btn {
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-  transform: none;
-}
-
-[data-theme="fancy_dark"] .vpn-indicator-btn:hover,
-[data-theme="fancy_light"] .vpn-indicator-btn:hover,
-[data-theme="fancy_dark"] .vpn-indicator-btn[aria-expanded="true"],
-[data-theme="fancy_light"] .vpn-indicator-btn[aria-expanded="true"],
-[data-theme="fancy_dark"] .machines-indicator-btn:hover,
-[data-theme="fancy_light"] .machines-indicator-btn:hover,
-[data-theme="fancy_dark"] .machines-indicator-btn[aria-expanded="true"],
-[data-theme="fancy_light"] .machines-indicator-btn[aria-expanded="true"] {
-  background: var(--pill-hover-bg);
-  border-color: transparent;
-  box-shadow: none;
-  transform: none;
-}
+   The header's icon buttons (every `.global-apps-menu-btn`: ✉ 🗓 ☑, Models,
+   ⚙, the status cluster's VPN/Machines/Mobile, the add-project +) are
+   deliberately NOT themed here — they keep one flat, transparent-at-rest
+   style with one hover in every theme. */
 
 /* No generic bottom stripe on fancy-theme pills — the old --warning (yellow)
    rail is gone; a non-active pill is bare (same color as the bar). Only the
