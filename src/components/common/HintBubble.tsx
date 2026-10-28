@@ -32,7 +32,7 @@ export function HintBubble({
   action?: { label: string; run: () => void };
   /** Rendered after the title (the untested pill of not-yet-verified hints). */
   tag?: ReactNode;
-  /** × / Esc: closed for now, its chance unchanged. */
+  /** × / Esc / Skip: closed for now, its chance unchanged. */
   onDismiss: () => void;
   /** Read: each press halves the hint's chance of showing again. */
   onRead: () => void;
@@ -92,6 +92,14 @@ export function HintBubble({
             {action.label}
           </button>
         )}
+        <button
+          type="button"
+          className="hint-bubble-link"
+          title={t("hint.skipTitle")}
+          onClick={onDismiss}
+        >
+          {t("hint.skip")}
+        </button>
         <button
           type="button"
           className="hint-bubble-got-it"

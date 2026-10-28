@@ -23,6 +23,16 @@ describe("phone hint messages", () => {
     expect(screen.getByRole("status")).toBeTruthy();
   });
 
+  it("Skip closes the tip for this visit without counting a read", () => {
+    const first = render(<HintMessage hint="agentHold" />);
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
+    expect(readHintReads()).toEqual({});
+    first.unmount();
+    render(<HintMessage hint="agentHold" />);
+    expect(screen.getByText(/Tapping ＋ opens/)).toBeTruthy();
+  });
+
   it("Read counts a read for that tip only and keeps it away for this launch", () => {
     const first = render(<HintMessage hint="agentHold" />);
     fireEvent.click(screen.getByRole("button", { name: "Read" }));

@@ -77,7 +77,7 @@ export function resetTips(): void {
   draws.clear();
 }
 
-/** × closes for this visit; Read closes too and halves the tip's chance of
+/** × and Skip close for this visit; Read closes too and halves the tip's chance of
  * coming back; Turn off tips silences every tip on this phone until This
  * device → Tips turns them on again, which the card then says in place of the
  * tip. No timer: the reader gets time to read and dismiss the message. */
@@ -99,6 +99,7 @@ export function HintMessage({ hint, floating = false, vars, onClose }: { hint: H
         <div className="hint-message-actions">
           {isUntested("mobile.hints.read") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           <button onClick={() => { writeFlag("hintsOff", true); setView("off"); }}>{t("mobile.hints.turnOff")}</button>
+          <button onClick={close}>{t("mobile.hints.skip")}</button>
           <button onClick={() => { readTip(hint); close(); }}>{t("mobile.hints.read")}</button>
         </div>
       </>}
