@@ -33,10 +33,12 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * `hintAgentHold`, `hintAgentDefault`, `hintProjectFiles`, `hintChatTools`, `hintTabCard`, `hintSendHold`,
  * `hintChatMenu`, `hintSentFiles`, `hintChatSwipe`, `hintMarkup`, `hintStatusLine` and the to-do, mail and calendar
  * screens' `hintTodo*`, `hintMail*`, `hintCalendar*` suppress individual
- * messages only when their Never show this message again checkbox is ticked.
+ * tips: written by the old Never show this message again checkbox, still
+ * honoured, cleared by Reset tips. `hintsOff` is the tips' Turn off tips
+ * button, undone under This device → Tips.
  * `limitBars` shows the facts row's usage limits as bars rather than
  * percentages, off unset. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage";
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
@@ -168,4 +170,18 @@ export function writeTerminalView(agent: string, view: TerminalViewChoice, stora
   } catch {
     // See readFlag.
   }
+}
+
+/** How often each tip's Read button was pressed on this phone, by tip; every
+ * read halves the tip's chance of showing again (`src/lib/hintChance.ts`).
+ * Anything that is not a map of counts reads as none read. */
+export function readHintReads(storage?: FlagStorage): Record<string, number> {
+  return readJson(`${PREFIX}hintReads`, (parsed) => {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0));
+  }, {}, storage);
+}
+
+export function writeHintReads(reads: Record<string, number> | undefined, storage?: FlagStorage): void {
+  writeJson(`${PREFIX}hintReads`, reads, storage);
 }

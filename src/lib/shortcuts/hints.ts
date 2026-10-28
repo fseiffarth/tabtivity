@@ -34,8 +34,8 @@ export const HOW_TO_START_STEPS: HowToStep[] = [
   { titleKey: "howToStart.step4Title", bodyKey: "howToStart.step4Body" },
 ];
 
-/** Stable id for a contextual hint. Persisted in `settings.hints_seen`, so renaming
- *  one resets it for everyone — pick carefully. */
+/** Stable id for a contextual hint. Persisted in `settings.hints_seen` and
+ *  `settings.hints_read`, so renaming one resets it for everyone — pick carefully. */
 export type HintId =
   | "create-project"
   | "add-tab"
@@ -173,6 +173,10 @@ export interface PickOptions {
   anchorOnScreen?: (selector: string) => boolean;
   /** False holds every feature hint back (session cap / gap not yet over). */
   allowFeature?: boolean;
+  /** Whether a hint won its draw for this sitting (`stores/hints` `hintDrawn`:
+   *  each Read halves the chance). Asked last, so only a hint that would
+   *  otherwise show is drawn. Absent means every hint is drawn. */
+  drawn?: (id: HintId) => boolean;
 }
 
 /** Pure selection: the highest-priority unseen hint eligible for this context,
@@ -184,13 +188,14 @@ export function pickHint(
   opts: PickOptions = {},
 ): HintId | null {
   if (!enabled) return null;
-  const { anchorOnScreen, allowFeature = true } = opts;
+  const { anchorOnScreen, allowFeature = true, drawn } = opts;
   const eligible = HINTS.filter((h) => !seen.has(h.id) && h.when(ctx)).sort(
     (a, b) => b.priority - a.priority,
   );
   for (const h of eligible) {
     if (h.tier === "feature" && (!allowFeature || !anchorOnScreen)) continue;
     if (h.anchor && anchorOnScreen && !anchorOnScreen(h.anchor)) continue;
+    if (drawn && !drawn(h.id)) continue;
     return h.id;
   }
   return null;

@@ -81,7 +81,7 @@ function accountOption(account: MobileMailAccount, t: Translate) {
 const isAccountId = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 
 /** The mail screen's tips, each its own card, one at a time (`HintQueue`). */
-const MAIL_TIPS: readonly HintKey[] = ["mailMove", "mailWrite"];
+const MAIL_TIPS: readonly HintKey[] = ["mailBack", "mailPickers", "mailWrite"];
 
 export function Mail() {
   const t = useT();

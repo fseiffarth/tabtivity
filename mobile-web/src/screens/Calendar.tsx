@@ -58,7 +58,7 @@ export const defaultEnd = (stamp: string) => { const m = /^(\d{4}-\d{2}-\d{2})T(
 type Editing = { event?: MobileCalendarEvent; draft: MobileCalendarEventInput } | null;
 
 /** The calendar's tips, each its own card, one at a time (`HintQueue`). */
-const CALENDAR_TIPS: readonly HintKey[] = ["calendarViews", "calendarManage"];
+const CALENDAR_TIPS: readonly HintKey[] = ["calendarViews", "calendarDays", "calendarEvents", "calendarCalendars", "calendarReminders"];
 
 export function Calendar() {
   const t = useT();

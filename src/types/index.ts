@@ -905,9 +905,12 @@ export interface Settings {
   /** True once the first-run "How to start" welcome has been shown/dismissed, so
    *  it never re-opens automatically. Re-openable manually from Settings. */
   onboarding_seen?: boolean;
-  /** Ids of contextual hints (see `src/lib/shortcuts/hints.ts`) the user has seen/dismissed
-   *  or implicitly acted on, so each surfaces at most once. */
+  /** Ids of contextual hints (see `src/lib/shortcuts/hints.ts`) retired for good:
+   *  the user did what the hint points at (or, before Read existed, dismissed it). */
   hints_seen?: string[];
+  /** How often the user pressed each hint's Read button, by hint id; every read
+   *  halves the hint's chance of showing again (`lib/hintChance.ts`). */
+  hints_read?: Record<string, number>;
   /** Master switch for the contextual hint system; default ON when unset. */
   hints_enabled?: boolean;
   /** True once the guided "Take a tour" walkthrough has been completed or

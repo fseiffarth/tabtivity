@@ -1706,6 +1706,7 @@ export function SettingsDialog({
               label={t("settings.showHints")}
               checked={settings?.hints_enabled ?? true}
               onChange={(e) => void updateSettings({ hints_enabled: e.target.checked })}
+              help={t("settings.showHintsHelp")}
             />
             <div className="settings-link-row">
               <button

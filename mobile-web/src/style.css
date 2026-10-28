@@ -415,8 +415,9 @@ small { color:#9498aa; }
 .hint-message-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .hint-message-head > button { flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -8px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.3rem; }
 .hint-message > p { margin:8px 0; }
-.hint-message > label { display:flex; align-items:center; gap:10px; min-height:var(--hit); cursor:pointer; }
-.hint-message > label > input[type="checkbox"] { flex:0 0 auto; width:20px; height:20px; margin:0; accent-color:#9b8cff; }
+.hint-message-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; }
+.hint-message-actions > button { min-height:var(--hit); padding:6px 14px; }
+.hint-message-actions > .untested { margin-right:auto; }
 .hint-message-floating { position:fixed; z-index:10; top:calc(64px + env(safe-area-inset-top)); left:max(12px,calc((100vw - var(--screen-measure)) / 2 + 12px)); right:max(12px,calc((100vw - var(--screen-measure)) / 2 + 12px)); margin:0; max-height:calc(100dvh - 90px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow:auto; box-shadow:0 8px 24px rgba(4,5,9,.45); }
 .home-empty,.project-empty { display:grid; justify-items:center; gap:6px; padding:var(--sp-7) var(--sp-4); text-align:center; }
 .home-empty-glyph,.project-empty-glyph { color:#6f7488; font-size:40px; line-height:1; }
@@ -1127,7 +1128,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-screen-note { margin:0; padding:0 4px; color:#d9dce7; font-size:.86rem; line-height:1.4; }
 .transcript-screen-action { justify-self:start; }
 /* Under the stored session while the live screen shows the agent mid-turn. */
-.transcript-working { display:flex; align-items:center; gap:8px; padding:6px 10px; color:#9da3b6; font:500 .78rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; }
+/* `min-width:0` (as `.readable-line`): a grid item's nowrap facts or shell
+   command would otherwise widen the whole chat column past the screen. */
+.transcript-working { display:flex; align-items:center; gap:8px; min-width:0; padding:6px 10px; white-space:nowrap; color:#9da3b6; font:500 .78rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; }
 .transcript-working-dots { display:inline-flex; gap:3px; }
 .transcript-working-dots i { width:5px; height:5px; border-radius:50%; background:#8fb8ff; animation:transcript-working 1.2s ease-in-out infinite; }
 .transcript-working-dots i:nth-child(2) { animation-delay:.2s; }
@@ -1136,12 +1139,12 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* What the agent's own spinner prints about the turn — elapsed time, tokens —
    pushed to the end of the working row. Tabular figures so a ticking timer
    does not shuffle the row on every repaint. */
-.transcript-working-facts { margin-left:auto; color:#787f93; font-size:.72rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.transcript-working-facts { min-width:0; margin-left:auto; overflow:hidden; color:#787f93; font-size:.72rem; font-variant-numeric:tabular-nums; white-space:nowrap; text-overflow:ellipsis; }
 .transcript-working-facts em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
 /* A running shell, under the working row: its `$` where the dots are, and the
    agent's few words on it cut to one line. */
 .transcript-shell-mark { width:15px; text-align:center; color:#8fb8ff; font:600 .78rem/1 ui-monospace,SFMono-Regular,Menlo,monospace; }
-.transcript-shell-summary { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.transcript-shell-item { min-width:0; }
 .transcript-shell-toggle { flex:none; padding:2px 8px; border:0; background:transparent; color:#8fb8ff; font-size:.8rem; }
 .transcript-shell-command { margin:0 10px 6px 33px; padding:6px 8px; max-height:40vh; overflow:auto; border-radius:8px; background:#14161e; color:#c8cde0; font:400 .72rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 @media (prefers-reduced-motion: reduce) { .transcript-working-dots i { animation:none; opacity:.7; } }

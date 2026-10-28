@@ -79,7 +79,7 @@ function blankTask(board: TodoBoard): TodoTaskInput {
 }
 
 /** The board's tips, each its own card, one at a time (`HintQueue`). */
-const TODO_TIPS: readonly HintKey[] = ["todoCards", "todoBoard"];
+const TODO_TIPS: readonly HintKey[] = ["todoDone", "todoEdit", "todoMove", "todoFilter", "todoColumns", "todoAdd"];
 
 export function Todo({ card }: { card?: string }) {
   const t = useT();

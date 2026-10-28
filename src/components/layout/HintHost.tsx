@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
-import { useHintsStore } from "../../stores/hints";
+import { hintDrawn, useHintsStore } from "../../stores/hints";
 import { useTabsStore } from "../../stores/tabs";
 import { useTourStore } from "../../stores/tour";
 import {
@@ -58,6 +58,7 @@ export function HintHost() {
   const active = useHintsStore((s) => s.active);
   const show = useHintsStore((s) => s.show);
   const dismiss = useHintsStore((s) => s.dismiss);
+  const read = useHintsStore((s) => s.read);
   const disableAll = useHintsStore((s) => s.disableAll);
   // The guided tour is a fuller-screen overlay; suppress contextual hints while
   // it runs so the two onboarding surfaces never paint at once.
@@ -124,7 +125,7 @@ export function HintHost() {
     const allowFeature = () =>
       useHintsStore.getState().featureShown < FEATURE_CAP &&
       Date.now() - useHintsStore.getState().lastClosedAt >= FEATURE_GAP_MS;
-    const opts = () => ({ anchorOnScreen, allowFeature: allowFeature() });
+    const opts = () => ({ anchorOnScreen, allowFeature: allowFeature(), drawn: hintDrawn });
     const candidate = pickHint(ctx, seen, hintsEnabled, opts());
     if (!candidate) return;
     const earliest = Math.max(mountedAt.current + GRACE_MS, lastClosedAt + GAP_MS);
@@ -236,9 +237,8 @@ export function HintHost() {
       action={
         def.action && { label: t(def.action.labelKey), run: HINT_ACTIONS[def.action.id] }
       }
-      onDismiss={() => {
-        dismiss(def.id);
-      }}
+      onDismiss={() => dismiss(def.id)}
+      onRead={() => read(def.id)}
       onDisableAll={disableAll}
     />
   );
