@@ -23,6 +23,7 @@ import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
 import type { ProjectBox, ProjectEntry } from "../../types";
 import type { SortKey } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { UntestedTag } from "../common/UntestedTag";
 import { FolderIcon, GearIcon, HexagonIcon } from "../common/icons/Icon";
 
@@ -70,22 +71,36 @@ export function useRemoteBlocked(projectId: string | null, isRemote: boolean) {
  * `isRemote` stays in the deps because a project can flip local → remote
  * ("Extend to remote") under a mounted view, and only then is there a side to
  * decide at all.
+ *
+ * A host-pinned project (`isHostPinned`: a VM, or a remote project with no
+ * local copy) has no Local side, so the answer is always Remote and nothing is
+ * latched — a later conversion to a plain Remote then decides afresh.
  */
 export function useFileSource(projectId: string | null, isRemote: boolean) {
   const stored = useFileSourcePrefStore((s) => (projectId ? s.byProject[projectId] : undefined));
+  const pinned = useHostPinned(projectId);
   const { remoteSshState } = useRemoteBlocked(projectId, isRemote);
   useEffect(() => {
-    if (!projectId || !isRemote) return;
+    if (!projectId || !isRemote || pinned) return;
     // Only a settled lamp is a decision: latching mid-handshake would freeze
     // "remote" onto a project whose connect is about to fail, and a project with
     // no status entry at all (never activated this session) has said nothing yet.
     if (!fileSourceSettled(remoteSshState)) return;
     useFileSourcePrefStore.getState().latch(projectId, autoFileSource(remoteSshState));
-  }, [projectId, isRemote, remoteSshState]);
+  }, [projectId, isRemote, pinned, remoteSshState]);
   const setSource = (s: FileSourceSide) => {
-    if (projectId) useFileSourcePrefStore.getState().set(projectId, s);
+    if (projectId && !pinned) useFileSourcePrefStore.getState().set(projectId, s);
   };
-  return [stored ?? autoFileSource(remoteSshState), setSource] as const;
+  const source: FileSourceSide = pinned ? "remote" : stored ?? autoFileSource(remoteSshState);
+  return [source, setSource] as const;
+}
+
+/** Whether the project behind `projectId` lives only on its host
+ *  (`isHostPinned`), read from the projects store. */
+function useHostPinned(projectId: string | null): boolean {
+  return useProjectsStore((s) =>
+    projectId ? isHostPinned(s.projects.find((p) => p.id === projectId)) : false,
+  );
 }
 
 /**
@@ -104,12 +119,14 @@ export function useFileSource(projectId: string | null, isRemote: boolean) {
  * and component state does not survive a remount — the viewer came back seeded
  * from the shared value, i.e. flipped to Remote without the user touching it.
  * A viewer with no stable id keeps the old component-state behaviour.
+ * A host-pinned project is always Remote here too, and never latches.
  */
 export function useIndependentFileSource(
   projectId: string | null,
   isRemote: boolean,
   viewerId?: string,
 ) {
+  const pinned = useHostPinned(projectId);
   const { remoteSshState } = useRemoteBlocked(projectId, isRemote);
   const key = viewerId && projectId ? viewerSourceKey(viewerId, projectId) : null;
   const own = useFileSourcePrefStore((s) => (key ? s.byViewer[key] : undefined));
@@ -120,16 +137,19 @@ export function useIndependentFileSource(
     setLocal(null);
   }, [projectId, isRemote]);
   useEffect(() => {
-    if (!key || !isRemote) return;
+    if (!key || !isRemote || pinned) return;
     if (!fileSourceSettled(remoteSshState)) return;
     const store = useFileSourcePrefStore.getState();
     store.latchViewer(
       key,
       (projectId ? store.byProject[projectId] : undefined) ?? autoFileSource(remoteSshState),
     );
-  }, [key, projectId, isRemote, remoteSshState]);
-  const source = own ?? local ?? shared ?? autoFileSource(remoteSshState);
+  }, [key, projectId, isRemote, pinned, remoteSshState]);
+  const source: FileSourceSide = pinned
+    ? "remote"
+    : own ?? local ?? shared ?? autoFileSource(remoteSshState);
   const setSource = (s: FileSourceSide) => {
+    if (pinned) return;
     if (key) useFileSourcePrefStore.getState().setViewer(key, s);
     else setLocal(s);
   };
@@ -185,6 +205,22 @@ export function FileSourceSwitch({
       </button>
     </span>
   );
+}
+
+/** The tree area's line while a remote project's host tree can't be listed.
+ *  `pinnedProject` is set for a host-pinned project: its files exist only on
+ *  the host, so the line says so and offers no Local copy to fall back to. */
+function disconnectedLine(
+  t: ReturnType<typeof useT>,
+  ssh: ReturnType<typeof useRemoteBlocked>["remoteSshState"],
+  pinnedProject: ProjectEntry | null,
+): string {
+  if (ssh === "connecting") return t("projectFilesPane.connecting");
+  if (pinnedProject?.remote) {
+    const host = pinnedProject.remote.label || pinnedProject.remote.host;
+    return t("projectFilesPane.disconnectedHostOnly", { host });
+  }
+  return t("projectFilesPane.disconnected");
 }
 
 export interface BoxRoot {
@@ -304,8 +340,10 @@ function BoxRootSection({
     variant === "member" ? s.projects.find((p) => p.id === rootId) ?? null : null,
   );
   // Which side of a remote member the tree shows — the PROJECT-WIDE side, the
-  // same latch/choice the side panel's single view reads.
+  // same latch/choice the side panel's single view reads. Always the host for a
+  // pinned member, which has no mirror (and so no switch, no ⧉).
   const [source, setSource] = useFileSource(remote ? rootId : null, remote);
+  const pinned = isHostPinned(project);
   const { remoteSshState, remoteBlocked: sshDown } = useRemoteBlocked(remote ? rootId : null, remote);
   // "Local" lists the mirror — a plain local tree, never gated on the pool.
   const treeDir = remote
@@ -384,20 +422,22 @@ function BoxRootSection({
               {t(v === "files" ? "projectFilesView.tabFiles" : "projectFilesView.tabGit")}
             </button>
           ))}
-          <button
-            className="toolbar-btn toolbar-btn--sm"
-            style={toolbarBtnStyle}
-            onClick={() => {
-              const sub = rel.replace(/^\/+|\/+$/g, "");
-              const path = sub ? `${treeDir.replace(/\/+$/, "")}/${sub}` : treeDir;
-              invoke("open_in_file_manager", { path }).catch((e) =>
-                console.error("open_in_file_manager", e),
-              );
-            }}
-            title={t("projectFilesView.openInFileManagerTitle")}
-          >
-            ⧉
-          </button>
+          {!pinned && (
+            <button
+              className="toolbar-btn toolbar-btn--sm"
+              style={toolbarBtnStyle}
+              onClick={() => {
+                const sub = rel.replace(/^\/+|\/+$/g, "");
+                const path = sub ? `${treeDir.replace(/\/+$/, "")}/${sub}` : treeDir;
+                invoke("open_in_file_manager", { path }).catch((e) =>
+                  console.error("open_in_file_manager", e),
+                );
+              }}
+              title={t("projectFilesView.openInFileManagerTitle")}
+            >
+              ⧉
+            </button>
+          )}
           {localFile && project && (
             <button
               className="toolbar-btn toolbar-btn--sm"
@@ -409,7 +449,7 @@ function BoxRootSection({
             </button>
           )}
           <UntestedTag id="projectFilesPane.1" />
-          {remote && (
+          {remote && !pinned && (
             <span style={{ marginLeft: "auto" }}>
               <FileSourceSwitch source={source} onChange={setSource} />
             </span>
@@ -419,9 +459,7 @@ function BoxRootSection({
       {!collapsed && remoteBlocked && (
         <div className="file-tree-empty" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
           <div>
-            {remoteSshState === "connecting"
-              ? t("projectFilesPane.connecting")
-              : t("projectFilesPane.disconnected")}
+            {disconnectedLine(t, remoteSshState, pinned ? project : null)}
           </div>
           {remoteSshState !== "connecting" && (
             <button
@@ -471,6 +509,7 @@ function BoxRootSection({
             projectDir={dir}
             projectId={remote ? rootId : undefined}
             remote={remote}
+            hostPinned={pinned}
             onChanged={() => {}}
           />
         </div>
@@ -698,6 +737,9 @@ export function ProjectFilesPane({
   const reorderFor = useMemberReorder(activeBox, memberOrder);
   const projectId = project?.id ?? null;
   const isRemoteProject = !!project?.remote;
+  // No local copy (`isHostPinned`): the tree is always the host's, and the
+  // mirror's whole-tree sync row has nothing to act on.
+  const pinned = isHostPinned(project);
   const { remoteSshState, remoteBlocked } = useRemoteBlocked(projectId, isRemoteProject);
   const syncMap = useSyncStore((s) => (projectId ? s.byProject[projectId] : undefined));
   // Live per-file progress for the whole-tree transfer below. The tree renders
@@ -770,7 +812,7 @@ export function ProjectFilesPane({
           tree into the mirror; Local → push the mirror back to the host (skipping
           host-diverged/orange files). Both need a live connection, so the row is
           gated on !remoteBlocked. */}
-      {!compact && !activeBox && isRemoteProject && projectId && !remoteBlocked && (
+      {!compact && !activeBox && isRemoteProject && !pinned && projectId && !remoteBlocked && (
         <div className="side-panel-source">
           {/* Project-wide auto-sync toggle: the root "" marker. When on, the
               whole tree bidirectionally auto-syncs; individual files/folders
@@ -904,15 +946,12 @@ export function ProjectFilesPane({
             // main-thread list_dir would freeze the window). Keep the view looking
             // the same — the Remote/Local switch stays up — but show a Connect
             // prompt in the tree area. Selecting "Local" still browses the offline
-            // mirror.
-            if (isRemoteProject && source === "remote" && remoteBlocked) {
+            // mirror. A pinned project has no Local side: the prompt is all there
+            // is until the host is back (D5: nothing cached).
+            if (isRemoteProject && (source === "remote" || pinned) && remoteBlocked) {
               return (
                 <div className="file-tree-empty" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-                  <div>
-                    {remoteSshState === "connecting"
-                      ? t("projectFilesPane.connecting")
-                      : t("projectFilesPane.disconnected")}
-                  </div>
+                  <div>{disconnectedLine(t, remoteSshState, pinned ? project : null)}</div>
                   {remoteSshState !== "connecting" && projectId && (
                     <button
                       type="button"
@@ -930,12 +969,12 @@ export function ProjectFilesPane({
             // default `<state_dir>/mirror` only for legacy projects that never
             // persisted one. Computing `${projectDir}/mirror` unconditionally
             // pointed the Local tree at the pre-move location after a relocate.
-            const mirrorDir =
-              resolveLocalMirror(project) ??
-              (projectDir
-                ? `${projectDir.replace(/[/\\]+$/, "")}/mirror`
-                : projectDir);
-            const treeDir = isRemoteProject && source === "local" ? mirrorDir : projectDir;
+            // A pinned project never resolves one: it has no mirror at all.
+            const treeDir =
+              isRemoteProject && !pinned && source === "local"
+                ? resolveLocalMirror(project) ??
+                  (projectDir ? `${projectDir.replace(/[/\\]+$/, "")}/mirror` : projectDir)
+                : projectDir;
             return (
               <FileTree
                 // The tree's identity IS (project, root dir) — every piece of its
@@ -965,7 +1004,7 @@ export function ProjectFilesPane({
                 initialRelPath={folder}
                 onRelPathChange={onFolderChange}
                 onOpenFolderTab={onOpenFolderTab}
-                syncSource={isRemoteProject ? source : undefined}
+                syncSource={isRemoteProject ? (pinned ? "remote" : source) : undefined}
                 remoteProbeDir={isRemoteProject ? projectDir : undefined}
                 active={active}
                 searchOpen={searchOpen}

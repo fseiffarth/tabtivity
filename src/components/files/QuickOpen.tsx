@@ -20,6 +20,7 @@ import { IS_MAC } from "../../lib/platform";
 import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
 import { openTexWorkspace } from "../../lib/viewers/tex/openTexWorkspace";
 import { useT } from "../../lib/i18n";
+import { isHostPinned } from "../../lib/projectTabHost";
 import "./QuickOpen.css";
 
 interface PathEntry {
@@ -61,6 +62,11 @@ export function QuickOpen() {
   const [files, setFiles] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
+  // The active project lives only on its host (`isHostPinned`). The listing
+  // below walks a local folder, and such a project's directory is its state
+  // dir, so the palette opens with nothing in it until the host listing lands
+  // (`docs/remote_only_projects_plan.md`, E6a).
+  const [hostOnly, setHostOnly] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -82,8 +88,15 @@ export function QuickOpen() {
   const loadFiles = useCallback(
     async (projectDir: string) => {
       const token = ++fetchToken.current;
-      setLoading(true);
+      const { projects, activeId } = useProjectsStore.getState();
+      const pinned = isHostPinned(projects.find((p) => p.id === activeId));
+      setHostOnly(pinned);
       setFiles([]);
+      if (pinned) {
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
       try {
         const entries = await invoke<PathEntry[]>("list_project_paths", { projectDir });
         if (token !== fetchToken.current) return; // superseded by a newer open
@@ -212,7 +225,11 @@ export function QuickOpen() {
             <div className="qo-empty">{t("quickOpen.loading")}</div>
           ) : results.length === 0 ? (
             <div className="qo-empty">
-              {files.length === 0 ? t("quickOpen.noFiles") : t("quickOpen.noMatches")}
+              {hostOnly
+                ? t("quickOpen.hostOnly")
+                : files.length === 0
+                  ? t("quickOpen.noFiles")
+                  : t("quickOpen.noMatches")}
             </div>
           ) : (
             results.map((rel, idx) => (

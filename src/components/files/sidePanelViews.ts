@@ -44,6 +44,9 @@ export interface SidePanelViewGates {
   inBox: boolean;
   projectId: string | null | undefined;
   remote: boolean;
+  /** The remote project keeps a local mirror — false for a host-pinned one
+   *  (`isHostPinned`), which has nothing to diverge from the host. */
+  mirror: boolean;
   slurm: boolean;
   remarks: boolean;
   todo: boolean;
@@ -55,6 +58,7 @@ export function sidePanelViewAvailable(view: FilesPanelView, g: SidePanelViewGat
   const project = !g.inBox && !!g.projectId;
   switch (view) {
     case "orange":
+      return project && g.remote && g.mirror;
     case "sessions":
       return project && g.remote;
     case "jobs":

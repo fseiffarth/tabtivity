@@ -12,6 +12,9 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { fuzzyMatch, fuzzyRank } from "../../lib/fuzzy";
 import { useT } from "../../lib/i18n";
+import { isHostPinned } from "../../lib/projectTabHost";
+import { useProjectsStore } from "../../stores/projects";
+import { resolveProjectDirectory } from "../../types";
 import "../files/QuickOpen.css";
 
 interface PathEntry {
@@ -75,6 +78,15 @@ export function ContextFilePicker({
   const [rootIdx, setRootIdx] = useState(0);
   const activeRoot = roots && roots.length > 0 ? roots[Math.min(rootIdx, roots.length - 1)] : null;
   const listDir = activeRoot?.dir ?? projectDir;
+  // `list_project_paths` walks a local folder, and a host-pinned project's
+  // directory is its state dir, not its files: list nothing rather than that
+  // folder's own bookkeeping, until the host listing lands
+  // (`docs/remote_only_projects_plan.md`, E6a). The match is the registry's
+  // exact directory, the identity the backend resolves too.
+  const hostOnly = useProjectsStore((s) =>
+    !!listDir &&
+    s.projects.some((p) => isHostPinned(p) && resolveProjectDirectory(p) === listDir),
+  );
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -83,7 +95,7 @@ export function ContextFilePicker({
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    if (!listDir) {
+    if (!listDir || hostOnly) {
       setFiles([]);
       setLoading(false);
       return;
@@ -98,7 +110,7 @@ export function ContextFilePicker({
     return () => {
       alive = false;
     };
-  }, [listDir]);
+  }, [listDir, hostOnly]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -198,7 +210,9 @@ export function ContextFilePicker({
             <div className="qo-empty">
               {!listDir
                 ? t("contextFilePicker.noProject")
-                : files.length === 0
+                : hostOnly
+                  ? t("quickOpen.hostOnly")
+                  : files.length === 0
                   ? t("quickOpen.noFiles")
                   : t("quickOpen.noMatches")}
             </div>

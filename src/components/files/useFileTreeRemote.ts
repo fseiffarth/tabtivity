@@ -8,6 +8,7 @@ import { useSyncStore, dirSyncAggregate } from "../../stores/remote/sync";
 import { useSettingsStore } from "../../stores/settings";
 import { projectIsOnHpc } from "../../lib/remote/hpc/hpcHost";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
+import { isHostPinned } from "../../lib/projectTabHost";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
 
 /** What the tree knows about its project's remote side: the listing source, the
@@ -30,8 +31,12 @@ export function useFileTreeRemote({
   // three-way merge viewer (`SyncMergeView`) opens a diverged file at — the ± diff
   // button below routes through it. Null for a local (non-remote) project.
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
+  // A host-pinned project (a VM, or a remote project with no local copy —
+  // `docs/remote_only_projects_plan.md`) has no mirror: no mirror root, no Local
+  // side and no sync overlay, whatever source a caller passed.
+  const hostPinned = isHostPinned(project);
   const mirrorRoot = useMemo(() => {
-    if (!project?.remote) return null;
+    if (!project?.remote || isHostPinned(project)) return null;
     return (
       resolveLocalMirror(project) ??
       `${resolveProjectDirectory(project).replace(/[/\\]+$/, "")}/mirror`
@@ -42,8 +47,12 @@ export function useFileTreeRemote({
   // local mirror dir and is never gated on the SSH pool. Only a remote-SOURCE
   // tree dispatches its listing over SFTP. `remoteListing` is the flag the
   // watch/refresh-bar/pool-gate logic below keys on.
-  const treatLocal = syncSource === "local";
+  const treatLocal = syncSource === "local" && !hostPinned;
   const remoteListing = isRemote && !treatLocal;
+  // Whether the rows carry the byte-sync overlay (slots, Sync to local / push,
+  // auto-sync rows): the host listing or the local mirror of a project that
+  // HAS a mirror. A pinned host listing is plain SFTP browsing.
+  const syncTracked = (remoteListing || treatLocal) && !hostPinned;
   // SSH-sync overlay state for the remote source: per-path green/amber/none + the
   // in-flight transfer progress. Only consulted in the remote-source view.
   const syncStatus = useSyncStore((s) => (projectId ? s.byProject[projectId] : undefined));
@@ -91,7 +100,7 @@ export function useFileTreeRemote({
   // imply the whole mirror is on the remote. `null` = unknown (not this view, or
   // disconnected): flag nothing rather than guess.
   const [hostChildNames, setHostChildNames] = useState<Set<string> | null>(null);
-  return { isRemote, project, mirrorRoot, treatLocal, remoteListing, syncStatus, dirSyncAgg, syncProgress, refreshSyncStatus, syncPull, syncPush, syncMarkSelected, syncSetAuto, syncAutoPreview, syncSetExcluded, remoteSshState, remoteBlocked, primaryIsHpc, hostChildNames, setHostChildNames };
+  return { isRemote, project, hostPinned, mirrorRoot, treatLocal, remoteListing, syncTracked, syncStatus, dirSyncAgg, syncProgress, refreshSyncStatus, syncPull, syncPush, syncMarkSelected, syncSetAuto, syncAutoPreview, syncSetExcluded, remoteSshState, remoteBlocked, primaryIsHpc, hostChildNames, setHostChildNames };
 }
 
 /** Keeps the sync overlay fresh (on re-list, focus and a light tick) and probes
