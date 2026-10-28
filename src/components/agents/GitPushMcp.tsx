@@ -86,7 +86,7 @@ function statusLabel(proposal: GitPushProposal): TranslationKey {
 
 /** One proposal: what would be pushed, with Push / Dismiss while pending and
  *  the outcome afterwards. Shared by the git bar and the Agents view. */
-export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPushProposal; onDecided?: (next: GitPushProposal) => void }) {
+export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPushProposal; onDecided?: (next: GitPushProposal, approve: boolean) => void }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -96,7 +96,7 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
     setError("");
     try {
       const next = await invoke<GitPushProposal>(command, { id: proposal.id, ...args });
-      onDecided?.(next);
+      onDecided?.(next, args.approve === true);
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   };
@@ -152,8 +152,19 @@ export function GitPushProposals({ projectId }: { projectId: string | null | und
   const rows = useGitPushProposals(projectId);
   const [overrides, setOverrides] = useState<Record<string, GitPushProposal>>({});
   const shown = rows.map((row) => overrides[row.id] ?? row).filter((row) => !row.cleared && row.status !== "dismissed" && row.status !== "expired");
+  // A push or release the user approved here closes its card once it went
+  // through (a failed one stays until dismissed); an agent-applied one stays.
+  const [approved, setApproved] = useState<Set<string>>(() => new Set());
+  const doneIds = shown.filter((row) => row.status === "pushed" && approved.has(row.id)).map((row) => row.id).join(",");
+  useEffect(() => {
+    if (!doneIds) return;
+    for (const id of doneIds.split(",")) void invoke("git_push_mcp_clear", { id }).catch(() => {});
+  }, [doneIds]);
   if (shown.length === 0) return null;
   return <div className="git-push-proposals">
-    {shown.map((row) => <GitPushProposalCard key={row.id} proposal={row} onDecided={(next) => setOverrides((prev) => ({ ...prev, [next.id]: next }))} />)}
+    {shown.map((row) => <GitPushProposalCard key={row.id} proposal={row} onDecided={(next, approve) => {
+      setOverrides((prev) => ({ ...prev, [next.id]: next }));
+      if (approve) setApproved((prev) => new Set(prev).add(next.id));
+    }} />)}
   </div>;
 }
