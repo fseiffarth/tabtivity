@@ -101,6 +101,12 @@ pub fn fence_unavailable_message() -> String {
             "Agent sandbox: {tool} is unavailable on this Mac, so this agent was not started. Open the project in a container, or use a Host session from the root console."
         );
     }
+    if cfg!(windows) {
+        // There is no fence to install here (see `platform_fenceable`): a
+        // one-shot command that needs one is refused, and a package manager
+        // line would send the user after something that does not exist.
+        return "Agent sandbox: Windows has no agent sandbox, so this action was not started. Run it in a container project instead.".to_string();
+    }
     match fence_install_cmd() {
         Some(cmd) => format!(
             "Agent sandbox: {tool} is unavailable, so this agent was not started. Install it with `{cmd}`."

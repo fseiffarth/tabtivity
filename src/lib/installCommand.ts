@@ -80,6 +80,19 @@ export function containerBuildShell(windows: boolean = IS_HOST_WINDOWS): Install
   return windows ? "powershell" : "bash";
 }
 
+/** The shell for an install command the user typed themselves (a custom agent).
+ *  On Windows the default shell is cmd.exe, which cannot run PowerShell syntax
+ *  such as `irm https://… | iex`, so a command that reads as PowerShell goes to
+ *  PowerShell; everything else (`npm install -g …`, `pip …`) keeps the host's
+ *  default. Elsewhere the default shell is already the user's own. */
+export function customInstallShell(
+  command: string,
+  windows: boolean = IS_HOST_WINDOWS,
+): InstallShellKind {
+  const looksLikePowerShell = /\|\s*iex\b|\b(?:irm|iwr|Invoke-[A-Za-z]+)\b|\$env:|\$\(|\bSet-[A-Za-z]+\b/i.test(command);
+  return windows && looksLikePowerShell ? "powershell" : "default";
+}
+
 export function runInstallInTab(
   label: string,
   command: string,

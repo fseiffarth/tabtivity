@@ -248,6 +248,7 @@ pub fn project_search_blocking(
     let root_raw = PathBuf::from(&project_dir);
     let root = root_raw
         .canonicalize()
+        .map(crate::paths::without_verbatim_prefix)
         .map_err(|e| format!("invalid project_dir '{project_dir}': {e}"))?;
     if !root.is_dir() {
         return Err(format!("project_dir '{project_dir}' is not a directory"));

@@ -197,7 +197,7 @@ mod tests {
     fn no_cli_shim_is_written_on_windows_and_a_stale_one_is_removed() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
-        install_in(dir.path(), Some(Path::new("tabtivity.exe")), &["claude", "agy"]).unwrap();
+        install_in(dir.path(), Some(Path::new(concat!(crate::app_slug!(), ".exe"))), &["claude", "agy"]).unwrap();
         assert!(!dir.path().join("claude").exists());
         assert!(!dir.path().join("agy").exists());
     }

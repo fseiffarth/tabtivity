@@ -2319,6 +2319,16 @@ fn command_for_resolved(path: std::path::PathBuf) -> CommandBuilder {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase());
     match ext.as_deref() {
+        // An npm global shim just runs `node <script>.js %*`. Going through
+        // `cmd.exe /C` re-parses every argument's quotes, which mangles the JSON
+        // an agent is launched with (`--mcp-config {"mcpServers":…}`), so run
+        // node on the script itself and the argv arrives exactly as built.
+        Some("cmd") if npm_shim_target(&path).is_some() => {
+            let (node, script) = npm_shim_target(&path).expect("checked above");
+            let mut c = CommandBuilder::new(node);
+            c.arg(script);
+            c
+        }
         Some("cmd") | Some("bat") => {
             let mut c = CommandBuilder::new("cmd.exe");
             c.arg("/D");
@@ -2337,6 +2347,30 @@ fn command_for_resolved(path: std::path::PathBuf) -> CommandBuilder {
         }
         _ => CommandBuilder::new(path),
     }
+}
+
+/// The script an npm-generated `*.cmd` shim runs, as `(node, script)`. The shim's
+/// last line is `… "%_prog%" "%dp0%\node_modules\<pkg>\<entry>.js" %*`, with
+/// `_prog` the `node.exe` beside the shim when there is one and `node` from PATH
+/// otherwise. `None` for any other batch file, or when the script is missing, so
+/// those keep their `cmd.exe /C` launch.
+fn npm_shim_target(shim: &std::path::Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let text = std::fs::read_to_string(shim).ok()?;
+    let line = text.lines().rev().find(|l| l.contains("%*") && (l.contains("%dp0%") || l.contains("%~dp0")))?;
+    let after = line.split_once("%dp0%").or_else(|| line.split_once("%~dp0"))?.1;
+    let rel = after.trim_start_matches(['\\', '/']).split('"').next()?;
+    let lower = rel.to_ascii_lowercase();
+    if !(lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs")) || rel.contains("..") {
+        return None;
+    }
+    let dir = shim.parent()?;
+    let script = dir.join(rel.replace('/', "\\"));
+    if !script.is_file() {
+        return None;
+    }
+    let local_node = dir.join("node.exe");
+    let node = if local_node.is_file() { local_node } else { crate::paths::resolve_executable("node")? };
+    Some((node, script))
 }
 
 fn build_command(opts: &PtyOptions) -> CommandBuilder {
@@ -4311,5 +4345,50 @@ mod client_tests {
         map.remove(tab);
         map.remove(&attach);
         map.remove(&attach3);
+    }
+}
+
+#[cfg(test)]
+mod npm_shim_tests {
+    use super::npm_shim_target;
+
+    /// What `cmd-shim` writes for `npm install -g @openai/codex`.
+    const SHIM: &str = r#"@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
+"#;
+
+    #[test]
+    fn an_npm_shim_resolves_to_node_and_its_script_and_anything_else_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("codex.cmd");
+        std::fs::write(&shim, SHIM).unwrap();
+        // The script is missing: stay on the `cmd.exe /C` launch.
+        assert!(npm_shim_target(&shim).is_none());
+        let script_dir = dir.path().join("node_modules").join("@openai").join("codex").join("bin");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        std::fs::write(script_dir.join("codex.js"), "").unwrap();
+        std::fs::write(dir.path().join("node.exe"), "").unwrap();
+        let (node, script) = npm_shim_target(&shim).expect("an npm shim");
+        assert_eq!(node, dir.path().join("node.exe"));
+        assert_eq!(script, script_dir.join("codex.js"));
+        // A hand-written batch file is not an npm shim.
+        let other = dir.path().join("tool.cmd");
+        std::fs::write(&other, "@echo off\r\necho hi\r\n").unwrap();
+        assert!(npm_shim_target(&other).is_none());
     }
 }

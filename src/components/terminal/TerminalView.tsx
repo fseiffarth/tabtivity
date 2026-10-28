@@ -9,6 +9,7 @@ import { resolveTheme, useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
 import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
@@ -536,6 +537,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           "'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Cascadia Mono', Consolas, Menlo, monospace",
         theme: terminalTheme(colorSchemeRef.current),
         minimumContrastRatio: TERMINAL_MIN_CONTRAST,
+        // Under ConPTY the OS repaints wrapped lines itself on a resize; without
+        // this xterm reflows them too and the output duplicates or garbles. The
+        // build number only has to be past the ConPTY reflow fix (Windows 11).
+        ...(IS_HOST_WINDOWS ? { windowsPty: { backend: "conpty" as const, buildNumber: 22621 } } : {}),
       });
       const fit = new FitAddon();
       built.loadAddon(fit);

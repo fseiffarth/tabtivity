@@ -2128,7 +2128,7 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
 fn diff_no_index_command(cwd: &std::path::Path, old: &std::path::Path, new: &std::path::Path) -> std::process::Command {
     let args = ["diff", "--no-index", "--", &old.to_string_lossy(), &new.to_string_lossy()];
     let mut cmd = crate::commands::git::hardened_git_command_in(cwd, &args);
-    let ceiling = cwd.parent().map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+    let ceiling = cwd.parent().map(|p| crate::paths::without_verbatim_prefix(p.canonicalize().unwrap_or_else(|_| p.to_path_buf())));
     cmd.env("GIT_CEILING_DIRECTORIES", ceiling.unwrap_or_else(|| cwd.to_path_buf()));
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
     cmd

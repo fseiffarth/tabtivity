@@ -298,6 +298,15 @@ enum Landing {
     NoClobber,
 }
 
+/// Whether a failed rename is the short-lived Windows sharing conflict: access
+/// denied, a sharing violation or a lock violation. Never true elsewhere, where
+/// `PermissionDenied` is a real permission problem a retry cannot fix.
+fn is_transient_sharing_error(e: &std::io::Error) -> bool {
+    cfg!(windows)
+        && (e.kind() == std::io::ErrorKind::PermissionDenied
+            || matches!(e.raw_os_error(), Some(5 | 32 | 33)))
+}
+
 /// The one staged-write path. `private` is the file's Unix mode and asks for
 /// the Windows owner-only ACL; `None` keeps the staging file's own mode
 /// (`0600` from `tempfile` on Unix) and ACL. `Ok(false)` only for a
@@ -334,7 +343,23 @@ fn write_atomic(path: &Path, bytes: &[u8], private: Option<u32>, landing: Landin
     durability::record(DurabilityStep::FileSynced, staged.path());
     match landing {
         Landing::Replace => {
-            staged.persist(path).map_err(|e| e.error)?;
+            let mut staged = staged;
+            let mut attempt = 0u64;
+            loop {
+                match staged.persist(path) {
+                    Ok(_) => break,
+                    // Windows: a rename onto a file another process has open
+                    // without `FILE_SHARE_DELETE` (antivirus, the indexer, a
+                    // viewer) fails for a moment. Retry briefly rather than
+                    // lose the save.
+                    Err(e) if attempt < 5 && is_transient_sharing_error(&e.error) => {
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(25 * attempt));
+                        staged = e.file;
+                    }
+                    Err(e) => return Err(e.error),
+                }
+            }
         }
         Landing::NoClobber => match staged.persist_noclobber(path) {
             Ok(_) => {}

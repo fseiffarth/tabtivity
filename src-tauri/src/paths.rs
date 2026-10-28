@@ -306,6 +306,9 @@ fn supplemental_path_dirs_for(
                         .join("bin"),
                 );
                 dirs.push(local.join("bin"));
+                // Where winget links the portable packages it installs; a
+                // fresh install is invisible to this process until relaunch.
+                dirs.push(local.join("Microsoft").join("WinGet").join("Links"));
             }
             if let Some(roaming) = app_data {
                 dirs.push(PathBuf::from(roaming).join("npm"));
@@ -324,6 +327,10 @@ fn supplemental_path_dirs_for(
                 // `qemu-system-*.exe` and `qemu-img.exe` here and adds nothing
                 // to PATH; the VM tier resolves them through this.
                 dirs.push(PathBuf::from(pf).join("qemu"));
+                // Docker Desktop and OpenVPN's installers add their `bin` to the
+                // machine PATH for *new* processes only.
+                dirs.push(PathBuf::from(pf).join("Docker").join("Docker").join("resources").join("bin"));
+                dirs.push(PathBuf::from(pf).join("OpenVPN").join("bin"));
             }
         }
         OsKind::Unix => {}
@@ -609,6 +616,34 @@ pub fn resolve_offpath_binary(bin: &str) -> Option<PathBuf> {
         std::env::var_os("PATHEXT").as_deref(),
         &|p| p.is_file(),
     )
+}
+
+/// `\\?\C:\dir` -> `C:\dir` and `\\?\UNC\srv\share` -> `\\srv\share`, or `None`
+/// when `raw` carries no verbatim prefix or is too long for the plain spelling
+/// (a path at or past `MAX_PATH` only works verbatim).
+fn strip_verbatim_prefix(raw: &str) -> Option<String> {
+    if raw.len() >= 260 {
+        return None;
+    }
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{rest}"));
+    }
+    let rest = raw.strip_prefix(r"\\?\")?;
+    let mut chars = rest.chars();
+    let drive = chars.next()?;
+    (drive.is_ascii_alphabetic() && chars.next() == Some(':') && chars.next() == Some('\\'))
+        .then(|| rest.to_string())
+}
+
+/// A `canonicalize`d path spelled the way programs expect. Windows returns
+/// `\\?\C:\…`, which `cmd.exe` refuses as a working directory, Git for Windows
+/// does not understand in `GIT_CEILING_DIRECTORIES` and the UI would show to the
+/// user. Unchanged elsewhere, and for a path only the verbatim form can name.
+pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return path;
+    }
+    path.to_str().and_then(strip_verbatim_prefix).map(PathBuf::from).unwrap_or(path)
 }
 
 pub fn home_dir() -> PathBuf {
@@ -1048,6 +1083,16 @@ mod tests {
     }
 
     #[test]
+    fn verbatim_prefixes_are_stripped_only_where_the_plain_spelling_works() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users\a").as_deref(), Some(r"C:\Users\a"));
+        assert_eq!(strip_verbatim_prefix(r"\\?\UNC\srv\share\x").as_deref(), Some(r"\\srv\share\x"));
+        assert_eq!(strip_verbatim_prefix(r"C:\Users\a"), None);
+        assert_eq!(strip_verbatim_prefix(r"\\?\GLOBALROOT\Device"), None);
+        let long = format!(r"\\?\C:\{}", r"dir\".repeat(80));
+        assert_eq!(strip_verbatim_prefix(&long), None);
+    }
+
+    #[test]
     fn resolve_in_dirs_returns_none_when_absent() {
         let dirs = vec![PathBuf::from("/opt/bin")];
         let found = resolve_in_dirs(&dirs, "nope", &["exe"], &|_| false);
@@ -1132,6 +1177,9 @@ mod tests {
             path.starts_with(r"C:\Program Files")
                 && path.ends_with(Path::new("MiKTeX/miktex/bin/x64"))
         }));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("Microsoft/WinGet/Links"))));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("Docker/Docker/resources/bin"))));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("OpenVPN/bin"))));
     }
 
     #[test]
