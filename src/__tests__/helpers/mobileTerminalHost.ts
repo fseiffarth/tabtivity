@@ -9,6 +9,7 @@
  * its offline path; any other request still fails the test as unmocked.
  * A test that cares about one of those routes stubs `fetch` itself.
  */
+import { act } from "@testing-library/react";
 import { vi } from "vitest";
 import { unmockedFetch } from "./testGuards";
 
@@ -33,4 +34,21 @@ export function stubTerminalSideChannels(): void {
     }
     return unmockedFetch(input, init);
   });
+}
+
+const wait = async (ms: number) => {
+  await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, ms)); });
+};
+
+/** The keystrokes `sent()` holds once `count` of them have gone out. Waits
+ * `ms` as before, then on until the count is reached (up to 5 s): the screen
+ * sends agent keys `AGENT_KEY_GAP` apart, and a slow CI runner (Windows)
+ * stretches those timers past a fixed wait. A short tail after a late arrival
+ * keeps one key too many visible. */
+export async function keysSent(sent: () => string[], count: number, ms: number): Promise<string[]> {
+  await wait(ms);
+  if (sent().length >= count) return sent();
+  for (let waited = 0; sent().length < count && waited < 5000; waited += 50) await wait(50);
+  await wait(200);
+  return sent();
 }

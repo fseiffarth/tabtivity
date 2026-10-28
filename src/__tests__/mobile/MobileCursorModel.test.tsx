@@ -8,7 +8,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
+import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -139,24 +139,20 @@ describe(`${BRAND.display} Mobile — Cursor agent's model sheet`, () => {
     await act(async () => {});
 
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
-    await settle(400);
-    expect(FakeWebSocket.sent.slice(-2)).toEqual(["/model", "\r"]);
+    expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];
 
     // Opened on the current model, third of twelve, rows 1–6 drawn: the
     // highlight walks half a window past the first hidden row…
     await paint(dialog(1, 3));
-    await settle(600);
-    expect(FakeWebSocket.sent).toEqual(Array(6).fill(DOWN));
+    expect(await keysSent(() => FakeWebSocket.sent, 6, 600)).toEqual(Array(6).fill(DOWN));
     FakeWebSocket.sent = [];
     await paint(dialog(4, 9));
-    await settle(600);
-    expect(FakeWebSocket.sent).toEqual(Array(3).fill(DOWN));
+    expect(await keysSent(() => FakeWebSocket.sent, 3, 600)).toEqual(Array(3).fill(DOWN));
     FakeWebSocket.sent = [];
     // …and, once every row is known, back to where it was. Arrows only.
     await paint(dialog(7, 12));
-    await settle(1200);
-    expect(FakeWebSocket.sent).toEqual(Array(9).fill(UP));
+    expect(await keysSent(() => FakeWebSocket.sent, 9, 1200)).toEqual(Array(9).fill(UP));
     await paint(dialog(1, 3));
     await settle(300);
 
@@ -166,8 +162,7 @@ describe(`${BRAND.display} Mobile — Cursor agent's model sheet`, () => {
 
     FakeWebSocket.sent = [];
     pick("Claude Opus 4.8");
-    await settle(600);
-    expect(FakeWebSocket.sent).toEqual([DOWN, DOWN, DOWN, DOWN, "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 5, 600)).toEqual([DOWN, DOWN, DOWN, DOWN, "\r"]);
 
     // One step: the dialog is gone, and so is the sheet.
     await paint(DONE);

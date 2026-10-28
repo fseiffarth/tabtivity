@@ -11,7 +11,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
+import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -144,8 +144,7 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     FakeWebSocket.sent = [];
     pick("gpt-5.6-terra");
     // One row down from the highlight, then Enter — the arrow row's own keys.
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([DOWN, "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([DOWN, "\r"]);
     // The tap does not close the sheet: the session may have another step.
     expect(screen.queryByRole("dialog")).toBeTruthy();
 
@@ -157,8 +156,7 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
 
     FakeWebSocket.sent = [];
     pick("Medium");
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([UP, "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([UP, "\r"]);
 
     // The dialog is done: the sheet steps aside rather than sitting over the
     // session's own screen.
@@ -181,8 +179,7 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
       "› 3. gpt-6-sol            Previous generation workhorse model.",
       "  4. gpt-6-luna           Fast and affordable model for easier tasks.",
     ].join("\n"));
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([UP, UP]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([UP, UP]);
 
     FakeWebSocket.sent = [];
     await paint([
@@ -193,8 +190,7 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
       "  3. gpt-6-sol            Previous generation workhorse model.",
     ].join("\n"));
     expect(rows().some((row) => row.includes("gpt-6.1-sol (default)"))).toBe(true);
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([DOWN, DOWN]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([DOWN, DOWN]);
   });
 
   it("closes on a picker that has only one step", async () => {
@@ -242,22 +238,18 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     // A status line too narrow to name the model: the chip says the last one
     // the tab answered with, not "Model".
     fireEvent.click(screen.getByRole("button", { name: "Fable 5.1" }));
-    await settle(400);
-    expect(FakeWebSocket.sent.slice(-2)).toEqual(["/model", "\r"]);
+    expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];
     await paint(claudeWindow([`     ${DEFAULT}`, `     ${OPUS}`, `   ❯ ${FABLE}`]));
     // The highlight is walked onto the first hidden row — arrows only.
-    await settle(300);
-    expect(FakeWebSocket.sent).toEqual([DOWN]);
+    expect(await keysSent(() => FakeWebSocket.sent, 1, 300)).toEqual([DOWN]);
     FakeWebSocket.sent = [];
     await paint(claudeWindow([`   ↑ ${OPUS}`, `     ${FABLE}`, `   ❯ ${SONNET}`]));
-    await settle(300);
-    expect(FakeWebSocket.sent).toEqual([DOWN]);
+    expect(await keysSent(() => FakeWebSocket.sent, 1, 300)).toEqual([DOWN]);
     FakeWebSocket.sent = [];
     await paint(claudeWindow([`   ↑ ${FABLE}`, `     ${SONNET}`, `   ❯ ${HAIKU}`]));
     // Every row seen: back to where the highlight was.
-    await settle(300);
-    expect(FakeWebSocket.sent).toEqual([UP, UP]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 300)).toEqual([UP, UP]);
     await paint(claudeWindow([`   ❯ ${FABLE}`, `     ${SONNET}`, `     ${HAIKU}`]));
 
     expect(Array.from(document.querySelectorAll(".option-list strong"), (label) => label.textContent))
@@ -267,8 +259,7 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     // A hidden row is picked by its number, from where the highlight is.
     FakeWebSocket.sent = [];
     pick("Default (recommended)");
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([UP, UP, "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 3, 400)).toEqual([UP, UP, "\r"]);
   });
 
   it("drops the rest of a reveal walk when the sheet is closed mid-walk", async () => {
@@ -306,8 +297,7 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     for (let waited = 0; FakeWebSocket.sent.length === 0 && waited < 300; waited += 5) await settle(5);
     expect(FakeWebSocket.sent).toEqual([UP]);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([UP, ESC]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([UP, ESC]);
   });
 
   it("shows a local-model tab's model and opens no picker, not even from the card's tap", async () => {

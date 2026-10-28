@@ -14,7 +14,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
+import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -175,19 +175,16 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () 
     await act(async () => {});
 
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
-    await settle(400);
-    expect(FakeWebSocket.sent.slice(-2)).toEqual(["/model", "\r"]);
+    expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];
 
     // Six rows of seven: the highlight is walked onto the one the dialog hides
     // and back, so the sheet can list every model. Arrows only.
     await paint(picker(SIX(2), MEDIUM));
-    await settle(600);
-    expect(FakeWebSocket.sent).toEqual([DOWN, DOWN, DOWN, DOWN]);
+    expect(await keysSent(() => FakeWebSocket.sent, 4, 600)).toEqual([DOWN, DOWN, DOWN, DOWN]);
     FakeWebSocket.sent = [];
     await paint(picker(SEVEN(6)));
-    await settle(600);
-    expect(FakeWebSocket.sent).toEqual([UP, UP, UP, UP]);
+    expect(await keysSent(() => FakeWebSocket.sent, 4, 600)).toEqual([UP, UP, UP, UP]);
     await paint(picker(SIX(2), MEDIUM));
     await settle(300);
 
@@ -207,8 +204,7 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () 
     // effort belongs to the same Enter.
     FakeWebSocket.sent = [];
     pick("Gemini 3.8 Flash");
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([UP, UP]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([UP, UP]);
 
     // The dialog redraws with its slider on the model now highlighted, and the
     // sheet asks for the stop.
@@ -221,8 +217,7 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () 
     expect(FakeWebSocket.sent).toEqual([]);
 
     pick("high");
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([RIGHT, "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([RIGHT, "\r"]);
 
     // The dialog is gone: the sheet steps aside, and the chip reads the model
     // and the effort the session now prints.
@@ -246,14 +241,12 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () 
     expect(FakeWebSocket.sent).toEqual([]);
 
     pick("Claude Opus 4.6 (Thinking)");
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([DOWN]);
+    expect(await keysSent(() => FakeWebSocket.sent, 1, 400)).toEqual([DOWN]);
 
     // The walk has landed and the dialog draws no slider: there is nothing
     // left to ask, so this is the Enter that applies it.
     FakeWebSocket.sent = [];
     await paint(picker(SEVEN(5)));
-    await settle(300);
-    expect(FakeWebSocket.sent).toEqual(["\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 1, 300)).toEqual(["\r"]);
   });
 });
