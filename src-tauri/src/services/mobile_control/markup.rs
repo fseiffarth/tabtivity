@@ -130,8 +130,11 @@ pub const VIEWER_ASK_LINES: [&str; 4] = [
 ];
 /// What follows a `VIEWER_ASK_LINES` line: where the reader is, and what to do
 /// without the tool (a remote tab, the switch off) — say so and list the
-/// questions in the reply, the one place left.
-pub const VIEWER_ASK_ONLY: &str = "I am looking at the PDF, not at this chat, so ask only with `markup_ask` and then end your turn — never ask in your reply, and never with your own question tool or picker (such as AskUserQuestion). If you do not have the `markup_ask` tool, say so and list your questions in your reply.";
+/// questions in the reply, the one place left. A CLI that defers MCP tools
+/// (Claude Code lists them by name until ToolSearch loads them) reads a bare
+/// name as not having the tool and took that way out, so the line says a
+/// deferred tool is one to load, not one missing.
+pub const VIEWER_ASK_ONLY: &str = "I am looking at the PDF, not at this chat, so ask only with `markup_ask` and then end your turn — never ask in your reply, and never with your own question tool or picker (such as AskUserQuestion). If `markup_ask` is listed only by name (a deferred tool), load it first (in Claude Code with ToolSearch) and use it. If you do not have the `markup_ask` tool at all, say so and list your questions in your reply.";
 /// The dial's stop while the reader has not moved it.
 pub const DEFAULT_ASK: u8 = 2;
 /// The longest round id a view may mint for a Submit (`valid_round`).
@@ -1939,7 +1942,7 @@ mod tests {
             }
         }
         assert_eq!(VIEWER_ASK_LINES.len() + 1, ASK_LINES.len(), "one viewer line per asking stop");
-        for words in ["never ask in your reply", "AskUserQuestion", "say so and list your questions in your reply"] {
+        for words in ["never ask in your reply", "AskUserQuestion", "listed only by name", "ToolSearch", "say so and list your questions in your reply"] {
             assert!(VIEWER_ASK_ONLY.contains(words), "{words}");
         }
     }
