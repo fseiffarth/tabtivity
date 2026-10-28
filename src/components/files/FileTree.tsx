@@ -14,7 +14,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { GIT_STATE_COLOR } from "../../lib/theme/gitColors";
 import { createDeckFile } from "../../lib/viewers/deck/create";
-import { isPathExcluded, type SyncFileState, type SyncSkippedFile } from "../../stores/remote/sync";
+import { isPathExcluded, type SyncFileState } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { useActivityStore } from "../../stores/activity";
 import { useFileClipboardStore } from "../../stores/fileClipboard";
@@ -52,7 +52,6 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { FileTreeSearch } from "./FileTreeSearch";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
-import { SyncSkippedLarge } from "./SyncSkippedLarge";
 import { SyncMirrorSkips } from "./SyncMirrorSkips";
 import { MenuShortcut } from "../common/MenuShortcut";
 import type { ChordDescriptor } from "../../lib/shortcuts/shortcuts";
@@ -700,12 +699,7 @@ export function FileTree({
   // fading, since a one-second push must not report itself into a toast the user
   // has not looked at yet (the whole-project row in `ProjectFilesPane` strikes
   // the same bargain, with the same chrome).
-  const [syncNotice, setSyncNotice] = useState<{
-    text: string;
-    bad: boolean;
-    /** Files over the cap a pull left on the host (gap 35). */
-    skipped?: SyncSkippedFile[];
-  } | null>(null);
+  const [syncNotice, setSyncNotice] = useState<{ text: string; bad: boolean } | null>(null);
   // Whether the system clipboard holds an image when the context menu opened
   // (probed async on right-click), gating the "Paste screenshot" option.
   const [clipboardImage, setClipboardImage] = useState(false);
@@ -1550,15 +1544,11 @@ export function FileTree({
     if (!ok) return;
     setSyncNotice(null);
     try {
-      const outcome = await syncPull(projectId, rel);
+      await syncPull(projectId, rel);
       // The confirmation is that it landed at all. Silence used to be the
       // *only* successful outcome, which reads exactly like a button that does
-      // nothing. Files over the cap it left on the host are named with it.
-      setSyncNotice({
-        text: t("fileTree.pullDoneNotice", { name: label }),
-        bad: false,
-        skipped: outcome.skippedTooLarge,
-      });
+      // nothing.
+      setSyncNotice({ text: t("fileTree.pullDoneNotice", { name: label }), bad: false });
     } catch (err) {
       setError(String(err));
     }
@@ -1700,19 +1690,7 @@ export function FileTree({
     setPushBusy(true);
     try {
       if (action === "keep") await syncPush(projectId, rel, true);
-      else if (action === "host") {
-        // A host copy that grew past the cap is not pulled; say so rather
-        // than let the queue move on as if it had been. Added to a skipped
-        // line the queue already shows, so an earlier one is not lost.
-        const outcome = await syncPull(projectId, rel);
-        if (outcome.skippedTooLarge.length > 0) {
-          setSyncNotice((prev) => ({
-            text: "",
-            bad: false,
-            skipped: [...(prev && !prev.text ? (prev.skipped ?? []) : []), ...outcome.skippedTooLarge],
-          }));
-        }
-      }
+      else if (action === "host") await syncPull(projectId, rel);
       // "skip" leaves both sides as-is.
     } catch (err) {
       setError(String(err));
@@ -2860,10 +2838,7 @@ export function FileTree({
           className={`project-files-sync-result${syncNotice.bad ? " project-files-sync-result--bad" : ""}`}
           role="status"
         >
-          <span>
-            {syncNotice.text}
-            {syncNotice.skipped && <SyncSkippedLarge files={syncNotice.skipped} lead={!!syncNotice.text} />}
-          </span>
+          <span>{syncNotice.text}</span>
           <button
             className="file-tree-up"
             onClick={() => setSyncNotice(null)}

@@ -7,7 +7,7 @@ import { ProjectFilesSettingsDialog, useProjectFileFilters } from "./ProjectFile
 import { remoteMemberTreeDir } from "../../lib/projects/fileMove";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
-import { useSyncStore, type SyncSkippedFile } from "../../stores/remote/sync";
+import { useSyncStore } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { useBigFoldersStore } from "../../stores/bigFolders";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
@@ -24,7 +24,6 @@ import type { ProjectBox, ProjectEntry } from "../../types";
 import type { SortKey } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
-import { SyncSkippedLarge } from "./SyncSkippedLarge";
 import { FolderIcon, GearIcon, HexagonIcon } from "../common/icons/Icon";
 
 /**
@@ -710,12 +709,7 @@ export function ProjectFilesPane({
   const [syncBusy, setSyncBusy] = useState(false);
   // The outcome line under the row: what the transfer did, or why it failed.
   // `bad` only colours it — a skipped-conflicts result is not an error.
-  const [syncResult, setSyncResult] = useState<{
-    text: string;
-    bad: boolean;
-    /** Files over the cap a pull left on the host (gap 35). */
-    skipped?: SyncSkippedFile[];
-  } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ text: string; bad: boolean } | null>(null);
 
   /**
    * Run one whole-tree transfer with the confirm dialog in front of it, and
@@ -742,12 +736,8 @@ export function ProjectFilesPane({
     setSyncResult(null);
     try {
       if (direction === "pull") {
-        const outcome = await useSyncStore.getState().syncWholeProject(projectId);
-        setSyncResult({
-          text: t("projectFilesPane.syncPullDone"),
-          bad: false,
-          skipped: outcome.skippedTooLarge,
-        });
+        await useSyncStore.getState().syncWholeProject(projectId);
+        setSyncResult({ text: t("projectFilesPane.syncPullDone"), bad: false });
       } else {
         const r = await useSyncStore.getState().pushWholeProject(projectId);
         const parts = [t("projectFilesPane.syncPushed", { count: r.pushed })];
@@ -871,10 +861,7 @@ export function ProjectFilesPane({
           className={`project-files-sync-result${syncResult.bad ? " project-files-sync-result--bad" : ""}`}
           role="status"
         >
-          <span>
-            {syncResult.text}
-            {syncResult.skipped && <SyncSkippedLarge files={syncResult.skipped} />}
-          </span>
+          <span>{syncResult.text}</span>
           <button
             className="file-tree-up"
             onClick={() => setSyncResult(null)}

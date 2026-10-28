@@ -240,8 +240,8 @@ async fn resolve(
 /// Pull a single file or a whole folder subtree from the host into the local
 /// mirror, marking each pulled file selected and recording its base. `rel_path`
 /// is project-relative (`""` = the whole project root). Returns how many files
-/// landed and the files over the cap it left on the host
-/// ([`remote_sync::PullOutcome`]). Streams `sync-progress` as it goes.
+/// landed ([`remote_sync::PullOutcome`]); a file over the RAM cap is streamed,
+/// not left on the host. Streams `sync-progress` as it goes.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sync_pull(
     ctx: Ctx,
@@ -2012,14 +2012,16 @@ async fn pull_subtree(
         let host_abs = join_remote(&target.spec.remote_path, &file.rel);
         let local = mirror_local_path(project_id, &file.rel);
         // rsync already wrote the bytes; only lstat locally to capture the base,
-        // and record only a regular file within the cap (gap 35): an oversized
-        // file was left out of the transfer, and whatever else a changing host
-        // tree slipped past the walk is skipped like the floor would.
-        // Otherwise pull the file over SFTP (which confines the write, #863).
+        // and record only a regular file no larger than listed (gap 35):
+        // whatever else a changing host tree slipped past the walk is skipped
+        // like the floor would. Otherwise pull the file over SFTP (which
+        // confines the write, #863), streaming one over the RAM cap.
         let local_base = if rsynced {
             remote_sync::rsync_pulled_base(&local, file.size)
         } else {
-            match remote_sync::pull_file(sftp, &host_abs, file.size, file.mode, &mirror_root, &file.rel).await {
+            match remote_sync::pull_file_any_size(sftp, &host_abs, file.size, file.mode, &mirror_root, &file.rel)
+                .await
+            {
                 Ok(base) => Some(base),
                 Err(e) => {
                     pull_error.get_or_insert(e);
@@ -2027,9 +2029,9 @@ async fn pull_subtree(
                 }
             }
         };
-        outcome.tally(&file, local_base.is_some());
         match local_base {
             Some((ls, lm)) => {
+                outcome.pulled += 1;
                 let mut guard = manifest.lock().await;
                 let m = ensure_loaded(&mut guard, project_id);
                 remote_sync::record_pull(m, &file.rel, file.size, file.mtime, ls, lm);
@@ -2042,9 +2044,8 @@ async fn pull_subtree(
                 net_usage::record_files(project_id, 1, 0);
             }
             None => {
-                // A single oversized/unreadable file shouldn't abort the whole
-                // folder sync; carry on. One over the cap is in the outcome
-                // for the UI to name (gap 35); the rest stay a stderr line.
+                // A single unreadable file shouldn't abort the whole folder
+                // sync; carry on.
                 eprintln!("sync_pull: skip '{}'", file.rel);
             }
         }
@@ -2052,7 +2053,7 @@ async fn pull_subtree(
         emit(ctx, project_id, "file", &file.rel, done, total);
     }
     emit(ctx, project_id, "done", rel, done, total);
-    if !is_dir && outcome.pulled == 0 && outcome.skipped_too_large.is_empty() {
+    if !is_dir && outcome.pulled == 0 {
         return Err(match pull_error {
             Some(e) => format!("could not pull '{rel}': {e}"),
             None => format!("could not pull '{rel}'"),
@@ -2079,14 +2080,15 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
     if local_rsync.is_none() {
         return false;
     }
-    // The floor refuses a file over the cap; so does the fast path (gap 35).
-    let within_cap = remote_sync::rsync_transfer_list(files);
-    if within_cap.is_empty() {
+    if files.is_empty() {
         return false;
     }
-    let Some(rsync_files) = remote_sync::rsync_subtree_files(&within_cap, rel) else {
+    let Some(rsync_files) = remote_sync::rsync_subtree_files(files, rel) else {
         return false;
     };
+    // The floor refuses a file that grew past its listed size; rsync skips
+    // one past the largest (gap 35).
+    let max_size = files.iter().map(|file| file.size).max().unwrap_or(0);
     let spec = target.spec.clone();
     let host_src = join_remote(&spec.remote_path, rel);
     // #863: rsync writes THROUGH its destination, so a symlink at or above it
@@ -2110,6 +2112,7 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
             &host_src,
             &local_dest,
             &rsync_files,
+            max_size,
         )
         .is_ok()
     })

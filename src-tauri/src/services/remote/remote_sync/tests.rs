@@ -518,12 +518,13 @@ fn rsync_pull_args_build_target_and_flags() {
         "/srv/p/",
         "/local/mirror/",
         files_from,
+        4096,
     );
     assert_eq!(args[0], "-t");
     assert_eq!(args[1], "-c");
     // Gap 35: nothing beyond what the SFTP floor lands — no archive mode
     // (links, perms, owner, group, devices, specials), no recursion past
-    // the list, and the floor's size cap.
+    // the list, and nothing past the largest listed file.
     for banned in ["-a", "--archive", "-r", "--recursive", "-l", "--links", "-D", "-p", "-o", "-g"] {
         assert!(!args.iter().any(|arg| arg == banned), "{banned} in {args:?}");
     }
@@ -532,7 +533,7 @@ fn rsync_pull_args_build_target_and_flags() {
     assert!(args.iter().any(|arg| arg == "--no-links"));
     assert!(args.iter().any(|arg| arg == "--no-devices"));
     assert!(args.iter().any(|arg| arg == "--no-specials"));
-    assert!(args.iter().any(|arg| *arg == format!("--max-size={MAX_SYNC_FILE_BYTES}")));
+    assert!(args.iter().any(|arg| arg == "--max-size=4096"));
     assert!(args.iter().any(|arg| arg == "--exclude=/.git"));
     assert!(args.iter().any(|arg| arg == "--exclude=.git"));
     assert!(args.iter().any(|arg| arg == concat!("--exclude=.", crate::app_slug!())));
@@ -588,7 +589,7 @@ fn rsync_transport_hands_ssh_the_control_path_whole() {
 /// space or `$` in a project dir is one path, not two words or an expansion.
 #[test]
 fn rsync_pull_args_protect_the_host_path() {
-    let args = rsync_pull_args(fast(), &None, "host.example", None, "/srv/my $proj/", "/m/", Path::new("/tmp/list"));
+    let args = rsync_pull_args(fast(), &None, "host.example", None, "/srv/my $proj/", "/m/", Path::new("/tmp/list"), 1);
     assert!(args.iter().any(|arg| arg == "--protect-args"), "{args:?}");
     assert!(args.iter().any(|arg| arg == "host.example:/srv/my $proj/"));
 }
@@ -631,7 +632,7 @@ fn rsync_pull_reads_a_wildcard_host_dir_literally() {
     for dir in ["a[1]", "q?", "b\\x[2]", "x]y/c[1]", "p\\q/d[1]"] {
         let dest = tempfile::tempdir().unwrap();
         let src = format!("{}/", r.join(dir).display());
-        let mut args = rsync_pull_args(fast(), &None, "h", None, &src, &format!("{}/", dest.path().display()), list.path());
+        let mut args = rsync_pull_args(fast(), &None, "h", None, &src, &format!("{}/", dest.path().display()), list.path(), 64);
         let e = args.iter().position(|a| a == "-e").unwrap();
         args[e + 1] = ssh.display().to_string();
         let out = std::process::Command::new("rsync").args(&args).output().unwrap();
@@ -652,37 +653,32 @@ fn rsync_pull_args_omit_user_when_absent() {
         "/srv/p/",
         "/m/",
         Path::new("/tmp/list"),
+        1,
     );
     assert!(args.iter().any(|arg| arg == "host.example:/srv/p/"));
     assert!(!args.iter().any(|arg| arg == "-a" || arg == "-r" || arg == "--recursive"));
 }
 
 #[test]
-fn rsync_size_gate_matches_the_floor() {
-    assert!(rsync_may_transfer(0));
-    assert!(rsync_may_transfer(MAX_SYNC_FILE_BYTES));
-    assert!(!rsync_may_transfer(MAX_SYNC_FILE_BYTES + 1));
-}
-
-#[test]
-fn rsync_pulled_base_records_only_regular_files_within_the_cap() {
+fn rsync_pulled_base_records_only_regular_files_no_larger_than_listed() {
     let dir = tempfile::tempdir().unwrap();
     let regular = dir.path().join("a.txt");
     std::fs::write(&regular, b"hello").unwrap();
     assert_eq!(rsync_pulled_base(&regular, 5).map(|(size, _)| size), Some(5));
-    // Listed over the cap by the host walk: never recorded, whatever is on disk.
-    assert_eq!(rsync_pulled_base(&regular, MAX_SYNC_FILE_BYTES + 1), None);
-    // Missing, a directory, an oversized local file.
+    // Grew on the host after the walk listed it: never recorded.
+    assert_eq!(rsync_pulled_base(&regular, 4), None);
+    // Missing, a directory.
     assert_eq!(rsync_pulled_base(&dir.path().join("gone"), 1), None);
     let sub = dir.path().join("sub");
     std::fs::create_dir(&sub).unwrap();
     assert_eq!(rsync_pulled_base(&sub, 1), None);
+    // A file over the RAM cap is recorded like any other: rsync streams it.
     let big = dir.path().join("big.bin");
     std::fs::File::create(&big)
         .unwrap()
         .set_len(MAX_SYNC_FILE_BYTES + 1)
         .unwrap();
-    assert_eq!(rsync_pulled_base(&big, 1), None);
+    assert_eq!(rsync_pulled_base(&big, MAX_SYNC_FILE_BYTES + 1).map(|(size, _)| size), Some(MAX_SYNC_FILE_BYTES + 1));
     #[cfg(unix)]
     {
         // A symlink to a regular file is not followed; a FIFO is not a file.
@@ -698,11 +694,11 @@ fn rsync_pulled_base_records_only_regular_files_within_the_cap() {
 
 /// Run the real pull flags local→local when rsync is installed (the
 /// transport is the only part left out): a listed path that is a FIFO, a
-/// symlink, a directory full of unlisted files, or a file over the cap
-/// never lands; the listed regular file does, with its mtime.
+/// symlink, a directory full of unlisted files, or a file past the largest
+/// listed size never lands; the listed regular file does, with its mtime.
 #[cfg(unix)]
 #[test]
-fn rsync_pull_flags_land_only_listed_regular_files_within_the_cap() {
+fn rsync_pull_flags_land_only_listed_regular_files_within_the_listed_sizes() {
     if !samba_rsync_3() {
         eprintln!("no rsync >= 3 on PATH; skipping the local transfer check");
         return;
@@ -731,10 +727,8 @@ fn rsync_pull_flags_land_only_listed_regular_files_within_the_cap() {
     std::fs::write(s.join("was_file/unlisted.txt"), b"x").unwrap();
     std::fs::write(s.join("was_file/deep/unlisted.txt"), b"x").unwrap();
     std::os::unix::fs::symlink("/etc/hostname", s.join("link.txt")).unwrap();
-    std::fs::File::create(s.join("big.bin"))
-        .unwrap()
-        .set_len(MAX_SYNC_FILE_BYTES + 1)
-        .unwrap();
+    // Listed at most 2 bytes, grown to 3 by the time rsync runs.
+    std::fs::write(s.join("big.bin"), b"big").unwrap();
     let list = rsync_files_from(&[
         "d/ok.txt".into(),
         "swapped/inner.txt".into(),
@@ -744,7 +738,7 @@ fn rsync_pull_flags_land_only_listed_regular_files_within_the_cap() {
         "big.bin".into(),
     ])
     .unwrap();
-    let mut args = rsync_pull_flags(list.path());
+    let mut args = rsync_pull_flags(list.path(), 2);
     args.push(format!("{}/", s.display()));
     args.push(format!("{}/", dest.path().display()));
     let out = std::process::Command::new("rsync").args(&args).output().unwrap();
@@ -770,7 +764,7 @@ fn rsync_pull_flags_land_only_listed_regular_files_within_the_cap() {
 }
 
 /// The host tree both pull-path tests walk: two small files and one over
-/// the cap, in walk order.
+/// the RAM cap, in walk order.
 fn host_tree_with_a_big_file(host: &Path) -> Vec<HostFile> {
     std::fs::create_dir_all(host.join("d")).unwrap();
     std::fs::write(host.join("a.txt"), b"a").unwrap();
@@ -786,15 +780,11 @@ fn host_tree_with_a_big_file(host: &Path) -> Vec<HostFile> {
     ]
 }
 
-fn big_file_skipped() -> Vec<SkippedFile> {
-    vec![SkippedFile { rel: "d/big.bin".into(), size: MAX_SYNC_FILE_BYTES + 1 }]
-}
-
-/// Gap 35 follow-up: the rsync fast path pulls the files within the cap
-/// and the outcome names the one it left on the host.
+/// The rsync fast path pulls a file over the RAM cap with the rest (a 9 GB
+/// folder of checkpoints used to land as 4 GB) and records every one.
 #[cfg(unix)]
 #[test]
-fn a_pull_reports_files_over_the_cap_on_the_rsync_path() {
+fn a_pull_lands_files_over_the_cap_on_the_rsync_path() {
     if !samba_rsync_3() {
         eprintln!("no rsync >= 3 on PATH; skipping the local transfer check");
         return;
@@ -802,71 +792,140 @@ fn a_pull_reports_files_over_the_cap_on_the_rsync_path() {
     let host = tempfile::tempdir().unwrap();
     let mirror = tempfile::tempdir().unwrap();
     let files = host_tree_with_a_big_file(host.path());
-    let list = rsync_transfer_list(&files);
-    assert_eq!(list.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["a.txt", "d/b.txt"]);
-    let from = rsync_files_from(&rsync_subtree_files(&list, "").unwrap()).unwrap();
-    let mut args = rsync_pull_flags(from.path());
+    let from = rsync_files_from(&rsync_subtree_files(&files, "").unwrap()).unwrap();
+    let max_size = files.iter().map(|f| f.size).max().unwrap();
+    let mut args = rsync_pull_flags(from.path(), max_size);
     args.push(format!("{}/", host.path().display()));
     args.push(format!("{}/", mirror.path().display()));
     let out = std::process::Command::new("rsync").args(&args).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 
-    let mut outcome = PullOutcome::default();
     for file in &files {
-        let landed = rsync_pulled_base(&mirror.path().join(&file.rel), file.size).is_some();
-        outcome.tally(file, landed);
+        let base = rsync_pulled_base(&mirror.path().join(&file.rel), file.size);
+        assert_eq!(base.map(|(size, _)| size), Some(file.size), "{}", file.rel);
     }
-    assert_eq!(outcome.pulled, 2);
-    assert_eq!(outcome.skipped_too_large, big_file_skipped());
     assert_eq!(std::fs::read(mirror.path().join("a.txt")).unwrap(), b"a");
     assert_eq!(std::fs::read(mirror.path().join("d/b.txt")).unwrap(), b"bb");
-    assert!(!mirror.path().join("d/big.bin").exists());
 }
 
-/// Gap 35 follow-up: the SFTP floor's per-file rule (`pull_file` minus
-/// the wire) never reads a file over the cap, pulls the rest, and the
-/// outcome names the skipped one.
+/// The SFTP floor streams a file over the RAM cap (`pull_file_streamed_with`
+/// minus the wire) into the mirror, atomically, with the host's mode.
 #[tokio::test]
-async fn a_pull_reports_files_over_the_cap_on_the_sftp_path() {
+async fn a_streamed_pull_lands_the_whole_file() {
     let host = tempfile::tempdir().unwrap();
     let mirror = tempfile::tempdir().unwrap();
-    let files = host_tree_with_a_big_file(host.path());
-    let reads = std::cell::RefCell::new(Vec::new());
-    let mut outcome = PullOutcome::default();
-    for file in &files {
-        let host_abs = host.path().join(&file.rel);
-        let landed = pull_file_with(&host_abs.to_string_lossy(), file.size, file.mode, mirror.path(), &file.rel, || {
-            reads.borrow_mut().push(file.rel.clone());
-            let path = host_abs.clone();
-            async move { std::fs::read(path).map_err(|e| e.to_string()) }
-        })
-        .await
-        .is_ok();
-        outcome.tally(file, landed);
+    let body: Vec<u8> = (0..(3 * crate::services::sftp::STREAM_CHUNK + 17)).map(|i| (i % 251) as u8).collect();
+    std::fs::write(host.path().join("ckpt.pt"), &body).unwrap();
+    let host_abs = host.path().join("ckpt.pt");
+    let (size, mtime) = pull_file_streamed_with(
+        &host_abs.to_string_lossy(),
+        body.len() as u64,
+        Some(0o755),
+        mirror.path(),
+        "runs/main/ckpt.pt",
+        std::time::Duration::from_secs(5),
+        || async { tokio::fs::File::open(&host_abs).await.map_err(|e| e.to_string()) },
+    )
+    .await
+    .unwrap();
+    let local = mirror.path().join("runs").join("main").join("ckpt.pt");
+    assert_eq!(std::fs::read(&local).unwrap(), body);
+    assert_eq!(size, body.len() as u64);
+    assert!(mtime.is_some());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&local).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode & 0o100, 0o100, "the host's executable bit survives: {mode:o}");
     }
-    assert_eq!(*reads.borrow(), ["a.txt", "d/b.txt"], "a file over the cap is never read");
-    assert_eq!(outcome.pulled, 2);
-    assert_eq!(outcome.skipped_too_large, big_file_skipped());
-    assert_eq!(std::fs::read(mirror.path().join("a.txt")).unwrap(), b"a");
-    assert_eq!(std::fs::read(mirror.path().join("d/b.txt")).unwrap(), b"bb");
-    assert!(!mirror.path().join("d/big.bin").exists());
+    // Nothing staged is left beside it.
+    assert_eq!(std::fs::read_dir(local.parent().unwrap()).unwrap().count(), 1);
 }
 
-/// The pull result crosses to the frontend in camelCase, and a payload
-/// without the new field still reads (empty list).
+/// A host file that grows past its listed size (an endless stream swapped
+/// in), or stalls, is refused; the mirror keeps its old copy and no staged
+/// file is left behind.
+#[tokio::test]
+async fn a_streamed_pull_refuses_a_grown_or_stalled_file() {
+    let host = tempfile::tempdir().unwrap();
+    let mirror = tempfile::tempdir().unwrap();
+    std::fs::write(mirror.path().join("f.bin"), b"old").unwrap();
+    std::fs::write(host.path().join("f.bin"), b"0123456789").unwrap();
+    let host_abs = host.path().join("f.bin");
+    let grown = pull_file_streamed_with(
+        &host_abs.to_string_lossy(),
+        4,
+        None,
+        mirror.path(),
+        "f.bin",
+        std::time::Duration::from_secs(5),
+        || async { tokio::fs::File::open(&host_abs).await.map_err(|e| e.to_string()) },
+    )
+    .await;
+    assert!(grown.unwrap_err().contains("grew past"));
+
+    // The sending half stays open and silent: the read never completes.
+    let (_quiet, reader) = tokio::io::duplex(64);
+    let stalled = pull_file_streamed_with(
+        "/h/f.bin",
+        10,
+        None,
+        mirror.path(),
+        "f.bin",
+        std::time::Duration::from_millis(20),
+        || async move { Ok(reader) },
+    )
+    .await;
+    assert!(stalled.unwrap_err().contains("sent nothing"));
+
+    assert_eq!(std::fs::read(mirror.path().join("f.bin")).unwrap(), b"old");
+    assert_eq!(std::fs::read_dir(mirror.path()).unwrap().count(), 1);
+}
+
+/// The buffered floor auto-sync uses still refuses a file over the RAM cap
+/// without reading it.
+#[tokio::test]
+async fn the_buffered_pull_never_reads_a_file_over_the_cap() {
+    let mirror = tempfile::tempdir().unwrap();
+    let read = std::cell::Cell::new(false);
+    let out = pull_file_with("/h/big.bin", MAX_SYNC_FILE_BYTES + 1, None, mirror.path(), "big.bin", || {
+        read.set(true);
+        async { Ok(Vec::new()) }
+    })
+    .await;
+    assert!(out.unwrap_err().contains("too large"));
+    assert!(!read.get());
+}
+
+/// A traversal or a symlinked folder in the mirror is refused before the
+/// host file is even opened (#863), as on the buffered floor.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_streamed_pull_is_confined_before_it_opens_the_host_file() {
+    let mirror = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), mirror.path().join("d")).unwrap();
+    for rel in ["d/f.bin", "../f.bin"] {
+        let opened = std::cell::Cell::new(false);
+        let out = pull_file_streamed_with("/h/f.bin", 1, None, mirror.path(), rel, std::time::Duration::from_secs(1), || {
+            opened.set(true);
+            async { Ok(tokio::io::empty()) }
+        })
+        .await;
+        assert!(out.is_err(), "{rel}");
+        assert!(!opened.get(), "{rel}: the host file was opened");
+    }
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+/// The pull result crosses to the frontend in camelCase; an older payload
+/// that still names skipped files reads too.
 #[test]
-fn a_pull_outcome_is_camel_case_and_defaults_to_nothing_skipped() {
-    let outcome = PullOutcome { pulled: 2, skipped_too_large: big_file_skipped() };
-    let json = serde_json::to_value(&outcome).unwrap();
-    assert_eq!(json["pulled"], 2);
-    assert_eq!(json["skippedTooLarge"][0]["rel"], "d/big.bin");
-    assert_eq!(json["skippedTooLarge"][0]["size"], MAX_SYNC_FILE_BYTES + 1);
-    let old: PullOutcome = serde_json::from_str(r#"{"pulled":3}"#).unwrap();
-    assert_eq!(old, PullOutcome { pulled: 3, skipped_too_large: Vec::new() });
-    // A file that failed for another reason is not reported as too large.
-    let mut outcome = PullOutcome::default();
-    outcome.tally(&HostFile { rel: "gone.txt".into(), size: 5, mtime: None, mode: None }, false);
-    assert_eq!(outcome, PullOutcome::default());
+fn a_pull_outcome_is_camel_case() {
+    let json = serde_json::to_value(PullOutcome { pulled: 2 }).unwrap();
+    assert_eq!(json, serde_json::json!({ "pulled": 2 }));
+    let old: PullOutcome = serde_json::from_str(r#"{"pulled":3,"skippedTooLarge":[]}"#).unwrap();
+    assert_eq!(old, PullOutcome { pulled: 3 });
 }
 
 #[test]

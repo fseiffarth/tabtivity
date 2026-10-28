@@ -807,8 +807,8 @@ pub async fn create_file_on(sftp: &Sftp, path: &str) -> Result<(), String> {
 /// Chunk size for the streaming transfers below — bounded so an arbitrarily large
 /// file never lives fully in memory (the whole-file `read_file_on`/`write_file_on`
 /// buffer everything, which is why the git-lockstep bundle transport streams; #28n
-/// Phase 3).
-const STREAM_CHUNK: usize = 256 * 1024;
+/// Phase 3), and a manual sync pull of a file over the RAM cap too.
+pub const STREAM_CHUNK: usize = 256 * 1024;
 
 /// Upload a local file to the host in bounded chunks (never buffering the whole
 /// file), creating missing parent directories first. The remote streaming analogue

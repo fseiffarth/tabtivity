@@ -219,7 +219,6 @@ export const UNTESTED = {
   "importDrop.title": { area: "files", what: "importDrop · File already exists" },
   "projectFilesPane.1": { area: "files", what: "ProjectFilesPane · Project settings" },
   "projectFilesPane.syncMirrorSkipped": { area: "files", what: "Remote tree · a line under the file tree naming mirror files a push left alone (background auto-sync or a manual push): a link or one behind a linked folder, a FIFO/device/folder where a file was, or one over 64 MiB — with the reason per file; dismissible, it clears once the file is an ordinary file again" },
-  "projectFilesPane.syncSkippedLarge": { area: "files", what: "Remote tree Pull / Sync all result line, and the diverged view's take-host (per row and for all) · names the files over 64 MiB the pull left on the host (count, then the list; more than three fold behind Show files), rsync and SFTP path alike" },
   "projectFilesPane.2": { area: "files", what: "ProjectFilesPane · Large folders…" },
   "projectFilesView.1": { area: "files", what: "ProjectFilesView · Files" },
   "projectFilesView.2": { area: "files", what: "ProjectFilesView · Remote machines…" },
