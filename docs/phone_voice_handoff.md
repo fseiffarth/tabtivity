@@ -852,3 +852,118 @@ live. The phone bundle is stale once this lands (`npm run mobile:bundle`).
 - The brief / speed sheet sits under This device for now. S8's voice sheet
   may absorb it.
 - The es, fr and it strings were not reviewed by a native speaker.
+
+## S6 review (branch `voice-s6`)
+
+**Commits:** `5793ebbf` holds the fixes and their tests. This section is in
+the commit after it. Reviewed: `git diff ca415f07..voice-s6` (`8458bcc9`,
+`0d1d86bc`).
+
+### Fixed (each with a regression test)
+
+1. **A turn wait that ended early dropped the answers it held.** While a
+   hands-free turn is awaited, `useReadAloud` marks each arriving answer as
+   heard but does not read it (`holdReadingForTurn`), and `readTurn` reads
+   them only from the wait's own timer. A wait that ended any other way
+   (hands-free switched off in the Focus menu, the link lost, which clears
+   the wait, or the mic's stop) released the hold without reading, so those
+   answers were never spoken. Before S6 each was read as it arrived. Now
+   the end of a wait whose answers were not read reads them (`readTheTurn`,
+   the last 3, then following), unless the mic is open or being prepared.
+   Test: "hands-free: a turn wait that ends early (…) still reads the
+   answers it held", for both cases (`MobileTerminalReadAloud.test.tsx`).
+2. **A send dictated over a held turn lost that turn's answers.** Tapping
+   Dictate during the wait and sending again started a new wait from the
+   newest answer, so the first turn's held answers were skipped. The turn
+   record now carries `since` (where its reading starts) apart from `answer`
+   (the turn-over check's key at the send): a send over a held, unread turn
+   keeps the old `since`. Test: "hands-free: a send dictated over a held
+   turn reads that turn's answers with the next".
+
+Both tests failed against the code before the fixes.
+
+### Checked, no bug found
+
+- **Read-aloud without hands-free.** The Focus setting reads each new
+  answer once: what a tab's first feed brings is history, answers that
+  arrive while it is off or while dictating are marked heard, and more than
+  3 at once are left to the eye, as before. MessageMenu's Read aloud reads
+  an answer of the open tab on its cursor and anything else (prompt,
+  subagent message, screen bubble) as a full one-off; its Stop row follows
+  `currentSpeechId`. Every stop and move bumps `generation` before
+  `speechSynthesis.cancel()`, and `said()` re-checks it after the listening
+  gap's await, so a cut-off utterance starts nothing.
+- **The flagged return-to-tab change is not a regression.** Tab switches
+  are not the only remount: the idle lock (`auth` "locked") and a resume
+  after a lost link (`auth` "loading", `restoreLastPlace`) also unmount and
+  remount the Terminal (`App.tsx`, keyed by tab id). Before S6 every such
+  remount made what arrived meanwhile history, so a kitchen phone that
+  locked during a turn never read the turn's answer. The plan wants the
+  position to survive reconnects and tab switches and "nothing read twice or
+  skipped" (Defaults). A remount cannot tell a tab switch from a resume, and
+  the 3-answer cap still keeps a long absence silent. Left as built; still
+  listed for the user below.
+- **The hands-free loop.** Nothing is read while `listening` (the feed and
+  `readTurn` check it, and `useReadAloud` stops the voice when dictation
+  starts). The mic opens only from the wait's timer, which needs
+  `!speaking` and runs again once the voice is quiet. A reading command
+  closes the mic (`endDictation` aborts) and the mic waits for the voice
+  alone. "stop" / "stopp" never reaches `runReadingCommand`, so the send
+  guard keeps it, and the cancel window always has a draft, so no reading
+  command fires in it.
+- **Reading commands** fire only on a settled hands-free segment, with an
+  empty draft and a read position on that tab; `matchReading` compares the
+  whole utterance (after the command word and polite words) with a phrase.
+  Plain dictation (hands-free off) never calls the pick.
+- **Chat bubbles:** no rendering change; the pill sits in the menu row.
+- **Per-tab position:** the cursors, heard sets and holds are keyed by tab
+  id; `activeTab` is set by the feed and cleared only by its own tab's
+  leave, so a keyed swap cannot leak Read aloud onto another tab.
+- **Prefs:** `voiceRate` round-trips as `String(rate)`, accepted only when it
+  is one of `READING_RATES`; `voiceBrief` is a plain flag. Home's row reads
+  both on mount.
+- **i18n:** the 10 `mobile.speech.*` keys are in all five dictionaries.
+- **Untested rows:** `mobile.speech.cursor` (MessageMenu row) and
+  `mobile.speech.reading` (This device row) exist and both pills render
+  through `isUntested`.
+
+### Gates
+
+`scripts/gates.sh --base ca415f07` (19 files, frontend), at a load of
+about 50:
+
+| Gate | Result |
+|---|---|
+| brand-check | PASS |
+| `git diff --check ca415f07` | PASS |
+| `npm run lint` | PASS (0 errors, no new warnings) |
+| `npm run build` (tsc, desktop, mobile, web bundles) | PASS |
+| vitest `--changed ca415f07` | PASS on the first run (1998 s; the script prints no counts) |
+| `scripts/privacy-check.sh` (staged fixes) | PASS, 2 paths |
+
+The voice files on their own (`MobileTerminalReadAloud` 8, which was 5,
+plus `MobileSpeechOutput`, `MobileHandsFree`, `MobileTerminalHandsFree`,
+`VoiceReading` and `VoiceCommands`): 6 files, 124 tests, all passed. There
+was no Rust change, so no cargo gate ran. The phone bundle is stale once
+this lands (`npm run mobile:bundle`).
+
+### S6 review — flagged for user
+
+- **S6 changed today's hands-free loop.** The plan gives end-of-turn
+  reading to S5 "while armed", and says that with `handsFreeCommands` off
+  the Focus row "works exactly as today". S6 made today's loop read at the
+  turn's end and take spoken reading commands (`useHandsFree.ts`, an S5
+  file). It works and the tests cover it, but it is a scope change: keep
+  it, or move it behind `handsFreeCommands` when S5 lands?
+- **Returning to a tab reads up to 3 answers that came meanwhile** (see
+  above). The alternative, history on a tab switch but not on a lock or a
+  resume, needs a navigation signal from `App.tsx` (S4's file).
+- **Fix 1 after the mic's stop:** if the reader tapped Dictate during a
+  wait and then stopped the mic, the turn's held answers are read right
+  after the stop. Rare; before S6 they were read as they arrived.
+- **For S4 (not reachable yet):** `readAnswers` returns true while the
+  tab's reading is queued but paused (`pauseReading`), so a turn ending
+  during a pause would neither speak nor open the mic. And `leaveReading`
+  keeps `lastReading`, so a media button with no tab moves a reading of a
+  tab that is no longer on screen. S4 should decide both.
+- Not run live: no phone, no window.
