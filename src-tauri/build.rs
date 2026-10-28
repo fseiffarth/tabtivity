@@ -61,6 +61,7 @@ fn generate_mobile_assets() {
                 "json" | "webmanifest" => "application/manifest+json",
                 "svg" => "image/svg+xml",
                 "png" => "image/png",
+                "wav" => "audio/wav",
                 _ => "application/octet-stream",
             };
             format!("({name:?}, {}, {mime:?})", rust_bytes(&bytes))

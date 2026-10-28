@@ -33,3 +33,4 @@ b2f4d5a815434d484a0698ba52da936c608c4960 src-tauri/icons/128x128@2x.png — Eldr
 1cc8d189e1c1f062db80b4a176e84a92cdcbbbde src-tauri/icons/installer/sidebar.bmp — installer art regenerated for the rename from its .svg (scripts/gen-installer-images.sh): the unchanged mark, text only the name "Tabtivity" (sidebar: plus "Terminal workspace"); vector-only, viewed
 ac247bc8c313133ae6e00e567db443aece4f8c1c screenshots/promo.mp4 — 90 s promo re-rendered in the app's real layout (redrawn from the lesson renders: mock UI, invented projects and people, synthetic voice and music); no real screen, host, account or mail; frames sampled and checked
 be2d1f9e38ae3172926bad2704960dd7e281763f screenshots/promo.gif — 15 s silent teaser cut from that promo; same content, frames sampled and checked
+963fe49c164ecf6333a8925ddaed035f4c8fd00e mobile-web/public/silence.wav — generated 8-bit mono 8 kHz PCM WAV, 6 s of the zero line (0x80) only; no metadata chunks, no text
