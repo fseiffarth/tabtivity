@@ -307,6 +307,7 @@ export const UNTESTED = {
   "rootOverlay.viewers": { area: "layout", what: "RootOverlay · viewers, Files tabs and links opened in the console stay in root" },
   "rootOverlay.1": { area: "layout", what: "RootOverlay · ⚿ Tabtivity tools + ✓ Approvals" },
   "overlayAgent.dock": { area: "layout", what: "OverlayAgentColumn · Ctrl+1–9 in the mail / calendar / to-do overlay docks a root agent beside the app: resizable column, ⚿ badge, ↗ open in the root console, × hide, placeholder while the console is open, Ctrl+N re-shows the same live agent, Escape stays in the agent, events/cards an agent adds fly in" },
+  "rootConsole.tabMenu": { area: "layout", what: "RootOverlay · right-clicking a root-console tab opens the main window's tab menu: Rename, Colour, Important/Urgent, to-do card, Duplicate, Close / Close others / left / right, Reopen closed tab; colours and marks show on the console's tabs" },
   "rootConsole.installTabTitle": { area: "layout", what: "RootOverlay · a one-click install's tab pulses in the console strip until clicked" },
   "rootReview.groupApproveAll": { area: "layout", what: "RootReviewStrip · Approve all per MCP group; ✓ on a mail draft files it under Drafted by agents" },
   "rootReview.icsImport": { area: "layout", what: "RootReviewStrip · Calendar file staged by calendar_import_ics" },

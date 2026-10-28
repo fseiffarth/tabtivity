@@ -29,7 +29,12 @@ import {
   type TabEntry,
 } from "../../stores/tabs";
 import { dividerFraction } from "../../stores/tabs/layoutTree";
-import { isSingletonTabKind } from "../../stores/tabs/tabKinds";
+import { canDuplicateTab, isSingletonTabKind } from "../../stores/tabs/tabKinds";
+import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
+import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
+import { registerHostBoundTab } from "../../lib/remote/hostBound";
+import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
+import { tabColorCss } from "../../lib/theme/tabColors";
 import {
   clampFilesWidth,
   DEFAULT_GROUP_FILES_WIDTH,
@@ -49,6 +54,11 @@ import { TabAgentModeMarks, TabContinueButton, TabStatusMark, statusMarkSlots } 
 import { pickEdge, previewInset } from "../tabs/dragGeometry";
 import { dragPreviewLayout } from "../tabs/dragPreview";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
+import { MenuShortcut } from "../common/MenuShortcut";
+import { useDialogs } from "../common/PromptDialogs";
+import { TabColorPicker } from "../tabs/TabColorPicker";
+import { TabMarkBadge } from "../tabs/TabMarkBadge";
+import { TabMarkMenuItems } from "../tabs/TabMarkMenuItems";
 import { StarIcon } from "./StarIcon";
 import { RootReviewStrip } from "./RootReviewStrip";
 import { useRootReviewStore } from "../../stores/rootReview";
@@ -633,30 +643,30 @@ function RootOverlay() {
     files?: GroupFiles,
   ) => (
     <>
-      <GroupStrip
-        groupId={groupId}
-        tabs={tabKeys.map((k) => tabByKey.get(k)).filter((tab): tab is TabEntry => !!tab)}
-        activeKey={activeKey}
-        draggingKey={drag?.key ?? null}
-        stripRef={registerStrip(groupId)}
-        onTabPointerDown={startTabDrag}
-      />
-      <div className="tab-new-wrap">
-        <button
-          className="tab-new-btn"
-          title={t("detachedTabs.newTab")}
-          onClick={(e) => openAddMenu(e.currentTarget.getBoundingClientRect(), groupId)}
-        >
-          +
-        </button>
-      </div>
-      {/* Split, every subwindow carries its own bar and therefore its own ◫;
-          unsplit, the toggle sits in the console's title bar beside the ×. */}
-      {split && groupId !== EMPTY_GROUP_ID && (
-        <div className="tab-controls" style={filesReserveStyle(files)}>
-          {filesToggle(groupId, !!files?.filesOpen)}
+        <GroupStrip
+          groupId={groupId}
+          tabs={tabKeys.map((k) => tabByKey.get(k)).filter((tab): tab is TabEntry => !!tab)}
+          activeKey={activeKey}
+          draggingKey={drag?.key ?? null}
+          stripRef={registerStrip(groupId)}
+          onTabPointerDown={startTabDrag}
+        />
+        <div className="tab-new-wrap">
+          <button
+            className="tab-new-btn"
+            title={t("detachedTabs.newTab")}
+            onClick={(e) => openAddMenu(e.currentTarget.getBoundingClientRect(), groupId)}
+          >
+            +
+          </button>
         </div>
-      )}
+        {/* Split, every subwindow carries its own bar and therefore its own ◫;
+            unsplit, the toggle sits in the console's title bar beside the ×. */}
+        {split && groupId !== EMPTY_GROUP_ID && (
+          <div className="tab-controls" style={filesReserveStyle(files)}>
+            {filesToggle(groupId, !!files?.filesOpen)}
+          </div>
+        )}
     </>
   );
 
@@ -946,15 +956,54 @@ function GroupStrip({
   // which of the console's tabs is running what they just asked for.
   const installTabs = useRootOverlayStore((s) => s.installTabs);
   const clearInstallTab = useRootOverlayStore((s) => s.clearInstallTab);
+  const closedAgentTabs = useClosedAgentTabs(ROOT_SCOPE);
+  const { promptText, dialogs } = useDialogs();
+  const [tabMenu, setTabMenu] = useState<{ key: string; index: number; x: number; y: number } | null>(null);
+  const menuTab = tabMenu ? tabs.find((tb) => tb.key === tabMenu.key) : undefined;
+
+  // The explicit close the main window's × and menu make (`closeTabInScope`):
+  // a resumable agent tab is kept for "Reopen closed tab", a minted local tmux
+  // session ends with it.
+  function closeTab(key: string) {
+    clearInstallTab(key);
+    closeTabInScope(ROOT_SCOPE, key);
+  }
+  // `TabBar`'s menu, minus what the console has no home for: tab groups (this
+  // strip draws no group chips) and Schedule prompt (root-console scheduling is
+  // outside v1, `docs/context/agent_schedule_mcp.md`). The strip has no inline
+  // label editor, so Rename asks through a dialog like the popout's.
+  async function renameTab(key: string) {
+    setTabMenu(null);
+    const tab = tabs.find((tb) => tb.key === key);
+    if (!tab) return;
+    const label = await promptText({
+      title: t("common.rename"),
+      label: t("tabBar.renameAriaLabel"),
+      initial: tab.label,
+      unchanged: tab.label,
+    });
+    if (label) useTabsStore.getState().renameTabInScope(ROOT_SCOPE, key, label);
+  }
+  async function duplicateTab(key: string) {
+    setTabMenu(null);
+    const source = tabs.find((tb) => tb.key === key);
+    if (!source) return;
+    const overrides = source.hostBoundUid
+      ? { hostBoundUid: await registerHostBoundTab(ROOT_SCOPE) }
+      : undefined;
+    useTabsStore.getState().duplicateTab(key, overrides);
+  }
+
   // The shared strip, so an overflowing console bar scrolls with the same
   // chevrons as every other tab bar.
   return (
+    <>
     <ScrollingTabStrip
       revision={tabs.map((tab) => tab.key).join(",")}
       activeKey={activeKey ?? undefined}
       stripRef={stripRef}
     >
-      {tabs.map((tab) => {
+      {tabs.map((tab, index) => {
         const isActive = tab.key === activeKey;
         const ptyId = `${ROOT_SCOPE}:${tab.key}`;
         const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
@@ -966,13 +1015,22 @@ function GroupStrip({
           ? busyStateClass(busyKindByTab[ptyId], tab.kind)
           : attentionStateClass(attn);
         const install = !!installTabs[tab.key];
+        // A user-set colour replaces the kind colour, as on `TabBar`'s tabs.
+        const userColor = tabColorCss(tab.color);
+        const style = { "--tab-accent": userColor ?? TAB_ACCENT[tab.kind] } as React.CSSProperties;
         return (
           <div
             key={tab.key}
-            className={`tab ${isActive ? "active" : ""}${stateClass}${install ? " install-pending" : ""}${
-              draggingKey === tab.key ? " dragging" : ""
-            }`}
+            className={`tab ${isActive ? "active" : ""}${stateClass}${userColor ? " has-tab-color" : ""}${
+              install ? " install-pending" : ""
+            }${draggingKey === tab.key ? " dragging" : ""}`}
+            style={style}
             title={install ? t("rootConsole.installTabTitle") : undefined}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setTabMenu({ key: tab.key, index, x: e.clientX, y: e.clientY });
+            }}
             onPointerDown={(e) => onTabPointerDown(e, tab, groupId)}
             onMouseDown={() => {
               if (isActive) clearAttention(ptyId);
@@ -983,6 +1041,7 @@ function GroupStrip({
           >
             <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
             <span className="tab-label">{tab.label}</span>
+            <TabMarkBadge tab={tab} />
             <TabAgentModeMarks scope={ROOT_SCOPE} tab={tab} isActive={isActive} />
             <TabContinueButton tab={tab} stateClass={stateClass} />
             {install && <UntestedTag id="rootConsole.installTabTitle" />}
@@ -992,8 +1051,7 @@ function GroupStrip({
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                clearInstallTab(tab.key);
-                useTabsStore.getState().removeTabInScope(ROOT_SCOPE, tab.key);
+                closeTab(tab.key);
               }}
             >
               ×
@@ -1002,6 +1060,93 @@ function GroupStrip({
         );
       })}
     </ScrollingTabStrip>
+    {tabMenu && menuTab && (
+      <ContextMenuPortal
+        x={tabMenu.x}
+        y={tabMenu.y}
+        onClose={() => setTabMenu(null)}
+        className="tab-new-menu"
+      >
+        <button className="tab-new-menu-item" onClick={() => void renameTab(menuTab.key)}>
+          <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+          {t("common.rename")}
+          <UntestedTag id="rootConsole.tabMenu" />
+        </button>
+        <TabColorPicker
+          current={menuTab.color}
+          onPick={(color) => useTabsStore.getState().setTabColorInScope(ROOT_SCOPE, menuTab.key, color)}
+        />
+        <TabMarkMenuItems tab={menuTab} scope={ROOT_SCOPE} onDone={() => setTabMenu(null)} />
+        {canDuplicateTab(menuTab) && (
+          <button className="tab-new-menu-item" onClick={() => void duplicateTab(menuTab.key)}>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent">⧉</span>
+            {t("tabBar.duplicate")}
+            <UntestedTag id="tabBar.1" />
+          </button>
+        )}
+        <button
+          className="tab-new-menu-item"
+          onClick={() => {
+            setTabMenu(null);
+            closeTab(menuTab.key);
+          }}
+        >
+          <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+          {t("common.close")}
+          <MenuShortcut chord="closeTab" />
+        </button>
+        <button
+          className="tab-new-menu-item"
+          disabled={tabs.length <= 1}
+          onClick={() => {
+            setTabMenu(null);
+            tabs.filter((tb) => tb.key !== menuTab.key).forEach((tb) => closeTab(tb.key));
+          }}
+        >
+          <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+          {t("tabBar.closeOthers")}
+        </button>
+        <button
+          className="tab-new-menu-item"
+          disabled={tabMenu.index === 0}
+          onClick={() => {
+            setTabMenu(null);
+            tabs.slice(0, tabMenu.index).forEach((tb) => closeTab(tb.key));
+          }}
+        >
+          <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+          {t("tabBar.closeToLeft")}
+        </button>
+        <button
+          className="tab-new-menu-item"
+          disabled={tabMenu.index === tabs.length - 1}
+          onClick={() => {
+            setTabMenu(null);
+            tabs.slice(tabMenu.index + 1).forEach((tb) => closeTab(tb.key));
+          }}
+        >
+          <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+          {t("tabBar.closeToRight")}
+        </button>
+        {closedAgentTabs.length > 0 && (
+          <button
+            className="tab-new-menu-item"
+            title={t("tabBar.reopenClosedTitle", { label: closedAgentTabs[0].tab.label })}
+            onClick={() => {
+              setTabMenu(null);
+              reopenClosedAgentTab(ROOT_SCOPE);
+            }}
+          >
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent">↺</span>
+            {t("tabBar.reopenClosed")}
+            <UntestedTag id="tabBar.reopenClosed" />
+            <MenuShortcut chord="reopenClosedTab" />
+          </button>
+        )}
+      </ContextMenuPortal>
+    )}
+    {dialogs}
+    </>
   );
 }
 

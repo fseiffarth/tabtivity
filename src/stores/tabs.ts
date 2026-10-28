@@ -451,7 +451,8 @@ interface TabsStore {
   // IDENTIFIES the original rather than describing it is re-minted or dropped
   // (see `duplicateSpec`); `overrides` is for the one such field the store can't
   // mint synchronously, `hostBoundUid` (registering it is a backend round trip).
-  duplicateTab: (key: string, overrides?: Partial<TabEntry>) => TabEntry | null;
+  // Writes the scope that owns the tab, so the root console's menu can use it.
+  duplicateTab:(key: string, overrides?: Partial<TabEntry>) => TabEntry | null;
   ensureTab: (
     tab: Omit<TabEntry, "key">,
     matches: (tab: TabEntry) => boolean,
@@ -1364,7 +1365,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
   },
 
   duplicateTab: (key, overrides) => {
-    const { tabs, layout } = currentScopeState(get());
+    // The scope that owns the tab: the root console's tabs are not the active
+    // scope's while it floats over a project.
+    const owner = scopeOfTab(get(), key);
+    const { tabs, layout } = scopeState(get(), owner);
     const source = tabs.find((t) => t.key === key);
     if (!source) return null;
     const found = findGroupOfTab(layout, key);
@@ -1374,16 +1378,13 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // up to a flush interval ago: merge what is still staged (§3.1).
     const spec = duplicateSpec({ ...source, viewerState: savedViewerState(source) });
     const entry: TabEntry = {
-      ...withTmuxSession(
-        withRunHostDefault(get().scope, { ...spec, ...overrides }),
-        get().scope,
-      ),
+      ...withTmuxSession(withRunHostDefault(owner, { ...spec, ...overrides }), owner),
       key: nextKeyValue,
       launchedAt: Date.now(),
     };
-    countTabOpen(get().scope, entry);
+    countTabOpen(owner, entry);
     set((s) => {
-      const { tabs: cur, layout: curLayout } = currentScopeState(s);
+      const { tabs: cur, layout: curLayout } = scopeState(s, owner);
       // Re-resolve inside the setter: the group (and the source's index in it)
       // may have moved between the read above and this write.
       const at = curLayout ? findGroupOfTab(curLayout, key) : null;
@@ -1394,7 +1395,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         tabKeys.splice(i + 1, 0, nextKeyValue);
         return { ...g, tabKeys, activeKey: nextKeyValue };
       });
-      return writeScope(s, s.scope, [...cur, entry], next, at.group.id);
+      return writeScope(s, owner, [...cur, entry], next, at.group.id);
     });
     return entry;
   },

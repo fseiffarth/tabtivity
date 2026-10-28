@@ -11,7 +11,6 @@ import {
   useGroup,
   useGroupTabs,
   type TabEntry,
-  type TabKind,
   type TabLocation,
 } from "../../stores/tabs";
 import {
@@ -20,6 +19,7 @@ import {
   NETWORK_TAB_CMD,
   MONITOR_TAB_CMD,
   SKILLSLIBRARY_TAB_CMD,
+  canDuplicateTab,
 } from "../../stores/tabs/tabKinds";
 import type { AddTabOpts } from "../../stores/tabs/types";
 import { useDragStore } from "../../stores/drag/drag";
@@ -125,31 +125,6 @@ function playDetachFlyOut(
     dx,
     dy,
   });
-}
-
-/**
- * The panes the "+" menu opens through `ensureTab` — one per scope by
- * construction, because each renders a machine-global or store-global list that
- * a second copy would repeat verbatim (see `handleAddMonitor` and friends).
- * There is nothing for "Duplicate" to produce, so the item is **hidden** rather
- * than disabled: no state makes it available, and a permanently dead entry in a
- * five-item menu is worse than one that isn't there.
- */
-const SINGLETON_TAB_KINDS = new Set<TabKind>([
-  "projects3d",
-  "monitor",
-  "calendar",
-  "printing",
-  "skillslibrary",
-  "promptchart",
-]);
-
-/** Is a second tab like this one a thing that can exist? A Files (Project) tab
- *  counts as a singleton only at the project ROOT — one opened on a folder is
- *  its own view, exactly the distinction `handleAdd` draws. */
-function canDuplicateTab(tab: TabEntry): boolean {
-  if (SINGLETON_TAB_KINDS.has(tab.kind)) return false;
-  return !(isFileTabKind(tab.kind) && !tab.folder);
 }
 
 // Empty activity maps a bar without a tab group subscribes to (see `TabItem`).

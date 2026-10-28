@@ -177,6 +177,30 @@ describe("RootOverlayHost", () => {
     expect(b.key).not.toBe(a.key);
   });
 
+  it("right-click gives a root tab the main window's tab menu, written to the ROOT scope", async () => {
+    const { a, b } = seedRootTabs();
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().show());
+    const rootTabs = () => useTabsStore.getState().tabsByScope.root ?? [];
+
+    fireEvent.contextMenu(screen.getByText("Shell"));
+    fireEvent.click(screen.getByLabelText("Red"));
+    expect(rootTabs().find((t) => t.key === b.key)?.color).toBe("red");
+    expect(screen.getByText("Shell").closest(".tab")?.classList.contains("has-tab-color")).toBe(true);
+
+    // Duplicate lands in root, right after its source, never in the project.
+    fireEvent.click(screen.getByText("Duplicate tab"));
+    expect(rootTabs()).toHaveLength(3);
+    const [group] = allGroups(useTabsStore.getState().layoutByScope.root ?? null);
+    expect(group.tabKeys.slice(0, 2)).toEqual([a.key, b.key]);
+    expect(useTabsStore.getState().tabsByScope.p1 ?? []).toEqual([]);
+
+    fireEvent.contextMenu(screen.getByText("Claude"));
+    fireEvent.click(screen.getByText("Close to the right"));
+    expect(rootTabs().map((t) => t.key)).toEqual([a.key]);
+    expect(useTabsStore.getState().scope).toBe("p1");
+  });
+
   it("pulses the tab an install opened until it is clicked", async () => {
     const { a, b } = seedRootTabs();
     useRootOverlayStore.getState().markInstallTab(b.key);
