@@ -390,6 +390,19 @@ mod tests {
         assert_eq!(settings.files_alerts_muted, Some(vec!["one".into()]));
     }
 
+    /// The frontend sends a cleared key (`undefined`, "back to the default") as
+    /// `null`; the merge must reset it rather than keep the old value.
+    #[test]
+    fn a_null_in_a_settings_patch_clears_the_field() {
+        let mut settings = Settings { ui_zoom: Some(1.5), ..Settings::default() };
+        let patch = serde_json::from_value::<Map<String, Value>>(serde_json::json!({ "ui_zoom": null }))
+            .unwrap();
+
+        merge_settings_patch(&mut settings, patch).unwrap();
+
+        assert_eq!(settings.ui_zoom, None);
+    }
+
     /// Headless owner plan, H1: every write moves the file's revision; the
     /// whole-document save must carry the one it loaded and is refused
     /// otherwise, so a patch landed in between survives it.

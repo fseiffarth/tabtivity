@@ -136,7 +136,10 @@ pushes that SHA itself. A moved remote is re-checked for fast-forward. Unapprove
 24 h; records live 24 h in memory beside the tokens (neither survives a
 restart) and go with a revoked session. Dismissing a *finished* card
 (`git_push_mcp_clear`) only sets `cleared`: the card hides it, while
-`git_push_status` still reports the outcome to the agent. There is no typed notice into the
+`git_push_status` still reports the outcome to the agent. A card the user
+approved with Push or Release clears itself once it reads *pushed*
+(`GitPushProposals`); a failed one, or one an agent applied, waits for its
+Dismiss. There is no typed notice into the
 tab — the schedule lane types *prompts*, and a push outcome must not become one
 — so a `staged`/`running` result tells the agent to poll `git_push_status`.
 The audit ring keeps the session, tool and category; never the note or output.

@@ -90,6 +90,34 @@ describe("Mobile project screen — project types", () => {
     expect(screen.getByRole("button", { name: "Project menu" })).toBeTruthy();
   });
 
+  it("the × hides a remote project's reach line for good, on every remote project", async () => {
+    vi.stubGlobal("fetch", host(detail({ folder: true, create: "agents", files: true }, { host: "remote" })));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("Claude");
+    const reach = /Remote project: the phone reaches its agents/;
+    fireEvent.click(within(screen.getByText(reach).closest(".notice") as HTMLElement).getByRole("button", { name: "Hide this hint" }));
+    expect(screen.queryByText(reach)).toBeNull();
+    cleanup();
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("Claude");
+    expect(screen.queryByText(reach)).toBeNull();
+  });
+
+  it("hiding the reach line keeps a folder-less project's no-copy sentence, without a ×", async () => {
+    vi.stubGlobal("fetch", host(detail({ folder: true, create: "agents", files: true }, { host: "remote" })));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("Claude");
+    fireEvent.click(within(screen.getByText(/Remote project: the phone reaches/).closest(".notice") as HTMLElement).getByRole("button", { name: "Hide this hint" }));
+    cleanup();
+    vi.stubGlobal("fetch", host(detail({ folder: false, create: "none", files: false, tabs: [] }, { host: "remote" })));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("No tabs yet");
+    expect(screen.getByText(/There is no local copy of its files yet/)).toBeTruthy();
+    expect(screen.queryByText(/Remote project: the phone reaches/)).toBeNull();
+    const note = screen.getByText(/There is no local copy of its files yet/).closest(".notice") as HTMLElement;
+    expect(within(note).queryByRole("button", { name: "Hide this hint" })).toBeNull();
+  });
+
   it("shows the host's message when a create is refused as not attachable", async () => {
     const refusal = () => new Response(JSON.stringify({ error: "not_attachable" }), { status: 409 });
     vi.stubGlobal("fetch", host(detail({ folder: true, create: "agents" }, { host: "remote" }), refusal));

@@ -166,18 +166,46 @@ function remoteConnectArgs(ref: ProjectHostRef): Record<string, unknown> {
  */
 export function syncGlobalConnected(target: Target): void {
   const { activeId } = useProjectsStore.getState();
-  const settings = useSettingsStore.getState().settings;
   for (const ref of projectHostsMatching(target)) {
     if (ref.projectId !== activeId) continue;
-    if (!mayAutoTouch(settings, ref.target)) continue;
-    const status = useRemoteStatusStore.getState();
-    const cur = hostStateOf(status, ref.projectId, ref.hostId).ssh;
-    if (cur === "connected" || cur === "connecting") continue;
-    status.setSsh(ref.projectId, "connecting", ref.hostId);
-    void invoke("remote_connect", remoteConnectArgs(ref))
-      .then(() => useRemoteStatusStore.getState().setSsh(ref.projectId, "connected", ref.hostId))
-      .catch(() => useRemoteStatusStore.getState().setSsh(ref.projectId, "error", ref.hostId));
+    openPoolOnMachine(ref, ["connected", "connecting"]);
   }
+}
+
+/**
+ * A project was just **activated** — open the pool of each of its hosts a global
+ * machine is already connected to. The other half of `syncGlobalConnected`'s edge:
+ * a machine connected while its project was inactive left that project at `off`, so
+ * a tab on the host stayed held behind "Not connected" while the machine sat green
+ * in the header, and nothing short of reconnecting the machine ever opened it.
+ *
+ * Still an event, not a standing claim: it fires on activation only, never from the
+ * dead-host reconciler, and only from an `off` lamp — a host that already failed
+ * this session is not re-attacked by switching back and forth (the rule
+ * `autoConnectPrimary` keeps). A stale machine lamp (it is never polled) costs one
+ * failed connect and a red lamp.
+ */
+export function syncConnectedMachinesInto(projectId: string): void {
+  const gm = useGlobalMachinesStore.getState();
+  for (const m of gm.machines) {
+    if ((gm.status[m.id] ?? "off") !== "connected") continue;
+    for (const ref of projectHostsMatching(m)) {
+      if (ref.projectId !== projectId) continue;
+      openPoolOnMachine(ref, ["connected", "connecting", "error"]);
+    }
+  }
+}
+
+/** Open one project host's pool riding a connected machine's master, unless it is
+ *  tagged HPC or its lamp is in one of `skip`. */
+function openPoolOnMachine(ref: ProjectHostRef, skip: ConnState[]): void {
+  if (!mayAutoTouch(useSettingsStore.getState().settings, ref.target)) return;
+  const status = useRemoteStatusStore.getState();
+  if (skip.includes(hostStateOf(status, ref.projectId, ref.hostId).ssh)) return;
+  status.setSsh(ref.projectId, "connecting", ref.hostId);
+  void invoke("remote_connect", remoteConnectArgs(ref))
+    .then(() => useRemoteStatusStore.getState().setSsh(ref.projectId, "connected", ref.hostId))
+    .catch(() => useRemoteStatusStore.getState().setSsh(ref.projectId, "error", ref.hostId));
 }
 
 /** A global machine actively disconnected (jobs ended, master closed) — tear the

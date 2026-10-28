@@ -196,6 +196,7 @@ export function LocalityMenu({
   onClose,
   onChangeView,
   onChoose,
+  carriesConversation,
 }: {
   menu: LocalityMenuState;
   /** The location currently selected (dotted in the menu). A tab's
@@ -206,6 +207,9 @@ export function LocalityMenu({
   onClose: () => void;
   onChangeView: (view: "root" | "machines") => void;
   onChoose: (key: string, loc: TabLocation) => void;
+  /** The tab is an agent whose conversation a switch takes along
+   *  (`agentLocationSwitch`): the menu says so. */
+  carriesConversation?: boolean;
 }) {
   const t = useT();
   const cur = current;
@@ -243,6 +247,12 @@ export function LocalityMenu({
     >
         {menu.view === "root" ? (
           <>
+            {carriesConversation && (
+              <div className="tab-new-menu-hint" title={t("tabLocality.carriesConversationTitle")}>
+                {t("tabLocality.carriesConversation")}
+                <UntestedTag id="agentLocationSwitch.1" />
+              </div>
+            )}
             {machineItem("local", <HomeIcon />, t("tabLocality.localMirrorItem"))}
             <button
               className="tab-new-menu-item"

@@ -172,24 +172,13 @@ export interface SyncMirrorSkips {
   items: SyncMirrorSkip[];
 }
 
-/** A host file a pull left on the host because it is over the 64 MiB cap. */
-export interface SyncSkippedFile {
-  /** Project-relative path. */
-  rel: string;
-  /** Host size in bytes. */
-  size: number;
-}
-
 /**
- * What a pull did — mirrors the backend `PullOutcome`. Files over the cap used
- * to be skipped with nothing but a log line while the pull read as done; they
- * come back here (rsync and SFTP path alike) for the result line to name.
+ * What a pull did — mirrors the backend `PullOutcome`. A file over the 64 MiB
+ * RAM cap is streamed, so a pull leaves nothing on the host for its size.
  */
 export interface SyncPullOutcome {
   /** Files that landed in the mirror. */
   pulled: number;
-  /** Files over the cap left on the host; empty when none. */
-  skippedTooLarge: SyncSkippedFile[];
 }
 
 /** One file only the host holds (`sync_scan_host_new`). */
@@ -207,8 +196,6 @@ export interface HostNewScan {
 
 /** What a batch take-one-side (`resolveAll`) did. */
 export interface SyncResolveOutcome {
-  /** Host files over the cap a "host" batch left on the host. */
-  skipped: SyncSkippedFile[];
   /** Files that did not transfer. */
   failed: number;
   /** The first failure's message, or null when every file went. */
@@ -228,7 +215,6 @@ function toPullOutcome(raw: unknown): SyncPullOutcome {
   const r = (raw && typeof raw === "object" ? raw : {}) as Partial<SyncPullOutcome>;
   return {
     pulled: typeof r.pulled === "number" ? r.pulled : typeof raw === "number" ? raw : 0,
-    skippedTooLarge: Array.isArray(r.skippedTooLarge) ? r.skippedTooLarge : [],
   };
 }
 
@@ -486,6 +472,22 @@ export function splitByNewerSide(
 }
 
 /**
+ * Diverged files minus the ones BOTH sides changed since their recorded base
+ * (the backend's per-side flags, both copies present) — the orange view's
+ * "exclude changed on both" tick, so a bulk take-a-side never silently drops
+ * one side's edits of a true conflict; those are resolved per row.
+ */
+export function withoutChangedOnBoth(
+  byPath: Record<string, SyncEntryStatus> | undefined,
+  relPaths: string[],
+): string[] {
+  return relPaths.filter((rel) => {
+    const e = byPath?.[rel];
+    return !(e && e.hostMtime != null && e.localMtime != null && e.hostDiverged && e.localDiverged);
+  });
+}
+
+/**
  * Which side a 🗑 in the orange view would delete: the surviving copy of a file
  * deleted on exactly one side, or null when no deletion applies. Deleting the
  * mirror copy is only offered when the host was actually consulted and
@@ -644,11 +646,9 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     // Iterate per path (each side has its own single-file command) but refresh
     // the cached status only once at the end — refreshing per file would re-stat
     // the whole selection N times. A single failed file is logged and skipped so
-    // one bad path doesn't abort the rest of the batch. A host copy over the
-    // cap is not pulled; it is collected and returned rather than only logged.
+    // one bad path doesn't abort the rest of the batch.
     // The failures are returned too: logging them only made a batch the backend
     // refused file by file look exactly like one that went through.
-    const skipped: SyncSkippedFile[] = [];
     let failed = 0;
     let firstError: string | null = null;
     const fail = (rel: string, e: unknown) => {
@@ -659,8 +659,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     for (const rel of relPaths) {
       try {
         if (side === "host") {
-          const outcome = toPullOutcome(await invoke<unknown>("sync_pull", { projectId, relPath: rel }));
-          skipped.push(...outcome.skippedTooLarge);
+          await invoke<unknown>("sync_pull", { projectId, relPath: rel });
         } else {
           const why = pushFailure(
             await invoke<SyncPushResult>("sync_push", { projectId, relPath: rel, force: true }),
@@ -672,7 +671,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
       }
     }
     await get().refreshStatus(projectId);
-    return { skipped, failed, firstError };
+    return { failed, firstError };
   },
 
   markSelected: async (projectId, relPaths, selected, isDir) => {

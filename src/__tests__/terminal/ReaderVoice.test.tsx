@@ -181,6 +181,49 @@ describe("dictating into the Chat's composer", () => {
     expect(runInstallInTab).not.toHaveBeenCalled();
   });
 
+  it("shows the model it listens with and switches to another installed one in place", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "voice_status") {
+        const s = status(true);
+        s.models.push({ id: "base", kind: "whisper", installed: true, sizeBytes: 60_000_000 });
+        return Promise.resolve(s);
+      }
+      if (command === "voice_listen_start") return Promise.resolve(11);
+      if (command === "agent_tab_transcript") return Promise.resolve({ available: true, version: "v1", entries: [{ kind: "prompt", text: "fix the parser", at: "2026-09-30T08:00:00Z" }] });
+      return Promise.resolve([]);
+    });
+    await composer(host);
+    await startMic();
+    const picker = screen.getByRole("button", { name: "Speech model" });
+    expect(picker.textContent).toMatch(/^Small · 190 MB.*installed/);
+    await act(async () => {
+      fireEvent.click(picker);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText(/^Base · 60 MB.*installed/));
+    });
+    expect(invoke).toHaveBeenCalledWith("voice_listen_stop", { session: 11 });
+    expect(invoke).toHaveBeenCalledWith("patch_settings", { patch: { voice_model: "base" } });
+    expect(invoke).toHaveBeenLastCalledWith("voice_listen_start", expect.objectContaining({ model: "base" }));
+    expect(runInstallInTab).not.toHaveBeenCalled();
+  });
+
+  it("stops the mic and opens the install card for a missing model picked while listening", async () => {
+    await composer(host);
+    await startMic();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Speech model" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText(/^Large v3 turbo/));
+    });
+    expect(screen.getByRole("button", { name: "Dictate" })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Install" }));
+    });
+    expect(invoke).toHaveBeenCalledWith("voice_model_install_script", { id: "large-v3-turbo" });
+  });
+
   it("warns about a muted mic, and drops the warning when sound returns", async () => {
     await composer(host);
     await startMic();

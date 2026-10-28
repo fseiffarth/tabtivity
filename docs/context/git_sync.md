@@ -113,8 +113,10 @@ the *why*.
     to the requested subtree, the transfer falls back to the SFTP path. Its
     flags hold rsync to the SFTP floor's rules against a host tree that changes
     after the walk (gap 35): no `-a` (so no links, devices, FIFOs, modes or
-    owners), no recursion past the list, `--max-size` at the 64 MiB cap, and only
-    a regular file within the cap is recorded in the manifest afterwards.
+    owners), no recursion past the list, `--max-size` at the largest listed
+    file, and only a regular file no larger than listed is recorded in the
+    manifest afterwards. A manual pull has no per-file cap: the SFTP path
+    streams a file over 64 MiB instead of reading it whole.
 - **Concurrent writers are serialized at their ownership boundary.** Every
   lockstep reconcile—poll, watcher, retry, checkout, pairing, resolve, or backup
   restore—takes the same per-project async guard before touching bundle paths or

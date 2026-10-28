@@ -102,10 +102,10 @@ export function StatusCluster() {
   const order = useSettingsStore((s) => s.settings?.header_order);
   const present = useHeaderSlotsStore((s) => s.present);
   // A drag that reached the chevron shows the folded icons until it ends
-  // (`HeaderSlot`); a drag of a foldable icon needs the chevron as its way in
-  // even when nothing is folded yet.
+  // (`HeaderSlot`); a drag needs the chevron as its way in even when nothing is
+  // folded yet.
   const foldPeek = useHeaderSlotsStore((s) => s.foldPeek);
-  const dragFoldable = useHeaderSlotsStore((s) => s.drag != null && s.drag.id !== "settings");
+  const dragFoldable = useHeaderSlotsStore((s) => s.drag != null);
   const [resourcePeek, setResourcePeek] = useState(0);
 
   useEffect(() => {

@@ -146,7 +146,7 @@ export function BoxScopeChip({
       cleanup();
       logoDragged.current = true;
       dismiss();
-      startWindowDrag();
+      startWindowDrag({ x: ev.clientX, y: ev.clientY });
     };
     const cleanup = () => {
       window.removeEventListener("mousemove", onMove);

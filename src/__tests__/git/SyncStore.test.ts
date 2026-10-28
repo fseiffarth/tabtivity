@@ -83,41 +83,29 @@ describe("sync store actions", () => {
     expect(pullArgs).toEqual({ projectId: "p1", relPath: "src/lib.rs" });
   });
 
-  it("pull and syncWholeProject return the files left on the host as too large", async () => {
-    const skipped = [{ rel: "data/big.bin", size: 70 * 1024 * 1024 }];
+  it("pull and syncWholeProject return how many files landed", async () => {
     invokeMock.mockImplementation(((cmd: string) =>
-      Promise.resolve(
-        cmd === "sync_pull" || cmd === "sync_whole_project"
-          ? { pulled: 2, skippedTooLarge: skipped }
-          : [],
-      )) as never);
-    expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 2, skippedTooLarge: skipped });
-    expect(await useSyncStore.getState().syncWholeProject("p1")).toEqual({
-      pulled: 2,
-      skippedTooLarge: skipped,
-    });
-    // An answer without the field (an older backend) reads as nothing skipped.
+      Promise.resolve(cmd === "sync_pull" || cmd === "sync_whole_project" ? { pulled: 2 } : [])) as never);
+    expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 2 });
+    expect(await useSyncStore.getState().syncWholeProject("p1")).toEqual({ pulled: 2 });
+    // A bare count (an older backend) still reads.
     invokeMock.mockImplementation(((cmd: string) =>
       Promise.resolve(cmd === "sync_pull" ? 3 : [])) as never);
-    expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 3, skippedTooLarge: [] });
+    expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 3 });
   });
 
-  it("resolveAll collects the files left on the host as too large and the failures", async () => {
-    const big = { rel: "data/big.bin", size: 70 * 1024 * 1024 };
+  it("resolveAll collects the failures", async () => {
     invokeMock.mockImplementation(((cmd: string, args?: { relPath?: string }) => {
       if (cmd !== "sync_pull") return Promise.resolve([]);
       if (args?.relPath === "data/bad.txt") return Promise.reject(new Error("gone"));
-      return Promise.resolve(
-        args?.relPath === "data/big.bin" ? { pulled: 0, skippedTooLarge: [big] } : { pulled: 1, skippedTooLarge: [] },
-      );
+      return Promise.resolve({ pulled: 1 });
     }) as never);
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(
       await useSyncStore.getState().resolveAll("p1", ["a.txt", "data/big.bin", "data/bad.txt"], "host"),
-    ).toEqual({ skipped: [big], failed: 1, firstError: "gone" });
+    ).toEqual({ failed: 1, firstError: "gone" });
     // The local side pushes; nothing is pulled, nothing reported.
     expect(await useSyncStore.getState().resolveAll("p1", ["a.txt"], "local")).toEqual({
-      skipped: [],
       failed: 0,
       firstError: null,
     });
@@ -129,7 +117,6 @@ describe("sync store actions", () => {
           : [],
       )) as never);
     expect(await useSyncStore.getState().resolveAll("p1", ["a.txt"], "local")).toEqual({
-      skipped: [],
       failed: 1,
       firstError: "denied",
     });

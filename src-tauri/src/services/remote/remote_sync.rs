@@ -34,10 +34,15 @@ use tokio::sync::Mutex;
 
 use crate::services::sftp::{self, SyncKind};
 
-/// Largest single file the sync will transfer (64 MiB). `read_file_on` buffers a
-/// whole file in RAM and holds the SFTP channel (G8), so a giant artifact is
-/// skipped with an error rather than stalling the connection / OOMing.
+/// Largest single file the sync moves whole in RAM (64 MiB). `read_file_on` buffers a
+/// whole file and holds the SFTP channel (G8), so auto-sync and every push refuse a
+/// giant artifact with an error rather than stalling the connection / OOMing. A
+/// manual pull streams a larger file instead ([`pull_file_any_size`]).
 pub const MAX_SYNC_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How long a streamed pull ([`pull_file_any_size`]) waits for the host's next
+/// chunk before the transfer counts as stalled.
+const STREAM_PULL_STALL: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// One manifest record for a project-relative path. The host/local size+mtime are
 /// the **bases** captured at the last successful pull/push — the reference the
@@ -1040,6 +1045,84 @@ where
     Ok((local_size, local_mtime))
 }
 
+/// [`pull_file`] for a manual pull, which takes a file of any size: one within
+/// [`MAX_SYNC_FILE_BYTES`] goes through `pull_file`, a larger one is streamed
+/// straight into the staged mirror file in bounded chunks, never whole in RAM.
+/// The preview the user confirmed priced those files in, so leaving them on
+/// the host made a 9 GB folder land as 4 GB.
+pub async fn pull_file_any_size(
+    sftp: &openssh_sftp_client::Sftp,
+    host_abs: &str,
+    host_size: u64,
+    host_mode: Option<u32>,
+    mirror_root: &Path,
+    rel: &str,
+) -> Result<(u64, Option<u64>), String> {
+    if host_size <= MAX_SYNC_FILE_BYTES {
+        return pull_file(sftp, host_abs, host_size, host_mode, mirror_root, rel).await;
+    }
+    let open = || async {
+        let file = sftp.open(host_abs).await.map_err(|e| format!("sftp open failed: {e}"))?;
+        let chunk = std::num::NonZeroUsize::new(sftp::STREAM_CHUNK).expect("a non-zero chunk");
+        Ok(openssh_sftp_client::file::TokioCompatFile::with_capacity(file, chunk))
+    };
+    pull_file_streamed_with(host_abs, host_size, host_mode, mirror_root, rel, STREAM_PULL_STALL, open).await
+}
+
+/// The streamed half of [`pull_file_any_size`] with the host open passed in
+/// (`open`, called once, after the mirror path is confined): the same
+/// confinement, modes and atomic replace as [`pull_file_with`], with the host's
+/// bytes copied chunk by chunk into the staged file. A file that grows past
+/// the `host_size` the walk listed is refused (a host swapping in an endless
+/// stream cannot fill the disk), and so is a chunk that takes longer than
+/// `stall`. Testable without a host.
+async fn pull_file_streamed_with<O, F, A>(
+    host_abs: &str,
+    host_size: u64,
+    host_mode: Option<u32>,
+    mirror_root: &Path,
+    rel: &str,
+    stall: std::time::Duration,
+    open: O,
+) -> Result<(u64, Option<u64>), String>
+where
+    O: FnOnce() -> F,
+    F: std::future::Future<Output = Result<A, String>>,
+    A: tokio::io::AsyncRead,
+{
+    use tokio::io::AsyncReadExt;
+    let local = confined_mirror_path(mirror_root, rel)?;
+    let parent = local.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    confined_mirror_path(mirror_root, rel)?;
+    let host = open().await?;
+    tokio::pin!(host);
+    // Dropped on any error below, which deletes it: the mirror keeps its old copy.
+    let mut staged = staged_mirror_file(parent, &local, host_mode)?;
+    let mut buf = vec![0u8; sftp::STREAM_CHUNK];
+    let mut total = 0u64;
+    loop {
+        let n = tokio::time::timeout(stall, host.as_mut().read(&mut buf))
+            .await
+            .map_err(|_| format!("'{host_abs}': the host sent nothing for {} s", stall.as_secs()))?
+            .map_err(|e| format!("sftp streaming read failed: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if total > host_size {
+            return Err(format!(
+                "'{host_abs}' grew past the {host_size} bytes listed while it was being pulled"
+            ));
+        }
+        staged.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+    }
+    staged.flush().map_err(|e| e.to_string())?;
+    staged.persist(&local).map_err(|e| e.error.to_string())?;
+    let meta = std::fs::metadata(&local).map_err(|e| e.to_string())?;
+    Ok(local_meta(&meta))
+}
+
 /// Write `bytes` to project-relative `rel` under `mirror_root`, confined to the
 /// mirror (#863): [`confined_mirror_path`] before creating the parent dirs and
 /// again after, so a directory symlink planted while they were being created is
@@ -1281,24 +1364,25 @@ fn rsync_e_quote(word: &str) -> String {
 /// that the preview/manifest walker skipped (nested repos and symlinks in
 /// particular). The rest is defence in depth against a host-side tree changing
 /// between the walk and rsync (gap 35): rsync must land exactly what the SFTP
-/// floor ([`pull_file`]) would — regular files of at most
-/// [`MAX_SYNC_FILE_BYTES`], default modes.
+/// floor ([`pull_file_any_size`]) would — regular files, default modes.
 /// - `-t -c` (not `-a`): keep timestamps and the checksum compare; no `-p`,
 ///   `-o`, `-g` (the floor writes default modes) and no `-l`/`-D`, spelled out
 ///   as `--no-links --no-devices --no-specials`, so a symlink, FIFO, socket or
 ///   device in the list is skipped by the receiving side.
-/// - `--max-size`: a file over the cap is skipped, as the floor refuses it.
+/// - `--max-size` at `max_size`, the largest file the walk listed: a file that
+///   grew past it on the host is skipped, as the floor refuses one that grows
+///   past its own listed size.
 /// - No `-r`: `--files-from` implies `--relative` and `--dirs`, which still
 ///   create each listed file's parent directories, but a listed path that has
 ///   become a directory is not descended into, so unlisted files never land.
-pub fn rsync_pull_flags(files_from: &Path) -> Vec<String> {
+pub fn rsync_pull_flags(files_from: &Path, max_size: u64) -> Vec<String> {
     vec![
         "-t".to_string(),
         "-c".to_string(),
         "--no-links".to_string(),
         "--no-devices".to_string(),
         "--no-specials".to_string(),
-        format!("--max-size={MAX_SYNC_FILE_BYTES}"),
+        format!("--max-size={max_size}"),
         "--exclude=/.git".to_string(),
         format!("--exclude={}", crate::brand::PROJECT_DIR),
         "--exclude=.git".to_string(),
@@ -1314,6 +1398,7 @@ pub fn rsync_pull_flags(files_from: &Path) -> Vec<String> {
 /// the ControlMaster transport and the two endpoints. Pure, unit-tested (it
 /// never touches the network). `_fast` is the proof both ends take
 /// `--protect-args`.
+#[allow(clippy::too_many_arguments)]
 pub fn rsync_pull_args(
     _fast: RsyncFastPath,
     user: &Option<String>,
@@ -1322,13 +1407,14 @@ pub fn rsync_pull_args(
     host_src: &str,
     local_dest: &str,
     files_from: &Path,
+    max_size: u64,
 ) -> Vec<String> {
     let host_src = rsync_literal_host_path(host_src);
     let target = match user {
         Some(u) => format!("{u}@{host}:{host_src}"),
         None => format!("{host}:{host_src}"),
     };
-    let mut args = rsync_pull_flags(files_from);
+    let mut args = rsync_pull_flags(files_from, max_size);
     args.extend([
         "-e".to_string(),
         rsync_ssh_transport(port),
@@ -1364,68 +1450,24 @@ fn rsync_literal_host_path(path: &str) -> String {
         .join("/")
 }
 
-/// Whether a host file of `host_size` bytes may ride the rsync fast path at
-/// all: the same cap the SFTP floor applies. The caller leaves larger files out
-/// of the `--files-from` list (`--max-size` is the second line).
-pub fn rsync_may_transfer(host_size: u64) -> bool {
-    host_size <= MAX_SYNC_FILE_BYTES
-}
-
-/// The files of a pull that may ride the rsync fast path: those within the
-/// cap ([`rsync_may_transfer`]), in walk order.
-pub fn rsync_transfer_list(files: &[HostFile]) -> Vec<HostFile> {
-    files.iter().filter(|file| rsync_may_transfer(file.size)).cloned().collect()
-}
-
-/// A host file a pull left on the host because it is over
-/// [`MAX_SYNC_FILE_BYTES`] (gap 35): project-relative path and host size.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkippedFile {
-    pub rel: String,
-    pub size: u64,
-}
-
-/// What a `sync_pull` / `sync_whole_project` did. The files over the cap used
-/// to be skipped with a stderr line only, and the pull still read as done;
-/// they are reported here, on the rsync and the SFTP path alike, for the UI
-/// to name. `skippedTooLarge` defaults to empty, so an older payload without
-/// it still reads.
+/// What a `sync_pull` / `sync_whole_project` did. A manual pull takes files of
+/// any size ([`pull_file_any_size`]), so nothing is left on the host for size.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullOutcome {
     /// Files that landed in the mirror and were recorded.
     pub pulled: usize,
-    /// Files over the cap left on the host, in walk order.
-    #[serde(default)]
-    pub skipped_too_large: Vec<SkippedFile>,
-}
-
-impl PullOutcome {
-    /// Count one file of the pull after its transport (`landed`: recorded in
-    /// the manifest). A file that did not land because the host walk listed it
-    /// over the cap is reported; one that failed for another reason (gone,
-    /// unreadable, not a regular file any more) stays a stderr line.
-    pub fn tally(&mut self, file: &HostFile, landed: bool) {
-        if landed {
-            self.pulled += 1;
-        } else if !rsync_may_transfer(file.size) {
-            self.skipped_too_large.push(SkippedFile { rel: file.rel.clone(), size: file.size });
-        }
-    }
 }
 
 /// The manifest base for a file rsync just wrote at `local`, or `None` to
 /// leave it unrecorded: only a regular file (lstat, so a symlink is not
-/// followed) within the cap counts, and only when the host walk listed it
-/// within the cap too. A FIFO, socket, device, directory or link a changing
-/// host tree slipped past the walk is never recorded as synced (gap 35).
+/// followed) no larger than the walk listed it counts. A FIFO, socket, device,
+/// directory or link a changing host tree slipped past the walk is never
+/// recorded as synced (gap 35), nor is a file that grew since — the floor
+/// refuses that one too.
 pub fn rsync_pulled_base(local: &Path, host_size: u64) -> Option<(u64, Option<u64>)> {
-    if !rsync_may_transfer(host_size) {
-        return None;
-    }
     let meta = std::fs::symlink_metadata(local).ok()?;
-    if !meta.file_type().is_file() || meta.len() > MAX_SYNC_FILE_BYTES {
+    if !meta.file_type().is_file() || meta.len() > host_size {
         return None;
     }
     Some(local_meta(&meta))
@@ -1552,6 +1594,7 @@ fn which_on_path(bin: &str) -> bool {
 /// `local_dest_dir`. Both get a trailing slash so the source's CONTENTS land in
 /// dest. Best-effort fast-path: returns `Err` on any failure so the caller falls
 /// back to the SFTP walker. Blocking shell-out, so call from `spawn_blocking`.
+#[allow(clippy::too_many_arguments)]
 pub fn rsync_pull_dir(
     fast: RsyncFastPath,
     user: &Option<String>,
@@ -1560,6 +1603,7 @@ pub fn rsync_pull_dir(
     host_src_dir: &str,
     local_dest_dir: &std::path::Path,
     files: &[String],
+    max_size: u64,
 ) -> Result<(), String> {
     if files.is_empty() {
         return Ok(());
@@ -1573,7 +1617,7 @@ pub fn rsync_pull_dir(
             .trim_end_matches(['/', '\\'])
     );
     let files_from = rsync_files_from(files)?;
-    let args = rsync_pull_args(fast, user, host, port, &src, &dest, files_from.path());
+    let args = rsync_pull_args(fast, user, host, port, &src, &dest, files_from.path(), max_size);
     let out = crate::paths::command_no_window("rsync")
         .args(&args)
         .output()

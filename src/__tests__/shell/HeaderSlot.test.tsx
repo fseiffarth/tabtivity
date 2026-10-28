@@ -10,6 +10,7 @@ import { headerPinDefaults, isHeaderPinned, toggleHeaderPin } from "../../lib/he
 import { MOBILE_HOST_KEY } from "../../lib/brand";
 import type { Settings } from "../../types";
 import { useHeaderSlotsStore } from "../../stores/headerSlots";
+import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useSettingsStore } from "../../stores/settings";
 
 const updateSettings = vi.fn(() => Promise.resolve());
@@ -17,6 +18,7 @@ const updateSettings = vi.fn(() => Promise.resolve());
 beforeEach(() => {
   localStorage.clear();
   useHeaderSlotsStore.setState({ present: {}, drag: null, foldPeek: false });
+  useHeaderHoverMenuStore.setState({ openId: null, held: false });
   useSettingsStore.setState({ settings: {} as never, updateSettings } as never);
 });
 
@@ -60,6 +62,9 @@ describe("headerPins", () => {
     expect(isHeaderPinned({ mobile: false }, "mobile", off)).toBe(false);
   });
 });
+
+const box = (left: number, width: number) =>
+  ({ left, right: left + width, width, top: 0, bottom: 40, height: 40, x: left, y: 0, toJSON() {} }) as DOMRect;
 
 describe("HeaderSlot", () => {
   it("keeps a pinned item in the bar and folds an unpinned one", () => {
@@ -111,8 +116,6 @@ describe("HeaderSlot", () => {
   });
 
   it("folds an icon dropped on the collapsed chevron, opening the folded icons on the way", () => {
-    const box = (left: number, width: number) =>
-      ({ left, right: left + width, width, top: 0, bottom: 40, height: 40, x: left, y: 0, toJSON() {} }) as DOMRect;
     render(
       <div>
         <HeaderSlot id="mail"><i data-testid="mail" /></HeaderSlot>
@@ -144,6 +147,60 @@ describe("HeaderSlot", () => {
     });
     // The peek ends with the drag; the saved collapsed state never changed.
     expect(battery.getAttribute("data-folded")).toBe("true");
+  });
+
+  it("folds the gear dropped on the chevron and keeps hover menus shut while dragging", () => {
+    render(
+      <div>
+        <HeaderSlot id="settings"><i data-testid="gear" /></HeaderSlot>
+        <div className="header-status-cluster">
+          <button className="status-cluster-toggle" data-testid="toggle" />
+        </div>
+      </div>,
+    );
+    screen.getByTestId("gear").parentElement!.getBoundingClientRect = () => box(0, 32);
+    screen.getByTestId("toggle").getBoundingClientRect = () => box(160, 30);
+    act(() => useHeaderHoverMenuStore.getState().open("settings"));
+
+    fireEvent.pointerDown(screen.getByTestId("gear").parentElement!, { button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 170, clientY: 10 });
+    expect(useHeaderHoverMenuStore.getState().openId).toBeNull();
+    act(() => useHeaderHoverMenuStore.getState().open("vpn"));
+    expect(useHeaderHoverMenuStore.getState().openId).toBeNull();
+    fireEvent.pointerUp(window, { clientX: 170, clientY: 10 });
+
+    expect(updateSettings).toHaveBeenCalledWith({
+      header_order: expect.arrayContaining(["status:settings"]),
+      header_pins: { settings: false },
+    });
+    act(() => useHeaderHoverMenuStore.getState().open("vpn"));
+    expect(useHeaderHoverMenuStore.getState().openId).toBe("vpn");
+  });
+
+  it("never drops a readout into the apps run", () => {
+    useSettingsStore.setState({ settings: { header_pins: { battery: true } } as never } as never);
+    render(
+      <div>
+        <HeaderSlot id="mail"><i data-testid="mail" /></HeaderSlot>
+        <div className="header-status-cluster">
+          <HeaderSlot id="vpn"><i data-testid="vpn" /></HeaderSlot>
+          <HeaderSlot id="battery"><i data-testid="battery" /></HeaderSlot>
+        </div>
+      </div>,
+    );
+    const left: Record<string, number> = { mail: 0, vpn: 80, battery: 120 };
+    document.querySelectorAll<HTMLElement>("[data-header-slot]").forEach((el) => {
+      el.getBoundingClientRect = () => box(left[el.dataset.headerSlot!], 32);
+    });
+    expect(screen.getByTestId("battery").parentElement!.dataset.readout).toBe("true");
+
+    fireEvent.pointerDown(screen.getByTestId("battery").parentElement!, { button: 0, clientX: 130, clientY: 10 });
+    fireEvent.pointerMove(window, { clientX: 2, clientY: 10 });
+    fireEvent.pointerUp(window, { clientX: 2, clientY: 10 });
+
+    const saved = (updateSettings.mock.calls[0] as unknown as [{ header_order: string[] }])[0].header_order;
+    expect(saved).not.toContain("apps:battery");
+    expect(saved.indexOf("battery")).toBeLessThan(saved.indexOf("vpn"));
   });
 
   it("reports whether it holds anything", async () => {

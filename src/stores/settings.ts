@@ -544,8 +544,15 @@ async function baseForWrite(): Promise<Partial<Settings>> {
  * backend-stale development session, fall back to the former whole-object
  * command only when the new command is genuinely unavailable. */
 async function persistSettingsPatch(patch: Partial<Settings>): Promise<Settings> {
+  // A key set to `undefined` means "back to the default", but JSON drops it, so
+  // the backend never heard of it and its merge kept the old value (the zoom
+  // reset to 100% snapped back to the previous zoom). Send it as `null`, which
+  // the merge reads as `None`.
+  const wire = Object.fromEntries(
+    Object.entries(patch).map(([key, value]) => [key, value === undefined ? null : value]),
+  );
   try {
-    const updated = await invoke<Settings | undefined>("patch_settings", { patch });
+    const updated = await invoke<Settings | undefined>("patch_settings", { patch: wire });
     if (updated) return updated;
   } catch (err) {
     const message = String(err);

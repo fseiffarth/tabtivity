@@ -116,7 +116,7 @@ describe("popouts come back with their scope", () => {
     useTabsStore.getState().setScope("B");
     await flush();
     expect(detachCalls()).toEqual([
-      { projectId: "B", groupId: "g-2", x: null, y: null, width: null, height: null },
+      { projectId: "B", groupId: "g-2", x: null, y: null, width: null, height: null, monitor: null },
     ]);
     const order = invokeMock.mock.calls.map((c) => c[0]);
     expect(order.indexOf("sync_detached_scope")).toBeLessThan(order.indexOf("detach_subwindow"));
@@ -125,7 +125,7 @@ describe("popouts come back with their scope", () => {
     useTabsStore.getState().setScope("A");
     await flush();
     expect(detachCalls()).toEqual([
-      { projectId: "A", groupId: "g-1", x: 10, y: 20, width: 700, height: 500 },
+      { projectId: "A", groupId: "g-1", x: 10, y: 20, width: 700, height: 500, monitor: null },
     ]);
   });
 

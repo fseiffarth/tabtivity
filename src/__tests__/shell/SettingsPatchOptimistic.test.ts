@@ -13,6 +13,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({ setZoom: () => Promise.resolve() }),
+}));
 
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
@@ -54,6 +57,17 @@ describe("updateSettings applies the patch before the write lands", () => {
       side_panel_edge: "left",
       side_panel_view: "git",
     });
+  });
+
+  it("sends a cleared key as null so the backend resets it", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "patch_settings" ? Promise.resolve({} as Settings) : Promise.resolve(undefined),
+    );
+    // Zoom back to 100% clears `ui_zoom`; JSON drops `undefined`, so without
+    // the null the backend kept the old zoom and the reset snapped back.
+    await useSettingsStore.getState().updateSettings({ ui_zoom: undefined });
+    const call = invoke.mock.calls.find(([cmd]) => cmd === "patch_settings");
+    expect(JSON.parse(JSON.stringify(call?.[1]))).toEqual({ patch: { ui_zoom: null } });
   });
 
   it("puts the previous state back when the write fails", async () => {

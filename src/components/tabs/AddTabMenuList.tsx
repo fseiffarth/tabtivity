@@ -36,8 +36,39 @@ export interface AddMenuEntry {
   moreEntries?: AddMenuEntry[];
   /** The fly-out's heading (defaults to the row's label). */
   moreTitle?: string;
+  /** Where else this row can start: a ▾ button at the row's right end opens
+   *  these as a fly-out (a remote project's machines for an agent row), while
+   *  the row itself keeps its one-click default. */
+  machineEntries?: AddMenuEntry[];
+  /** The ▾ button's tooltip and the machine fly-out's heading. */
+  machineTitle?: string;
   onPick: () => void;
 }
+
+/** A fly-out beside the menu: its heading, rows and the control it hangs off. */
+interface Flyout {
+  label: string;
+  entries: AddMenuEntry[];
+  anchor: DOMRect;
+}
+
+/** Place a fly-out against its anchor, flipping to the left when there is no
+ *  room on the right, and clamped into the window vertically. */
+function flyoutPos(anchor: DOMRect, el: HTMLElement): { left: number; top: number } {
+  const rect = el.getBoundingClientRect();
+  const margin = 8;
+  let left = anchor.right + 4;
+  if (left + rect.width > window.innerWidth - margin) {
+    left = Math.max(margin, anchor.left - 4 - rect.width);
+  }
+  const top = Math.max(margin, Math.min(anchor.top, window.innerHeight - margin - rect.height));
+  return { left, top };
+}
+
+/** How long the pointer rests on a row with machines before its list opens,
+ *  and how long a hover-opened list outlives the pointer leaving it. */
+const HOVER_OPEN_MS = 150;
+const HOVER_CLOSE_MS = 250;
 
 /** One labelled section of the add-tab menu. */
 export interface AddMenuGroup {
@@ -53,6 +84,29 @@ export interface AddMenuGroup {
   /** Non-pickable explainer rendered when the group has no entries (only while
    *  the search box is empty — a hint is not a search result). */
   hint?: string;
+}
+
+/** One row of a fly-out: no cursor of its own, a click picks it. */
+function flyoutRow(e: AddMenuEntry) {
+  return (
+    <button
+      key={e.key}
+      className={`tab-new-menu-item${isUntested(e.untested) ? " untested" : ""}`}
+      disabled={e.disabled}
+      onClick={e.onPick}
+    >
+      <span className="tab-new-menu-dot" style={{ color: e.color }}>
+        {e.dot ?? "●"}
+      </span>
+      {e.label}
+      {e.caution && (
+        <span className="tab-new-menu-caution" title={e.caution} aria-label={e.caution}>
+          <WarningIcon />
+        </span>
+      )}
+      {e.untested && <UntestedTag id={e.untested} />}
+    </button>
+  );
 }
 
 /**
@@ -75,14 +129,24 @@ export interface AddMenuGroup {
 export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   const t = useT();
   const [query, setQuery] = useState("");
-  const [moreMenu, setMoreMenu] = useState<{
-    label: string;
-    entries: AddMenuEntry[];
-    anchor: DOMRect;
-  } | null>(null);
+  const [moreMenu, setMoreMenu] = useState<Flyout | null>(null);
   const [morePos, setMorePos] = useState<{ left: number; top: number } | null>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const moreTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  // A row's machine list (its ▾): a fly-out of its own, so one opened from a
+  // row inside "More agents…" leaves that list standing beside it. `hover`:
+  // the pointer resting on the row opened it, so it leaves focus in the
+  // search box and closes again when the pointer moves off both.
+  const [machineMenu, setMachineMenu] = useState<(Flyout & { key: string; hover?: boolean }) | null>(null);
+  const [machinePos, setMachinePos] = useState<{ left: number; top: number } | null>(null);
+  const machineMenuRef = useRef<HTMLDivElement>(null);
+  const caretRefs = useRef(new Map<string, HTMLButtonElement>());
+  // One pending hover open/close at a time: the delay lets a pointer sweep
+  // across rows (or cut diagonally into the fly-out) without the list
+  // flickering between agents.
+  const hoverTimer = useRef<number | undefined>(undefined);
+  const clearHover = () => window.clearTimeout(hoverTimer.current);
+  useEffect(() => clearHover, []);
   const q = query.trim().toLowerCase();
 
   // Fly-out triggers are keyed `<group>/<row key>`: a group can hold more than
@@ -90,7 +154,38 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   const openMoreMenu = (label: string, entries: AddMenuEntry[], anchor?: HTMLButtonElement | null) => {
     if (!anchor) return;
     setMorePos(null);
+    setMachineMenu(null);
     setMoreMenu({ label, entries, anchor: anchor.getBoundingClientRect() });
+  };
+  const openMachineMenu = (entry: AddMenuEntry, anchor?: HTMLButtonElement | null, hover = false) => {
+    clearHover();
+    if (!anchor || !entry.machineEntries) return;
+    setMachinePos(null);
+    setMachineMenu({
+      key: entry.key,
+      label: entry.machineTitle ?? entry.label,
+      entries: entry.machineEntries,
+      anchor: anchor.getBoundingClientRect(),
+      hover,
+    });
+  };
+  // Resting on a row with machines opens its list; leaving it (for anything
+  // but the list) closes a list the hover opened. A clicked list stays.
+  const hoverMachines = (entry: AddMenuEntry) => {
+    clearHover();
+    if (entry.disabled || machineMenu?.key === entry.key) return;
+    hoverTimer.current = window.setTimeout(
+      () => openMachineMenu(entry, caretRefs.current.get(entry.key), true),
+      HOVER_OPEN_MS,
+    );
+  };
+  const leaveMachines = () => {
+    clearHover();
+    if (!machineMenu?.hover) return;
+    hoverTimer.current = window.setTimeout(
+      () => setMachineMenu((m) => (m?.hover ? null : m)),
+      HOVER_CLOSE_MS,
+    );
   };
 
   const visible = q
@@ -133,7 +228,11 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
 
   // A typed search is a new route to all entries; a stale adjacent menu would
   // only obscure its results, so it closes as soon as the query changes.
-  useEffect(() => setMoreMenu(null), [q]);
+  useEffect(() => {
+    clearHover();
+    setMoreMenu(null);
+    setMachineMenu(null);
+  }, [q]);
 
   // The menu is as wide as its longest label, so a query that filtered that
   // row out narrowed the whole menu, search box included, under the cursor.
@@ -153,16 +252,47 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   // compact parent sits against the right edge of the viewport.
   useLayoutEffect(() => {
     if (!moreMenu || !moreMenuRef.current) return;
-    const rect = moreMenuRef.current.getBoundingClientRect();
-    const margin = 8;
-    let left = moreMenu.anchor.right + 4;
-    if (left + rect.width > window.innerWidth - margin) {
-      left = Math.max(margin, moreMenu.anchor.left - 4 - rect.width);
-    }
-    const top = Math.max(margin, Math.min(moreMenu.anchor.top, window.innerHeight - margin - rect.height));
-    setMorePos({ left, top });
+    setMorePos(flyoutPos(moreMenu.anchor, moreMenuRef.current));
     moreMenuRef.current.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
   }, [moreMenu]);
+  useLayoutEffect(() => {
+    if (!machineMenu || !machineMenuRef.current) return;
+    setMachinePos(flyoutPos(machineMenu.anchor, machineMenuRef.current));
+    if (machineMenu.hover) return;
+    machineMenuRef.current.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [machineMenu]);
+
+  // A row with a machine list sits in a split: the row (its default start) and
+  // a ▾ beside it that opens the list. Two sibling buttons, never one nested in
+  // the other. Hovering either half opens the list too.
+  const withMachines = (e: AddMenuEntry, row: ReactNode) => {
+    if (!e.machineEntries) return row;
+    const title = e.machineTitle ?? e.label;
+    return (
+      <div
+        key={e.key}
+        className="tab-new-menu-split"
+        onPointerEnter={() => hoverMachines(e)}
+        onPointerLeave={leaveMachines}
+      >
+        {row}
+        <button
+          ref={(node) => {
+            if (node) caretRefs.current.set(e.key, node);
+            else caretRefs.current.delete(e.key);
+          }}
+          className={`tab-new-menu-item tab-new-menu-split-caret${machineMenu?.key === e.key ? " open" : ""}`}
+          disabled={e.disabled}
+          title={title}
+          aria-label={title}
+          aria-haspopup="menu"
+          onClick={(event) => openMachineMenu(e, event.currentTarget)}
+        >
+          ▾
+        </button>
+      </div>
+    );
+  };
 
   // The pickable rows in render order — what ↑/↓ walk. Disabled entries are
   // skipped rather than stepped over, so the cursor never lands somewhere
@@ -235,6 +365,14 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
             e.preventDefault();
             setMoved(true);
             setCursor(Math.max(0, pickable.length - 1));
+          } else if (
+            e.key === "ArrowRight" &&
+            active?.machineEntries &&
+            e.currentTarget.selectionStart === query.length
+          ) {
+            // → at the end of the query opens the highlighted row's machines.
+            e.preventDefault();
+            openMachineMenu(active, caretRefs.current.get(active.key));
           } else if (e.key === "Enter" && active) {
             e.preventDefault();
             if (active.moreEntries) {
@@ -260,7 +398,7 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
       {visible.map((g) => (
         <Fragment key={g.label}>
           <div className="tab-new-menu-group-label">{g.label}</div>
-          {g.entries.map((e) => (
+          {g.entries.map((e) => withMachines(e,
             <button
               key={e.key}
               ref={(node) => {
@@ -298,7 +436,7 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
               )}
               {e.untested && <UntestedTag id={e.untested} />}
               {e.shortcut && <MenuShortcut chord={e.shortcut} />}
-            </button>
+            </button>,
           ))}
           {g.entries.length === 0 && g.hint && (
             <div className="tab-new-menu-hint">{g.hint}</div>
@@ -318,25 +456,25 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
         >
           <div className="tab-new-menu-group-label">{moreMenu.label}</div>
           <div className="menu-scroll-region">
-            {moreMenu.entries.map((e) => (
-              <button
-                key={e.key}
-                className={`tab-new-menu-item${isUntested(e.untested) ? " untested" : ""}`}
-                disabled={e.disabled}
-                onClick={e.onPick}
-              >
-                <span className="tab-new-menu-dot" style={{ color: e.color }}>
-                  {e.dot ?? "●"}
-                </span>
-                {e.label}
-                {e.caution && (
-                  <span className="tab-new-menu-caution" title={e.caution} aria-label={e.caution}>
-                    <WarningIcon />
-                  </span>
-                )}
-                {e.untested && <UntestedTag id={e.untested} />}
-              </button>
-            ))}
+            {moreMenu.entries.map((e) => withMachines(e, flyoutRow(e)))}
+          </div>
+        </div>
+      )}
+      {machineMenu && (
+        <div
+          ref={machineMenuRef}
+          className="tab-new-menu tab-new-menu-more"
+          style={{
+            position: "fixed",
+            left: machinePos?.left ?? -10000,
+            top: machinePos?.top ?? -10000,
+          }}
+          onPointerEnter={clearHover}
+          onPointerLeave={leaveMachines}
+        >
+          <div className="tab-new-menu-group-label">{machineMenu.label}</div>
+          <div className="menu-scroll-region">
+            {machineMenu.entries.map(flyoutRow)}
           </div>
         </div>
       )}

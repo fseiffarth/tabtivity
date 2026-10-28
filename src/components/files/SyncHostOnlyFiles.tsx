@@ -6,13 +6,11 @@ import {
   useSyncStore,
   type HostNewScan,
   type SyncEntryStatus,
-  type SyncSkippedFile,
 } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { ErrorNote } from "../common/ErrorNote";
 import { ArrowDownIcon, SearchIcon, TrashIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
-import { SyncSkippedLarge } from "./SyncSkippedLarge";
 
 /**
  * The diverged view's **remote-only** section: files the host holds that the
@@ -38,14 +36,12 @@ export function SyncHostOnlyFiles({
   const [scan, setScan] = useState<HostNewScan | null>(null);
   const [scanning, setScanning] = useState(false);
   const [deleted, setDeleted] = useState<Set<string>>(() => new Set());
-  const [skipped, setSkipped] = useState<SyncSkippedFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // A snapshot of another project's host means nothing here.
   useEffect(() => {
     setScan(null);
     setDeleted(new Set());
-    setSkipped(null);
     setError(null);
   }, [projectId]);
 
@@ -56,7 +52,6 @@ export function SyncHostOnlyFiles({
   const runScan = async () => {
     setScanning(true);
     setError(null);
-    setSkipped(null);
     try {
       const result = await withHpcConfirm((confirmed) =>
         useSyncStore.getState().scanHostNew(projectId, confirmed),
@@ -83,9 +78,7 @@ export function SyncHostOnlyFiles({
     });
     if (!ok) return;
     setError(null);
-    setSkipped(null);
     const outcome = await useSyncStore.getState().resolveAll(projectId, paths, "host");
-    setSkipped(outcome.skipped);
     if (outcome.failed > 0)
       setError(t("projectFilesView.resolveFailed", { count: outcome.failed, error: outcome.firstError ?? "" }));
   };
@@ -166,13 +159,6 @@ export function SyncHostOnlyFiles({
         </div>
       )}
       {error && <ErrorNote className="project-files-sync-result" role="alert" error={error} />}
-      {skipped && skipped.length > 0 && (
-        <div className="project-files-sync-result" role="status">
-          <span>
-            <SyncSkippedLarge files={skipped} lead={false} />
-          </span>
-        </div>
-      )}
       {files.map((f) => (
         <div key={f.relPath} className="orange-file-row" title={f.relPath}>
           <span className="orange-file-name">

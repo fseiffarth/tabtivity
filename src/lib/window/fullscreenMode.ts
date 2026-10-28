@@ -28,6 +28,19 @@ import { create } from "zustand";
 
 export const useFullscreenMode = create<{ on: boolean }>(() => ({ on: false }));
 
+/** Leave this window's fullscreen mode (a logo drag out of it). Resolves once
+ *  the request reached the window; a refusal restores the record and throws. */
+export async function leaveWindowFullscreen(): Promise<void> {
+  const was = useFullscreenMode.getState().on;
+  useFullscreenMode.setState({ on: false });
+  try {
+    await getCurrentWindow().setFullscreen(false);
+  } catch (err) {
+    useFullscreenMode.setState({ on: was });
+    throw err;
+  }
+}
+
 /** Enter or leave this window's fullscreen mode. Best-effort: a WM that
  *  refuses leaves the record where the window actually is. */
 export async function toggleWindowFullscreen(): Promise<void> {

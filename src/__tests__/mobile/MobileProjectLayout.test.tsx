@@ -8,6 +8,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Project } from "../../../mobile-web/src/screens/Project";
+import { resetTips } from "../../../mobile-web/src/components/HintMessage";
 
 const fetchMock = vi.fn();
 
@@ -30,6 +31,7 @@ const agent = (id: string, label: string) => ({ id, label, kind: "agent", availa
 
 beforeEach(() => {
   localStorage.clear();
+  resetTips();
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -79,10 +81,9 @@ describe("Mobile project screen — layout", () => {
     serve([agent("a", "claude 1")], { agents: [{ id: "claude", label: "Claude", modes: [], default: true }] });
     const early = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     // The screen's tips share one spot, one card at a time: the ☰ one leads,
-    // and closing it with × leaves the spot empty for the visit.
+    // and closing it with Read leaves the spot empty for the visit.
     expect(await screen.findByText(/Tap ☰ to open/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("checkbox", { name: "Never show this message again" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close tip" }));
+    fireEvent.click(screen.getByRole("button", { name: "Read" }));
     expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
     early.unmount();
     const first = render(<Project id="p1" back={() => {}} terminal={() => {}} />);

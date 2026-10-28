@@ -2328,6 +2328,7 @@ pub fn run() {
             commands::subwindow::focus_detached_window,
             commands::subwindow::sync_detached_scope,
             commands::subwindow::detached_window_is_parked,
+            commands::subwindow::detached_window_screens,
             commands::subwindow::detached_retire_ack,
             commands::subwindow::detached_retire_ready,
             // The deck presenter's audience window (M#90)
@@ -2519,6 +2520,7 @@ pub fn run() {
             commands::agents::agent_tab_chats,
             commands::agents::agent_tab_resume_chat,
             commands::agents::agent_tab_move_session,
+            commands::agents::agent_tab_move_host,
             commands::ollama::ollama_status,
             commands::ollama::ollama_gpu_status,
             commands::ollama::ollama_models_dir_plan,

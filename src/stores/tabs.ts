@@ -33,6 +33,7 @@ import type {
   SavedLayoutTree,
   SavedTabEntry,
   ScopeSwitchSnapshot,
+  ScreenRect,
   SplitDir,
   SplitNode,
   TabEntry,
@@ -451,7 +452,8 @@ interface TabsStore {
   // IDENTIFIES the original rather than describing it is re-minted or dropped
   // (see `duplicateSpec`); `overrides` is for the one such field the store can't
   // mint synchronously, `hostBoundUid` (registering it is a backend round trip).
-  duplicateTab: (key: string, overrides?: Partial<TabEntry>) => TabEntry | null;
+  // Writes the scope that owns the tab, so the root console's menu can use it.
+  duplicateTab:(key: string, overrides?: Partial<TabEntry>) => TabEntry | null;
   ensureTab: (
     tab: Omit<TabEntry, "key">,
     matches: (tab: TabEntry) => boolean,
@@ -568,9 +570,9 @@ interface TabsStore {
   // The caller ends a tmux session the tab owns first, or the respawn would
   // just reattach to it ("Undo clear", `stores/agents/agentClearUndo`).
   // `patch` changes the tab's label and Tabby launch on the way (a chat's model
-  // switch, `switchAssistantModel`), or its folder (an agent moved to another
-  // worktree, `switchAgentWorktree`).
-  relaunchTabInScope: (scope: string, key: string, args: string[], patch?: Partial<Pick<TabEntry, "label" | "assistant" | "cwd">>) => void;
+  // switch, `switchAssistantModel`), its folder (an agent moved to another
+  // worktree, `switchAgentWorktree`) or its machine (`switchTabLocation`).
+  relaunchTabInScope: (scope: string, key: string, args: string[], patch?: Partial<Pick<TabEntry, "label" | "assistant" | "cwd" | "location">>) => void;
   // Swap the built-in viewer an embed tab renders its file with, in place — same
   // tab, same key, same position in the layout. `viewer` is persisted, so a tab
   // saved under a viewer choice the app has since revised comes back under the
@@ -1364,7 +1366,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
   },
 
   duplicateTab: (key, overrides) => {
-    const { tabs, layout } = currentScopeState(get());
+    // The scope that owns the tab: the root console's tabs are not the active
+    // scope's while it floats over a project.
+    const owner = scopeOfTab(get(), key);
+    const { tabs, layout } = scopeState(get(), owner);
     const source = tabs.find((t) => t.key === key);
     if (!source) return null;
     const found = findGroupOfTab(layout, key);
@@ -1374,16 +1379,13 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // up to a flush interval ago: merge what is still staged (§3.1).
     const spec = duplicateSpec({ ...source, viewerState: savedViewerState(source) });
     const entry: TabEntry = {
-      ...withTmuxSession(
-        withRunHostDefault(get().scope, { ...spec, ...overrides }),
-        get().scope,
-      ),
+      ...withTmuxSession(withRunHostDefault(owner, { ...spec, ...overrides }), owner),
       key: nextKeyValue,
       launchedAt: Date.now(),
     };
-    countTabOpen(get().scope, entry);
+    countTabOpen(owner, entry);
     set((s) => {
-      const { tabs: cur, layout: curLayout } = currentScopeState(s);
+      const { tabs: cur, layout: curLayout } = scopeState(s, owner);
       // Re-resolve inside the setter: the group (and the source's index in it)
       // may have moved between the read above and this write.
       const at = curLayout ? findGroupOfTab(curLayout, key) : null;
@@ -1394,7 +1396,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         tabKeys.splice(i + 1, 0, nextKeyValue);
         return { ...g, tabKeys, activeKey: nextKeyValue };
       });
-      return writeScope(s, s.scope, [...cur, entry], next, at.group.id);
+      return writeScope(s, owner, [...cur, entry], next, at.group.id);
     });
     return entry;
   },
@@ -3491,17 +3493,19 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       let changed = false;
       const next = entries.map((d) => {
         if (d.id !== groupId) return d;
+        const monitor = bounds.monitor ?? d.bounds?.monitor;
         if (
           d.bounds &&
           d.bounds.x === bounds.x &&
           d.bounds.y === bounds.y &&
           d.bounds.w === bounds.w &&
-          d.bounds.h === bounds.h
+          d.bounds.h === bounds.h &&
+          sameScreen(d.bounds.monitor, monitor)
         ) {
           return d;
         }
         changed = true;
-        return { ...d, bounds };
+        return { ...d, bounds: monitor ? { ...bounds, monitor } : bounds };
       });
       if (!changed) return {};
       return { detachedGroupsByScope: { ...s.detachedGroupsByScope, [scope]: next } };
@@ -3940,6 +3944,21 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
 const openingDetachedWindows = new Map<string, Promise<void>>();
 const detachedOpenDelays = [0, 300, 900, 1800, 3600, 7200, 15000, ...Array<number>(6).fill(30_000)];
 
+function sameScreen(a: ScreenRect | undefined, b: ScreenRect | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
+/** A saved screen in the shape `detach_subwindow` parses, else null: a garbled
+ *  one read back from disk must not fail the whole respawn. */
+export function screenArg(m: unknown): ScreenRect | null {
+  if (!m || typeof m !== "object") return null;
+  const { x, y, w, h } = m as Record<string, unknown>;
+  const int = (v: unknown): v is number => Number.isInteger(v);
+  if (!int(x) || !int(y) || !int(w) || !int(h) || w <= 0 || h <= 0) return null;
+  return { x, y, w, h };
+}
+
 function openDetachedWindow(scope: string, groupId: string): Promise<void> {
   const label = `detached-${scope}-${groupId}`;
   const pending = openingDetachedWindows.get(label);
@@ -3959,6 +3978,7 @@ function openDetachedWindow(scope: string, groupId: string): Promise<void> {
           y: b?.y ?? null,
           width: b?.w ?? null,
           height: b?.h ?? null,
+          monitor: screenArg(b?.monitor),
         });
         return;
       } catch {

@@ -166,22 +166,20 @@ locally and once per host, `remote_sync::rsync_fast_path`), fed the exact file
 list the host walker produced; otherwise per-file SFTP — macOS's
 `/usr/bin/rsync` (2.6.9 or openrsync) always takes SFTP. rsync lands only
 what SFTP would: `-t -c --no-links --no-devices --no-specials
---max-size=<64 MiB>`, no `-a` and no recursion past the list
-(`remote_sync::rsync_pull_flags`), files over the cap left out of the list, and
-only a regular file within the cap recorded afterwards. Any rsync error (an old
+--max-size=<largest listed file>`, no `-a` and no recursion past the list
+(`remote_sync::rsync_pull_flags`), and only a regular file no larger than the
+walk listed it recorded afterwards. Any rsync error (an old
 or foreign rsync refusing a flag included) falls back to SFTP. The SFTP path
 gives each mirror copy the host file's permission bits through the umask (what
 rsync gives a new file), so a host `0755` script stays executable; with no host
 mode it keeps the mirror copy's own. Never a setuid/setgid/sticky bit, from
 either side. Locally edited
-files it overwrites are logged. Files over the 64 MiB cap stay on the host on
-either path; the pull returns them (`remote_sync::PullOutcome`:
-`pulled` + `skippedTooLarge`, path and size), and the result line under the
-Remote tree (a folder Pull, *Sync all*, a *take host* in the push-conflict
-queue), or atop the diverged (orange) view for its *take host* per row and
-for all, says "N file(s) over 64 MiB were not pulled" with the list
-(`SyncSkippedLarge`, folded past three). Copy such a file by hand (`scp`,
-`rsync`) if the mirror needs it.
+files it overwrites are logged. A manual pull takes files of any size: SFTP
+reads one within the 64 MiB RAM cap whole and streams a larger one in 256 KiB
+chunks into the staged mirror file (`remote_sync::pull_file_any_size`), refused
+if it grows past its listed size or the host sends nothing for 120 s. They used
+to stay on the host, so a 9 GB folder of checkpoints landed as 4 GB. Auto-sync
+keeps the cap (its per-file timeout is sized for it), as does every push.
 
 **Push** (`sync_push`, *Push all* in the Local tree): for each file the host is
 re-stat'd; a host that moved since the base **blocks** that file and returns it
@@ -381,7 +379,7 @@ into the mirror.
 | lockstep *disconnected* | the pool is cold | reconnect; nothing was claimed or written |
 | *Files changed on your local copy* dialog | a fast-forward, checkout, reset, or confirmed pull removed or overwrote mirror files | read the entry; git-side losses name the restore command |
 | pull/push of one file "did nothing" | it is lockstep-owned or excluded — the command now says which | commit it / include it |
-| a pulled folder lacks a big file | over the 64 MiB cap; the pull's result line names it | copy it by hand |
+| an auto-synced big file stays orange | auto-sync moves at most 64 MiB per file | pull it by hand (no cap) |
 
 ## 7. Verifying a change
 

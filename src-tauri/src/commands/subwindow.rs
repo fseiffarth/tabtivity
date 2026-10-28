@@ -247,6 +247,10 @@ pub async fn detach_subwindow(
     y: Option<f64>,
     width: Option<f64>,
     height: Option<f64>,
+    // Native Wayland: the screen the saved layout recorded for it at the last
+    // quit (`detached_window_screens`), GDK's logical rect. Ignored elsewhere,
+    // and once this run has a record of its own.
+    monitor: Option<MonitorRect>,
 ) -> Result<String, String> {
     let label = detached_label(&project_id, &group_id);
 
@@ -286,7 +290,16 @@ pub async fn detach_subwindow(
     // store's rect is unreliable (a Wayland popout never learns its position, so
     // its bounds stream rarely flushes), which is why the backend's own capture
     // wins on Wayland. Elsewhere it is only the fallback for a caller with none.
-    let saved = win_registry.lock_ok().detached_bounds.get(&label).copied();
+    //
+    // The first respawn after a restart has no capture yet: it takes the screen
+    // and size the saved layout kept from the last quit, so it too comes back on
+    // its own screen rather than the pointer's.
+    let saved = win_registry
+        .lock_ok()
+        .detached_bounds
+        .get(&label)
+        .copied()
+        .or_else(|| restart_bounds(window_positions_readable(), width, height, monitor));
     let saved_size = saved.map(|b| (f64::from(b.w), f64::from(b.h)));
     // A Wayland respawn (the scope just came back) must not take the focus
     // the user is typing into in the main window.
@@ -432,6 +445,31 @@ pub async fn detach_subwindow(
     Ok(label)
 }
 
+/// The Wayland record a restart respawns from: the saved layout's screen and
+/// size, when this run has no capture of its own. Nothing where positions are
+/// readable (the saved rect places it) or without a screen and a real size.
+fn restart_bounds(
+    positions_readable: bool,
+    width: Option<f64>,
+    height: Option<f64>,
+    monitor: Option<MonitorRect>,
+) -> Option<crate::commands::apps::DetachedBounds> {
+    if positions_readable {
+        return None;
+    }
+    let (monitor, w, h) = (monitor?, width?, height?);
+    if !(w >= 1.0 && h >= 1.0 && w.is_finite() && h.is_finite()) || monitor.w == 0 || monitor.h == 0 {
+        return None;
+    }
+    Some(crate::commands::apps::DetachedBounds {
+        x: 0,
+        y: 0,
+        w: w as u32,
+        h: h as u32,
+        monitor: Some(monitor),
+    })
+}
+
 /// Force a fresh popout's first paint shortly after creation, deferred on a
 /// thread so the webview has mounted. The window stays mapped throughout, so
 /// the X11 id `detach_subwindow` resolved remains valid.
@@ -536,23 +574,120 @@ enum HopAction {
     Nothing,
     Unfullscreen,
     RestoreSize,
+    /// Past [`MONITOR_HOP_TIMEOUT`]: leave fullscreen wherever it is and take
+    /// the size back, rather than stay a fullscreen window.
+    GiveUp,
 }
 
-/// One GTK window-state report during the round trip. Pure, so the order the
-/// reports arrive in is unit-tested without a compositor.
+/// What the client can see of its window at one look during the round trip.
 #[cfg(any(target_os = "linux", test))]
-fn monitor_hop_step(hop: MonitorHop, fullscreen: bool) -> (MonitorHop, HopAction) {
+#[derive(Clone, Copy, Debug)]
+struct HopView {
+    /// GTK's FULLSCREEN state.
+    fullscreen: bool,
+    /// GDK's monitor index for the surface (`monitor_at_window`).
+    answer: Option<usize>,
+    /// What GDK would answer had the surface entered no output
+    /// ([`gdk_fallback_monitor`]).
+    guess: Option<usize>,
+    /// Since the window was asked fullscreen and shown.
+    elapsed: std::time::Duration,
+}
+
+/// The whole round-trip decision for one look, from a window-state report or
+/// the poll: the shown proof ([`entered_target`], else the unproven delay),
+/// the step, and the give-up past the timeout. Pure; the compositor model in
+/// the tests drives it the way `present_on_monitor` does.
+#[cfg(any(target_os = "linux", test))]
+fn hop_tick(hop: MonitorHop, view: HopView, target: usize) -> (MonitorHop, HopAction) {
+    if hop == MonitorHop::Done {
+        return (hop, HopAction::Nothing);
+    }
+    if view.elapsed >= MONITOR_HOP_TIMEOUT {
+        return (MonitorHop::Done, HopAction::GiveUp);
+    }
+    let shown = hop == MonitorHop::Entering
+        && view.fullscreen
+        && entered_target(view.answer, view.guess, target)
+            .unwrap_or(view.elapsed >= MONITOR_HOP_UNPROVEN_DELAY);
+    monitor_hop_step(hop, view.fullscreen, shown)
+}
+
+/// One look at the round trip: GTK's fullscreen state and whether the
+/// compositor has shown the window on its screen yet. Pure, so the order the
+/// reports arrive in is unit-tested without a compositor.
+///
+/// It leaves fullscreen only once SHOWN. GTK reports fullscreen from the first
+/// configure, before the window's first buffer, and Mutter places a window
+/// that leaves fullscreen before it was ever shown on the pointer's screen
+/// (`meta_window_place`: `showing_for_first_time` → the current monitor) — the
+/// main window's, right after the switch. That is how every respawn came back
+/// beside the main window.
+#[cfg(any(target_os = "linux", test))]
+fn monitor_hop_step(hop: MonitorHop, fullscreen: bool, shown: bool) -> (MonitorHop, HopAction) {
     match (hop, fullscreen) {
-        (MonitorHop::Entering, true) => (MonitorHop::Leaving, HopAction::Unfullscreen),
+        (MonitorHop::Entering, true) if shown => (MonitorHop::Leaving, HopAction::Unfullscreen),
         (MonitorHop::Leaving, false) => (MonitorHop::Done, HopAction::RestoreSize),
         (hop, _) => (hop, HopAction::Nothing),
     }
 }
 
+/// Which monitor GDK answers for a toplevel that has entered no output yet:
+/// `gdk_display_get_monitor_at_window`'s geometric fallback, which on Wayland
+/// sees every toplevel at (0,0) — the largest overlap of `(0,0,w,h)`, first
+/// one on a tie, else the one holding its centre. `None`: no monitor matches.
+#[cfg(any(target_os = "linux", test))]
+fn gdk_fallback_monitor(w: i32, h: i32, monitors: &[MonitorRect]) -> Option<usize> {
+    let overlap = |m: &MonitorRect| {
+        let iw = (m.x + m.w as i32).min(w) - m.x.max(0);
+        let ih = (m.y + m.h as i32).min(h) - m.y.max(0);
+        i64::from(iw.max(0)) * i64::from(ih.max(0))
+    };
+    let mut best: Option<(usize, i64)> = None;
+    for (i, m) in monitors.iter().enumerate() {
+        let area = overlap(m);
+        if area > best.map_or(0, |(_, a)| a) {
+            best = Some((i, area));
+        }
+    }
+    best.map(|(i, _)| i).or_else(|| {
+        let (cx, cy) = (w / 2, h / 2);
+        monitors.iter().position(|m| {
+            cx >= m.x && cy >= m.y && cx < m.x + m.w as i32 && cy < m.y + m.h as i32
+        })
+    })
+}
+
+/// Whether GDK's monitor for a surface proves the compositor has shown it on
+/// `target`: Mutter sends a surface `wl_surface.enter` only once its actor is
+/// on that output, and GDK's answer is that output from then on. `None` when
+/// the answer can't tell — `target` is also what GDK guesses for a surface
+/// that entered nothing.
+#[cfg(any(target_os = "linux", test))]
+fn entered_target(answer: Option<usize>, fallback: Option<usize>, target: usize) -> Option<bool> {
+    match answer {
+        Some(i) if i == target && fallback == Some(target) => None,
+        Some(i) => Some(i == target),
+        None => Some(false),
+    }
+}
+
 /// How long the round trip may take before the popout is simply dropped out of
-/// fullscreen and resized (a compositor that never confirms the fullscreen).
+/// fullscreen and resized (a compositor that never confirms the fullscreen, or
+/// never shows it). Generous: the respawn runs during a project switch.
+#[cfg(any(target_os = "linux", test))]
+const MONITOR_HOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// When [`entered_target`] can't tell, how long after the fullscreen the
+/// window counts as shown. Mutter shows a window within a frame of its first
+/// buffer; this leaves room for a loaded switch.
+#[cfg(any(target_os = "linux", test))]
+const MONITOR_HOP_UNPROVEN_DELAY: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// How often the round trip looks for the shown proof (GTK raises no signal
+/// for an output enter that doesn't change the scale).
 #[cfg(target_os = "linux")]
-const MONITOR_HOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const MONITOR_HOP_POLL: std::time::Duration = std::time::Duration::from_millis(40);
 
 /// Show a hidden Wayland respawn on the screen it was retired from, at `size`.
 ///
@@ -562,13 +697,14 @@ const MONITOR_HOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// the one it wants to be fullscreen ON (`gtk_window_fullscreen_on_monitor`,
 /// as the presenter does). Mutter places a window that was fullscreen from its
 /// first frame only when it leaves fullscreen, and places it then on the
-/// screen it is on (`unfullscreen_window` → `meta_window_place`, no longer
-/// "showing for the first time"). So the popout is shown fullscreen on its
-/// screen, dropped out of fullscreen as soon as GTK reports it, then given its
-/// size back. That round trip is a real OS resize, which is also what paints
-/// WebKitGTK's first frame, so no nudge. A screen that is gone → the main
-/// window's screen, the size capped to it; no screen to name at all → a plain
-/// show wherever the compositor puts it.
+/// screen it is on (`meta_window_unmake_fullscreen` → `meta_window_place`,
+/// once no longer "showing for the first time"). So the popout is shown
+/// fullscreen on its screen, dropped out of fullscreen once the compositor has
+/// shown it there ([`monitor_hop_step`]), then given its size back. That round
+/// trip is a real OS resize, which is also what paints WebKitGTK's first
+/// frame, so no nudge. A screen that is gone → the main window's screen, the
+/// size capped to it; no screen to name at all → a plain show wherever the
+/// compositor puts it.
 #[cfg(target_os = "linux")]
 fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: Option<Size>) {
     let on_main = app.clone();
@@ -618,42 +754,61 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
                 }
             }
         };
-        let hop = std::sync::Arc::new(std::sync::Mutex::new(MonitorHop::Entering));
-        let (on_event, restore_on_event) = (hop.clone(), restore.clone());
-        gtk_win.connect_window_state_event(move |w, ev| {
-            let fullscreen = ev
-                .new_window_state()
-                .contains(gtk::gdk::WindowState::FULLSCREEN);
-            let action = {
-                let mut hop = on_event.lock_ok();
-                let (next, action) = monitor_hop_step(*hop, fullscreen);
-                *hop = next;
-                action
-            };
-            match action {
-                HopAction::Unfullscreen => w.unfullscreen(),
-                HopAction::RestoreSize => restore_on_event(),
-                HopAction::Nothing => {}
+        let started = std::time::Instant::now();
+        let hop = std::rc::Rc::new(std::cell::Cell::new(MonitorHop::Entering));
+        // One look at the round trip ([`hop_tick`]), from a window-state report
+        // (its new state) or the poll (the window's current one).
+        let step = std::rc::Rc::new({
+            let (hop, gtk_win) = (hop.clone(), gtk_win.clone());
+            move |reported: Option<bool>| {
+                let gdk_win = gtk_win.window();
+                let fullscreen = reported.unwrap_or_else(|| {
+                    gdk_win
+                        .as_ref()
+                        .is_some_and(|w| w.state().contains(gtk::gdk::WindowState::FULLSCREEN))
+                });
+                let (answer, guess) = gdk_win.map_or((None, None), |gdk_win| {
+                    let d = gdk_win.display();
+                    let monitors: Vec<_> = (0..d.n_monitors()).map(|i| d.monitor(i)).collect();
+                    let answer = d
+                        .monitor_at_window(&gdk_win)
+                        .and_then(|m| monitors.iter().position(|o| o.as_ref() == Some(&m)));
+                    let none = MonitorRect { x: 0, y: 0, w: 0, h: 0 };
+                    let rects: Vec<MonitorRect> =
+                        monitors.iter().map(|m| m.as_ref().map_or(none, gdk_monitor_rect)).collect();
+                    (answer, gdk_fallback_monitor(gdk_win.width(), gdk_win.height(), &rects))
+                });
+                let view = HopView { fullscreen, answer, guess, elapsed: started.elapsed() };
+                let (next, action) = hop_tick(hop.get(), view, index as usize);
+                hop.set(next);
+                match action {
+                    HopAction::Unfullscreen => gtk_win.unfullscreen(),
+                    HopAction::RestoreSize => restore(),
+                    HopAction::GiveUp => {
+                        gtk_win.unfullscreen();
+                        restore();
+                    }
+                    HopAction::Nothing => {}
+                }
             }
+        });
+        let on_event = step.clone();
+        gtk_win.connect_window_state_event(move |_, ev| {
+            on_event(Some(ev.new_window_state().contains(gtk::gdk::WindowState::FULLSCREEN)));
             gtk::glib::Propagation::Proceed
         });
         gtk_win.fullscreen_on_monitor(&screen, index);
         let _ = win.show();
 
-        let fallback = on_main.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(MONITOR_HOP_TIMEOUT);
-            let on_main = fallback.clone();
-            let _ = fallback.run_on_main_thread(move || {
-                let prev = std::mem::replace(&mut *hop.lock_ok(), MonitorHop::Done);
-                if prev == MonitorHop::Done {
-                    return;
-                }
-                if let Some(Ok(gtk_win)) = on_main.get_webview_window(&label).map(|w| w.gtk_window()) {
-                    gtk_win.unfullscreen();
-                }
-                restore();
-            });
+        // GTK raises nothing when the surface enters its output, so look again
+        // until the round trip is over (or given up on).
+        gtk::glib::timeout_add_local(MONITOR_HOP_POLL, move || {
+            step(None);
+            if hop.get() == MonitorHop::Done {
+                gtk::glib::ControlFlow::Break
+            } else {
+                gtk::glib::ControlFlow::Continue
+            }
         });
     });
 }
@@ -1290,6 +1445,55 @@ fn remember_wayland_bounds(reg: &WindowRegistryState, win: &tauri::WebviewWindow
     );
 }
 
+/// One popout's screen and size for the saved layout (native Wayland).
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct DetachedScreen {
+    pub w: u32,
+    pub h: u32,
+    pub monitor: MonitorRect,
+}
+
+/// The screen and size each of `labels` has, for the saved layout to keep at
+/// quit so a restart respawns it there (`detach_subwindow`'s `monitor`). Native
+/// Wayland only — elsewhere the saved position already says it, and this
+/// answers nothing. A shown popout is read off GDK now; a retired or hidden
+/// one answers its last capture; one with neither is left out.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn detached_window_screens(
+    app: AppHandle,
+    labels: Vec<String>,
+) -> std::collections::HashMap<String, DetachedScreen> {
+    if window_positions_readable() {
+        return Default::default();
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let on_main = app.clone();
+    let dispatched = app.run_on_main_thread(move || {
+        let reg = on_main.state::<WindowRegistryState>();
+        let mut out = std::collections::HashMap::new();
+        for label in labels {
+            let live = on_main
+                .get_webview_window(&label)
+                .filter(|w| w.is_visible().unwrap_or(false))
+                .and_then(|w| Some((gdk_monitor_of(&w)?, w.inner_size().ok()?)));
+            let screen = match live {
+                Some((monitor, size)) => Some(DetachedScreen { w: size.width, h: size.height, monitor }),
+                None => reg.lock_ok().detached_bounds.get(&label).and_then(|b| {
+                    Some(DetachedScreen { w: b.w, h: b.h, monitor: b.monitor? })
+                }),
+            };
+            if let Some(screen) = screen {
+                out.insert(label, screen);
+            }
+        }
+        let _ = tx.send(out);
+    });
+    if dispatched.is_err() {
+        return Default::default();
+    }
+    rx.await.unwrap_or_default()
+}
+
 /// The unsaved-work fallback, already marked parked by [`settle_retire`]:
 /// hide instead of close, so the unsaved buffer survives. Shown again by
 /// [`show_detached_windows`] when its scope returns. Hidden, not minimized: GTK
@@ -1807,15 +2011,194 @@ mod tests {
         use HopAction::*;
         use MonitorHop::*;
         // Reports before the fullscreen lands change nothing.
-        assert_eq!(monitor_hop_step(Entering, false), (Entering, Nothing));
-        assert_eq!(monitor_hop_step(Entering, true), (Leaving, Unfullscreen));
+        assert_eq!(monitor_hop_step(Entering, false, false), (Entering, Nothing));
+        // Fullscreen but not yet shown on its screen: leaving now would let
+        // Mutter place it on the pointer's screen.
+        assert_eq!(monitor_hop_step(Entering, true, false), (Entering, Nothing));
+        assert_eq!(monitor_hop_step(Entering, true, true), (Leaving, Unfullscreen));
         // A repeated fullscreen report does not ask twice.
-        assert_eq!(monitor_hop_step(Leaving, true), (Leaving, Nothing));
-        assert_eq!(monitor_hop_step(Leaving, false), (Done, RestoreSize));
+        assert_eq!(monitor_hop_step(Leaving, true, true), (Leaving, Nothing));
+        assert_eq!(monitor_hop_step(Leaving, false, false), (Done, RestoreSize));
         // Afterwards the popout is an ordinary window: a later fullscreen is
         // someone's own, never undone here.
-        assert_eq!(monitor_hop_step(Done, true), (Done, Nothing));
-        assert_eq!(monitor_hop_step(Done, false), (Done, Nothing));
+        assert_eq!(monitor_hop_step(Done, true, true), (Done, Nothing));
+        assert_eq!(monitor_hop_step(Done, false, false), (Done, Nothing));
+    }
+
+    fn rect(x: i32, y: i32, w: u32, h: u32) -> MonitorRect {
+        MonitorRect { x, y, w, h }
+    }
+
+    /// Mutter 50.1's side of a respawn's fullscreen hop, as its source reads,
+    /// with the timings a real switch can have. Times in ms after the popout
+    /// was asked fullscreen on `target` and shown.
+    struct Compositor {
+        monitors: Vec<MonitorRect>,
+        /// The screen under the pointer: the main window's, after the switch.
+        pointer: usize,
+        /// The first configure: GTK reports FULLSCREEN from here.
+        configure_at: u64,
+        /// Mutter shows the window (calc-showing after its first buffer).
+        shown_at: u64,
+        /// Then sends `wl_surface.enter` for the output.
+        enter_after: u64,
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Landing {
+        /// The screen Mutter placed it on when it left fullscreen.
+        placed: Option<usize>,
+        /// Size restores sent (exactly one wanted).
+        restores: u32,
+    }
+
+    /// Drive `policy` the way `present_on_monitor` does — a look at each
+    /// window-state report and at every 40 ms poll — against [`Compositor`].
+    /// Mutter's rule (`meta_window_unmake_fullscreen` → `meta_window_place`):
+    /// a window leaving fullscreen before it was ever shown is placed on the
+    /// pointer's screen (`showing_for_first_time` → current monitor), one
+    /// shown already on the screen it is fullscreen on.
+    fn land(
+        c: &Compositor,
+        target: usize,
+        policy: impl Fn(MonitorHop, HopView, usize) -> (MonitorHop, HopAction),
+    ) -> Landing {
+        let (w, h) = (900, 640);
+        let guess = gdk_fallback_monitor(w, h, &c.monitors);
+        let mut hop = MonitorHop::Entering;
+        let mut left_at: Option<u64> = None;
+        let mut out = Landing { placed: None, restores: 0 };
+        let mut now = 0;
+        while now <= 6000 && hop != MonitorHop::Done {
+            // GTK sees the unfullscreen confirmed on the next configure.
+            let fullscreen = now >= c.configure_at && left_at.is_none_or(|t| now < t + 10);
+            let entered = out
+                .placed
+                .or((now >= c.shown_at + c.enter_after).then_some(target));
+            let reported = now == c.configure_at || left_at.is_some_and(|t| now == t + 10);
+            if reported || now % 40 == 0 {
+                let view = HopView {
+                    fullscreen,
+                    answer: entered.or(guess),
+                    guess,
+                    elapsed: std::time::Duration::from_millis(now),
+                };
+                let (next, action) = policy(hop, view, target);
+                hop = next;
+                if matches!(action, HopAction::Unfullscreen | HopAction::GiveUp) && left_at.is_none() {
+                    left_at = Some(now);
+                    out.placed = Some(if now >= c.shown_at { target } else { c.pointer });
+                }
+                if matches!(action, HopAction::RestoreSize | HopAction::GiveUp) {
+                    out.restores += 1;
+                }
+            }
+            now += 10;
+        }
+        out
+    }
+
+    /// Two externals side by side; laptop panel + two externals; two externals
+    /// at different heights (nothing at the origin's right).
+    fn layouts() -> Vec<Vec<MonitorRect>> {
+        vec![
+            vec![rect(0, 0, 2560, 1440), rect(2560, 0, 2560, 1440)],
+            vec![rect(0, 0, 1920, 1200), rect(1920, 0, 2560, 1440), rect(4480, 0, 2560, 1440)],
+            vec![rect(0, 300, 1920, 1080), rect(1920, 0, 2560, 1440)],
+            vec![rect(2560, 0, 1920, 1080), rect(0, 0, 2560, 1440)],
+        ]
+    }
+
+    #[test]
+    fn the_old_hop_lands_on_the_pointers_screen_in_the_compositor_model() {
+        // The model finds the bug the user kept hitting: leaving fullscreen at
+        // GTK's first fullscreen report, before Mutter has shown the window.
+        let c = Compositor {
+            monitors: layouts()[0].clone(),
+            pointer: 0,
+            configure_at: 20,
+            shown_at: 60,
+            enter_after: 10,
+        };
+        let old = |hop, v: HopView, _| monitor_hop_step(hop, v.fullscreen, true);
+        assert_eq!(land(&c, 1, old).placed, Some(0));
+    }
+
+    #[test]
+    fn a_respawn_lands_on_its_own_screen_whatever_the_layout_and_timing() {
+        // (configure, shown, enter after shown): a quick show, a loaded
+        // switch, a very slow first frame.
+        let timings = [(10, 30, 10), (20, 200, 20), (30, 1500, 30), (50, 3000, 40)];
+        for monitors in layouts() {
+            let guess = gdk_fallback_monitor(900, 640, &monitors);
+            for target in 0..monitors.len() {
+                for pointer in (0..monitors.len()).filter(|&p| p != target) {
+                    for &(configure_at, shown_at, enter_after) in &timings {
+                        // Meant for the screen GDK guesses anyway, only the
+                        // unproven delay stands in for the proof.
+                        if guess == Some(target) && shown_at + enter_after >= 700 {
+                            continue;
+                        }
+                        let c = Compositor {
+                            monitors: monitors.clone(),
+                            pointer,
+                            configure_at,
+                            shown_at,
+                            enter_after,
+                        };
+                        assert_eq!(
+                            land(&c, target, hop_tick),
+                            Landing { placed: Some(target), restores: 1 },
+                            "monitors {monitors:?}, target {target}, pointer {pointer}, \
+                             timing {configure_at}/{shown_at}/{enter_after}",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_hop_the_compositor_never_shows_gives_up_once_at_the_timeout() {
+        let c = Compositor {
+            monitors: layouts()[0].clone(),
+            pointer: 0,
+            configure_at: 20,
+            shown_at: u64::MAX / 2,
+            enter_after: 0,
+        };
+        let out = land(&c, 1, hop_tick);
+        // It does not stay a fullscreen window: it leaves once, sized once.
+        assert_eq!(out.restores, 1);
+        assert!(out.placed.is_some());
+    }
+
+    #[test]
+    fn gdk_guesses_the_origin_monitor_for_a_surface_that_entered_none() {
+        // Two external screens side by side: every unentered toplevel "is" on
+        // the left one, whatever screen it is meant for.
+        let two = [rect(0, 0, 2560, 1440), rect(2560, 0, 2560, 1440)];
+        assert_eq!(gdk_fallback_monitor(900, 640, &two), Some(0));
+        // Laptop panel right of the externals, listed first.
+        let three = [rect(5120, 0, 1920, 1200), rect(0, 0, 2560, 1440), rect(2560, 0, 2560, 1440)];
+        assert_eq!(gdk_fallback_monitor(900, 640, &three), Some(1));
+        // Nothing covers the origin's window: the one holding its centre, or none.
+        let offset = [rect(0, 400, 1920, 1080), rect(1920, 0, 1920, 1080)];
+        assert_eq!(gdk_fallback_monitor(100, 100, &offset), None);
+        assert_eq!(gdk_fallback_monitor(100, 900, &offset), Some(0));
+    }
+
+    #[test]
+    fn only_an_answer_the_fallback_cannot_give_proves_the_screen_was_entered() {
+        // Meant for the right screen, GDK still guesses the left: not shown.
+        assert_eq!(entered_target(Some(0), Some(0), 1), Some(false));
+        // GDK answers the right screen, which it never guesses: shown there.
+        assert_eq!(entered_target(Some(1), Some(0), 1), Some(true));
+        // Meant for the screen GDK guesses anyway: can't tell.
+        assert_eq!(entered_target(Some(0), Some(0), 0), None);
+        // Entered another screen: not shown on its own.
+        assert_eq!(entered_target(Some(2), Some(0), 1), Some(false));
+        assert_eq!(entered_target(None, None, 1), Some(false));
     }
 
     #[test]
@@ -2023,5 +2406,19 @@ mod tests {
         assert!(detached_size(Some(900.0), Some(-1.0)).is_none());
         assert!(detached_size(None, Some(640.0)).is_none());
         assert!(detached_size(Some(900.0), None).is_none());
+    }
+
+    #[test]
+    fn a_wayland_restart_respawns_on_the_screen_the_layout_kept() {
+        let right = rect(2560, 0, 2560, 1440);
+        let b = restart_bounds(false, Some(900.0), Some(640.0), Some(right)).expect("a record");
+        assert_eq!((b.w, b.h, b.monitor), (900, 640, Some(right)));
+        // Readable positions: the saved rect places it, no screen record.
+        assert!(restart_bounds(true, Some(900.0), Some(640.0), Some(right)).is_none());
+        // No screen kept (an older layout) or no real size: the plain respawn.
+        assert!(restart_bounds(false, Some(900.0), Some(640.0), None).is_none());
+        assert!(restart_bounds(false, Some(0.0), Some(640.0), Some(right)).is_none());
+        assert!(restart_bounds(false, None, Some(640.0), Some(right)).is_none());
+        assert!(restart_bounds(false, Some(900.0), Some(640.0), Some(rect(0, 0, 0, 0))).is_none());
     }
 }

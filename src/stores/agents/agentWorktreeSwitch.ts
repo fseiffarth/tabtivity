@@ -87,12 +87,12 @@ const EXIT_WAIT_MS = 3_000;
  * one there. `failed`: the tab came back in its old folder. */
 export type WorktreeSwitchResult = "carried" | "fresh" | "failed";
 
-export async function switchAgentWorktree(
-  scope: string,
-  tab: TabEntry,
-  to: string,
-  label: string,
-): Promise<WorktreeSwitchResult> {
+/** Stop `tab`'s CLI before its conversation is moved: its own local tmux
+ * session ended (with `localSession`; never one it only attached to), the PTY
+ * killed and its exit waited for, as a CLI still running would write on into
+ * the conversation being moved. `false` when it could not be stopped. Shared
+ * with the locality switch (`agentLocationSwitch`). */
+export async function stopAgentTab(scope: string, tab: TabEntry, localSession: boolean): Promise<boolean> {
   const ptyId = `${scope}:${tab.key}`;
   let off = () => {};
   const exited = new Promise<void>((resolve) => {
@@ -102,18 +102,26 @@ export async function switchAgentWorktree(
       resolve();
     });
   });
-  let stopped = true;
   try {
-    // Never a session the tab only attached to.
-    const session = IS_HOST_WINDOWS || tab.tmuxAttach ? null : tab.tmuxSession;
+    const session = !localSession || IS_HOST_WINDOWS || tab.tmuxAttach ? null : tab.tmuxSession;
     if (session) await invoke("local_tmux_kill", { session });
     await invoke("pty_kill", { id: ptyId });
     await exited;
+    return true;
   } catch {
-    stopped = false;
+    return false;
   } finally {
     off();
   }
+}
+
+export async function switchAgentWorktree(
+  scope: string,
+  tab: TabEntry,
+  to: string,
+  label: string,
+): Promise<WorktreeSwitchResult> {
+  const stopped = await stopAgentTab(scope, tab, true);
   let moved: WorktreeSwitchResult = "failed";
   if (stopped) {
     try {

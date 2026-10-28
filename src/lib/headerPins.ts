@@ -6,7 +6,7 @@ import type { Settings } from "../types";
  * Which top-bar items stay in the bar and which fold behind the ‹ chevron.
  *
  * Every item a user may place has an id. By default the global apps and menus
- * (✉ 🗓 ☑ 📥 🧠 ?) and the VPN and Machines menus are pinned; the other
+ * (✉ 🗓 ☑ 📥 🧠 ? ⚙) and the VPN and Machines menus are pinned; the other
  * machine-state readouts (alerts, connection, battery, Mobile, CPU/RAM/GPU)
  * fold. `Settings.header_pins` holds only the user's overrides — `true` pins an
  * item, `false` folds it — so an id the user never touched follows this table
@@ -14,9 +14,8 @@ import type { Settings } from "../types";
  *
  * The one moving default is the phone icon (`headerPinDefaults`).
  *
- * The settings gear is an id so it can be dragged among the other icons, but it
- * is always pinned: it is the way back to every other setting, and a bar that
- * could hide it would need a second way in.
+ * The settings gear folds like any other icon: behind the chevron it is still
+ * one click away, and Settings also opens from keyboard steering.
  */
 export const HEADER_ITEM_IDS = [
   "mail",
@@ -45,6 +44,7 @@ const PINNED_BY_DEFAULT: ReadonlySet<HeaderItemId> = new Set([
   "inbox",
   "models",
   "help",
+  "settings",
   "vpn",
   "machines",
 ]);
@@ -76,7 +76,6 @@ export function isHeaderPinned(
   id: HeaderItemId,
   defaults: ReadonlySet<HeaderItemId> = PINNED_BY_DEFAULT,
 ): boolean {
-  if (id === "settings") return true;
   return pins?.[id] ?? defaults.has(id);
 }
 
@@ -105,6 +104,14 @@ export const HEADER_GROUPS = {
 
 export type HeaderGroup = keyof typeof HEADER_GROUPS;
 
+/** Plain status readouts — no menu, no click, only a tooltip. They move and fold
+ *  within the status cluster but never join the apps-and-menus run. */
+const HEADER_READOUT_IDS: ReadonlySet<HeaderItemId> = new Set(["conn", "battery"]);
+
+export function isHeaderReadout(id: HeaderItemId): boolean {
+  return HEADER_READOUT_IDS.has(id);
+}
+
 /** The group an item belongs to until the user drags it across. */
 export function headerGroupOf(id: HeaderItemId): HeaderGroup {
   return (Object.keys(HEADER_GROUPS) as HeaderGroup[]).find((g) =>
@@ -127,7 +134,7 @@ function parseOrder(order: readonly string[] | undefined): Placed[] {
     const id = (m ? m[2] : raw) as HeaderItemId;
     if (!(HEADER_ITEM_IDS as readonly string[]).includes(id) || seen.has(id)) continue;
     seen.add(id);
-    out.push({ id, group: m ? (m[1] as HeaderGroup) : headerGroupOf(id) });
+    out.push({ id, group: m && !isHeaderReadout(id) ? (m[1] as HeaderGroup) : headerGroupOf(id) });
   }
   return out;
 }
@@ -156,13 +163,14 @@ export function orderedHeaderIds(group: HeaderGroup, order: readonly string[] | 
 
 /** The saved order after moving `id` into `group`, in front of `beforeId`
  *  (`null`, or one not in that group → the end of it). Other groups' entries are
- *  kept as they were. */
+ *  kept as they were. A readout asked into `apps` stays in `status`. */
 export function moveHeaderItem(
   order: readonly string[] | undefined,
   id: HeaderItemId,
   beforeId: HeaderItemId | null,
   group: HeaderGroup = placedGroupOf(id, order),
 ): string[] {
+  if (isHeaderReadout(id)) group = "status";
   const ids = orderedHeaderIds(group, order).filter((x) => x !== id);
   const at = beforeId === null ? ids.length : ids.indexOf(beforeId);
   ids.splice(at < 0 ? ids.length : at, 0, id);

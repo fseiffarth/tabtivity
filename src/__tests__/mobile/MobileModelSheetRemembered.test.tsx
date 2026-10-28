@@ -7,7 +7,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
+import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -158,8 +158,7 @@ describe(`${BRAND.display} Mobile — the model sheet before the session draws i
     await act(async () => {});
 
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
-    await settle(400);
-    expect(FakeWebSocket.sent.slice(-2)).toEqual(["/model", "\r"]);
+    expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];
 
     // Nothing drawn yet, and the sheet already lists the remembered rows.
@@ -171,8 +170,7 @@ describe(`${BRAND.display} Mobile — the model sheet before the session draws i
 
     // The live picker lists Opus third: the walk goes there, from row 4.
     await paint(PICKER);
-    await settle(600);
-    expect(FakeWebSocket.sent).toEqual([UP, "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 600)).toEqual([UP, "\r"]);
     // Answered as soon as it was drawn: a list that never settled is not kept.
     await settle(700);
     expect(kept).toEqual([]);

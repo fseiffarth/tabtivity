@@ -1428,6 +1428,34 @@ pub async fn agent_tab_move_session(
     .map_err(|e| e.to_string())?
 }
 
+/// Take the conversation of a remote project's agent tab along when the tab
+/// changes where it runs (`services::agent_host_move`): `from` and `to` are a
+/// host id (`"primary"` or a worker's), unset for this machine. The window has
+/// stopped the tab's terminal; `tmux_session` is the tab's session on a host,
+/// ended here. `fresh` when the CLI cannot take it along and starts a new one.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_move_host(
+    agent: String,
+    project_id: String,
+    session_id: String,
+    from: Option<String>,
+    to: Option<String>,
+    tmux_session: Option<String>,
+    ctx: Ctx,
+) -> Result<crate::services::agent_relocate::Moved, String> {
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+    crate::services::agent_host_move::move_session(
+        pool,
+        &agent,
+        &project_id,
+        &session_id,
+        from.as_deref(),
+        to.as_deref(),
+        tmux_session.as_deref(),
+    )
+    .await
+}
+
 /// Read `agent`'s own usage panel by running its CLI's print mode once.
 ///
 /// Free in every sense that matters: the run is client-side (Claude's envelope

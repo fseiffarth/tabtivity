@@ -546,7 +546,7 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
  * and never changes.
  */
 /** An agent chat's tips, in the order they come (`HintQueue`). */
-const CHAT_TIPS: readonly HintKey[] = ["chatTools", "statusLine", "sendHold", "chatMenu", "sentFiles", "markup", "chatSwipe"];
+const CHAT_TIPS: readonly HintKey[] = ["composerAttach", "composerKeys", "composerPlanGoal", "composerClear", "composerCommit", "composerMic", "statusLamp", "statusModel", "statusMode", "statusWorktree", "sendHold", "chatMenu", "sentFiles", "markup", "chatSwipe"];
 const TABBY_TIPS: readonly HintKey[] = ["sendHold", "chatMenu", "chatSwipe"];
 
 function AskedCard({ questions, label, notAnswered, untested, time, press }: {

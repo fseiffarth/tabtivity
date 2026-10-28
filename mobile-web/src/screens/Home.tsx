@@ -12,6 +12,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { ThemeRow, ThemeSheet } from "../components/ThemePicker";
+import { TipsRow, TipsSheet, tipsOff } from "../components/TipsPicker";
 import { LanguageRow, LanguageSheet } from "../components/LanguagePicker";
 import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
@@ -100,6 +101,9 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   /** The phone's own theme (`theme.ts`); unset, it follows the desktop's. */
   const [theme, setTheme] = useState<PhoneTheme>(() => readPhoneTheme());
   const [themeSheet, setThemeSheet] = useState(false);
+  /** The tip cards' Turn off tips, undone here (`TipsPicker`). */
+  const [tipsAreOff, setTipsAreOff] = useState(tipsOff);
+  const [tipsSheet, setTipsSheet] = useState(false);
   const [pushSheet, setPushSheet] = useState(false);
   /** The header gear's sheet: the phone's own settings, kept off the page. */
   const [deviceSheet, setDeviceSheet] = useState(false);
@@ -107,7 +111,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   /** The Projects heading's ＋: a new project, made by name in the desktop's
    * projects folder (`NewProjectSheet`). */
   const [newProject, setNewProject] = useState(false);
-  const rowSheetOpen = languageSheet || themeSheet || speechLangSheet || pushSheet || markupInstructionSheet || markupOpenSheet;
+  const rowSheetOpen = languageSheet || themeSheet || tipsSheet || speechLangSheet || pushSheet || markupInstructionSheet || markupOpenSheet;
   const [push, setPush] = useState<HostPushState | null>(null);
   useEffect(() => {
     if (pushSupport() !== "supported") return;
@@ -236,7 +240,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       {offline
         ? <span className="home-offline" role="img" aria-label={connection}><span className="lamp off" aria-hidden="true" /><span aria-hidden="true">{connection}</span></span>
         : <span className="lamp" role="img" aria-label={connection} title={connection} />}
-      <button className="home-settings" aria-haspopup="dialog" aria-expanded={deviceSheet} aria-label={t("mobile.home.thisDevice")} title={t("mobile.home.thisDevice")} onClick={() => setDeviceSheet(true)}>
+      <button className="home-settings" aria-haspopup="dialog" aria-expanded={deviceSheet} aria-label={t("mobile.home.thisDevice")} title={t("mobile.home.thisDevice")} onClick={() => { setTipsAreOff(tipsOff()); setDeviceSheet(true); }}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
       </button>
     </header>
@@ -326,6 +330,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
         <ul className="option-list">
           <LanguageRow open={() => setLanguageSheet(true)} expanded={languageSheet} />
           <ThemeRow choice={theme} open={() => setThemeSheet(true)} expanded={themeSheet} />
+          <TipsRow off={tipsAreOff} open={() => setTipsSheet(true)} expanded={tipsSheet} />
           <li><button aria-haspopup="dialog" aria-expanded={speechLangSheet} onClick={() => setSpeechLangSheet(true)}>
             <span><strong>{t("mobile.speech.language")}{isUntested("mobile.speech.language") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{speechLangSummary(speechLang, t)}</small></span>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
@@ -360,6 +365,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
     {newProject && <NewProjectSheet onClose={() => setNewProject(false)} onCreated={(project) => { setNewProject(false); open(project.id); }} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}
+    {tipsSheet && <TipsSheet off={tipsAreOff} onChange={setTipsAreOff} onClose={() => setTipsSheet(false)} />}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
     {pushSheet && <NotificationsSheet onChange={setPush} onClose={() => setPushSheet(false)} />}
     {markupInstructionSheet && <MarkupInstructionSheet onChange={setMarkupInstruction} onClose={() => setMarkupInstructionSheet(false)} />}

@@ -85,6 +85,11 @@ thirty **Lessons** that walk you through real tasks in the real interface
 (adding a project, arranging tabs, the PDF and YAML viewers, TeX, printing,
 the calendar, mail, local models, boxes, containers, SSH projects, Mobile and
 more). **Show contextual hints** and **Reset hints** control the small tips.
+Each tip has **Turn off hints** (this switch turns them on again), **Skip**
+(closes it for now, its chance unchanged) and **Read**:
+every Read halves that tip's chance of showing again, until **Reset hints**
+brings them all back. On the phone the same buttons sit on each tip card, and
+**This device → Tips** turns tips on again or resets them.
 **Feature Guide** is a glossary of the interface.
 
 New features that have not been checked by hand yet wear an **untested** pill;

@@ -29,7 +29,7 @@ it("shows the final commit list, the note and a first-URL confirmation, and push
   expect(screen.getByText("0123456 → abcdef0")).toBeTruthy();
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Confirm URL and push" })); });
   expect(invoke).toHaveBeenCalledWith("git_push_mcp_decide", { id: "push-a", approve: true });
-  expect(onDecided).toHaveBeenCalledWith(expect.objectContaining({ status: "pushed" }));
+  expect(onDecided).toHaveBeenCalledWith(expect.objectContaining({ status: "pushed" }), true);
 });
 
 it("dismisses with the same command and surfaces a backend refusal", async () => {
@@ -90,7 +90,7 @@ it("renders an Allow CI card and allows through the same decide command", async 
   expect(screen.queryByRole("button", { name: "Push" })).toBeNull();
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Allow" })); });
   expect(invoke).toHaveBeenCalledWith("git_push_mcp_decide", { id: "ci-a", approve: true });
-  expect(onDecided).toHaveBeenCalledWith(expect.objectContaining({ status: "allowed" }));
+  expect(onDecided).toHaveBeenCalledWith(expect.objectContaining({ status: "allowed" }), true);
 });
 
 it("shows an allowed CI card's outcome and dismisses a waiting one", async () => {
@@ -103,4 +103,18 @@ it("shows an allowed CI card's outcome and dismisses a waiting one", async () =>
   render(<GitPushProposalCard proposal={ci} />);
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Dismiss" })); });
   expect(invoke).toHaveBeenCalledWith("git_push_mcp_decide", { id: "ci-b", approve: false });
+});
+
+it("closes a card the user approved once it is pushed, and leaves other pushed or failed cards", async () => {
+  const pending: GitPushProposal = { ...row, needs_url_confirm: false };
+  const other: GitPushProposal = { ...row, id: "push-other", status: "pushed", message: "Pushed develop to origin." };
+  invoke.mockImplementation((command: string, args: { id?: string }) => Promise.resolve(
+    command === "git_push_mcp_proposals" ? [pending, other]
+      : command === "git_push_mcp_decide" ? { ...pending, status: "pushed", message: "Pushed develop to origin." }
+        : { ...pending, id: args.id, cleared: true }));
+  await act(async () => { render(<GitPushProposals projectId="p" />); });
+  expect(invoke).not.toHaveBeenCalledWith("git_push_mcp_clear", expect.anything());
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Push" })); });
+  expect(invoke).toHaveBeenCalledWith("git_push_mcp_clear", { id: "push-a" });
+  expect(invoke).not.toHaveBeenCalledWith("git_push_mcp_clear", { id: "push-other" });
 });

@@ -10,6 +10,7 @@ import {
   startDesktopDictation,
   voiceErrorKey,
   voiceInputOffered,
+  voiceLangOptions,
   voiceLangTag,
   voiceModelInstallCommand,
   voiceStatus,
@@ -27,8 +28,8 @@ type Phase = "off" | "starting" | "preparing" | "listening";
 
 /**
  * Dictation for the Chat's composer (`ReaderComposer`, docs/desktop_voice_plan.md
- * step 3): the mic button beside Send, the "Heard:" line and the install card,
- * on the backend's speech engine (`lib/voice/desktopVoice`). A settled segment
+ * step 3): the mic button beside Send, the "Heard:" line, the pickers of the
+ * speech model it listens with and the language it listens in, and the install card, on the backend's speech engine (`lib/voice/desktopVoice`). A settled segment
  * goes to `onText`; the composer puts it in the draft and sends on a spoken
  * "go on". One mic per machine: starting it here stops it in any other tab,
  * whose session then ends.
@@ -52,6 +53,8 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
   const [problem, setProblem] = useState<TranslationKey | null>(null);
   /** The install card, while open: the catalog's speech models and the one picked. */
   const [install, setInstall] = useState<{ models: VoiceModelState[]; pick: VoiceModel } | null>(null);
+  /** While a session runs: the model it listens with and the catalog's speech models. */
+  const [using, setUsing] = useState<{ models: VoiceModelState[]; id: VoiceModel } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const session = useRef<DesktopDictation | null>(null);
   /** Bumped by every start and end, so a start that resolves late stops. */
@@ -63,16 +66,19 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
   const offered = voiceInputOffered();
 
   const model = settings?.voice_model ?? DEFAULT_VOICE_MODEL;
+  const langChoice = (settings?.voice_lang ?? "auto") as VoiceLangChoice;
 
   const reset = () => {
     session.current = null;
     paintMicLevel(buttonRef.current, null);
     setPhase("off");
     setHeard("");
+    setUsing(null);
   };
 
-  /** `use`: the model to listen with (the card's pick), else the setting's. */
-  const start = async (use: string = model) => {
+  /** `use`: the model to listen with (the card's pick), else the setting's;
+   * `lang`: the language choice to listen in, else the setting's. */
+  const start = async (use: string = model, lang: VoiceLangChoice = langChoice) => {
     const mine = ++attempt.current;
     setProblem(null);
     setInstall(null);
@@ -85,16 +91,18 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
         setPhase("off");
         return;
       }
-      const chosen = status.models.find((m) => m.id === use && m.kind === "whisper");
+      const whisper = status.models.filter((m) => m.kind === "whisper");
+      const chosen = whisper.find((m) => m.id === use);
       if (!chosen?.installed) {
-        setInstall({ models: status.models.filter((m) => m.kind === "whisper"), pick: use as VoiceModel });
+        setInstall({ models: whisper, pick: use as VoiceModel });
         setPhase("off");
         return;
       }
+      setUsing({ models: whisper, id: use as VoiceModel });
       const dictation = await startDesktopDictation({
         tabKey,
         model: use,
-        lang: voiceLangTag(settings?.voice_lang as VoiceLangChoice | undefined, uiLanguage),
+        lang: voiceLangTag(lang, uiLanguage),
         mode: "dictate",
         pauseMs: settings?.voice_pause_ms ?? VOICE_PAUSE_MS.default,
         headset: settings?.voice_headset ?? false,
@@ -162,6 +170,40 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
     session.current = null;
   }, [tabKey]);
 
+  /** The running session's picker: an installed model becomes the setting and
+   * listening starts over with it; a missing one opens the install card. */
+  const switchModel = async (id: VoiceModel) => {
+    const current = using;
+    if (!current || id === current.id) return;
+    end();
+    if (!current.models.some((m) => m.id === id && m.installed)) {
+      setInstall({ models: current.models, pick: id });
+      return;
+    }
+    try {
+      await updateSettings({ voice_model: id });
+    } catch (error) {
+      setProblem(voiceErrorKey(error));
+      return;
+    }
+    void start(id);
+  };
+
+  /** The running session's language picker: the pick becomes the setting and
+   * listening starts over in it, with the model it listened with. */
+  const switchLang = async (choice: VoiceLangChoice) => {
+    const current = using;
+    if (!current || choice === langChoice) return;
+    end();
+    try {
+      await updateSettings({ voice_lang: choice });
+    } catch (error) {
+      setProblem(voiceErrorKey(error));
+      return;
+    }
+    void start(current.id, choice);
+  };
+
   const pickedHere = (target: { models: VoiceModelState[]; pick: VoiceModel }) =>
     target.models.some((m) => m.id === target.pick && m.installed);
 
@@ -209,7 +251,30 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
     : phase === "preparing" ? t("terminal.reader.voice.preparing")
     : listening ? t("terminal.reader.voice.listening")
     : "";
-  const strip = (line || install) ? (
+  const picker = using && (phase === "preparing" || listening) ? (
+    <div className="terminal-reader-voice-model">
+      <span>{t("settings.voice.model")}</span>
+      <Dropdown
+        value={using.id}
+        ariaLabel={t("settings.voice.model")}
+        onChange={(value) => void switchModel(value as VoiceModel)}
+        options={VOICE_MODELS.map((id) => ({
+          value: id,
+          label: `${t(VOICE_MODEL_LABELS[id])}${using.models.some((m) => m.id === id && m.installed) ? ` · ${t("settings.voice.installed")}` : ""}`,
+        }))}
+      />
+      <UntestedTag id="terminal.reader.voice.modelPicker" />
+      <span>{t("settings.voice.lang")}</span>
+      <Dropdown
+        value={langChoice}
+        ariaLabel={t("settings.voice.lang")}
+        onChange={(value) => void switchLang(value as VoiceLangChoice)}
+        options={voiceLangOptions(t)}
+      />
+      <UntestedTag id="terminal.reader.voice.langPicker" />
+    </div>
+  ) : null;
+  const strip = (line || install || picker) ? (
     <div className="terminal-reader-voice">
       {install && (
         <div className="terminal-reader-voice-card" role="dialog" aria-label={t("terminal.reader.voice.installTitle")}>
@@ -239,6 +304,7 @@ export function useReaderVoice({ tabKey, visible, disabled, onText }: {
           {problem === "terminal.reader.voice.err.silent" && <UntestedTag id="terminal.reader.voice.silent" />}
         </div>
       )}
+      {picker}
     </div>
   ) : null;
 

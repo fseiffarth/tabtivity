@@ -103,6 +103,7 @@ class FakeWebSocket {
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { BRAND } from "../../lib/brand";
+import { keysSent } from "../helpers/mobileTerminalHost";
 
 const ESC = String.fromCharCode(27);
 const DOWN = `${ESC}[B`;
@@ -248,8 +249,7 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     within(question()).getByRole("button", { name: "Which model picker fails" });
     FakeWebSocket.sent = [];
     fireEvent.click(within(question()).getByText("Phone model sheet"));
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual(["3"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 1, 400)).toEqual(["3"]);
   });
 
   it("opens OpenCode's custom-answer editor before typing the Chat field's words", async () => {
@@ -265,8 +265,7 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     expect(FakeWebSocket.sent).toEqual([]);
     fireEvent.change(within(question()).getByRole("textbox", { name: "Your answer…" }), { target: { value: "Phone model sheet" } });
     fireEvent.click(within(question()).getByRole("button", { name: "Send" }));
-    await settle(600);
-    expect(FakeWebSocket.sent).toEqual(["2", "Phone model sheet", "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 3, 600)).toEqual(["2", "Phone model sheet", "\r"]);
   });
 
   it("lists the dialog's rows by their own numbers, and answers the one tapped", async () => {
@@ -293,8 +292,7 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     FakeWebSocket.sent = [];
     fireEvent.click(within(question()).getByText("Yes, allow all edits during this session"));
     // One row down from the highlight, then Enter — the arrow row's own keys.
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([DOWN, "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([DOWN, "\r"]);
 
     // The same row cannot be sent twice while the session catches up.
     FakeWebSocket.sent = [];
@@ -342,8 +340,7 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     expect(rows()).toHaveLength(3);
     FakeWebSocket.sent = [];
     fireEvent.click(within(question()).getByText("Yes, allow all edits during this session"));
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual([DOWN, "\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([DOWN, "\r"]);
   });
 
   it("shows a Codex question in the reading view's own type, without its card", async () => {
@@ -453,7 +450,6 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     // can no longer be answered, the rows go live again.
     await settle(6_500);
     fireEvent.click(within(question()).getByText("Yes"));
-    await settle(400);
-    expect(FakeWebSocket.sent).toEqual(["\r"]);
+    expect(await keysSent(() => FakeWebSocket.sent, 1, 400)).toEqual(["\r"]);
   });
 });

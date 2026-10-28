@@ -11,7 +11,7 @@ import {
   useGroup,
   useGroupTabs,
   type TabEntry,
-  type TabKind,
+  type TabLocation,
 } from "../../stores/tabs";
 import {
   PRINTING_TAB_CMD,
@@ -19,6 +19,7 @@ import {
   NETWORK_TAB_CMD,
   MONITOR_TAB_CMD,
   SKILLSLIBRARY_TAB_CMD,
+  canDuplicateTab,
 } from "../../stores/tabs/tabKinds";
 import type { AddTabOpts } from "../../stores/tabs/types";
 import { useDragStore } from "../../stores/drag/drag";
@@ -27,7 +28,7 @@ import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
 import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
-import { agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
+import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { AddTabMenuList, type AddMenuEntry, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
@@ -76,6 +77,7 @@ import { newDropToken, probeDropTarget } from "../../lib/window/dropClaim";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useProjectsStore } from "../../stores/projects";
+import { carriesAcrossHosts, switchTabLocation } from "../../stores/agents/agentLocationSwitch";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { closeTabWithConfirm } from "../../lib/remote/closeRemoteTab";
@@ -124,31 +126,6 @@ function playDetachFlyOut(
     dx,
     dy,
   });
-}
-
-/**
- * The panes the "+" menu opens through `ensureTab` — one per scope by
- * construction, because each renders a machine-global or store-global list that
- * a second copy would repeat verbatim (see `handleAddMonitor` and friends).
- * There is nothing for "Duplicate" to produce, so the item is **hidden** rather
- * than disabled: no state makes it available, and a permanently dead entry in a
- * five-item menu is worse than one that isn't there.
- */
-const SINGLETON_TAB_KINDS = new Set<TabKind>([
-  "projects3d",
-  "monitor",
-  "calendar",
-  "printing",
-  "skillslibrary",
-  "promptchart",
-]);
-
-/** Is a second tab like this one a thing that can exist? A Files (Project) tab
- *  counts as a singleton only at the project ROOT — one opened on a folder is
- *  its own view, exactly the distinction `handleAdd` draws. */
-function canDuplicateTab(tab: TabEntry): boolean {
-  if (SINGLETON_TAB_KINDS.has(tab.kind)) return false;
-  return !(isFileTabKind(tab.kind) && !tab.folder);
 }
 
 // Empty activity maps a bar without a tab group subscribes to (see `TabItem`).
@@ -515,7 +492,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const storeAddTab = useTabsStore((s) => s.addTab);
   const duplicateTab = useTabsStore((s) => s.duplicateTab);
   const storeEnsureTab = useTabsStore((s) => s.ensureTab);
-  const setTabLocation = useTabsStore((s) => s.setTabLocation);
   // Experimental — off until ticked: the in-app browser (#61). This is
   // the entry-point half of the gate; the other half is the withdrawal
   // (`lib/experimentalSweep`), which closes any browser tab already open when the
@@ -538,6 +514,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // subscribing to the references is fine.
   const primaryHost = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.remote?.host);
   const computeHosts = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.compute_hosts);
+  // A VM project's tabs are pinned to the VM, so its agents get no machine list.
+  const isVmScope = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.vm?.enabled);
+  const scopeProject = useProjectsStore((s) => s.projects.find((p) => p.id === scope));
   // Per-tab file source (remote-native vs local mirror), published by the file
   // viewers. Lets the Remote/Local badge ride on the viewer tab itself rather
   // than costing a whole viewer header row. Only meaningful on remote projects.
@@ -654,7 +633,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Right-click on a tab-group chip: its own menu (rename / ungroup / close).
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
-  const { promptText, dialogs } = useDialogs();
+  const { promptText, showMessage, dialogs } = useDialogs();
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   // The tabs live in their own horizontally-scrolling strip; chevrons flank it
@@ -799,6 +778,10 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     if (tabEl) revealTab(tabEl);
   }, [activeKey, tabs.length, revealTab]);
 
+  // A remote project's "+" agent rows each get a ▾ to start on a machine.
+  const addMenuMachines =
+    menuOpen && isRemoteScope && !isVmScope ? agentMachines({ primaryHost, computeHosts, t }) : undefined;
+
   function openAddMenu() {
     if (menuPos) { setMenuPos(null); return; }
     const r = addBtnRef.current?.getBoundingClientRect();
@@ -808,7 +791,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     setMenuPos({ x: r.left, y: r.bottom + 4 });
   }
 
-  function handleAdd(item: StaticMenuItem) {
+  function handleAdd(item: StaticMenuItem, location?: TabLocation) {
     // addTab/ensureTab insert into the focused group; focus this one first.
     focusGroup(groupId);
     // Both file panes are one-per-cwd: a second identical view of the same
@@ -834,7 +817,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     void worktreePicker.specFor(item).then((spec) => {
       if (!spec) return;
       focusGroup(groupId);
-      addTab(spec, place);
+      addTab(location ? { ...spec, location } : spec, place);
     });
   }
 
@@ -1827,6 +1810,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   customAgents,
                   pick: handleAdd,
                   pickCloud: handleAddCloud,
+                  machines: addMenuMachines,
                   defaultAgentBin,
                   agentOrder,
                   onAddCustom: () => {
@@ -1842,6 +1826,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     customAgents,
                     pick: handleAdd,
                     pickCloud: handleAddCloud,
+                    machines: addMenuMachines,
                     defaultAgentBin,
                     agentOrder,
                     onAddCustom: () => {
@@ -2067,17 +2052,28 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           <AgentScheduleDialog scope={scope} tab={tab} onClose={() => setScheduleDialogKey(null)} />
         ) : null;
       })()}
-      {localityMenu && (
-        <LocalityMenu
-          menu={localityMenu}
-          current={tabLocation(tabs.find((tb) => tb.key === localityMenu.key))}
-          primaryHost={primaryHost}
-          computeHosts={computeHosts}
-          onClose={() => setLocalityMenu(null)}
-          onChangeView={(view) => setLocalityMenu((m) => (m ? { ...m, view } : m))}
-          onChoose={(key, loc) => setTabLocation(key, loc)}
-        />
-      )}
+      {localityMenu && (() => {
+        const tab = tabs.find((tb) => tb.key === localityMenu.key);
+        return (
+          <LocalityMenu
+            menu={localityMenu}
+            current={tabLocation(tab)}
+            primaryHost={primaryHost}
+            computeHosts={computeHosts}
+            onClose={() => setLocalityMenu(null)}
+            onChangeView={(view) => setLocalityMenu((m) => (m ? { ...m, view } : m))}
+            carriesConversation={!!tab && carriesAcrossHosts(tab, scopeProject, tabLocation(tab) === "local" ? "remote" : "local")}
+            onChoose={(_key, loc) => {
+              if (!tab) return;
+              void switchTabLocation(scope, tab, loc).then((result) => {
+                if (result === "failed") {
+                  void showMessage({ title: t("tabLocality.moveFailedTitle"), body: t("tabLocality.moveFailedBody") });
+                }
+              });
+            }}
+          />
+        );
+      })()}
       {tabMenu && (
         <ContextMenuPortal
           x={tabMenu.x}

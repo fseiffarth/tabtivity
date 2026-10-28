@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Language, TranslationKey } from "../i18n";
+import { LANGUAGES, type Language, type TranslationKey } from "../i18n";
 import { isServerClient } from "../transport/linkState";
 
 // The renderer's side of the desktop speech engine (`services::voice`,
@@ -129,6 +129,15 @@ export function voiceLangTag(choice: VoiceLangChoice | undefined, uiLanguage: La
   if (!choice || choice === "auto") return uiLanguage;
   if (choice === "detect") return "auto";
   return choice;
+}
+
+/** The speech language picker's choices (Settings → Voice and the Chat's dictation strip). */
+export function voiceLangOptions(t: (key: TranslationKey) => string): { value: VoiceLangChoice; label: string }[] {
+  return [
+    { value: "auto", label: t("settings.voice.langAuto") },
+    ...LANGUAGES.map((language) => ({ value: language.value, label: language.label })),
+    { value: "detect", label: t("settings.voice.langDetect") },
+  ];
 }
 
 /** The hands-free pause (step 4): its range and default, in ms. */

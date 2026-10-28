@@ -58,6 +58,18 @@ interface SyncConfirmBase {
 export interface SyncTransferRequest extends SyncConfirmBase {
   direction: SyncDirection;
   deleteSide?: undefined;
+  newer?: undefined;
+}
+
+/** The orange view's "take the newer copy for all": each file moves the way its
+ *  newer side says, so ONE ask covers both directions. Two asks in a row put the
+ *  second one up only once the first transfer had finished — minutes later, often
+ *  after the user had switched project — and each named only half of the act. */
+export interface SyncNewerRequest extends SyncConfirmBase {
+  /** `host`: newer on the host, pulled over the mirror; `local`: pushed over the host. */
+  newer: { host: string[]; local: string[] };
+  direction?: undefined;
+  deleteSide?: undefined;
 }
 
 /** Propagating a one-sided deletion (the orange view's delete-the-other-copy
@@ -69,13 +81,14 @@ export interface SyncTransferRequest extends SyncConfirmBase {
 export interface SyncDeleteRequest extends SyncConfirmBase {
   deleteSide: "host" | "local";
   direction?: undefined;
+  newer?: undefined;
   /** The host copy is the file's only one because it was never synced (the
    *  orange view's remote-only rows), not because the mirror's was deleted. */
   hostOnly?: boolean;
 }
 
 /** What the dialog is being asked about. */
-export type SyncConfirmRequest = SyncTransferRequest | SyncDeleteRequest;
+export type SyncConfirmRequest = SyncTransferRequest | SyncDeleteRequest | SyncNewerRequest;
 
 /** One side's metadata from `sync_file_meta` (the doomed copy, for a delete ask). */
 export interface SyncDoomedMeta {
@@ -103,6 +116,9 @@ export interface SyncTransferPreview {
 
 type Pending = SyncConfirmRequest & {
   preview: SyncTransferPreview | null;
+  /** A take-newer ask's price, one preview per direction (null while loading,
+   *  failed, or that direction has no files). */
+  newerPreview: Record<SyncDirection, SyncTransferPreview | null> | null;
   /** The copy a delete ask would destroy (from `sync_file_meta`); null while
    *  loading / failed / not a delete ask. */
   doomed: SyncDoomedMeta | null;
@@ -137,9 +153,49 @@ export const useSyncConfirmStore = create<SyncConfirmState>((set, get) => ({
       // copy, so there is nothing to load.
       const batchDelete = !!req.deleteSide && !!req.relPaths;
       set({
-        pending: { ...req, preview: null, doomed: null, loading: !batchDelete, error: null, resolve },
+        pending: {
+          ...req,
+          preview: null,
+          newerPreview: null,
+          doomed: null,
+          loading: !batchDelete,
+          error: null,
+          resolve,
+        },
       });
       if (batchDelete) return;
+      if (req.newer) {
+        const newer = req.newer;
+        const lists: Record<SyncDirection, string[]> = { pull: newer.host, push: newer.local };
+        const dirs = (["pull", "push"] as const).filter((d) => lists[d].length > 0);
+        void Promise.all(
+          dirs.map((direction) =>
+            invoke<SyncTransferPreview>("sync_transfer_preview", {
+              projectId: req.projectId,
+              relPath: req.relPath,
+              direction,
+              force: !!req.force,
+              relPaths: lists[direction],
+            }).then((preview) => [direction, preview] as const),
+          ),
+        )
+          .then((priced) => {
+            const p = get().pending;
+            if (!p || p.resolve !== resolve) return;
+            const newerPreview: Record<SyncDirection, SyncTransferPreview | null> = {
+              pull: null,
+              push: null,
+            };
+            for (const [direction, preview] of priced) newerPreview[direction] = preview;
+            set({ pending: { ...p, newerPreview, loading: false } });
+          })
+          .catch((e) => {
+            const p = get().pending;
+            if (!p || p.resolve !== resolve) return;
+            set({ pending: { ...p, loading: false, error: String(e) } });
+          });
+        return;
+      }
       // Price it in the background. The dialog is already up and already
       // requires a click, so a slow or failing preview costs information, never
       // the gate itself. A delete ask is priced with the doomed copy's own

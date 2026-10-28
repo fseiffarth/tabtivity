@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
 import { BUBBLE_W, placeBubble } from "../../lib/shortcuts/hintAnchor";
+import { UntestedTag } from "./UntestedTag";
 
 /**
  * A small floating coachmark anchored above/below a UI element, or a centered
@@ -19,6 +20,7 @@ export function HintBubble({
   action,
   tag,
   onDismiss,
+  onRead,
   onDisableAll,
 }: {
   rect: DOMRect | null;
@@ -26,11 +28,14 @@ export function HintBubble({
   title: string;
   body: string;
   /** Optional button that carries out what the hint describes. Running it also
-   *  dismisses the hint — the user has acted on it. */
+   *  counts as reading the hint — the user has acted on it. */
   action?: { label: string; run: () => void };
   /** Rendered after the title (the untested pill of not-yet-verified hints). */
   tag?: ReactNode;
+  /** × / Esc / Skip: closed for now, its chance unchanged. */
   onDismiss: () => void;
+  /** Read: each press halves the hint's chance of showing again. */
+  onRead: () => void;
   onDisableAll: () => void;
 }) {
   const t = useT();
@@ -66,8 +71,14 @@ export function HintBubble({
       <div className="hint-bubble-title">{title}{tag}</div>
       <div className="hint-bubble-body">{body}</div>
       <div className="hint-bubble-actions">
-        <button type="button" className="hint-bubble-link" onClick={onDisableAll}>
-          {t("hint.dontShowHints")}
+        <UntestedTag id="desktop.hints.read" />
+        <button
+          type="button"
+          className="hint-bubble-link"
+          title={t("hint.turnOffTitle")}
+          onClick={onDisableAll}
+        >
+          {t("hint.turnOff")}
         </button>
         {action && (
           <button
@@ -75,14 +86,27 @@ export function HintBubble({
             className="hint-bubble-got-it"
             onClick={() => {
               action.run();
-              onDismiss();
+              onRead();
             }}
           >
             {action.label}
           </button>
         )}
-        <button type="button" className="hint-bubble-got-it" onClick={onDismiss}>
-          {action ? t("hint.notNow") : t("howToStart.gotIt")}
+        <button
+          type="button"
+          className="hint-bubble-link"
+          title={t("hint.skipTitle")}
+          onClick={onDismiss}
+        >
+          {t("hint.skip")}
+        </button>
+        <button
+          type="button"
+          className="hint-bubble-got-it"
+          title={t("hint.readTitle")}
+          onClick={onRead}
+        >
+          {t("hint.read")}
         </button>
       </div>
     </div>,

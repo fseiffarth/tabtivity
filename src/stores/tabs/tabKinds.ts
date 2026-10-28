@@ -263,6 +263,15 @@ export function isSingletonTabKind(kind: TabKind): boolean {
   );
 }
 
+/** Is a second tab like this one a thing that can exist? Shared by the tab
+ *  right-click menus' "Duplicate" (`TabBar`, the root console), which hide the
+ *  row rather than disable it. A Files (Project) tab counts as a singleton only
+ *  at the project ROOT — one opened on a folder is its own view. */
+export function canDuplicateTab(tab: Pick<TabEntry, "kind" | "folder">): boolean {
+  if (isSingletonTabKind(tab.kind)) return false;
+  return !((tab.kind === "files" || tab.kind === "projectfiles") && !tab.folder);
+}
+
 /** Whether a tab owns a backend PTY. Pure frontend panes must never be sent
  * through terminal spawn/kill/activity paths merely because they are not files. */
 export function isPtyTabKind(kind: TabKind): boolean {
