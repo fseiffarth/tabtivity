@@ -3787,7 +3787,7 @@ export const enSource = {
   "localModel.runningLoaded": "Ollama running · model loaded",
   "localModel.running": "Ollama running",
   "localModel.stopped": "Ollama stopped",
-  "localModel.modelSuffix": " · model: {name}",
+  "localModel.modelSuffix": " · selected model: {name}",
   "localModel.noModelSelected": " · no model selected",
   "localModel.menuTitle": "Models & agents",
   "modelsOverlay.title": "Models & agents",

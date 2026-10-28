@@ -3678,7 +3678,7 @@ export const dict: Dict = {
   "localModel.runningLoaded": "Ollama läuft · Modell geladen",
   "localModel.running": "Ollama läuft",
   "localModel.stopped": "Ollama gestoppt",
-  "localModel.modelSuffix": " · Modell: {name}",
+  "localModel.modelSuffix": " · ausgewähltes Modell: {name}",
   "localModel.noModelSelected": " · kein Modell ausgewählt",
   "localModel.menuTitle": "Modelle & Agenten",
   "modelsOverlay.title": "Modelle & Agenten",
