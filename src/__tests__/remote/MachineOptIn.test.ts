@@ -4,8 +4,9 @@
  * one that reconnects it: on activation and launch, on a dead pool, and after a
  * tunnel-up / machine sweep. Everything else about that path still holds: the HPC
  * gate, the probe, and never a prompt (no modal, no login tab for a machine-only
- * opt-in). A machine that is merely *connected*, armed for another login, or
- * behind the switched-off Machines feature changes nothing.
+ * opt-in). A machine that is merely *connected* is ridden once on activation
+ * (`syncConnectedMachinesInto`) but never re-dialled; one armed for another
+ * login, or behind the switched-off Machines feature, changes nothing.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -217,16 +218,22 @@ describe("no opt-in, no change", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("ssh_probe", expect.anything());
   });
 
-  it("ignores a machine that is only connected, not armed", async () => {
+  it("rides a machine that is only connected on activation, but never re-dials it", async () => {
     useGlobalMachinesStore.setState({
       machines: [{ ...ARMED, auto_connect: false }],
       status: { m1: "connected" },
     });
 
+    // Activation opens the pool on the machine's live master, without a probe
+    // (`syncConnectedMachinesInto`) — the tab on that host must not stay held.
     await useProjectsStore.getState().setActive("p1");
     await settle();
-    expect(connects()).toHaveLength(0);
+    expect(connects()).toHaveLength(1);
+    expect(lamp("p1")).toBe("connected");
+    expect(invokeMock).not.toHaveBeenCalledWith("ssh_probe", expect.anything());
 
+    // Connected is still no opt-in: the dead-host reconciler leaves it red.
+    invokeMock.mockClear();
     useRemoteStatusStore.setState({ byProject: { p1: { ssh: "connected", vpn: "off" } }, byHost: {} });
     await silentReconnectDeadHost("p1", "primary");
     expect(connects()).toHaveLength(0);

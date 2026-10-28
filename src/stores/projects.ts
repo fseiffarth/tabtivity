@@ -43,7 +43,7 @@ import { useRunHostPrefStore } from "./remote/runHostPref";
 import { useTimerStore } from "./timer";
 import { useSettingsStore, whenSettingsLoaded } from "./settings";
 import { mayAutoTouch, targetOfSpec } from "../lib/remote/hpc/hpcHost";
-import { machineArmsHost } from "../lib/remote/machineSync";
+import { machineArmsHost, syncConnectedMachinesInto } from "../lib/remote/machineSync";
 import { PRIMARY_HOST, useRemoteStatusStore } from "./remote/remoteStatus";
 import { markVpnConnected, markVpnConnecting, markVpnError, releaseVpn } from "./remote/vpn/vpnStatus";
 import { useConnectDialogStore } from "./remote/connectDialog";
@@ -1482,8 +1482,13 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     // here silently — see `autoConnectRemote`. Fire-and-forget; never blocks the switch.
     // A local project with `compute_hosts` goes through it too — its workers are
     // pooled hosts with the same opt-in (their own, or an armed global machine).
+    // Before it, a host a connected global machine already holds rides that master
+    // (`syncConnectedMachinesInto`, which claims the lamp so the opt-in path skips it).
     const activated = nextProjects.find((p) => p.id === id);
-    if (activated?.remote || activated?.compute_hosts?.length) void autoConnectRemote(activated.id);
+    if (activated?.remote || activated?.compute_hosts?.length) {
+      syncConnectedMachinesInto(activated.id);
+      void autoConnectRemote(activated.id);
+    }
     // Fire-and-forget: the switch runs on a backend worker thread and returns
     // immediately. The resulting tab layout / side-panel folder arrives via the
     // `project-runtime-switched` event, handled by listenProjectRuntimeSwitched.

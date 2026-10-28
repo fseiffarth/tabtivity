@@ -87,7 +87,10 @@ eligibility (no "nothing saved" toast for a key login the project copy never
 recorded), opens no root-console login tab non-headless (red lamp instead), and
 connects with `viaLogin` so riding the machine's master is never recorded as key
 auth. A hand-connected machine still lights the active project on its own
-`→ connected` edge (`syncGlobalConnected`).
+`→ connected` edge (`syncGlobalConnected`), and a project activated while such a
+machine is connected rides it once (`syncConnectedMachinesInto`, from an `off`
+lamp only; never the dead-host reconciler) — switching away drops a project's
+pools, and a tab on that host otherwise stayed held while the machine sat green.
 
 An armed project that fails (3) is no longer *silent*. It used to `return` with no
 lamp, no toast and no console line, which reads exactly like "auto-connect is
