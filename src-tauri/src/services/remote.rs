@@ -986,6 +986,9 @@ mod tests {
 
         let vm = RemoteSpec { vm: Some(true), ..spec() };
         assert_eq!(local_copy_in(&entry("p4", Some("/state/p4"), Some(vm)), state.path()), None);
+        // A VM's `vm` outranks a stray `remote_only: false`: still no mirror.
+        let unpinned_vm = RemoteSpec { vm: Some(true), remote_only: Some(false), ..spec() };
+        assert_eq!(local_copy_in(&entry("p6", Some("/state/p6"), Some(unpinned_vm)), state.path()), None);
 
         assert_eq!(local_copy_in(&entry("p5", Some("/work/p5"), None), state.path()), None);
         assert!(std::fs::read_dir(state.path()).unwrap().next().is_none(), "a pure resolver");

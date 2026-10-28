@@ -422,7 +422,13 @@ mod tests {
     #[test]
     fn a_remote_only_project_never_moves_a_tab_to_or_from_this_machine() {
         let sentinel = concat!(crate::app_upper!(), "_REMOTE_ONLY:");
-        for pinned in [spec(serde_json::json!({ "remote_only": true })), spec(serde_json::json!({ "vm": true }))] {
+        let pinned = [
+            spec(serde_json::json!({ "remote_only": true })),
+            spec(serde_json::json!({ "vm": true })),
+            // A VM outranks a stray `remote_only: false` (hand edit, bundle).
+            spec(serde_json::json!({ "vm": true, "remote_only": false })),
+        ];
+        for pinned in pinned {
             for (from, to) in [(None, Some("primary")), (Some("primary"), None), (Some("w1"), None), (None, None)] {
                 let refusal = local_side_refusal(&pinned, from, to).expect("refused");
                 assert!(refusal.starts_with(sentinel), "{refusal}");

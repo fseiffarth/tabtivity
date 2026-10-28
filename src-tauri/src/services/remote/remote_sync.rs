@@ -184,15 +184,16 @@ pub fn mirror_dir(project_id: &str) -> PathBuf {
 }
 
 /// [`mirror_dir`] for a caller that needs a remote project's local tree for
-/// something other than sync: `None` when the registry names the project
-/// remote-only (it has no local copy, and the default path must not be minted
-/// as one), else exactly [`mirror_dir`]. The by-id twin of
-/// `remote::local_copy_in`. The sync engines keep [`mirror_dir`]; their entry
-/// points refuse a remote-only project before reaching it.
+/// something other than sync: `remote::local_copy_in` over the project's
+/// registry record, so `None` for a remote-only project (it has no local copy,
+/// and the default path must not be minted as one), for a local project, and
+/// when the record cannot be read (fail closed: an unreadable registry never
+/// turns a remote-only project's default path into a tree); else exactly
+/// [`mirror_dir`]. The sync engines keep [`mirror_dir`]; their entry points
+/// refuse a remote-only project before reaching it.
 pub fn mirror_dir_opt(project_id: &str) -> Option<PathBuf> {
-    let remote_only = crate::services::remote::remote_target_for(project_id)
-        .is_some_and(|t| t.spec.is_remote_only());
-    (!remote_only).then(|| mirror_dir(project_id))
+    let entry = crate::services::remote::project_entry(project_id).ok()?;
+    crate::services::remote::local_copy_in(&entry, &crate::storage::state_dir())
 }
 
 /// The manifest file path: `<state_dir>/.../<id>/sync.json`.

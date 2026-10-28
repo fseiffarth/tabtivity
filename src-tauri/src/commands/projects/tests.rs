@@ -2090,7 +2090,8 @@ fn a_remote_only_project_refuses_a_local_run_host() {
     let plain = spec(None, "h.example", None, "/srv/p");
     let remote_only = RemoteSpec { remote_only: Some(true), ..plain.clone() };
     let vm = RemoteSpec { vm: Some(true), ..plain.clone() };
-    for pinned in [&remote_only, &vm] {
+    let unpinned_vm = RemoteSpec { vm: Some(true), remote_only: Some(false), ..plain.clone() };
+    for pinned in [&remote_only, &vm, &unpinned_vm] {
         let refusal = run_host_refusal(Some(pinned), Some("local")).expect("refused");
         assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
         for kept in [None, Some("remote"), Some("host:w1")] {

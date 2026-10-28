@@ -138,7 +138,8 @@ pub struct RemoteSpec {
     /// The project keeps **no local copy** (`docs/remote_only_projects_plan.md`):
     /// its tree lives only on the host, every tab runs there, git runs there and
     /// nothing is synced. Read it through [`RemoteSpec::is_remote_only`], never
-    /// raw: absent means "a VM project is, a plain Remote is not". Written by the
+    /// raw: a VM project always is, whatever this says; a plain Remote is only
+    /// with `Some(true)` (absent: not). Written by the
     /// backend only (at creation from the request's top-level `remoteOnly`, or by
     /// a conversion), never taken from a renderer-sent spec. Meaningless on a
     /// worker ([`ComputeHost`] flattens this struct), where it is stripped.
@@ -159,12 +160,14 @@ pub struct RemoteSpec {
 }
 
 impl RemoteSpec {
-    /// This spec's project keeps no local copy: [`remote_only`](Self::remote_only),
-    /// defaulting to on for a VM spec (a VM project is remote-only + boot) and off
-    /// for every other entry, so an entry written before the field existed keeps
-    /// its behaviour.
+    /// This spec's project keeps no local copy: always for a VM spec (a VM
+    /// project is remote-only + boot, and its `vm` outranks the flag, as in the
+    /// spawn guard's `Pin::of` and the cockpit's `isHostPinned`, so a stray
+    /// `remote_only: false` on a VM never hands it a mirror), else
+    /// [`remote_only`](Self::remote_only), off when absent, so an entry written
+    /// before the field existed keeps its behaviour.
     pub fn is_remote_only(&self) -> bool {
-        self.remote_only.unwrap_or(self.vm == Some(true))
+        self.vm == Some(true) || self.remote_only == Some(true)
     }
 }
 
@@ -682,17 +685,20 @@ mod tests {
     }
 
     /// `remote_only`: absent stays absent on rewrite (an entry from before the
-    /// field keeps today's posture), an explicit value survives, a VM spec with
-    /// no value is remote-only, and the keys this model does not know still
+    /// field keeps today's posture), an explicit value survives, a VM spec is
+    /// remote-only whatever its flag says, and the keys this model does not know still
     /// ride through `extra` beside it.
     #[test]
     fn remote_only_round_trips_and_defaults_by_tier() {
-        let cases: [(&str, bool); 6] = [
+        let cases: [(&str, bool); 7] = [
             (r#"{"host":"h","remote_path":"/srv/p"}"#, false),
             (r#"{"host":"h","remote_path":"/srv/p","remote_only":true}"#, true),
             (r#"{"host":"h","remote_path":"/srv/p","remote_only":false}"#, false),
             (r#"{"host":"127.0.0.1","remote_path":"/p","vm":true}"#, true),
             (r#"{"host":"127.0.0.1","remote_path":"/p","vm":false}"#, false),
+            // A VM outranks the flag: an explicit `false` (a hand edit, an
+            // imported bundle) never unpins it.
+            (r#"{"host":"127.0.0.1","remote_path":"/p","vm":true,"remote_only":false}"#, true),
             (r#"{"host":"h","remote_path":"/srv/p","remote_only":true,"future_key":{"a":1}}"#, true),
         ];
         for (raw, want) in cases {

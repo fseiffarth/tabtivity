@@ -1845,6 +1845,22 @@ mod tests {
         assert!(made.is_dir());
     }
 
+    /// In [`prepare`] the pinned refusal runs before the local-tab mirror step
+    /// (which creates the mirror folder), so a refused remote-only or VM spawn
+    /// returns its sentinel before any mirror path is resolved or created.
+    #[test]
+    fn prepare_refuses_a_pinned_spawn_before_the_mirror_step() {
+        let source = include_str!("launch_prep.rs");
+        let start = source.find("pub async fn prepare(").expect("prepare");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+        let refusal = body.find("pinned_spawn_refusal(").expect("the pinned refusal is in prepare");
+        let mirror = body.find("local_tab_mirror(").expect("the mirror step is in prepare");
+        assert!(refusal < mirror, "the pinned refusal must precede the mirror step");
+        for resolver in ["mirror_dir", "local_copy_in", "local_tab_mirror"] {
+            assert!(!body[..refusal].contains(resolver), "{resolver} runs before the pinned refusal");
+        }
+    }
+
     #[test]
     fn cwd_within_accepts_project_dir_and_subdirs() {
         assert!(cwd_within("/home/u/proj", Path::new("/home/u/proj")));
