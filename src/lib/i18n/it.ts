@@ -6040,6 +6040,8 @@ export const dict: Dict = {
   "tabLocality.runHostTitle": "Eseguito su: {label}",
   "tabLocality.runHostSubtitle": "Dove vengono eseguiti Run/Debug e le shell avviate da questo progetto — la macchina, non da quale lato vengono letti i file.",
   "tabLocality.runLabel": "Esegui: {label}",
+  "tabLocality.pinnedHostTitle": "Questo progetto esiste solo sul suo host, quindi le sue schede girano lì: non c'è una copia locale in cui eseguirle.",
+  "tabs.remoteOnlyRefused": "Questo progetto esiste solo sul suo host, quindi questo non può girare su questo computer: non c'è una copia locale. Aprilo invece sull'host.",
   "tabBar.subwindowFallback": "Sottofinestra",
   "category.work": "Lavoro",
   "category.personal": "Personale",

@@ -6044,6 +6044,8 @@ export const dict: Dict = {
   "tabLocality.runHostTitle": "Läuft auf: {label}",
   "tabLocality.runHostSubtitle": "Wo Run/Debug und von diesem Projekt gestartete Shells laufen — die Maschine, nicht von welcher Seite Dateien gelesen werden.",
   "tabLocality.runLabel": "Ausführen: {label}",
+  "tabLocality.pinnedHostTitle": "Dieses Projekt liegt nur auf seinem Host, darum laufen seine Tabs dort: Es gibt keine lokale Kopie, in der sie laufen könnten.",
+  "tabs.remoteOnlyRefused": "Dieses Projekt liegt nur auf seinem Host, darum kann das nicht auf diesem Computer laufen: Es gibt keine lokale Kopie. Öffne es stattdessen auf dem Host.",
   "tabBar.subwindowFallback": "Subfenster",
   "category.work": "Arbeit",
   "category.personal": "Persönlich",

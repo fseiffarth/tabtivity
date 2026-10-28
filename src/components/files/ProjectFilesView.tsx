@@ -104,7 +104,7 @@ import { ArrowDownIcon, ArrowUpIcon, ArrowsHorizontalIcon, CheckIcon, GearIcon, 
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "../mobile/MobileAccessPicker";
-import { projectHostKind } from "../../lib/projectTabHost";
+import { isHostPinned, projectHostKind } from "../../lib/projectTabHost";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
@@ -1747,6 +1747,7 @@ export function ProjectFilesView({
           {source === "remote" && (
             <RunHostPicker
               projectId={projectId}
+              pinned={isHostPinned(project)}
               primaryHost={project.remote.label || project.remote.host}
               computeHosts={project.compute_hosts}
             />
@@ -1794,6 +1795,7 @@ export function ProjectFilesView({
           {source === "remote" && (
             <RunHostPicker
               projectId={projectId}
+              pinned={isHostPinned(project)}
               primaryHost={project.remote.label || project.remote.host}
               computeHosts={project.compute_hosts}
             />

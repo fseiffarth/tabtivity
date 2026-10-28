@@ -39,7 +39,7 @@ import { isTabColor } from "../../lib/theme/tabColors";
 import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { dayKey } from "../../lib/usageRollup";
-import { phoneCreateVerdict, phoneListsTab, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
+import { isHostPinned, phoneCreateVerdict, phoneListsTab, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
 import { resolveProjectDirectory, type CalendarEvent, type CalendarTask, type ProjectEntry, type Subtask, type TaskColumn } from "../../types";
 import type { MailFolder, MailHeader } from "../../types/mail";
 import { addSubtask, boardColumns, columnOf, dropAccepted, fallbackColumnId, provisionalRank, toggleTaskDone } from "../../lib/todoBoard";
@@ -1411,7 +1411,7 @@ function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string |
   // desktop's SSH master) is never wrapped here, drawn or not: its session,
   // if any, runs on the host.
   const project = scope.project;
-  if (project?.remote && effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) !== "local") return "session_gone";
+  if (project?.remote && effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }) !== "local") return "session_gone";
   const ready = mobileTmuxReadiness(scope.id, tab.key);
   // Not drawn yet (a scope `enterScope` just restored): its first render
   // stamps the switch, which is on, and the spawn is wrapped.

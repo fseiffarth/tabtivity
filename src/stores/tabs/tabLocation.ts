@@ -4,6 +4,7 @@
 import { translate, useI18nStore } from "../../lib/i18n";
 import type { TabKind, TabLocation } from "./types";
 import { isLocalAgentKind } from "./tabKinds";
+import { isHostPinned, type HostPinProject } from "../../lib/projectTabHost";
 
 /** The backend host id a tab location runs on: `"primary"` for the primary remote
  *  (`"remote"`), the worker id for a `host:<id>` location, or `null` for `"local"`
@@ -89,17 +90,21 @@ export function defaultLocationForKind(kind: TabKind): TabLocation {
 export function effectiveTabLocation(
   tab: { kind: TabKind; location?: TabLocation },
   opts?: {
-    /** VM tier (`docs/vm_projects_plan.md`): the owning project lives inside
-     *  a VM, so locality is PINNED to the VM host — the agents-default-local
-     *  rule below is precisely the escape that tier forbids, and any stored
-     *  `location: "local"` (e.g. a persisted layout an in-VM agent could have
-     *  written) is overridden, never honored. The backend's spawn guard
-     *  refuses a local spawn outright as the hard boundary; this keeps the
-     *  frontend from ever building one. */
-    vmProject?: boolean;
+    /** The owning project lives only on its host (`isHostPinned`: a VM,
+     *  `docs/vm_projects_plan.md`, or a remote-only project,
+     *  `docs/remote_only_projects_plan.md`), so locality is PINNED to the
+     *  host — the agents-default-local rule below is precisely the escape
+     *  those projects forbid, and any stored `location: "local"` (e.g. a
+     *  persisted layout an in-VM agent could have written) is overridden,
+     *  never honored. A worker (`host:<id>`) stays: it is a host too. The
+     *  backend's spawn guard refuses a local spawn outright as the hard
+     *  boundary; this keeps the frontend from ever building one. */
+    hostPinned?: boolean;
   },
 ): TabLocation {
-  if (opts?.vmProject && !isLocalAgentKind(tab.kind)) return "remote";
+  if (opts?.hostPinned && !isLocalAgentKind(tab.kind)) {
+    return tab.location && isRemoteLocation(tab.location) ? tab.location : "remote";
+  }
   if (isLocalAgentKind(tab.kind)) return "local";
   return tab.location ?? defaultLocationForKind(tab.kind);
 }
@@ -116,13 +121,20 @@ export function effectiveTabLocation(
  * project's persisted override (`opts.mirror`, from resolveLocalMirror) when set;
  * fall back to the default `<state dir>/mirror` for legacy projects with none.
  * Returns `fallback` (the tab's own cwd) unchanged for a local project or a tab
- * that runs on the host (remote locality).
+ * that runs on the host (remote locality, which `hostPinned` forces: a VM or
+ * remote-only project has no mirror to run in).
  */
 export function localTabCwd(
   tab: { kind: TabKind; location?: TabLocation },
-  opts: { isRemoteProject: boolean; projectDirectory: string; fallback: string; mirror?: string | null },
+  opts: {
+    isRemoteProject: boolean;
+    projectDirectory: string;
+    fallback: string;
+    mirror?: string | null;
+    hostPinned?: boolean;
+  },
 ): string {
-  if (!opts.isRemoteProject || effectiveTabLocation(tab) !== "local") {
+  if (!opts.isRemoteProject || effectiveTabLocation(tab, { hostPinned: opts.hostPinned }) !== "local") {
     return opts.fallback;
   }
   const override = opts.mirror?.trim();
@@ -132,10 +144,9 @@ export function localTabCwd(
 }
 
 /** The host shape {@link hostTabId} and {@link hostTabCwd} read. */
-type TabHostProject = {
+type TabHostProject = HostPinProject & {
   remote?: { remote_path: string };
   compute_hosts?: readonly { id: string; remote_path: string }[];
-  vm?: { enabled?: boolean };
 };
 
 /**
@@ -145,7 +156,7 @@ type TabHostProject = {
  */
 export function hostTabId(tab: { kind: TabKind; location?: TabLocation }, project: TabHostProject | undefined): string | null {
   if (!project?.remote) return null;
-  const hostId = remoteHostIdOf(effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }));
+  const hostId = remoteHostIdOf(effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }));
   if (!hostId || hostId === "primary") return hostId;
   return project.compute_hosts?.some((h) => h.id === hostId) ? hostId : "primary";
 }

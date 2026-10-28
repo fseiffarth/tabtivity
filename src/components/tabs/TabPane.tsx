@@ -120,11 +120,11 @@ export interface TabPaneProps {
   /** The stable tmux session name to spawn-or-attach this remote shell/script tab
    *  into (TODO #85), or undefined when the tab doesn't run persistently. */
   tmuxSession?: string;
-  /** VM tier (`docs/vm_projects_plan.md`): the owning project lives inside a
-   *  VM, so tab locality is pinned to it (agents-default-local is exactly the
-   *  escape that tier forbids). Resolved by CenterPanel; a popout omits it —
-   *  its panes are attach-only and never spawn. */
-  vmProject?: boolean;
+  /** The owning project lives only on its host (`isHostPinned`: a VM or a
+   *  remote-only project), so tab locality is pinned to it (agents-default-local
+   *  is exactly the escape those forbid). Resolved by PaneSlot; a popout omits
+   *  it — its panes are attach-only and never spawn. */
+  hostPinned?: boolean;
   /** A terminal pane shows its Reader always, with no toggle (the Tabby
    *  overlay's chats; see `TerminalView.readerAlways`). */
   readerAlways?: boolean;
@@ -144,7 +144,7 @@ function TabPaneImpl({
   terminalCwd,
   sandbox = false,
   tmuxSession,
-  vmProject = false,
+  hostPinned = false,
   readerAlways = false,
 }: TabPaneProps) {
   // Identical in both windows: null for the root scope, else the scope id.
@@ -276,7 +276,7 @@ function TabPaneImpl({
       // Diffs: a popout's tabs store has no entry to look it up in.
       // The spawn inputs, mapped once (`tabTerminalSpawn`): the pane layer
       // reads the same identity to tell when a sleeping tab must wake.
-      const spawn = tabTerminalSpawn(tab, scope, { terminalCwd, sandbox, tmuxSession, vmProject, attachOnly });
+      const spawn = tabTerminalSpawn(tab, scope, { terminalCwd, sandbox, tmuxSession, hostPinned, attachOnly });
       return (
         <PaneTabContext.Provider value={{ scope, tab }}>
         <TerminalView

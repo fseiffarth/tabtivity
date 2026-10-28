@@ -36,6 +36,23 @@ describe("agentMachines", () => {
     expect(machines[3]).toMatchObject({ disabled: true });
     expect(machines[3].label).toContain("cold.example");
   });
+
+  it("has no Local row on a host-pinned project, and one machine is no list", () => {
+    const pinned = agentMachines({ primaryHost: "head.example", computeHosts: hosts, pinned: true, t });
+    expect(pinned.map((m) => m.location)).toEqual(["remote", "host:gpu", "host:cold"]);
+    // A VM: its primary alone, nothing to choose between.
+    const lone = agentMachines({ primaryHost: "vm", pinned: true, t });
+    const rows = agentMenuEntries({
+      installedBuiltins: new Set(["claude"]),
+      installedCmds: null,
+      customAgents: [],
+      pick: vi.fn(),
+      machines: lone,
+      onAddCustom: vi.fn(),
+      t,
+    });
+    expect(rows.find((e) => e.key === "claude")?.machineEntries).toBeUndefined();
+  });
 });
 
 describe("agent rows with machines", () => {

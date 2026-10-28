@@ -1081,6 +1081,11 @@ export interface RemoteSpec {
    *  forward. Written by the backend at creation/boot, never user-set. What a
    *  VM-aware surface (the pill glyph, the spawn guard) dispatches on. */
   vm?: boolean;
+  /** Remote-only project (`docs/remote_only_projects_plan.md`): no local
+   *  mirror; files, tabs and git all live on the host. Written by the backend
+   *  at creation (or a conversion), read-only to the renderer. Absent = `vm`
+   *  (a VM is remote-only). Read it through `isHostPinned`, never directly. */
+  remote_only?: boolean;
 }
 
 /** Egress policy for a project VM (`docs/vm_projects_plan.md`): `off` = the
