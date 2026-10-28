@@ -64,6 +64,24 @@ describe(`${BRAND.display} Mobile Focus formats an answer's Markdown`, () => {
     expect(host.querySelector("a, img")).toBeNull();
     expect(host.textContent).toContain('<a href="https://evil.example">x</a>');
   });
+
+  it("hides a line that is only a <br> tag, but not one in code or prose", () => {
+    const host = dom(answerHtml([
+      "The gates are still running.",
+      "",
+      "<br>",
+      "  <BR />  ",
+      "",
+      "A <br> in a sentence stays.",
+      "",
+      "```html",
+      "<br>",
+      "```",
+    ].join("\n")));
+    expect([...host.querySelectorAll("p")].map((p) => p.textContent))
+      .toEqual(["The gates are still running.", "A <br> in a sentence stays."]);
+    expect(host.querySelector("pre code")?.textContent).toContain("<br>");
+  });
 });
 
 describe(`${BRAND.display} Mobile Focus formats a prompt's Markdown`, () => {

@@ -24,7 +24,27 @@ import { renderMarkdown } from "../../../src/lib/viewers/markdown";
  * reach the markup could still not open, load, run or restyle anything.
  */
 export function answerHtml(text: string): string {
-  return inert(renderMarkdown(text));
+  return inert(renderMarkdown(withoutLoneBreaks(text)));
+}
+
+/** A line that is nothing but a `<br>` tag: an agent's stray filler. Escaped, it
+ * would read as the literal tag. */
+const LONE_BREAK = /^\s*<br\s*\/?>\s*$/i;
+const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+
+/** `text` without its lone-`<br>` lines (`LONE_BREAK`), except inside a fenced
+ * code block, where the line is the code's own. */
+function withoutLoneBreaks(text: string): string {
+  if (!/<br/i.test(text)) return text;
+  let fence: string | null = null;
+  return text.split("\n").filter((line) => {
+    const open = FENCE.exec(line)?.[1];
+    if (open && (fence === null || (open[0] === fence[0] && open.length >= fence.length))) {
+      fence = fence === null ? open : null;
+      return true;
+    }
+    return fence !== null || !LONE_BREAK.test(line);
+  }).join("\n");
 }
 
 /**
