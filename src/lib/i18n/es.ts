@@ -6040,6 +6040,8 @@ export const dict: Dict = {
   "tabLocality.runHostTitle": "Se ejecuta en: {label}",
   "tabLocality.runHostSubtitle": "Dónde se ejecutan Run/Debug y las shells lanzadas desde este proyecto — la máquina, no de qué lado se leen los archivos.",
   "tabLocality.runLabel": "Ejecutar: {label}",
+  "tabLocality.pinnedHostTitle": "Este proyecto solo existe en su host, así que sus pestañas se ejecutan allí: no hay una copia local donde ejecutarlas.",
+  "tabs.remoteOnlyRefused": "Este proyecto solo existe en su host, así que esto no puede ejecutarse en este ordenador: no hay copia local. Ábrelo en el host.",
   "tabBar.subwindowFallback": "Subventana",
   "category.work": "Trabajo",
   "category.personal": "Personal",

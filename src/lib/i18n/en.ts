@@ -6168,6 +6168,8 @@ export const enSource = {
   "tabLocality.runHostTitle": "Runs on: {label}",
   "tabLocality.runHostSubtitle": "Where Run/Debug and shells launched from this project run — the machine, not which side files are read from.",
   "tabLocality.runLabel": "Run: {label}",
+  "tabLocality.pinnedHostTitle": "This project lives only on its host, so its tabs run there: there is no local copy to run in.",
+  "tabs.remoteOnlyRefused": "This project lives only on its host, so this cannot run on this computer: there is no local copy. Open it on the host instead.",
   "tabBar.subwindowFallback": "Subwindow",
   "category.work": "Work",
   "category.personal": "Personal",

@@ -44,15 +44,17 @@ export interface AgentMachine {
 
 /** The machines a remote project's new agent tab can start on — the tab
  *  locality menu's list, in its order and wording: the local mirror, the
- *  primary, then each worker (one without the code offered disabled). */
+ *  primary, then each worker (one without the code offered disabled). A
+ *  `pinned` project (`isHostPinned`) has no local mirror, so no Local row. */
 export function agentMachines(opts: {
   primaryHost?: string;
   computeHosts?: LocalityHost[];
+  pinned?: boolean;
   t: (key: TranslationKey, vars?: Record<string, string>) => string;
 }): AgentMachine[] {
   const names = { primaryHost: opts.primaryHost, computeHosts: opts.computeHosts };
   return [
-    { location: "local", label: localityHostLabel("local", names) },
+    ...(opts.pinned ? [] : [{ location: "local", label: localityHostLabel("local", names) } satisfies AgentMachine]),
     { location: "remote", label: localityHostLabel("remote", names) },
     ...(opts.computeHosts ?? []).map((h): AgentMachine => {
       const label = localityHostLabel(`host:${h.id}`, names);
@@ -85,7 +87,8 @@ export function agentMenuEntries(opts: {
    *  machine list, else the kind's default. */
   pick: (item: StaticMenuItem, location?: TabLocation) => void;
   /** A remote project's machines (`agentMachines`): every agent row then gets
-   *  a ▾ list to start it on one of them directly. Unset → no list. */
+   *  a ▾ list to start it on one of them directly. Unset, or a single machine
+   *  (a VM's primary alone), → no list: there is nothing to choose. */
   machines?: AgentMachine[];
   /** Start one of an installed built-in's cloud launches. Unset → no
    *  "Cloud session" row (a scope where no cloud session makes sense). */
@@ -100,7 +103,7 @@ export function agentMenuEntries(opts: {
 }): AddMenuEntry[] {
   // The ▾ fly-out under an agent row: the same agent, started on a machine.
   const machinesFor = (label: string, item: () => StaticMenuItem) =>
-    opts.machines?.length
+    opts.machines && opts.machines.length > 1
       ? {
           machineTitle: opts.t("newTabMenu.chooseMachine", { agent: label }),
           machineEntries: opts.machines.map((m): AddMenuEntry => ({

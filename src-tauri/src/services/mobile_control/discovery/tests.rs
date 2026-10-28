@@ -1414,8 +1414,8 @@ fn the_tab_locality_rule_matches_the_windows_table() {
     .expect("fixture");
     assert!(table.len() > 10);
     for row in table {
-        let (kind, location, vm) = (row["kind"].as_str().unwrap(), row["location"].as_str(), row["vm"].as_bool().unwrap());
-        assert_eq!(tab_is_local(kind, location, vm), row["local"].as_bool().unwrap(), "{row}");
+        let (kind, location, pinned) = (row["kind"].as_str().unwrap(), row["location"].as_str(), row["pinned"].as_bool().unwrap());
+        assert_eq!(tab_is_local(kind, location, pinned), row["local"].as_bool().unwrap(), "{row}");
     }
 }
 

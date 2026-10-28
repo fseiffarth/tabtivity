@@ -7,6 +7,7 @@ import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { useActivityStore } from "../activity";
 import { useProjectsStore } from "../projects";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
+import { isHostPinned } from "../../lib/projectTabHost";
 import {
   effectiveTabLocation,
   isResumableAgentTab,
@@ -141,7 +142,7 @@ function askPlan(scope: string, tab: TabEntry): Promise<UndoClearPlan | null> {
  * project's local tab) — the only kind this window relaunches. */
 export function runsLocally(scope: string, tab: TabEntry): boolean {
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
-  return !project?.remote || effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) === "local";
+  return !project?.remote || effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }) === "local";
 }
 
 /** Respawn the tab on the args a restore would give it (also the Reader's

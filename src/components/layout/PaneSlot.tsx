@@ -23,7 +23,7 @@ import {
 import type { HostConnState } from "../../stores/remote/remoteStatus";
 import { shouldPersistTab, shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
 import { mobileTmuxReadyKey } from "../../lib/terminal/mobileTmuxReady";
-import { tabRunsInContainer } from "../../lib/projectTabHost";
+import { isHostPinned, tabRunsInContainer } from "../../lib/projectTabHost";
 import { resolveLocalMirror, resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { MOBILE_ACCESS_KEY } from "../../lib/brand";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
@@ -129,12 +129,12 @@ function PaneSlotImpl({
   // remote project switched away from never un-holds.
   const paneRemoteProj = !!paneProject?.remote;
   const paneDisconnected = paneRemoteProj && projectSsh !== "connected";
-  const vmProject = !!paneProject?.vm?.enabled;
+  const hostPinned = isHostPinned(paneProject);
   // A terminal pane runs on a remote host when its effective locality resolves
   // to one (primary or a worker). Held while THAT host's pool is down: spawning
   // `ssh -tt` now would block on the dead pool. Multi-host: a pane on gpu-2
   // holds iff gpu-2 is down, independent of the primary (plan §4.5).
-  const location = effectiveTabLocation(tab, { vmProject });
+  const location = effectiveTabLocation(tab, { hostPinned });
   const rawHostId = remoteHostIdOf(location);
   // A tab naming a worker that no longer exists (machine removed) falls back
   // to the primary — matching the backend's wrap_pty_options (plan §8).
@@ -183,6 +183,7 @@ function PaneSlotImpl({
     isRemoteProject: paneRemoteProj,
     projectDirectory,
     mirror,
+    hostPinned,
     fallback: tab.cwd,
   });
   // Run this tab inside the project's session container when the toggle is
@@ -236,7 +237,7 @@ function PaneSlotImpl({
   const terminalSleepable = isSleepableTerminalTab(tab, { inPopout, drawnElsewhere });
   const ptyId = isPtyTabKind(tab.kind) ? `${scopeKey}:${tab.key}` : null;
   const spawnIdentity = terminalSleepable
-    ? `${terminalSpawnKey(tabTerminalSpawn(tab, scopeKey, { terminalCwd, sandbox, tmuxSession, vmProject }))}|${holdRemoteTerminal}`
+    ? `${terminalSpawnKey(tabTerminalSpawn(tab, scopeKey, { terminalCwd, sandbox, tmuxSession, hostPinned }))}|${holdRemoteTerminal}`
     : "";
   const sleepable = sleepAfterMs != null && (viewerSleepable || terminalSleepable);
   const hidden = sleepable && !visible;
@@ -290,7 +291,7 @@ function PaneSlotImpl({
         terminalCwd={terminalCwd}
         sandbox={sandbox}
         tmuxSession={tmuxSession}
-        vmProject={vmProject}
+        hostPinned={hostPinned}
       />
     </PaneSleepHoldContext.Provider>
   );

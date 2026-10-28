@@ -30,6 +30,7 @@ import { TERMINAL_MIN_CONTRAST, terminalPalette } from "../../lib/terminal/termi
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
+import { remoteOnlyRefusal } from "../../lib/projectTabHost";
 import { isAiOffRefusal, useAiOff, whenAiOn } from "../../lib/aiSwitch";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
@@ -107,6 +108,14 @@ interface PtyScrollback {
   endOffset: number;
   /** The program ended (a wake's read: it ended while the pane slept). */
   exited?: boolean;
+}
+
+/** A failed spawn's line in the pane: for a project that lives only on its
+ *  host, the translated refusal (`remoteOnlyRefusal`, never the backend's raw
+ *  text), else the error as it came, in red. */
+function spawnErrorNote(err: unknown): string {
+  const hostOnly = remoteOnlyRefusal(err);
+  return hostOnly ? `\r\n\x1b[33m[${hostOnly}]\x1b[0m\r\n` : `\r\n\x1b[31m[spawn error: ${err}]\x1b[0m\r\n`;
 }
 
 /** Keep only bytes newer than an atomic backend scrollback snapshot. */
@@ -1729,7 +1738,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             } catch (retryErr) {
               if (cancelled) return;
               if (!isAiOffRefusal(retryErr)) {
-                writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
+                writeTerm(spawnErrorNote(retryErr));
                 return;
               }
               await new Promise((resolve) => setTimeout(resolve, pause));
@@ -1768,13 +1777,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             spawnState = "spawned";
             ownsPty = true;
           } catch (retryErr) {
-            if (!cancelled) writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
+            if (!cancelled) writeTerm(spawnErrorNote(retryErr));
           }
           return;
         }
         const refusal = hpcGuardRefusal(e);
         if (!refusal) {
-          writeTerm(`\r\n\x1b[31m[spawn error: ${e}]\x1b[0m\r\n`);
+          writeTerm(spawnErrorNote(e));
           return;
         }
         const ok = await useHpcGuardStore.getState().request(refusal.kind, refusal.target);
@@ -1801,7 +1810,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           spawnState = "spawned";
           ownsPty = true;
         } catch (retryErr) {
-          if (!cancelled) writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
+          if (!cancelled) writeTerm(spawnErrorNote(retryErr));
         }
       }
     };

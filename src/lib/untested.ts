@@ -880,6 +880,7 @@ export const UNTESTED = {
   "tabStack.newGroup": { area: "tabs", what: "TabBar · tab right-click New tab group… / Add to group / Remove from group: grouped tabs fold into one chip, kept after a relaunch" },
   "tabStackChip.1": { area: "tabs", what: "TabStackChip · hovering a tab-group chip lists its tabs; a click on one activates it, × closes it; right-click the chip to rename, ungroup or close the group" },
   "tabLocalityBadges.1": { area: "tabs", what: "TabLocalityBadges · Run on machine" },
+  "tabLocality.pinnedHostTitle": { area: "tabs", what: "VM or remote-only project · a tab's ☁ locality badge (and the file viewer's Run: picker) opens straight on the machine list, with no Local (mirror) row and no way back to one" },
   "agentLocationSwitch.1": { area: "tabs", what: "Remote project · a Claude tab's locality badge moved Local ⇄ host (or host ⇄ worker): the CLI restarts there and resumes the same conversation, a later switch back resumes it with everything said on the other side" },
   "newTabMenu.chooseMachine": { area: "tabs", what: "Remote project \"+\" menu · ▾ beside each agent row starts it straight on the local mirror, the primary or a worker; hovering the row opens the list (main bar and popouts)" },
 

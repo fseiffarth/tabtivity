@@ -6042,6 +6042,8 @@ export const dict: Dict = {
   "tabLocality.runHostTitle": "S'exécute sur : {label}",
   "tabLocality.runHostSubtitle": "Où s'exécutent Run/Debug et les shells lancés depuis ce projet — la machine, pas de quel côté les fichiers sont lus.",
   "tabLocality.runLabel": "Exécuter : {label}",
+  "tabLocality.pinnedHostTitle": "Ce projet n'existe que sur son hôte, ses onglets s'y exécutent donc : il n'y a pas de copie locale où les exécuter.",
+  "tabs.remoteOnlyRefused": "Ce projet n'existe que sur son hôte, cela ne peut donc pas s'exécuter sur cet ordinateur : il n'y a pas de copie locale. Ouvrez-le plutôt sur l'hôte.",
   "tabBar.subwindowFallback": "Sous-fenêtre",
   "category.work": "Travail",
   "category.personal": "Personnel",

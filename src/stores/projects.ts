@@ -61,6 +61,7 @@ import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
 import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../lib/brand";
+import { isHostPinned } from "../lib/projectTabHost";
 
 function connectionsHeadless(): boolean {
   return useSettingsStore.getState().settings?.connections_headless ?? true;
@@ -874,7 +875,7 @@ export function projectTmuxTargets(
   for (const tab of tabs) {
     if (!isPtyTabKind(tab.kind)) continue;
     let hostId = remoteHostIdOf(
-      effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }),
+      effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
     );
     if (
       hostId &&
@@ -1650,7 +1651,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
             key: tab.key,
             label: tab.label,
             kind: tab.kind,
-            location: effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }),
+            location: effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
           })),
           localTargets.length,
           remoteSessions,
