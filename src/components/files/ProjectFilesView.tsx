@@ -2241,44 +2241,33 @@ export function ProjectFilesView({
                     onClick={() => {
                       if (!projectId) return;
                       void (async () => {
-                        // One confirmation per direction, each naming the files
-                        // that side's copy would overwrite.
+                        // ONE confirmation for both directions, naming each
+                        // side's files: a second ask would only come up once the
+                        // first transfer finished — minutes later, maybe over
+                        // another project.
+                        const ok = await confirmSyncTransfer({
+                          projectId,
+                          relPath: "",
+                          isDir: true,
+                          label: project?.name ?? projectId,
+                          newer: newerSplit,
+                          force: true,
+                        });
+                        if (!ok) return;
                         setOrangeSkipped(null);
                         setOrangeError(null);
                         const outcomes: SyncResolveOutcome[] = [];
                         if (newerSplit.host.length > 0) {
-                          const ok = await confirmSyncTransfer({
-                            projectId,
-                            direction: "pull",
-                            relPath: "",
-                            isDir: true,
-                            label: project?.name ?? projectId,
-                            relPaths: newerSplit.host,
-                            force: true,
-                          });
-                          if (ok) {
-                            const outcome = await useSyncStore
-                              .getState()
-                              .resolveAll(projectId, newerSplit.host, "host");
-                            setOrangeSkipped(outcome.skipped);
-                            outcomes.push(outcome);
-                          }
+                          const outcome = await useSyncStore
+                            .getState()
+                            .resolveAll(projectId, newerSplit.host, "host");
+                          setOrangeSkipped(outcome.skipped);
+                          outcomes.push(outcome);
                         }
-                        if (newerSplit.local.length > 0) {
-                          const ok = await confirmSyncTransfer({
-                            projectId,
-                            direction: "push",
-                            relPath: "",
-                            isDir: true,
-                            label: project?.name ?? projectId,
-                            relPaths: newerSplit.local,
-                            force: true,
-                          });
-                          if (ok)
-                            outcomes.push(
-                              await useSyncStore.getState().resolveAll(projectId, newerSplit.local, "local"),
-                            );
-                        }
+                        if (newerSplit.local.length > 0)
+                          outcomes.push(
+                            await useSyncStore.getState().resolveAll(projectId, newerSplit.local, "local"),
+                          );
                         noteResolveFailures(...outcomes);
                       })();
                     }}

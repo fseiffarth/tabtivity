@@ -144,4 +144,43 @@ describe("sync transfer confirmation", () => {
     await settle();
     expect(useSyncConfirmStore.getState().pending).toBeNull();
   });
+
+  it("prices a take-newer ask per direction in one dialog", async () => {
+    const answer = confirmSyncTransfer({
+      projectId: "p1",
+      relPath: "",
+      isDir: true,
+      label: "proj",
+      newer: { host: ["h.txt"], local: ["l1.txt", "l2.txt"] },
+      force: true,
+    });
+    await settle();
+    const calls = invokeMock.mock.calls.filter((c) => c[0] === "sync_transfer_preview");
+    expect(calls.map((c) => c[1])).toEqual([
+      { projectId: "p1", relPath: "", direction: "pull", force: true, relPaths: ["h.txt"] },
+      { projectId: "p1", relPath: "", direction: "push", force: true, relPaths: ["l1.txt", "l2.txt"] },
+    ]);
+    const pending = useSyncConfirmStore.getState().pending;
+    expect(pending?.loading).toBe(false);
+    expect(pending?.newerPreview).toEqual({ pull: PREVIEW, push: PREVIEW });
+    useSyncConfirmStore.getState().proceed();
+    expect(await answer).toBe(true);
+  });
+
+  it("asks for no direction a take-newer ask has no files for", async () => {
+    const answer = confirmSyncTransfer({
+      projectId: "p1",
+      relPath: "",
+      isDir: true,
+      label: "proj",
+      newer: { host: [], local: ["l.txt"] },
+      force: true,
+    });
+    await settle();
+    const calls = invokeMock.mock.calls.filter((c) => c[0] === "sync_transfer_preview");
+    expect(calls.map((c) => (c[1] as { direction: string }).direction)).toEqual(["push"]);
+    expect(useSyncConfirmStore.getState().pending?.newerPreview).toEqual({ pull: null, push: PREVIEW });
+    useSyncConfirmStore.getState().cancel();
+    expect(await answer).toBe(false);
+  });
 });
