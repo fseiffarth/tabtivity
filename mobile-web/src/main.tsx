@@ -11,6 +11,21 @@ import { applyPhoneTheme } from "./theme";
 import { rememberPushLanguage } from "./pushTitles";
 import { hardenPrototype } from "../../src/lib/hardenPrototype";
 import { traceConnect } from "./api";
+import { storageDashKey } from "../../src/lib/brand";
+
+/** The voice probe page (docs/phone_voice_plan.md, step 0): a developer tool,
+ * shown instead of the app only for `?voiceProbe` while the desktop's "Show
+ * untested tags" is on — the flag App.tsx caches from the status probe. Its
+ * own chunk, so the app never loads it otherwise. Deleted in agent step S11. */
+const VoiceProbe = React.lazy(() => import("./voiceProbe").then((module) => ({ default: module.VoiceProbe })));
+function voiceProbeWanted(): boolean {
+  try {
+    return new URLSearchParams(window.location.search).has("voiceProbe")
+      && localStorage.getItem(storageDashKey("show-untested-tags")) === "true";
+  } catch {
+    return false;
+  }
+}
 
 hardenPrototype();
 // An uncaught error or a rejection nobody awaited is otherwise invisible on a
@@ -24,5 +39,6 @@ window.addEventListener("unhandledrejection", (event) => traceFailure("unhandled
 applyPhoneTheme();
 rememberPushLanguage();
 if ("serviceWorker" in navigator) window.addEventListener("load", () => void navigator.serviceWorker.register("/sw.js"));
-ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><ErrorBoundary><App /></ErrorBoundary></React.StrictMode>);
+const page = voiceProbeWanted() ? <React.Suspense fallback={null}><VoiceProbe /></React.Suspense> : <App />;
+ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><ErrorBoundary>{page}</ErrorBoundary></React.StrictMode>);
 
