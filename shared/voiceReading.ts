@@ -522,10 +522,15 @@ function blockChunks(block: Block, all: boolean, ctx: Ctx): ReadingChunk[] {
   }
 }
 
+/** A section's heading as said, `""` for none. */
+function headingText(section: SourceSection, ctx: Ctx): string {
+  return section.heading === null ? "" : sayProse(section.heading, ctx.labels);
+}
+
+/** The heading's chunks: a `#` line has no length limit, and a chunk over
+ * `maxChunk` is one Chrome on Android cuts off and never ends. */
 function headingChunk(section: SourceSection, ctx: Ctx): ReadingChunk[] {
-  if (section.heading === null) return [];
-  const text = sayProse(section.heading, ctx.labels);
-  return text ? [{ text, kind: "heading" }] : [];
+  return speechChunks(headingText(section, ctx), ctx.maxChunk).map((text) => ({ text, kind: "heading" }));
 }
 
 function sectionChunks(section: SourceSection, all: boolean, ctx: Ctx): ReadingChunk[] {
@@ -546,7 +551,7 @@ function outlineChunks(section: SourceSection, ctx: Ctx): ReadingChunk[] {
   if (!first) return head;
   if (first.kind === "text" || first.kind === "item") {
     const sentence = FIRST_SENTENCE.exec(first.text)?.[0].trim() ?? first.text;
-    first = { ...first, text: speechChunks(sentence, ctx.limits.maxChars)[0] ?? sentence };
+    first = { ...first, text: speechChunks(sentence, Math.min(ctx.limits.maxChars, ctx.maxChunk))[0] ?? sentence };
   }
   return [...head, first];
 }
@@ -564,7 +569,7 @@ function build(sections: { section: number; chunks: ReadingChunk[] }[], ctx: Ctx
   const kept = sections.filter((entry) => entry.chunks.length > 0);
   return {
     sections: kept.map((entry) => ({
-      heading: headingChunk(parsed.sections[entry.section], ctx)[0]?.text ?? null,
+      heading: headingText(parsed.sections[entry.section], ctx) || null,
       chunks: entry.chunks,
     })),
     source: kept.map((entry) => entry.section),
@@ -821,6 +826,21 @@ export function createReadingCursor(options: ReadingOptions, answers: readonly R
     return chunkAt(pos);
   }
 
+  /** A skip past the end ("next" in the last section, "next answer" in the
+   * last answer): reading stops at this answer's last chunk, so a later
+   * `advance` (following) goes on into new answers, never back into what
+   * was skipped. */
+  function skipToEnd(): null {
+    detour = null;
+    done = true;
+    const outline = pos ? outlineOf(pos.id) : null;
+    if (pos && outline && outline.sections.length > 0) {
+      const section = outline.sections.length - 1;
+      pos = { id: pos.id, section, chunk: outline.sections[section].chunks.length - 1 };
+    }
+    return null;
+  }
+
   function nextSectionFrom(at: Pos): Pos | null {
     const outline = outlineOf(at.id);
     if (outline && at.section + 1 < outline.sections.length) return { id: at.id, section: at.section + 1, chunk: 0 };
@@ -952,9 +972,7 @@ export function createReadingCursor(options: ReadingOptions, answers: readonly R
       if (!pos) return null;
       const next = nextSectionFrom(pos);
       if (next) return land(next);
-      detour = null;
-      done = true;
-      return null;
+      return skipToEnd();
     },
 
     nextAnswer() {
@@ -962,9 +980,7 @@ export function createReadingCursor(options: ReadingOptions, answers: readonly R
       if (!pos) return null;
       const next = answerStart(indexOf(pos.id) + 1);
       if (next) return land(next);
-      detour = null;
-      done = true;
-      return null;
+      return skipToEnd();
     },
 
     back() {

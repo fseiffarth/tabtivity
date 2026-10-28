@@ -170,6 +170,28 @@ describe("matching an utterance (English)", () => {
     expect(said(match("project kitchen", "en", lists, free))).toBe("openProject project=p-kitchen");
   });
 
+  it("takes a long name said exactly over the same name with a number", () => {
+    // The joined letters of "Project Alpha 2" score 0.92 against "project
+    // alpha": without the exact rule that was an ambiguity, and saying the
+    // exact name again could not resolve it.
+    const numbered: VoiceLists = {
+      projects: [{ id: "pa", name: "Project Alpha" }, { id: "pa2", name: "Project Alpha 2" }, { id: "km", name: "Kitchen Remodel" }, { id: "km2", name: "Kitchen Remodel 2" }],
+    };
+    expect(said(match("project project alpha", "en", numbered, free))).toBe("openProject project=pa");
+    expect(said(match("project project alpha two", "en", numbered, free))).toBe("openProject project=pa2");
+    expect(said(match("project kitchen remodel", "en", numbered, free))).toBe("openProject project=km");
+    const asked: VoiceMatch = {
+      kind: "ambiguous",
+      id: "openProject",
+      slot: "project",
+      candidates: [numbered.projects![0], numbered.projects![1]],
+      partial: {},
+      heardCommandWord: false,
+    };
+    expect(said(resolveAmbiguity("Project Alpha", asked, "en") ?? match("", "en"))).toBe("openProject project=pa");
+    expect(said(resolveAmbiguity("Project Alpha 2", asked, "en") ?? match("", "en"))).toBe("openProject project=pa2");
+  });
+
   it("does not take a different name for a misheard one", () => {
     expect(said(match("project delta", "en", lists, free))).toBe("nothing:unknownName");
     expect(said(match("project omega", "en", lists, free))).toBe("nothing:unknownName");
@@ -244,6 +266,9 @@ describe("matching an utterance (English)", () => {
     expect(said(match("new to-do Buy oat milk", "en", lists, free))).toBe("newTodo text=Buy oat milk");
     // A text slot never stands empty.
     expect(match("reply", "en", lists, free).kind).toBe("nothing");
+    // Nor starts inside a word: "that's" is not "that" plus the dictation "s …".
+    expect(said(match("tell Claude that's wrong", "en", lists, free))).toBe("tell agent=claude text=that's wrong");
+    expect(said(match("reply that's fine, thanks", "en", lists, free))).toBe("replyMail text=that's fine, thanks");
   });
 
   it("reports whether the command word was said, and types the args by id", () => {
@@ -278,6 +303,15 @@ describe("the personal command word", () => {
     expect(said(match("Jarvi projects", "en", lists, own))).toBe("nothing:noCommandWord");
     expect(said(match("Jarviss projects", "en", lists, own))).toBe("nothing:noCommandWord");
     expect(said(match("Jar vis projects", "en", lists, own))).toBe("projects");
+  });
+
+  it("may be a phrase of five words or more", () => {
+    // The safer the phrase, the longer: it once stopped being heard past four words.
+    const phrase = { commandWord: "listen up my kitchen helper" };
+    expect(said(match("Listen up, my kitchen helper: projects", "en", lists, phrase))).toBe("projects");
+    expect(hasCommandWord("listen up my kitchen helper next waiting", "en", phrase.commandWord)).toBe(true);
+    expect(said(match("listen up my kitchen projects", "en", lists, phrase))).toBe("nothing:noCommandWord");
+    expect(matchReading("listen up my kitchen helper next", "en", phrase.commandWord)).toBe("next");
   });
 
   it("works in every language, and a blank one falls back to the default", () => {

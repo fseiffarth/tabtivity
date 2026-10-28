@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { LANGUAGES, loadDict, translate } from "../../lib/i18n";
+import { matchReading } from "../../lib/voice/voiceCommands";
 import {
   codeChunks,
   createReadingCursor,
@@ -100,6 +102,19 @@ describe("the reading outline", () => {
       "See chime.ts and todo.md, also the docs and a link. And/or 1/2 stay.",
     );
     expect(said(outlineAnswer("Open **/etc/hosts** now.", "full", options))[0][0]).toBe("Open hosts now.");
+  });
+
+  it("cuts a long heading into chunks of at most the maximum too", () => {
+    const heading = Array.from({ length: 80 }, (_, i) => `word${i}`).join(" ");
+    const outline = outlineAnswer(`# ${heading}\n\nText.`, "full", options);
+    const chunks = outline.sections[0].chunks;
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) expect(chunk.text.length).toBeLessThanOrEqual(220);
+    expect(chunks.filter((chunk) => chunk.kind === "heading").map((chunk) => chunk.text).join(" ")).toBe(heading);
+    expect(outline.sections[0].heading).toBe(heading);
+    // The outline's first sentence keeps to a smaller `maxChunk` as well.
+    const brief = outlineAnswer(`## H\n\n${"long ".repeat(60)}end.`, "outline", { ...options, maxChunk: 50 });
+    for (const chunk of brief.sections[0].chunks) expect(chunk.text.length).toBeLessThanOrEqual(50);
   });
 
   it("cuts long paragraphs into chunks of at most the maximum", () => {
@@ -232,6 +247,31 @@ describe("the reading cursor", () => {
     expect(c.repeat()?.text).toBe("Last answer.");
   });
 
+  it("a skip past the end never comes back to what it skipped", () => {
+    // "next" in the last section, then a new answer arrives while following:
+    // reading goes on with the new answer, not with the skipped section.
+    const two = { id: "two", agent: "Claude", text: "## One\n\nA one. A two.\n\n## Two\n\nB one. B two." };
+    const fresh = { id: "fresh", agent: "Claude", text: "New answer." };
+    const c = createReadingCursor({ ...options, maxChunk: 10 }, [two]);
+    c.start("two", { follow: true });
+    expect(c.next()?.text).toBe("Two");
+    expect(c.next()).toBeNull();
+    expect(c.ended()).toBe(true);
+    c.setAnswers([two, fresh]);
+    expect(c.advance()?.text).toBe("New answer.");
+    // "next answer" in the last answer, likewise.
+    const d = createReadingCursor({ ...options, maxChunk: 10 }, [two]);
+    d.start("two", { follow: true });
+    expect(d.nextAnswer()).toBeNull();
+    d.setAnswers([two, fresh]);
+    expect(d.advance()?.text).toBe("New answer.");
+    // Without new answers, nothing more is read.
+    const e = createReadingCursor({ ...options, maxChunk: 10 }, [two]);
+    e.start("two", { follow: true });
+    e.nextAnswer();
+    expect(e.advance()).toBeNull();
+  });
+
   it("\"back\" is the previous chunk; twice, the section before", () => {
     const c = cursor();
     c.start("a1");
@@ -321,5 +361,27 @@ describe("labels and code", () => {
   it("packs code lines into chunks", () => {
     expect(codeChunks("a\n\nb\n", 10).map((chunk) => chunk.text)).toEqual(["a\nb"]);
     expect(codeChunks("x".repeat(5) + "\n" + "y".repeat(8), 10).map((chunk) => chunk.text)).toEqual(["xxxxx", "yyyyyyyy"]);
+  });
+});
+
+describe("the dictionaries' reading lines", () => {
+  const langs = LANGUAGES.map((language) => language.value);
+  beforeAll(async () => {
+    for (const lang of langs) expect(await loadDict(lang)).toBe(true);
+  });
+
+  it.each(langs)("%s: fill every label, and the long-answer line names the language's own \"summary\" command", (lang) => {
+    // The call S6 makes: `translate` passes as a `ReadingTranslate` as is.
+    const t = readingLabels((key, params) => translate(lang, key, params));
+    const position = { id: "a", answer: 2, answers: 3, section: 1, sections: 4, chunk: 1, chunks: 2 };
+    const lines = [t.code(12), t.code(1), t.table(6), t.table(1), t.more(5), t.link(), t.answered("Claude", 40),
+      t.answered("Claude", 1), t.answeredLong("Claude", 40), t.answeredLong("Claude", 1), t.where(position)];
+    for (const line of lines) expect(line, line).not.toMatch(/[{}]|voice\.reading/);
+    for (const key of READING_LABEL_KEYS) if (lang !== "en") expect(translate(lang, key), key).not.toBe(translate("en", key));
+    for (const line of [t.answeredLong("Claude", 40), t.answeredLong("Claude", 1)]) {
+      const quoted = /[“„«"]\s*([^”“»"]+?)\s*[”“»"]/u.exec(line)?.[1];
+      expect(quoted, line).toBeTruthy();
+      expect(matchReading(quoted ?? "", lang), line).toBe("summary");
+    }
   });
 });

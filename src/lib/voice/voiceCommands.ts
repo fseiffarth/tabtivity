@@ -389,11 +389,13 @@ function commandWordKey(lang: Language, personal: string | null | undefined): st
 }
 
 /** How many leading tokens the command word takes, 0 when it is not first.
- * An exact match of the normalized words, no fuzzy margin (decision 5). */
+ * An exact match of the normalized words, no fuzzy margin (decision 5). No
+ * cap on the words: a personal command word may be a phrase of five words
+ * or more, and the prefix test ends the walk at the first word off. */
 function commandWordLength(tokens: readonly Token[], key: string): number {
   if (!key) return 0;
   let joined = "";
-  for (let index = 0; index < Math.min(tokens.length, 4); index++) {
+  for (let index = 0; index < tokens.length; index++) {
     joined += tokens[index].norm;
     if (joined === key) return index + 1;
     if (!key.startsWith(joined)) return 0;
@@ -510,6 +512,12 @@ function resolveName(heard: readonly string[], list: readonly VoiceListItem[] | 
     .filter((entry) => entry.score >= NAME_FLOOR)
     .sort((a, b) => b.score - a.score || b.tie - a.tie || a.item.name.length - b.item.name.length);
   if (!scored.length) return { kind: "none" };
+  // A name said exactly (letter for letter, after the phonetic key) is that
+  // name, however close a longer one comes: "Project Alpha" is not asked back
+  // against "Project Alpha 2", whose joined letters score 0.92. Two exact ones
+  // ("Alpha", "Alfa") still ask back.
+  const exact = scored.filter((entry) => entry.score >= 1);
+  if (exact.length === 1) return { kind: "one", item: exact[0].item, score: 1 };
   const close = scored.filter((entry) => scored[0].score - entry.score < NAME_MARGIN);
   if (close.length === 1) return { kind: "one", item: close[0].item, score: close[0].score };
   return { kind: "ambiguous", candidates: close.slice(0, 3).map((entry) => entry.item), score: close[0].score };
@@ -651,6 +659,9 @@ function evaluate(template: Template, spans: Spans, source: Words, tokens: reado
       if (value < 1 || value > 99) return null;
       values.n = value;
     } else if (slot === "text") {
+      // Dictation starts at a word: "that's wrong" splits into "that" + "s"
+      // at the apostrophe, and "tell {agent} that {text}" must not send "s wrong".
+      if (span[0] > 0 && !/\s/u.test(source.text.slice(tokens[span[0] - 1].end, tokens[span[0]].start))) return null;
       const text = rawText(source, tokens, span);
       if (!text) return null;
       values.text = text;
