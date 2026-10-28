@@ -170,9 +170,8 @@ pub async fn host_tab_copy(
     }
     let local = mirror_file(project_id, host_id, launch_id);
     let every = if crate::services::hpc_mode::is_careful_host(&target.spec) { CAREFUL_CHECK_EVERY } else { CHECK_EVERY };
-    let key = format!("{}\n{}\n{launch_id}", crate::storage::project_key(project_id), crate::storage::project_key(host_id));
     let mut mirrors = MIRRORS.lock().await;
-    let mirror = mirrors.entry(key).or_default();
+    let mirror = mirrors.entry(mirror_key(project_id, host_id, launch_id)).or_default();
     let fresh = mirror.checked.is_some_and(|at| at.elapsed() < every);
     // While the host cannot be asked (the session dropped, a stat failed), a
     // conversation copied before is still the one shown.
@@ -194,6 +193,18 @@ pub async fn host_tab_copy(
     Some(if mirror.remote.is_none() { HostCopy::NotYet } else { HostCopy::At(local) })
 }
 
+/// The [`MIRRORS`] entry of one host tab.
+fn mirror_key(project_id: &str, host_id: &str, launch_id: &str) -> String {
+    format!("{}\n{}\n{launch_id}", crate::storage::project_key(project_id), crate::storage::project_key(host_id))
+}
+
+/// Forget what is known of the host tab's conversation: the tab's
+/// conversation was just taken to or from that host
+/// (`services::agent_host_move`), so the next read finds it afresh.
+pub async fn forget(project_id: &str, host_id: &str, launch_id: &str) {
+    MIRRORS.lock().await.remove(&mirror_key(project_id, host_id, launch_id));
+}
+
 /// The session the tab launched as `launch_id` runs on the host now, and the
 /// folder it runs in. Claude keeps a `~/.claude/sessions/<pid>.json` per
 /// running CLI naming the session it is on, and the tab's CLI carries the
@@ -201,7 +212,7 @@ pub async fn host_tab_copy(
 /// exports). Both are read over SFTP — the environment from
 /// `/proc/<pid>/environ` — so nothing runs on the host. `None` when no running
 /// CLI of the tab is found: it exited, or the host has no readable `/proc`.
-async fn running_session(sftp: &Sftp, launch_id: &str) -> Option<(String, String)> {
+pub(crate) async fn running_session(sftp: &Sftp, launch_id: &str) -> Option<(String, String)> {
     let entries = crate::services::sftp::list_dir_raw_on(sftp, SESSIONS).await.ok()?;
     let pids = entries.iter().filter_map(|entry| {
         let pid = entry.name.strip_suffix(".json")?;

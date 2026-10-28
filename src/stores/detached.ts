@@ -39,6 +39,7 @@ import type { DetachedGroup, WindowBounds } from "./tabs/types";
 import type { LocalityHost } from "./tabs/tabLocation";
 import { useProjectsStore } from "./projects";
 import { noteClosedPopoutTabs, reopenClosedAgentTab } from "./agents/closedAgentTabs";
+import { carriesAcrossHosts, switchTabLocation } from "./agents/agentLocationSwitch";
 import {
   PRIMARY_HOST,
   hostStateOf,
@@ -1127,6 +1128,17 @@ export async function listenDetachedHost(): Promise<() => void> {
       // it belongs in that scope's own layout, which only this window holds.
       store.addTabToScope(edit.scope, edit.tab);
       return;
+    }
+    if (edit.kind === "setLocation") {
+      // Through the locality switch, as the main bar's badge: an agent tab's
+      // conversation comes along (`agentLocationSwitch`). The popout learns
+      // the outcome from the reseed.
+      const tab = (store.tabsByScope[scope] ?? []).find((t) => t.key === edit.key);
+      const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
+      if (tab && carriesAcrossHosts(tab, project, edit.location)) {
+        void switchTabLocation(scope, tab, edit.location).then(() => reseedDetached(scope, groupId));
+        return;
+      }
     }
     if (edit.kind === "close" && edit.user) noteClosedPopoutTabs(scope, groupId, [edit.key]);
     store.applyDetachedEdit(scope, groupId, edit);

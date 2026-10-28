@@ -77,6 +77,7 @@ import { newDropToken, probeDropTarget } from "../../lib/window/dropClaim";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useProjectsStore } from "../../stores/projects";
+import { carriesAcrossHosts, switchTabLocation } from "../../stores/agents/agentLocationSwitch";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { closeTabWithConfirm } from "../../lib/remote/closeRemoteTab";
@@ -491,7 +492,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const storeAddTab = useTabsStore((s) => s.addTab);
   const duplicateTab = useTabsStore((s) => s.duplicateTab);
   const storeEnsureTab = useTabsStore((s) => s.ensureTab);
-  const setTabLocation = useTabsStore((s) => s.setTabLocation);
   // Experimental — off until ticked: the in-app browser (#61). This is
   // the entry-point half of the gate; the other half is the withdrawal
   // (`lib/experimentalSweep`), which closes any browser tab already open when the
@@ -516,6 +516,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const computeHosts = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.compute_hosts);
   // A VM project's tabs are pinned to the VM, so its agents get no machine list.
   const isVmScope = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.vm?.enabled);
+  const scopeProject = useProjectsStore((s) => s.projects.find((p) => p.id === scope));
   // Per-tab file source (remote-native vs local mirror), published by the file
   // viewers. Lets the Remote/Local badge ride on the viewer tab itself rather
   // than costing a whole viewer header row. Only meaningful on remote projects.
@@ -632,7 +633,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Right-click on a tab-group chip: its own menu (rename / ungroup / close).
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
-  const { promptText, dialogs } = useDialogs();
+  const { promptText, showMessage, dialogs } = useDialogs();
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   // The tabs live in their own horizontally-scrolling strip; chevrons flank it
@@ -2051,17 +2052,28 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           <AgentScheduleDialog scope={scope} tab={tab} onClose={() => setScheduleDialogKey(null)} />
         ) : null;
       })()}
-      {localityMenu && (
-        <LocalityMenu
-          menu={localityMenu}
-          current={tabLocation(tabs.find((tb) => tb.key === localityMenu.key))}
-          primaryHost={primaryHost}
-          computeHosts={computeHosts}
-          onClose={() => setLocalityMenu(null)}
-          onChangeView={(view) => setLocalityMenu((m) => (m ? { ...m, view } : m))}
-          onChoose={(key, loc) => setTabLocation(key, loc)}
-        />
-      )}
+      {localityMenu && (() => {
+        const tab = tabs.find((tb) => tb.key === localityMenu.key);
+        return (
+          <LocalityMenu
+            menu={localityMenu}
+            current={tabLocation(tab)}
+            primaryHost={primaryHost}
+            computeHosts={computeHosts}
+            onClose={() => setLocalityMenu(null)}
+            onChangeView={(view) => setLocalityMenu((m) => (m ? { ...m, view } : m))}
+            carriesConversation={!!tab && carriesAcrossHosts(tab, scopeProject, tabLocation(tab) === "local" ? "remote" : "local")}
+            onChoose={(_key, loc) => {
+              if (!tab) return;
+              void switchTabLocation(scope, tab, loc).then((result) => {
+                if (result === "failed") {
+                  void showMessage({ title: t("tabLocality.moveFailedTitle"), body: t("tabLocality.moveFailedBody") });
+                }
+              });
+            }}
+          />
+        );
+      })()}
       {tabMenu && (
         <ContextMenuPortal
           x={tabMenu.x}

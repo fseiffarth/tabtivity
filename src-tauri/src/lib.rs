@@ -2519,6 +2519,7 @@ pub fn run() {
             commands::agents::agent_tab_chats,
             commands::agents::agent_tab_resume_chat,
             commands::agents::agent_tab_move_session,
+            commands::agents::agent_tab_move_host,
             commands::ollama::ollama_status,
             commands::ollama::ollama_gpu_status,
             commands::ollama::ollama_models_dir_plan,

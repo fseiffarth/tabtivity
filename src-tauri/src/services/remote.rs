@@ -23,6 +23,8 @@
 //! opts into "Save password", it is kept in the OS keychain (never our JSON) and
 //! reused here for silent reconnect (see `services::remote_credentials`).
 
+// An agent tab's conversation taken along when it moves between here and a host.
+pub mod agent_host_move;
 pub mod remote_credentials;
 pub mod remote_sync;
 // A host tab's conversation, copied from the host over the pooled SFTP session.
