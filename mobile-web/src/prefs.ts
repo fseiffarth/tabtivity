@@ -42,8 +42,10 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * `limitBars` shows the facts row's usage limits as bars rather than
  * percentages, off unset. `focusHandsFree` is the Focus composer's hands-free
  * loop (`shared/handsFree.ts`): a pause sends the dictation after a cancel
- * window and the mic opens again once the answer is over, off unset. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff" | "focusHandsFree";
+ * window and the mic opens again once the answer is over, off unset.
+ * `voiceBrief` reads answers aloud in brief — headings and first sentences
+ * (`shared/voiceReading.ts`) — rather than whole, off unset. */
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff" | "focusHandsFree" | "voiceBrief";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
@@ -94,8 +96,10 @@ export function writeFlag(name: MobileFlag, value: boolean, storage?: FlagStorag
  * tap on the project screen's ＋ starts (`newTabDefault.ts`), an id the
  * desktop's catalog lists, or `api:<id>` / `local:<id>` for the sheet's API and
  * local-model rows, whose `newTabLabel` is the name it was starred under; unset,
- * the desktop's default agent is used. */
-export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen" | "newTabAgent" | "newTabLabel";
+ * the desktop's default agent is used. `voiceRate` is read-aloud's speaking
+ * rate, one of `speechOutput.ts` `READING_RATES`, stepped by "faster" /
+ * "slower"; unset, the voice's own pace. */
+export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen" | "newTabAgent" | "newTabLabel" | "voiceRate";
 
 export function readChoice<T extends string>(name: MobileChoice, accept: (value: unknown) => value is T, fallback: T, storage?: FlagStorage): T {
   try {

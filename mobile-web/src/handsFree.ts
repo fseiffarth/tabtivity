@@ -18,16 +18,19 @@ export const TURN_SETTLE_MS = 1_500;
  * again. The phone reads the agent's busy row off the live screen
  * (`agentWork`); the turn is over once that was seen and is gone, or once the
  * agent waits on a question, or once a new answer arrived while it looks idle
- * — a turn too quick for its busy row to reach the phone.
+ * — a turn too quick for its busy row to reach the phone. A wait that only
+ * read aloud (a spoken reading command such as "repeat") started no turn:
+ * it is over at once, and the mic waits for the voice alone.
  */
 export function handsFreeTurnOver(state: {
+  reading?: boolean;
   busy: boolean;
   sawWork: boolean;
   question: boolean;
   answerAtSend: string | null;
   answerNow: string | null;
 }): boolean {
-  if (state.question) return true;
+  if (state.question || state.reading) return true;
   if (state.busy) return false;
   return state.sawWork || (state.answerNow !== null && state.answerNow !== state.answerAtSend);
 }

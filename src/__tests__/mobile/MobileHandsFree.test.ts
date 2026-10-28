@@ -13,6 +13,12 @@ const prompt = (labels: string[], extra: Partial<SelectPrompt> = {}): SelectProm
 } as SelectPrompt);
 
 describe("the phone's hands-free loop", () => {
+  it("ends a wait on a reading command at once: no turn was started", () => {
+    const idle = { busy: false, sawWork: false, question: false, answerAtSend: "a1", answerNow: "a1" };
+    expect(handsFreeTurnOver(idle)).toBe(false);
+    expect(handsFreeTurnOver({ ...idle, reading: true })).toBe(true);
+  });
+
   it("picks a question's row by the number it printed", () => {
     const yesNo = prompt(["Yes", "Yes, and don't ask again", "No, and tell Claude what to do"]);
     expect(voicePick("two", yesNo)?.label).toBe("Yes, and don't ask again");

@@ -57,3 +57,10 @@ export function speechTag(choice: SpeechLang = readSpeechLang(), scope: { langua
   if (choice !== "auto") return SPOKEN_TAG[choice];
   return scope.language || "en-US";
 }
+
+/** The app language a BCP-47 tag speaks (`de-AT` → `de`), for the lines and
+ * the command phrases said and heard in it; English for any other. */
+export function speechLanguage(tag: string = speechTag()): Language {
+  const base = tag.toLowerCase().split("-")[0];
+  return LANGUAGES.find((language) => language.value === base)?.value ?? "en";
+}

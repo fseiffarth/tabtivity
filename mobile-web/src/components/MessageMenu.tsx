@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { speechTag } from "../speechLang";
-import { currentSpeechId, speak, speechOutputSupported, stopSpeaking, subscribeSpeech } from "../speechOutput";
-import { spokenText } from "../../../shared/voice";
+import { currentSpeechId, readMessage, speechOutputSupported, stopSpeaking, subscribeSpeech } from "../speechOutput";
 import { useBackLayer } from "../backStack";
 
 /** How long a finger rests on a bubble before its menu opens. Long enough
@@ -71,10 +70,12 @@ function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; 
     }
   };
   // Reading keeps the sheet open: the row that started the voice is the one
-  // that stops it, and the backdrop dismisses it in a tap.
+  // that stops it, and the backdrop dismisses it in a tap. An answer of the
+  // open session is read on that tab's reading cursor, so the spoken moves
+  // go on from it (`speechOutput.ts` `readMessage`).
   const read = () => {
     if (speaking) stopSpeaking();
-    else speak(id, spokenText(text, t("mobile.speech.code")), speechTag(), true);
+    else readMessage(id, text, speechTag());
   };
   const title = t("mobile.focus.messageMenu");
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
@@ -124,7 +125,7 @@ function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; 
             {speaking
               ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg>
               : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l5 4V6l-5 4zM16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" /></svg>}
-            <span><strong>{t(speaking ? "mobile.speech.stop" : "mobile.speech.read")}</strong></span>
+            <span><strong>{t(speaking ? "mobile.speech.stop" : "mobile.speech.read")}</strong>{isUntested("mobile.speech.cursor") && <small>{t("mobile.focus.untested")}</small>}</span>
           </button>
         </li>}
       </ul>
