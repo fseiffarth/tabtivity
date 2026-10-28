@@ -221,6 +221,84 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
     }
   });
 
+  // Before the hold, each answer was read as it arrived. A wait that ends
+  // without its read (hands-free switched off, the link lost) must not leave
+  // the answers it held unread: they were marked heard while it held them.
+  it.each(["hands-free switched off", "the link lost"])("hands-free: a turn wait that ends early (%s) still reads the answers it held", async (how) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      FakeRecognition.instances = [];
+      Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: FakeRecognition });
+      localStorage.setItem(storageKey("mobile.focusHandsFree"), "1");
+      localStorage.setItem(storageKey("mobile.focusReadAloud"), "1");
+      let entries = [FIRST];
+      vi.stubGlobal("fetch", sidecarFetch(() => ({ available: true, version: `${entries.length}:1`, truncated: false, entries })));
+      render(<Terminal tab={TAB} back={() => {}} />);
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+      await act(async () => {});
+      act(() => FakeRecognition.instances[0].onresult?.(heard("fix the login")));
+      await act(async () => { vi.advanceTimersByTime(3_000); });
+
+      entries = [FIRST, SECOND];
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      await settle();
+      expect(spoken.map((utterance) => utterance.text)).toEqual([]);
+
+      if (how === "the link lost") {
+        act(() => { FakeWebSocket.instances.forEach((socket) => socket.close()); });
+      } else {
+        fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+        fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Hands-free/ }));
+      }
+      await settle();
+      expect(spoken.map((utterance) => utterance.text).filter((text) => text !== "")).toEqual(["Done: the ✕ empties the draft."]);
+    } finally {
+      vi.useRealTimers();
+      delete (window as Window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
+    }
+  });
+
+  it("hands-free: a send dictated over a held turn reads that turn's answers with the next", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      FakeRecognition.instances = [];
+      Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: FakeRecognition });
+      localStorage.setItem(storageKey("mobile.focusHandsFree"), "1");
+      localStorage.setItem(storageKey("mobile.focusReadAloud"), "1");
+      const third = { kind: "answer", text: "And the logout too.", at: "2026-09-15T05:50:10.000Z" };
+      let entries = [FIRST];
+      vi.stubGlobal("fetch", sidecarFetch(() => ({ available: true, version: `${entries.length}:1`, truncated: false, entries })));
+      render(<Terminal tab={TAB} back={() => {}} />);
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+      await act(async () => {});
+      act(() => FakeRecognition.instances[0].onresult?.(heard("fix the login")));
+      await act(async () => { vi.advanceTimersByTime(3_000); });
+      entries = [FIRST, SECOND];
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      await settle();
+
+      // The reader dictates again before the wait was over, and sends.
+      fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+      await act(async () => {});
+      act(() => FakeRecognition.instances[FakeRecognition.instances.length - 1].onresult?.(heard("and the logout")));
+      await act(async () => { vi.advanceTimersByTime(3_000); });
+      expect(spoken.map((utterance) => utterance.text)).toEqual([]);
+
+      entries = [FIRST, SECOND, third];
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      await settle();
+      await act(async () => { vi.advanceTimersByTime(1_600); });
+      act(() => { spoken[0].onend?.(); });
+      act(() => { spoken[1].onend?.(); });
+      expect(spoken.map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft.", "code block, one line", "And the logout too."]);
+    } finally {
+      vi.useRealTimers();
+      delete (window as Window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
+    }
+  });
+
   it("speaks in the phone's language until the picker chooses another", async () => {
     Object.defineProperty(window.navigator, "language", { configurable: true, value: "en-GB" });
     vi.stubGlobal("fetch", sidecarFetch(() => ({ available: true, version: "1:1", truncated: false, entries: [FIRST] })));

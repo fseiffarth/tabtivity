@@ -58,10 +58,11 @@ export function useHandsFree({
   const [guardPhase, setGuardPhase] = useState<GuardPhase>("idle");
   /** Hands-free sent at this time and waits for the turn to end, to open the
    * mic again; `sawWork` once the agent was seen at work on it, `answer` the
-   * newest answer's key at the send, `read` once its answers were read,
-   * `reading` for a wait on a spoken reading command alone. */
+   * newest answer's key at the send, `since` the answer its reading starts
+   * after, `read` once its answers were read, `reading` for a wait on a
+   * spoken reading command alone. */
   const [handsFreeWait, setHandsFreeWait] = useState<number | null>(null);
-  const handsFreeTurn = useRef<{ sawWork: boolean; answer: string | null; read: boolean; reading: boolean }>({ sawWork: false, answer: null, read: false, reading: false });
+  const handsFreeTurn = useRef<{ sawWork: boolean; answer: string | null; since: string | null; read: boolean; reading: boolean }>({ sawWork: false, answer: null, since: null, read: false, reading: false });
   /** Whether read-aloud is saying something now (`speechOutput`). */
   const [speaking, setSpeaking] = useState(() => currentSpeechId() !== null);
   useEffect(() => subscribeSpeech(() => setSpeaking(currentSpeechId() !== null)), []);
@@ -76,13 +77,17 @@ export function useHandsFree({
   /** Hands-free sent: the mic opens again once the turn is over and its
    * answers were read. Read-aloud holds them until then. */
   const awaitTurn = () => {
-    handsFreeTurn.current = { sawWork: false, answer: lastAnswerKey, read: false, reading: false };
+    // A send while the last turn's answers are still held unread (dictated
+    // over the wait) reads those too: they were held, never heard.
+    const held = handsFreeWait !== null && !handsFreeTurn.current.read;
+    const since = held ? handsFreeTurn.current.since : lastAnswerKey;
+    handsFreeTurn.current = { sawWork: false, answer: lastAnswerKey, since, read: false, reading: false };
     holdReadingForTurn(tab.id, true);
     setHandsFreeWait(Date.now());
   };
   /** A reading command moved the voice: the mic opens again once it is quiet. */
   const awaitReading = () => {
-    handsFreeTurn.current = { sawWork: false, answer: lastAnswerKey, read: true, reading: true };
+    handsFreeTurn.current = { sawWork: false, answer: lastAnswerKey, since: lastAnswerKey, read: true, reading: true };
     setHandsFreeWait(Date.now());
   };
   /** The turn's answers, read once: at its end, or before a question it
@@ -90,7 +95,7 @@ export function useHandsFree({
   const readTheTurn = () => {
     if (!readAloud || handsFreeTurn.current.read) return false;
     handsFreeTurn.current.read = true;
-    return readTurn(tab.id, handsFreeTurn.current.answer);
+    return readTurn(tab.id, handsFreeTurn.current.since);
   };
   const awaitTurnRef = useRef(awaitTurn);
   awaitTurnRef.current = awaitTurn;
@@ -150,9 +155,21 @@ export function useHandsFree({
     holdReadingForTurn(tab.id, false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id]);
-  // Read-aloud waits for the turn's end only while a turn is awaited.
+  // Read-aloud waits for the turn's end only while a turn is awaited. A wait
+  // that ends before its answers were read (hands-free switched off, the link
+  // lost, the mic's stop) reads them now: they were marked heard while held,
+  // and before the hold each was read as it arrived. Not over dictation.
+  const turnWaited = useRef(false);
   useEffect(() => {
-    if (handsFreeWait === null) holdReadingForTurn(tab.id, false);
+    if (handsFreeWait !== null) {
+      turnWaited.current = true;
+      return;
+    }
+    holdReadingForTurn(tab.id, false);
+    if (!turnWaited.current) return;
+    turnWaited.current = false;
+    if (!listening && !preparingVoice) readTheTurn();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handsFreeWait, tab.id]);
   // Hands-free's turn: the agent seen at work on what was sent.
   useEffect(() => {
