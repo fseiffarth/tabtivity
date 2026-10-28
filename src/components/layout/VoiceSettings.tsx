@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { LANGUAGES, useT, type TranslationKey } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import {
@@ -7,6 +7,7 @@ import {
   VOICE_MODEL_LABELS,
   VOICE_MODELS,
   voiceErrorKey,
+  voiceLangOptions,
   voiceModelInstallCommand,
   voiceStatus,
   type VoiceStatus,
@@ -77,11 +78,7 @@ export function VoiceSettings() {
             value={settings?.voice_lang ?? "auto"}
             ariaLabel={t("settings.voice.lang")}
             onChange={(value) => void updateSettings({ voice_lang: value })}
-            options={[
-              { value: "auto", label: t("settings.voice.langAuto") },
-              ...LANGUAGES.map((language) => ({ value: language.value, label: language.label })),
-              { value: "detect", label: t("settings.voice.langDetect") },
-            ]}
+            options={voiceLangOptions(t)}
           />
         }
       />
