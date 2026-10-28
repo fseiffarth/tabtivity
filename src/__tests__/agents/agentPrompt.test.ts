@@ -145,6 +145,38 @@ describe("looksLikeDecisionPrompt", () => {
     expect(looksLikeDecisionPrompt(screen)).toBe(false);
   });
 
+  it("does not mistake the user's own prompts in Claude's history for a menu", () => {
+    // Claude marks every sent prompt with "❯", its menu pointer too: a sent
+    // "yes, watch for it…" read as a highlighted Yes and lit the tab as a question.
+    const screen = [
+      "  I can watch for the run to finish and start the rerun.",
+      "",
+      "❯ yes, watch for it to finish and rerun the failed stages",
+      "",
+      "  Ran 1 shell command",
+      "",
+      "● I started a background watcher. It waits for the stages to finish.",
+      "",
+      "❯ yes",
+      "",
+      "● No, don't restart it.",
+      "",
+      "❯ 1. fix the n_ids cap bug",
+      "",
+      "● Fixed.",
+      "────────────────",
+      "❯ check progress",
+      "────────────────",
+      "  ⏵⏵ auto mode on · 1 shell · ↓ to manage",
+    ].join("\n");
+    expect(looksLikeDecisionPrompt(screen)).toBe(false);
+  });
+
+  it("detects a pointer on a later option of a menu", () => {
+    expect(looksLikeDecisionPrompt("Allow this command?\n  Yes\n❯ No")).toBe(true);
+    expect(looksLikeDecisionPrompt("Pick a layout\n  1. Grid\n❯ 2. List\n  3. Cards")).toBe(true);
+  });
+
   it("detects Codex's startup hook-trust menu, which has no deny option", () => {
     // Captured live from Codex 0.161.0.
     const screen = [

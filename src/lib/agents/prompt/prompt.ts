@@ -21,13 +21,31 @@
 // sat in its history looking exactly like a highlighted option and lit the tab
 // as blocked on a question that did not exist. Codex's approval menus are
 // numbered yes/no menus, which `hasYesNoMenu` catches without the glyph.
-const POINTER_CHOICE = /[❯▶►➤»]\s*\d+[.)]\s*[^\s\d]/u;
+//
+// Claude's "❯" has the same double life: it marks every sent prompt in its
+// history too. So a pointer row counts only beside another option row of a
+// different number (`hasPointerChoice`): a sent "1. fix x" is one row alone.
+const POINTER_CHOICE = /[❯▶►➤»]\s*(\d+)[.)]\s*[^\s\d]/gu;
 
-// A pointer glyph directly beside a bare yes/no-style word, e.g. "❯ Yes" /
-// "❯ Allow" — the shape a simple binary confirmation takes when it isn't
-// numbered (only multi-choice menus number their options).
+// A pointer glyph beside a bare yes/no-style word, e.g. "❯ Yes" / "❯ Allow" —
+// the shape a simple binary confirmation takes when it isn't numbered (only
+// multi-choice menus number their options). The word must be the whole row
+// (a line end, the text's end, or a column gap a repaint left after it), and a
+// row of the other answer must sit next to it (`hasPointerWordMenu`): Claude's
+// sent "yes, watch for it to finish" and a sent bare "yes" both start with
+// "❯ yes" and lit a finished tab as a question.
 const POINTER_WORD =
-  /[❯▶►➤»]\s*(yes|no|proceed|allow|approve|continue|cancel|reject|deny|don'?t)\b/i;
+  /[❯▶►➤»][ \t]*(yes|no|proceed|allow|approve|continue|cancel|reject|deny|don'?t)[ \t]*(?=\r?\n|$|[ \t]{2})/giu;
+
+// Any bare one-word row, the pointer's counterpart; the same row end.
+const BARE_WORD_ROW = /(?:^|[\r\n]|[ \t]{2})[ \t]*([A-Za-z]+(?:'[A-Za-z]+)?)[ \t]*(?=\r?\n|$|[ \t]{2})/g;
+
+// Another menu row near a pointer row: a number and a word, as `MENU_OPTION`.
+const NUMBERED_ROW = /(?:\D|^)(\d{1,2})[.)][ \t]*[A-Za-z]/g;
+
+// How far either side of a pointer row its sibling options may sit: a menu's
+// rows are adjacent, apart from an option's one-line description.
+const MENU_REACH = 600;
 
 // One row of a numbered menu: the option's number and the FIRST WORD of its
 // label. Matched independently of the pointer glyph, which a partial redraw can
@@ -82,6 +100,43 @@ function hasYesNoMenu(plain: string): boolean {
   return false;
 }
 
+/** The text within `MENU_REACH` of a match, the match itself blanked out. */
+function aroundMatch(plain: string, m: RegExpExecArray): string {
+  const end = m.index + m[0].length;
+  return plain.slice(Math.max(0, m.index - MENU_REACH), m.index) + "\n" + plain.slice(end, end + MENU_REACH);
+}
+
+/** A pointer on a numbered row with another numbered row beside it. */
+function hasPointerChoice(plain: string): boolean {
+  POINTER_CHOICE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = POINTER_CHOICE.exec(plain)) !== null) {
+    const near = aroundMatch(plain, m);
+    NUMBERED_ROW.lastIndex = 0;
+    let row: RegExpExecArray | null;
+    while ((row = NUMBERED_ROW.exec(near)) !== null) {
+      if (Number(row[1]) !== Number(m[1])) return true;
+    }
+  }
+  return false;
+}
+
+/** A pointer on a bare yes/no word with a bare row of the other answer beside it. */
+function hasPointerWordMenu(plain: string): boolean {
+  POINTER_WORD.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = POINTER_WORD.exec(plain)) !== null) {
+    const other = AFFIRM_WORD.test(m[1]) ? DENY_WORD : AFFIRM_WORD;
+    const near = aroundMatch(plain, m);
+    BARE_WORD_ROW.lastIndex = 0;
+    let row: RegExpExecArray | null;
+    while ((row = BARE_WORD_ROW.exec(near)) !== null) {
+      if (other.test(row[1])) return true;
+    }
+  }
+  return false;
+}
+
 // Terminal escape sequences, peeled off in this order: OSC (`ESC ] … BEL|ST`),
 // which can carry an arbitrary payload such as a window title; then CSI
 // (`ESC [ … final byte`), the colour/cursor traffic that makes up most of a TUI
@@ -118,8 +173,8 @@ export function stripAnsi(text: string): string {
  */
 export function looksLikeDecisionPromptStripped(plain: string): boolean {
   if (OPENCODE_QUESTION_KEYS.test(plain)) return true;
-  if (POINTER_CHOICE.test(plain)) return true;
-  if (POINTER_WORD.test(plain)) return true;
+  if (hasPointerChoice(plain)) return true;
+  if (hasPointerWordMenu(plain)) return true;
   if (CODEX_HOOK_TRUST_HEADING.test(plain) && TRUST_OPTION.test(plain)) return true;
   return hasYesNoMenu(plain);
 }
