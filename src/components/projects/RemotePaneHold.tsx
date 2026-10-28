@@ -3,7 +3,9 @@
  * connection is down. Mounting the real terminal/SFTP view here would spawn
  * `ssh -tt` against a dead pool and freeze the window, so the pane is held until
  * the project connects (then it re-renders and the live view takes over). Local
- * panes and the file browser are NOT held — they work on the mirror offline.
+ * panes and the file browser are NOT held — they work on the mirror offline —
+ * except on a host-pinned project (VM, remote-only), which has no mirror: its
+ * Files tab holds here too (`PaneSlot`).
  *
  * Shared by both the remote terminal pane (CenterPanel) and the remote file
  * viewer (FileViewerPane, for a remote-native file), so a disconnected remote
