@@ -4,7 +4,7 @@ import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type Agent
 import { GitSheet } from "./GitSheet";
 import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
-import { readChoice, readFlag, writeChoice, writeFlag } from "../prefs";
+import { readChoice, readFlag, writeChoice, writeFlag, type MobileFlag } from "../prefs";
 import { useRowDrag } from "../rowDrag";
 import { applyServerOrder, placeBeside } from "../tabReorder";
 import { ColorSheet } from "./ColorSheet";
@@ -63,6 +63,12 @@ const HOST_NOTE: Partial<Record<ProjectHost, TranslationKey>> = {
   remote: "mobile.project.hostRemote",
   container: "mobile.project.hostContainer",
   vm: "mobile.project.hostVm",
+};
+/** The flag the × on that line sets, per type (`prefs.ts`). */
+const HOST_NOTE_FLAG: Partial<Record<ProjectHost, MobileFlag>> = {
+  remote: "projectNoteRemote",
+  container: "projectNoteContainer",
+  vm: "projectNoteVm",
 };
 /** Why a project the host gave no folder for has no files, Git or send-a-file,
  * by type: a remote project has no local copy yet, a VM keeps its files. */
@@ -296,6 +302,16 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     setHintsGone((gone) => gone[which] ? gone : { ...gone, [which]: true });
     writeFlag(which === "reorder" ? "projectHintReorder" : which === "swipe" ? "projectHintSwipe" : "projectHintHold", true);
   };
+  /** The project types whose line under the header the reader hid with its ×. */
+  const [hostNotesGone, setHostNotesGone] = useState(() => new Set(Object.entries(HOST_NOTE_FLAG).flatMap(([host, flag]) => readFlag(flag) ? [host] : [])));
+  const dropHostNote = (host: ProjectHost) => {
+    const flag = HOST_NOTE_FLAG[host];
+    if (!flag) return;
+    writeFlag(flag, true);
+    setHostNotesGone((gone) => new Set(gone).add(host));
+  };
+  const projectHost = detail?.project.host ?? "local";
+  const hostNote = hostNotesGone.has(projectHost) ? undefined : HOST_NOTE[projectHost];
   /** The tab whose close is in flight — its ✕ is held until the desktop answers. */
   const [closingId, setClosingId] = useState<string | null>(null);
   /** The card a swipe is closing: it slides out while the desktop answers,
@@ -699,11 +715,15 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         agents are the ones on this computer, and a container's or VM's tabs are
         not on the phone yet. A project with no folder to give says so too —
         the files, Git and send-a-file entries are gone, and the reader should
-        not have to wonder why. */}
-    {detail && (HOST_NOTE[detail.project.host ?? "local"] || folderless) && <p className="notice">{[
-      HOST_NOTE[detail.project.host ?? "local"],
-      folderless ? (hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[detail.project.host ?? "local"]) : undefined,
-    ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+        not have to wonder why. The type's line hides for good on its ×; the
+        no-folder half stays, since it explains entries this project lacks. */}
+    {detail && (hostNote || folderless) && <p className="notice project-host-note">
+      <span>{[
+        hostNote,
+        folderless ? (hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[projectHost]) : undefined,
+      ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+      {hostNote && <button onClick={() => dropHostNote(projectHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
+    </p>}
     {error && <p className="error">{error}</p>}
     <HintQueue hints={tips} vars={{ agentHold: { agent: quickLabel ?? "" } }} />
     {projectInbox.view}

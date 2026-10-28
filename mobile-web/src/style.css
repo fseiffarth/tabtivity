@@ -410,7 +410,9 @@ small { color:#9498aa; }
 .home-project-card .count::before { content:""; width:11px; height:9px; border:1.5px solid currentColor; border-radius:2px; }
 .home-hint,.project-hint { display:flex; align-items:center; gap:var(--sp-1); margin:6px 0 0 var(--sp-1); color:var(--ink-muted); font-size:var(--fs-foot); line-height:1.35; }
 .home-hint > span,.project-hint > span { flex:1 1 auto; min-width:0; }
-.home-hint > button,.project-hint > button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -6px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.2rem; }
+.project-host-note { display:flex; align-items:flex-start; gap:var(--sp-1); }
+.project-host-note > span { flex:1 1 auto; min-width:0; }
+.home-hint > button,.project-hint > button,.project-host-note > button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -6px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.2rem; }
 .hint-message { margin:12px 0; padding:10px 14px; border:1px solid #4a426e; border-radius:14px; background:#211e35; color:#e6e9f2; font-size:var(--fs-sub); line-height:1.45; }
 .hint-message-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .hint-message-head > button { flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -8px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.3rem; }

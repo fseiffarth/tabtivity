@@ -779,6 +779,7 @@ export const UNTESTED = {
   "mobile.home.assistantFab": { area: "mobile", what: "Home · a round button with the desktop's Tabby (cat) icon floats just above the tab bar while the assistant's Mobile switch is on and opens Tabby's chat in one tap; gone with the switch off; the project screen's ＋ sits as low; the Desktop section scrolls clear of it" },
   "mobile.project.hintDismiss": { area: "mobile", what: "Project · The drag and swipe hints sit in one muted line under the cards; its × hides them for good, and each also goes once its gesture has been used" },
   "mobile.setupTitle": { area: "mobile", what: "MobileSetupGuide · Set up Tabtivity Mobile" },
+  "mobile.project.hostNoteDismiss": { area: "mobile", what: "Project · The line under the header on what the phone reaches for a remote, container or VM project has a ×; it hides that line for good on every project of the type (a folder-less project's no-files sentence stays)" },
   "headerPins.mobileNudge": { area: "mobile", what: "Header · while Mobile is off and this guide was never opened, the dimmed phone icon stays in the bar instead of folding behind the ‹ chevron; once the guide has been opened (or Mobile is on) it folds like the other readouts; a right-click pin/hide choice still wins" },
   "mobile.speech.language": { area: "mobile", what: "Terminal · Reader voice-language picker", tested: "2026-09-23" },
   "mobile.voice.keepListening": { area: "mobile", what: "Terminal · Dictation keeps listening through pauses, holds the screen awake, shows the mic level", tested: "2026-09-23" },
