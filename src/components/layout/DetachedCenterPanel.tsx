@@ -1917,6 +1917,7 @@ export function DetachedCenterPanel({
                   ? agentMachines({ primaryHost, computeHosts, pinned: hostPinned, t })
                   : undefined
               }
+              hostPinned={hostPinned}
             />
           );
         })()}

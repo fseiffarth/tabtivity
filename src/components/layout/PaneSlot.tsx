@@ -149,11 +149,15 @@ function PaneSlotImpl({
       : paneHostId
         ? hostSsh?.[paneHostId]?.ssh
         : undefined;
+  // A host-pinned project (VM, remote-only) has no local copy to fall back
+  // on, so its Files tab — which on a plain remote project browses the mirror
+  // while offline — holds too, on the primary's pool (the tree it lists); its
+  // terminals always resolve to a host above.
   const holdRemoteTerminal =
     paneRemoteProj &&
-    isPtyTabKind(tab.kind) &&
-    paneHostId !== null &&
-    paneHostSsh !== "connected";
+    (isPtyTabKind(tab.kind)
+      ? paneHostId !== null && paneHostSsh !== "connected"
+      : hostPinned && tab.kind === "files" && projectSsh !== "connected");
   // The label of the host this pane runs on (primary host, or the worker's
   // label), for the hold placeholder + hover card.
   const paneHostLabel =
@@ -171,7 +175,8 @@ function PaneSlotImpl({
   // FileBrowser re-lists on `projectDir` change, so it swaps back to the remote
   // tree once the pool connects. (Resolved here, not inside TabPane, because
   // the popout has no projects store to resolve it.)
-  const filesProjectDir = paneDisconnected
+  // A host-pinned project has no mirror: its Files tab holds instead (above).
+  const filesProjectDir = paneDisconnected && !hostPinned
     ? localTabCwd(
         { kind: "files" },
         { isRemoteProject: true, projectDirectory, mirror, fallback: tab.cwd },

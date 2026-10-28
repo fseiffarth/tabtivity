@@ -107,7 +107,9 @@ export interface TabPaneProps {
   attachOnly?: boolean;
   /** Open the connect dialog (network pane + a held remote terminal). */
   onConnect?: () => void;
-  /** A remote terminal whose SSH pool is down — hold rather than spawn. */
+  /** A remote terminal whose SSH pool is down — hold rather than spawn. Also
+   *  set for a host-pinned project's Files tab, which has no mirror to browse
+   *  offline. */
   holdRemoteTerminal?: boolean;
   /** The held terminal's host label (only read when `holdRemoteTerminal`). */
   remoteHost?: string;
@@ -226,6 +228,9 @@ function TabPaneImpl({
         </LazyPane>
       );
     case "files":
+      if (holdRemoteTerminal) {
+        return <RemotePaneHold host={remoteHost} onConnect={onConnect ?? (() => {})} />;
+      }
       return <FileBrowser projectDir={filesProjectDir} projectId={projectId} active={visible} />;
     case "projectfiles":
       return (

@@ -649,10 +649,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const menuOpen = menuPos !== null;
-  // The local-model group's GPU gate; probes only while the menu is open.
-  const localModelGpu = useLocalModelPlacement(localModel, menuOpen);
+  // The local-model group's GPU gate; probes only while the menu is open
+  // (and never on a host-pinned scope, whose menu has no such group).
+  const localModelGpu = useLocalModelPlacement(localModel, menuOpen && !hostPinned);
   // The API section's CLIs (a stored key can run them); asked while open.
-  const keyableAgents = useKeyableAgents(menuOpen);
+  const keyableAgents = useKeyableAgents(menuOpen && !hostPinned);
 
   const updateScrollState = useCallback(() => {
     const el = stripRef.current;
@@ -828,9 +829,10 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   }
 
   // Cloud sessions clone a project's repository, so they are offered in a
-  // project's menu only — not the root console's or a box's.
+  // project's menu only — not the root console's or a box's — and not on a
+  // host-pinned one, whose cloud launch would start on this machine.
   const handleAddCloud =
-    scope !== ROOT_SCOPE && !scope.startsWith(BOX_SCOPE_PREFIX)
+    scope !== ROOT_SCOPE && !scope.startsWith(BOX_SCOPE_PREFIX) && !hostPinned
       ? (item: StaticMenuItem, launch: CloudLaunch) => {
           setMenuPos(null);
           const place = placement();
@@ -1845,13 +1847,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   compactAgentBins,
                 ),
               },
-              ...apiKeyMenuGroups({
-                keyable: keyableAgents,
-                installedBuiltins: enabledAgents,
-                remoteScope: isRemoteScope,
-                pick: handleAdd,
-                t,
-              }),
+              // A host-pinned scope (VM, remote-only) has no local tree: its
+              // API-key and local-model rows, which start on this machine,
+              // are not offered.
+              ...(hostPinned
+                ? []
+                : apiKeyMenuGroups({
+                    keyable: keyableAgents,
+                    installedBuiltins: enabledAgents,
+                    remoteScope: isRemoteScope,
+                    pick: handleAdd,
+                    t,
+                  })),
               // Box scope: one row-trio per member — files view, shell, and a
               // (resume-safe, member-cwd) Claude tab. Empty members list (or a
               // non-box scope) contributes no group at all.
@@ -1889,16 +1896,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               // Only offer agents whose binary is actually installed: Mistral/vibe
               // (checked against `vibeForLocalModel`) and the drivers the backend
               // already marks `available` — and only once the model is on the GPU.
-              localModelMenuGroup({
-                localModel,
-                localModelOffInRoot,
-                localDrivers,
-                vibeForLocalModel,
-                gpu: localModelGpu,
-                onVibe: (model) => void handleOllamaModel(model),
-                onLaunch: (id, label, model) => void handleLocalLaunch(id, label, model),
-                t,
-              }),
+              ...(hostPinned
+                ? []
+                : [localModelMenuGroup({
+                    localModel,
+                    localModelOffInRoot,
+                    localDrivers,
+                    vibeForLocalModel,
+                    gpu: localModelGpu,
+                    onVibe: (model) => void handleOllamaModel(model),
+                    onLaunch: (id, label, model) => void handleLocalLaunch(id, label, model),
+                    t,
+                  })]),
               {
                 label: t("newTabMenu.groupShell"),
                 entries: [{

@@ -55,6 +55,10 @@ interface Props {
   /** A remote project's machines (`agentMachines`, from the popout's streamed
    *  remote info): each agent row gets a ▾ to start on one. Unset → none. */
   machines?: AgentMachine[];
+  /** The scope lives only on its host (`isHostPinned`, from the popout's
+   *  streamed project): no row that starts a tab on this machine — the
+   *  local-model and API-key groups, the ☁ Cloud fly-out — is offered. */
+  hostPinned?: boolean;
 }
 
 /**
@@ -64,7 +68,17 @@ interface Props {
  * `onPick`; the caller decides how to create the tab (the main window calls
  * `addTab`; the popout streams an "add" edit to the main window).
  */
-export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onClose, onManageAgents, machines }: Props) {
+export function NewTabMenu({
+  scope,
+  projectCwd,
+  projectName,
+  anchor,
+  onPick,
+  onClose,
+  onManageAgents,
+  machines,
+  hostPinned = false,
+}: Props) {
   const t = useT();
 
   // Experimental — off until ticked. This menu is the DETACHED
@@ -92,9 +106,10 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
     installedCustom,
     boxMembers,
   } = useAddTabMenuData(scope);
-  // This menu only exists while open, so the GPU gate probes for its lifetime.
-  const localModelGpu = useLocalModelPlacement(localModel, true);
-  const keyableAgents = useKeyableAgents(true);
+  // This menu only exists while open, so the GPU gate probes for its lifetime
+  // (a host-pinned scope has neither group, so it probes nothing).
+  const localModelGpu = useLocalModelPlacement(localModel, !hostPinned);
+  const keyableAgents = useKeyableAgents(!hostPinned);
 
   // "+ agent" on a project with linked worktrees asks which one first (#23).
   // The popout cannot tell a remote project from a local one (it is inert to
@@ -118,9 +133,10 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
   };
 
   // Cloud sessions clone a project's repository, so they are offered in a
-  // project's menu only — not the root console's or a box's.
+  // project's menu only — not the root console's or a box's — and not on a
+  // host-pinned one, whose cloud launch would start on this machine.
   const pickCloud =
-    scope !== ROOT_SCOPE && !scope.startsWith(BOX_SCOPE_PREFIX)
+    scope !== ROOT_SCOPE && !scope.startsWith(BOX_SCOPE_PREFIX) && !hostPinned
       ? (item: StaticMenuItem, launch: CloudLaunch) => {
           void worktreePicker.cloudSpecFor(item, launch).then((spec) => {
             if (spec) onPick(spec);
@@ -206,13 +222,17 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
           },
           // The popout cannot tell a remote project from a local one (its
           // projects store is inert), so its rows carry no remote caution.
-          ...apiKeyMenuGroups({
-            keyable: keyableAgents,
-            installedBuiltins: enabledAgents,
-            remoteScope: false,
-            pick: pickStatic,
-            t,
-          }),
+          // A host-pinned scope (VM, remote-only) has no local tree: its
+          // API-key and local-model rows, which start here, are not offered.
+          ...(hostPinned
+            ? []
+            : apiKeyMenuGroups({
+                keyable: keyableAgents,
+                installedBuiltins: enabledAgents,
+                remoteScope: false,
+                pick: pickStatic,
+                t,
+              })),
           // The root console's Host session (`docs/context/agent_authority.md`):
           // an agent with the user's full rights, for work that is not any
           // project's — repairing the machine. Root scope only, never a default.
@@ -278,16 +298,18 @@ export function NewTabMenu({ scope, projectCwd, projectName, anchor, onPick, onC
                 ]),
               }]
             : []),
-          localModelMenuGroup({
-            localModel,
-            localModelOffInRoot,
-            localDrivers,
-            vibeForLocalModel,
-            gpu: localModelGpu,
-            onVibe: (model) => void pickOllamaModel(model),
-            onLaunch: (id, label, model) => void pickLocalLaunch(id, label, model),
-            t,
-          }),
+          ...(hostPinned
+            ? []
+            : [localModelMenuGroup({
+                localModel,
+                localModelOffInRoot,
+                localDrivers,
+                vibeForLocalModel,
+                gpu: localModelGpu,
+                onVibe: (model) => void pickOllamaModel(model),
+                onLaunch: (id, label, model) => void pickLocalLaunch(id, label, model),
+                t,
+              })]),
           {
             label: t("newTabMenu.groupShell"),
             entries: SHELL_ITEMS.filter((i) => i.kind === "shell").map((item) => ({
