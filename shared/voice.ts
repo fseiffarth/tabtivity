@@ -155,6 +155,10 @@ export function spokenText(markdown: string, codeLabel: string): string {
     .trim();
 }
 
+/** A sentence: up to an end mark followed by a space or the end, so the dot
+ * in "chime.ts", "v0.2" or "3.5" is no sentence's end. */
+export const SENTENCE = /[^\s][\s\S]*?(?:[.!?…]+(?=\s|$)|$)\s*/gu;
+
 /** `text` in pieces of at most `max` characters, each short enough for the
  * caller's voice to speak whole: sentences, packed together while they fit,
  * and a sentence too long for one piece cut at a word. */
@@ -165,7 +169,7 @@ export function speechChunks(text: string, max: number): string[] {
     if (open) chunks.push(open);
     open = "";
   };
-  for (const sentence of text.match(/[^.!?…]+[.!?…]*\s*/g) ?? []) {
+  for (const sentence of text.match(SENTENCE) ?? []) {
     let rest = sentence.trim();
     if (!rest) continue;
     if (open && open.length + 1 + rest.length <= max) {
