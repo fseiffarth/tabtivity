@@ -8,7 +8,7 @@ use app_lib::commands::project_transfer::{
     preview_project_export_blocking, ExportProjectRequest, ImportBundleRequest, MirrorSource,
 };
 use app_lib::commands::projects::{
-    archive_project_blocking, clear_archive, create_project_blocking, delete_archived_project_blocking, get_projects,
+    add_compute_host, archive_project_blocking, clear_archive, create_project_blocking, delete_archived_project_blocking, get_projects,
     import_project_blocking, list_archived_projects, load_project_blocking,
     restore_archived_project_blocking, save_projects,
     set_project_auto_connect, set_project_description, set_project_remote_control,
@@ -16,7 +16,7 @@ use app_lib::commands::projects::{
     CLAUDE_SETTINGS, GITIGNORE_DEFAULT, SCAFFOLD_FILES,
 };
 use app_lib::schema::project::{
-    RemoteSpec, SandboxScope, SandboxSourceDecision, SandboxSpec, SandboxToggleOutcome,
+    ComputeHost, RemoteSpec, SandboxScope, SandboxSourceDecision, SandboxSpec, SandboxToggleOutcome,
 };
 use tempfile::{Builder, TempDir};
 
@@ -452,6 +452,76 @@ fn create_remote_project_scaffolds_the_local_mirror() {
         );
 
         assert_project_registered(&PathBuf::from(&entry.local_file), "remote-project");
+    });
+}
+
+/// The posture is the backend's to write: a `remote_only` the renderer puts
+/// inside `req.remote` (create) or a worker's spec (add machine) never reaches
+/// `projects.json` or `project.json`, so the project stays a plain Remote with
+/// its local copy. `mirror_dir_opt` answers by id like `local_copy_in`: the
+/// mirror for it, `None` for a local project and an unknown id.
+#[test]
+fn a_renderer_sent_remote_only_is_never_stored() {
+    with_isolated_home("remote-only-strip-home", |_| {
+        let mirror_parent = tempdir_in_test_projects("remote-only-strip-mirror");
+        let entry = create_project_blocking(CreateProjectRequest {
+            name: "strip-project".to_string(),
+            directory: String::new(),
+            description: None,
+            git_type: Some("none".to_string()),
+            git_provider: None,
+            skip_scaffold: true,
+            remote: Some(RemoteSpec {
+                user: Some("alice".to_string()),
+                host: "nonexistent.invalid".to_string(),
+                port: None,
+                remote_path: "/home/alice/work".to_string(),
+                openvpn: None,
+                auto_connect: None,
+                key_auth: None,
+                persist_sessions: None,
+                vm: None,
+                remote_only: Some(true),
+                label: None,
+                extra: Default::default(),
+            }),
+            remote_only: false,
+            mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
+            vm: None,
+        })
+        .expect("create remote project");
+        let stored = || {
+            get_projects()
+                .expect("get projects")
+                .into_iter()
+                .find(|p| p.id == entry.id)
+                .expect("registered")
+        };
+        let remote = stored().extra.get("remote").cloned().expect("a remote spec");
+        assert!(remote.get("remote_only").is_none(), "projects.json: {remote}");
+        let display = fs::read_to_string(&entry.local_file).expect("project.json");
+        assert!(!display.contains("remote_only"), "project.json: {display}");
+
+        let mirror = stored().extra.get("mirror").and_then(|v| v.as_str()).map(PathBuf::from);
+        assert!(mirror.is_some(), "a plain Remote keeps its mirror");
+        assert_eq!(app_lib::services::remote_sync::mirror_dir_opt(&entry.id), mirror);
+
+        let worker: ComputeHost = serde_json::from_value(serde_json::json!({
+            "id": "w1", "host": "gpu.invalid", "remote_path": "/srv/p", "remote_only": true,
+        }))
+        .unwrap();
+        assert_eq!(worker.spec.remote_only, Some(true));
+        let hosts = add_compute_host(entry.id.clone(), worker).expect("add worker");
+        assert_eq!(hosts[0].spec.remote_only, None);
+        let workers = stored().extra.get("compute_hosts").cloned().expect("stored workers");
+        assert!(workers[0].get("remote_only").is_none(), "compute_hosts: {workers}");
+        let display = fs::read_to_string(&entry.local_file).expect("project.json");
+        assert!(!display.contains("remote_only"), "project.json: {display}");
+
+        let target = tempdir_in_test_projects("remote-only-strip-local");
+        let local = new_local_project("strip-local", target.path());
+        assert_eq!(app_lib::services::remote_sync::mirror_dir_opt(&local.id), None);
+        assert_eq!(app_lib::services::remote_sync::mirror_dir_opt("no-such-project"), None);
     });
 }
 
