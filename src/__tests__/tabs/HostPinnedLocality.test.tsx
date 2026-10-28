@@ -27,6 +27,8 @@ describe("isHostPinned", () => {
     // A VM is remote-only by default (the spec's `vm`), and by its record
     // however its spec reads.
     expect(isHostPinned({ remote: { ...remote, vm: true } })).toBe(true);
+    // An explicit `remote_only: false` never unpins a VM (Rust twin agrees).
+    expect(isHostPinned({ remote: { ...remote, vm: true, remote_only: false } })).toBe(true);
     expect(isHostPinned({ vm: { enabled: true } })).toBe(true);
     expect(isHostPinned({ vm: { enabled: true }, remote: { ...remote, remote_only: false } })).toBe(true);
     expect(isHostPinned({ vm: { enabled: false }, remote })).toBe(false);

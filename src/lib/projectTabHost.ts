@@ -28,13 +28,14 @@ export type HostPinProject = {
 /** Tabs and files of this project live only on its host: a VM project, or a
  *  remote project created without a local copy
  *  (`docs/remote_only_projects_plan.md`). No mirror, locality pinned. The TS
- *  twin of `RemoteSpec::is_remote_only` (`remote_only`, absent = the spec's
- *  `vm`), OR'd with the VM record so a VM is pinned however its spec reads. */
+ *  twin of `RemoteSpec::is_remote_only` (the spec's `vm` or `remote_only`;
+ *  a VM stays pinned even with `remote_only: false`), OR'd with the VM
+ *  record so a VM is pinned however its spec reads. */
 export function isHostPinned(p: HostPinProject | null | undefined): boolean {
   if (!p) return false;
   if (p.vm?.enabled) return true;
   if (!p.remote) return false;
-  return p.remote.remote_only ?? p.remote.vm === true;
+  return p.remote.vm === true || p.remote.remote_only === true;
 }
 
 /** The marker the backend puts in front of what it refused for a host-pinned
