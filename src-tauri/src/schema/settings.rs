@@ -713,6 +713,13 @@ pub struct Settings {
     /// EXPERIMENTAL, default OFF. Project-wide per-file remarks in REMARKS.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_remarks: Option<bool>,
+    /// EXPERIMENTAL, default OFF. The Chat's hands-free loop
+    /// (`docs/desktop_voice_plan.md` step 4): a pause sends the dictation after
+    /// a chime and a cancel window, and the mic opens again once the answer
+    /// has been read. Purely a frontend gate — the backend's `handsFree`
+    /// listen mode is the same session as dictation's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_hands_free: Option<bool>,
     /// EXPERIMENTAL, default OFF. The chat assistant (`docs/assistant_plan.md`,
     /// `services::assistant`): chats in a scope of its own that reach the web
     /// and nothing else. Read via [`Settings::assistant_enabled`]; the

@@ -297,6 +297,21 @@ export async function startDesktopDictation(
   };
 }
 
+/** `voice_speak`'s bounds (`services::voice`). */
+export const SPEAK_LIMITS = { chunks: 200, chunkChars: 1000, rate: { min: 0.5, max: 2 } } as const;
+
+/** Read `chunks` aloud as read `id` (after what is being said; `replace`:
+ * instead of it). `voice:speaking` follows it; rejects with the backend's
+ * code when there is no voice. */
+export function voiceSpeak(id: string, chunks: string[], lang: string, rate = 1, replace = false): Promise<void> {
+  return invoke("voice_speak", { id, chunks, lang, rate, replace });
+}
+
+/** Stop what is being read, and everything queued. */
+export function voiceSpeakStop(): Promise<void> {
+  return invoke("voice_speak_stop");
+}
+
 /** Stop whichever session holds the mic (the header indicator's click). */
 export function stopVoiceSession(session: number): Promise<void> {
   return invoke("voice_listen_stop", { session });

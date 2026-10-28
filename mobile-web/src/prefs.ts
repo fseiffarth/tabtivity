@@ -40,8 +40,10 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * honoured, cleared by Reset tips. `hintsOff` is the tips' Turn off tips
  * button, undone under This device → Tips.
  * `limitBars` shows the facts row's usage limits as bars rather than
- * percentages, off unset. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff";
+ * percentages, off unset. `focusHandsFree` is the Focus composer's hands-free
+ * loop (`shared/handsFree.ts`): a pause sends the dictation after a cancel
+ * window and the mic opens again once the answer is over, off unset. */
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff" | "focusHandsFree";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than

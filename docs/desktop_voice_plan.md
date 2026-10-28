@@ -4,7 +4,10 @@ Status: plan (2026-10-21; reviewed and amended 2026-10-22 and, before
 Batch A, 2026-10-23). Step 0 partly done 2026-10-22: build, API and CI probes
 recorded under step 0; the host's audio probes (`scripts/voice-probe/`) are
 still for the user to run. Both of step 0's decisions are made (2026-10-23).
-Step 1 and steps 2a/2b built (catalog hashes pending); steps 3 and 2c built.
+Step 1 and steps 2a/2b built; steps 3 and 2c built; steps 4, 5 and 6 built
+2026-10-25 on `feat/voice-hands-free` and landed on `develop` 2026-10-28
+(the phone loop moved into `screens/terminal/useHandsFree.ts` after the
+Terminal split; none run live). Next: the test gate.
 
 Order of work: **phase 1** (steps 0–6) ships with the OS voice, then the user
 tests it live. **Phase 2** (Piper, step 7) happens only if that test finds
@@ -716,6 +719,20 @@ open segment's partial. Like the phone, a send ends the dictation.
 
 ### 4. Read-aloud and the hands-free loop
 
+**Built 2026-10-25** (not run live), with these departures: the Chat has no
+menu, so **Read aloud** and **Hands-free** are chips at the end of the
+composer's chip row (`voice_read_aloud` / `voice_hands_free_on` settings;
+the Hands-free chip only behind the experimental `voice_hands_free` flag).
+Popout windows run on the busy-lamp fallback (they get no hook verdicts);
+`docs/context/voice.md` says so. A question card is read out only with
+read-aloud on. Headset barge-in: a headset session holds the mute gate open
+(`MuteGate::set_headset`, only that session closes it) and speech starting
+while the voice speaks calls `tts::stop` (`SessionConfig::barge_in`); in
+hands-free with a headset the mic reopens while the answer is read. The send
+guard is `shared/handsFree.ts`, shared with step 5; the turn end is
+`lib/voice/agentTurn.ts`. The stop key is `readerStopSpeaking`
+(Ctrl+Shift+Q). The system-voice picker waits for `voice_voices` (2c).
+
 - **Read-aloud.** A toggle in the Chat's menu, as the phone's
   `focusReadAloud`.
   - When the turn ends, it speaks `spokenText` of the new answer in
@@ -762,6 +779,15 @@ open segment's partial. Like the phone, a send ends the dictation.
 
 ### 5. Phone hands-free on Chrome's speech (`mobile-web`)
 
+**Built 2026-10-25** (not run live), with these departures: the phone has no
+experimental flag, so the toggle is a Focus-menu row (`focusHandsFree`, off
+unset) wearing the Untested pill. The turn's end is read off the live
+screen's busy row (`agentWork`, settled for 1.5 s), a question, or a new
+answer while idle — not `getAgentStatus`, whose report may run the CLI for
+its usage panel. The pause is the desktop's default 1.5 s (the phone has no
+setting). A send still aborts the recognizer as before: the guard sends only
+once nothing is left unsettled. The Media Session probe is a `todo/` entry.
+
 Today, dictation and read-aloud exclude each other on the phone: read-aloud
 is silent while you dictate, and starting the mic stops any speech
 (`mobile-web/src/screens/Terminal.tsx`, the read-aloud effect around line
@@ -799,6 +825,9 @@ is silent while you dictate, and starting the mic stops any speech
   and `mobile.voice.handsFreeQuestion`. Rebuild with `npm run mobile:bundle`.
 
 ### 6. Docs
+
+**Done 2026-10-25**: `docs/context/voice.md`, `docs/help/talking-to-an-agent.md`,
+the file-map rows and the `todo/group-s-agents.md` test-gate boxes.
 
 - `docs/context/voice.md`: why the engine sits in the backend, why the OS
   voice is half-duplex, the one-listener rule, why there is no `claude -p`,

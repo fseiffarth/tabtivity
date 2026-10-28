@@ -69,11 +69,20 @@ impl Control {
 /// Half-duplex with the OS voice: while it speaks, and for a tail after,
 /// captured audio is thrown away so the speakers never dictate into the
 /// draft. Machine-wide, like the voice; the capture callback reads it.
+///
+/// Headset mode (a setting, off by default) opens the gate: the voice is in
+/// the user's ears, not in the mic, so speech heard while it speaks is the
+/// user talking over it — barge-in, which stops the voice
+/// ([`SessionConfig::barge_in`]).
 pub struct MuteGate {
     speaking: AtomicBool,
     /// Milliseconds after [`MuteGate::epoch`] until which the tail mutes.
     tail_until_ms: AtomicU64,
     epoch: std::sync::OnceLock<Instant>,
+    /// The listening session in headset mode, 0 for none: only that session
+    /// may close the gate again, so an old session ending late cannot undo
+    /// the new one's mode.
+    headset_session: AtomicU64,
 }
 
 /// The tail after the voice stops (the output device's buffer; step 0's host
@@ -82,7 +91,12 @@ pub const MUTE_TAIL: Duration = Duration::from_millis(300);
 
 impl MuteGate {
     pub const fn new() -> Self {
-        Self { speaking: AtomicBool::new(false), tail_until_ms: AtomicU64::new(0), epoch: std::sync::OnceLock::new() }
+        Self {
+            speaking: AtomicBool::new(false),
+            tail_until_ms: AtomicU64::new(0),
+            epoch: std::sync::OnceLock::new(),
+            headset_session: AtomicU64::new(0),
+        }
     }
 
     fn ms(&self, at: Instant) -> u64 {
@@ -97,7 +111,25 @@ impl MuteGate {
         self.speaking.store(speaking, Ordering::SeqCst);
     }
 
+    /// Whether the voice is speaking now (the tail aside).
+    pub fn speaking(&self) -> bool {
+        self.speaking.load(Ordering::SeqCst)
+    }
+
+    /// Session `session` listens in headset mode (`on`), or has stopped
+    /// (`off`; a no-op unless it is the session that turned it on).
+    pub fn set_headset(&self, session: u64, on: bool) {
+        if on {
+            self.headset_session.store(session, Ordering::SeqCst);
+        } else {
+            let _ = self.headset_session.compare_exchange(session, 0, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+
     pub fn muted(&self, at: Instant) -> bool {
+        if self.headset_session.load(Ordering::SeqCst) != 0 {
+            return false;
+        }
         self.speaking.load(Ordering::SeqCst) || self.ms(at) < self.tail_until_ms.load(Ordering::SeqCst)
     }
 }
@@ -109,6 +141,10 @@ impl Default for MuteGate {
 }
 
 pub static GATE: MuteGate = MuteGate::new();
+
+/// Tests that set or read [`GATE`] (here and in `tts`) take turns with it.
+#[cfg(test)]
+pub(super) static GATE_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// What the capture sends: 16 kHz mono audio, or why it stopped. `after_gap`
 /// marks audio following samples the mute gate threw away.
@@ -160,6 +196,10 @@ pub struct SessionConfig {
     pub end_silence_ms: u32,
     pub headset: bool,
     pub prompt: Option<String>,
+    /// Stops the voice when speech starts while it speaks, in headset mode
+    /// ([`super::tts::stop`]; a fake in tests). It stops the voice, never the
+    /// agent's turn.
+    pub barge_in: fn(),
 }
 
 impl SessionConfig {
@@ -172,6 +212,7 @@ impl SessionConfig {
             end_silence_ms: req.pause_ms,
             headset: req.headset,
             prompt: req.prompt.clone(),
+            barge_in: super::tts::stop,
         }
     }
 }
@@ -378,6 +419,10 @@ impl Listener {
         for event in self.vad.push(samples) {
             match event {
                 VadEvent::Start => {
+                    // Talking over the voice, with a headset: it stops.
+                    if self.config.headset && GATE.speaking() {
+                        (self.config.barge_in)();
+                    }
                     self.segment += 1;
                     self.last_partial = Instant::now();
                     self.to_owner(
@@ -434,6 +479,23 @@ impl Listener {
     }
 }
 
+/// The mute gate held open for a headset session, closed again however the
+/// session ends.
+struct HeadsetMode(u64);
+
+impl HeadsetMode {
+    fn on(session: u64) -> Self {
+        GATE.set_headset(session, true);
+        Self(session)
+    }
+}
+
+impl Drop for HeadsetMode {
+    fn drop(&mut self) {
+        GATE.set_headset(self.0, false);
+    }
+}
+
 /// The session thread. Returns when the session stopped and its queued
 /// finals were answered (or it was aborted).
 pub fn run<S: AudioSource, F: TranscriberFactory>(
@@ -444,6 +506,8 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
     factory: F,
 ) {
     let session = config.session;
+    // Headset mode opens the mute gate for as long as this session runs.
+    let _headset = config.headset.then(|| HeadsetMode::on(session));
     let cancel = Arc::new(AtomicBool::new(false));
     let (jobs_tx, jobs_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
@@ -558,6 +622,7 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
 mod tests {
     use super::super::vad::tests::{hiss, tone};
     use super::*;
+    use app_core::sync::LockExt;
     use app_core::{Caller, ClientId, CoreState, RecordingEvents};
     use std::sync::Mutex;
 
@@ -574,6 +639,7 @@ mod tests {
             end_silence_ms: 700,
             headset: false,
             prompt: None,
+            barge_in: || {},
         }
     }
 
@@ -672,6 +738,51 @@ mod tests {
         let ctx = ctx(events.clone());
         let c = control.clone();
         (control, std::thread::spawn(move || run(ctx, cfg, c, source, factory)))
+    }
+
+    #[test]
+    fn a_headset_session_opens_the_gate_until_it_ends() {
+        let gate = MuteGate::new();
+        let t0 = Instant::now();
+        gate.set_speaking(true, t0);
+        assert!(gate.muted(t0));
+        gate.set_headset(5, true);
+        assert!(!gate.muted(t0), "the voice is in the ears, not the mic");
+        // An older session ending late leaves the newer one's mode alone.
+        gate.set_headset(4, false);
+        assert!(!gate.muted(t0));
+        gate.set_headset(5, false);
+        assert!(gate.muted(t0));
+    }
+
+    static BARGED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn count_barge_in() {
+        BARGED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Runs `speech()` through a session while the voice speaks; how many
+    /// times it barged in.
+    fn barge_ins(headset: bool) -> usize {
+        let _serial = GATE_SERIAL.lock_ok();
+        BARGED.store(0, Ordering::SeqCst);
+        GATE.set_speaking(true, Instant::now());
+        let events = RecordingEvents::new();
+        let (factory, _) = factory();
+        let cfg = SessionConfig { headset, barge_in: count_barge_in, ..config(9) };
+        let (control, thread) = spawn(&events, cfg, FakeSource { audio: speech(), gap_at: None, fail_start: None }, factory);
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+        assert!(GATE.muted(Instant::now()), "the ended session closed the gate again");
+        GATE.set_speaking(false, Instant::now());
+        BARGED.load(Ordering::SeqCst)
+    }
+
+    #[test]
+    fn talking_over_the_voice_with_a_headset_stops_it() {
+        assert_eq!(barge_ins(true), 1);
+        assert_eq!(barge_ins(false), 0, "without a headset only the key interrupts");
     }
 
     #[test]

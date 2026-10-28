@@ -128,6 +128,8 @@ import { useModelPicker, useModelPickerAnswers } from "./terminal/useModelPicker
 import { useSignInPageWalk } from "./terminal/useSignInPageWalk";
 import { useLiveQuestion } from "./terminal/useLiveQuestion";
 import { useVoiceInput } from "./terminal/useVoiceInput";
+import { useHandsFree } from "./terminal/useHandsFree";
+import { type SendGuard } from "../../../shared/handsFree";
 import {
   type VoiceNote, TRANSCRIPT_STEP, UNDO_RELOADS, LINK_WAIT_MS, type InboxUpload, leafOfReference,
   liftedDraft, uploadInFlight, withAttachments, type ChatInbox,
@@ -649,6 +651,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const connectedRef = useRef(false);
   const voiceRequest = useRef(0);
   const voiceProgress = useRef<DictationProgress>(DICTATION_START);
+  /** Hands-free (`focusHandsFree`): the send guard the dictation feeds, and
+   * whether the recognizer holds words it has not settled yet. */
+  const sendGuard = useRef<SendGuard>();
+  const voiceOpen = useRef(false);
+  /** The user stopped the mic: what it still settles is plain dictation. */
+  const voiceStopping = useRef(false);
   const copiedTimer = useRef<number>();
   const sendTimers = useRef<number[]>([]);
   /** When this screen last sent a slash command, and last drew output from
@@ -1295,12 +1303,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     readableHost, earlier, revealed, setRevealed, revealAnchor,
   });
   const {
-    type, press, clearPending, deliver, sendAgentText, forgetDictation, subagentTarget, submitDraft,
+    type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft,
     submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow,
     pullQueued, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation,
   } = useComposerSend({
     tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
-    dictateButton, connectedRef, voiceRequest, voiceProgress, sendTimers, commandSentAt,
+    dictateButton, connectedRef, voiceRequest, voiceProgress, sendGuard, voiceOpen, sendTimers, commandSentAt,
     lastOutputAt, settleQueue, bracketedPaste, screenRows, viewportRows, connected, setAiOffAt,
     aiOffRef, ctrl, setCtrl, setSendFailed, setDraft, draft, uploadsRef, editing, setEditing,
     editingRef, editSending, setEditSending, liveScreen, setLastSent, slashCliKey, agentKey,
@@ -1919,7 +1927,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   );
   const {
     questionAsk, questionContext, questionTabs, questionTabFocus, questionTabSubmit,
-    questionContextShown, questionSignature, questionSent, sentSignature, answerQuestion,
+    questionContextShown, questionSignature, questionHeld, questionSent, sentSignature, answerQuestion,
     stepQuestion, answerQuestionText,
   } = useLiveQuestion({
     clearPending, deliver, agentLabel, liveTail, liveQuestion,
@@ -2018,11 +2026,26 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
     followReadable(true);
   };
+  /** The mic's start, for hands-free to open it again once a turn is over. */
+  const startVoiceRef = useRef<() => Promise<void>>(async () => {});
+  const {
+    handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, stopLoop,
+    toggleHandsFree, handsFreeLine: handsFreeLineFor,
+  } = useHandsFree({
+    tab, t, sendGuard, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation,
+    connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
+    questionSignature, questionAsk, answerQuestion, transcript,
+  });
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
     tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
     setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
     setVoiceFailure, forgetDictation, submitDraftRef,
+    handsFree: {
+      on: handsFreeRef, guard: handsFreeGuard, sendGuard, voiceOpen, voiceStopping,
+      pick: voicePickRef, awaitTurn: awaitTurnRef, stopLoop,
+    },
   });
+  startVoiceRef.current = startVoice;
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language ? { language: note.language } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
@@ -2031,6 +2054,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const voiceLine = voiceProblem ? sayVoice(voiceProblem)
     : voicePreview ? t("mobile.voice.heard", { text: voicePreview })
     : voiceStatus ? sayVoice(voiceStatus) : "";
+  const handsFreeLine = handsFreeLineFor(voiceProblem !== null);
   /** What the sheet paints: the live step, or — between the tap and the
    * session's redraw — the answered one, listed but not tappable, so the sheet
    * does not blink empty on the way to the next step. */
@@ -2254,6 +2278,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           <span><strong>{t("mobile.speech.auto")} {isUntested("mobile.focus.readAloud") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{t(speechAvailable ? "mobile.speech.autoHint" : "mobile.speech.unavailable")}</small></span>
           {readAloud && speechAvailable && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
         </button>
+        {/* Hands-free: a pause sends the dictation after a chime and a cancel
+            window, and the mic opens again once the answer is over. The
+            screen must stay on and this page open — a web page cannot keep
+            the microphone from a pocket. */}
+        <button role="menuitemcheckbox" aria-checked={handsFree && voiceAvailable} aria-disabled={voiceAvailable ? undefined : "true"} className={voiceAvailable ? undefined : "unavailable"} onClick={() => {
+          if (!voiceAvailable) return;
+          writeFlag("focusHandsFree", toggleHandsFree(unlockSpeech));
+          setFocusMenu(false);
+        }}>
+          <span><strong>{t("mobile.voice.handsFree")} {isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{t(voiceAvailable ? "mobile.voice.handsFreeHint" : "mobile.voice.unavailable")}</small></span>
+          {handsFree && voiceAvailable && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+        </button>
         <button role="menuitemcheckbox" aria-checked={voiceRemote && voiceLocalOffered} aria-disabled={voiceLocalOffered ? undefined : "true"} className={voiceLocalOffered ? undefined : "unavailable"} onClick={() => {
           if (!voiceLocalOffered) return;
           writeFlag("voiceRemote", !voiceRemote);
@@ -2352,7 +2388,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
                   <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
-                    <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.onScreen") && <> · {t("mobile.focus.untested")}</>}</small>
+                    <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
                         it — in Claude Code's permission dialog the file and the
                         diff it is asking about. Bounded by `readSelectPrompt`
@@ -2418,7 +2454,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </>}
     </div>
     <div className="terminal-controls">
-      {tab.kind === "agent" && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
+      {tab.kind === "agent" && handsFreeLine && (handsFreeLine.run
+        ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={handsFreeLine.run}>{handsFreeLine.text}{isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</button>
+        : <div className="voice-feedback hands-free" role="status" aria-live="polite">{handsFreeLine.text}</div>)}
+      {tab.kind === "agent" && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
       {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}
@@ -2551,7 +2590,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
-          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
+          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : handsFree && speaking ? stopSpeaking : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
         </div>
         <div className="composer-bar">
           {tab.kind === "agent" && <>

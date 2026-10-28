@@ -2352,6 +2352,15 @@ export function SettingsDialog({
               help={t("settings.assistantHelp")}
             />
 
+            {/* The Chat's hands-free voice loop; its chip appears beside
+                read-aloud only while this is on. */}
+            <ToggleCard
+              label={<>{t("settings.voiceHandsFree")} <UntestedTag id="terminal.reader.voice.handsFree" /></>}
+              checked={experimentalEnabled(settings, "voice_hands_free")}
+              onChange={(e) => void updateSettings({ voice_hands_free: e.target.checked })}
+              help={t("settings.voiceHandsFreeHelp")}
+            />
+
             {/* Mail is ONE switch. It used to be two — this gate plus a
                 `mail_global_app` sub-toggle deciding whether the header button
                 appeared *as well as* the mail tab — but the tab is retired, so
