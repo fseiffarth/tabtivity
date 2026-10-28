@@ -453,10 +453,9 @@ fn resolve_in_dirs(
     exists: &impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     for dir in dirs {
-        let base = dir.join(bin);
-        if exists(&base) {
-            return Some(base);
-        }
+        // Extensions first: npm's Windows global dir holds `claude` (a POSIX
+        // sh script `CreateProcess` rejects with error 193) beside `claude.cmd`
+        // and `claude.ps1`, and the bare file must not shadow the launchable one.
         for ext in exts {
             if ext.is_empty() {
                 continue;
@@ -465,6 +464,10 @@ fn resolve_in_dirs(
             if exists(&cand) {
                 return Some(cand);
             }
+        }
+        let base = dir.join(bin);
+        if exists(&base) {
+            return Some(base);
         }
     }
     None
@@ -1033,6 +1036,15 @@ mod tests {
         let present = dirs[0].join("vibe.exe");
         let found = resolve_in_dirs(&dirs, "vibe", &["exe", "cmd", "bat"], &|p| p == present);
         assert_eq!(found, Some(present));
+    }
+
+    #[test]
+    fn resolve_in_dirs_prefers_a_windows_extension_over_the_bare_shim_script() {
+        let dirs = vec![PathBuf::from("npm")];
+        let bare = dirs[0].join("codex");
+        let cmd = dirs[0].join("codex.cmd");
+        let found = resolve_in_dirs(&dirs, "codex", &["exe", "cmd"], &|p| p == bare || p == cmd);
+        assert_eq!(found, Some(cmd));
     }
 
     #[test]

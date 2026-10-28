@@ -2355,7 +2355,17 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
     // Tabtivity's own helpers (the `ssh` of a remote tab, the local `tmux`) come
     // from the root-owned system dirs first, never a user-writable one (#861).
     let resolved = crate::paths::helper_program(std::ffi::OsStr::new(&cmd_str))
-        .or_else(|| crate::paths::resolve_offpath_binary(&cmd_str));
+        .or_else(|| crate::paths::resolve_offpath_binary(&cmd_str))
+        // Windows: a bare name left to `portable_pty`'s own PATH search takes
+        // the first file named exactly that — the `#!/bin/sh` agent shim in
+        // `<state>/bin` (first on every tab's PATH), or npm's `codex` script
+        // beside `codex.cmd` — and `CreateProcess` refuses both (error 193).
+        // `resolve_executable` skips the shim dir and tries PATHEXT first.
+        .or_else(|| {
+            (cfg!(windows) && !cmd_str.contains(['/', '\\']))
+                .then(|| crate::paths::resolve_executable(&cmd_str))
+                .flatten()
+        });
     let mut cmd = match resolved {
         Some(resolved) => command_for_resolved(resolved),
         None => CommandBuilder::new(&cmd_str),

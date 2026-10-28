@@ -765,6 +765,7 @@ fn rsync_pull_flags_land_only_listed_regular_files_within_the_listed_sizes() {
 
 /// The host tree both pull-path tests walk: two small files and one over
 /// the RAM cap, in walk order.
+#[cfg(unix)]
 fn host_tree_with_a_big_file(host: &Path) -> Vec<HostFile> {
     std::fs::create_dir_all(host.join("d")).unwrap();
     std::fs::write(host.join("a.txt"), b"a").unwrap();

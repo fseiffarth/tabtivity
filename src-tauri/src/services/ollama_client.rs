@@ -373,6 +373,28 @@ pub fn ollama_install_cmd() -> &'static str {
     }
 }
 
+/// The one-click command that brings an installed Ollama up to date, run in a
+/// PowerShell tab on Windows and a shell tab elsewhere.
+///
+/// Windows uses `winget upgrade`, not `install`: for a package that is already
+/// present `install` can stop at "already installed / no applicable upgrade"
+/// and leave the old version in place. winget is looked up on PATH first and
+/// then at its per-user App Execution Alias, because a tab's PATH can lack
+/// `%LOCALAPPDATA%\Microsoft\WindowsApps`. The installers elsewhere update in
+/// place, so the install command is the upgrade command.
+pub fn ollama_upgrade_cmd() -> &'static str {
+    if cfg!(target_os = "windows") {
+        concat!(
+            "$w = (Get-Command winget -ErrorAction SilentlyContinue).Source; ",
+            "if (-not $w) { $w = \"$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\winget.exe\" }; ",
+            "& $w upgrade --id Ollama.Ollama -e --silent ",
+            "--accept-source-agreements --accept-package-agreements"
+        )
+    } else {
+        ollama_install_cmd()
+    }
+}
+
 /// Capability lists keyed by *manifest digest*, not by model name. A model's
 /// capabilities are fixed by its manifest, so a digest that has been read once
 /// can never need re-reading — and a re-pull (the one thing that changes them)

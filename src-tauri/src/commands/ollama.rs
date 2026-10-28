@@ -1447,9 +1447,8 @@ pub struct OllamaVersionStatus {
     /// True only when both versions parsed *and* `latest` is genuinely newer.
     /// An unreadable version on either side is not an update.
     pub update_available: bool,
-    /// The one-click upgrade command. Deliberately the *install* command: both
-    /// installers (winget, `install.sh`) upgrade in place, and a second command
-    /// string would be a second thing to keep correct.
+    /// The one-click upgrade command ([`ollama_upgrade_cmd`]): `winget upgrade`
+    /// on Windows, the install script elsewhere (it upgrades in place).
     pub install_cmd: String,
     /// Which shell `install_cmd` needs, for `runInstallInTab`.
     pub shell_kind: String,
@@ -1541,7 +1540,7 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
 
         let mut status = OllamaVersionStatus {
             current,
-            install_cmd: ollama_install_cmd().to_string(),
+            install_cmd: ollama_upgrade_cmd().to_string(),
             shell_kind: if cfg!(target_os = "windows") {
                 "powershell"
             } else {
