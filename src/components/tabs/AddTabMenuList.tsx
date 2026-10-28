@@ -65,6 +65,11 @@ function flyoutPos(anchor: DOMRect, el: HTMLElement): { left: number; top: numbe
   return { left, top };
 }
 
+/** How long the pointer rests on a row with machines before its list opens,
+ *  and how long a hover-opened list outlives the pointer leaving it. */
+const HOVER_OPEN_MS = 150;
+const HOVER_CLOSE_MS = 250;
+
 /** One labelled section of the add-tab menu. */
 export interface AddMenuGroup {
   label: string;
@@ -129,11 +134,19 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const moreTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   // A row's machine list (its ▾): a fly-out of its own, so one opened from a
-  // row inside "More agents…" leaves that list standing beside it.
-  const [machineMenu, setMachineMenu] = useState<(Flyout & { key: string }) | null>(null);
+  // row inside "More agents…" leaves that list standing beside it. `hover`:
+  // the pointer resting on the row opened it, so it leaves focus in the
+  // search box and closes again when the pointer moves off both.
+  const [machineMenu, setMachineMenu] = useState<(Flyout & { key: string; hover?: boolean }) | null>(null);
   const [machinePos, setMachinePos] = useState<{ left: number; top: number } | null>(null);
   const machineMenuRef = useRef<HTMLDivElement>(null);
   const caretRefs = useRef(new Map<string, HTMLButtonElement>());
+  // One pending hover open/close at a time: the delay lets a pointer sweep
+  // across rows (or cut diagonally into the fly-out) without the list
+  // flickering between agents.
+  const hoverTimer = useRef<number | undefined>(undefined);
+  const clearHover = () => window.clearTimeout(hoverTimer.current);
+  useEffect(() => clearHover, []);
   const q = query.trim().toLowerCase();
 
   // Fly-out triggers are keyed `<group>/<row key>`: a group can hold more than
@@ -144,7 +157,8 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
     setMachineMenu(null);
     setMoreMenu({ label, entries, anchor: anchor.getBoundingClientRect() });
   };
-  const openMachineMenu = (entry: AddMenuEntry, anchor?: HTMLButtonElement | null) => {
+  const openMachineMenu = (entry: AddMenuEntry, anchor?: HTMLButtonElement | null, hover = false) => {
+    clearHover();
     if (!anchor || !entry.machineEntries) return;
     setMachinePos(null);
     setMachineMenu({
@@ -152,7 +166,26 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
       label: entry.machineTitle ?? entry.label,
       entries: entry.machineEntries,
       anchor: anchor.getBoundingClientRect(),
+      hover,
     });
+  };
+  // Resting on a row with machines opens its list; leaving it (for anything
+  // but the list) closes a list the hover opened. A clicked list stays.
+  const hoverMachines = (entry: AddMenuEntry) => {
+    clearHover();
+    if (entry.disabled || machineMenu?.key === entry.key) return;
+    hoverTimer.current = window.setTimeout(
+      () => openMachineMenu(entry, caretRefs.current.get(entry.key), true),
+      HOVER_OPEN_MS,
+    );
+  };
+  const leaveMachines = () => {
+    clearHover();
+    if (!machineMenu?.hover) return;
+    hoverTimer.current = window.setTimeout(
+      () => setMachineMenu((m) => (m?.hover ? null : m)),
+      HOVER_CLOSE_MS,
+    );
   };
 
   const visible = q
@@ -196,6 +229,7 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   // A typed search is a new route to all entries; a stale adjacent menu would
   // only obscure its results, so it closes as soon as the query changes.
   useEffect(() => {
+    clearHover();
     setMoreMenu(null);
     setMachineMenu(null);
   }, [q]);
@@ -224,17 +258,23 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   useLayoutEffect(() => {
     if (!machineMenu || !machineMenuRef.current) return;
     setMachinePos(flyoutPos(machineMenu.anchor, machineMenuRef.current));
+    if (machineMenu.hover) return;
     machineMenuRef.current.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
   }, [machineMenu]);
 
   // A row with a machine list sits in a split: the row (its default start) and
   // a ▾ beside it that opens the list. Two sibling buttons, never one nested in
-  // the other.
+  // the other. Hovering either half opens the list too.
   const withMachines = (e: AddMenuEntry, row: ReactNode) => {
     if (!e.machineEntries) return row;
     const title = e.machineTitle ?? e.label;
     return (
-      <div key={e.key} className="tab-new-menu-split">
+      <div
+        key={e.key}
+        className="tab-new-menu-split"
+        onPointerEnter={() => hoverMachines(e)}
+        onPointerLeave={leaveMachines}
+      >
         {row}
         <button
           ref={(node) => {
@@ -429,6 +469,8 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
             left: machinePos?.left ?? -10000,
             top: machinePos?.top ?? -10000,
           }}
+          onPointerEnter={clearHover}
+          onPointerLeave={leaveMachines}
         >
           <div className="tab-new-menu-group-label">{machineMenu.label}</div>
           <div className="menu-scroll-region">

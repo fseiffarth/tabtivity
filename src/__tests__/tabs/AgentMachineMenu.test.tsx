@@ -5,7 +5,7 @@
  * agent on the machine picked.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AddTabMenuList } from "../../components/tabs/AddTabMenuList";
 import { agentMachines, agentMenuEntries } from "../../components/tabs/agentMenuEntries";
@@ -76,6 +76,23 @@ describe("agent rows with machines", () => {
     expect(screen.getByRole("button", { name: /cold\.example/ })).toHaveProperty("disabled", true);
     await userEvent.click(screen.getByRole("button", { name: /GPU box/ }));
     expect(pick).toHaveBeenLastCalledWith(expect.objectContaining({ cmd: "claude" }), "host:gpu");
+  });
+
+  it("hovering a row opens its machines without taking focus; leaving closes them", async () => {
+    render(<AddTabMenuList groups={[{ label: "Agents", entries: entries(vi.fn(), true) }]} />);
+    const search = screen.getByRole("textbox");
+    expect(document.activeElement).toBe(search);
+    await userEvent.hover(screen.getByRole("button", { name: new RegExp(`${claudeLabel}$`) }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /GPU box/ })).toBeTruthy());
+    expect(document.activeElement).toBe(search);
+
+    // Into the list: it stays.
+    await userEvent.hover(screen.getByRole("button", { name: /GPU box/ }));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(document.querySelector(".tab-new-menu-more")).toBeTruthy();
+
+    await userEvent.unhover(screen.getByRole("button", { name: /GPU box/ }));
+    await waitFor(() => expect(document.querySelector(".tab-new-menu-more")).toBeNull());
   });
 
   it("→ at the end of the query opens the highlighted row's machines", async () => {
