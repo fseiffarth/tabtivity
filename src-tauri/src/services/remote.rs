@@ -235,6 +235,38 @@ pub(crate) fn spec_from_value(value: &serde_json::Value) -> Option<RemoteSpec> {
     serde_json::from_value(value.clone()).ok()
 }
 
+/// A remote project's **local copy** — the folder on this machine its tree is
+/// mirrored into: the explicit `extra["mirror"]`, else the default
+/// `<state_dir>/remote-projects/<id>/mirror`. `None` for a remote-only project
+/// ([`RemoteSpec::is_remote_only`], VM projects included), which has none, and
+/// for a local project, which is not mirrored. Pure over the entry and an
+/// explicit state dir, so the root planners stay testable;
+/// `remote_sync::mirror_dir_opt` is the same answer by project id.
+///
+/// Every caller that resolves "a remote project's local tree" for something
+/// other than the sync engines goes through this (or `mirror_dir_opt`): a
+/// remote-only project's default path must never be taken for a tree, nor
+/// created as one.
+pub(crate) fn local_copy_in(entry: &ProjectEntry, state_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let spec = spec_from_entry(entry)?;
+    if spec.is_remote_only() {
+        return None;
+    }
+    Some(
+        crate::services::fs_confine::mirror_override_dir(entry)
+            .unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &entry.id)),
+    )
+}
+
+/// The one wording of a refusal a remote-only project answers with:
+/// `{UPPER}_REMOTE_ONLY: <what>`. The prefix is the sentinel the cockpit matches
+/// to word each refusal in its own language (`remoteOnlyRefusal` in
+/// `src/lib/projectTabHost.ts`), so every refusal is built here and the raw
+/// text after it is only a fallback.
+pub fn remote_only_refusal(what: &str) -> String {
+    format!("{}_REMOTE_ONLY: {what}", crate::brand::UPPER)
+}
+
 /// The extra "worker" hosts mirrored into a `projects.json` entry's flattened
 /// `extra["compute_hosts"]`, or `[]` when absent/unparseable. Pure, so the
 /// resolver is testable without the real state dir.
@@ -247,9 +279,15 @@ fn compute_hosts_from_entry(entry: &ProjectEntry) -> Vec<ComputeHost> {
 }
 
 /// [`compute_hosts_from_entry`] over the raw `compute_hosts` value of a record
-/// read some other way; `[]` when it is not a list of hosts.
+/// read some other way; `[]` when it is not a list of hosts. A worker's
+/// `remote_only` is dropped: the posture is the project's (its primary spec's),
+/// so a stale one on a worker can never pin or unpin anything.
 pub(crate) fn compute_hosts_from_value(value: &serde_json::Value) -> Vec<ComputeHost> {
-    serde_json::from_value(value.clone()).unwrap_or_default()
+    let mut hosts: Vec<ComputeHost> = serde_json::from_value(value.clone()).unwrap_or_default();
+    for host in &mut hosts {
+        host.spec.remote_only = None;
+    }
+    hosts
 }
 
 /// The extra worker hosts declared for `project_id`, read from the always-local
@@ -778,6 +816,7 @@ mod tests {
             key_auth: None,
             persist_sessions: None,
             vm: None,
+            remote_only: None,
             label: None,
             extra: HashMap::new(),
         }
@@ -885,6 +924,7 @@ mod tests {
                 key_auth: None,
                 persist_sessions: None,
                 vm: None,
+                remote_only: None,
                 label: None,
                 extra: HashMap::new(),
             },
@@ -917,6 +957,57 @@ mod tests {
         assert_eq!(hosts[0].id, "h1");
         assert_eq!(hosts[0].spec.host, "gpu-2.example");
         assert!(hosts[0].sync_code); // serde default_true survives a round trip
+    }
+
+    /// The local copy of each posture, over a tempdir state: an explicit
+    /// mirror wins, else the default under the state dir; a remote-only or VM
+    /// project (whatever stale `mirror` it carries) and a local project have
+    /// none. Nothing is created.
+    #[test]
+    fn local_copy_in_resolves_per_posture() {
+        let state = tempfile::tempdir().unwrap();
+        let explicit = state.path().join("chosen").join("p1");
+        let mut with_mirror = entry("p1", Some("/state/p1"), Some(spec()));
+        with_mirror
+            .extra
+            .insert("mirror".to_string(), serde_json::Value::String(explicit.to_string_lossy().into_owned()));
+        assert_eq!(local_copy_in(&with_mirror, state.path()), Some(explicit));
+
+        let default = entry("p2", Some("/state/p2"), Some(spec()));
+        assert_eq!(
+            local_copy_in(&default, state.path()),
+            Some(crate::services::remote_sync::default_mirror_dir_in(state.path(), "p2"))
+        );
+
+        let remote_only = RemoteSpec { remote_only: Some(true), ..spec() };
+        let mut pinned = entry("p3", Some("/state/p3"), Some(remote_only));
+        pinned.extra.insert("mirror".to_string(), serde_json::Value::String("/stale/mirror".into()));
+        assert_eq!(local_copy_in(&pinned, state.path()), None);
+
+        let vm = RemoteSpec { vm: Some(true), ..spec() };
+        assert_eq!(local_copy_in(&entry("p4", Some("/state/p4"), Some(vm)), state.path()), None);
+
+        assert_eq!(local_copy_in(&entry("p5", Some("/work/p5"), None), state.path()), None);
+        assert!(std::fs::read_dir(state.path()).unwrap().next().is_none(), "a pure resolver");
+    }
+
+    #[test]
+    fn the_refusal_carries_the_sentinel() {
+        let msg = remote_only_refusal("no local copy");
+        assert_eq!(msg, concat!(crate::app_upper!(), "_REMOTE_ONLY: no local copy"));
+    }
+
+    /// A worker's `remote_only` is meaningless and never read: the hosts parse
+    /// with it dropped, so only the primary spec decides the posture.
+    #[test]
+    fn a_worker_ignores_the_remote_only_flag() {
+        let mut host = serde_json::to_value(compute_host("h1", "gpu-2.example")).unwrap();
+        host["remote_only"] = serde_json::Value::Bool(true);
+        let hosts = compute_hosts_from_value(&serde_json::json!([host]));
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].spec.remote_only, None);
+        assert!(!hosts[0].spec.is_remote_only());
+        assert!(!hosts[0].spec.extra.contains_key("remote_only"));
     }
 
     #[test]

@@ -135,6 +135,15 @@ pub struct RemoteSpec {
     /// boundary, not a perf surprise. Written at creation, never user-set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vm: Option<bool>,
+    /// The project keeps **no local copy** (`docs/remote_only_projects_plan.md`):
+    /// its tree lives only on the host, every tab runs there, git runs there and
+    /// nothing is synced. Read it through [`RemoteSpec::is_remote_only`], never
+    /// raw: absent means "a VM project is, a plain Remote is not". Written by the
+    /// backend only (at creation from the request's top-level `remoteOnly`, or by
+    /// a conversion), never taken from a renderer-sent spec. Meaningless on a
+    /// worker ([`ComputeHost`] flattens this struct), where it is stripped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_only: Option<bool>,
     /// Display name for this machine, e.g. "gpu-2"; falls back to `host`. Shown
     /// wherever a project's hosts are listed side by side (the System Monitor's
     /// source picker, the pill's connection lamps, `hostsForProject`) so a host is
@@ -147,6 +156,16 @@ pub struct RemoteSpec {
     pub label: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
+}
+
+impl RemoteSpec {
+    /// This spec's project keeps no local copy: [`remote_only`](Self::remote_only),
+    /// defaulting to on for a VM spec (a VM project is remote-only + boot) and off
+    /// for every other entry, so an entry written before the field existed keeps
+    /// its behaviour.
+    pub fn is_remote_only(&self) -> bool {
+        self.remote_only.unwrap_or(self.vm == Some(true))
+    }
 }
 
 fn default_true() -> bool {
@@ -660,6 +679,31 @@ mod tests {
         assert_eq!(json(&list), serde_json::from_str::<Value>(&entries).unwrap());
         let spec: RemoteSpec = serde_json::from_value(list[0].extra["remote"].clone()).unwrap();
         assert_eq!(spec.host, "build.example");
+    }
+
+    /// `remote_only`: absent stays absent on rewrite (an entry from before the
+    /// field keeps today's posture), an explicit value survives, a VM spec with
+    /// no value is remote-only, and the keys this model does not know still
+    /// ride through `extra` beside it.
+    #[test]
+    fn remote_only_round_trips_and_defaults_by_tier() {
+        let cases: [(&str, bool); 6] = [
+            (r#"{"host":"h","remote_path":"/srv/p"}"#, false),
+            (r#"{"host":"h","remote_path":"/srv/p","remote_only":true}"#, true),
+            (r#"{"host":"h","remote_path":"/srv/p","remote_only":false}"#, false),
+            (r#"{"host":"127.0.0.1","remote_path":"/p","vm":true}"#, true),
+            (r#"{"host":"127.0.0.1","remote_path":"/p","vm":false}"#, false),
+            (r#"{"host":"h","remote_path":"/srv/p","remote_only":true,"future_key":{"a":1}}"#, true),
+        ];
+        for (raw, want) in cases {
+            let spec: RemoteSpec = parse(raw);
+            assert_eq!(spec.is_remote_only(), want, "{raw}");
+            let input: Value = serde_json::from_str(raw).unwrap();
+            assert_eq!(json(&spec), input, "rewritten unchanged: {raw}");
+        }
+        let spec: RemoteSpec = parse(r#"{"host":"h","remote_path":"/p","remote_only":true,"future_key":7}"#);
+        assert_eq!(spec.extra.get("future_key"), Some(&Value::from(7)));
+        assert!(!spec.extra.contains_key("remote_only"), "the typed field, not extra");
     }
 
     /// Fields the Python app wrote and the Rust model never learned about ride

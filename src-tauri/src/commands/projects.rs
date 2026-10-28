@@ -2159,6 +2159,7 @@ pub fn create_project_for_phone(name: &str, device_id: &str) -> Result<String, P
         git_provider: None,
         skip_scaffold: false,
         remote: None,
+        remote_only: false,
         mirror_parent: None,
         vm: None,
     })
@@ -2343,6 +2344,11 @@ fn patch_compute_hosts(
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             patch(&mut hosts);
+            // The posture is the project's, read off its primary spec; on a
+            // worker the flattened field means nothing and is never stored.
+            for host in &mut hosts {
+                host.spec.remote_only = None;
+            }
             let value = serde_json::to_value(&hosts).map_err(|e| e.to_string())?;
             if hosts.is_empty() {
                 entry.extra.remove("compute_hosts");
@@ -2370,6 +2376,10 @@ pub fn set_project_run_host(
     let value = location
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
+    if let Some(refusal) = run_host_refusal(spec.as_ref(), value.as_deref()) {
+        return Err(refusal);
+    }
 
     patch_project_entry_mirrored(
         &project_id,
@@ -2389,6 +2399,17 @@ pub fn set_project_run_host(
         |project, ()| project.run_host = value.clone(),
     )?;
     Ok(value)
+}
+
+/// Why `location` may not be the run host of the project whose primary spec is
+/// `spec`, or `None`. `"local"` is the mirror, and a remote-only project (a VM
+/// included) has none: its shells run on one of its hosts.
+fn run_host_refusal(spec: Option<&RemoteSpec>, location: Option<&str>) -> Option<String> {
+    (location == Some("local") && spec.is_some_and(RemoteSpec::is_remote_only)).then(|| {
+        crate::services::remote::remote_only_refusal(
+            "shells of this project cannot run on this computer; it keeps no local copy. Pick one of its hosts.",
+        )
+    })
 }
 
 /// Add an extra "worker" host to a remote project (the pill's "Add machine").
@@ -4107,6 +4128,15 @@ pub struct CreateProjectRequest {
     /// project root becomes the local sshfs mountpoint for `remote`.
     #[serde(default)]
     pub remote: Option<RemoteSpec>,
+    /// The new remote project keeps **no local copy** (Remote-only,
+    /// `docs/remote_only_projects_plan.md`): no mirror, every tab and git on the
+    /// host. The one way the renderer asks for the posture: a `remote_only` sent
+    /// inside `remote` is dropped ([`strip_renderer_posture`]), and only the
+    /// backend writes the spec field. Ignored without `remote`, and for a VM
+    /// (remote-only already). Acting on it is the creation step's (plan E6b);
+    /// until that lands the project is created as a plain Remote.
+    #[serde(default)]
+    pub remote_only: bool,
     /// Remote projects only: the user-chosen parent directory for the local
     /// mirror (the dialog's "Local location"). The mirror lands at
     /// `<mirror_parent>/<name>`. Absent → the default `projects-ssh` root.
@@ -4127,8 +4157,19 @@ pub async fn create_project(req: CreateProjectRequest) -> Result<ProjectEntry, S
     app_core::rt::try_blocking("project", move || create_project_blocking(req)).await
 }
 
+/// A renderer-sent spec never carries the posture: `remote_only` is the
+/// backend's to write (from a request's top-level `remoteOnly`, or a
+/// conversion), so one arriving inside `remote` is dropped before anything
+/// stores it (`docs/remote_only_projects_plan.md`, engine rule 1).
+fn strip_renderer_posture(remote: Option<&mut RemoteSpec>) {
+    if let Some(remote) = remote {
+        remote.remote_only = None;
+    }
+}
+
 pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectEntry, String> {
     let id = uuid_v4();
+    strip_renderer_posture(req.remote.as_mut());
 
     // A VM project IS a remote project (the one architectural decision of
     // `docs/vm_projects_plan.md`): synthesize its RemoteSpec here. Host and
@@ -4151,6 +4192,7 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
             key_auth: Some(true),
             persist_sessions: None,
             vm: Some(true),
+            remote_only: None,
             label: Some("VM".to_string()),
             extra: HashMap::new(),
         });
@@ -4422,6 +4464,15 @@ pub struct ImportProjectRequest {
     /// remote directory and the only supported `mode` is "keep".
     #[serde(default)]
     pub remote: Option<RemoteSpec>,
+    /// The new remote project keeps **no local copy** (Remote-only,
+    /// `docs/remote_only_projects_plan.md`): no mirror, every tab and git on the
+    /// host. The one way the renderer asks for the posture: a `remote_only` sent
+    /// inside `remote` is dropped ([`strip_renderer_posture`]), and only the
+    /// backend writes the spec field. Ignored without `remote`, and for a VM
+    /// (remote-only already). Acting on it is the creation step's (plan E6b);
+    /// until that lands the project is created as a plain Remote.
+    #[serde(default)]
+    pub remote_only: bool,
     /// Remote imports only: the user-chosen parent directory for the local
     /// mirror (the dialog's "Local location"). The mirror lands at
     /// `<mirror_parent>/<name>`. Absent → the default `projects-ssh` root.
@@ -4434,7 +4485,8 @@ pub async fn import_project(req: ImportProjectRequest) -> Result<ProjectEntry, S
     app_core::rt::try_blocking("project", move || import_project_blocking(req)).await
 }
 
-pub fn import_project_blocking(req: ImportProjectRequest) -> Result<ProjectEntry, String> {
+pub fn import_project_blocking(mut req: ImportProjectRequest) -> Result<ProjectEntry, String> {
+    strip_renderer_posture(req.remote.as_mut());
     if req.name.trim().is_empty() {
         return Err("Project name is invalid".to_string());
     }
@@ -4770,7 +4822,9 @@ struct ExtendPrep {
 /// The guards and reads of [`extend_project_to_remote`], then its first side
 /// effects (the remote root, the state dir) — in that order, so a refused or
 /// unreadable `project.json` stops extend before anything is touched.
-fn extend_prepare_blocking(req: ExtendProjectRemoteRequest) -> Result<ExtendPrep, String> {
+fn extend_prepare_blocking(mut req: ExtendProjectRemoteRequest) -> Result<ExtendPrep, String> {
+    // Extending keeps the local tree as the mirror: never remote-only.
+    strip_renderer_posture(Some(&mut req.remote));
     let entry = crate::services::remote::project_entry(&req.project_id)?;
     let list = read_projects_list()?;
 

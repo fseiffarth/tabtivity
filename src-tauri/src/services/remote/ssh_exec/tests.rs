@@ -11,6 +11,7 @@ fn spec(user: Option<&str>, host: &str, port: Option<u16>, remote_path: &str) ->
         key_auth: None,
         persist_sessions: None,
         vm: None,
+        remote_only: None,
         label: None,
         extra: HashMap::new(),
     }

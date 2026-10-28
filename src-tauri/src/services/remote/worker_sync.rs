@@ -767,6 +767,7 @@ mod tests {
                 key_auth: None,
                 persist_sessions: None,
                 vm: None,
+                remote_only: None,
                 label: None,
                 extra: Default::default(),
             },

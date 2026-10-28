@@ -500,6 +500,7 @@ fn spec(user: Option<&str>, host: &str, port: Option<u16>, path: &str) -> Remote
         key_auth: None,
         persist_sessions: None,
         vm: None,
+        remote_only: None,
         label: None,
         extra: HashMap::new(),
     }
@@ -2079,4 +2080,49 @@ fn the_sync_command_scan_sees_attribute_bodies_and_skips_async() {
     assert!(projects.iter().any(|(n, body)| n == "get_projects" && body.ends_with('}')));
     assert!(!projects.iter().any(|(n, _)| n == "project_folder_exists"), "an async command is not a sync one");
     assert!(command_files().iter().any(|f| f == "ollama.rs"));
+}
+
+/// `"local"` (the mirror) is refused as the run host of a remote-only project,
+/// a VM included, with the sentinel; its hosts, a clear, and every value on a
+/// plain Remote or local project are kept.
+#[test]
+fn a_remote_only_project_refuses_a_local_run_host() {
+    let plain = spec(None, "h.example", None, "/srv/p");
+    let remote_only = RemoteSpec { remote_only: Some(true), ..plain.clone() };
+    let vm = RemoteSpec { vm: Some(true), ..plain.clone() };
+    for pinned in [&remote_only, &vm] {
+        let refusal = run_host_refusal(Some(pinned), Some("local")).expect("refused");
+        assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
+        for kept in [None, Some("remote"), Some("host:w1")] {
+            assert_eq!(run_host_refusal(Some(pinned), kept), None, "{kept:?}");
+        }
+    }
+    for location in [None, Some("local"), Some("remote")] {
+        assert_eq!(run_host_refusal(Some(&plain), location), None);
+        assert_eq!(run_host_refusal(None, location), None);
+    }
+}
+
+/// The posture never comes from a renderer-sent spec: create, import and
+/// extend drop a `remote_only` inside `remote` before anything stores it.
+#[test]
+fn a_renderer_sent_spec_never_carries_the_posture() {
+    let mut sent = RemoteSpec { remote_only: Some(true), ..spec(None, "h.example", None, "/srv/p") };
+    strip_renderer_posture(Some(&mut sent));
+    assert_eq!(sent.remote_only, None);
+    assert!(!sent.is_remote_only());
+    strip_renderer_posture(None);
+
+    // The request's own key is the top-level camelCase `remoteOnly`.
+    let req: CreateProjectRequest = serde_json::from_value(serde_json::json!({
+        "name": "p", "directory": "", "remoteOnly": true,
+        "remote": { "host": "h.example", "remote_path": "/srv/p", "remote_only": true },
+    }))
+    .unwrap();
+    assert!(req.remote_only);
+    let req: ImportProjectRequest = serde_json::from_value(serde_json::json!({
+        "sourceDir": "/x", "name": "p", "mode": "keep",
+    }))
+    .unwrap();
+    assert!(!req.remote_only, "absent = a plain Remote");
 }

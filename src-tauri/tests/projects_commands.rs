@@ -189,6 +189,7 @@ fn stale_frontend_save_preserves_a_newer_entry_patch() {
             git_provider: None,
             skip_scaffold: false,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
             vm: None,
         })
@@ -237,6 +238,7 @@ fn create_project_refuses_an_existing_folder() {
             git_provider: None,
             skip_scaffold: false,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
             vm: None,
         };
@@ -272,6 +274,7 @@ fn create_project_refuses_an_existing_empty_folder_but_creates_a_fresh_one() {
             git_provider: None,
             skip_scaffold: false,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
             vm: None,
         };
@@ -317,9 +320,11 @@ fn create_remote_project_enables_lockstep_when_git_backed() {
                 key_auth: None,
                 persist_sessions: None,
                 vm: None,
+                remote_only: None,
                 label: None,
                 extra: Default::default(),
             }),
+            remote_only: false,
             mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
             vm: None,
         };
@@ -357,9 +362,11 @@ fn create_remote_project_leaves_lockstep_off_without_git() {
                 key_auth: None,
                 persist_sessions: None,
                 vm: None,
+                remote_only: None,
                 label: None,
                 extra: Default::default(),
             }),
+            remote_only: false,
             mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
             vm: None,
         };
@@ -399,9 +406,11 @@ fn create_remote_project_scaffolds_the_local_mirror() {
                 key_auth: None,
                 persist_sessions: None,
                 vm: None,
+                remote_only: None,
                 label: None,
                 extra: Default::default(),
             }),
+            remote_only: false,
             mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
             vm: None,
         };
@@ -463,6 +472,7 @@ fn import_project_copy_creates_missing_scaffolds_without_overwriting_existing_on
             manual_validation_confirmed: Some(true),
             skip_scaffold: false,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
         };
 
@@ -512,6 +522,7 @@ fn import_project_move_creates_missing_scaffolds_without_overwriting_existing_on
             manual_validation_confirmed: Some(true),
             skip_scaffold: false,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
         };
 
@@ -556,6 +567,7 @@ fn import_project_keep_creates_missing_scaffolds_in_place_without_overwriting_ex
             manual_validation_confirmed: None,
             skip_scaffold: false,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
         };
 
@@ -602,6 +614,7 @@ fn import_project_skip_scaffold_adds_no_files_but_inits_git() {
             manual_validation_confirmed: None,
             skip_scaffold: true,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
         };
 
@@ -662,6 +675,7 @@ fn import_project_skip_scaffold_without_git_does_not_init() {
             manual_validation_confirmed: None,
             skip_scaffold: true,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
         };
 
@@ -689,6 +703,7 @@ fn set_project_description_writes_both_projects_json_and_project_json() {
             git_provider: None,
             skip_scaffold: false,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
             vm: None,
         })
@@ -746,6 +761,7 @@ fn new_local_project(name: &str, target: &Path) -> app_lib::schema::projects::Pr
         manual_validation_confirmed: None,
         skip_scaffold: false,
         remote: None,
+        remote_only: false,
         mirror_parent: None,
     })
     .expect("import project")
@@ -1619,9 +1635,11 @@ fn set_project_auto_connect_writes_both_copies_and_clears() {
                 key_auth: None,
                 persist_sessions: None,
                 vm: None,
+                remote_only: None,
                 label: None,
                 extra: Default::default(),
             }),
+            remote_only: false,
             mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
             vm: None,
         })
@@ -1671,6 +1689,7 @@ fn set_project_auto_connect_rejects_local_and_unknown_projects() {
             git_provider: None,
             skip_scaffold: true,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
             vm: None,
         })
