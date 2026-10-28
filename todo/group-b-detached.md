@@ -38,6 +38,22 @@
   - [ ] ❌ Doesn't work on Windows
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ **Wayland popout keeps its screen across switches and restarts
+  (2026-10-28).** Still after 2026-09-25 (user, random-walk-transformer: the
+  popout came back beside the main window every switch). Cause, read in Mutter
+  50.1: GTK reports fullscreen at the first configure, before the window has a
+  buffer; the hop left fullscreen right then, and Mutter places a window
+  leaving fullscreen that was never shown on the *pointer's* screen
+  (`meta_window_place`, `showing_for_first_time`). The hop now waits until the
+  surface has entered its screen (GDK's output for it; 700 ms when that can't
+  be told, 4 s cap). A restart had no screen at all: the quit now saves each
+  popout's screen with its bounds and the respawn uses it. Check: popout moved
+  to the other external screen, switch away and back (several times, both
+  directions), then quit and start again. Expect a brief fullscreen flash on
+  the popout's screen, then the popout there at its size. Not run live
+  (`subwindow.rs` `present_on_monitor`, `detached_window_screens`).
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
 - [ ] 🖐️ **Wayland popout respawns on its own screen (2026-09-25).** A popout
   closed by a project switch (no unsaved work) came back on the pointer's
   screen, while one kept minimized for unsaved work kept its screen — so one

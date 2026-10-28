@@ -170,8 +170,9 @@ impl DetachedRetire {
 }
 
 /// One connected monitor's position and size in physical desktop px, as reported
-/// by Tauri's `available_monitors()`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// by Tauri's `available_monitors()`. (A native-Wayland popout's remembered
+/// screen is GDK's logical rect in the same shape, kept in the saved layout.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MonitorRect {
     pub x: i32,
     pub y: i32,

@@ -2328,6 +2328,7 @@ pub fn run() {
             commands::subwindow::focus_detached_window,
             commands::subwindow::sync_detached_scope,
             commands::subwindow::detached_window_is_parked,
+            commands::subwindow::detached_window_screens,
             commands::subwindow::detached_retire_ack,
             commands::subwindow::detached_retire_ready,
             // The deck presenter's audience window (M#90)

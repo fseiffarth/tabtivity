@@ -930,6 +930,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("detached_retire_ready", Client),
     ("detached_window_frontmost", Client),
     ("detached_window_is_parked", Client),
+    ("detached_window_screens", Client),
     ("detach_subwindow", Client),
     ("focus_detached_window", Client),
     ("snap_detached_window", Client),

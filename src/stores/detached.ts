@@ -11,6 +11,7 @@
  * and the seed/edit payload builders + appliers. The wiring (listeners) lives in
  * `DetachedApp` / the main shell.
  */
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen, type EventCallback } from "@tauri-apps/api/event";
 import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -35,7 +36,7 @@ import {
   moveKeyInTree,
 } from "./tabs/layoutTree";
 import { normalizeTodoId } from "./tabs/tabEntries";
-import type { DetachedGroup, WindowBounds } from "./tabs/types";
+import type { DetachedGroup, ScreenRect, WindowBounds } from "./tabs/types";
 import type { LocalityHost } from "./tabs/tabLocation";
 import { useProjectsStore } from "./projects";
 import { noteClosedPopoutTabs, reopenClosedAgentTab } from "./agents/closedAgentTabs";
@@ -1498,6 +1499,41 @@ export async function closeOrphanedPopouts(): Promise<void> {
 }
 
 /**
+ * Native Wayland: write each popout's screen (and size) into its saved bounds
+ * before the quit persists them, so a restart respawns it on that screen. The
+ * backend answers nothing where positions are readable. Best-effort.
+ */
+async function keepDetachedScreens(
+  byScope: Record<string, DetachedGroup[] | undefined>,
+): Promise<void> {
+  const entries = Object.entries(byScope).flatMap(([scope, list]) =>
+    (list ?? []).map((entry) => ({ scope, entry })),
+  );
+  if (entries.length === 0) return;
+  let screens: Record<string, { w: number; h: number; monitor: ScreenRect }> | undefined;
+  try {
+    screens = await invoke("detached_window_screens", {
+      labels: entries.map(({ entry }) => entry.label),
+    });
+  } catch {
+    return;
+  }
+  if (!screens || typeof screens !== "object") return;
+  const { setDetachedBounds } = useTabsStore.getState();
+  for (const { scope, entry } of entries) {
+    const screen = screens[entry.label];
+    if (!screen) continue;
+    setDetachedBounds(scope, entry.id, {
+      x: entry.bounds?.x ?? 0,
+      y: entry.bounds?.y ?? 0,
+      w: screen.w,
+      h: screen.h,
+      monitor: screen.monitor,
+    });
+  }
+}
+
+/**
  * App-quit teardown for every open popout. Called from the MAIN window's
  * `onCloseRequested` before it destroys itself: a detached `WebviewWindow` lives
  * in the same process but is NOT a child of the main window, so closing the main
@@ -1518,6 +1554,7 @@ export async function shutdownDetachedWindows(): Promise<void> {
   // From here on a popout's `Destroyed` is ours, not a crash (#224): the records
   // must survive so the popouts respawn at their saved bounds next launch.
   shuttingDown = true;
+  await keepDetachedScreens(store.detachedGroupsByScope);
   for (const [scope, entries] of Object.entries(store.detachedGroupsByScope)) {
     if (!entries || entries.length === 0) continue;
     // Persist the detached set + bounds durably — for EVERY scope (#229). Root

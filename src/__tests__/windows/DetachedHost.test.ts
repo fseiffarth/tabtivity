@@ -492,6 +492,30 @@ describe("detached host (#42)", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("attach_subwindow", expect.anything());
   });
 
+  it("app-quit teardown keeps each Wayland popout's screen in the bounds it persists", async () => {
+    const { label, groupId } = detachSecond();
+    useProjectsStore.setState({
+      projects: [{ id: "p", name: "p", local_file: "/p/project.json" } as never],
+    });
+    const monitor = { x: 2560, y: 0, w: 2560, h: 1440 };
+    invokeMock.mockImplementation((cmd: unknown) =>
+      Promise.resolve(
+        cmd === "detached_window_screens" ? { [label]: { w: 900, h: 640, monitor } } : undefined,
+      ) as Promise<undefined>,
+    );
+    try {
+      await shutdownDetachedWindows();
+    } finally {
+      invokeMock.mockImplementation(() => Promise.resolve(undefined));
+    }
+    expect(invokeMock).toHaveBeenCalledWith("detached_window_screens", { labels: [label] });
+    const entry = useTabsStore.getState().detachedGroupsByScope["p"]?.find((d) => d.id === groupId);
+    expect(entry?.bounds).toEqual({ x: 0, y: 0, w: 900, h: 640, monitor });
+    // Taken before the persist, so the saved layout carries it.
+    const order = invokeMock.mock.calls.map(([cmd]) => cmd);
+    expect(order.indexOf("detached_window_screens")).toBeLessThan(order.indexOf("workspace_sync"));
+  });
+
   it("app-quit teardown persists a scope with no project.json too (root/box), and closes it", async () => {
     // Group B #229. A scope with no matching project entry — the root scope,
     // and any `box:<id>` scope — has no `local_file`, and the teardown used to

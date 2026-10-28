@@ -20,6 +20,7 @@ import {
   allGroups,
   pruneSavedTree,
   isDetachedPtyId,
+  screenArg,
   type GroupNode,
   type SplitNode,
 } from "../../stores/tabs";
@@ -102,7 +103,40 @@ describe("tabs store — detach / attach subwindow (#42)", () => {
       y: null,
       width: null,
       height: null,
+      monitor: null,
     });
+  });
+
+  it("a Wayland popout's saved screen survives the bounds stream and reaches the respawn", async () => {
+    const { right } = twoGroups();
+    useTabsStore.getState().detachGroup(right.id, { skipBackend: true });
+    const monitor = { x: 2560, y: 0, w: 2560, h: 1440 };
+    useTabsStore.getState().setDetachedBounds("p", right.id, { x: 0, y: 0, w: 900, h: 640, monitor });
+    // The popout's own stream never knows the screen: it must not drop it.
+    useTabsStore.getState().setDetachedBounds("p", right.id, { x: 0, y: 0, w: 1000, h: 700 });
+    const detached = useTabsStore.getState().detachedGroupsByScope["p"];
+    expect(detached[0].bounds).toEqual({ x: 0, y: 0, w: 1000, h: 700, monitor });
+    // It is saved with the layout...
+    const merged = withDetachedDocked(serializeTree(useTabsStore.getState().layout), detached);
+    expect(findDetachedGroup(merged)?.bounds).toEqual({ x: 0, y: 0, w: 1000, h: 700, monitor });
+    // ...and handed to the respawn.
+    invokeMock.mockClear();
+    useTabsStore.getState().respawnDetachedForScope("p");
+    await vi.waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "detach_subwindow",
+        expect.objectContaining({ groupId: right.id, width: 1000, height: 700, monitor }),
+      ),
+    );
+  });
+
+  it("a garbled saved screen is dropped rather than failing the respawn", () => {
+    expect(screenArg({ x: 0, y: 0, w: 1920, h: 1080 })).toEqual({ x: 0, y: 0, w: 1920, h: 1080 });
+    expect(screenArg({ x: 0.5, y: 0, w: 1920, h: 1080 })).toBeNull();
+    expect(screenArg({ x: 0, y: 0, w: 0, h: 1080 })).toBeNull();
+    expect(screenArg({ x: "0", y: 0, w: 1920, h: 1080 })).toBeNull();
+    expect(screenArg(null)).toBeNull();
+    expect(screenArg(undefined)).toBeNull();
   });
 
   it("keeps a popout separate when its first OS window build fails", async () => {
@@ -397,6 +431,7 @@ describe("tabs store — drag a tab/file to another monitor → standalone windo
       y: bounds.y,
       width: bounds.w,
       height: bounds.h,
+      monitor: null,
     });
   });
 
@@ -453,6 +488,7 @@ describe("tabs store — drag a tab/file to another monitor → standalone windo
       y: bounds.y,
       width: bounds.w,
       height: bounds.h,
+      monitor: null,
     });
   });
 });

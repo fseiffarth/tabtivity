@@ -472,6 +472,21 @@ export interface WindowBounds {
   y: number;
   w: number;
   h: number;
+  /**
+   * Native Wayland only, where `x`/`y` mean nothing: the screen the popout was
+   * on at the last quit (GDK's logical rect, backend `detached_window_screens`),
+   * so a restart respawns it there. Kept across the bounds stream, which never
+   * knows it.
+   */
+  monitor?: ScreenRect;
+}
+
+/** A monitor's rect as the backend names it (`MonitorRect`). */
+export interface ScreenRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 /**

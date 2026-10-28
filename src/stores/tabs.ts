@@ -33,6 +33,7 @@ import type {
   SavedLayoutTree,
   SavedTabEntry,
   ScopeSwitchSnapshot,
+  ScreenRect,
   SplitDir,
   SplitNode,
   TabEntry,
@@ -3492,17 +3493,19 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       let changed = false;
       const next = entries.map((d) => {
         if (d.id !== groupId) return d;
+        const monitor = bounds.monitor ?? d.bounds?.monitor;
         if (
           d.bounds &&
           d.bounds.x === bounds.x &&
           d.bounds.y === bounds.y &&
           d.bounds.w === bounds.w &&
-          d.bounds.h === bounds.h
+          d.bounds.h === bounds.h &&
+          sameScreen(d.bounds.monitor, monitor)
         ) {
           return d;
         }
         changed = true;
-        return { ...d, bounds };
+        return { ...d, bounds: monitor ? { ...bounds, monitor } : bounds };
       });
       if (!changed) return {};
       return { detachedGroupsByScope: { ...s.detachedGroupsByScope, [scope]: next } };
@@ -3941,6 +3944,21 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
 const openingDetachedWindows = new Map<string, Promise<void>>();
 const detachedOpenDelays = [0, 300, 900, 1800, 3600, 7200, 15000, ...Array<number>(6).fill(30_000)];
 
+function sameScreen(a: ScreenRect | undefined, b: ScreenRect | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
+/** A saved screen in the shape `detach_subwindow` parses, else null: a garbled
+ *  one read back from disk must not fail the whole respawn. */
+export function screenArg(m: unknown): ScreenRect | null {
+  if (!m || typeof m !== "object") return null;
+  const { x, y, w, h } = m as Record<string, unknown>;
+  const int = (v: unknown): v is number => Number.isInteger(v);
+  if (!int(x) || !int(y) || !int(w) || !int(h) || w <= 0 || h <= 0) return null;
+  return { x, y, w, h };
+}
+
 function openDetachedWindow(scope: string, groupId: string): Promise<void> {
   const label = `detached-${scope}-${groupId}`;
   const pending = openingDetachedWindows.get(label);
@@ -3960,6 +3978,7 @@ function openDetachedWindow(scope: string, groupId: string): Promise<void> {
           y: b?.y ?? null,
           width: b?.w ?? null,
           height: b?.h ?? null,
+          monitor: screenArg(b?.monitor),
         });
         return;
       } catch {
