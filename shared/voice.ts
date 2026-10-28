@@ -85,8 +85,26 @@ function ordinalOf(word: string): number | undefined {
  * pick — "one", "option two", "Nummer 3, bitte", "the second one", "die
  * Zweite" — so a sentence that merely contains a number is never taken for
  * one. A number outside the card is no pick, and nothing is guessed at.
+ *
+ * `labels`, when given, are the rows' own words: an utterance that says one
+ * row's label whole — case and punctuation aside — picks it ("an option's
+ * words"). Two rows with the same words pick neither.
  */
-export function matchOption(utterance: string, count: number): number | null {
+export function matchOption(utterance: string, count: number, labels?: readonly string[]): number | null {
+  const pick = matchOptionNumber(utterance, count);
+  if (pick !== null || !labels) return pick;
+  const said = utteranceWords(utterance).join(" ");
+  if (!said) return null;
+  let found: number | null = null;
+  for (let index = 0; index < Math.min(count, labels.length); index++) {
+    if (utteranceWords(labels[index]).join(" ") !== said) continue;
+    if (found !== null) return null;
+    found = index;
+  }
+  return found;
+}
+
+function matchOptionNumber(utterance: string, count: number): number | null {
   let words = utteranceWords(utterance);
   while (words.length > 0 && OPTION_POLITE.has(words[words.length - 1])) words = words.slice(0, -1);
   while (words.length > 0 && OPTION_POLITE.has(words[0])) words = words.slice(1);
