@@ -693,3 +693,162 @@ window is the main checkout's build.
   answer, `advance()` would resume that one. This is a judgement call for
   S6, not fixed.
 - Not run live: no phone, no window.
+
+## S6: read-aloud cursor (branch `voice-s6`)
+
+**Commits:** `8458bcc9` holds the code, tests, dictionary keys, prefs keys and
+untested rows. This section is in the commit after it. Base: `ca415f07`.
+
+### What landed
+
+- `mobile-web/src/speechOutput.ts` moves from its flat queue to the
+  `voiceReading` cursor. The old exports keep their meaning: `speak`,
+  `stopSpeaking`, `unlockSpeech`, `currentSpeechId`, `subscribeSpeech`. Plain
+  `speak` (question read-outs, the probe) still queues sentence chunks; it
+  does not go through the reading model. The `generation` counter is bumped
+  by every stop and every move.
+  - One cursor per tab in module state (`readings`). This is the read
+    position, and it survives a reconnect, a tab switch and a remount, but
+    not a reload. The set of turn keys already heard is kept with it, so an
+    answer is not read twice and none is skipped across a remount. It holds
+    tab ids, so nothing is written to storage.
+  - The queue holds plain items and reading items (a reading item is a
+    tab's cursor). The voice says `cursor.current()`. On `onend`, if
+    `atSectionEnd()` (or every chunk, if asked), it awaits the
+    `onSectionEnd` hook, then calls `advance()`. `null` ends that item.
+- `useReadAloud` (`useSessionChat.ts`) feeds each tab's answer turns to its
+  cursor (`feedReading`). Fresh answers (at most 3) are read with `follow`.
+  While a hands-free turn is awaited (`holdReadingForTurn`), nothing is read
+  entry by entry. `t` stays in the props type for the call site, but is
+  unused: the labels are said in the speech language.
+- `useHandsFree.ts` (today's Focus loop stands in for "armed"):
+  - `awaitTurn` holds read-aloud for the turn.
+  - When the turn is over, the turn's answers are read first (`readTurn`:
+    the last 3 after the answer that was newest at the send). The mic opens
+    once the voice is quiet.
+  - A question the turn ended on is read after those answers.
+  - With the mic open and nothing dictated yet, a whole utterance that
+    `matchReading` hears (in the speech language) runs `runReadingCommand`.
+    The tab must have a read position. "stop" stays the send guard's. The
+    mic then waits for the voice alone (`handsFreeTurnOver({ reading:
+    true })`, new in `handsFree.ts`).
+- `components/MessageMenu.tsx`: Read aloud calls `readMessage(id, text,
+  lang)`. For an answer of the open tab, this starts that tab's cursor on
+  it (no follow), so the spoken moves go on from it. Anything else (a
+  prompt, a subagent's message, a shell's screen bubble) is read as a
+  one-off reading in full.
+- **Brief / full and rate UI:** This device → **Reading aloud**
+  (`components/ReadAloudSheet.tsx`, new, an `OptionSheet` with two groups):
+  "Whole answers" / "Brief", and the speeds 0.7×–2×. There is one row in
+  `screens/Home.tsx`.
+- `speechLang.ts`: `speechLanguage(tag = speechTag())` turns a BCP-47 tag
+  into an app `Language`, used for the labels and for `matchReading`.
+
+### API for S3 / S4 / S5 / S10 (all in `speechOutput.ts`)
+
+```ts
+// feeding (S5 keeps useReadAloud as the feeder)
+feedReading(tab, turnKeys, answers: ReadingAnswer[], lang): string[] | null  // fresh answer ids; null = first feed
+readAnswers(tab, id): boolean          // read from id on, following into later answers
+holdReadingForTurn(tab, hold); readingHeld(tab): boolean
+readTurn(tab, sinceKey | null): boolean  // end of turn: last MAX_SPOKEN_AT_ONCE answers after sinceKey
+readMessage(id, text, lang): void        // a message's Read aloud (replaces what is said)
+leaveReading(tab)
+// moves: tab omitted = the reading being said, else the last one read
+readNext, readNextAnswer, readBack, readRepeat, readSummary, readAll, readCode, sayWhere: (tab?) => boolean
+runReadingCommand(id: VoiceReadId, tab?): boolean   // matchReading's result, "stop" and rates included
+stepRate(±1): number; setReadingRate(r); readingRate(); READING_RATES
+setReadBrief(on); readBrief(); setReadingDriving(on)  // S10: brief + DRIVING_LIMITS
+pauseReading(); resumeReading(); readingPaused()       // S4 play/pause
+readingNow(): { tab, agent, position } | null           // S4 lock-screen card; subscribeSpeech fires per chunk
+hasReadPosition(tab?): boolean
+onSectionEnd(hook, { everyChunk? }): () => void         // S4 listen gaps
+forgetReadings()                                        // tests
+```
+
+The `onSectionEnd` hook gets `{ tab, position, sectionEnd }`. Reading goes on
+once its promise settles. A move made inside the gap (a command heard there)
+bumps `generation`, and the step it was waiting for is dropped. There is one
+hook at a time, and it is called after every chunk with `everyChunk`
+(`voiceGapsPerChunk`).
+
+### Hot-file additions
+
+- **`prefs.ts`**: `MobileFlag` `voiceBrief` and `MobileChoice` `voiceRate`
+  (string, one of `READING_RATES`). S3 still adds `handsFreeCommands`,
+  `voiceDriving`, `voiceGapsPerChunk`, `voiceCommandWord` and
+  `voiceConfirmPhrase`. Neither new key is cleared by `forgetDeviceData`
+  (they are the owner's).
+- **i18n** (en, de, es, fr, it; 10 each, appended at the end):
+  `mobile.speech.reading`, `.readingHint`, `.modeGroup`, `.modeFull`,
+  `.modeFullHint`, `.modeBrief`, `.modeBriefHint`, `.rateGroup`,
+  `.rateValue` (`{rate}×`), `.rateNormal`. `mobile.speech.code` is no longer
+  read by any code, but it was left in the dictionaries.
+- **`untested.ts`**: new rows `mobile.speech.cursor` (the MessageMenu Read
+  aloud row) and `mobile.speech.reading` (the This device row). The
+  `mobile.voice.handsFree` row's text now also covers end-of-turn reading and
+  the spoken reading commands.
+- **`style.css`**: none.
+- **Filemap**: no rows added (S11). `ReadAloudSheet.tsx` is new;
+  `speechOutput.ts`'s row should say "reading cursor per tab".
+
+### Choices and gotchas
+
+- **Skipped streaming answer** (flagged in Batch A): no skipped-id set is
+  needed. A skip past the end parks the cursor and ends the reading item. A
+  new answer begins with `start`, so `advance()` is never called on a
+  parked cursor except after an explicit "repeat" or "back".
+- **`start(id)` on an empty answer** (flagged in Batch A): `begin` enqueues
+  only when `start` returned a chunk, so a stale position is never resumed
+  by itself.
+- **Back twice:** as Batch A said, the mic is closed during speech in
+  today's loop, so a spoken "back" always comes after the chunk ended and
+  steps back by one chunk. A spoken "back, back" (the section before) needs
+  S4's buttons or listen gaps.
+- **Brief applies** to the tab's answers, including Read aloud on one of
+  them. A one-off (prompt, subagent, screen) is always full. "summary" and
+  "read all" are per answer, as in S2.
+- **Rate change** cuts the current chunk and says it again at the new rate.
+  A rate command with nothing being said repeats the current chunk, so the
+  new pace is heard.
+- **"where"** is said as a plain interjection, and then the chunk it cut off
+  is said again.
+- **A move** cuts off what was being said, drops that item (unless it is the
+  same reading), and keeps the rest of the queue.
+- **A new answer while one message is read from its menu** is started after
+  that message (`then`), as the old queue did.
+- **Labels** are said in the speech language. The dictionary is loaded on
+  the first reading in that language, and the readings re-render when it
+  lands; until then the English labels stand in.
+- **Tab switch:** leaving a tab stops the voice (as before), but the tab's
+  heard keys are kept. Back on the tab, up to 3 answers that arrived
+  meanwhile are read (before, the first read after a remount was all
+  history).
+- **`readTurn` reads the last 3** of the turn's answers. A long agentic turn
+  with many short in-between messages is read only from its third-last. The
+  user can say "back" to go further.
+
+### Gates
+
+`scripts/gates.sh --base ca415f07` (18 files, frontend): brand PASS,
+whitespace PASS, `npm run lint` PASS, `npm run build` PASS, vitest
+`--changed` PASS (728 files, 6865 tests, all passed on the first run, rerun with the dot reporter for the count). There was no Rust change.
+`scripts/privacy-check.sh`: PASS (18 paths). New and changed tests:
+`MobileSpeechOutput.test.ts` 17 (was 1), `MobileTerminalReadAloud.test.tsx`
+5 (one new hands-free end-to-end case; the old cases now expect the reading
+model's chunks, "code block, one line"), and `MobileHandsFree.test.ts` +1.
+The new hands-free case was checked to fail with the hold disabled. Not run
+live. The phone bundle is stale once this lands (`npm run mobile:bundle`).
+
+### Flagged for user
+
+- Whether returning to a tab should read up to 3 answers that arrived while
+  you were away (as built, following the plan's "survives tab switches"), or
+  treat them as history as before.
+- Whether the end of a hands-free turn should read the turn's last 3
+  answers (as built) or only its final one.
+- Whether a rate step should restart the current chunk (as built) or apply
+  from the next one.
+- The brief / speed sheet sits under This device for now. S8's voice sheet
+  may absorb it.
+- The es, fr and it strings were not reviewed by a native speaker.
