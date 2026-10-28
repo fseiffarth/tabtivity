@@ -557,3 +557,139 @@ Flagged for user:
 - `voiceSession.ts` now exports three helpers, a small change in a file
   S3 owns.
 - Never run on a phone; nothing here is verified live.
+
+## Batch A review (branch `voice-a`)
+
+**Commits:** `5e4936c9` holds the dictionary keys, the fixes and their
+tests. This section is in the commit after it. Reviewed: `git diff
+70344a96..voice-a` (S0, S1, S2 and the `build.rs` `wav` row).
+
+### Mechanical: the reading keys
+
+The 11 `voice.reading.*` keys from S2's table are appended after S1's
+`voice.*` keys in all five dictionaries. en, de, es and fr are as S2 drafted
+them. In it, the quoted command is now «riassunto», S1's
+`voice.read.summary`, not S2's draft «riepilogo» (which would not have been
+heard as "summary"). A new test, "the dictionaries' reading lines" in
+`VoiceReading.test.ts`, builds `readingLabels((key, params) =>
+translate(lang, key, params))` with no cast (it type-checks). For each
+language it fills every label and checks that the quoted word of both long
+lines is matched by `matchReading` as `summary`.
+
+### Fixed (each with a regression test)
+
+1. **`{text}` started inside a word.** Apostrophes split words, so "tell
+   Claude that's wrong" filled `tell {agent} that {text}` with the text
+   "s wrong", and "reply that's fine" replied "s fine". A `{text}` slot
+   now starts only after whitespace. Test: "carries dictation as heard in a
+   {text} slot" (two new cases).
+2. **An exact long name was asked back.** The joined-letters score of
+   "Project Alpha 2" against "project alpha" is 0.92, inside the 0.15
+   margin, so "project Project Alpha" was ambiguous. Saying "Project Alpha"
+   again in `resolveAmbiguity` stayed ambiguous, so it returned `null`: that
+   project could be picked only by number. S1's "Alpha" vs "Alpha 2" worked
+   only because the names are short. Now a name that scores 1 (letter for
+   letter after the phonetic key) is picked when it is the only one; two
+   exact ones ("Alpha", "Alfa") still ask back. Test: "takes a long name
+   said exactly over the same name with a number".
+3. **A personal command word of five or more words was never heard.**
+   `commandWordLength` joined at most four tokens, and hyphens and
+   apostrophes count as word breaks. The cap is gone; the prefix test still
+   ends the walk at the first word that is off. Test: "may be a phrase of
+   five words or more".
+4. **A skip past the end came back to what it skipped.** "next" in the last
+   section, or "next answer" in the last answer, ended reading but left the
+   cursor where it was. With `follow`, the next `advance()` (when a new
+   answer arrives) then read the rest of the skipped section or answer
+   instead of the new one. Now the cursor goes to that answer's last chunk.
+   Test: "a skip past the end never comes back to what it skipped".
+5. **Chunk limit.** A `#` heading was one chunk of any length (a test
+   heading of 80 words was a 399-character utterance, which Chrome on
+   Android cuts off and never ends). The outline's first sentence was cut
+   to `limits.maxChars` even when `maxChunk` was smaller. Headings now go
+   through `speechChunks(…, maxChunk)`, and the outline uses the smaller of
+   the two limits. Test: "cuts a long heading into chunks of at most the
+   maximum too".
+
+All five tests failed against the code before the fixes.
+
+### Checked, no bug found
+
+- **Probe gate:** `main.tsx` renders the lazy `voiceProbe` chunk only with
+  `?voiceProbe` **and** `localStorage[storageDashKey("show-untested-tags")]
+  === "true"`, the key `App.tsx` writes. Nothing else imports
+  `voiceProbe.tsx`. Its only network call is a HEAD for `/silence.wav`; it
+  makes no API call.
+- **Phone bundle:** `voiceCommands.ts` imports `shared/voice`, `lib/fuzzy`
+  (no imports) and `lib/i18n` (Zustand, React, `lib/brand`, `en`), with no
+  Tauri anywhere in the chain. The phone already value-imports `lib/i18n`
+  (`App.tsx`, `connection.ts`, `speechLang.ts`, …), so the matcher adds no
+  new dependency. `npm run build` (which runs `mobile:bundle`) passes.
+  `mobile-dist/` is gitignored, so there is nothing to commit.
+- **Matcher:** the read phrases, yes words and no words of every language
+  map to their own id with no collision; number words are normalized the
+  same way in templates, names and utterances; `matchesPhrase` and
+  `matchConfirm` (a plain yes gives `needPhrase` when a confirm phrase is
+  set) behave as decision 5 says.
+- **Brand:** the probe spells the name only through `BRAND.display`, and
+  brand-check passes.
+
+### Gates
+
+`scripts/gates.sh --base 70344a96` (19 files: frontend + src-tauri), with
+`CARGO_INCREMENTAL=0` and the worktree's own `target/` (on disk, not /tmp),
+at a load of 50–78:
+
+| Gate | Result |
+|---|---|
+| brand-check | PASS |
+| `git diff --check 70344a96` | PASS |
+| `npm run lint` | PASS (0 errors) |
+| `cargo clippy -p tabtivity -p app-serverd --all-targets -D warnings` | PASS |
+| `cargo clippy -p tabtivity --no-default-features --lib -D warnings` | PASS |
+| `cargo clippy -p app-serverd --all-targets -D warnings` | PASS |
+| `npm run build` (tsc, desktop, mobile, web bundles) | PASS |
+| vitest `--changed 70344a96` | PASS — 728 files, 6852 tests (rerun with the dot reporter for the count, also all green) |
+| `cargo test -p tabtivity -p app-serverd` | PASS |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | PASS |
+| `cargo test --workspace` (run separately) | PASS — 13 test binaries, 5232 passed, 0 failed, 7 ignored |
+| `scripts/privacy-check.sh` (staged) | PASS, 9 paths |
+
+The voice tests are `VoiceCommands` 55 (S1's 53, plus 2), `VoiceReading` 34
+(S2's 27, plus 2 tests and a 5-language `it.each`), `VoiceText` 13 and
+`i18n` all green. `backend:stale` does not apply in a worktree: the running
+window is the main checkout's build.
+
+### Batch A review — flagged for user
+
+- **Driving reads two long sentences whole.** In brief mode an answer is
+  "short" when it has ≤ 2 sentences **or** ≤ 220 characters (S2 read the
+  plan's "≤ ~2 sentences or ~15 s" literally), so a two-sentence answer of
+  2 000 characters is read whole in the car. **and** would hold driving to
+  ~15 s. I recommend **and** for `DRIVING_LIMITS`.
+- **"Skip this answer" on an answer still streaming.** After the skip, the
+  cursor sits at that answer's end. When the answer grows, a following
+  `advance()` reads the new part. Should a skipped answer stay skipped? S6
+  could keep a skipped-id set.
+- **"back" twice needs no `advance` in between.** The mic is closed while a
+  chunk is spoken, so a second spoken "back" usually arrives after the
+  chunk ended and `advance()` ran: it is then a chunk-back again. Back
+  twice works with the Media Session previous-track button during speech,
+  or in a listen gap. S6 should know this.
+- **Dictation that starts with the app's name** ("{app} crashes when …") is
+  taken as a command ("Didn't catch that") and never reaches the draft.
+  This follows from decision 1 and the `{app}` default, and probe items 5/7
+  and the personal word are the remedy. It is recorded here only so it is
+  not a surprise.
+- **The exact-name rule (fix 2) is a small change to the "floor and
+  margin" default.** If the recognizer drops a trailing "2", the matcher
+  now opens "Project Alpha" instead of asking back.
+- **A trailing "please" is cut from dictation** ("tell Claude to say
+  please" → "to say"), because polite words are stripped at the utterance's
+  end before the `{text}` slot. Minor; left as is.
+- **`start(id)` on an answer with nothing to say yet** keeps the previous
+  position. With `follow`, that is what lets a later `advance()` find the
+  new answer, but if reading had been stopped in the middle of an older
+  answer, `advance()` would resume that one. This is a judgement call for
+  S6, not fixed.
+- Not run live: no phone, no window.
