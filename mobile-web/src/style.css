@@ -366,6 +366,11 @@ small { color:#9498aa; }
 .new-tab-cloud-agent { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 0 8px; }
 .new-tab-cloud-agent > strong { flex:1 1 auto; min-width:0; color:#aeb4c8; font-size:.9rem; font-weight:600; overflow-wrap:anywhere; }
 .new-tab-cloud-agent > button { min-height:36px; padding:6px 10px; font-size:.8rem; }
+/* The model sheet's launch defaults: the fold above, its fields stacked. */
+.launch-defaults[open] { display:grid; gap:10px; padding-bottom:8px; }
+.launch-defaults > .sheet-note { padding:0; }
+.launch-defaults input { padding:10px; border-radius:10px; }
+.launch-defaults-actions { display:flex; flex-wrap:wrap; gap:8px; }
 /* Home: slim bar, large title, one segmented switch, then inset groups with
    hairline rows. No gradients: accent for actions and selection, colour for
    state. The project screen shares the gutter and the ground. */

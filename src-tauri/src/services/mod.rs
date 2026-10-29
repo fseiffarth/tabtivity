@@ -3,7 +3,7 @@
 // friends still resolve; `remote` and `root_mcp` are their own group's root file.
 pub mod agent;
 pub use agent::{
-    agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_exec,
+    agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_defaults, agent_exec,
     agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
     agent_install, agent_latest, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,

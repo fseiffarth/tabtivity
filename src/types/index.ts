@@ -499,6 +499,8 @@ export interface Settings {
   agent_preface_commands?: Record<string, string[]>;
   /** Model names per agent command, typed as that CLI's own `/model <name>`. */
   agent_models?: Record<string, string[]>;
+  /** Native startup choices per CLI binary, applied to new agent sessions. */
+  agent_launch_defaults?: Record<string, { model?: string; effort?: string }>;
   /** The agent a prompt-chart draft aimed at "New agent tab" launches (the
    *  bare command, `"claude"`); unset falls back to `default_agent_cmd`. Set
    *  from the chart's own toolbar. Rides in the backend's `extra` catch-all. */

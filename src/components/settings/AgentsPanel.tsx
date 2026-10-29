@@ -53,6 +53,7 @@ import { CodexAutoReviewToggle, AgentAccounts } from "./AgentAccounts";
 import { AgentFenceCard } from "./AgentFenceCard";
 import { AgentCronSection } from "./AgentCronSection";
 import { AgentComposerCard } from "./AgentComposerCard";
+import { AgentDefaults } from "./AgentDefaults";
 
 const NO_CUSTOM_AGENTS: CustomAgent[] = [];
 
@@ -160,6 +161,9 @@ export function AgentsPanel({
       .then((rows) => {
         setVersions(Object.fromEntries(rows.map((row) => [row.agent, row])));
         useAgentVersionNoticeStore.getState().update(rows);
+        // Version-dependent startup options (OpenCode v2 variants) may have
+        // become known during this probe, including on a first installation.
+        void invoke<AgentInfo[]>("list_agents").then(setAgents).catch(() => {});
       })
       .catch(() => {})
       .finally(() => setCheckingVersions(false));
@@ -628,6 +632,11 @@ export function AgentsPanel({
       )}
       {parts?.drift}
       {a.id === "codex" && <CodexHookNotice />}
+      {a.installed && (
+        <AgentsFold label={<>{t("agents.defaultsTitle")} <UntestedTag id="agents.launchDefaults" /></>}>
+          <AgentDefaults agent={a} />
+        </AgentsFold>
+      )}
       {a.installed && installedExtras && (
         <div className="agents-card-use">
           <span className="agents-card-use-label">

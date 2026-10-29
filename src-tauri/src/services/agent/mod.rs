@@ -12,6 +12,7 @@ pub mod agent_bin;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
 pub mod agent_changes;
+pub mod agent_defaults;
 pub mod agent_chats;
 // `--agent-exec`: an agent's secrets mapped from their app-named carriers to
 // the CLI's own variable names, just before the agent runs (no common name on

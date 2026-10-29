@@ -940,6 +940,8 @@ pub async fn prepare(
     // resolution `spawn_pty` used to do; it no longer does, to avoid resolving
     // twice.)
     // (A chat's session is resolved once its argv is built, below.)
+    // Some resolvers consume --continue (Copilot pins a --session-id instead).
+    let requested_resume = crate::services::agent_defaults::resumed(&opts.cmd, &opts.args);
     if !assistant {
         // OpenCode's session plugin is listed per release (a directory for 2,
         // the file for 1.x): probe first, so the resolve lists the one this
@@ -1037,6 +1039,13 @@ pub async fn prepare(
     // The push token, if `grant_lanes` minted one; its binding learns the fence
     // scope once the fence is decided below.
     let push_token = opts.env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned();
+
+    // Model defaults cannot affect MCP authority. In particular Vibe's native
+    // VIBE_ACTIVE_MODEL is also an older local-model tab's marker, so inject
+    // it only after grant_lanes has decided every lane from the original tab.
+    if !assistant && !requested_resume {
+        crate::services::agent_defaults::apply(&mut opts);
+    }
 
     // A local OpenCode is offered exactly the models Ollama has loaded (see
     // `services::local_drivers::opencode_loaded_models_config`) — handed over as an

@@ -7,6 +7,7 @@ import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
+import { LaunchDefaultsFold } from "../components/LaunchDefaultsFold";
 import { ConfirmSheet } from "../components/ConfirmSheet";
 import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
@@ -1655,6 +1656,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           : "terminal.reader.assistantModelFailed");
       });
   };
+  // Manage CLIs' startup defaults for this CLI, under the model sheet's rows.
+  const launchDefaults = tab.kind === "agent" && !tab.local_model && !tab.assistant_launch && !tab.on_host
+    ? <LaunchDefaultsFold tabId={tab.id} />
+    : undefined;
   const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
@@ -2650,6 +2655,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         options={effortOptions}
         waiting={t(connected ? "mobile.model.waitingSession" : "mobile.model.waitingConnection")}
         busy={effortOptions.length === 0}
+        footer={launchDefaults}
         onPick={chooseEffort}
         onClose={closeModelSheet}
       />
@@ -2672,6 +2678,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           ? "mobile.model.waitingConnection"
           : answered ? "mobile.model.waitingSession" : "terminal.reader.modelWaiting")}
         busy={modelPreview ? heldPick !== null : shownStep != null && (pickerStep == null || reveal != null || effortFor != null)}
+        footer={launchDefaults}
         onPick={chooseModel}
         onClose={closeModelSheet}
       />}</div>}

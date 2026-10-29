@@ -36,6 +36,7 @@ import { STATUS_AGENTS, TerminalReaderStatus, type ReaderPanel } from "./Termina
 import { CONTEXT_AGENTS, TerminalReaderContext } from "./TerminalReaderContext";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
+import { ReaderLaunchDefaults } from "./ReaderLaunchDefaults";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
@@ -443,6 +444,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
             : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
           {session.remembered && <small className="terminal-reader-question-more">{t("terminal.reader.modelRemembered")} <UntestedTag id="agents.modelRows.remembered" /></small>}
+          {modelPicking && tab.cmd && <ReaderLaunchDefaults cmd={tab.cmd} />}
         </div>
       )}
       {effortOpen && (
@@ -475,6 +477,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           </div>
           {effortFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.effortFailed")}</small>}
           <small className="terminal-reader-question-more">{t("terminal.reader.effortNote")}</small>
+          {tab.cmd && <ReaderLaunchDefaults cmd={tab.cmd} />}
         </div>
       )}
       {worktreesOpen && (

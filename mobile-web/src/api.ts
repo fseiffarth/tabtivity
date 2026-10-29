@@ -758,6 +758,25 @@ export function rememberModelRows(tabId: string, rows: ModelRows): Promise<{ kep
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`, { method: "POST", body: JSON.stringify(rows) });
 }
 
+/** One CLI's startup defaults and what it can take (`services::agent_defaults`). */
+export interface LaunchDefaults {
+  saved: { model: string; effort: string };
+  capabilities: { model: boolean; efforts: string[]; effort_requires_model: boolean };
+}
+
+/** `GET /api/v1/tabs/{id}/launch-defaults` — the model and effort new sessions
+ * of the tab's CLI start on (Manage CLIs → Default model and effort). `409
+ * no_launch_defaults` for a local-model, Tabby or host tab. */
+export function getLaunchDefaults(tabId: string): Promise<LaunchDefaults> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/launch-defaults`);
+}
+
+/** `PUT /api/v1/tabs/{id}/launch-defaults` — keep them for the tab's CLI;
+ * both blank hands the choice back to the CLI. This session keeps its own. */
+export function saveLaunchDefaults(tabId: string, saved: LaunchDefaults["saved"]): Promise<{ saved: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/launch-defaults`, { method: "PUT", body: JSON.stringify(saved) });
+}
+
 /** `POST /api/v1/tabs/{id}/assistant-model` — switch the chat to that model:
  * the desktop restarts its CLI on it and resumes the conversation (so the wait
  * is `WORKTREE_MOVE_TIMEOUT`'s). `409 tab_busy` while the chat is at work. */

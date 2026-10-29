@@ -3585,6 +3585,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   cursor: var(--cur-pointer, pointer);
 }
 .terminal-reader-picker-close:hover { color: var(--text-primary); }
+/* Manage CLIs' launch defaults, folded under the model and effort lists. */
+.terminal-reader-defaults {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+.agents-stack.compact { gap: 10px; }
 /* Codex /status, anchored to the same facts row as the other chat controls. */
 .terminal-reader-status {
   width: min(620px, calc(100% - 28px));

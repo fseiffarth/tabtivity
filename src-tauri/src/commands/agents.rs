@@ -66,6 +66,7 @@ fn platform_install(spec: &AgentSpec) -> (Option<&'static str>, String, &'static
 /// Public view of one agent + whether it is currently installed.
 #[derive(serde::Serialize)]
 pub struct AgentInfo {
+    pub launch_defaults: crate::services::agent_defaults::Capabilities,
     pub id: String,
     pub label: String,
     pub bin: String,
@@ -338,6 +339,7 @@ pub async fn list_agents() -> Vec<AgentInfo> {
                 .map(|pkg| format!("npm uninstall -g {pkg}"))
                 .unwrap_or_default();
             AgentInfo {
+                launch_defaults: crate::services::agent_defaults::capabilities(spec.bin),
                 id: spec.id.to_string(),
                 label: spec.label.to_string(),
                 bin: spec.bin.to_string(),
