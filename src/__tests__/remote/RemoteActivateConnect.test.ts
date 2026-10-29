@@ -88,7 +88,10 @@ const backend = (opts: {
   loginReadyAfter?: number;
   /** Non-headless: `openvpn_status` answers true from this poll onwards. */
   vpnUpAfter?: number;
+  /** `remote_connect` rejects this many times before it succeeds. */
+  connectFails?: number;
 }) => {
+  let connectFailures = 0;
   const probes = Array.isArray(opts.probe) ? [...opts.probe] : opts.probe ? [opts.probe] : [];
   let sshConnects = 0;
   let vpnStatusChecks = 0;
@@ -109,6 +112,10 @@ const backend = (opts: {
         return opts.vpnFails ? Promise.reject("tunnel failed") : Promise.resolve();
       case "openvpn_status":
         return Promise.resolve(++vpnStatusChecks > (opts.vpnUpAfter ?? Infinity));
+      case "remote_connect":
+        return connectFailures++ < (opts.connectFails ?? 0)
+          ? Promise.reject("kex_exchange_identification: Connection reset by peer")
+          : Promise.resolve();
       case "ssh_connect":
         return sshConnects++ >= (opts.loginReadyAfter ?? 0)
           ? Promise.resolve()
@@ -663,6 +670,35 @@ describe("re-trying an unreachable host", () => {
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sshLamp()).toBe("connected");
+  });
+
+  it("re-tries a connect that failed after its probe had passed", async () => {
+    backend({ probe: REACHABLE, sshSaved: true, connectFails: 1 });
+    useProjectsStore.setState({
+      projects: [project("remote1", { auto_connect: true })],
+      activeId: "remote1",
+    });
+    useRemoteStatusStore.getState().setSsh("remote1", "connected");
+
+    await silentReconnectDeadHost("remote1", "primary");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sshLamp()).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sshLamp()).toBe("connected");
+  });
+
+  it("gives up re-trying a connect that keeps failing on a host that lets us in", async () => {
+    backend({ probe: REACHABLE, sshSaved: true, connectFails: Infinity });
+    useProjectsStore.setState({ projects: [project("remote1", { auto_connect: true })] });
+
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    const connects = invokeMock.mock.calls.filter(([cmd]) => cmd === "remote_connect").length;
+    // The first try and three re-tries, then red for good.
+    expect(connects).toBe(4);
+    expect(sshLamp()).toBe("error");
   });
 
   it("reconnects a dropped key-auth host with headless connections off", async () => {

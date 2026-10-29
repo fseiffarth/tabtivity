@@ -673,19 +673,32 @@ pub struct SshProbe {
 /// rather than "the host said no". Auto-connect escalates to the project's VPN
 /// tunnel *only* on the former: a wrong or expired credential must never cause a
 /// tunnel to be brought up, and no tunnel would fix it anyway.
+///
+/// A connection the network or the server dropped before authentication (reset,
+/// closed during the key exchange — sshd's `MaxStartups` does that to a burst of
+/// connects — or a network that is down outright after a wake) is unreachable too:
+/// no credential was judged, so a re-try replays nothing. Any text that got as far
+/// as authentication is a "no", whatever else it says.
 fn ssh_unreachable(err: &str) -> bool {
-    const MARKERS: [&str; 6] = [
+    const MARKERS: [&str; 11] = [
         "Connection timed out",
         "Operation timed out",
         "No route to host",
         "Network is unreachable",
+        "Network is down",
+        "Host is down",
         "Connection refused",
         "Could not resolve hostname",
+        "Connection reset",
+        "kex_exchange_identification",
+        "Connection closed by",
     ];
+    const REJECTED: [&str; 3] = ["permission denied", "authentication", "host key"];
     let err = err.to_ascii_lowercase();
-    MARKERS
-        .iter()
-        .any(|m| err.contains(&m.to_ascii_lowercase()))
+    !REJECTED.iter().any(|m| err.contains(m))
+        && MARKERS
+            .iter()
+            .any(|m| err.contains(&m.to_ascii_lowercase()))
 }
 
 /// Silently probe whether this host is reachable *and* authenticates right now,
@@ -1019,6 +1032,10 @@ mod tests {
             "ssh: connect to host build.example port 22: Network is unreachable",
             "ssh: connect to host build.example port 22: Connection refused",
             "ssh: Could not resolve hostname build.example: Name or service not known",
+            "ssh: connect to host build.example port 22: Network is down",
+            "kex_exchange_identification: read: Connection reset by peer",
+            "kex_exchange_identification: Connection closed by remote host",
+            "Connection closed by 192.0.2.10 port 22",
         ] {
             assert!(ssh_unreachable(err), "should be unreachable: {err}");
         }
@@ -1032,6 +1049,8 @@ mod tests {
             "alice@build.example: Permission denied (publickey,password).",
             "Received disconnect from 10.0.0.2 port 22:2: Too many authentication failures",
             "Host key verification failed.",
+            "Received disconnect from 192.0.2.10 port 22:2: Too many authentication failures\nConnection closed by 192.0.2.10 port 22",
+            "alice@build.example: Permission denied (publickey).\nConnection closed by 192.0.2.10 port 22",
         ] {
             assert!(!ssh_unreachable(err), "should not be unreachable: {err}");
         }

@@ -487,8 +487,10 @@ async function autoConnectPrimary(
     status().setSsh(projectId, "connected");
   } catch (error) {
     console.warn("auto-connect failed", error);
-    if (stillActive()) status().setSsh(projectId, "error");
-    else abandon();
+    if (stillActive()) {
+      status().setSsh(projectId, "error");
+      void retryAfterFailedConnect(projectId, undefined, targetArgs(remote));
+    } else abandon();
   } finally {
     autoConnecting.delete(projectId);
   }
@@ -585,8 +587,10 @@ async function autoConnectWorker(projectId: string, host: ComputeHost): Promise<
     status().setSsh(projectId, "connected", hostId);
   } catch (error) {
     console.warn("worker auto-connect failed", error);
-    if (stillActive()) status().setSsh(projectId, "error", hostId);
-    else abandon();
+    if (stillActive()) {
+      status().setSsh(projectId, "error", hostId);
+      void retryAfterFailedConnect(projectId, hostId, targetArgs(host));
+    } else abandon();
   } finally {
     autoConnecting.delete(claim);
   }
@@ -703,6 +707,11 @@ export async function silentReconnectDeadHost(projectId: string, hostId: string)
   } catch (error) {
     console.warn("silent reconnect of dead host failed", error);
     status().setSsh(projectId, "error", hostId);
+    void retryAfterFailedConnect(projectId, hostId, {
+      user: target.user,
+      host: target.host,
+      port: target.port,
+    });
   } finally {
     autoConnecting.delete(claim);
   }
@@ -798,6 +807,37 @@ function clearUnreachableRetry(projectId: string, hostId?: string): void {
   const entry = unreachableRetries.get(key);
   if (entry?.timer) clearTimeout(entry.timer);
   unreachableRetries.delete(key);
+}
+
+/** The SSH coordinates of a host spec, as `ssh_probe` wants them. */
+const targetArgs = (spec: { user?: string; host: string; port?: number }): SshArgs => ({
+  user: spec.user ?? null,
+  host: spec.host,
+  port: spec.port ?? null,
+});
+
+/**
+ * A connect that threw after its probe had passed: the network dropped in between
+ * (a wake, a Wi-Fi hop), or the pool's own dial hit what the probe slipped past.
+ * That used to end at a red lamp for good, since only a *probe* failure joined the
+ * re-try loop. Probe once more and let its verdict decide: unreachable joins the
+ * loop; answering and authenticating again joins it for a few attempts only (a
+ * connect that keeps failing on a host that lets us in is not the network, and a
+ * login every five minutes forever would be its own problem); a host that now says
+ * no stays red, as before.
+ */
+async function retryAfterFailedConnect(
+  projectId: string,
+  hostId: string | undefined,
+  sshArgs: SshArgs,
+): Promise<void> {
+  const probe = await invoke<SshProbe>("ssh_probe", sshArgs).catch(() => null);
+  if (!probe) return;
+  const key = hostClaim(projectId, hostId);
+  const attempts = unreachableRetries.get(key)?.attempt ?? -1;
+  if (probe.unreachable || (probe.ok && attempts < 2)) scheduleUnreachableRetry(projectId, hostId);
+  // Given up: the next outage backs off from the start again.
+  else unreachableRetries.delete(key);
 }
 
 function runUnreachableRetry(projectId: string, hostId?: string): void {
