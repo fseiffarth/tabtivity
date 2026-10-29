@@ -26,6 +26,8 @@
 // An agent tab's conversation taken along when it moves between here and a host.
 pub mod agent_host_move;
 pub mod remote_credentials;
+// A remote-only project's scaffold and first commit, made on the host.
+pub mod remote_scaffold;
 pub mod remote_sync;
 // A host tab's conversation, copied from the host over the pooled SFTP session.
 pub mod remote_transcript;

@@ -569,6 +569,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["projects_root_dir", "core"],
   ["remote_mirror_root_dir", "core"],
   ["remote_mirror_status", "core"],
+  ["remote_project_init_host", "core"],
   ["remove_compute_host", "core"],
   ["rename_project_dir", "core"],
   ["repair_all_project_scaffolds", "core"],

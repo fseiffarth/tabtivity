@@ -797,6 +797,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("projects_root_dir", Core),
     ("remote_mirror_root_dir", Core),
     ("remote_mirror_status", Core),
+    ("remote_project_init_host", Core),
     ("remove_compute_host", Core),
     ("rename_project_dir", Core),
     ("repair_all_project_scaffolds", Core),

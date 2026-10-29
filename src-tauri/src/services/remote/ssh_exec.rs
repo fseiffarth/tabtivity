@@ -1336,15 +1336,14 @@ pub fn remote_du_raw(spec: &RemoteSpec, remote_dir: &str) -> Result<String, Stri
 /// agent tabs / git can `cd` into the project root. `mkdir -p <path>` is handed
 /// to the remote `$SHELL -c`, so the path is single-quoted via `shell_quote` and
 /// validated (no leading `-`, no control chars). Returns the trimmed stderr on
-/// failure; callers treat it as best-effort.
+/// failure; callers treat it as best-effort. Bounded ([`bounded_ssh_output`]).
 pub fn remote_mkdir_p(spec: &RemoteSpec) -> Result<(), String> {
     validate_arg("remote path", &spec.remote_path)?;
     let mut args = ssh_base_args(&spec.user, &spec.host, spec.port)?;
     args.push(format!("mkdir -p {}", shell_quote(&spec.remote_path)));
-    let out = crate::paths::command_no_window("ssh")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("failed to run mkdir over ssh: {e}"))?;
+    let mut cmd = crate::paths::command_no_window("ssh");
+    cmd.args(&args);
+    let out = bounded_ssh_output(cmd, "mkdir")?;
     if out.status.success() {
         Ok(())
     } else {
@@ -1368,14 +1367,30 @@ pub fn remote_git_init(spec: &RemoteSpec) -> Result<(), String> {
         "cd {path} && git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {init}",
         init = crate::services::git_init::INIT_SHELL
     ));
-    let out = crate::paths::command_no_window("ssh")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("failed to run git init over ssh: {e}"))?;
+    let mut cmd = crate::paths::command_no_window("ssh");
+    cmd.args(&args);
+    let out = bounded_ssh_output(cmd, "git init")?;
     if out.status.success() {
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// Run a one-shot ssh command for [`remote_mkdir_p`] / [`remote_git_init`],
+/// bounded at `git_bounded::WRITE_TIMEOUT`: a wedged ControlMaster or a hung
+/// host must not hold project creation (or the remote-only host init) forever.
+/// A timeout kills and reaps the ssh child's whole subtree and says what was
+/// stopped (`what`), never a fake empty output. No `hazard` precheck: nothing
+/// local is read.
+fn bounded_ssh_output(mut cmd: std::process::Command, what: &str) -> Result<std::process::Output, String> {
+    use crate::services::git_bounded::{run, Opts, RunError, WRITE_TIMEOUT};
+    match run(&mut cmd, Opts { timeout: Some(WRITE_TIMEOUT), no_precheck: true, ..Opts::default() }) {
+        Ok(ran) => Ok(ran.output),
+        Err(RunError::TimedOut(_)) => Err(format!(
+            "{what} over ssh timed out and was stopped. The connection to the host may be stalled."
+        )),
+        Err(e) => Err(format!("failed to run {what} over ssh: {e}")),
     }
 }
 

@@ -1074,3 +1074,42 @@ fn git_ssh_args_rejects_bad_remote_path_and_host() {
     assert!(git_ssh_args(&spec(None, "h", None, "-rf"), &["status".to_string()]).is_err());
     assert!(git_ssh_args(&spec(None, "-evil", None, "/p"), &["status".to_string()]).is_err());
 }
+
+// ── bounded one-shot helpers (remote_mkdir_p, remote_git_init) ─────────
+
+/// A hung one-shot ssh helper is stopped at its ceiling and says what it was,
+/// instead of holding project creation forever; a quick one answers its output.
+#[cfg(unix)]
+#[test]
+fn a_hung_one_shot_ssh_helper_is_stopped_and_named() {
+    use crate::services::git_bounded::{NOT_A_HANG, TEST_TIMEOUT};
+    use std::time::{Duration, Instant};
+    TEST_TIMEOUT.with(|t| t.set(Some(Duration::from_millis(300))));
+    let mut cmd = std::process::Command::new("sh");
+    cmd.args(["-c", "sleep 30"]);
+    let started = Instant::now();
+    let err = bounded_ssh_output(cmd, "mkdir").expect_err("times out");
+    TEST_TIMEOUT.with(|t| t.set(None));
+    assert!(err.starts_with("mkdir over ssh timed out"), "{err}");
+    assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
+
+    let mut ok = std::process::Command::new("sh");
+    ok.args(["-c", "printf done"]);
+    assert_eq!(bounded_ssh_output(ok, "git init").expect("ran").stdout, b"done");
+}
+
+/// `remote_mkdir_p` and `remote_git_init` run through the bound, never a bare
+/// `.output()` (plan review sibling fix): read off the source so a later edit
+/// cannot quietly unbound them.
+#[test]
+fn the_one_shot_ssh_helpers_are_bounded() {
+    let src = include_str!("../ssh_exec.rs");
+    for name in ["pub fn remote_mkdir_p(", "pub fn remote_git_init("] {
+        let start = src.find(name).unwrap_or_else(|| panic!("{name} not found"));
+        let body = &src[start..];
+        let end = body.find("\n}\n").expect("fn end");
+        let body = &body[..end];
+        assert!(body.contains("bounded_ssh_output("), "{name} is not bounded");
+        assert!(!body.contains(".output()"), "{name} runs a bare .output()");
+    }
+}

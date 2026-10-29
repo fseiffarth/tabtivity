@@ -2157,13 +2157,15 @@ fn a_renderer_sent_spec_never_carries_the_posture() {
 }
 
 /// Neither relocation command may mint a mirror for a remote-only project (a
-/// VM included): both refuse with the sentinel; a plain Remote is kept.
+/// VM included, whatever its `remote_only` says: the VM outranks the flag):
+/// both refuse with the sentinel; a plain Remote is kept.
 #[test]
 fn a_remote_only_project_refuses_mirror_relocation() {
     let plain = spec(None, "h.example", None, "/srv/p");
     let remote_only = RemoteSpec { remote_only: Some(true), ..plain.clone() };
     let vm = RemoteSpec { vm: Some(true), ..plain.clone() };
-    for pinned in [&remote_only, &vm] {
+    let unpinned_vm = RemoteSpec { vm: Some(true), remote_only: Some(false), ..plain.clone() };
+    for pinned in [&remote_only, &vm, &unpinned_vm] {
         for what in ["setting a mirror folder", "moving the mirror"] {
             let refusal = mirror_relocation_refusal(pinned, what).expect("refused");
             assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
@@ -2171,8 +2173,6 @@ fn a_remote_only_project_refuses_mirror_relocation() {
         }
     }
     assert_eq!(mirror_relocation_refusal(&plain, "moving the mirror"), None);
-    let unpinned = RemoteSpec { vm: Some(true), remote_only: Some(false), ..plain.clone() };
-    assert_eq!(mirror_relocation_refusal(&unpinned, "moving the mirror"), None);
 }
 
 /// Repair scaffold (and the launch-time legacy repair) never writes into a
@@ -2186,4 +2186,111 @@ fn a_remote_only_project_has_no_scaffold_target() {
     assert_eq!(scaffold_target_for_entry(&remote_entry("p2", "R", &remote_only, Some("/w/stale"))), None);
     let vm = RemoteSpec { vm: Some(true), ..plain };
     assert_eq!(scaffold_target_for_entry(&remote_entry("p3", "V", &vm, Some("/w/stale"))), None);
+}
+
+/// The request's top-level `remoteOnly` is what writes the posture, after the
+/// strip; a VM request and a request without `remote` are left alone.
+#[test]
+fn the_requested_posture_is_written_after_the_strip() {
+    let base = spec(None, "h.example", None, "/srv/p");
+    let mut asked = base.clone();
+    apply_requested_posture(Some(&mut asked), true, false);
+    assert_eq!(asked.remote_only, Some(true));
+    let mut plain = base.clone();
+    apply_requested_posture(Some(&mut plain), false, false);
+    assert_eq!(plain.remote_only, None, "absent = a plain Remote");
+    let mut vm = RemoteSpec { vm: Some(true), ..base };
+    apply_requested_posture(Some(&mut vm), true, true);
+    assert_eq!(vm.remote_only, None, "a VM's remote_only is never written");
+    apply_requested_posture(None, true, false);
+}
+
+fn create_req(remote: Option<RemoteSpec>, skip_scaffold: bool) -> CreateProjectRequest {
+    CreateProjectRequest {
+        name: "p".to_string(),
+        directory: "/x/p".to_string(),
+        description: None,
+        git_type: Some("local".to_string()),
+        git_provider: None,
+        skip_scaffold,
+        remote,
+        remote_only: false,
+        mirror_parent: None,
+        vm: None,
+    }
+}
+
+/// One row per kind: a local project scaffolds its folder; a plain Remote
+/// mkdirs the host, scaffolds its mirror and may arm lockstep; a remote-only
+/// project only mkdirs the host (no mirror, no local scaffold, no lockstep, no
+/// local `.git` check); a VM does nothing local and no mkdir either.
+#[test]
+fn remote_creation_plan_per_kind() {
+    let plain = spec(None, "h.example", None, "/srv/p");
+    let local = remote_creation_plan(&create_req(None, false), false);
+    assert_eq!(
+        local,
+        CreationPlan { mkdir_host: false, mirror: false, local_scaffold: true, arm_lockstep: false, check_local_git: true }
+    );
+    assert!(!remote_creation_plan(&create_req(None, true), false).local_scaffold);
+    assert!(remote_creation_plan(&create_req(None, true), false).check_local_git, "skip still inits the repo");
+
+    let remote = remote_creation_plan(&create_req(Some(plain.clone()), false), false);
+    assert_eq!(
+        remote,
+        CreationPlan { mkdir_host: true, mirror: true, local_scaffold: true, arm_lockstep: true, check_local_git: true }
+    );
+    let remote_skip = remote_creation_plan(&create_req(Some(plain.clone()), true), false);
+    assert!(remote_skip.mirror && !remote_skip.local_scaffold && !remote_skip.check_local_git);
+
+    let host_only = CreationPlan {
+        mkdir_host: true,
+        mirror: false,
+        local_scaffold: false,
+        arm_lockstep: false,
+        check_local_git: false,
+    };
+    let remote_only = RemoteSpec { remote_only: Some(true), ..plain.clone() };
+    for skip in [false, true] {
+        assert_eq!(remote_creation_plan(&create_req(Some(remote_only.clone()), skip), false), host_only);
+    }
+    let vm = RemoteSpec { vm: Some(true), ..plain };
+    assert_eq!(
+        remote_creation_plan(&create_req(Some(vm), false), true),
+        CreationPlan { mkdir_host: false, ..host_only }
+    );
+}
+
+/// Only a remote-only project is set up on its host: a plain Remote's
+/// scaffold lives in its mirror, and a VM is set up inside its guest.
+#[test]
+fn host_init_runs_only_for_a_remote_only_project() {
+    let plain = spec(None, "h.example", None, "/srv/p");
+    assert!(host_init_refusal(&plain).is_some());
+    assert_eq!(host_init_refusal(&RemoteSpec { remote_only: Some(true), ..plain.clone() }), None);
+    let vm = host_init_refusal(&RemoteSpec { vm: Some(true), ..plain.clone() }).expect("VM refused");
+    assert!(vm.contains("virtual machine"), "{vm}");
+    assert!(host_init_refusal(&RemoteSpec { vm: Some(true), remote_only: Some(true), ..plain }).is_some());
+}
+
+/// A host repo that could not be made downgrades both copies of the label to
+/// `none` and drops the hosting provider, as `finish_import` does.
+#[test]
+fn a_failed_host_git_init_downgrades_the_label() {
+    let mut entry = remote_entry("p1", "P", &spec(None, "h.example", None, "/srv/p"), None);
+    entry.extra.insert("git_type".to_string(), Value::String("remote-private".to_string()));
+    entry.extra.insert("git_provider".to_string(), Value::String("github".to_string()));
+    downgrade_entry_git_label(&mut entry);
+    assert_eq!(entry.extra.get("git_type").and_then(Value::as_str), Some("none"));
+    assert!(!entry.extra.contains_key("git_provider"));
+    assert!(entry.extra.contains_key("remote"), "nothing else is touched");
+
+    let mut project = Project {
+        git_type: Some("remote-private".to_string()),
+        git_provider: Some("github".to_string()),
+        ..Default::default()
+    };
+    downgrade_project_git_label(&mut project);
+    assert_eq!(project.git_type.as_deref(), Some("none"));
+    assert_eq!(project.git_provider, None);
 }
