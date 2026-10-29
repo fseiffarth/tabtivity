@@ -5848,3 +5848,82 @@ fn an_agent_notice_lookup_carries_the_scopes_phone_list() {
     limit_to(&host, "projects.json", &["d1"]);
     assert_eq!(agent_tab_ref(&host.state, &tmux).expect("tab").devices, Some(vec!["d1".to_string()]));
 }
+
+/// A remote-only project (E7, D15): the detail says `remote_only` with no
+/// folder and agents to create; `launch-options` offers no "this computer"
+/// (`here: false`) and drops every launch that starts here, with a window or
+/// without; and a create that names no machine — or a reopen, which starts
+/// here too — is refused before the window or the owner is asked.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_remote_only_project_starts_nothing_on_this_computer() {
+    let host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let path = state_dir.join("projects.json");
+    let mut records: Vec<Value> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    records[0]["remote"]["remote_only"] = true.into();
+    std::fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+    let cookie = host.pair_device(&signing_key(95)).await.0;
+    let (_, _, listed) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    let p = json(&listed)["projects"][0]["id"].as_str().expect("project id").to_string();
+    let (status, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let detail = json(&detail);
+    assert_eq!(detail["project"]["remote_only"], true, "{detail}");
+    assert_eq!(detail["project"]["host"], "remote");
+    assert_eq!((detail["folder"].as_bool(), detail["create"].as_str()), (Some(false), Some("agents")), "{detail}");
+
+    let (_, _, options) = host.send(get_as(&format!("/api/v1/projects/{p}/launch-options"), &cookie)).await;
+    assert_eq!(json(&options)["here"], false, "no window: {options}");
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let asked: Arc<Mutex<usize>> = Arc::default();
+    let seen = asked.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let answer = match request {
+                DesktopRequest::LaunchOptions { .. } => DesktopResponse::LaunchOptions {
+                    worktrees: Vec::new(),
+                    cloud: Vec::new(),
+                    sign_in: Vec::new(),
+                    local: None,
+                    api_key: Vec::new(),
+                },
+                _ => {
+                    *seen.lock().unwrap() += 1;
+                    DesktopResponse::Error { code: "unknown_agent".into(), message: "not offered".into() }
+                }
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+    let (status, _, options) = host.send(get_as(&format!("/api/v1/projects/{p}/launch-options"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{options}");
+    let options = json(&options);
+    assert_eq!(options["here"], false, "{options}");
+    assert_eq!(options["hosts"].as_array().map(Vec::len), Some(1), "its primary: {options}");
+    for key in ["worktrees", "cloud", "sign_in", "api_key"] {
+        assert_eq!(options[key], json!([]), "{key}: {options}");
+    }
+    assert!(options["local"].is_null(), "{options}");
+
+    let plain = json!({ "project_id": p, "kind": "agent", "agent_id": "claude", "idempotency_key": "remote-only-0123456789abcdef" });
+    let (status, _, body) = host.send(create_request(&p, &cookie, plain)).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("not_attachable")), "{body}");
+    let reopen = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/projects/{p}/tabs/reopen"))
+        .header(header::ORIGIN, ORIGIN)
+        .header(header::COOKIE, cookie_pair(&cookie))
+        .body(Body::empty())
+        .expect("request");
+    let (status, _, body) = host.send(reopen).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("not_attachable")), "{body}");
+    assert_eq!(*asked.lock().unwrap(), 0, "the window was never asked to start a tab");
+    desktop.abort();
+}

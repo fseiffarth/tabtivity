@@ -131,9 +131,11 @@ export function phoneListsTab(
 
 /** What the phone may create in the project: anything in a local one (and in a
  * box, root, the assistant); only agents in a remote one, where they run in
- * the local mirror; nothing in a container or a VM (phase 1). A remote project
- * whose mirror does not exist yet is the sidecar's `none`; the window cannot
- * see that, and `launch_prep` makes the mirror at spawn. */
+ * the local mirror — or, in a remote-only one, on one of its machines alone
+ * (`createOnHost`; with no host named, `phoneProjectFolder` is "" and the
+ * create is refused); nothing in a container or a VM (phase 1). A remote
+ * project whose mirror does not exist yet is the sidecar's `none`; the window
+ * cannot see that, and `launch_prep` makes the mirror at spawn. */
 export function phoneCreateVerdict(project: ProjectEntry | null | undefined): PhoneCreateVerdict {
   switch (projectHostKind(project)) {
     case "local":
@@ -151,13 +153,16 @@ export function phoneCreateVerdict(project: ProjectEntry | null | undefined): Ph
  * a local or container project's directory; a remote project's local mirror
  * (the entry's own, else `<directory>/mirror`, as a local tab of it runs in);
  * a VM project's only if the user opted into a mirror, else "" (no folder on
- * the host, so the folder-shaped handlers answer `project_ineligible`). */
+ * the host, so the folder-shaped handlers answer `project_ineligible`); a
+ * remote-only project's never ("": it has no local copy, whatever an old
+ * `mirror` key says). */
 export function phoneProjectFolder(project: ProjectEntry): string {
   const mirror = resolveLocalMirror(project);
   switch (projectHostKind(project)) {
     case "vm":
       return mirror ?? "";
     case "remote":
+      if (isHostPinned(project)) return "";
       return localTabCwd(
         { kind: "agent" },
         { isRemoteProject: true, projectDirectory: resolveProjectDirectory(project), mirror, fallback: "" },

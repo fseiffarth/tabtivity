@@ -222,6 +222,12 @@ pub struct PublicProject {
     /// Where the project's tabs run: a type word the phone words one line
     /// from (`local`, `remote`, `container`, `vm`), never a host name or path.
     pub host: ProjectHost,
+    /// A remote project with no local copy (`docs/remote_only_projects_plan.md`):
+    /// its tabs run and its files live on its host alone, so the phone offers
+    /// no "this computer" and words the project as such. A fact about the
+    /// type, like `host`; absent for every other project.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub remote_only: bool,
     pub live_sessions: usize,
     pub last_activity: Option<u64>,
     /// Root only: how many staged root-agent proposals wait for a decision.
@@ -521,6 +527,10 @@ pub struct ResolvedProject {
     /// anywhere else would never reach the phone's list. Raw; never crosses
     /// the browser API (the phone gets opaque ids).
     pub machines: Vec<HostMachine>,
+    /// The project lives only on its host (a VM, or a remote-only project):
+    /// nothing of it runs here, so a tab the phone starts in it must name one
+    /// of [`Self::machines`] (`host::creatable`).
+    pub pinned: bool,
 }
 
 /// One machine of a remote project, as the phone's ＋ offers it
@@ -578,6 +588,9 @@ struct ScopeSource {
     /// A remote (not VM) project's hosts, from its record: where its host
     /// tabs run.
     hosts: Option<ProjectHosts>,
+    /// The project lives only on its host ([`host_pinned`]): a VM, or a
+    /// remote-only project, which has no mirror and runs nothing here.
+    pinned: bool,
 }
 
 /// A remote project's hosts as its `projects.json` record names them — never
@@ -611,10 +624,6 @@ impl ProjectHosts {
         })
     }
 
-    /// The host a tab at `location` runs on: `"remote"` or none (a shell's
-    /// default) the primary, `"host:<id>"` that worker. A worker id that no
-    /// longer resolves is no host: the session is wherever it last ran, and
-    /// that is not guessed.
     /// [`ResolvedProject::machines`] for these hosts.
     fn machines(&self) -> Vec<HostMachine> {
         if !self.persist {
@@ -640,6 +649,10 @@ impl ProjectHosts {
         primary.chain(workers).collect()
     }
 
+    /// The host a tab at `location` runs on: `"remote"` or none (a shell's
+    /// default) the primary, `"host:<id>"` that worker. A worker id that no
+    /// longer resolves is no host: the session is wherever it last ran, and
+    /// that is not guessed.
     fn spec_for(&self, location: Option<&str>) -> Option<&RemoteSpec> {
         match host_location(location)? {
             HostLocation::Primary => self.primary.as_ref(),
@@ -1110,13 +1123,31 @@ fn project_host(project: &ProjectRecord) -> ProjectHost {
     }
 }
 
+/// Whether a project lives only on its host, by its record: a VM, or a remote
+/// project whose spec says `remote_only` (or `vm`) — the backend's
+/// `RemoteSpec::is_remote_only` read off the loose value, and the window's
+/// `isHostPinned` (`lib/projectTabHost.ts`), which reads the same three
+/// fields. Never decided from a path, and a flag that is not `true` is no pin.
+fn host_pinned(project: &ProjectRecord) -> bool {
+    if enabled(&project.vm) {
+        return true;
+    }
+    let Some(remote) = project.remote.as_ref() else {
+        return false;
+    };
+    let flag = |key: &str| remote.get(key).and_then(Value::as_bool) == Some(true);
+    flag("vm") || flag("remote_only")
+}
+
 /// The folder a project gives the phone — the scope root that files, uploads,
 /// the inbox and outbox, markup and the git dot use:
 /// - local and container: the entry's `directory` (a container mounts the host
 ///   folder at the same path);
 /// - remote: the local mirror, the entry's `mirror` if set, else the default
 ///   `remote_sync::default_mirror_dir_in` (the `directory` of a remote project
-///   holds only its `project.json` and `sync.json`);
+///   holds only its `project.json` and `sync.json`) — none for a remote-only
+///   project ([`host_pinned`]), which has no local copy, whatever an old
+///   `mirror` key or a leftover default folder says;
 /// - VM: the `mirror` folder only if the user opted into one — a VM project has
 ///   no mirror by default, its overlay is the working tree.
 ///
@@ -1128,6 +1159,7 @@ fn mobile_root(state_dir: &Path, project: &ProjectRecord) -> Option<PathBuf> {
     let mirror = project.mirror.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(PathBuf::from);
     match project_host(project) {
         ProjectHost::Vm => mirror,
+        ProjectHost::Remote if host_pinned(project) => None,
         ProjectHost::Remote => Some(mirror.unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &project.id))),
         ProjectHost::Local | ProjectHost::Container => project.directory(),
     }
@@ -1154,18 +1186,21 @@ fn tab_is_local(kind: &str, location: Option<&str>, vm_project: bool) -> bool {
 
 /// Whether a saved tab of this scope has a local tmux session the phone can
 /// attach to: a local project's always; a remote or VM project's only when the
-/// tab is local ([`tab_is_local`]); a container project's only when it runs on
-/// the host — not an agent, and not a shell while the spec's scope is `all`
-/// (the window's `sandbox` flag in `PaneSlot`).
+/// tab is local ([`tab_is_local`]); a remote-only project's never — nothing
+/// of it runs here, not even a local-model tab (`launch_prep` refuses every
+/// `local_only` spawn there), the window's `phoneReachesTab`; a container
+/// project's only when it runs on the host — not an agent, and not a shell
+/// while the spec's scope is `all` (the window's `sandbox` flag in `PaneSlot`).
 fn tab_on_this_machine(source: &ScopeSource, tab: &SavedTab) -> bool {
-    runs_on_this_machine(source.host, source.shells_in_container, &tab.kind, tab.location.as_ref().and_then(Value::as_str))
+    runs_on_this_machine(source.host, source.pinned, source.shells_in_container, &tab.kind, tab.location.as_ref().and_then(Value::as_str))
 }
 
 /// [`tab_on_this_machine`] on its inputs, so a launch (`launch_place`) applies
-/// the same table as the catalog does.
-fn runs_on_this_machine(host: ProjectHost, shells_in_container: bool, kind: &str, location: Option<&str>) -> bool {
+/// the same table as the catalog does. `pinned` is [`host_pinned`].
+fn runs_on_this_machine(host: ProjectHost, pinned: bool, shells_in_container: bool, kind: &str, location: Option<&str>) -> bool {
     match host {
         ProjectHost::Local => true,
+        ProjectHost::Remote if pinned => false,
         ProjectHost::Remote | ProjectHost::Vm => tab_is_local(kind, location, host == ProjectHost::Vm),
         ProjectHost::Container => match kind {
             "agent" => false,
@@ -1201,7 +1236,8 @@ pub(super) enum LaunchPlace {
     InContainer,
     /// A tab that runs on a remote host or in a VM: no local tmux session, so
     /// the phone cannot attach to it and does not start it. (`launch_prep` has
-    /// no window's pool here, so a spawn would only fail.)
+    /// no window's pool here, so a spawn would only fail.) Every tab of a
+    /// remote-only project, whatever its kind: it has no mirror to run in.
     NotAttachable,
 }
 
@@ -1229,12 +1265,14 @@ pub(super) fn launch_place(state_dir: &Path, raw_id: &str, kind: &str, location:
         return LaunchPlace::AsRecorded;
     };
     let host = project_host(project);
-    // A VM project never runs a tab on the host (`launch_prep` refuses a local
-    // spawn there), not even the `local_agent` the catalog lists.
-    if host == ProjectHost::Vm {
+    // A VM or remote-only project never runs a tab on the host (`launch_prep`
+    // refuses a local spawn there), not even the `local_agent` the catalog
+    // lists for a VM: never `LocalMirror`, whatever the kind or location.
+    let pinned = host_pinned(project);
+    if host == ProjectHost::Vm || pinned {
         return LaunchPlace::NotAttachable;
     }
-    if !runs_on_this_machine(host, container_shells(project), kind, location) {
+    if !runs_on_this_machine(host, pinned, container_shells(project), kind, location) {
         return if host == ProjectHost::Container { LaunchPlace::InContainer } else { LaunchPlace::NotAttachable };
     }
     match (host, mobile_root(state_dir, project)) {
@@ -1245,11 +1283,16 @@ pub(super) fn launch_place(state_dir: &Path, raw_id: &str, kind: &str, location:
 }
 
 /// What the phone may create in a project: local projects anything; a remote
-/// project with a mirror its agents (they run in the mirror); a remote
-/// project without one, a container and a VM nothing (phase 1).
-fn create_verdict(host: ProjectHost, folder: bool) -> CreateVerdict {
+/// project with a mirror its agents (they run in the mirror); a remote-only
+/// project (`pinned`) agents on its machines alone, so only while it has one
+/// a phone-made agent may start on (`machines`, [`ResolvedProject::machines`])
+/// — a create that names none is refused (`host::creatable`); a remote
+/// project without a mirror, a container and a VM nothing (phase 1).
+fn create_verdict(host: ProjectHost, folder: bool, pinned: bool, machines: bool) -> CreateVerdict {
     match host {
         ProjectHost::Local => CreateVerdict::All,
+        ProjectHost::Remote if pinned && machines => CreateVerdict::Agents,
+        ProjectHost::Remote if pinned => CreateVerdict::None,
         ProjectHost::Remote if folder => CreateVerdict::Agents,
         ProjectHost::Remote | ProjectHost::Container | ProjectHost::Vm => CreateVerdict::None,
     }
@@ -1417,18 +1460,23 @@ fn host_tabs_on(terminals: &str) -> bool {
 /// record still names, and only while the project persists sessions. The
 /// one rule behind the catalog's listing and the refresher's targets
 /// ([`host_probe_targets`]), so the two cannot drift.
+///
+/// A remote-only project's tab is on its host whatever its saved `location`
+/// says: an unset, `"local"` or unknown one is the primary's, a `host:<id>`
+/// that worker's — the window's pinned `effectiveTabLocation`.
 fn host_of_tab<'a>(source: &'a ScopeSource, tab: &SavedTab, shells: bool, host_tabs: bool) -> Option<&'a RemoteSpec> {
     if !host_tabs || tab_on_this_machine(source, tab) {
         return None;
     }
     let hosts = source.hosts.as_ref().filter(|hosts| hosts.persist)?;
-    let location = tab.location.as_ref().and_then(Value::as_str);
+    let saved = tab.location.as_ref().and_then(Value::as_str);
+    let location = if source.pinned && host_location(saved).is_none() { Some("remote") } else { saved };
     let listed_kind = match tab.kind.as_str() {
         "agent" => resumable(tab) && !tab.sign_in && !tab.cloud,
         "shell" => shells,
         _ => false,
     };
-    if !listed_kind || tab.ephemeral || tab.tmux_attach.is_some() || tab_is_local(&tab.kind, location, false) {
+    if !listed_kind || tab.ephemeral || tab.tmux_attach.is_some() || tab_is_local(&tab.kind, location, source.pinned) {
         return None;
     }
     let tmux = tab.tmux_session.as_deref()?;
@@ -1440,13 +1488,14 @@ fn host_of_tab<'a>(source: &'a ScopeSource, tab: &SavedTab, shells: bool, host_t
 
 /// The catalog's listing rule at the window's table level
 /// (`phoneListsTab` in `lib/projectTabHost.ts`, the fixture's `lists`): a tab
-/// that runs here, or one on a remote (not VM) project's host. The per-tab
-/// facts ([`host_of_tab`]: kind, tmux name, persist flag, a worker that
-/// resolves) are the catalog's alone.
+/// that runs here, or one on a remote (not VM) project's host — every tab of
+/// a remote-only one, which runs nothing here. The per-tab facts
+/// ([`host_of_tab`]: kind, tmux name, persist flag, a worker that resolves)
+/// are the catalog's alone.
 #[cfg(test)]
-fn phone_lists_tab(host: ProjectHost, shells_in_container: bool, kind: &str, location: Option<&str>) -> bool {
-    runs_on_this_machine(host, shells_in_container, kind, location)
-        || (host == ProjectHost::Remote && matches!(kind, "agent" | "shell") && host_location(location).is_some())
+fn phone_lists_tab(host: ProjectHost, pinned: bool, shells_in_container: bool, kind: &str, location: Option<&str>) -> bool {
+    runs_on_this_machine(host, pinned, shells_in_container, kind, location)
+        || (host == ProjectHost::Remote && (pinned || (matches!(kind, "agent" | "shell") && host_location(location).is_some())))
 }
 
 /// One scope's saved tabs (`sessions/<key>/terminals.json`). A file that does
@@ -1521,6 +1570,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             cwd_alias: None,
             shells_in_container: false,
             hosts: None,
+            pinned: false,
         });
     }
     if assistant_open(state_dir) {
@@ -1540,6 +1590,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             cwd_alias: None,
             shells_in_container: false,
             hosts: None,
+            pinned: false,
         });
     }
     for project in &projects {
@@ -1556,12 +1607,13 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
         }
         let host = project_host(project);
         // A remote project's folder is its mirror, a default that needs no
-        // `directory`; a VM without a mirror has none and is listed all the
-        // same (no tabs, no folder) so the switch shows on the phone. A local
-        // or container project with no `directory` is no project folder.
+        // `directory`; a VM without a mirror and a remote-only project have
+        // none and are listed all the same (no local tabs, no folder) so the
+        // switch shows on the phone — and a remote-only one's host tabs. A
+        // local or container project with no `directory` is no project folder.
         let roots: Vec<PathBuf> = match mobile_root(state_dir, project) {
             Some(root) => vec![root],
-            None if host == ProjectHost::Vm => Vec::new(),
+            None if host == ProjectHost::Vm || host_pinned(project) => Vec::new(),
             None => continue,
         };
         sources.push(ScopeSource {
@@ -1575,6 +1627,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             cwd_alias: (host == ProjectHost::Remote).then(|| project.directory()).flatten(),
             shells_in_container: host == ProjectHost::Container && container_shells(project),
             hosts: ProjectHosts::of(project),
+            pinned: host_pinned(project),
         });
     }
     for b in &boxes {
@@ -1617,6 +1670,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             cwd_alias: None,
             shells_in_container: false,
             hosts: None,
+            pinned: false,
         });
     }
     Ok(sources)
@@ -1777,6 +1831,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             status: "active".into(),
             kind: ScopeKind::Project,
             host: ProjectHost::Local,
+            remote_only: false,
             live_sessions: 1,
             last_activity: None,
             pending_reviews: None,
@@ -1803,6 +1858,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         create: CreateVerdict::All,
         primary_host: None,
         machines: Vec::new(),
+        pinned: false,
     }
 }
 
@@ -2021,12 +2077,19 @@ fn resolve_scope(
         });
     }
     let last_activity = tabs.iter().filter_map(|t| t.public.last_activity).max();
+    let machines = source
+        .hosts
+        .as_ref()
+        .filter(|_| listing.host_tabs)
+        .map(ProjectHosts::machines)
+        .unwrap_or_default();
     let public = PublicProject {
         id: key_id(host_key, "project", &[&source.raw_id]),
         label: source.label.chars().take(120).collect(),
         status: source.status,
         kind: source.kind,
         host: source.host,
+        remote_only: source.pinned && source.host == ProjectHost::Remote,
         live_sessions: tabs.iter().filter(|t| t.public.available).count(),
         last_activity,
         pending_reviews: (source.kind == ScopeKind::Root)
@@ -2043,14 +2106,10 @@ fn resolve_scope(
         devices: source.devices,
         host: source.host,
         folder,
-        create: create_verdict(source.host, folder),
-        machines: source
-            .hosts
-            .as_ref()
-            .filter(|_| listing.host_tabs)
-            .map(ProjectHosts::machines)
-            .unwrap_or_default(),
+        create: create_verdict(source.host, folder, source.pinned, machines.iter().any(|machine| machine.runnable)),
+        machines,
         primary_host: source.hosts.and_then(|hosts| hosts.primary),
+        pinned: source.pinned,
     })
 }
 

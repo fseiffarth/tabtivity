@@ -4,16 +4,30 @@ import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
 import { CheckboxIcon, CheckIcon, SquareIcon } from "../common/icons/Icon";
-import type { ProjectHostKind } from "../../lib/projectTabHost";
+import { isHostPinned, projectHostKind, type ProjectHostKind } from "../../lib/projectTabHost";
+import type { ProjectEntry } from "../../types";
 import { phoneReach, usePairedPhones, type PairedPhone, type PhoneReach } from "./usePairedPhones";
 
+/** The word a project's reach line is chosen by: its type (the sidecar's
+ *  `host` word), with a remote project that keeps no local copy
+ *  (`isHostPinned`, a VM aside) told apart, since the phone reaches nothing
+ *  of it on this computer. */
+export type PhoneReachHost = ProjectHostKind | "remote_only";
+
+/** {@link PhoneReachHost} of a project. */
+export function phoneReachHost(project: ProjectEntry | null | undefined): PhoneReachHost {
+  const host = projectHostKind(project);
+  return host === "remote" && isHostPinned(project) ? "remote_only" : host;
+}
+
 /** What the phone reaches of a project that does not run in a plain local
- *  folder (the sidecar's `host` word); a local project needs no sentence. */
+ *  folder; a local project needs no sentence. */
 export const HOST_REACH_KEY = {
   remote: "mobile.hostReach.remote",
+  remote_only: "mobile.hostReach.remoteOnly",
   container: "mobile.hostReach.container",
   vm: "mobile.hostReach.vm",
-} as const satisfies Record<Exclude<ProjectHostKind, "local">, TranslationKey>;
+} as const satisfies Record<Exclude<PhoneReachHost, "local">, TranslationKey>;
 
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
@@ -65,7 +79,7 @@ export function MobileAccessPicker({
   y: number;
   kind: "project" | "box" | "assistant";
   /** A project's type, so the head says what the phone reaches of it. */
-  host?: ProjectHostKind;
+  host?: PhoneReachHost;
   enabled: boolean;
   /** The stored per-phone list (`undefined` = every phone). */
   devices: unknown;
