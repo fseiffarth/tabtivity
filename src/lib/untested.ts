@@ -876,6 +876,7 @@ export const UNTESTED = {
   "remoteMachinesWindow.3": { area: "projects", what: "RemoteMachinesWindow · Username" },
   "remoteMachinesWindow.4": { area: "projects", what: "RemoteMachinesWindow · Remote path for this machine's copy" },
   "remoteMachinesWindow.5": { area: "projects", what: "RemoteMachinesWindow · Add <machine> to this project? (pending panel from the Machines menu)" },
+  "remoteMachinesWindow.reconnectAll": { area: "projects", what: "RemoteMachinesWindow · Reconnect all: every disconnected/red host re-dialled with saved password, key or login master, never a prompt; failures named under the button" },
   "savePasswordRow.1": { area: "projects", what: "SavePasswordRow · A terminal login is one Tabtivity never sees, so it stores nothing new — and deletes nothing…" },
   "terminalSignIn.label": { area: "projects", what: "TerminalSignInToggle · Sign in in a terminal: the embedded terminal runs the ssh/openvpn login itself, no shell before or after it (screen 2026-10-15 #1)" },
   "transfer.export": { area: "projects", what: "ProjectExportDialog · Export project…" },

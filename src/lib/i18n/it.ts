@@ -4841,6 +4841,10 @@ export const dict: Dict = {
   "remoteMachines.remotePathForCopy": "Percorso remoto per la copia di questa macchina",
   "remoteMachines.pathToProject": "Percorso al progetto su questa macchina",
   "remoteMachines.reconnect": "Riconnetti",
+  "remoteMachines.reconnectAll": "Riconnetti tutte",
+  "remoteMachines.reconnectingAll": "Riconnessione…",
+  "remoteMachines.reconnectAllTitle":
+    "Riconnette ogni macchina scollegata con la password salvata, la chiave o il login aperto, senza chiedere nulla. Una macchina che fallisce ancora viene indicata qui; il suo Connetti… accetta una password.",
   "remoteMachines.browseEllipsis": "Sfoglia…",
   "remoteMachines.browserFooter": "Naviga fino a una cartella, poi fai clic su «Usa questa cartella».",
   "remoteMachines.labelOptional": "Etichetta (opzionale)",

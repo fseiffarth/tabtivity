@@ -4864,6 +4864,10 @@ export const dict: Dict = {
   "remoteMachines.remotePathForCopy": "Remote-Pfad für die Kopie dieser Maschine",
   "remoteMachines.pathToProject": "Pfad zum Projekt auf dieser Maschine",
   "remoteMachines.reconnect": "Erneut verbinden",
+  "remoteMachines.reconnectAll": "Alle neu verbinden",
+  "remoteMachines.reconnectingAll": "Verbinde neu…",
+  "remoteMachines.reconnectAllTitle":
+    "Verbindet jede getrennte Maschine neu – mit gespeichertem Passwort, Schlüssel oder offenem Login, ohne Nachfrage. Eine Maschine, die weiter scheitert, wird hier genannt; ihr eigenes Verbinden… nimmt ein Passwort an.",
   "remoteMachines.browseEllipsis": "Durchsuchen…",
   "remoteMachines.browserFooter": "Navigiere zu einem Ordner und klicke dann auf „Diesen Ordner verwenden“.",
   "remoteMachines.labelOptional": "Bezeichnung (optional)",

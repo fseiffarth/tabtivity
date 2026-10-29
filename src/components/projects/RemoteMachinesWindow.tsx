@@ -26,7 +26,7 @@ import { ConnLamp } from "../common/ConnLamp";
 import { Toggle } from "../common/Toggle";
 import { PasswordInput } from "../common/PasswordInput";
 import { UntestedTag } from "../common/UntestedTag";
-import { useProjectsStore } from "../../stores/projects";
+import { reconnectAllHosts, useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { formatRemoteTarget, resolveLocalMirror } from "../../types";
 import { isHostPinned } from "../../lib/projectTabHost";
@@ -663,6 +663,30 @@ export function RemoteMachinesWindow({
     setReports((prev) => ({ ...prev, [hostId]: rep }));
   };
 
+  // "Reconnect all" (top of the window): every host that is down, re-dialled with
+  // what is already saved — never a prompt (`reconnectAllHosts`). A host that still
+  // fails is named below the button; its own Connect… takes a password.
+  const hostLabel = (hostId: string) => {
+    if (hostId === PRIMARY_HOST)
+      return project.remote?.label || project.remote?.host || project.name;
+    const w = workers.find((h) => h.id === hostId);
+    return w ? w.label || w.host : hostId;
+  };
+  const anyDown =
+    (project.remote !== undefined && primarySsh !== "connected") ||
+    workers.some((w) => (byHost?.[w.id]?.ssh ?? "off") !== "connected");
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectErrors, setReconnectErrors] = useState<{ hostId: string; error: string }[]>([]);
+  const reconnectAll = async () => {
+    setReconnecting(true);
+    setReconnectErrors([]);
+    try {
+      setReconnectErrors(await reconnectAllHosts(project.id));
+    } finally {
+      setReconnecting(false);
+    }
+  };
+
   return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog dialog-framed remote-machines-dialog" onMouseDown={(e) => e.stopPropagation()}>
@@ -672,6 +696,24 @@ export function RemoteMachinesWindow({
         </div>
 
         <div className="dialog-scroll">
+        <div className="remote-machine-actions">
+          <button
+            type="button"
+            disabled={reconnecting || !anyDown}
+            title={t("remoteMachines.reconnectAllTitle")}
+            onClick={() => void reconnectAll()}
+          >
+            {reconnecting ? t("remoteMachines.reconnectingAll") : t("remoteMachines.reconnectAll")}
+          </button>
+          <UntestedTag id="remoteMachinesWindow.reconnectAll" />
+        </div>
+        {reconnectErrors.map((f) => (
+          <ErrorNote
+            key={f.hostId}
+            className="project-dialog-error"
+            error={`${hostLabel(f.hostId)}: ${f.error}`}
+          />
+        ))}
         <p className="settings-help">
           {t("remoteMachines.introPre")} <strong>{t("remoteMachines.introStrongPrimary")}</strong>{" "}
           {t("remoteMachines.introMid1")}{" "}

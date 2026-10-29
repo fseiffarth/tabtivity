@@ -956,6 +956,64 @@ export function disconnectRemote(projectId: string): void {
 }
 
 /**
+ * The Remote machines window's "Reconnect all": a click, so none of the unattended
+ * gates apply (no opt-in, an HPC-tagged host is allowed — `background: false`), but
+ * it never prompts either. Every host not already connected or connecting is
+ * re-dialled with what is already there — a saved password, key/agent auth, or a
+ * live login master — the primary first (it owns the files and its tunnel may be
+ * the route the workers need), then the workers together. Whatever still fails
+ * stays red, and its reason is returned so the window can name it; that host's own
+ * Connect… is the way to type a password.
+ */
+export async function reconnectAllHosts(
+  projectId: string,
+): Promise<{ hostId: string; error: string }[]> {
+  const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
+  if (!project) return [];
+  const status = () => useRemoteStatusStore.getState();
+  const headless = connectionsHeadless();
+  const lampOf = (hostId: string) =>
+    (hostId === PRIMARY_HOST
+      ? status().byProject[projectId]?.ssh
+      : status().byHost[projectId]?.[hostId]?.ssh) ?? "off";
+  const reconnect = async (hostId: string): Promise<{ hostId: string; error: string } | null> => {
+    const lamp = lampOf(hostId);
+    const claim = hostClaim(projectId, hostId);
+    if (lamp === "connected" || lamp === "connecting" || autoConnecting.has(claim)) return null;
+    const worker = hostId === PRIMARY_HOST ? undefined : hostId;
+    autoConnecting.add(claim);
+    status().setSsh(projectId, "connecting", worker);
+    try {
+      await invoke("remote_connect", {
+        projectId,
+        hostId: worker ?? null,
+        password: null,
+        background: false,
+        // Non-headless, a credential-less connect rides the login's master and is
+        // no evidence of key auth (`autoConnectInteractive`).
+        ...(headless ? {} : { viaLogin: true }),
+      });
+      clearUnreachableRetry(projectId, worker);
+      status().setSsh(projectId, "connected", worker);
+      return null;
+    } catch (error) {
+      status().setSsh(projectId, "error", worker);
+      return { hostId, error: String(error) };
+    } finally {
+      autoConnecting.delete(claim);
+    }
+  };
+  const failures: { hostId: string; error: string }[] = [];
+  if (project.remote) {
+    const primary = await reconnect(PRIMARY_HOST);
+    if (primary) failures.push(primary);
+  }
+  const workers = await Promise.all((project.compute_hosts ?? []).map((h) => reconnect(h.id)));
+  for (const w of workers) if (w) failures.push(w);
+  return failures;
+}
+
+/**
  * One-click log out of a *connected* remote project (the pill's logout button):
  * drop the pooled SSH/SFTP connection and release its claim on the OpenVPN tunnel,
  * without routing through the Connect modal. The modal's Disconnect does the same

@@ -119,6 +119,17 @@ answering, and a re-try never re-opens the tunnel's login. The dead-host path no
 longer gives up outright non-headless either: the probe is its eligibility check,
 so a key host reconnects and a password host goes red.
 
+Two gaps stayed after that (2026-10-29). "Unreachable" now also covers a
+connection dropped *before* authentication (reset, closed during the key
+exchange — sshd's `MaxStartups` does that to a burst of connects to one
+cluster — or a network that is down), unless the text names an auth or
+host-key failure (`ssh_unreachable`). And a connect that throws *after* its
+probe passed re-probes (`retryAfterFailedConnect`): unreachable joins the loop,
+a host that lets us in gets three re-tries and then stays red. The Remote
+machines window's **Reconnect all** (`reconnectAllHosts`) is the click for
+whatever is left: every host not connected, no opt-in needed, never a prompt,
+the errors named under the button.
+
 Finally, none of this is the only line of defence: the backend refuses a
 background dial to a tagged host inside the ssh-argv builders themselves
 (`docs/context/hpc_careful_mode.md`, "The dial policy"). The frontend gates decide

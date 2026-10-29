@@ -5007,6 +5007,10 @@ export const enSource = {
   "remoteMachines.remotePathForCopy": "Remote path for this machine's copy",
   "remoteMachines.pathToProject": "Path to the project on this machine",
   "remoteMachines.reconnect": "Reconnect",
+  "remoteMachines.reconnectAll": "Reconnect all",
+  "remoteMachines.reconnectingAll": "Reconnecting…",
+  "remoteMachines.reconnectAllTitle":
+    "Reconnect every machine that is down, with its saved password, key or open login — nothing is asked. A machine that still fails is named here; its own Connect… takes a password.",
   "remoteMachines.browseEllipsis": "Browse…",
   "remoteMachines.browserFooter": "Browse to a folder, then click “Use this folder”.",
   "remoteMachines.labelOptional": "Label (optional)",

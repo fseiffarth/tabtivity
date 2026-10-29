@@ -37,6 +37,7 @@ import {
   retryAutoConnectAfterVpn,
   retryUnreachableNow,
   silentReconnectDeadHost,
+  reconnectAllHosts,
   useProjectsStore,
 } from "../../stores/projects";
 import { useConnectDialogStore } from "../../stores/remote/connectDialog";
@@ -739,5 +740,35 @@ describe("re-trying an unreachable host", () => {
     // ssh in a login tab could only fail too; the re-try opens it once the host answers.
     expect(useTabsStore.getState().tabsByScope.root ?? []).toHaveLength(0);
     expect(sshLamp()).toBe("error");
+  });
+});
+
+describe("Reconnect all", () => {
+  it("re-dials every host that is down, with no opt-in, and names what still fails", async () => {
+    backend({ probe: REACHABLE, sshSaved: true, connectFails: 1 });
+    useProjectsStore.setState({
+      projects: [
+        {
+          ...project("remote1", {}),
+          compute_hosts: [{ id: "w1", host: "w1.example", remote_path: "/srv/work" }],
+        } as unknown as ProjectEntry,
+      ],
+    });
+    useRemoteStatusStore.getState().setSsh("remote1", "error");
+
+    const failures = await reconnectAllHosts("remote1");
+
+    // The primary goes first and takes the one failure; the worker then connects.
+    expect(failures).toEqual([
+      { hostId: "primary", error: "kex_exchange_identification: Connection reset by peer" },
+    ]);
+    expect(sshLamp()).toBe("error");
+    expect(useRemoteStatusStore.getState().byHost.remote1?.w1?.ssh).toBe("connected");
+    expect(invokeMock).toHaveBeenCalledWith("remote_connect", {
+      projectId: "remote1",
+      hostId: "w1",
+      password: null,
+      background: false,
+    });
   });
 });
