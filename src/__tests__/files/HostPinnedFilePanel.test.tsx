@@ -8,7 +8,8 @@
  *   only on the host — no listing is attempted;
  * - a host file never reaches an OS app (Shift-open / no built-in viewer): a
  *   message points at "Download to…" instead;
- * - search and quick open stay off until the host listing lands (E6a);
+ * - quick open and the context-file picker list the host's files, only while
+ *   connected (E6a);
  * - the git history has no lockstep to pair.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -27,6 +28,7 @@ vi.mock("../../lib/files/openFileEntry", () => ({ openFileEntry: mockOpenFileEnt
 import { SidePanel } from "../../components/layout/SidePanel";
 import { GitHistory } from "../../components/files/GitHistory";
 import { QuickOpen } from "../../components/files/QuickOpen";
+import { ContextFilePicker } from "../../components/embed/ContextFilePicker";
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore } from "../../stores/tabs";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
@@ -66,6 +68,7 @@ function setupInvoke() {
     if (cmd === "get_opened_windows") return Promise.resolve([]);
     if (cmd === "get_settings") return Promise.resolve({});
     if (cmd === "git_peer_status") return Promise.resolve({ enabled: false });
+    if (cmd === "list_project_paths") return Promise.resolve([{ path: "data/run.log", is_dir: false }]);
     return Promise.resolve(null);
   });
 }
@@ -111,9 +114,8 @@ describe("the file panel of a host-pinned project", () => {
     expect(document.querySelector(".file-sync-slot")).toBeNull();
     expect(screen.queryByText("Sync all")).toBeNull();
     expect(calls("sync_status")).toHaveLength(0);
-    // Search stays off, and does not point at a Local side that isn't there.
-    const hint = document.querySelector(".file-tree-search-remote-hint");
-    expect(hint?.textContent).toContain("does not reach this project’s host yet");
+    // Search reaches the host (E6a): no hint pointing at a Local side that isn't there.
+    expect(document.querySelector(".file-tree-search-remote-hint")).toBeNull();
   });
 
   it("disconnected, the tree area is the host-only Connect prompt and nothing is listed", async () => {
@@ -156,7 +158,7 @@ describe("the file panel of a host-pinned project", () => {
     expect(mockOpenFileEntry).toHaveBeenCalledTimes(1);
   });
 
-  it("quick open lists nothing from the state dir while the host listing is not there", async () => {
+  it("quick open lists the host's files while connected", async () => {
     setSsh("connected");
     await act(async () => {
       render(<QuickOpen />);
@@ -164,8 +166,33 @@ describe("the file panel of a host-pinned project", () => {
     await act(async () => {
       fireEvent.keyDown(window, { key: "p", ctrlKey: true });
     });
-    expect(await screen.findByText(/finding them by name does not reach the host yet/)).toBeTruthy();
+    expect(await screen.findByText("data/run.log")).toBeTruthy();
+    // The stored directory: the backend resolves it to the host.
+    expect(calls("list_project_paths")).toEqual([["list_project_paths", { projectDir: "/state/p1" }]]);
+  });
+
+  it("quick open asks nothing of a disconnected host and says to connect", async () => {
+    setSsh("off");
+    await act(async () => {
+      render(<QuickOpen />);
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+    });
+    expect(await screen.findByText(/The files live only on lab-box/)).toBeTruthy();
     expect(calls("list_project_paths")).toHaveLength(0);
+  });
+
+  it("the context-file picker lists the host once it connects", async () => {
+    setSsh("off");
+    await act(async () => {
+      render(<ContextFilePicker projectDir="/state/p1" attached={[]} onPick={() => {}} onClose={() => {}} />);
+    });
+    expect(await screen.findByText(/The files live only on lab-box/)).toBeTruthy();
+    expect(calls("list_project_paths")).toHaveLength(0);
+    await act(async () => setSsh("connected"));
+    expect(await screen.findByText("data/run.log")).toBeTruthy();
+    expect(calls("list_project_paths")).toEqual([["list_project_paths", { projectDir: "/state/p1" }]]);
   });
 });
 

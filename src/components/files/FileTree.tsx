@@ -2364,8 +2364,10 @@ export function FileTree({
   }
 
   // Whether the search results replace the browsed listing. The search box is
-  // only offered on a local-source tree (its backends walk the local path).
-  const canSearch = !remoteListing;
+  // offered on a local-source tree (its backends walk the local path) and on a
+  // host-pinned project, whose backends search the host (only while connected:
+  // `remoteBlocked` returned above).
+  const canSearch = !remoteListing || hostPinned;
   const searching = canSearch && searchOpen && search.trim().length > 0;
   // Folder the search is confined to: the browsed folder by default, the whole
   // project when "root" is chosen (or when already at the root).
@@ -2701,15 +2703,12 @@ export function FileTree({
           )}
         </div>
       )}
-      {/* Search backends walk the canonical local path, so a remote-source
-          listing has no search box. Say why in its place — the Local/Remote
-          switch is already visible in the source row — rather than leaving the
-          affordance to silently vanish. */}
+      {/* Search backends walk the canonical local path, so the Remote side of a
+          plain remote project has no search box. Say why in its place — the
+          Local/Remote switch is already visible in the source row — rather than
+          leaving the affordance to silently vanish. */}
       {!canSearch && (
-        <div className="file-tree-search-remote-hint">
-          {/* A pinned project has no Local side to switch to. */}
-          {t(hostPinned ? "fileTree.searchHostOnlyHint" : "fileTree.searchRemoteHint")}
-        </div>
+        <div className="file-tree-search-remote-hint">{t("fileTree.searchRemoteHint")}</div>
       )}
       {!searching && pathEdit !== null && (
         <div className="file-tree-breadcrumb file-tree-path-edit">
@@ -2880,6 +2879,7 @@ export function FileTree({
           mode={searchMode}
           caseSensitive={searchCase}
           scopeRel={searchScope}
+          hostPinned={hostPinned}
           onReveal={revealPath}
         />
       )}

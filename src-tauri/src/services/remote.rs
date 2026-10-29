@@ -25,6 +25,8 @@
 
 // An agent tab's conversation taken along when it moves between here and a host.
 pub mod agent_host_move;
+// Content search and quick open on a remote-only project's host (E6a).
+pub mod host_search;
 pub mod remote_credentials;
 pub mod remote_sync;
 // A host tab's conversation, copied from the host over the pooled SFTP session.
