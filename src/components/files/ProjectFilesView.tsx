@@ -55,6 +55,7 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncHostOnlyFiles } from "./SyncHostOnlyFiles";
 import { AgentSchedulesView } from "../agents/AgentSchedulesView";
+import { CliOverviewView } from "../agents/CliOverviewView";
 import { useDialogs } from "../common/PromptDialogs";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { persistentSessionOf } from "../../lib/remote/closeRemoteTab";
@@ -2950,6 +2951,8 @@ export function ProjectFilesView({
       )}
 
       {view === "agents" && <AgentSchedulesView scope={scope} active={active} />}
+
+      {view === "clis" && <CliOverviewView active={active} />}
 
       {view === "windows" && (
         <div className="side-panel-scroll" style={{ flex: 1, overflowY: "auto", padding: 4 }}>

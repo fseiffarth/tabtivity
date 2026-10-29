@@ -20,6 +20,7 @@ import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
 import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
+import { CliOverviewSection } from "./CliOverviewSheet";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
@@ -318,12 +319,14 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       </p>}
     </>}
     {/* What goes to the desktop rather than coming from it: a file for its
-        inbox and the local models it runs. They stay on the page, not in a
-        sheet — closing one would drop the upload rows still in flight. */}
+        inbox and the local models it runs — plus its agent CLIs' plans and
+        limits. They stay on the page, not in a sheet — closing one would drop
+        the upload rows still in flight. */}
     <h2 className="home-section-head">{t("mobile.home.desktopHead")}</h2>
     <div className="home-desktop">
       <SendToDesktop />
       <LocalModelsSection />
+      <CliOverviewSection />
     </div>
     {/* What this phone does, as against what the desktop is doing, behind
         the header's gear. A row's own sheet replaces it while open, and

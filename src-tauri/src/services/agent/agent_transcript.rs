@@ -1461,7 +1461,7 @@ const SESSION_WINDOW_MAX_MINUTES: i64 = 24 * 60;
 /// The newest context and rate-limit figures in a Codex rollout's `lines`.
 /// Each comes from the newest `token_count` event that carries it: an event
 /// can hold the limits without the token counts, or the other way round.
-fn codex_usage(lines: &[&str]) -> Option<TranscriptUsage> {
+pub(crate) fn codex_usage(lines: &[&str]) -> Option<TranscriptUsage> {
     let mut usage = TranscriptUsage::default();
     let mut limits_read = false;
     for line in lines.iter().rev() {

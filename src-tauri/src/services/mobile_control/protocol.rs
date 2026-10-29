@@ -1437,6 +1437,15 @@ pub enum DesktopRequest {
     LocalModels {
         request_id: String,
     },
+    /// The CLI overview (`services::cli_overview`): per agent CLI in use its
+    /// plan and usage windows. Host-wide, no project. With no window the
+    /// sidecar answers it without Claude's panel, which runs the CLI.
+    /// `refresh` asks for the panel again (floored on the desktop).
+    CliOverview {
+        request_id: String,
+        #[serde(default)]
+        refresh: bool,
+    },
     /// Load, unload or start (`LocalModelAction`). Load and start answer as
     /// soon as the request checks out and run on in the window, so the
     /// default deadlines hold; the answer is a fresh `LocalModels`.
@@ -1506,6 +1515,7 @@ impl DesktopRequest {
             | Self::MarkupAnswer { request_id, .. }
             | Self::MarkupDismiss { request_id, .. }
             | Self::LocalModels { request_id }
+            | Self::CliOverview { request_id, .. }
             | Self::LocalModelMutate { request_id, .. }
             | Self::Refresh { request_id, .. } => request_id,
         }
@@ -1523,7 +1533,7 @@ impl DesktopRequest {
         std::time::Duration::from_secs(match self {
             Self::MailMessage { .. } | Self::MailMark { .. } => 35,
             Self::MailReply { .. } => 65,
-            Self::AgentStatus { .. } => 25,
+            Self::AgentStatus { .. } | Self::CliOverview { .. } => 25,
             // Waits for the old CLI to exit (`switchAgentWorktree`, up to
             // 3 s) before the move and the respawn.
             Self::MoveWorktree { .. } => 20,
@@ -1550,7 +1560,7 @@ impl DesktopRequest {
         std::time::Duration::from_secs(match self {
             Self::MailMessage { .. } | Self::MailMark { .. } => 30,
             Self::MailReply { .. } => 60,
-            Self::AgentStatus { .. } => 20,
+            Self::AgentStatus { .. } | Self::CliOverview { .. } => 20,
             Self::MoveWorktree { .. } | Self::SwitchAssistantModel { .. } => 15,
             Self::AssistantModels { .. } => 28,
             Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
@@ -1612,6 +1622,7 @@ impl DesktopRequest {
             | Self::AttachDesktopImage { .. }
             | Self::MarkupQuestions { .. }
             | Self::LocalModels { .. }
+            | Self::CliOverview { .. }
             | Self::Refresh { .. } => false,
         }
     }
@@ -2060,6 +2071,12 @@ pub enum DesktopResponse {
     /// [`DesktopRequest::LocalModelMutate`]. `server` is `running`,
     /// `starting`, `stopped`, `unreachable` or `not_installed`; the sidecar
     /// forces it, and every row, into shape before the phone sees them.
+    /// Answers [`DesktopRequest::CliOverview`]: the rows as the window read
+    /// them; the sidecar drops the account and path-shaped panel lines.
+    CliOverview {
+        #[serde(default)]
+        clis: Vec<crate::services::cli_overview::CliOverviewRow>,
+    },
     LocalModels {
         #[serde(default)]
         server: String,

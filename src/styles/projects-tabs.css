@@ -3645,6 +3645,19 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompts-view .settings-section-title > .settings-btn { margin-left: auto; }
 .agent-prompts-section:first-child .settings-section-title { padding-top: 0; border-top: none; }
 
+/* CLI overview (side panel → CLIs): the Agents view's cards, one per CLI. */
+.cli-overview-head { display: flex; align-items: baseline; gap: 8px; }
+.cli-overview-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cli-overview-plan { padding: 1px 7px; border: 1px solid var(--border-color); border-radius: 999px; font-size: 11px; color: var(--text-secondary); }
+.cli-overview-facts { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.cli-overview-meter { display: flex; flex-direction: column; gap: 3px; }
+.cli-overview-meter > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.cli-overview-meter > div:first-child span:last-child { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.cli-overview-meter small { color: var(--text-muted); font-size: 11px; }
+.cli-overview-bar { height: 6px; overflow: hidden; background: var(--bg-hover); border-radius: 3px; }
+.cli-overview-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.cli-overview-bar.high > span { background: var(--warning, #f0a35e); }
+
 /* Prompt chart: one horizontal time axis, drafts on a strip above it. The
    card treatment follows `.todo-card` (solid surface plus a static shadow
    whose opacity changes); nothing here animates a box-shadow. */

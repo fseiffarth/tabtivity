@@ -2,6 +2,7 @@ import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
 import { storageKey } from "../../src/lib/brand";
 import type { ModelRows } from "./terminal/modelRows";
+import type { CliOverviewRow } from "../../shared/cliOverview";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
 export type ScopeKind = "project" | "box" | "root" | "assistant";
@@ -1796,6 +1797,14 @@ async function localModelsBody(write: Promise<unknown>): Promise<LocalModelList>
   const list = normalizeLocalModels(await write);
   if (!list) throw new ApiError(200, "malformed_response");
   return list;
+}
+
+/** `GET /api/v1/clis` — the CLI overview: per agent CLI in use its plan and
+ * usage windows, without the account. `desktop_available: false` means no
+ * window answered, so Claude's panel (which runs the CLI) is missing.
+ * `refresh` asks the window to read that panel again. */
+export async function getCliOverview(refresh = false, signal?: AbortSignal): Promise<{ clis: CliOverviewRow[]; desktop_available: boolean }> {
+  return api(`/api/v1/clis${refresh ? "?refresh=1" : ""}`, { signal }, STATUS_TIMEOUT);
 }
 
 /** `GET /api/v1/local-models` — the Ollama models installed on the desktop.

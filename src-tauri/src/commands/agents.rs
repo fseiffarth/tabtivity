@@ -1573,6 +1573,29 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
     }
 }
 
+/// The CLI overview (`services::cli_overview`): per CLI in use, its plan,
+/// account and usage windows — the side panel's CLIs view and the phone's
+/// CLIs section. Claude's windows are its `agent_usage` panel, read only when
+/// Claude is signed in; `refresh` is that read's (still floored).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_overview(refresh: Option<bool>) -> Vec<crate::services::cli_overview::CliOverviewRow> {
+    let mut rows = app_core::rt::spawn_blocking(|| {
+        let logins = crate::services::agent_auth::status();
+        crate::services::cli_overview::rows_in(&crate::storage::state_dir(), &logins)
+    })
+    .await
+    .unwrap_or_default();
+    if let Some(row) = rows.iter_mut().find(|r| r.id == "claude" && r.signed_in) {
+        let report = agent_usage("claude".to_string(), refresh).await;
+        row.usage = Some(crate::services::cli_overview::CliUsagePanel {
+            raw: report.raw,
+            code: report.code,
+            cached: report.cached,
+        });
+    }
+    rows
+}
+
 /// What version of each *installed* agent CLI is on this machine, against the
 /// releases Tabtivity's flags and parsers were verified with.
 ///

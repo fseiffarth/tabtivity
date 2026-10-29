@@ -255,6 +255,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_tab_move_session", Core),
     ("agent_tab_move_host", Core),
     ("agent_usage", Core),
+    ("agent_overview", Core),
     ("agent_versions", Core),
     ("agent_warmup", Core),
     ("check_agent_updates", Core),

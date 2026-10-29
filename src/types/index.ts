@@ -132,7 +132,8 @@ export type FilesPanelView =
   | "jobs"
   | "remarks"
   | "todo"
-  | "assistant";
+  | "assistant"
+  | "clis";
 
 /** `Settings.assistant_settings` (Rust `schema::settings::AssistantSettings`):
  *  the chat assistant's options. Every key optional; an absent block is the

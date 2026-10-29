@@ -374,6 +374,7 @@ const AUTHENTICATED_GETS: &[&str] = &[
     "/api/v1/tabs/anything/desktop-images",
     "/api/v1/tabs/anything/markup/questions",
     "/api/v1/local-models",
+    "/api/v1/clis",
 ];
 
 /// The desktop bounds the tail before it sends one; this bounds it again at
@@ -5889,6 +5890,60 @@ fn an_agent_notice_lookup_carries_the_scopes_phone_list() {
     assert_eq!(agent_tab_ref(&host.state, &tmux).expect("tab").devices, None);
     limit_to(&host, "projects.json", &["d1"]);
     assert_eq!(agent_tab_ref(&host.state, &tmux).expect("tab").devices, Some(vec!["d1".to_string()]));
+}
+
+/// The CLI overview: with no window the sidecar answers from the files (the
+/// stored plan, no Claude panel); the window's rows cross without the
+/// account and without a panel line that names a local path.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_cli_overview_crosses_without_account_or_local_paths() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(66)).await.0;
+    let state_dir = host.state.config.state_dir.clone();
+    let store = crate::services::agent_auth::store_path_in(
+        &state_dir,
+        "claude",
+        &crate::services::agent_auth::file(".claude/.credentials.json"),
+    );
+    std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+    std::fs::write(&store, r#"{"claudeAiOauth":{"accessToken":"secret","subscriptionType":"pro"}}"#).unwrap();
+
+    let (status, _, body) = host.send(get_as("/api/v1/clis", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let answer = json(&body);
+    assert_eq!(answer["desktop_available"], false);
+    let claude = answer["clis"].as_array().unwrap().iter().find(|row| row["id"] == "claude").expect("claude row").clone();
+    assert_eq!(claude["plan"]["name"], "pro");
+    assert!(claude.get("usage").is_none());
+    assert!(!body.contains("secret"));
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let desktop = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let request = admin::read_frame::<DesktopRequest>(&mut stream).await.expect("request");
+        assert!(matches!(request, DesktopRequest::CliOverview { refresh: true, .. }), "{request:?}");
+        let response: DesktopResponse = serde_json::from_value(json!({
+            "status": "cli_overview",
+            "clis": [{
+                "id": "claude", "label": "Claude Code", "signedIn": true, "account": "someone@example.org",
+                "plan": { "name": "max", "tier": "default_claude_max_5x" },
+                "usage": { "raw": "Current session: 41% used · resets 6pm\nDebug log: /home/someone/.claude/x.txt", "cached": false },
+            }],
+        }))
+        .expect("response");
+        admin::write_frame(&mut stream, &response).await.expect("answer");
+    });
+    let (status, _, body) = host.send(get_as("/api/v1/clis?refresh=1", &cookie)).await;
+    desktop.await.expect("desktop");
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let answer = json(&body);
+    assert_eq!(answer["desktop_available"], true);
+    let row = &answer["clis"][0];
+    assert!(row.get("account").is_none(), "{row}");
+    assert_eq!(row["usage"]["raw"], "Current session: 41% used · resets 6pm\n…");
+    assert!(!body.contains("someone"));
 }
 
 /// A remote-only project (E7, D15): the detail says `remote_only` with no

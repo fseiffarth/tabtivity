@@ -2506,6 +2506,7 @@ pub fn run() {
             commands::agents::agent_global_set_codex_auto_review,
             commands::agents::agent_global_open,
             commands::agents::agent_usage,
+            commands::agents::agent_overview,
             commands::agents::agent_versions,
             commands::agents::dismiss_agent_version,
             commands::agents::remembered_model_rows,

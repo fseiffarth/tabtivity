@@ -49,3 +49,13 @@ timestamps are bounded, and each scan has a byte/file budget — past it the
 command answers `partial` and the frontend asks again a few times (capped),
 never polling. CLIs Eldrun cannot read show as "not reported", never `0`; no
 cost figures.
+
+**The CLI overview** (`services::cli_overview`, `docs/cli_overview_plan.md`)
+is read, never counted or stored: per CLI its plan (off Tabtivity's login
+store copies — only the plan fields leave the module, never a token), Claude's
+windows from the `agent_usage` panel and Codex's from the newest rollout that
+carries `rate_limits`, "as of" that file's mtime. The desktop shows it as the
+side panel's CLIs view; the phone asks the window over the bridge
+(`CliOverview`) and, with no window, gets the file-only rows (no Claude
+panel — reading it runs the CLI, which needs the window, as for
+`AgentStatus`). Phone rows never carry the account.

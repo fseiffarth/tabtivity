@@ -37,6 +37,7 @@ import { undoAgentClear } from "../../stores/agents/agentClearUndo";
 import { reopenClosedAgentTab, resumeArgsOf, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
 import { isTabColor } from "../../lib/theme/tabColors";
 import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
+import type { CliOverviewRow } from "../../../shared/cliOverview";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { dayKey } from "../../lib/usageRollup";
 import { isHostPinned, phoneCreateVerdict, phoneListsTab, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
@@ -318,7 +319,8 @@ type DesktopRequest =
   | { type: "markup_dismiss"; request_id: string; project_id: string; tmux_session: string; ask_id: string }
   | { type: "refresh"; request_id: string; project_id?: string | null; slices: string[] }
   | { type: "local_models"; request_id: string }
-  | { type: "local_model_mutate"; request_id: string; action: LocalModelAction };
+  | { type: "local_model_mutate"; request_id: string; action: LocalModelAction }
+  | { type: "cli_overview"; request_id: string; refresh?: boolean };
 type DesktopResponse =
 | { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot }
   | { status: "activity"; statuses: AgentTabStatus[]; prompts: AgentTabPrompts[] }
@@ -347,6 +349,7 @@ type DesktopResponse =
   | { status: "attached"; attachment: InboxAttachment }
   | { status: "markup_questions"; asks: MobileMarkupAsk[]; ticks: MarkupTick[] }
   | ({ status: "local_models" } & MobileLocalModelList)
+  | { status: "cli_overview"; clis: CliOverviewRow[] }
   | { status: "error"; code: string; message: string };
 
 /** One agent tab closed in the scope, as the phone's "Recently closed" row
@@ -3063,6 +3066,12 @@ async function handleRequest(
     // Both check the host-wide switch first (`lib/mobileLocalModels`).
     case "local_models": return localModelsList();
     case "local_model_mutate": return localModelMutate(request.action);
+    // The side panel's CLIs view's reading; the sidecar cuts it for the phone
+    // (no account, no path-naming panel line).
+    case "cli_overview": return {
+      status: "cli_overview",
+      clis: await invoke<CliOverviewRow[]>("agent_overview", { refresh: !!request.refresh }),
+    };
     // A sidecar newer than this window can ask for a kind it does not know.
     // Answered at once and by name: `undefined` failed to deserialize in
     // `mobile_desktop_respond`, and the phone sat out the whole desktop

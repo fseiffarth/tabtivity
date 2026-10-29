@@ -52,6 +52,9 @@ pub mod agent_turn;
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
 pub mod agent_versions;
+// One overview of the CLIs in use: plan, account, usage windows
+// (docs/cli_overview_plan.md).
+pub mod cli_overview;
 pub mod codex_bind;
 // Codex's own SQLite thread store (`~/.codex/state_<n>.sqlite`), read
 // read-only for the model a Codex tab is running now that its releases

@@ -7,7 +7,7 @@ pub use agent::{
     agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
     agent_install, agent_latest, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,
-    assistant_model_probe, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
+    assistant_model_probe, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
     model_rows, opencode_models, opencode_session, opencode_store, transcript_watch,
 };
 pub mod api;

@@ -3007,6 +3007,51 @@ async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -
     local_models_response(local_models_call(&state, DesktopRequest::LocalModels { request_id }).await, StatusCode::OK)
 }
 
+/// `GET /api/v1/clis[?refresh=1]` — the CLI overview (`services::cli_overview`):
+/// per agent CLI in use its plan and usage windows. The window answers, with
+/// Claude's `/usage` panel; with no window the sidecar answers from the files
+/// alone (plans, Codex's last-turn windows), since reading the panel runs the
+/// CLI (`headless::agent_status` makes the same call). Either way the rows are
+/// cut to what a phone may see (`cli_overview::for_phone`).
+async fn cli_overview(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentStatusQuery>,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    let refresh = matches!(query.refresh.as_deref(), Some("1" | "true"));
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::CliOverview { request_id: new_request_id(), refresh },
+    )
+    .await;
+    // Anything but the window's rows — no window, or one whose page predates
+    // the request — is answered from the files.
+    let (rows, desktop_available) = match response {
+        Ok(DesktopResponse::CliOverview { clis }) => (clis, true),
+        other => {
+            let state_dir = state.config.state_dir.clone();
+            let rows = tokio::task::spawn_blocking(move || {
+                let logins = crate::services::agent_auth::status_in(&state_dir, &crate::paths::home_dir());
+                crate::services::cli_overview::rows_in(&state_dir, &logins)
+            })
+            .await
+            .unwrap_or_default();
+            (rows, !desktop_down(&other))
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "clis": crate::services::cli_overview::for_phone(rows),
+            "desktop_available": desktop_available,
+        })),
+    )
+}
+
 /// `POST /api/v1/local-models` `{ action: load | unload | start, model? }`.
 /// Guarded like every write; then the switch, then the action — a pull, a
 /// delete or anything else unnamed is `unsupported_action` and never reaches
@@ -7436,6 +7481,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/mail", get(mail_overview))
         // Host-wide, no project or path: list, and load / unload / start.
         // A body is one action and at most one model name.
+        .route("/api/v1/clis", get(cli_overview))
         .route(
             "/api/v1/local-models",
             get(local_models_list).merge(post(local_models_mutate).layer(DefaultBodyLimit::max(1024))),

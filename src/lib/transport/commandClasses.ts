@@ -84,6 +84,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["agent_tab_move_session", "core"],
   ["agent_tab_move_host", "core"],
   ["agent_usage", "core"],
+  ["agent_overview", "core"],
   ["agent_versions", "core"],
   ["agent_warmup", "core"],
   ["check_agent_updates", "core"],
