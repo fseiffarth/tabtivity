@@ -548,6 +548,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("agent_tab_transcript", "localModel", NotAPath),
     ("claude_folder_trusted", "localOnly", NotAPath),
     ("copilot_set_project_policy", "localOnly", NotAPath),
+    ("set_remote_mirror_dir", "keepLocalCopy", NotAPath), // a bool: the E8 reverse conversion
     ("caldav_delete", "resourceHref", NotAPath),
     ("caldav_push", "resourceHref", NotAPath),
     ("caldav_resource_etag", "resourceHref", NotAPath),

@@ -1887,6 +1887,8 @@ pub fn run() {
             commands::projects::extend_project_to_remote,
             commands::projects::detach_project_from_remote,
             commands::projects::remote_project_init_host,
+            commands::remote_unpair::remote_unpair_mirror_preview,
+            commands::remote_unpair::remote_unpair_mirror,
             commands::projects::get_time_today,
             commands::projects::archive_project,
             commands::projects::forget_project,

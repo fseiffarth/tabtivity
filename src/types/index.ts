@@ -1562,6 +1562,35 @@ export interface HostInitReport {
   gitType: string;
 }
 
+/** `remote_unpair_mirror_preview`'s answer: what "Stop keeping a local copy"
+ *  would leave behind (`docs/remote_only_projects_plan.md` E8). Every count
+ *  blocks the conversion; `stoppedWorkers` is only named. */
+export interface UnpairPreview {
+  lockstepEnabled: boolean;
+  mirrorIsRepo: boolean;
+  commitsNotOnHost: number;
+  uncommitted: number;
+  unpushedSyncEdits: number;
+  localTabs: number;
+  stoppedWorkers: string[];
+  mirrorPath: string;
+  mirrorExists: boolean;
+  /** Where the folder ends up (empty when there is none). */
+  keptAt: string;
+  /** The folder is moved out of the state dir to `keptAt`. */
+  moves: boolean;
+  fingerprint: string;
+}
+
+/** `remote_unpair_mirror`'s answer. */
+export interface UnpairOutcome {
+  entry: ProjectEntry;
+  keptAt: string;
+  moved: boolean;
+  /** The move out failed; the folder is still at `keptAt`. */
+  moveError?: string | null;
+}
+
 /** `import_project_export`'s answer. */
 export interface ImportBundleResult {
   entry: ProjectEntry;

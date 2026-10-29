@@ -228,7 +228,7 @@ pub fn project_directory(project_id: &str) -> Option<String> {
 /// The `RemoteSpec` mirrored into a `projects.json` entry's flattened
 /// `extra["remote"]`, or `None` for a local project. Pure, so the "remote iff a
 /// spec is present" mapping is testable without the real state dir.
-fn spec_from_entry(entry: &ProjectEntry) -> Option<RemoteSpec> {
+pub(crate) fn spec_from_entry(entry: &ProjectEntry) -> Option<RemoteSpec> {
     spec_from_value(entry.extra.get("remote")?)
 }
 
@@ -270,6 +270,16 @@ pub(crate) fn local_copy_in(entry: &ProjectEntry, state_dir: &std::path::Path) -
 /// planners that walk a project list rather than look one id up.
 pub(crate) fn entry_is_remote_only(entry: &ProjectEntry) -> bool {
     spec_from_entry(entry).is_some_and(|spec| spec.is_remote_only())
+}
+
+/// Whether the project's registry record reads remote-only **now**. The
+/// background sync loops (`git_peer`, `sync_auto`) capture the spec when they
+/// start, so each pass asks this again once it holds the project's mutation
+/// lock: a Remote → Remote-only conversion (`commands::remote_unpair`)
+/// writes the flag under that lock, and a pass that waited behind it must end
+/// rather than act on the old spec. `false` when the record cannot be read.
+pub fn is_remote_only_now(project_id: &str) -> bool {
+    remote_target_for(project_id).is_some_and(|t| t.spec.is_remote_only())
 }
 
 /// The one wording of a refusal a remote-only project answers with:

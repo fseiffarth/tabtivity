@@ -42,6 +42,8 @@ import { useSavedCredential } from "../../lib/projects/useSavedCredential";
 import { isHpcHost, targetOfSpec } from "../../lib/remote/hpc/hpcHost";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { useRemoteMachinesStore, type DroppedGlobalMachine } from "../../stores/remote/remoteMachines";
+import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
+import { KeepLocalCopyDialog, StopLocalCopyDialog } from "./LocalCopyDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { PasswordInput } from "../common/PasswordInput";
 import { FolderPickerDialog } from "../common/FolderPickerDialog";
@@ -1283,6 +1285,14 @@ export function ProjectPill({
   // No local copy (remote-only or VM): nothing on this disk to show, move, detach
   // to, repair or open in an IDE — those rows are not offered (F3).
   const hostPinned = isHostPinned(project);
+  // Remote ⇄ Remote-only (E8/F9): a plain Remote may stop keeping its mirror, a
+  // remote-only one may keep one again. Never a VM (v1), and only while the
+  // primary is connected: the preview asks the host which commits it has, and
+  // a new copy pairs from it.
+  const converts = !!project.remote && !isVmProject && project.remote.vm !== true;
+  const primaryConnected = useRemoteStatusStore((s) => s.byProject[project.id]?.ssh === "connected");
+  const [showStopLocalCopy, setShowStopLocalCopy] = useState(false);
+  const [showKeepLocalCopy, setShowKeepLocalCopy] = useState(false);
   const [vmRunning, setVmRunning] = useState(false);
   const pollVm = useCallback(
     (poll: PollRun) =>
@@ -1815,6 +1825,31 @@ export function ProjectPill({
               >
                 {t("pill.moveProjectEllipsis")}
                 <UntestedTag id="projectPill.1" />
+              </button>
+            )}
+            {converts && !hostPinned && (
+              <button
+                className="danger"
+                disabled={!primaryConnected}
+                onClick={() => {
+                  setContextMenu(null);
+                  setShowStopLocalCopy(true);
+                }}
+                title={t(primaryConnected ? "pill.stopLocalCopyMenuTitle" : "pill.stopLocalCopyNeedsConnection")}
+              >
+                {t("pill.stopLocalCopyEllipsis")}
+              </button>
+            )}
+            {converts && hostPinned && (
+              <button
+                disabled={!primaryConnected}
+                onClick={() => {
+                  setContextMenu(null);
+                  setShowKeepLocalCopy(true);
+                }}
+                title={t(primaryConnected ? "pill.keepLocalCopyMenuTitle" : "pill.keepLocalCopyNeedsConnection")}
+              >
+                {t("pill.keepLocalCopyEllipsis")}
               </button>
             )}
             <button
@@ -2521,6 +2556,29 @@ export function ProjectPill({
             {t("pill.detachDesc2Pre")} <strong>{t("pill.pairingWord")}</strong>{t("pill.detachDesc2Post")}
           </p>
         </AsyncConfirmDialog>
+      )}
+
+      {/* Remote ⇄ Remote-only. Stopping never deletes the mirror folder (D8):
+          the outcome names where it is kept, and a failed move-out says so. */}
+      {showStopLocalCopy && (
+        <StopLocalCopyDialog
+          project={project}
+          onClose={() => setShowStopLocalCopy(false)}
+          onDone={(outcome) =>
+            void showMessage({
+              title: t("pill.stopLocalCopyDoneTitle", { name: project.name }),
+              body: outcome.moveError
+                ? t("pill.stopLocalCopyMoveFailed", { path: outcome.keptAt, error: outcome.moveError })
+                : outcome.keptAt
+                  ? t("pill.stopLocalCopyDoneBody", { path: outcome.keptAt })
+                  : t("pill.stopLocalCopyNoFolder"),
+              error: !!outcome.moveError,
+            })
+          }
+        />
+      )}
+      {showKeepLocalCopy && (
+        <KeepLocalCopyDialog project={project} onClose={() => setShowKeepLocalCopy(false)} />
       )}
 
       {/* Unpublish (forget the push target). Non-destructive: the hosted repo

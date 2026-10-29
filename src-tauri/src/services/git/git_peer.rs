@@ -311,7 +311,7 @@ fn hardened_remote_script(script: &str) -> String {
 /// An annotated tag's object sha resolves to the commit it points at rather than being
 /// echoed verbatim, so it drops out of the result. That only forfeits a delta hint (a
 /// bigger bundle), never correctness — which is the safe direction for the caller.
-fn known_shas(peer: &Peer, shas: &[String]) -> Vec<String> {
+pub(crate) fn known_shas(peer: &Peer, shas: &[String]) -> Vec<String> {
     if shas.is_empty() {
         return Vec::new();
     }
@@ -4036,8 +4036,11 @@ async fn poll_loop(
     match crate::services::sync_op::acquire(&project_id).await {
         Ok(op) => {
             // Stopped while it waited for the lock (a disconnect behind a long
-            // transfer, lockstep turned off): never start a pass after that.
-            if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            // transfer, lockstep turned off), or the project stopped keeping a
+            // local copy (the spec above predates it): never start a pass after that.
+            if stopping.load(std::sync::atomic::Ordering::SeqCst)
+                || crate::services::remote::is_remote_only_now(&project_id)
+            {
                 return;
             }
             let s = detect_and_sync(
@@ -4129,8 +4132,9 @@ async fn poll_loop(
 
 /// One background lockstep pass under the project's mutation lock
 /// (`services::sync_op`); a lock that could not be taken skips the pass. `false`
-/// when the loop was stopped while it waited for the lock: no pass ran, and the
-/// loop ends.
+/// when the loop was stopped while it waited for the lock, or the project
+/// turned remote-only meanwhile (`remote::is_remote_only_now`, read under the
+/// lock the conversion writes under): no pass ran, and the loop ends.
 async fn guarded_pass(
     ctx: &CoreCtx,
     pool: &RemotePoolState,
@@ -4142,7 +4146,9 @@ async fn guarded_pass(
 ) -> bool {
     match crate::services::sync_op::acquire(project_id).await {
         Ok(op) => {
-            if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            if stopping.load(std::sync::atomic::Ordering::SeqCst)
+                || crate::services::remote::is_remote_only_now(project_id)
+            {
                 return false;
             }
             let s = detect_and_sync(op, pool, manifest, auto, project_id, spec, ReconcileOpts::default()).await;
