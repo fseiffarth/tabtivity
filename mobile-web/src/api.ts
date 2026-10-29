@@ -1004,6 +1004,9 @@ export interface SessionTranscript {
   /** How many subagents only those earlier turns hold — the Subagents
    * index counts them with the ones it lists. */
   agentsEarlier?: number;
+  /** The prompt the oldest entry answers, when the entry limit left it out:
+   * the Reader pins it over a turn that opens on its answers. */
+  cutPrompt?: TranscriptEntry;
   /** How many of the session's subagents are at work right now, the ones
    * the answer leaves out included; absent at zero and on a CLI whose record
    * does not say (only Claude's does). */

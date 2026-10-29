@@ -202,6 +202,11 @@ pub struct AgentTranscript {
     /// A long session that never spawned one is `truncated` with zero.
     #[serde(default, rename = "agentsEarlier", skip_serializing_if = "is_zero")]
     pub agents_earlier: u32,
+    /// The prompt the oldest entry answers, when the entry limit left it out:
+    /// a turn longer than the limit opens on its answers, and the Reader pins
+    /// the prompt they belong to above them.
+    #[serde(default, rename = "cutPrompt", skip_serializing_if = "Option::is_none")]
+    pub cut_prompt: Option<Box<TranscriptEntry>>,
     /// How many of the session's subagents are at work right now (`running`
     /// entries, the cut-off ones included) — the count the phone's tab cards
     /// show. Zero on a CLI whose record does not say.
@@ -1146,8 +1151,10 @@ fn read_transcript_in(
     let running_agents = running_agents(&entries);
     let running_cwds = running_cwds(&entries);
     let cwd = newest_cwd(&text, kind, sidechain);
+    let mut cut_prompt = None;
     if entries.len() > limit {
         let drop = entries.len() - limit;
+        cut_prompt = prompt_cut_off(&entries, drop);
         entries.drain(..drop);
         truncated = true;
     }
@@ -1160,6 +1167,7 @@ fn read_transcript_in(
         entries,
         truncated,
         agents_earlier,
+        cut_prompt,
         running_agents,
         usage,
         model,
@@ -1405,6 +1413,16 @@ fn claude_spawned(folder: &Path) -> std::collections::HashMap<String, ClaudeSpaw
         }
     }
     spawned
+}
+
+/// The prompt `entries[drop]` answers when a cut of the first `drop` entries
+/// leaves it out: the newest prompt before the cut, unless the first kept
+/// entry is a prompt of its own.
+pub(crate) fn prompt_cut_off(entries: &[TranscriptEntry], drop: usize) -> Option<Box<TranscriptEntry>> {
+    if entries.get(drop).is_none_or(|first| first.kind == "prompt") {
+        return None;
+    }
+    entries[..drop].iter().rev().find(|entry| entry.kind == "prompt").map(|entry| Box::new(entry.clone()))
 }
 
 /// How many of the session's `spawned` subagents (tokens) are missing from

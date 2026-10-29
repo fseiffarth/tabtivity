@@ -4563,6 +4563,9 @@ async fn phone_transcript(
     transcript.context_card = None;
     transcript.cwd = None;
     transcript.running_cwds.clear();
+    if let Some(prompt) = transcript.cut_prompt.as_mut() {
+        prompt.cwd = None;
+    }
     let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
     let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
     let project = (entry_cwds.iter().any(|cwd| !cwd.is_empty()))

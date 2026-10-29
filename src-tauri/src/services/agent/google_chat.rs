@@ -23,7 +23,7 @@ use crate::services::agent_sqlite::{Limits, open_read};
 use serde_json::Value;
 
 use crate::services::agent_chats::FolderChat;
-use crate::services::agent_transcript::{AgentTranscript, transcript_entry};
+use crate::services::agent_transcript::{AgentTranscript, prompt_cut_off, transcript_entry};
 use crate::services::home_io::{HomeDir, HomeFile};
 use crate::terminal::PtyOptions;
 
@@ -71,8 +71,10 @@ fn empty(version: String, previous: Option<&str>) -> AgentTranscript {
 
 fn finish(mut read: AgentTranscript, limit: usize) -> AgentTranscript {
     if read.entries.len() > limit {
+        let drop = read.entries.len() - limit;
         read.truncated = true;
-        read.entries.drain(..read.entries.len() - limit);
+        read.cut_prompt = prompt_cut_off(&read.entries, drop);
+        read.entries.drain(..drop);
     }
     read
 }

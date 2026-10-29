@@ -113,6 +113,24 @@ describe("the agent pane's Reader", () => {
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
   });
 
+  it("pins the prompt a long turn left behind Show earlier turns", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript"
+        ? { ...transcript, entries: transcript.entries.slice(1, 2), cutPrompt: { kind: "prompt", text: "plan the release", at: "2026-09-30T07:59:00Z" } }
+        : []));
+    reader(host);
+    const earlier = await screen.findByRole("button", { name: "Show earlier turns" });
+    expect(earlier.dataset.prompt).toBe("plan the release");
+    expect(earlier.dataset.promptTime).toBeTruthy();
+    // Scrolled past the button: the turn on screen reads against its prompt.
+    const list = host.querySelector<HTMLElement>(".terminal-reader-list")!;
+    const box = (top: number, height: number) => ({ top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    list.getBoundingClientRect = () => box(100, 400);
+    earlier.getBoundingClientRect = () => box(20, 30);
+    fireEvent.scroll(list);
+    expect(host.querySelector(".terminal-reader-pinned-prompt-text")?.textContent).toBe("plan the release");
+  });
+
   it("counts the subagents of earlier turns only when those turns hold one", async () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, agentsEarlier: 2 } : []));

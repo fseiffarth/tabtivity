@@ -180,6 +180,12 @@ fn a_claude_transcript_reads_as_prompts_and_one_bubble_per_message() {
     let last = read_transcript(&path, TranscriptKind::Claude, None, 2).unwrap();
     assert!(last.truncated);
     assert_eq!(kinds(&last).iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec!["answer", "prompt"]);
+    // The kept answer's own prompt was cut off: it comes along for the pin.
+    assert_eq!(last.cut_prompt.as_ref().map(|p| p.text.as_str()), Some("add a clear\nbutton"));
+    // A cut on a prompt leaves nothing to pin.
+    let newest = read_transcript(&path, TranscriptKind::Claude, None, 1).unwrap();
+    assert!(newest.truncated && newest.cut_prompt.is_none());
+    assert!(read.cut_prompt.is_none());
 
     assert!(read_transcript(&dir.path().join("missing.jsonl"), TranscriptKind::Claude, None, 5).is_none());
 }

@@ -92,7 +92,7 @@ import { agentWork } from "../terminal/agentBusy";
 import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
 import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
-import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
+import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
@@ -823,7 +823,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * newer one further down (the reader already shows a prompt, and a pinned
    * older one would read as the question to the answer below it). Read off
    * the chat as drawn (`data-prompt`), so the stored session and the screen
-   * reading pin alike, with the bubble's own time (`.transcript-time`). The subagent index sticks over the top of the chat:
+   * reading pin alike, with the bubble's own time (`.transcript-time`). A
+   * prompt the read left behind "Show earlier turns" rides on that button,
+   * so the turn that opens on its answers pins it too. The subagent index sticks over the top of the chat:
    * a bubble behind it is out of sight too, and the pin sits under it
    * (`pinnedTop`, px below the view's top) — drawn over it, it was hidden. */
   const [pinnedPrompt, setPinnedPrompt] = useState("");
@@ -849,7 +851,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     }
     pinnedPromptEl.current = owner;
     setPinnedPrompt((owner?.dataset.prompt ?? "").trim());
-    setPinnedTime(owner?.querySelector(":scope > .transcript-time")?.textContent ?? "");
+    setPinnedTime(owner?.dataset.promptTime ?? owner?.querySelector(":scope > .transcript-time")?.textContent ?? "");
   }, []);
   /** Whether Terminal view is panned to the newest rows. Kept from the box's
    * own scroll events rather than measured when it is wanted: a resize is the
@@ -1372,6 +1374,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * so its facts row reads like Claude's. */
   // The cleared conversation's figures are not the new chat's.
   const storedUsage = sinceClear ? undefined : transcript?.usage;
+  /** The prompt the oldest turn answers, left behind "Show earlier turns",
+   * and its time as its bubble would show it. */
+  const cutPrompt = transcript?.truncated && !sinceClear ? transcript.cutPrompt : undefined;
+  const cutPromptMoment = chatMoment(cutPrompt?.at);
+  const cutPromptTime = cutPromptMoment ? chatTime(cutPromptMoment) : undefined;
   const contextLeft = status?.context ?? (storedUsage?.contextLeft != null ? `${storedUsage.contextLeft}%` : undefined);
   const limitTime = new Date(limitsNow);
   const shownLimits = limits.session || limits.week ? limits : sessionLimits(storedUsage, limitTime);
@@ -2394,7 +2401,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 : <div className="readable-empty"><strong>{t("mobile.transcript.empty")}</strong><span>{t("mobile.transcript.emptyHint")}</span>{transcript?.available === false && <button onClick={() => setView("terminal")}>{t("mobile.transcript.toTerminal")}</button>}</div>)
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
-                  {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
+                  {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
                   <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>

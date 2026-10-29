@@ -45,7 +45,7 @@ use serde_json::Value;
 use crate::services::agent_chats::FolderChat;
 use crate::services::agent_changes::{opencode_part_changes, opencode_v2_tool_changes, AgentChanges};
 use crate::services::agent_transcript::{
-    agent_entry, agents_unlisted, insert_by_time, running_agents, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
+    agent_entry, agents_unlisted, insert_by_time, prompt_cut_off, running_agents, subagent_token, transcript_entry, AgentTranscript, TranscriptEntry, MAX_SUBAGENT_DEPTH,
 };
 use crate::services::prompt_blame::epoch_ms_to_iso;
 
@@ -185,8 +185,11 @@ pub fn session_transcript(
     let spawned: Vec<String> = children.iter().filter_map(|entry| entry.subagent.clone()).collect();
     insert_by_time(&mut entries, children, truncated);
     let running_agents = running_agents(&entries);
+    let mut cut_prompt = None;
     if entries.len() > limit {
-        entries.drain(..entries.len() - limit);
+        let drop = entries.len() - limit;
+        cut_prompt = prompt_cut_off(&entries, drop);
+        entries.drain(..drop);
         truncated = true;
     }
     let agents_earlier = if truncated { agents_unlisted(&entries, &spawned) } else { 0 };
@@ -198,6 +201,7 @@ pub fn session_transcript(
         entries,
         truncated,
         agents_earlier,
+        cut_prompt,
         running_agents,
         usage: None,
         model: None,

@@ -74,7 +74,7 @@ import { questionSpeech, voicePick } from "../../../mobile-web/src/handsFree";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
-import { commandArgsInline, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
+import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import type { AskedQuestion, RunningShell, TranscriptEntry } from "../../../mobile-web/src/api";
@@ -1509,6 +1509,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   );
   /** Earlier turns to read in: none of the cleared conversation's. */
   const levelTruncated = !!shownTranscript?.available && shownTranscript.truncated && !(sinceClear && !openStep);
+  /** The prompt the oldest turn on screen answers, left behind "Show earlier
+   * turns", and its time as its bubble would show it. */
+  const cutPrompt = levelTruncated ? shownTranscript?.cutPrompt : undefined;
+  const cutPromptMoment = chatMoment(cutPrompt?.at);
+  const cutPromptTime = cutPromptMoment ? chatTime(cutPromptMoment, use24h) : undefined;
   const levelEntriesRef = useRef(levelEntries);
   levelEntriesRef.current = levelEntries;
   const turns = useMemo(() => transcriptTurns(levelEntries), [levelEntries]);
@@ -1693,7 +1698,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * that starts above the scroll position — while its bubble is scrolled off
    * the top, pinned there as on the phone's Focus Reader; empty while any
    * prompt bubble is in view (that one, or a newer one further down). Read
-   * off the chat as drawn (`data-prompt`), with the bubble's own time. */
+   * off the chat as drawn (`data-prompt`), with the bubble's own time. A
+   * prompt the read left behind "Show earlier turns" rides on that button,
+   * so the turn that opens on its answers pins it too. */
   const [pinnedPrompt, setPinnedPrompt] = useState("");
   const [pinnedTime, setPinnedTime] = useState("");
   const pinnedPromptEl = useRef<HTMLElement | null>(null);
@@ -1714,7 +1721,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     }
     pinnedPromptEl.current = owner;
     setPinnedPrompt((owner?.dataset.prompt ?? "").trim());
-    setPinnedTime(owner?.querySelector(":scope > .terminal-reader-time")?.textContent ?? "");
+    setPinnedTime(owner?.dataset.promptTime ?? owner?.querySelector(":scope > .terminal-reader-time")?.textContent ?? "");
   }, []);
 
   const onScroll = () => {
@@ -2027,7 +2034,13 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           onMouseOut={onPathOut}
         >
           {levelTruncated && (
-            <button type="button" className="terminal-reader-earlier" onClick={showEarlier}>
+            <button
+              type="button"
+              className="terminal-reader-earlier"
+              onClick={showEarlier}
+              data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined}
+              data-prompt-time={cutPromptTime}
+            >
               {t("terminal.reader.earlier")}
             </button>
           )}

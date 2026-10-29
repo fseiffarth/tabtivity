@@ -69,6 +69,13 @@ export function slashCommand(text: string): SlashCommand | null {
   return match ? { name: match[1], args: match[2] ?? "" } : null;
 }
 
+/** A prompt as a pinned bubble reads it (`data-prompt`): a slash command as
+ * its name and arguments, as its rule names it. */
+export function pinnedPromptText(text: string): string {
+  const command = slashCommand(text);
+  return command ? (command.args ? `${command.name} ${command.args}` : command.name) : text;
+}
+
 /** Whether a command's arguments ride on the divider beside its name: a
  * one-word setting does (`/model opus`, `/effort high`); anything with words
  * — the text of a `/goal` or `/plan` — is the reader's own message and reads
