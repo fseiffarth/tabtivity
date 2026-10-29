@@ -2412,14 +2412,31 @@ fn run_host_refusal(spec: Option<&RemoteSpec>, location: Option<&str>) -> Option
     })
 }
 
+/// Why `host` may not be added to the project whose primary spec is `spec`, or
+/// `None`. A **synced-copy** worker (`sync_code` without `shared_fs`) is fed from
+/// the mirror (`services::worker_sync`), and a remote-only project (a VM included)
+/// has none; a shared-filesystem or manual-only worker works unchanged (D4).
+fn compute_host_refusal(spec: Option<&RemoteSpec>, host: &ComputeHost) -> Option<String> {
+    (host.sync_code && !host.shared_fs && spec.is_some_and(RemoteSpec::is_remote_only)).then(|| {
+        crate::services::remote::remote_only_refusal(
+            "this project keeps no local copy to sync code to the machine from; add it as a shared-filesystem machine or with code sync off",
+        )
+    })
+}
+
 /// Add an extra "worker" host to a remote project (the pill's "Add machine").
 /// Mints a stable `id` when the incoming spec has none, then appends it. Returns
 /// the full updated host list. The primary (`Project.remote`) is untouched.
+/// Refuses a synced-copy worker on a remote-only project ([`compute_host_refusal`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_compute_host(
     project_id: String,
     mut host: ComputeHost,
 ) -> Result<Vec<ComputeHost>, String> {
+    let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
+    if let Some(refusal) = compute_host_refusal(spec.as_ref(), &host) {
+        return Err(refusal);
+    }
     if host.id.trim().is_empty() {
         host.id = uuid_v4();
     }

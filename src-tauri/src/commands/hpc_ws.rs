@@ -856,17 +856,33 @@ pub fn set_project_hpc(
     )
 }
 
+/// Why the anchor's logs cannot be pulled into the project whose primary spec is
+/// `spec`, or `None`: a remote-only project (a VM included) has no local mirror to
+/// copy them into — its logs are read over SFTP in place. Pure.
+fn pull_logs_refusal(spec: Option<&crate::schema::project::RemoteSpec>) -> Option<String> {
+    spec.is_some_and(crate::schema::project::RemoteSpec::is_remote_only).then(|| {
+        crate::services::remote::remote_only_refusal(
+            "the logs stay on the host: this project keeps no local copy to pull them into",
+        )
+    })
+}
+
 /// Copy the anchor's `logs/` into the local mirror's `logs/` — the provenance
 /// record on the machine the user actually reads logs on. Small by construction
 /// (SLURM out/err only), so it is a plain per-file SFTP read, not a sync pass;
 /// nothing is deleted locally and an unreadable file is skipped rather than
-/// failing the batch. Returns how many files were copied.
+/// failing the batch. Returns how many files were copied. Refused for a
+/// remote-only project ([`pull_logs_refusal`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_pull_logs(
     ctx: Ctx,
     project_id: String,
     logs_dir: String,
 ) -> Result<u32, String> {
+    let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
+    if let Some(refusal) = pull_logs_refusal(spec.as_ref()) {
+        return Err(refusal);
+    }
     let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     let dir = validate_abs_path("logs folder", &logs_dir)?;
     let sftp = crate::services::remote::pooled_sftp(pool, &project_id)
@@ -1000,6 +1016,23 @@ pub async fn hpc_ws_move_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pulling logs into the mirror is refused for a remote-only project (a VM
+    /// included); a plain Remote project, and an unresolved one, pass the gate.
+    #[test]
+    fn a_remote_only_project_refuses_the_log_pull() {
+        let spec = |extra: serde_json::Value| -> crate::schema::project::RemoteSpec {
+            let mut v = serde_json::json!({ "host": "login.example", "remote_path": "/home/alice/p" });
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(v).unwrap()
+        };
+        for posture in [serde_json::json!({ "remote_only": true }), serde_json::json!({ "vm": true })] {
+            let refusal = pull_logs_refusal(Some(&spec(posture))).expect("refused");
+            assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
+        }
+        assert_eq!(pull_logs_refusal(Some(&spec(serde_json::json!({})))), None);
+        assert_eq!(pull_logs_refusal(None), None);
+    }
 
     #[test]
     fn scratch_candidates_are_parsed_and_deduped_by_path() {
