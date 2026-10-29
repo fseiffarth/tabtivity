@@ -1059,6 +1059,50 @@ fn git_ssh_args_shape_target_then_remote_command_last() {
     }
 }
 
+/// With the host's `timeout`, the host git runs under it at the verb's own
+/// ceiling plus the margin (so the local bound reports first); without it the
+/// command is exactly the plain one. Plain words either way — no shell syntax a
+/// non-POSIX login shell could trip on.
+#[test]
+fn a_host_git_call_is_bounded_on_the_host_too() {
+    use crate::services::git_bounded::{LONG_TIMEOUT, READ_TIMEOUT};
+    use crate::services::git_hardened::{hardened_git_args, hooked_git_args};
+    let status = hardened_git_args(&["status", "--porcelain"]);
+    let push = hooked_git_args(&["push"]);
+    assert_eq!(host_timeout_secs(&status), READ_TIMEOUT.as_secs() + 30);
+    assert_eq!(host_timeout_secs(&push), LONG_TIMEOUT.as_secs() + 30);
+    let args = vec!["status".to_string()];
+    assert_eq!(
+        bounded_remote_git_command("/srv/a && git b", &args, Some(150)),
+        "cd '/srv/a && git b' && timeout -k 10 150 git 'status'"
+    );
+    assert_eq!(bounded_remote_git_command("/srv/p", &args, None), remote_git_command("/srv/p", &args));
+    let s = spec(None, "h", None, "/srv/p");
+    assert_eq!(
+        git_ssh_args_within(&s, &args, Some(150)).unwrap().last().unwrap(),
+        "cd '/srv/p' && timeout -k 10 150 git 'status'"
+    );
+}
+
+/// The probe's bounded form runs on this machine's `timeout` (when it has one)
+/// and its output parses — the same words the host gets.
+#[cfg(unix)]
+#[test]
+fn the_host_git_probe_parses_on_a_real_shell() {
+    use crate::services::git_hardened::{parse_git_version, HOST_GIT_PROBE, HOST_GIT_PROBE_BOUNDED};
+    for probe in [HOST_GIT_PROBE_BOUNDED, HOST_GIT_PROBE] {
+        let Ok(out) = std::process::Command::new("sh").args(["-c", probe]).output() else {
+            continue;
+        };
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(parse_git_version(&text).is_some(), "{probe}: {text}");
+        } else {
+            eprintln!("{probe} did not run here; skipped");
+        }
+    }
+}
+
 #[test]
 fn git_ssh_args_includes_port() {
     let s = spec(None, "h", Some(2222), "/p");

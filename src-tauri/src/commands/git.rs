@@ -2441,7 +2441,13 @@ fn exclude_app_dir(ctx: &WorktreeCtx) {
             }
         }
         Some(t) => {
-            let _ = crate::services::ssh_exec::run_remote_script(&t.spec, &remote_exclude_script());
+            // Bounded: the bounded `worktree add` has already returned, and a
+            // stalled master must not hold the worker here instead.
+            let _ = crate::services::ssh_exec::run_remote_script_within(
+                &t.spec,
+                &remote_exclude_script(),
+                crate::services::git_bounded::READ_TIMEOUT,
+            );
         }
     }
 }

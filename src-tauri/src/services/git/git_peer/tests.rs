@@ -2434,3 +2434,38 @@ fn the_batched_host_scripts_run_no_repo_programs() {
         eprintln!("this git ran neither program unwrapped; the negative check above still holds");
     }
 }
+
+/// A `diff`/`log -p` a batched script may grow gets the local arm's diff-driver
+/// flags too: a host repo's `diff.external` program runs bare, never through
+/// [`hardened_remote_script`]. Other verbs pass through unchanged.
+#[cfg(unix)]
+#[test]
+fn the_batched_host_scripts_turn_the_diff_drivers_off() {
+    use std::os::unix::fs::PermissionsExt;
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_batched_host_scripts_turn_the_diff_drivers_off");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    repo_behind_by_one(&dir);
+    let marker = tmp.path().join("marker");
+    let external = tmp.path().join("external.sh");
+    std::fs::write(&external, format!("#!/bin/sh\necho external >> '{}'\n", marker.display())).unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let set = crate::paths::command_no_window("git")
+        .args(["config", "diff.external", &external.to_string_lossy()])
+        .current_dir(&dir)
+        .status()
+        .unwrap();
+    assert!(set.success());
+    std::fs::write(dir.join("base.txt"), b"edited\n").unwrap();
+
+    let out = run_sh(&dir, &hardened_remote_script("git diff; git log -p -1 >/dev/null; git rev-parse --verify --quiet HEAD"));
+    assert!(out.contains("+edited"), "git's own diff ran: {out}");
+    assert!(!marker.exists(), "diff.external ran: {:?}", std::fs::read_to_string(&marker));
+    // The control: bare, the same `git diff` runs the planted program.
+    run_sh(&dir, "git diff >/dev/null");
+    assert!(marker.exists(), "the planted diff.external is live");
+}

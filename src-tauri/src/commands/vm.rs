@@ -399,10 +399,11 @@ mod tests {
         assert!(!mirror_by_posture(Some(&spec(Some(true), None)), probe(false)));
         assert!(mirror_by_posture(Some(&spec(Some(true), None)), probe(true)));
         assert!(!mirror_by_posture(Some(&spec(None, Some(true))), probe(false)));
+        // A VM outranks a stray `remote_only: false` (`RemoteSpec::is_remote_only`).
+        assert!(!mirror_by_posture(Some(&spec(Some(true), Some(false))), probe(false)));
         // Not remote-only, or no spec: a mirror, without looking.
         probed.set(false);
         assert!(mirror_by_posture(Some(&spec(None, None)), probe(false)));
-        assert!(mirror_by_posture(Some(&spec(Some(true), Some(false))), probe(false)));
         assert!(mirror_by_posture(None, probe(false)));
         assert!(!probed.get(), "the folder is probed only for a remote-only project");
     }

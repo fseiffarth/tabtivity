@@ -1264,10 +1264,48 @@ fn the_host_push_is_hardened_and_bounded_at_the_push_ceiling() {
     assert_ne!(verb(&ssh).as_deref(), Some("push"), "the wrapped argv cannot name the verb: {ssh:?}");
 }
 
-/// Every host git call goes through `git_hardened::run_git_as` (hardened
-/// args, hooks off unless trust-gated) — lockstep's own `Peer::Remote` arm is
-/// the one other caller. A bare `run_git_remote` elsewhere skips the
-/// hardening, as the push button's host arm once did.
+/// `git --version` parses across builds; a malformed answer is no version.
+#[test]
+fn the_host_git_version_is_read_from_its_banner() {
+    use crate::services::git_hardened::parse_git_version;
+    assert_eq!(parse_git_version("git version 1.8.3\n"), Some((1, 8)));
+    assert_eq!(parse_git_version("motd line\ngit version 2.39.3 (Apple Git-145)\n"), Some((2, 39)));
+    assert_eq!(parse_git_version("git version 2.42.0.windows.1"), Some((2, 42)));
+    assert_eq!(parse_git_version("git version 2"), None);
+    assert_eq!(parse_git_version("sh: git: not found"), None);
+}
+
+/// A host git older than 2.9 ignores `core.hooksPath=`, so a hooks-off call
+/// whose verb runs a hook is refused there (and when the version is unknown);
+/// reads, hooks-live calls and a modern git pass.
+#[test]
+fn a_host_git_too_old_to_turn_hooks_off_refuses_hook_verbs() {
+    use crate::services::git_hardened::{host_hooks_off_refusal, hooked_git_args};
+    for verb in ["checkout", "merge", "commit", "fetch", "pull", "rebase", "push"] {
+        let off = hardened_git_args(&[verb, "x"]);
+        for version in [Some((1, 8)), Some((2, 8)), None] {
+            let why = host_hooks_off_refusal(version, &off).unwrap_or_else(|| panic!("{verb} {version:?} refused"));
+            assert!(why.starts_with(&format!("git {verb} was not run on the host")), "{why}");
+        }
+        for version in [Some((2, 9)), Some((2, 53)), Some((3, 0))] {
+            assert_eq!(host_hooks_off_refusal(version, &off), None, "{verb} {version:?}");
+        }
+        assert_eq!(host_hooks_off_refusal(Some((1, 8)), &hooked_git_args(&[verb])), None, "hooks live: {verb}");
+    }
+    for read in [&["status", "--porcelain"][..], &["log", "-1"], &["rev-parse", "HEAD"], &["for-each-ref"]] {
+        assert_eq!(host_hooks_off_refusal(Some((1, 8)), &hardened_git_args(read)), None, "{read:?}");
+        assert_eq!(host_hooks_off_refusal(None, &hardened_git_args(read)), None, "{read:?}");
+    }
+}
+
+/// Every host git call made as one `git <args>` (`ssh_exec::run_git_remote`)
+/// goes through `git_hardened::run_git_as` (hardened args, hooks off unless
+/// trust-gated) — lockstep's own `Peer::Remote` arm is the one other caller. A
+/// bare `run_git_remote` elsewhere skips the hardening, as the push button's
+/// host arm once did. Not covered: `git` inside a host shell script
+/// (`run_remote_script*`) — lockstep's batched probe wraps its own
+/// (`git_peer::hardened_remote_script`), the worktree exclude script runs only
+/// `rev-parse --git-common-dir`.
 #[test]
 fn every_host_git_call_goes_through_the_hardened_runner() {
     const ALLOWED: &[(&str, &str)] = &[("services/git/git_hardened.rs", "run_git_as"), ("services/git/git_peer.rs", "run")];

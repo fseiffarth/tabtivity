@@ -2464,7 +2464,9 @@ pub fn remove_compute_host(
 /// Patch a worker host's toggles (`sync_code` / `pull_outputs` / `auto_connect` /
 /// `shared_fs` / `label` / `user`). Each argument is applied only when `Some`, so a
 /// caller can flip one flag without restating the others. Unknown `host_id` is a
-/// silent no-op (returns the unchanged list).
+/// silent no-op (returns the unchanged list). A patch that would turn a worker of a
+/// remote-only project into a synced copy is refused, exactly as
+/// [`add_compute_host`] refuses adding one ([`HostPatch::apply_checked`]).
 ///
 /// `user` is the worker twin of [`set_project_remote_user`] — the SSH login name,
 /// editable from the same Connect dialog — and clears `key_auth` for the same
@@ -2480,42 +2482,81 @@ pub fn patch_compute_host(
     label: Option<String>,
     user: Option<String>,
 ) -> Result<Vec<ComputeHost>, String> {
-    patch_compute_hosts(&project_id, |hosts| {
+    let patch = HostPatch { sync_code, pull_outputs, auto_connect, shared_fs, label, user };
+    let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
+    let refused = std::sync::Mutex::new(None);
+    let hosts = patch_compute_hosts(&project_id, |hosts| {
         if let Some(h) = hosts.iter_mut().find(|h| h.id == host_id) {
-            if let Some(v) = &user {
-                let t = v.trim();
-                let next = if t.is_empty() {
-                    None
-                } else {
-                    Some(t.to_string())
-                };
-                if h.spec.user != next {
-                    h.spec.user = next;
-                    h.spec.key_auth = None;
-                }
-            }
-            if let Some(v) = shared_fs {
-                h.shared_fs = v;
-            }
-            if let Some(v) = sync_code {
-                h.sync_code = v;
-            }
-            if let Some(v) = pull_outputs {
-                h.pull_outputs = v;
-            }
-            if let Some(v) = auto_connect {
-                h.spec.auto_connect = v.then_some(true);
-            }
-            if let Some(v) = &label {
-                let t = v.trim();
-                h.spec.label = if t.is_empty() {
-                    None
-                } else {
-                    Some(t.to_string())
-                };
+            if let Err(why) = patch.apply_checked(h, spec.as_ref()) {
+                *refused.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why);
             }
         }
-    })
+    })?;
+    match refused.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner) {
+        Some(why) => Err(why),
+        None => Ok(hosts),
+    }
+}
+
+/// The fields [`patch_compute_host`] changes, each only when `Some`.
+#[derive(Default)]
+struct HostPatch {
+    sync_code: Option<bool>,
+    pull_outputs: Option<bool>,
+    auto_connect: Option<bool>,
+    shared_fs: Option<bool>,
+    label: Option<String>,
+    user: Option<String>,
+}
+
+impl HostPatch {
+    /// Apply the patch to `h`, or leave `h` as it was and answer the refusal when
+    /// the patched host is one [`compute_host_refusal`] refuses for the project
+    /// whose primary spec is `spec`. Pure.
+    fn apply_checked(&self, h: &mut ComputeHost, spec: Option<&RemoteSpec>) -> Result<(), String> {
+        let mut next = h.clone();
+        self.apply(&mut next);
+        if let Some(refusal) = compute_host_refusal(spec, &next) {
+            return Err(refusal);
+        }
+        *h = next;
+        Ok(())
+    }
+
+    fn apply(&self, h: &mut ComputeHost) {
+        if let Some(v) = &self.user {
+            let t = v.trim();
+            let next = if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            };
+            if h.spec.user != next {
+                h.spec.user = next;
+                h.spec.key_auth = None;
+            }
+        }
+        if let Some(v) = self.shared_fs {
+            h.shared_fs = v;
+        }
+        if let Some(v) = self.sync_code {
+            h.sync_code = v;
+        }
+        if let Some(v) = self.pull_outputs {
+            h.pull_outputs = v;
+        }
+        if let Some(v) = self.auto_connect {
+            h.spec.auto_connect = v.then_some(true);
+        }
+        if let Some(v) = &self.label {
+            let t = v.trim();
+            h.spec.label = if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            };
+        }
+    }
 }
 
 /// Normalize a list of category tags: trim each, drop blanks, and de-duplicate

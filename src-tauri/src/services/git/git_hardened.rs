@@ -945,6 +945,132 @@ pub(crate) fn validate_clone_url(url: &str) -> Result<(), String> {
 /// string.
 pub(crate) const NO_HOOKS_CONFIG: &[&str] = &["core.hooksPath="];
 
+// ── Host git: what the host's own git and shell can do ───────────────────────
+//
+// [`NO_HOOKS_CONFIG`] turns hooks off only on a git that knows `core.hooksPath`
+// (2.9, 2016). An older git — still the default on CentOS/RHEL 7 login nodes —
+// ignores the unknown key, and no other `-c` can stand in for it: such a git
+// always runs `$GIT_DIR/hooks/*`. So a hooks-off host call whose verb runs a
+// hook is refused on such a host ([`host_hooks_off_refusal`]) rather than
+// silently running the hook. `ssh_exec::run_git_remote` asks [`host_git`]
+// once per host, which also tells it whether the host can bound the call
+// itself (`timeout`): killing the local ssh client does not stop a git on the
+// far end of a channel without a pty.
+
+/// The git release that introduced `core.hooksPath`.
+const HOOKS_PATH_SINCE: (u32, u32) = (2, 9);
+
+/// Verbs that run a repo hook on a git older than [`HOOKS_PATH_SINCE`]: the
+/// checkout, merge, commit, rebase, `am` and pre-push hooks, and
+/// `pre-auto-gc` from the `gc --auto` that commit, merge, `am`, rebase and
+/// fetch end in. Reads (`status`, `log`, `rev-parse`, …) run none on such a
+/// git — `post-index-change` came with 2.22.
+const OLD_GIT_HOOK_VERBS: &[&str] = &[
+    "am", "bisect", "checkout", "cherry-pick", "clone", "commit", "fetch", "gc", "merge", "pull", "push", "rebase",
+    "revert", "submodule", "worktree",
+];
+
+/// What [`host_git`] learned about a host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HostGit {
+    /// `git --version`'s release; `None` when the probe got none.
+    pub version: Option<(u32, u32)>,
+    /// The host runs `timeout -k <s> <s> git …` (GNU coreutils, BusyBox), so a
+    /// host git call is bounded on the host as well.
+    pub timeout: bool,
+}
+
+/// `(major, minor)` from `git --version`'s output (`git version 2.39.3 (Apple
+/// Git-145)`, `git version 2.42.0.windows.1`, …). Pure.
+pub(crate) fn parse_git_version(out: &str) -> Option<(u32, u32)> {
+    let rest = out.lines().find_map(|l| l.trim().strip_prefix("git version "))?;
+    let mut parts = rest.split(|c: char| !c.is_ascii_digit());
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+/// Why `git <git_args>` may not run on a host whose git is `version`, or
+/// `None`. A hooks-off call ([`NO_HOOKS_CONFIG`] among the args) whose verb runs
+/// a hook ([`OLD_GIT_HOOK_VERBS`]) needs a git that knows `core.hooksPath`; an
+/// unknown version is refused too (fails closed). A hooks-live call (trust-gated
+/// or the host's own push) and every other verb pass. Pure.
+pub(crate) fn host_hooks_off_refusal(version: Option<(u32, u32)>, git_args: &[String]) -> Option<String> {
+    let hooks_off = git_args.iter().any(|a| NO_HOOKS_CONFIG.contains(&a.as_str()));
+    if !hooks_off || version.is_some_and(|v| v >= HOOKS_PATH_SINCE) {
+        return None;
+    }
+    let verb = crate::services::git_bounded::verb(git_args)?;
+    OLD_GIT_HOOK_VERBS.contains(&verb.as_str()).then(|| match version {
+        Some((major, minor)) => format!(
+            "git {verb} was not run on the host: its git {major}.{minor} cannot turn the repository's hooks off \
+             (that needs git {}.{} or newer), so they would run. Update git on the host.",
+            HOOKS_PATH_SINCE.0, HOOKS_PATH_SINCE.1
+        ),
+        None => format!(
+            "git {verb} was not run on the host: its git version could not be read (is the host reachable?), \
+             so it is not known that git can turn the repository's hooks off there."
+        ),
+    })
+}
+
+/// How long a failed [`host_git`] probe is remembered: long enough that a down
+/// or wedged host is not probed before every call, short enough that a
+/// reconnect is picked up.
+const HOST_GIT_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// What the host `spec` logs into can do, probed once per host
+/// (`user@host:port`) and kept for the app's lifetime; a probe that read no
+/// version is kept for [`HOST_GIT_RETRY`] only. Never an error: a host that
+/// could not be probed answers `version: None` (hook verbs refused) and
+/// `timeout: false` (bounded here only), and the call itself then fails or
+/// works exactly as it would have.
+pub(crate) fn host_git(spec: &crate::schema::project::RemoteSpec) -> HostGit {
+    use app_core::sync::LockExt;
+    use std::collections::HashMap;
+    use std::time::Instant;
+    static SEEN: std::sync::Mutex<Option<HashMap<String, (HostGit, Instant)>>> = std::sync::Mutex::new(None);
+    let key = format!("{}@{}:{}", spec.user.as_deref().unwrap_or(""), spec.host, spec.port.unwrap_or(22));
+    if let Some((found, at)) = SEEN.lock_ok().get_or_insert_with(Default::default).get(&key) {
+        if found.version.is_some() || at.elapsed() < HOST_GIT_RETRY {
+            return *found;
+        }
+    }
+    let found = probe_host_git(spec);
+    SEEN.lock_ok().get_or_insert_with(Default::default).insert(key, (found, Instant::now()));
+    found
+}
+
+/// The probe [`host_git`] runs first: it reads the version and, by running at
+/// all, proves the host's `timeout` takes the `-k` form the calls use.
+pub(crate) const HOST_GIT_PROBE_BOUNDED: &str = "timeout -k 5 60 git --version";
+/// The fallback probe, for a host without such a `timeout`.
+pub(crate) const HOST_GIT_PROBE: &str = "git --version";
+
+fn probe_host_git(spec: &crate::schema::project::RemoteSpec) -> HostGit {
+    let run = |script: &str| -> Option<std::process::Output> {
+        let mut cmd = crate::services::ssh_exec::remote_shell_command(spec, script).ok()?;
+        let opts = crate::services::git_bounded::Opts {
+            timeout: Some(crate::services::git_bounded::READ_TIMEOUT),
+            no_precheck: true,
+            ..Default::default()
+        };
+        crate::services::git_bounded::run(&mut cmd, opts).ok().map(|ran| ran.output)
+    };
+    let version = |out: &std::process::Output| parse_git_version(&String::from_utf8_lossy(&out.stdout));
+    let Some(out) = run(HOST_GIT_PROBE_BOUNDED) else {
+        return HostGit { version: None, timeout: false };
+    };
+    if out.status.success() {
+        if let Some(v) = version(&out) {
+            return HostGit { version: Some(v), timeout: true };
+        }
+    }
+    // ssh's own failure (255): the host was not reached, so a second try would not be either.
+    if out.status.code() == Some(255) {
+        return HostGit { version: None, timeout: false };
+    }
+    HostGit { version: run(HOST_GIT_PROBE).as_ref().and_then(version), timeout: false }
+}
+
 /// Turn git's own auth failure into the one sentence that tells the user what to
 /// do about it. A private https repo with no token stored reads as "could not
 /// read Username" / "Authentication failed", which explains nothing on its own.
