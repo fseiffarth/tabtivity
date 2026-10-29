@@ -44,13 +44,8 @@ scripts/brand-check.sh   # the app's name is spelled only in the brand modules
 `typescript` 5.9 package is only for typescript-eslint and editors — never
 bump it to 7.
 
-Before pushing, run `scripts/gates.sh --all`, then `scripts/ci-local.sh`
-(`--fast` for a small change): every Linux step of `ci-cd.yml` plus the
-cross-checks below; CI fails if they drift.
-
-Rust is pinned in `rust-toolchain.toml`, and CI installs the same version
-(`RUST_TOOLCHAIN` in `ci-cd.yml`); bump both together, then install it on the
-host outside the fence (`~/.rustup` is read-only inside one).
+Before pushing or bumping the Rust toolchain: `docs/context/ci_local.md`
+(`gates.sh --all`, `ci-local.sh`, the cross-OS checks it runs).
 `npm run lint` fails only on errors. Its `react-hooks/exhaustive-deps`
 warnings are advisory and mostly deliberate omissions (mount-only effects,
 timer `tick`s): don't add a dependency just to silence one, since that can
@@ -63,11 +58,7 @@ never skip silently.
 CI runs the tests on Linux, Windows and macOS; the local gates run Linux only.
 Backend tests must be cross-OS: paths built per component with `Path::join`
 (no `"a/b"` literals), absolute-path literals gated with `cfg!(windows)`,
-spawned programs compared by file stem. `scripts/ci-local.sh` also runs the
-Windows clippy/check (msvc shims `~/.local/bin/*-msvc-{rc,lib}-shim`), the
-`aarch64-apple-darwin` check and the daemon's `ldd` (no GTK/WebKit/X11/dbus);
-a missing target or shim is reported, so read its output before pushing
-backend changes to paths, process spawning, `cfg(...)` code or the daemon.
+spawned programs compared by file stem.
 Don't push new work while the branch's last ci-cd run is red; the next push is its fix.
 
 ## Git & privacy (public repo)
@@ -92,16 +83,8 @@ Don't push new work while the branch's last ci-cd run is red; the next push is i
   reshaping a load-bearing file? Update its row, one line. Never add a nested
   `CLAUDE.md`/`AGENTS.md`: agents auto-load those. Why a file is the way it
   is: grep `docs/filemap_rationale/` (frozen, verify against code).
-- Design rationale, one file per subsystem in `docs/context/` — open only the
-  one you're touching: agent_authority, agent_reader, agent_schedule_mcp,
-  agent_security_level (design only), agent_sessions, assistant,
-  brand_migration, caldav, copilot_completion, dev_builds, docker_containers,
-  git_push_mcp, git_sync, help_mcp, hpc_careful_mode, mail_encryption,
-  markup_mcp, mobile_access, mobile_sidecar, multi_host_remote, openvpn,
-  phone_markup, project_boxes, project_transfer, release_signing,
-  remote_autoconnect, remote_credentials, remote_projects, root_console,
-  server_gateway, server_mode, sharing, tmux_sessions, usage_stats,
-  vm_projects, voice, web_client.
+- Design rationale, one file per subsystem in `docs/context/` (`ls` it) —
+  open only the one you're touching.
 - Server version (hosted plan, gateway, daemon, sharing): start at
   `docs/server.md` — status, the user's decisions, open problems, doc map.
 - Before touching byte-sync or git lockstep: `docs/remote_sync_guide.md`.
