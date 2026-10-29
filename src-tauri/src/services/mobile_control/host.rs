@@ -4110,6 +4110,29 @@ fn has_folder(project: &super::discovery::ResolvedProject) -> Result<(), (Status
     Ok(())
 }
 
+/// The folder a file the phone adds for this tab lands in and is read back
+/// from: the folder the tab works in, as the desktop's drop and paste pick it
+/// (`commands::terminal::pty_drop_files`). That is the project's for a scope
+/// with a folder, and a chat's own (`assistant::chat_dir`, by its uid) for the
+/// assistant, whose scope has none. A chat folder is the one place its CLI
+/// can read an `@` reference from; a missing one, or a link in its place, is
+/// `not_a_project`, like any scope without a folder.
+fn drop_box(
+    state_dir: &std::path::Path,
+    project: &super::discovery::ResolvedProject,
+    tab: &ResolvedTab,
+) -> Result<PathBuf, (StatusCode, Json<serde_json::Value>)> {
+    if project.public.kind == ScopeKind::Assistant {
+        let chat = tab.session_id.as_deref().and_then(|uid| crate::services::assistant::chat_dir(state_dir, uid).ok());
+        return match chat {
+            Some(dir) if std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) => Ok(dir),
+            _ => Err(api_error(StatusCode::NOT_FOUND, "not_a_project")),
+        };
+    }
+    has_folder(project)?;
+    Ok(project.root.clone())
+}
+
 /// A tab that runs on its remote project's host has nothing on this machine
 /// for a route to act on — its inbox, a sign-in, a desktop switch to it — so
 /// such a route answers `409 tab_on_host` and the phone hides the control
@@ -5469,11 +5492,12 @@ struct InboxQuery {
 }
 
 /// `POST /api/v1/tabs/{tab_id}/inbox` — the composer's **+ → From this phone**.
-/// The raw body is the file; it lands in the tab's project under
-/// `.tabtivity/inbox/` and the phone gets the project-relative reference back to
-/// put after an `@`. The tab names the project and nothing else: a session
-/// that has ended can still receive a file for the next one. See
-/// `inbox.rs` for why a relative reference may cross the boundary.
+/// The raw body is the file; it lands in the tab's drop box (`drop_box`: its
+/// project, or a Tabby chat's own folder) under `.tabtivity/inbox/` and the
+/// phone gets the relative reference back to put after an `@`. The tab names
+/// the folder and nothing else: a session that has ended can still receive a
+/// file for the next one. See `inbox.rs` for why a relative reference may
+/// cross the boundary.
 async fn inbox_upload(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5498,10 +5522,10 @@ async fn inbox_upload(
     if let Err(error) = not_on_host(tab) {
         return error;
     }
-    if let Err(error) = has_folder(project) {
-        return error;
-    }
-    let root = project.root.clone();
+    let root = match drop_box(&state.config.state_dir, project, tab) {
+        Ok(root) => root,
+        Err(error) => return error,
+    };
     drop(catalog);
     store_in_project_inbox(root, query.name, body).await
 }
@@ -5601,19 +5625,22 @@ async fn global_inbox_upload(
 }
 
 /// The project an inbox-bound request is for, by its tab — the tab names the
-/// project and nothing else, exactly as `inbox_upload` reads it.
+/// project and nothing else, exactly as `inbox_upload` reads it — and, for a
+/// Tabby chat, the chat's uid, which names its drop box to the window
+/// (`drop_box`; the assistant scope has no folder of its own).
 fn inbox_project(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(String, Option<String>), (StatusCode, Json<serde_json::Value>)> {
     let catalog = catalog(state, phone)?;
     let Some((project, tab)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
     not_on_host(tab)?;
-    has_folder(project)?;
-    Ok(project.raw_id.clone())
+    drop_box(&state.config.state_dir, project, tab)?;
+    let chat = (project.public.kind == ScopeKind::Assistant).then(|| tab.session_id.clone()).flatten();
+    Ok((project.raw_id.clone(), chat))
 }
 
 /// The desktop's refusal of a desktop-image request, as the phone's status.
@@ -5646,8 +5673,8 @@ async fn desktop_images(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let project_id = match inbox_project(&state, &phone, &tab_id) {
-        Ok(raw) => raw,
+    let (project_id, _) = match inbox_project(&state, &phone, &tab_id) {
+        Ok(target) => target,
         Err(error) => return error,
     };
     let request_id = new_request_id();
@@ -5700,8 +5727,8 @@ async fn attach_desktop_image(
     if !desktop_images::valid_id(&request.image_id) {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
-    let project_id = match inbox_project(&state, &phone, &tab_id) {
-        Ok(raw) => raw,
+    let (project_id, chat) = match inbox_project(&state, &phone, &tab_id) {
+        Ok(target) => target,
         Err(error) => return error,
     };
     let request_id = new_request_id();
@@ -5711,22 +5738,24 @@ async fn attach_desktop_image(
         &DesktopRequest::AttachDesktopImage {
             request_id,
             project_id,
+            chat,
             image_id: request.image_id.clone(),
         },
     )
     .await;
     if desktop_down(&response) {
-        // No window: the file is copied into the project's inbox here.
+        // No window: the file is copied into the tab's drop box here.
         let Ok(snapshot) = catalog(&state, &phone) else {
             return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
         };
-        let Some((project, _)) = snapshot.tab(&tab_id) else {
+        let Some((project, tab)) = snapshot.tab(&tab_id) else {
             return api_error(StatusCode::NOT_FOUND, "tab_not_found");
         };
-        if let Err(error) = has_folder(project) {
-            return error;
-        }
-        let (state_dir, root, image_id) = (state.config.state_dir.clone(), project.root.clone(), request.image_id);
+        let root = match drop_box(&state.config.state_dir, project, tab) {
+            Ok(root) => root,
+            Err(error) => return error,
+        };
+        let (state_dir, image_id) = (state.config.state_dir.clone(), request.image_id);
         let attached = tokio::task::spawn_blocking(move || headless::attach_desktop_image(&state_dir, &root, &image_id))
             .await
             .unwrap_or_else(|_| Err("write_failed".to_string()));
@@ -5759,6 +5788,21 @@ fn outbox_root(
     };
     has_folder(project)?;
     Ok(project.root.clone())
+}
+
+/// The folder an inbox read is answered from, by its tab: the drop box
+/// `inbox_upload` wrote to (`drop_box`), so a Tabby chat's pictures come back
+/// from its own folder.
+fn inbox_root(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+) -> Result<PathBuf, (StatusCode, Json<serde_json::Value>)> {
+    let catalog = catalog(state, phone)?;
+    let Some((project, tab)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    drop_box(&state.config.state_dir, project, tab)
 }
 
 /// The same root by the project itself, for the project screen's outbox and
@@ -6117,7 +6161,7 @@ async fn inbox_described(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let root = match outbox_root(&state, &phone, &tab_id) {
+    let root = match inbox_root(&state, &phone, &tab_id) {
         Ok(root) => root,
         Err(error) => return error,
     };
@@ -6149,7 +6193,7 @@ async fn inbox_file(
         Ok(phone) => phone,
         Err(error) => return error.into_response(),
     };
-    let root = match outbox_root(&state, &phone, &tab_id) {
+    let root = match inbox_root(&state, &phone, &tab_id) {
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };

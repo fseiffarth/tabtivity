@@ -312,7 +312,7 @@ type DesktopRequest =
   | { type: "assistant_models"; request_id: string; project_id: string; tmux_session: string }
   | { type: "switch_assistant_model"; request_id: string; project_id: string; tmux_session: string; model: string }
   | { type: "desktop_images"; request_id: string; project_id: string }
-  | { type: "attach_desktop_image"; request_id: string; project_id: string; image_id: string }
+  | { type: "attach_desktop_image"; request_id: string; project_id: string; chat?: string; image_id: string }
   | { type: "markup_questions"; request_id: string; project_id: string; tmux_session: string; path?: string | null }
   | { type: "markup_answer"; request_id: string; project_id: string; tmux_session: string; ask_id: string; answers: MobileMarkupAnswer[]; device_id?: string }
   | { type: "markup_dismiss"; request_id: string; project_id: string; tmux_session: string; ask_id: string }
@@ -2876,18 +2876,21 @@ async function desktopImagesFor(projectId: string): Promise<DesktopResponse> {
   return { status: "desktop_images", images: await invoke<DesktopImage[]>("mobile_desktop_images") };
 }
 
-async function attachDesktopImage(projectId: string, imageId: string): Promise<DesktopResponse> {
+async function attachDesktopImage(projectId: string, imageId: string, chat?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
-  // A scope with no folder on this machine (a VM project without a mirror, the
-  // assistant) has no inbox: an empty path would be written relative to the
-  // app's own working directory.
-  if (!scope.cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
+  // A Tabby chat's image lands in the chat's own folder, named by its uid (the
+  // sidecar's `drop_box`). Any other scope with no folder on this machine (a
+  // VM project without a mirror) has no inbox: an empty path would be written
+  // relative to the app's own working directory.
+  const chatUid = scope.id === ASSISTANT_SCOPE ? chat : undefined;
+  if (!scope.cwd && !chatUid) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   try {
     const attachment = await invoke<InboxAttachment>("mobile_attach_desktop_image", {
       projectDir: scope.cwd,
+      chatUid,
       imageId,
     });
     return { status: "attached", attachment };
@@ -3052,7 +3055,7 @@ async function handleRequest(
     case "assistant_models": return tabAssistantModels(request.project_id, request.tmux_session);
     case "switch_assistant_model": return switchTabAssistantModel(request.project_id, request.tmux_session, request.model);
     case "desktop_images": return desktopImagesFor(request.project_id);
-    case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id);
+    case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id, request.chat);
     case "markup_questions": return markupQuestionsFor(request.project_id, request.tmux_session, request.path ?? undefined);
     case "markup_answer": return answerMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id, request.answers, request.device_id);
     case "markup_dismiss": return dismissMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id);

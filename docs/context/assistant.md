@@ -302,13 +302,19 @@ same picker (`setAssistantReach`); turning the switch off drops the list.
   it has no process) or creates one on the default ready launch
   (`assistantChat.ts`), then hands over to the Focus chat. The Project screen
   sends a landing on the scope (a restored place, a notification's back) back
-  to Home. The Focus chat is the existing one with files, outbox, inbox
-  upload, Commit, markup and held prompts hidden; its head is `TabbyHead`: the
+  to Home. The Focus chat is the existing one with files, outbox, Commit,
+  markup and held prompts hidden. The composer's **+** stays, minus *Project
+  file*: like a desktop drop or paste (`pty_drop_files`, the tab's own folder),
+  the phone's file or desktop image lands in the chat's folder
+  (`host::drop_box`: `chat_dir` by the chat's uid, refused when missing or a
+  link) and goes in as an `@.tabtivity/inbox/…` reference, which the CLI reads
+  itself, not through a tool. Codex has `view_image` off, so it gets the
+  reference and cannot see the picture. Its head is `TabbyHead`: the
   CLI dropdown (catalog rows carry `assistant_launch`, the chat's launch id,
   matched against `launch-options`) and Relaunch, both a create plus a close
-  of every other chat. Every folder-shaped route (git, files,
-  uploads, worktrees, inbox, outbox, markup, uncommitted, schedules, collected
-  prompts, desktop images) answers `404 not_a_project` for the scope.
+  of every other chat. Every other folder-shaped route (git, files,
+  uploads, worktrees, the project inbox, outbox, markup, uncommitted,
+  schedules, collected prompts) answers `404 not_a_project` for the scope.
 - A chat restored with the desktop has no process under lazy spawn, so the
   catalog lists it `available:false` and the terminal route answers
   `410 session_gone`. Opening such a chat from the phone (`TabbyOpen`) posts

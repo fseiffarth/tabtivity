@@ -1382,10 +1382,14 @@ pub enum DesktopRequest {
     /// Copy one of those images into the project's inbox — the same
     /// `.tabtivity/inbox/` drop box a file sent from the phone lands in — and
     /// answer with the project-relative reference. `image_id` is one the
-    /// desktop listed; a path never crosses.
+    /// desktop listed; a path never crosses. `chat` is a Tabby chat's uid:
+    /// the assistant scope has no folder, so the image lands in that chat's
+    /// own (`host::drop_box`).
     AttachDesktopImage {
         request_id: String,
         project_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chat: Option<String>,
         image_id: String,
     },
     /// The agent tab's open markup question (`services::markup_mcp`), for the

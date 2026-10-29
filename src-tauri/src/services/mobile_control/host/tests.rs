@@ -1748,11 +1748,6 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         ("DELETE", format!("/api/v1/tabs/{t}/outbox"), Value::Null, &["not_a_project"]),
         ("GET", format!("/api/v1/tabs/{t}/outbox/a.txt"), Value::Null, &["not_a_project"]),
         ("DELETE", format!("/api/v1/tabs/{t}/outbox/a.txt"), Value::Null, &["not_a_project"]),
-        ("GET", format!("/api/v1/tabs/{t}/inbox"), Value::Null, &["not_a_project"]),
-        ("GET", format!("/api/v1/tabs/{t}/inbox/a.txt"), Value::Null, &["not_a_project"]),
-        ("POST", format!("/api/v1/tabs/{t}/inbox?name=a.txt"), any.clone(), &["not_a_project"]),
-        ("GET", format!("/api/v1/tabs/{t}/desktop-images"), Value::Null, &["not_a_project"]),
-        ("POST", format!("/api/v1/tabs/{t}/desktop-images"), json!({ "image_id": desktop_images::CLIPBOARD_ID }), &["not_a_project"]),
         // Markup.
         ("GET", format!("/api/v1/tabs/{t}/markup/questions"), Value::Null, &["not_a_project"]),
         ("POST", format!("/api/v1/tabs/{t}/markup/answer"), any.clone(), &["not_a_project", "invalid_request"]),
@@ -1777,6 +1772,53 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}/transcript"), &cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// A Tabby chat's composer + works as a project chat's does: the phone's file
+/// lands in the chat's own folder (`drop_box`), the one its CLI can read an
+/// `@` reference from, and comes back for the chat's picture; the scope
+/// itself still has no inbox, and a chat folder swapped for a link is none.
+#[tokio::test]
+async fn a_tabby_chat_takes_the_phones_files_into_its_own_folder() {
+    let host = assistant_host(Arc::new(|_| Box::pin(async { Ok(()) })));
+    let cookie = host.pair_device(&signing_key(74)).await.0;
+    let (project_id, tab_id) = start_assistant_chat(&host, &cookie, "tabby-inbox-0123456789abcdef").await;
+    let state_dir = host.state.config.state_dir.clone();
+    let session: Value = serde_json::from_slice(&std::fs::read(state_dir.join("sessions").join("assistant").join("terminals.json")).expect("session")).expect("json");
+    let uid = session["tabLayout"][0]["sessionId"].as_str().expect("chat uid").to_string();
+    let chat = crate::services::assistant::chat_dir(&state_dir, &uid).unwrap();
+
+    let (status, _, body) = host.send(inbox_request(&tab_id, "shot.jpg", &cookie, b"jpeg bytes".to_vec())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let reference = json(&body)["attachment"]["reference"].as_str().expect("reference").to_string();
+    assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
+    assert!(!body.contains(&uid) && !body.contains(&*state_dir.to_string_lossy()), "{body}");
+    assert_eq!(std::fs::read(chat.join(&reference)).unwrap(), b"jpeg bytes");
+
+    let leaf = reference.rsplit('/').next().unwrap().to_string();
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/inbox/{leaf}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/inbox?names={leaf}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body)["files"].as_array().map(Vec::len), Some(1), "{body}");
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The scope's own drop box, by project, is still no folder.
+    let (status, _, body) = host
+        .send(request_as("POST", &format!("/api/v1/projects/{project_id}/inbox?name=a.txt"), &cookie, Some(json!({}))))
+        .await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_FOUND, Some("not_a_project")), "{body}");
+
+    #[cfg(unix)]
+    {
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::remove_dir_all(&chat).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), &chat).unwrap();
+        let (status, _, body) = host.send(inbox_request(&tab_id, "shot.jpg", &cookie, b"jpeg".to_vec())).await;
+        assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_FOUND, Some("not_a_project")), "{body}");
+        assert!(std::fs::read_dir(elsewhere.path()).unwrap().next().is_none());
+    }
 }
 
 /// A host with one opted-in remote project (no mirror on disk) whose one
