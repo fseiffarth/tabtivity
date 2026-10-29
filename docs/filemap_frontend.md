@@ -152,7 +152,7 @@ stores stay at the top. No `index.ts` barrels.
 | `lib/projects/scaffold.ts` | Pure helpers: name sanitize, SSH-address parse, scaffold/description fill prompts. |
 | `calendar/CalendarPane.tsx` | Calendar tab shell: toolbar, search, ICS import/export, view switch. |
 | `calendar/TimeGrid.tsx` | Day/week hour grid: positioned blocks, drag-create/move/resize, now-line. |
-| `calendar/MonthView.tsx` | Month + multiweek grid, with multi-day spanning bars. |
+| `calendar/MonthView.tsx` | Month + multiweek grid, with multi-day spanning bars; a bar drags to another day (day only, time kept). |
 | `calendar/AgendaView.tsx` / `calendar/TasksView.tsx` | Flat upcoming list; to-do (VTODO) list. |
 | `calendar/EventDialog.tsx` | Event editor (repeat, reminders, category, this-vs-all occurrences) + video-call field (`lib/calendar/conference.ts`). A link derived from location/notes is only hinted, never written into the field. |
 | `calendar/CalendarSidebar.tsx` | Mini-month + calendar list (color, visibility, bell = alerts on/off → `Calendar.alerts_off`: reminders and the header badge); CalDAV calendars carry their own sync affordance (⇅ / … / amber ! with the backend's error as tooltip). |

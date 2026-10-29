@@ -634,6 +634,12 @@
   background: color-mix(in srgb, var(--bg-main) 45%, transparent);
 }
 
+/* The day a dragged bar would land on. */
+.cal-month-day-drop {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
 .cal-month-day-out .cal-month-daynum {
   color: var(--text-muted);
   opacity: 0.6;
@@ -685,6 +691,15 @@
   border-radius: var(--radius);
   cursor: var(--cur-pointer, pointer);
   color: var(--accent);
+}
+
+.cal-month-bar {
+  user-select: none;
+}
+
+.cal-month-bar-dragging {
+  cursor: var(--cur-grabbing, grabbing);
+  opacity: 0.6;
 }
 
 .cal-month-bar:hover {
