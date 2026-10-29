@@ -732,7 +732,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       <span>{[
         hostNote,
         folderless ? (remoteOnly ? (hostFilesOffered ? "mobile.project.noFolderRemoteOnlyHost" : "mobile.project.noFolderRemoteOnly") : hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[projectHost]) : undefined,
-      ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+      ].flatMap((key) => key ? [t(key)] : []).join(" ")} {(remoteOnly ? isUntested("mobile.project.remoteOnly") : isUntested("mobile-every-project-type")) && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
       {hostNote && <button onClick={() => dropHostNote(noteHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
     </p>}
     {error && <p className="error">{error}</p>}

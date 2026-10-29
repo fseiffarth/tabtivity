@@ -1291,7 +1291,7 @@ export function ProjectDialog({
         {isRemoteProject && (
           <label className={`toggle-card${keepLocalCopy ? " is-on" : ""}`}>
             <span className="toggle-card-body">
-              <span className="toggle-card-title">{t("projectDialog.keepLocalCopyTitle")}</span>
+              <span className="toggle-card-title">{t("projectDialog.keepLocalCopyTitle")} <UntestedTag id="projectDialog.keepLocalCopyTitle" /></span>
               <span className="toggle-card-desc">{t("projectDialog.keepLocalCopyDesc")}</span>
             </span>
             <span className="eld-switch">
@@ -1402,7 +1402,9 @@ export function ProjectDialog({
             {urlError && <span id="project-url-error" className="ssh-optional-hint">{urlError}</span>}
             <span className="ssh-optional-hint">
               {hostClone ? (
-                t("projectDialog.cloneOnHostHint")
+                <>
+                  {t("projectDialog.cloneOnHostHint")} <UntestedTag id="projectDialog.cloneOnHostTab" />
+                </>
               ) : isForkImport ? (
                 <>
                   {t("projectDialog.forkHintPre")}{" "}

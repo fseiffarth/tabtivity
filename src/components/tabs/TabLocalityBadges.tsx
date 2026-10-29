@@ -231,7 +231,7 @@ export function LocalityMenu({
     loc: TabLocation,
     glyph: ReactNode,
     text: string,
-    opts?: { disabled?: boolean; note?: string; title?: string },
+    opts?: { disabled?: boolean; note?: string; title?: string; tag?: ReactNode },
   ) => (
     <button
       key={loc}
@@ -245,6 +245,7 @@ export function LocalityMenu({
       </span>
       {text}
       {opts?.note && <span className="tab-menu-hint">{opts.note}</span>}
+      {opts?.tag}
     </button>
   );
   return (
@@ -307,6 +308,7 @@ export function LocalityMenu({
                       disabled: true,
                       note: t("tabLocality.syncOff"),
                       title: t(pinned ? "tabLocality.syncOffPinnedTitle" : "tabLocality.syncOffTitle"),
+                      tag: pinned ? <UntestedTag id="tabLocality.syncedCopyPinned" /> : undefined,
                     },
               ),
             )}

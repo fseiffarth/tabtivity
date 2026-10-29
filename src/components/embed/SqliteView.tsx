@@ -6,6 +6,7 @@ import { cellToneColor } from "../../lib/viewers/table";
 import { viewerErrorText } from "../../lib/viewers/limitError";
 import { useFileScope, useFileSource } from "../../lib/files/fileAccess";
 import { basename } from "../../lib/paths";
+import { UntestedTag } from "../common/UntestedTag";
 
 /** One page of a table, mirroring the backend `SqlitePage` struct. */
 type SqlitePage = {
@@ -120,7 +121,7 @@ export function SqliteView({
       >
         {hostFile ? (
           <div style={{ padding: "1rem", color: "var(--text-secondary, #8b949e)" }}>
-            {t("fileTree.sqliteHostOnly", { name: basename(path) || path })}
+            {t("fileTree.sqliteHostOnly", { name: basename(path) || path })} <UntestedTag id="fileTree.sqliteHostOnly" />
           </div>
         ) : tablesError != null ? (
           <div className="file-viewer-error" style={{ padding: "1rem", color: "#f85149" }}>

@@ -261,7 +261,8 @@ export function ProjectExportDialog({
                               count: String(hostTally.files),
                               size: formatBytes(hostTally.bytes),
                             })
-                          : t("transfer.mirrorSourceHostMeasuring")}
+                          : t("transfer.mirrorSourceHostMeasuring")}{" "}
+                    <UntestedTag id="transfer.remoteOnly" />
                   </p>
                 )}
                 {includeMirror && !remoteOnly && (

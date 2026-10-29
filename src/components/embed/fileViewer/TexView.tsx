@@ -1068,6 +1068,7 @@ export function TexView({
               ? t("fileViewer.compileNamed", { name: rootName })
               : t("fileViewer.compileBtn")}
         </button>
+        {hostPinned && <UntestedTag id="tex.compileOnHostTab" />}
         {showEngineMenu && (
           <Dropdown
             className="file-viewer-tex-engine"

@@ -1,7 +1,7 @@
 ---
 id: remote-projects
 title: Remote (SSH) projects, VPN and compute machines
-keywords: [remote, ssh, sftp, host, server, cluster, hpc, slurm, vpn, openvpn, extend, machines, worker, tmux, sessions]
+keywords: [remote, ssh, sftp, host, server, cluster, hpc, slurm, vpn, openvpn, extend, machines, worker, tmux, sessions, remote-only, host only, no local copy, keep a local copy, download]
 related: [sync, git, containers-boxes, workspace-apps]
 ---
 
@@ -13,7 +13,9 @@ no sshfs, no FUSE mount, nothing to install on the host.
 1. Click `+` beside the project pills → **New Project** or **Import Project**.
 2. Tick **Remote (SSH) project** at the top of the dialog.
 3. Pick a **Local location** — where the synced local working copy (the
-   mirror) will live. The default is under `~/tabtivity/projects-ssh/`.
+   mirror) will live. The default is under `~/tabtivity/projects-ssh/`. To
+   keep no copy here at all, turn **Keep a local copy** off instead (see
+   "Remote-only projects").
 4. Enter the SSH address as `user@host` or `host:2222`. Leave the password
    blank to use your SSH key or agent; fill it in for password login.
 5. Click **Connect**. A remote file browser appears.
@@ -31,6 +33,53 @@ keychain, keyed by host.
 - The pill's connection lamp shows the SSH state; click it to reconnect.
 - Probes and sync only run while the project is connected, so a dead
   connection never hangs the window.
+
+## Remote-only projects
+
+A remote-only project keeps nothing on this computer: its files, tabs, agents
+and git all stay on the host, and Tabtivity is only the cockpit (tabs,
+viewers, the agent Chat, notes). Use it when the tree is too big to mirror, or
+should not leave the host.
+
+1. In the project dialog tick **Remote (SSH) project**, then turn off **Keep a
+   local copy** (it is on by default). The Local location disappears.
+2. Connect, browse to the host folder and name the project as usual.
+3. **New**: after Create, Tabtivity connects, sets up the new host folder
+   (the starter files and `git init`, as chosen in the dialog; nothing already
+   there is overwritten), and only then opens the agent tab.
+   If that setup fails, the dialog stays open on **Retry host setup**.
+   **Import → GitHub/GitLab**: one terminal tab on the host runs `git clone`
+   with the host's own git credentials. **Import a folder** registers the host
+   folder in place.
+4. The pill's hover card shows a **Host only** tag beside SSH. An HPC-tagged
+   host gets a warning line in the dialog; **Auto-connect on launch** is
+   pre-ticked only when the connect needs no password and no VPN.
+
+Where things run:
+
+- The file panel shows the host's tree only: no Local/Remote switch, no sync
+  rows. While disconnected it shows a Connect prompt, nothing cached.
+- Every shell, agent, run and build tab runs on the host. The tab badge lists
+  the project's machines with no Local row; the `+` menu has no local-model,
+  API-key or cloud-session rows. Agents use the host login's own CLI config.
+- Search, Ctrl+P quick open and the context-file picker search the host
+  while connected (an HPC host asks first).
+- Git (commit, push, branches, worktrees, Publish…) runs on the host.
+- TeX **Compile** saves, then runs `latexmk` in a build tab on the host; the
+  PDF tab opens once the build writes it.
+- The phone lists the host tabs, starts agents on the host and reads the
+  files under ☰ Files, while the desktop is connected.
+
+To bring a file to this computer, right-click it → **Download to…**. That
+is also the answer whenever something needs a local file: opening a host file
+in an app on this computer, dragging it out of the window, or opening a
+SQLite database.
+
+Not offered, because nothing exists locally: Git sync and file sync, workers
+with **Sync a copy** (only shared-filesystem workers), Show on disk, Move
+project…, Detach SSH host…, Repair scaffold, Open in IDE. Export packs the
+files straight from the host (only the settings while disconnected). A VM
+project works the same way: it is a remote-only project that Tabtivity boots.
 
 ## Extend a local project to a remote
 

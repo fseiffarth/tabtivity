@@ -1342,6 +1342,18 @@ and the host-aware variants, never inferred from path conventions.
   Byte-sync is opt-in per path from an explicit manifest and does **not** read
   `.gitignore`, so a pull is previewed and confirmed before it drags a big host
   tree down.
+- **Remote-only.** A remote project created with *Keep a local copy* off has no
+  mirror at all: `RemoteSpec.remote_only` (written by the backend from the
+  create request's top-level `remoteOnly`, never taken from the renderer's
+  spec) and `RemoteSpec::is_remote_only()`, which a VM project always is, with
+  `isHostPinned` as the frontend twin. `remote::local_copy_in` /
+  `remote_sync::mirror_dir_opt` answer `None` for it, connect mints no mirror,
+  and every engine that needs a local tree refuses with the
+  `{UPPER}_REMOTE_ONLY:` sentinel (spawn, byte-sync, lockstep, worker fan-out,
+  local run host, mirror relocation, local-tree export); the cockpit words it
+  through one mapper (`remoteOnlyRefusal`). Tabs, git, search, TeX builds and
+  the phone's tabs all run on the host; the file panel and viewers read over
+  SFTP with no Local side. Rationale: `docs/context/remote_projects.md`.
 - **Losses survive a relaunch.** Local-loss warnings are file-backed, not events:
   destructive background git or sync moves record through `services::local_loss`.
 - **Credentials.** Passwords are never persisted by default; the opt-in save

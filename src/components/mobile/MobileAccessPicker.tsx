@@ -135,7 +135,8 @@ export function MobileAccessPicker({
           </div>
           {host !== "local" && (
             <div className="context-menu-note">
-              {t(HOST_REACH_KEY[host])} <UntestedTag id="mobile-every-project-type" />
+              {t(HOST_REACH_KEY[host])}{" "}
+              {host === "remote_only" ? <UntestedTag id="mobile.hostReach.remoteOnly" /> : <UntestedTag id="mobile-every-project-type" />}
             </div>
           )}
           <button

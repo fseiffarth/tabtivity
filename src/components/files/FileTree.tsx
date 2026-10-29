@@ -1126,7 +1126,7 @@ export function FileTree({
     if (remoteListing && (external || !internalViewerFor(entry, disabledViewerSet))) {
       void showMessage({
         title: t("fileTree.hostFileExternalTitle"),
-        body: t("fileTree.hostFileExternalBody", { name: entry.name }),
+        body: <>{t("fileTree.hostFileExternalBody", { name: entry.name })} <UntestedTag id="fileTree.hostFileExternalTitle" /></>,
       });
       return;
     }
@@ -2699,6 +2699,7 @@ export function FileTree({
                   </button>
                 </span>
               )}
+              {hostPinned && <UntestedTag id="fileTree.hostSearch" />}
             </div>
           )}
         </div>

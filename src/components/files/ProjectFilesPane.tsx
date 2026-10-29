@@ -460,6 +460,7 @@ function BoxRootSection({
         <div className="file-tree-empty" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
           <div>
             {disconnectedLine(t, remoteSshState, pinned ? project : null)}
+            {pinned && remoteSshState !== "connecting" && <UntestedTag id="projectFilesPane.disconnectedHostOnly" />}
           </div>
           {remoteSshState !== "connecting" && (
             <button
@@ -951,7 +952,10 @@ export function ProjectFilesPane({
             if (isRemoteProject && (source === "remote" || pinned) && remoteBlocked) {
               return (
                 <div className="file-tree-empty" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-                  <div>{disconnectedLine(t, remoteSshState, pinned ? project : null)}</div>
+                  <div>
+                    {disconnectedLine(t, remoteSshState, pinned ? project : null)}
+                    {pinned && remoteSshState !== "connecting" && <UntestedTag id="projectFilesPane.disconnectedHostOnly" />}
+                  </div>
                   {remoteSshState !== "connecting" && projectId && (
                     <button
                       type="button"
