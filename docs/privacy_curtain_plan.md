@@ -1,6 +1,6 @@
 # Privacy curtain: hide the other windows while presenting
 
-*Status: built 2026-10-27 (uncommitted), never run live. Deviations from
+*Status: built 2026-10-27, landed on develop `5d2b1293`, never run live. Deviations from
 the plan are in "As built" below.*
 
 ## Why

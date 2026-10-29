@@ -2,7 +2,8 @@
 
 *Status: plan, 2026-10-24, reviewed the same day (see the last section).
 Phase 2 (remote-host part) of `docs/mobile_every_project_type_plan.md`.
-Nothing built.*
+Landed on develop 2026-10-24 (`d29097fa` through `caf2260a`), never run live;
+handoff: `docs/mobile_remote_host_tabs_handoff.md`.*
 
 ## Why
 
