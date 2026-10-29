@@ -196,6 +196,8 @@ export const UNTESTED = {
   "yamlGrid.1": { area: "embed", what: "YamlGrid · Card view of an empty YAML document" },
   "yamlGrid.2": { area: "embed", what: "YamlGrid · Card view's breadcrumb bar" },
   "tableView.selection": { area: "embed", what: "Table viewer · select cells, rows (row number) and columns (header name): click, Shift+click, drag, arrows, Ctrl+A, Ctrl+C copies as TSV, Esc clears; header ⇅ sorts" },
+  "tex.compileOnHostTab": { area: "embed", what: "Remote-only or VM project · TeX Compile opens a latexmk build tab on the host (replaced on the next Compile) and the PDF tab opens once the build writes it; no hover preview or compiler options" },
+  "fileTree.sqliteHostOnly": { area: "embed", what: "A SQLite file on the host (remote-only/VM, or the Remote side of a remote project) · the viewer says it opens only local files and points at Download to…" },
 
   // --- files — Project files, tree and git --------------------------
   "fileBrowser.1": { area: "files", what: "FileBrowser · New Presentation" },
@@ -245,6 +247,10 @@ export const UNTESTED = {
   "projectSettings.treeGrouping": { area: "files", what: "ProjectFilesSettings · Tree Grouping" },
   "remarksPane.1": { area: "files", what: "RemarksPane · Next remark" },
   "renameDialog.1": { area: "files", what: "RenameDialog · {t(isDir ? \"fileTree.renameFolderTitle\" : \"fileTree.renameFileTitle\")}" },
+  "projectFilesPane.disconnectedHostOnly": { area: "files", what: "Remote-only or VM project, disconnected · the file panel shows a Connect prompt saying the files live only on the host, with no Local copy to browse" },
+  "fileTree.hostFileExternalTitle": { area: "files", what: "Host file list (remote-only/VM, or the Remote side of a remote project) · Shift-opening a file, or opening one with no built-in viewer, explains it is on the host and points at Download to… instead of launching an app; Ctrl-dragging a file out of the window does nothing" },
+  "sidePanelViews.pinned": { area: "files", what: "Remote-only or VM project · the side panel and edge rail offer no Diverged view, no Local/Remote switch, no ⧉ and no sync row; the tree has no ↓/↑ sync slots" },
+  "fileTree.hostSearch": { area: "files", what: "Remote-only project · file-tree search (name and content, folder scope), Ctrl+P quick open and the context-file picker search the host while connected; an HPC-tagged host asks first" },
 
   // --- header — The header cluster: machines, VPN, dev build --------
   "devBuild.title": { area: "header", what: "DevBuildIndicator · Dev build", tested: "2026-09-20" },
@@ -793,6 +799,9 @@ export const UNTESTED = {
   "mobile.voice.handsFree": { area: "mobile", what: "Terminal · Focus menu → Hands-free: dictate, pause, a chime and a tappable \"Sending…\" line, then the prompt is sent; saying \"stop\" or tapping the line in that window keeps it unsent. The answer is read (with read-aloud on), a tap on \"Reading the answer…\" stops the voice while the agent goes on, and the mic opens again once the turn is over — not while the agent still runs tools" },
   "mobile.voice.handsFreeQuestion": { area: "mobile", what: "Terminal · Focus with Hands-free and read-aloud on: a question the agent asks is read out with its numbered rows, and saying \"two\" / \"option two\" / \"die Zweite\" picks that row as a tap would" },
   "mobile.windowsTerminalsNote": { area: "mobile", what: "MobileSettings · On Windows the phone cannot open this computer's terminals or agent tabs: they attach thr…" },
+  "mobile.newTab.remoteOnly": { area: "mobile", what: "NewTabSheet · remote-only project: Runs on lists its machines alone (no Desktop row), the primary preselected (else the first connected machine when no primary is listed); nothing starts while none is connected (connect hint); no shell/worktree/cloud/local-model/API-key/sign-in/send-a-file rows; with no window the 'needs the desktop window' line" },
+  "mobile.project.remoteOnly": { area: "mobile", what: "Project · remote-only project: header line 'everything runs on the remote host' (own × flag), no-folder line pointing at ☰ Files, no one-tap ＋ quick create and no ★ default" },
+  "mobile.hostReach.remoteOnly": { area: "mobile", what: "Phone access picker / file panel phone button / Settings → Mobile row: a remote-only project's reach line (host tabs and host files only)" },
 
   // --- monitoring — System monitor ----------------------------------
   "systemMonitorPane.1": { area: "monitoring", what: "SystemMonitorPane · Logged in" },
@@ -864,6 +873,12 @@ export const UNTESTED = {
   "transfer.import": { area: "projects", what: "ProjectImportBundleDialog · Import project file…" },
   "transfer.agentHistory": { area: "projects", what: "Export/Import project · agent conversations travel (Claude, Codex, Copilot, OpenCode, Gemini, … stores; databases stripped to conversation tables; folders re-pointed)" },
   "transfer.hostCopy": { area: "projects", what: "Export project (remote) · pack the files from the host's copy over SSH" },
+  "projectDialog.keepLocalCopyTitle": { area: "projects", what: "ProjectDialog · Keep a local copy off = remote-only project: no Local location; a New connects, sets up the host folder (scaffold + git init) and only then opens its agent tab, a failed setup retries alone; the auto-connect card is pre-ticked only for a password-less, VPN-less, non-HPC sign-in; an HPC host gets a warning line" },
+  "projectDialog.cloneOnHostTab": { area: "projects", what: "Import → clone with Keep a local copy off · <browsed>/<name> is made empty on the host and one host terminal tab runs git clone --progress <url> ." },
+  "projectType.tagRemoteOnly": { area: "projects", what: "Remote-only project · a Host only tag beside SSH in the pill hover card, naming the host" },
+  "pill.hostPinnedMenu": { area: "projects", what: "Remote-only or VM project · the pill menu has no Show on disk, Move project…, Detach SSH host…, Repair scaffold or Open in IDE (nor the file panel's IDE button/rows); Archive says nothing exists locally; Publish… and Move to provider… run on the host with no side choice" },
+  "transfer.remoteOnly": { area: "projects", what: "Remote-only project · Export packs the tree from the host only (settings alone while disconnected); importing its bundle asks for no mirror folder" },
+  "remoteMachines.syncCopyRemoteOnly": { area: "projects", what: "Remote-only project · Remote machines: Sync a copy is disabled with the reason, in the add form and on shared workers" },
 
   // --- skills — The skills library ----------------------------------
   "skillsLibrary.overlayTitle": { area: "skills", what: "ModelsOverlay · Skills tab (the machine-level Skills Library)" },
@@ -883,6 +898,7 @@ export const UNTESTED = {
   "tabLocality.pinnedHostTitle": { area: "tabs", what: "VM or remote-only project · a tab's ☁ locality badge (and the file viewer's Run: picker) opens straight on the machine list, with no Local (mirror) row and no way back to one" },
   "agentLocationSwitch.1": { area: "tabs", what: "Remote project · a Claude tab's locality badge moved Local ⇄ host (or host ⇄ worker): the CLI restarts there and resumes the same conversation, a later switch back resumes it with everything said on the other side" },
   "newTabMenu.chooseMachine": { area: "tabs", what: "Remote project \"+\" menu · ▾ beside each agent row starts it straight on the local mirror, the primary or a worker; hovering the row opens the list (main bar and popouts)" },
+  "tabLocality.syncedCopyPinned": { area: "tabs", what: "Tab badge / + ▾ machine list: on a remote-only project a synced-copy worker is offered disabled ('sync off', new pinned tooltip); a shared-filesystem worker stays runnable" },
 
   // --- todo — The to-do board ---------------------------------------
   "todo.overlayTitle": { area: "todo", what: "TodoOverlay · To-do board" },

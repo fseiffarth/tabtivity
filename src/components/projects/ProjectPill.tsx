@@ -2607,7 +2607,11 @@ export function ProjectPill({
               <> {t("pill.archiveRemoteNotTouchedPre")} <strong>{t("pill.notWord")}</strong> {t("pill.archiveRemoteNotTouchedPost")}</>
             )}
           </p>
-          {hostPinned && <p className="settings-help">{t("pill.archiveRemoteOnlyLine")}</p>}
+          {hostPinned && (
+            <p className="settings-help">
+              {t("pill.archiveRemoteOnlyLine")} <UntestedTag id="pill.hostPinnedMenu" />
+            </p>
+          )}
         </AsyncConfirmDialog>
       )}
 

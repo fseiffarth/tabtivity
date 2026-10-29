@@ -1536,7 +1536,8 @@ untested tag until a VM has actually booted on this machine).
   teardown on deactivate (container rule) / exit, archive/restore/delete move
   the VM state dir, sandbox↔VM mutual exclusion both ways, the
   **no-local-fallback spawn guard** (`vm_spawn_refusal`, `TABTIVITY_VM_DOWN`
-  sentinel), frontend locality pinning (`effectiveTabLocation` `vmProject`),
+  sentinel; since G.27 `launch_prep::pinned_spawn_refusal`), frontend locality
+  pinning (`effectiveTabLocation` `vmProject`, since G.27 `hostPinned`),
   and the "Download to…" size-confirmed SFTP exit in the file tree.
 - [x] Phase 3 — `bake-base.sh` build-tab command (provisioning boot streams
   the serial console into the tab; converts to `tabtivity-base-1.qcow2`).
@@ -1558,9 +1559,8 @@ untested tag until a VM has actually booted on this machine).
   disk space — carries no button, only the doctor's sentence. Untested live.
 - [ ] Frontend follow-ups — a `TABTIVITY_VM_DOWN` spawn error currently renders
   as terminal text; turn it into a "Boot VM" placeholder action (like
-  `RemotePaneHold`). The locality *badges* (`TabLocalityBadges`) still label a
-  VM project's agent tabs with the per-kind default; the spawn path is pinned,
-  only the glyph can mislabel. Surface the in-VM unpushed-commit count in the
+  `RemotePaneHold`). (The locality badges' per-kind default on VM tabs is
+  fixed by G.27: badge, menu and hover card read the pin.) Surface the in-VM unpushed-commit count in the
   pill (the uncalled `vm_unpushed_commits` command was removed 2026-10-15;
   restore it from `2f0569c5` `commands/vm.rs` with its caller).
 - [ ] Phase 6 (deferred by plan) — macOS/Windows backends, snapshots,
@@ -1570,7 +1570,7 @@ untested tag until a VM has actually booted on this machine).
   cloud-init user-data/instance-id, seed-iso argv, df parse, ssh-opts registry
   scoping (`services::vm`); allowlist matching/composition, CONNECT parsing,
   real-socket deny/temp-allow/405 (`services::vm_proxy`); spawn-refusal matrix
-  (`commands::terminal`); download path traversal + name guards
+  (`services::launch_prep`); download path traversal + name guards
   (`commands::vm`); locality pinning (`src/__tests__/remote/VmTabLocation.test.ts`).
 - [ ] 🖐️ **Manual test (Phase 1 QA)** — fetch the base image, create a VM
   project, watch it boot, ssh lamp green, open a shell tab (lands in
@@ -1709,3 +1709,200 @@ untested tag until a VM has actually booted on this machine).
     - [ ] **Open:** the export has no cancel, and progress is emitted per 64
       files — a multi-gigabyte tree is a long modal with a counter and no way
       out but closing the window.
+
+### G.27 — Remote-only projects (`docs/remote_only_projects_plan.md`)
+
+Implemented 2026-10-29 on the `ro-*` branches (A1–A11, A13; A12, the
+conversion, in progress), **nothing live-tested**. A remote project created
+with **Keep a local copy** off has no mirror: tabs, git, search and TeX builds
+run on the host, files are read over SFTP, nothing syncs. A VM project is
+remote-only + boot. Rationale: `docs/context/remote_projects.md` § Remote-only;
+step record: `docs/remote_only_projects_handoff.md`.
+
+- [x] 🤖 Automated tests (A1, engine contract) — `local_copy_in_resolves_per_posture`
+  (`services/remote.rs`), the spec round-trip, the run-host and agent-move
+  refusals, `a_remote_only_local_spawn_is_refused_with_its_sentinel` and
+  `prepare_refuses_a_pinned_spawn_before_the_mirror_step` (`launch_prep`),
+  `a_renderer_sent_remote_only_is_never_stored` (`tests/projects_commands.rs`).
+- [x] 🤖 Automated tests (A2, cockpit contract) — `tabLocality.fixture.json`
+  `pinned` rows read by `MobileTabLocality.test.ts`, `MobileTabReach.test.ts`
+  and `the_tab_locality_rule_matches_the_windows_table`; `HostPinnedLocality.test.tsx`.
+- [x] 🤖 Automated tests (A3, sync off + host lockstep hardening) —
+  `every_sync_command_checks_the_posture` (`commands/sync.rs`),
+  `a_remote_only_project_refuses_the_workspace_move` (`hpc_ws.rs`),
+  `a_worker_patch_cannot_make_a_synced_copy_of_a_remote_only_project`,
+  `the_batched_host_scripts_turn_the_diff_drivers_off` (`git_peer`),
+  `a_host_git_too_old_to_turn_hooks_off_refuses_hook_verbs`.
+- [x] 🤖 Automated tests (A4, git on the host) —
+  `every_host_git_call_goes_through_the_hardened_runner`,
+  `a_stale_default_mirror_is_not_a_remote_only_projects_repo` (`git_publish.rs`),
+  `a_host_git_call_is_bounded_on_the_host_too`, `the_host_create_scripts_run_no_git_of_their_own`,
+  `a_provider_command_is_bounded`.
+- [x] 🤖 Automated tests (A5, local-tree readers + export) —
+  `a_remote_only_project_travels_without_a_local_tree` (`tests/projects_commands.rs`),
+  `a_remote_only_project_refuses_mirror_relocation`,
+  `the_mail_reader_mirror_flag_follows_the_posture_and_fails_closed` (`commands/vm.rs`).
+- [x] 🤖 Automated tests (A6, host search + quick open) — `services/remote/host_search.rs`
+  (scripts, `rel_root`, HPC refusal, parsers), `commands/search.rs`,
+  `FileTreeSearch.test.tsx`, `HostPinnedFilePanel.test.tsx`.
+- [x] 🤖 Automated tests (A7, host creation + init) — `services/remote/remote_scaffold.rs`,
+  `a_remote_only_project_keeps_nothing_local` (`tests/projects_commands.rs`).
+- [x] 🤖 Automated tests (A8, phone) — `projectHostReach.fixture.json` remote-only
+  rows (`the_project_host_table_matches_the_windows`, `MobileTabReach.test.ts`),
+  `the_pin_matches_the_specs_posture`, `a_remote_only_project_runs_everything_on_its_host`,
+  `a_remote_only_project_starts_an_agent_on_a_listed_machine` (`mobile_control/host/tests.rs`),
+  `MobileNewTabSheet.test.tsx`, `MobileHostMachines.test.tsx`, `AgentMachineMenu.test.tsx`.
+- [x] 🤖 Automated tests (A9, creation dialog + pill) — `ProjectDialogRemoteOnly.test.tsx`,
+  `ProjectPillRemoteOnlyMenu.test.tsx`, `remote/RemoteOnlyWorkers.test.tsx`,
+  `ProjectTypeTags.test.ts`, `ProjectTransferDialogs.test.tsx`, `RemoteCreateFirstConnect.test.ts`.
+- [x] 🤖 Automated tests (A10, file panel) — `HostPinnedFilePanel.test.tsx`,
+  `SidePanelViews.test.ts`, `FileSourcePref.test.ts`.
+- [x] 🤖 Automated tests (A11, viewers + tabs) — `tabs/HostPinnedPanes.test.tsx`,
+  `tex/TexHostBuild.test.tsx`.
+- [ ] 🤖 Automated tests (A12, Remote ⇄ Remote-only conversion) — the preview
+  fingerprint and open-local-tab refusals, the VM refusal, the state-file
+  clears, the default-mirror move-out and its name suffix,
+  `set_remote_mirror_dir` without `keepLocalCopy` refusing; the pill rows'
+  counts, kept-folder path, `keepLocalCopy: true`, absent on VMs.
+- [ ] 🖐️ Manual test — create a **New** remote-only project (Remote (SSH) ticked, **Keep a local
+  copy** off) on a key-auth host: the dialog connects, the host folder gets
+  the starter files and a first commit, and only then the agent tab opens. No
+  folder appears under `<state_dir>/remote-projects/<id>/mirror`; the file
+  panel is the host's tree with no Local/Remote switch and no sync rows; the
+  hover card shows **Host only**. On an HPC-tagged host the dialog shows its
+  warning line.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Import → GitHub/GitLab with Keep a local copy off: one host terminal tab
+  runs `git clone --progress <url> .` into `<browsed>/<name>`, and the project
+  opens on the clone.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — open a shell and an agent tab: both run on the host. The tab badge shows ☁
+  and its menu lists only the machines (no Local row); the `+` menu has no
+  local-model, API-key or Cloud session rows. A synced-copy worker (if any)
+  is offered disabled.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — quit and relaunch: every tab reattaches (tmux) or resumes on the host, none
+  comes back local.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — drop the connection (pull the network): every pane holds on its Connect
+  placeholder, the file panel says the files live only on the host, nothing
+  freezes; Connect restores all of it.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — right-click a file and a folder → **Download to…** a local folder: the
+  copies land there. Shift-open a host file: the message points at Download
+  to… instead of launching an app; a host `.sqlite` says the same.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — commit and push from the git bar (runs on the host, host credentials);
+  content search and name search in the tree, Ctrl+P quick open and the
+  context-file picker all list the host's files.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — on the phone: the project lists its host tabs, ☰ Files reads the host's
+  files, and ＋ starts an agent on the host (no Desktop row; with the primary
+  offline nothing starts and the connect hint shows).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — a `.tex` file → **Compile**: a host build tab runs `latexmk`, the PDF tab
+  opens once it is written, and a second Compile replaces the build tab and
+  reloads the PDF.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — **Export project…** a remote-only project while connected (the files come
+  from the host) and import the bundle elsewhere: no mirror folder is asked
+  for or made.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — pill → **Stop keeping a local copy…** on a plain Remote project with
+  nothing unpushed: it becomes remote-only, and the mirror folder is kept at
+  the path the dialog reports (a default-location mirror moved out as
+  `<name> (local copy)`).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — pill → **Keep a local copy…** on a remote-only project: pick a folder,
+  lockstep pairs it from the host, and the project is a plain Remote again.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] **Open** (flagged in the handoff) — a tab saved at `host:<synced-copy
+  worker>` before the project became remote-only still spawns there on restore
+  (UI hides the worker; the backend spawn does not refuse it); hosts with git
+  < 2.9 refuse hooks-off host writes (fetch included) on every remote project;
+  D14's pre-ticked auto-connect on a key-auth host starts working only after
+  one manual connect records the key auth.

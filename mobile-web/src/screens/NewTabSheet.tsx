@@ -160,7 +160,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
       {creates && <p className="sheet-note">{t("mobile.newTab.note")}</p>}
       {creates && agentsOnly && <p className="sheet-note">{t("mobile.newTab.agentsOnly")}</p>}
       {creates && headless && !pinned && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
-      {creates && pinned && headless && <p className="sheet-note">{t("mobile.newTab.remoteOnlyNeedsWindow")}{isUntested("mobile.newTab.machine") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+      {creates && pinned && headless && <p className="sheet-note">{t("mobile.newTab.remoteOnlyNeedsWindow")}{isUntested("mobile.newTab.remoteOnly") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       <div className="create">
         {/* Every row that opens a tab is behind `creates`; the file row at the
             foot is not — on a host with no tmux it is the whole sheet. */}
@@ -212,7 +212,7 @@ function MachinePicker({ machines, value, here, onChange }: { machines: HostMach
   const offline = machines.some((row) => !row.connected);
   return <div className="new-tab-machine">
     <label>
-      <small>{t("mobile.newTab.runsOn")}{isUntested("mobile.newTab.machine") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
+      <small>{t("mobile.newTab.runsOn")}{(here ? isUntested("mobile.newTab.machine") : isUntested("mobile.newTab.remoteOnly")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
       <select value={value || (here ? "" : pinnedFallback(machines)?.id)} onChange={(event) => onChange(event.target.value)}>
         {here && <option value="">{t("mobile.newTab.thisComputer")}</option>}
         {machines.map((row) => <option key={row.id} value={row.id} disabled={!row.connected}>

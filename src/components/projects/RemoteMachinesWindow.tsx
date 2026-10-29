@@ -1139,7 +1139,11 @@ export function RemoteMachinesWindow({
                   ? t("remoteMachines.syncCopyDescOn")
                   : t("remoteMachines.syncCopyDescOff")}
               </p>
-              {noMirror && <p className="settings-help">{t("remoteMachines.syncCopyRemoteOnly")}</p>}
+              {noMirror && (
+                <p className="settings-help">
+                  {t("remoteMachines.syncCopyRemoteOnly")} <UntestedTag id="remoteMachines.syncCopyRemoteOnly" />
+                </p>
+              )}
 
               <label>
                 <span className="remote-machine-add-label">

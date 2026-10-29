@@ -1740,7 +1740,7 @@ export function ProjectFilesView({
           {/* Breaker: drop the switch onto its own row so it left-aligns with the
               pin/name (header padding edge) instead of trailing the tags. */}
           <span style={{ flexBasis: "100%", width: 0, height: 0 }} />
-          {!hostPinned && <FileSourceSwitch source={source} onChange={setSource} />}
+          {hostPinned ? <UntestedTag id="sidePanelViews.pinned" /> : <FileSourceSwitch source={source} onChange={setSource} />}
           {/* Run-host picker — which REMOTE machine (primary or a worker) scripts
               and shells launched from this project run on, distinct from the source
               switch's read side. Deliberately absent on Local: there is only one
