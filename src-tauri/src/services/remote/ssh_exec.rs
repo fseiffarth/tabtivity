@@ -1065,6 +1065,12 @@ pub fn master_check_args(control_path: &std::path::Path) -> Result<Vec<String>, 
     ])
 }
 
+/// Tests: control paths [`master_alive`] answers yes for without an `ssh`,
+/// so a sidecar test can take a host create past its connection check. Each
+/// test adds its own tempdir's path, so tests never see each other's.
+#[cfg(test)]
+pub(crate) static TEST_LIVE_MASTERS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 /// Whether a ControlMaster answers on `control_path` within `limit` — the
 /// **strict** reading, for the phone sidecar, which acts on `true` by riding
 /// the master: anything short of the master saying yes (no `ssh`, a spawn
@@ -1072,6 +1078,10 @@ pub fn master_check_args(control_path: &std::path::Path) -> Result<Vec<String>, 
 /// [`control_master_alive`] is the opposite reading, for callers that act on
 /// `false` by deleting.
 pub fn master_alive(control_path: &std::path::Path, limit: std::time::Duration) -> bool {
+    #[cfg(test)]
+    if TEST_LIVE_MASTERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|path| path == control_path) {
+        return true;
+    }
     if cfg!(target_os = "windows") {
         return false;
     }

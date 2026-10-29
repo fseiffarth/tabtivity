@@ -6046,6 +6046,7 @@ export const dict: Dict = {
   "tabLocality.primary": "Primär",
   "tabLocality.syncOff": "Sync aus",
   "tabLocality.syncOffTitle": "Diese Maschine enthält keinen Code — aktiviere „Code automatisch synchronisieren“ oder gemeinsames Dateisystem in Remote-Maschinen…, um hier Skripte auszuführen. Die Synchronisation bleibt beim primären Host.",
+  "tabLocality.syncOffPinnedTitle": "Diese Maschine hält eine synchronisierte Kopie, und ein reines Remote-Projekt hat keine lokale Kopie, aus der sie gespeist wird – sie enthält also keinen Code. Hier laufen Tabs nur auf einer Maschine mit dem gemeinsamen Dateisystem des primären Hosts.",
   "tabLocality.runHostTitle": "Läuft auf: {label}",
   "tabLocality.runHostSubtitle": "Wo Run/Debug und von diesem Projekt gestartete Shells laufen — die Maschine, nicht von welcher Seite Dateien gelesen werden.",
   "tabLocality.runLabel": "Ausführen: {label}",

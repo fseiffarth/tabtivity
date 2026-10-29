@@ -1542,12 +1542,18 @@ fn a_machine_is_named_by_its_label_and_runnable_only_with_the_code() {
             worker(serde_json::json!({ "sync_code": false, "shared_fs": true })),
         ],
         persist: true,
+        pinned: false,
     };
     let machines: Vec<_> = hosts.machines().into_iter().map(|m| (m.label, m.runnable)).collect();
     assert_eq!(
         machines,
         [("gpu-1".to_string(), true), ("gpu-2".to_string(), true), ("w2.example".to_string(), false), ("w2.example".to_string(), true)]
     );
+    // A remote-only project has no mirror to feed a synced copy (D4): only
+    // the primary and a worker on its folder hold the code.
+    let pinned = ProjectHosts { pinned: true, ..hosts };
+    let runnable: Vec<_> = pinned.machines().into_iter().map(|m| m.runnable).collect();
+    assert_eq!(runnable, [true, false, false, true]);
 }
 
 /// Plan step 2: a remote project's host tabs are listed off the session
@@ -1669,8 +1675,8 @@ fn a_remote_only_project_runs_everything_on_its_host() {
     assert_eq!(project.host, ProjectHost::Remote);
     assert_eq!(project.create, CreateVerdict::Agents, "agents on its machines");
     assert_eq!(project.primary_host.as_ref().map(|spec| spec.host.as_str()), Some("primary.example"));
-    let machines: Vec<_> = project.machines.iter().map(|m| m.location.as_str()).collect();
-    assert_eq!(machines, ["remote", "host:w1"]);
+    let machines: Vec<_> = project.machines.iter().map(|m| (m.location.as_str(), m.runnable)).collect();
+    assert_eq!(machines, [("remote", true), ("host:w1", false)], "w1 keeps a synced copy, which nothing feeds (D4)");
     let mut labels: Vec<_> = project.tabs.iter().map(|t| t.public.label.as_str()).collect();
     labels.sort_unstable();
     assert_eq!(labels, ["host shell", "local, no mirror", "on primary", "on the worker", "saved local", "shell saved local"]);

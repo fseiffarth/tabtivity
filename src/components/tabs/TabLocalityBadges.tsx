@@ -301,12 +301,12 @@ export function LocalityMenu({
                 `host:${h.id}`,
                 <CloudIcon />,
                 h.label || h.host || h.id,
-                workerRunnable(h)
+                workerRunnable(h, pinned)
                   ? undefined
                   : {
                       disabled: true,
                       note: t("tabLocality.syncOff"),
-                      title: t("tabLocality.syncOffTitle"),
+                      title: t(pinned ? "tabLocality.syncOffPinnedTitle" : "tabLocality.syncOffTitle"),
                     },
               ),
             )}

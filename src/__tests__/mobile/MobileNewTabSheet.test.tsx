@@ -360,6 +360,21 @@ describe("Mobile ＋ sheet — a remote-only project", () => {
     expect(onPick).toHaveBeenCalledWith("agent", agents[0], undefined, { host: "m-w1" });
   });
 
+  it("starts on the machine it shows when no primary is listed", async () => {
+    // The picker and the tiles read one fallback: a shown row is never one
+    // the agent would not start on (picking it again fires no change).
+    serve({ ...machines(true), hosts: [
+      { id: "m-w0", label: "cold", primary: false, connected: false },
+      { id: "m-w1", label: "gpu-1", primary: false, connected: true },
+    ] });
+    const onPick = sheet();
+    const picker = await screen.findByRole("combobox", { name: /^Runs on/ }) as HTMLSelectElement;
+    expect(picker.value).toBe("m-w1");
+    expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+    expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { host: "m-w1" });
+  });
+
   it("starts nothing with no window, and says the window has to be open", async () => {
     serve(machines(true));
     sheet(vi.fn(), true);

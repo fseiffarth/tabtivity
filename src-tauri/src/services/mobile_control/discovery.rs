@@ -546,7 +546,9 @@ pub struct HostMachine {
     pub primary: bool,
     /// The machine holds the code: the primary always; a worker that shares
     /// the primary's folder or keeps a synced copy (the window's
-    /// `workerRunnable`). A worker with neither has no tree to run in.
+    /// `workerRunnable`). A worker with neither has no tree to run in, and
+    /// neither has a synced copy of a remote-only project: it is fed from
+    /// the mirror, which that project does not have (D4).
     pub runnable: bool,
 }
 
@@ -605,6 +607,10 @@ struct ProjectHosts {
     /// is not `false` (`persistSessionsEnabled`); otherwise no host session
     /// exists for the name the tab was minted.
     persist: bool,
+    /// The project is remote-only ([`host_pinned`]): no mirror feeds a
+    /// synced-copy worker, so only one sharing the primary's folder holds
+    /// the code (D4).
+    pinned: bool,
 }
 
 impl ProjectHosts {
@@ -621,6 +627,7 @@ impl ProjectHosts {
                 .map(crate::services::remote::compute_hosts_from_value)
                 .unwrap_or_default(),
             persist: remote.get("persist_sessions").and_then(Value::as_bool) != Some(false),
+            pinned: host_pinned(project),
         })
     }
 
@@ -644,7 +651,7 @@ impl ProjectHosts {
             spec: h.spec.clone(),
             label: label_of(&h.spec),
             primary: false,
-            runnable: h.shared_fs || h.sync_code,
+            runnable: h.shared_fs || (h.sync_code && !self.pinned),
         });
         primary.chain(workers).collect()
     }
