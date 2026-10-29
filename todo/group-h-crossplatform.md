@@ -19,6 +19,20 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
 - *Both:* the network pane's per-connection table (interfaces only; an
   explanatory warning is shown in the pane).
 
+- [ ] 🖐️ **Cross-platform install/model smoke test:** run the reusable
+  [cross-platform testing checklist](../docs/cross-platform-testing.md), starting
+  with every CLI's install/download buttons, Ollama install/upgrade, and local
+  model pull/pause/resume/load. Keep a separate run record for each OS/build;
+  leave results unchecked until tested live.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+
 30. **Windows support follow-ups.** Windows is past the compile stage (state
     paths, shell fallback, browser profiles, network detection, app-icon
     helpers, NSIS packaging, and a Windows CI package job all exist). Native
