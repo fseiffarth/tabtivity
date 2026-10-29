@@ -1010,13 +1010,6 @@
   box-shadow: var(--shadow-2);
 }
 
-/* A project name in a left-docked file viewer sits at the outer window edge.
-   Keep its card under that name, but grow it inward (to the right) instead of
-   centering it across the window border. */
-.project-pill-popup.anchor-start {
-  transform: translate(0, 6px);
-}
-
 .pill-popup-path {
   font-size: 11px;
   font-style: italic;
