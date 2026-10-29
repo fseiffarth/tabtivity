@@ -3347,6 +3347,20 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader.card-composer .terminal-reader-composer { border-top: none; padding: 8px 18px 18px; }
 .terminal-reader.card-composer .terminal-reader-input textarea { padding: 12px 72px 42px 14px; min-height: 108px; }
 .terminal-reader.card-composer .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
+/* The chips sit over the box's bottom padding; a long draft scrolls its lines
+   through that padding, so a strip in the box's own colour hides them there
+   (before the textarea in the DOM, so Send and the mic stay above it). */
+.terminal-reader.card-composer .terminal-reader-input::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  right: 14px;
+  bottom: 1px;
+  height: 42px;
+  background: var(--bg-input);
+  border-bottom-left-radius: 14px;
+  pointer-events: none;
+}
 .terminal-reader.card-composer .terminal-reader-send { right: 10px; bottom: 10px; }
 .terminal-reader.card-composer .terminal-reader-mic { right: 42px; bottom: 12px; }
 .terminal-reader-error {
