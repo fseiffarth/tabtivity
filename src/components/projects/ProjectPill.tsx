@@ -1829,7 +1829,7 @@ export function ProjectPill({
             )}
             {converts && !hostPinned && (
               <button
-                className="danger"
+                className="untested danger"
                 disabled={!primaryConnected}
                 onClick={() => {
                   setContextMenu(null);
@@ -1838,10 +1838,12 @@ export function ProjectPill({
                 title={t(primaryConnected ? "pill.stopLocalCopyMenuTitle" : "pill.stopLocalCopyNeedsConnection")}
               >
                 {t("pill.stopLocalCopyEllipsis")}
+                <UntestedTag id="pill.stopLocalCopy" />
               </button>
             )}
             {converts && hostPinned && (
               <button
+                className="untested"
                 disabled={!primaryConnected}
                 onClick={() => {
                   setContextMenu(null);
@@ -1850,6 +1852,7 @@ export function ProjectPill({
                 title={t(primaryConnected ? "pill.keepLocalCopyMenuTitle" : "pill.keepLocalCopyNeedsConnection")}
               >
                 {t("pill.keepLocalCopyEllipsis")}
+                <UntestedTag id="pill.keepLocalCopy" />
               </button>
             )}
             <button

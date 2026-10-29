@@ -750,6 +750,31 @@ pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Move the working copy `src` to the free name `dst` (its parent exists):
+/// `rename`, falling back to copy-then-remove only across drives/filesystems
+/// (EXDEV on Unix, ERROR_NOT_SAME_DEVICE on Windows). The copy carries `.git`
+/// and nested repos — it is a move of the tree, history included, and the
+/// source is removed right after; the duplicate-style [`copy_dir_all`] dropped
+/// both and then deleted them. `dst` is free, so any other rename failure (a
+/// file held open, a permission refusal) is reported as `could not move
+/// {what}: …` rather than turned into a duplicate tree. `rename` is
+/// `fs::rename` outside tests.
+fn move_fresh_tree(
+    src: &Path,
+    dst: &Path,
+    what: &str,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    match rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if crate::paths::is_cross_device(&e) => {
+            copy_tree_core(src, dst, true)?;
+            fs::remove_dir_all(src).map_err(|e| e.to_string())
+        }
+        Err(e) => Err(format!("could not move {what}: {e}")),
+    }
+}
+
 /// The ONE recursive tree-copy core behind both copiers ([`move_tree`]'s
 /// cross-device fallback and [`copy_dir_all`]).
 ///
@@ -3133,21 +3158,8 @@ pub fn move_remote_mirror_blocking(
 
     let old = crate::services::remote_sync::mirror_dir(&project_id);
     if old.exists() && old != new_root {
-        // A plain rename fails across drives/filesystems. Fall back to
-        // copy-then-remove for that case only; `new_root` is a free name, so any
-        // other failure (a file held open, a permission refusal) is reported
-        // rather than turned into a duplicate tree. The copy carries `.git`
-        // (and nested repos): it is a move of the working copy, history
-        // included, and the original is removed right after — the
-        // duplicate-style `copy_dir_all` dropped both, then deleted them.
-        match fs::rename(&old, &new_root) {
-            Ok(()) => {}
-            Err(e) if crate::paths::is_cross_device(&e) => {
-                copy_tree_core(&old, &new_root, true)?;
-                fs::remove_dir_all(&old).map_err(|e| e.to_string())?;
-            }
-            Err(e) => return Err(format!("could not move the mirror: {e}")),
-        }
+        // `new_root` is a free name; a cross-drive move keeps `.git`.
+        move_fresh_tree(&old, &new_root, "the mirror", |a, b| fs::rename(a, b))?;
     } else {
         fs::create_dir_all(&new_root).map_err(|e| e.to_string())?;
     }
@@ -4831,18 +4843,10 @@ pub fn import_project_blocking(mut req: ImportProjectRequest) -> Result<ProjectE
                 copy_dir_all(&source, &dest)?;
             } else {
                 fs::create_dir_all(projects_root()).map_err(|e| e.to_string())?;
-                // A plain rename fails across drives/filesystems (EXDEV on Unix,
-                // ERROR_NOT_SAME_DEVICE on Windows). Fall back to copy-then-remove
-                // for that case only; `dest` was checked absent above, so any other
-                // failure is reported rather than turned into a duplicate tree.
-                match fs::rename(&source, &dest) {
-                    Ok(()) => {}
-                    Err(e) if crate::paths::is_cross_device(&e) => {
-                        copy_dir_all(&source, &dest)?;
-                        fs::remove_dir_all(&source).map_err(|e| e.to_string())?;
-                    }
-                    Err(e) => return Err(format!("could not move the folder: {e}")),
-                }
+                // `dest` was checked absent above. A cross-drive move keeps the
+                // folder's `.git` (the duplicate-style copy used to drop it and
+                // then delete the source).
+                move_fresh_tree(&source, &dest, "the folder", |a, b| fs::rename(a, b))?;
             }
             dest
         }

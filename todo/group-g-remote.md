@@ -1712,8 +1712,8 @@ untested tag until a VM has actually booted on this machine).
 
 ### G.27 — Remote-only projects (`docs/remote_only_projects_plan.md`)
 
-Implemented 2026-10-29 on the `ro-*` branches (A1–A11, A13; A12, the
-conversion, in progress), **nothing live-tested**. A remote project created
+Implemented 2026-10-29 on the `ro-*` branches (A1–A13, A12 the
+conversion), **nothing live-tested**. A remote project created
 with **Keep a local copy** off has no mirror: tabs, git, search and TeX builds
 run on the host, files are read over SFTP, nothing syncs. A VM project is
 remote-only + boot. Rationale: `docs/context/remote_projects.md` § Remote-only;
@@ -1759,11 +1759,14 @@ step record: `docs/remote_only_projects_handoff.md`.
   `SidePanelViews.test.ts`, `FileSourcePref.test.ts`.
 - [x] 🤖 Automated tests (A11, viewers + tabs) — `tabs/HostPinnedPanes.test.tsx`,
   `tex/TexHostBuild.test.tsx`.
-- [ ] 🤖 Automated tests (A12, Remote ⇄ Remote-only conversion) — the preview
-  fingerprint and open-local-tab refusals, the VM refusal, the state-file
-  clears, the default-mirror move-out and its name suffix,
-  `set_remote_mirror_dir` without `keepLocalCopy` refusing; the pill rows'
-  counts, kept-folder path, `keepLocalCopy: true`, absent on VMs.
+- [x] 🤖 Automated tests (A12, Remote ⇄ Remote-only conversion) —
+  `commands/remote_unpair.rs` (refusals, VM both ways, tab rule, porcelain
+  parser, tips, kept destination + suffixes, move-out keeps `.git` and never
+  deletes, blockers, sync-edit count, tab pinning),
+  `a_remote_project_stops_and_resumes_keeping_a_local_copy` and
+  `an_explicit_mirror_stays_in_place_when_the_copy_is_dropped`
+  (`tests/projects_commands.rs`), `ProjectPillLocalCopy.test.tsx`;
+  `a_cross_device_move_keeps_git_and_nested_repos` (`commands/projects`).
 - [ ] 🖐️ Manual test — create a **New** remote-only project (Remote (SSH) ticked, **Keep a local
   copy** off) on a key-auth host: the dialog connects, the host folder gets
   the starter files and a first commit, and only then the agent tab opens. No

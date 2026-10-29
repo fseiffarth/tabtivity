@@ -81,6 +81,15 @@ project…, Detach SSH host…, Repair scaffold, Open in IDE. Export packs the
 files straight from the host (only the settings while disconnected). A VM
 project works the same way: it is a remote-only project that Tabtivity boots.
 
+To switch an existing project, right-click its pill while connected: on a
+plain remote project **Stop keeping a local copy…** shows what only the
+local copy holds (commits or changes the host lacks, unsent file-sync edits,
+tabs running on this computer) and is refused until that is empty; the old
+folder is kept (moved out of the app's state folder as `<name> (local copy)`
+when it lived there), never deleted. On a remote-only project **Keep a local
+copy…** picks a folder and git lockstep fills it from the host. Neither is
+offered on a VM project.
+
 ## Extend a local project to a remote
 
 1. Right-click the local project's pill → **Extend to remote…**.

@@ -877,6 +877,8 @@ export const UNTESTED = {
   "projectDialog.cloneOnHostTab": { area: "projects", what: "Import → clone with Keep a local copy off · <browsed>/<name> is made empty on the host and one host terminal tab runs git clone --progress <url> ." },
   "projectType.tagRemoteOnly": { area: "projects", what: "Remote-only project · a Host only tag beside SSH in the pill hover card, naming the host" },
   "pill.hostPinnedMenu": { area: "projects", what: "Remote-only or VM project · the pill menu has no Show on disk, Move project…, Detach SSH host…, Repair scaffold or Open in IDE (nor the file panel's IDE button/rows); Archive says nothing exists locally; Publish… and Move to provider… run on the host with no side choice" },
+  "pill.stopLocalCopy": { area: "projects", what: "Remote project · Stop keeping a local copy…: preview of commits/changes/byte-sync edits/local tabs the host lacks blocks the confirm; on confirm the project turns remote-only and the old mirror is kept (moved out of the state folder as '<name> (local copy)' when it lived there), path shown" },
+  "pill.keepLocalCopy": { area: "projects", what: "Remote-only project · Keep a local copy…: pick a folder (projects-ssh/<name> by default), the project keeps a mirror again and git lockstep pairs it from the host" },
   "transfer.remoteOnly": { area: "projects", what: "Remote-only project · Export packs the tree from the host only (settings alone while disconnected); importing its bundle asks for no mirror folder" },
   "remoteMachines.syncCopyRemoteOnly": { area: "projects", what: "Remote-only project · Remote machines: Sync a copy is disabled with the reason, in the add form and on shared workers" },
 

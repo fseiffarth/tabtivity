@@ -241,6 +241,41 @@ fn the_move_copy_carries_git_state_verbatim() {
     assert!(dst.join(".git/HEAD").exists());
 }
 
+/// A cross-drive "move" (import in move mode, "Move project…" of a mirror)
+/// falls back to copy-then-remove. That copy used to be the duplicate-style
+/// `copy_dir_all`, which drops `.git` and nested repos — and the source was
+/// deleted right after, so the project's history was gone.
+#[test]
+fn a_cross_device_move_keeps_git_and_nested_repos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(src.join(".git")).unwrap();
+    std::fs::write(src.join(".git").join("HEAD"), b"ref: refs/heads/main").unwrap();
+    std::fs::create_dir_all(src.join("vendor").join(".git")).unwrap();
+    std::fs::write(src.join("vendor").join("lib.txt"), b"v").unwrap();
+    std::fs::write(src.join("a.txt"), b"x").unwrap();
+
+    let exdev = |_: &std::path::Path, _: &std::path::Path| {
+        Err(std::io::Error::new(std::io::ErrorKind::CrossesDevices, "cross-device"))
+    };
+    let dst = tmp.path().join("dst");
+    move_fresh_tree(&src, &dst, "the folder", exdev).unwrap();
+
+    assert!(!src.exists(), "the source is removed once the copy completed");
+    assert!(dst.join(".git").join("HEAD").exists(), "the history travels");
+    assert!(dst.join("vendor").join("lib.txt").exists(), "a nested repo travels");
+    assert!(dst.join("a.txt").exists());
+
+    // Any other rename failure is reported and copies nothing.
+    let denied = |_: &std::path::Path, _: &std::path::Path| {
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    };
+    let other = tmp.path().join("other");
+    let err = move_fresh_tree(&dst, &other, "the folder", denied).unwrap_err();
+    assert!(err.starts_with("could not move the folder:"), "{err}");
+    assert!(!other.exists() && dst.join("a.txt").exists());
+}
+
 /// §9.4: symlinks are recreated as links (never followed), and a DANGLING
 /// one — a stale venv/node `bin` pointer is the ordinary case — is copied
 /// rather than erroring out the whole move partway, which used to strand a
