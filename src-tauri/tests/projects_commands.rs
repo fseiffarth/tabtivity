@@ -615,6 +615,149 @@ fn a_remote_only_project_keeps_nothing_local() {
     });
 }
 
+/// Rewrite one registry entry in `projects.json` directly (the test needs
+/// shapes no command writes on purpose: a default-location mirror, a stale
+/// `"local"` run host).
+fn edit_registry_entry(id: &str, edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>)) {
+    let path = app_lib::storage::projects_path();
+    let mut list: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).expect("projects.json")).unwrap();
+    let entry = list
+        .as_array_mut()
+        .expect("a list")
+        .iter_mut()
+        .find(|e| e["id"] == serde_json::json!(id))
+        .expect("entry")
+        .as_object_mut()
+        .unwrap();
+    edit(entry);
+    fs::write(&path, serde_json::to_string_pretty(&list).unwrap()).unwrap();
+}
+
+/// E8: a plain Remote project whose mirror sits at the default location
+/// inside the state dir stops keeping it. The registry and `project.json` read
+/// remote-only, `mirror` and the `"local"` run host are gone, `sync.json` and
+/// `git_peer.json` are cleared while `local_loss.json` survives, and the folder
+/// — `.git` included — is moved out to the projects-ssh root as
+/// `<name> (local copy)`, never deleted. Then the reverse: without
+/// `keepLocalCopy` a remote-only project is refused; with it the mirror is
+/// recorded and `remote_only` removed in both copies.
+#[test]
+fn a_remote_project_stops_and_resumes_keeping_a_local_copy() {
+    use app_lib::commands::remote_unpair::{apply_unpair_blocking, move_out_blocking};
+    with_isolated_home("unpair-home", |_| {
+        let mirror_parent = tempdir_in_test_projects("unpair-mirror");
+        let entry = create_project_blocking(CreateProjectRequest {
+            name: "Paired".to_string(),
+            directory: String::new(),
+            description: None,
+            git_type: Some("none".to_string()),
+            git_provider: None,
+            skip_scaffold: true,
+            remote: Some(remote_only_spec("/home/alice/paired")),
+            remote_only: false,
+            mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
+            vm: None,
+        })
+        .expect("create remote project");
+        let id = entry.id.clone();
+        // The old default location, as a project from before configurable
+        // mirrors has it.
+        edit_registry_entry(&id, |e| {
+            e.remove("mirror");
+            e.insert("run_host".into(), serde_json::json!("local"));
+        });
+        let default_mirror = app_lib::services::remote_sync::mirror_dir(&id);
+        assert!(default_mirror.starts_with(app_lib::storage::state_dir()), "{}", default_mirror.display());
+        fs::create_dir_all(default_mirror.join(".git")).unwrap();
+        fs::write(default_mirror.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::write(default_mirror.join("notes.txt"), "only here").unwrap();
+        let manifest = app_lib::services::remote_sync::manifest_path(&id);
+        let peer_state = app_lib::services::git_peer::state_path(&id);
+        let loss = app_lib::services::local_loss::log_path(&id);
+        for f in [&manifest, &peer_state, &loss] {
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(f, "{}").unwrap();
+        }
+
+        // A mirror that is not the one the preview saw is refused.
+        let elsewhere = mirror_parent.path().join("elsewhere");
+        let err = apply_unpair_blocking(&id, &elsewhere).err().expect("refused");
+        assert!(err.contains("_MIRROR_CHANGED:"), "{err}");
+
+        let plan = apply_unpair_blocking(&id, &default_mirror).expect("unpair");
+        let outcome = move_out_blocking(plan);
+        assert!(outcome.moved, "{:?}", outcome.move_error);
+        let kept = PathBuf::from(&outcome.kept_at);
+        assert_eq!(kept.parent(), Some(app_lib::paths::projects_ssh_root().as_path()));
+        assert!(kept.file_name().unwrap().to_string_lossy().ends_with(" (local copy)"), "{}", kept.display());
+        assert_eq!(fs::read_to_string(kept.join("notes.txt")).unwrap(), "only here");
+        assert!(kept.join(".git").join("HEAD").is_file());
+        assert!(!default_mirror.exists(), "nothing left where mirror_dir would find it");
+        assert!(!manifest.exists() && !peer_state.exists(), "host-bound state cleared");
+        assert!(loss.exists(), "local_loss.json survives");
+
+        let stored = get_projects().unwrap().into_iter().find(|p| p.id == id).unwrap();
+        assert_eq!(stored.extra["remote"]["remote_only"], serde_json::json!(true));
+        assert_eq!(stored.extra["remote"]["host"], serde_json::json!("nonexistent.invalid"), "the spec is kept");
+        assert!(!stored.extra.contains_key("mirror") && !stored.extra.contains_key("run_host"));
+        let display: serde_json::Value = serde_json::from_str(&fs::read_to_string(&stored.local_file).unwrap()).unwrap();
+        assert_eq!(display["remote"]["remote_only"], serde_json::json!(true), "{display}");
+        assert!(display.get("mirror").is_none_or(|m| m.is_null()), "{display}");
+        assert_eq!(app_lib::services::remote_sync::mirror_dir_opt(&id), None);
+        // A second conversion is refused.
+        assert!(apply_unpair_blocking(&id, &default_mirror).is_err());
+
+        // The reverse.
+        use app_lib::commands::projects::set_remote_mirror_dir_blocking;
+        let target = mirror_parent.path().join("back");
+        let err = set_remote_mirror_dir_blocking(id.clone(), target.to_string_lossy().to_string(), false).unwrap_err();
+        assert!(err.contains("_REMOTE_ONLY:"), "{err}");
+        assert!(!target.exists(), "a refusal mints no folder");
+        let inside = app_lib::storage::state_dir().join("x");
+        assert!(set_remote_mirror_dir_blocking(id.clone(), inside.to_string_lossy().to_string(), true).is_err());
+        let resolved = set_remote_mirror_dir_blocking(id.clone(), target.to_string_lossy().to_string(), true).expect("keep a local copy");
+        assert!(target.is_dir());
+        let stored = get_projects().unwrap().into_iter().find(|p| p.id == id).unwrap();
+        assert!(stored.extra["remote"].get("remote_only").is_none(), "{}", stored.extra["remote"]);
+        assert_eq!(stored.extra["mirror"], serde_json::json!(resolved));
+        let display: serde_json::Value = serde_json::from_str(&fs::read_to_string(&stored.local_file).unwrap()).unwrap();
+        assert!(display["remote"].get("remote_only").is_none_or(|v| v.is_null()), "{display}");
+        assert_eq!(display["mirror"], serde_json::json!(resolved));
+        assert_eq!(app_lib::services::remote_sync::mirror_dir_opt(&id), Some(target.clone()));
+    });
+}
+
+/// An explicit-path mirror stays where it is on the conversion, now a plain
+/// folder the project no longer names.
+#[test]
+fn an_explicit_mirror_stays_in_place_when_the_copy_is_dropped() {
+    use app_lib::commands::remote_unpair::{apply_unpair_blocking, move_out_blocking};
+    with_isolated_home("unpair-explicit-home", |_| {
+        let mirror_parent = tempdir_in_test_projects("unpair-explicit-mirror");
+        let entry = create_project_blocking(CreateProjectRequest {
+            name: "Explicit".to_string(),
+            directory: String::new(),
+            description: None,
+            git_type: Some("none".to_string()),
+            git_provider: None,
+            skip_scaffold: true,
+            remote: Some(remote_only_spec("/home/alice/explicit")),
+            remote_only: false,
+            mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
+            vm: None,
+        })
+        .expect("create remote project");
+        let mirror = app_lib::services::remote_sync::mirror_dir(&entry.id);
+        assert!(mirror.starts_with(mirror_parent.path()));
+        fs::create_dir_all(&mirror).unwrap();
+        fs::write(mirror.join("keep.txt"), "x").unwrap();
+        let outcome = move_out_blocking(apply_unpair_blocking(&entry.id, &mirror).expect("unpair"));
+        assert!(!outcome.moved && outcome.move_error.is_none());
+        assert_eq!(PathBuf::from(&outcome.kept_at), mirror);
+        assert_eq!(fs::read_to_string(mirror.join("keep.txt")).unwrap(), "x");
+    });
+}
+
 #[test]
 fn import_project_copy_creates_missing_scaffolds_without_overwriting_existing_ones() {
     with_isolated_home("copy-home", |_| {

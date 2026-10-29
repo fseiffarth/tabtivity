@@ -470,6 +470,9 @@ async fn run_loop(
                 // disconnect. Breaking ends the task; `stop()` then finds it
                 // already finished, which is the same state as a cancel.
                 if hpc_now(&target) { break; }
+                // Converted to remote-only since the loop started: nothing
+                // left to sync (`stop` then finds the task finished).
+                if crate::services::remote::is_remote_only_now(&project_id) { break; }
                 if paused.load(Ordering::SeqCst) > 0 { continue; }
                 // Cheap once attached; this is what picks up a `sync_set_auto` that
                 // marked the first path after the task was already running.
@@ -570,6 +573,12 @@ async fn reconcile_pass(
         }
     };
     if paused.load(Ordering::SeqCst) > 0 || stopping.load(Ordering::SeqCst) {
+        return;
+    }
+    // The project stopped keeping a local copy while this pass waited for the
+    // lock (`commands::remote_unpair` writes the flag under it): the
+    // `target` this loop started with is stale, and its mirror may be moving.
+    if crate::services::remote::is_remote_only_now(project_id) {
         return;
     }
     // Bail if the connection is cold or the ssh child died (keepalive evicted it) —

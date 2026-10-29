@@ -68,9 +68,16 @@ async fn clear_host_bound_state(project_id: &str, manifest: &SyncManifestState) 
             None
         }
     };
+    clear_host_bound_files(project_id);
+    manifest.lock().await.remove(project_id);
+}
+
+/// The on-disk half of [`clear_host_bound_state`], for a caller that already
+/// holds the project's mutation lock (`commands::remote_unpair::remote_unpair_mirror`)
+/// and evicts the manifest cache itself.
+pub(crate) fn clear_host_bound_files(project_id: &str) {
     let _ = fs::remove_file(crate::services::remote_sync::manifest_path(project_id));
     let _ = fs::remove_file(crate::services::git_peer::state_path(project_id));
-    manifest.lock().await.remove(project_id);
 }
 
 /// Compute a `<name>` leaf under `parent` for a remote (SSH) project's local
@@ -726,7 +733,7 @@ pub(crate) fn entry_is_vm(entry: &ProjectEntry) -> bool {
 /// as it is rather than papered over with a copy. No-op when `src` does not
 /// exist. `src` is only removed after the whole copy succeeded, so a failed
 /// fallback leaves the source intact and the move retryable.
-fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
+pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
     if !src.exists() {
         return Ok(());
     }
@@ -2936,27 +2943,128 @@ pub(crate) fn mirror_relocation_refusal(spec: &RemoteSpec, what: &str) -> Option
 /// Used when the user relocates a mirror whose folder was deleted. Returns the
 /// resolved absolute path. Creates a folder and writes `project.json`, so on a
 /// worker.
+///
+/// `keep_local_copy: true` is the Remote-only → Remote conversion (E8's
+/// reverse, `remote_unpair`): only with it is a remote-only project accepted,
+/// and then `remote_only` is removed in the same write that records the
+/// mirror — before the caller turns lockstep on (`git_peer_set_enabled`),
+/// which refuses a remote-only project. VMs are refused (v1). Without it a
+/// remote-only project is refused as before, so the "relocate a missing
+/// mirror" caller can never convert one by accident. A conversion runs under
+/// the project's mutation lock and starts auto-sync when connected; pairing is
+/// the existing lockstep flow, host authoritative.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn set_remote_mirror_dir(project_id: String, path: String) -> Result<String, String> {
-    app_core::rt::try_blocking("project", move || set_remote_mirror_dir_blocking(project_id, path)).await
+pub async fn set_remote_mirror_dir(
+    ctx: Ctx,
+    project_id: String,
+    path: String,
+    keep_local_copy: Option<bool>,
+) -> Result<String, String> {
+    let keep = keep_local_copy == Some(true);
+    if !keep {
+        return app_core::rt::try_blocking("project", move || set_remote_mirror_dir_blocking(project_id, path, false))
+            .await;
+    }
+    let op = crate::services::sync_op::acquire_manual(&project_id).await?;
+    let id = project_id.clone();
+    let resolved = app_core::rt::try_blocking("project", move || set_remote_mirror_dir_blocking(id, path, true)).await?;
+    drop(op);
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+    if crate::services::remote::is_connected(pool, &project_id).await {
+        crate::services::sync_auto::start(
+            ctx.0.clone(),
+            pool.clone(),
+            ctx.get::<SyncManifestState>().clone(),
+            ctx.get::<crate::services::sync_auto::AutoSyncState>(),
+            &project_id,
+        )
+        .await;
+    }
+    Ok(resolved)
 }
 
-fn set_remote_mirror_dir_blocking(project_id: String, path: String) -> Result<String, String> {
+pub fn set_remote_mirror_dir_blocking(project_id: String, path: String, keep_local_copy: bool) -> Result<String, String> {
     let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Err("not a remote project".to_string());
     };
+    let converting = keep_local_copy && target.spec.is_remote_only();
     // Before anything is created: the folder would be the mirror being refused.
-    if let Some(refusal) = mirror_relocation_refusal(&target.spec, "setting a mirror folder") {
+    if converting {
+        let entry = crate::services::remote::project_entry(&project_id)?;
+        if let Some(refusal) = crate::commands::remote_unpair::keep_local_copy_refusal(&entry) {
+            return Err(refusal);
+        }
+    } else if let Some(refusal) = mirror_relocation_refusal(&target.spec, "setting a mirror folder") {
         return Err(refusal);
     }
     let dir = PathBuf::from(path.trim());
     if dir.as_os_str().is_empty() {
         return Err("Mirror path is empty".to_string());
     }
+    if converting {
+        // The folder becomes this project's tree: never a relative path, the
+        // state dir (where `mirror_dir`'s default lives), or another
+        // project's folder or mirror.
+        if !dir.is_absolute() {
+            return Err("the local copy's folder must be an absolute path".to_string());
+        }
+        if dir.starts_with(storage::state_dir()) {
+            return Err("pick a folder outside the app's state folder".to_string());
+        }
+        if let Some(conflict) = find_project_conflict(
+            &read_projects_list()?,
+            &ProjectSite::Local { dir: &dir.to_string_lossy() },
+            Some(&project_id),
+        ) {
+            return Err(conflict_message(&conflict));
+        }
+    }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let resolved = dir.to_string_lossy().to_string();
-    persist_mirror_dir(&project_id, &resolved)?;
+    if converting {
+        // Before the flip, while every tab still reads as pinned: an agent tab
+        // saved with no location would otherwise default to the new mirror.
+        let entry = crate::services::remote::project_entry(&project_id)?;
+        crate::commands::remote_unpair::pin_saved_tabs_to_host(&project_id, &entry.local_file)?;
+        persist_kept_local_copy(&project_id, &resolved)?;
+    } else {
+        persist_mirror_dir(&project_id, &resolved)?;
+    }
     Ok(resolved)
+}
+
+/// [`persist_mirror_dir`] for the Remote-only → Remote conversion: the same
+/// write also drops `remote_only` from the spec (both copies), field-level, so
+/// every other spec key survives. Refuses when the registry no longer reads
+/// remote-only (another writer got there first) or now reads as a VM.
+fn persist_kept_local_copy(project_id: &str, resolved: &str) -> Result<(), String> {
+    patch_project_entry_mirrored(
+        project_id,
+        |entry| {
+            if let Some(refusal) = crate::commands::remote_unpair::keep_local_copy_refusal(entry) {
+                return Err(refusal);
+            }
+            if !crate::services::remote::entry_is_remote_only(entry) {
+                return Err("this project already keeps a local copy".to_string());
+            }
+            let remote = entry
+                .extra
+                .get_mut("remote")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| "not a remote project".to_string())?;
+            remote.remove("remote_only");
+            entry
+                .extra
+                .insert("mirror".to_string(), Value::String(resolved.to_string()));
+            Ok(())
+        },
+        |project, ()| {
+            if let Some(remote) = project.remote.as_mut() {
+                remote.remote_only = None;
+            }
+            project.mirror = Some(resolved.to_string());
+        },
+    )
 }
 
 /// Persist a remote project's chosen mirror root into both `projects.json`
@@ -3028,11 +3136,14 @@ pub fn move_remote_mirror_blocking(
         // A plain rename fails across drives/filesystems. Fall back to
         // copy-then-remove for that case only; `new_root` is a free name, so any
         // other failure (a file held open, a permission refusal) is reported
-        // rather than turned into a duplicate tree.
+        // rather than turned into a duplicate tree. The copy carries `.git`
+        // (and nested repos): it is a move of the working copy, history
+        // included, and the original is removed right after — the
+        // duplicate-style `copy_dir_all` dropped both, then deleted them.
         match fs::rename(&old, &new_root) {
             Ok(()) => {}
             Err(e) if crate::paths::is_cross_device(&e) => {
-                copy_dir_all(&old, &new_root)?;
+                copy_tree_core(&old, &new_root, true)?;
                 fs::remove_dir_all(&old).map_err(|e| e.to_string())?;
             }
             Err(e) => return Err(format!("could not move the mirror: {e}")),

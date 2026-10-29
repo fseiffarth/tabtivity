@@ -558,6 +558,28 @@ fn pinned_spawn_refusal(pin: Pin, running: bool, local_only: bool, tab_id: &str)
     }
 }
 
+/// A remote-only project's tab on a **synced-copy** worker (`sync_code &&
+/// !shared_fs`): that copy was fed from the mirror the project no longer keeps
+/// (a Remote → Remote-only conversion leaves such workers behind, and a tab
+/// saved on one would restore there), so it would run on stale or missing
+/// code. Refused with the `{UPPER}_REMOTE_ONLY` sentinel, like adding such a
+/// worker (`add_compute_host`). A shared-filesystem worker, or one with code
+/// sync off (the user's own tree), runs as before (D4). Pure.
+fn synced_worker_spawn_refusal(
+    pin: Pin,
+    host: Option<&crate::schema::project::ComputeHost>,
+    tab_id: &str,
+) -> Option<String> {
+    let host = host?;
+    (pin == Pin::RemoteOnly && host.sync_code && !host.shared_fs).then(|| {
+        crate::services::remote::remote_only_refusal(&format!(
+            "tab '{tab_id}' would run on {}, whose copy of the code came from the local copy this project no longer keeps. \
+             Open the tab on the primary host or a shared-filesystem machine.",
+            host.display_label()
+        ))
+    })
+}
+
 /// The folder a `local_only` tab of the remote project `entry` runs in — its
 /// local copy, created when missing — or `None` when the project keeps none
 /// (a remote-only project: [`pinned_spawn_refusal`] has refused such a spawn
@@ -816,6 +838,12 @@ pub async fn prepare(
         let running = pin == Pin::Vm && crate::services::vm::is_running(pid);
         if let Some(refusal) = pinned_spawn_refusal(pin, running, opts.local_only, &opts.id) {
             return Err(refusal);
+        }
+        if let Some(host_id) = opts.remote_host_id.as_deref().filter(|h| *h != crate::services::remote::PRIMARY_HOST) {
+            let host = crate::services::remote::compute_hosts_for(pid).into_iter().find(|h| h.id == host_id);
+            if let Some(refusal) = synced_worker_spawn_refusal(pin, host.as_ref(), &opts.id) {
+                return Err(refusal);
+            }
         }
     }
 
@@ -1815,6 +1843,26 @@ mod tests {
         for running in [false, true] {
             assert_eq!(pinned_spawn_refusal(Pin::RemoteOnly, running, false, "t1"), None);
         }
+    }
+
+    #[test]
+    fn a_remote_only_tab_on_a_synced_copy_worker_is_refused() {
+        let worker = |shared_fs: bool, sync_code: bool| -> crate::schema::project::ComputeHost {
+            serde_json::from_value(serde_json::json!({
+                "id": "gpu", "host": "gpu.example", "remote_path": "/w",
+                "shared_fs": shared_fs, "sync_code": sync_code,
+            }))
+            .expect("worker")
+        };
+        let msg = synced_worker_spawn_refusal(Pin::RemoteOnly, Some(&worker(false, true)), "t1").unwrap();
+        assert!(msg.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{msg}");
+        assert!(msg.contains("'t1'") && msg.contains("gpu.example"), "{msg}");
+        // D4: a shared-filesystem worker, or one with code sync off, runs.
+        assert_eq!(synced_worker_spawn_refusal(Pin::RemoteOnly, Some(&worker(true, true)), "t1"), None);
+        assert_eq!(synced_worker_spawn_refusal(Pin::RemoteOnly, Some(&worker(false, false)), "t1"), None);
+        // A plain Remote project's synced worker is fed from its mirror.
+        assert_eq!(synced_worker_spawn_refusal(Pin::None, Some(&worker(false, true)), "t1"), None);
+        assert_eq!(synced_worker_spawn_refusal(Pin::RemoteOnly, None, "t1"), None);
     }
 
     /// A refused remote-only spawn creates no mirror folder: the local-tab
