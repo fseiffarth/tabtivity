@@ -19,6 +19,7 @@ import {
   type SandboxSpec,
   type SandboxToggleOutcome,
   type SshProbe,
+  type UnpairOutcome,
 } from "../types";
 import {
   effectiveTabLocation,
@@ -61,6 +62,7 @@ import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
 import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../lib/brand";
+import { isHostPinned } from "../lib/projectTabHost";
 
 function connectionsHeadless(): boolean {
   return useSettingsStore.getState().settings?.connections_headless ?? true;
@@ -874,7 +876,7 @@ export function projectTmuxTargets(
   for (const tab of tabs) {
     if (!isPtyTabKind(tab.kind)) continue;
     let hostId = remoteHostIdOf(
-      effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }),
+      effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
     );
     if (
       hostId &&
@@ -1093,6 +1095,14 @@ interface ProjectsStore {
   /** Detach a remote (SSH) project back to a plain local project: its mirror
    * becomes the project directory in place. The host's files are never touched. */
   detachProjectFromRemote: (id: string) => Promise<void>;
+  /** Remote → Remote-only (`remote_unpair_mirror`): stop keeping the local mirror.
+   * `expect` is the fingerprint of the preview the user confirmed. The folder is
+   * kept (moved out of the state dir when it lived there); the outcome says where. */
+  stopKeepingLocalCopy: (id: string, expect: string) => Promise<UnpairOutcome>;
+  /** Remote-only → Remote (`set_remote_mirror_dir` with `keepLocalCopy`): record
+   * `path` as the project's local copy. The tabs are pinned to the host first, so
+   * an agent saved with no location keeps running there. Returns the stored path. */
+  keepLocalCopy: (id: string, path: string) => Promise<string>;
   /** Forget a published project's push target without deleting the hosted repo
    * or local history: removes `origin`, resets git_type → "local". */
   unpublishProject: (id: string) => Promise<void>;
@@ -1650,7 +1660,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
             key: tab.key,
             label: tab.label,
             kind: tab.kind,
-            location: effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }),
+            location: effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
           })),
           localTargets.length,
           remoteSessions,
@@ -2017,6 +2027,24 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     // the project entry clears it, so a detached project would keep showing a connection
     // to a host it no longer has.
     useRemoteStatusStore.getState().clear(id);
+  },
+
+  stopKeepingLocalCopy: async (id, expect) => {
+    const outcome = await invoke<UnpairOutcome>("remote_unpair_mirror", { projectId: id, expect });
+    patchProject(id, () => outcome.entry);
+    return outcome;
+  },
+
+  keepLocalCopy: async (id, path) => {
+    useTabsStore.getState().pinScopeTabsToHost(id);
+    const stored = await invoke<string>("set_remote_mirror_dir", { projectId: id, path, keepLocalCopy: true });
+    patchProject(id, (project) => {
+      if (!project.remote) return { ...project, mirror: stored };
+      const remote = { ...project.remote };
+      delete remote.remote_only;
+      return { ...project, remote, mirror: stored };
+    });
+    return stored;
   },
 
   unpublishProject: async (id) => {

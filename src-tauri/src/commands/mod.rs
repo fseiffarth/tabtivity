@@ -66,6 +66,7 @@ pub mod project_transfer;
 pub mod projects;
 pub mod python;
 pub mod remote;
+pub mod remote_unpair;
 pub mod root_mcp;
 pub mod search;
 pub mod settings;

@@ -1,3 +1,4 @@
+import { BRAND } from "./brand";
 import type { TranslationKey } from "./i18n";
 
 /**
@@ -17,6 +18,10 @@ import type { TranslationKey } from "./i18n";
  * output), so an already-translated sentence set as the error passes through.
  */
 const RULES: { test: RegExp; key: TranslationKey }[] = [
+  // The backend's refusal for a project with no local copy (`{UPPER}_REMOTE_ONLY:
+  // <what>`, `remoteOnlyRefusal` in `lib/projectTabHost.ts`): its English tail
+  // is never the summary, wherever the error surfaces.
+  { test: new RegExp(`\\b${BRAND.upper}_REMOTE_ONLY:`), key: "tabs.remoteOnlyRefused" },
   { test: /\bcaldav_http_refused\b/, key: "caldav.httpRefused" },
   { test: /\bcommand [\w:.-]+ not found\b/i, key: "errors.backendOutdated" },
   { test: /Permission denied \((publickey|password|keyboard-interactive|gssapi)/i, key: "errors.sshAuth" },

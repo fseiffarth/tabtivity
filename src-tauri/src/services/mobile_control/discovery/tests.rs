@@ -1414,15 +1414,17 @@ fn the_tab_locality_rule_matches_the_windows_table() {
     .expect("fixture");
     assert!(table.len() > 10);
     for row in table {
-        let (kind, location, vm) = (row["kind"].as_str().unwrap(), row["location"].as_str(), row["vm"].as_bool().unwrap());
-        assert_eq!(tab_is_local(kind, location, vm), row["local"].as_bool().unwrap(), "{row}");
+        let (kind, location, pinned) = (row["kind"].as_str().unwrap(), row["location"].as_str(), row["pinned"].as_bool().unwrap());
+        assert_eq!(tab_is_local(kind, location, pinned), row["local"].as_bool().unwrap(), "{row}");
     }
 }
 
 /// The project-type table the window's `projectTabHost` reads too
 /// (`src/__tests__/mobile/projectHostReach.fixture.json`): the host word,
 /// whether a tab of a kind and location runs on this machine, and the
-/// create verdict of a project with a folder.
+/// create verdict of a project with a folder (a remote-only one: with a
+/// machine to start on). The pin is read off the record ([`host_pinned`]),
+/// as the window's `isHostPinned` reads it.
 #[test]
 fn the_project_host_table_matches_the_windows() {
     let table: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
@@ -1438,12 +1440,13 @@ fn the_project_host_table_matches_the_windows() {
         }
         let project: ProjectRecord = serde_json::from_value(record).expect("record");
         let host = project_host(&project);
+        let pinned = host_pinned(&project);
         assert_eq!(serde_json::to_value(host).unwrap(), row["host"], "{row}");
-        let reach = runs_on_this_machine(host, container_shells(&project), row["kind"].as_str().unwrap(), row["location"].as_str());
+        let reach = runs_on_this_machine(host, pinned, container_shells(&project), row["kind"].as_str().unwrap(), row["location"].as_str());
         assert_eq!(reach, row["reach"].as_bool().unwrap(), "{row}");
-        let lists = phone_lists_tab(host, container_shells(&project), row["kind"].as_str().unwrap(), row["location"].as_str());
+        let lists = phone_lists_tab(host, pinned, container_shells(&project), row["kind"].as_str().unwrap(), row["location"].as_str());
         assert_eq!(lists, row["lists"].as_bool().unwrap(), "{row}");
-        assert_eq!(serde_json::to_value(create_verdict(host, true)).unwrap(), row["create"], "{row}");
+        assert_eq!(serde_json::to_value(create_verdict(host, true, pinned, true)).unwrap(), row["create"], "{row}");
     }
 }
 
@@ -1539,12 +1542,18 @@ fn a_machine_is_named_by_its_label_and_runnable_only_with_the_code() {
             worker(serde_json::json!({ "sync_code": false, "shared_fs": true })),
         ],
         persist: true,
+        pinned: false,
     };
     let machines: Vec<_> = hosts.machines().into_iter().map(|m| (m.label, m.runnable)).collect();
     assert_eq!(
         machines,
         [("gpu-1".to_string(), true), ("gpu-2".to_string(), true), ("w2.example".to_string(), false), ("w2.example".to_string(), true)]
     );
+    // A remote-only project has no mirror to feed a synced copy (D4): only
+    // the primary and a worker on its folder hold the code.
+    let pinned = ProjectHosts { pinned: true, ..hosts };
+    let runnable: Vec<_> = pinned.machines().into_iter().map(|m| m.runnable).collect();
+    assert_eq!(runnable, [true, false, false, true]);
 }
 
 /// Plan step 2: a remote project's host tabs are listed off the session
@@ -1614,6 +1623,136 @@ fn host_tabs_need_persisted_sessions_a_non_vm_project_and_tmux_terminals() {
     assert!(host_tabs_on(terminals_support_on(false)));
     let (dir, _) = host_tab_state(None, false);
     assert!(load_hosts(dir.path(), &HostLive::default(), host_tabs_on(terminals_support_on(true))).tabs.is_empty());
+}
+
+/// [`host_tab_state`] for a remote-only project (`remote.remote_only`):
+/// the same record and tabs, plus a stale `mirror` key and a leftover
+/// default mirror folder on disk (neither makes it a folder), an agent and
+/// a shell saved `"local"`, and a local-model tab.
+fn remote_only_state(persist: Option<bool>) -> (tempfile::TempDir, String) {
+    let (dir, primary) = host_tab_state(persist, false);
+    let state = dir.path();
+    let path = state.join("projects.json");
+    let mut records: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let stale = state.join("old-mirror");
+    fs::create_dir_all(&stale).unwrap();
+    records[0]["remote"]["remote_only"] = true.into();
+    records[0]["mirror"] = stale.to_string_lossy().into();
+    fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+    fs::create_dir_all(crate::services::remote_sync::default_mirror_dir_in(state, "p-host")).unwrap();
+    let session = state.join("sessions").join("p-host").join("terminals.json");
+    let mut layout: serde_json::Value = serde_json::from_slice(&fs::read(&session).unwrap()).unwrap();
+    let cwd = state.join("dirs").join("p-host");
+    let name = |kind: &str, n: u32| format!("{}-p-host--{kind}-{n}23456789", crate::app_slug!());
+    let tabs = layout["tabLayout"].as_array_mut().unwrap();
+    tabs.push(tab_json("saved local", "agent", &cwd, &name("agent", 11), serde_json::json!({ "signIn": false, "sessionId": "sess-11", "location": "local" })));
+    tabs.push(tab_json("shell saved local", "shell", &cwd, &name("shell", 12), serde_json::json!({ "location": "local" })));
+    tabs.push(tab_json("local model", "local_agent", &cwd, &name("agent", 13), serde_json::json!({ "signIn": false, "sessionId": "sess-13", "location": "local" })));
+    fs::write(&session, layout.to_string()).unwrap();
+    (dir, primary)
+}
+
+/// A remote-only project (E7) has no folder on the phone — not its stale
+/// `mirror` key, not a leftover default folder — and runs nothing here:
+/// every agent and shell is on its host, one saved `"local"` or with no
+/// location on the primary (the window's pinned locality), and the
+/// local-model tab is not listed at all (D11). Its primary and machines are
+/// filled, so the phone may start agents there; the row says `remote_only`
+/// and nothing raw.
+#[test]
+fn a_remote_only_project_runs_everything_on_its_host() {
+    let (dir, _) = remote_only_state(None);
+    let state = dir.path();
+    allow_shells(state);
+    let records: Vec<ProjectRecord> = serde_json::from_slice(&fs::read(state.join("projects.json")).unwrap()).unwrap();
+    assert!(host_pinned(&records[0]));
+    assert_eq!(project_host(&records[0]), ProjectHost::Remote, "the browser word stays remote");
+    assert_eq!(mobile_root(state, &records[0]), None);
+
+    let project = load_hosts(state, &HostLive::default(), true);
+    assert!(project.pinned && !project.folder && !project.has_folder());
+    assert!(project.public.remote_only);
+    assert_eq!(project.host, ProjectHost::Remote);
+    assert_eq!(project.create, CreateVerdict::Agents, "agents on its machines");
+    assert_eq!(project.primary_host.as_ref().map(|spec| spec.host.as_str()), Some("primary.example"));
+    let machines: Vec<_> = project.machines.iter().map(|m| (m.location.as_str(), m.runnable)).collect();
+    assert_eq!(machines, [("remote", true), ("host:w1", false)], "w1 keeps a synced copy, which nothing feeds (D4)");
+    let mut labels: Vec<_> = project.tabs.iter().map(|t| t.public.label.as_str()).collect();
+    labels.sort_unstable();
+    assert_eq!(labels, ["host shell", "local, no mirror", "on primary", "on the worker", "saved local", "shell saved local"]);
+    for tab in &project.tabs {
+        assert!(tab.public.on_host && tab.place.on_host() && tab.cwd.is_empty(), "{}", tab.public.label);
+    }
+    let wire = serde_json::to_string(&project.public).unwrap();
+    assert!(wire.contains(r#""remote_only":true"#), "{wire}");
+    for raw in ["primary.example", "old-mirror", "p-host", "/srv/", "alice"] {
+        assert!(!wire.contains(raw), "{raw} crossed: {wire}");
+    }
+
+    // Every tab of it, whatever its kind or saved location, starts nowhere here.
+    for kind in ["agent", "shell", "local_agent"] {
+        for location in [None, Some("local"), Some("remote"), Some("host:w1")] {
+            assert_eq!(launch_place(state, "p-host", kind, location), LaunchPlace::NotAttachable, "{kind} {location:?}");
+        }
+    }
+    // The refresher probes its hosts, as the catalog lists tabs on them.
+    if host_tabs_here() {
+        let mut hosts: Vec<String> = host_probe_targets(state).into_iter().map(|spec| spec.host).collect();
+        hosts.sort();
+        assert_eq!(hosts, ["primary.example", "w1.example"]);
+    }
+}
+
+/// With no machine a phone-made agent may start on (host sessions not
+/// persisted, or a build that lists no host tab), a remote-only project
+/// takes nothing from the phone; a plain remote project's row carries no
+/// `remote_only` at all.
+#[test]
+fn a_remote_only_project_without_machines_creates_nothing() {
+    let (dir, _) = remote_only_state(Some(false));
+    let project = load_hosts(dir.path(), &HostLive::default(), true);
+    assert!(project.machines.is_empty());
+    assert_eq!(project.create, CreateVerdict::None);
+    let (dir, _) = remote_only_state(None);
+    assert_eq!(load_hosts(dir.path(), &HostLive::default(), false).create, CreateVerdict::None, "no host tabs here");
+    let (dir, _) = host_tab_state(None, false);
+    let plain = load_hosts(dir.path(), &HostLive::default(), true);
+    assert!(!plain.pinned && !plain.public.remote_only);
+    assert!(!serde_json::to_string(&plain.public).unwrap().contains("remote_only"));
+}
+
+/// The pin is the backend's `RemoteSpec::is_remote_only` read off the loose
+/// record (a VM outranks a `false`), and only a real `true` pins.
+#[test]
+fn the_pin_matches_the_specs_posture() {
+    let record = |extra: serde_json::Value| -> ProjectRecord {
+        let mut record = serde_json::json!({ "id": "p", "name": "P", "status": "active" });
+        for (key, value) in extra.as_object().unwrap() {
+            record[key] = value.clone();
+        }
+        serde_json::from_value(record).unwrap()
+    };
+    for (remote, vm_record, pinned) in [
+        (serde_json::json!({ "host": "h" }), false, false),
+        (serde_json::json!({ "host": "h", "remote_only": true }), false, true),
+        (serde_json::json!({ "host": "h", "remote_only": false }), false, false),
+        (serde_json::json!({ "host": "h", "vm": true }), false, true),
+        (serde_json::json!({ "host": "h", "vm": true, "remote_only": false }), false, true),
+        (serde_json::json!({ "host": "h", "remote_only": "yes" }), false, false),
+        (serde_json::json!({ "host": "h" }), true, true),
+    ] {
+        let mut extra = serde_json::json!({ "remote": remote.clone() });
+        if vm_record {
+            extra["vm"] = serde_json::json!({ "enabled": true });
+        }
+        assert_eq!(host_pinned(&record(extra)), pinned, "{remote} vm={vm_record}");
+        if let Ok(spec) = serde_json::from_value::<RemoteSpec>(remote.clone()) {
+            if !vm_record {
+                assert_eq!(spec.is_remote_only(), pinned, "{remote}");
+            }
+        }
+    }
+    assert!(!host_pinned(&record(serde_json::json!({}))), "a local project");
 }
 
 /// The refresher probes exactly the hosts the catalog would list a tab

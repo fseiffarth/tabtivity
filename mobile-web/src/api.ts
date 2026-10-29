@@ -18,7 +18,7 @@ export type ProjectHost = "local" | "remote" | "container" | "vm";
  * agents alone (a remote project's shell would run on the remote host), or
  * nothing. Absent from an older desktop is `all`. */
 export type CreateVerdict = "all" | "agents" | "none";
-export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; host?: ProjectHost; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
+export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; host?: ProjectHost; /** A `remote` project that keeps no copy on the desktop: its tabs run and its files live on its machines alone. Absent otherwise. */ remote_only?: boolean; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
 export type AgentStatus = "working" | "question" | "interrupted" | "done";
 /** The desktop's own one-line summary of a tab's scheduled prompts: what the
  * Agents view prints under an agent tab, so the project overview says the same
@@ -77,7 +77,7 @@ export interface ApiKeyLaunchRow { agent_id: string; budget_reached?: boolean }
  * `connected`: the desktop holds a connection to it now — the only way the
  * agent can start there, since the phone never dials a host itself. */
 export interface HostMachineRow { id: string; label: string; primary: boolean; connected: boolean }
-export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions; api_key?: ApiKeyLaunchRow[]; hosts?: HostMachineRow[] }
+export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions; api_key?: ApiKeyLaunchRow[]; hosts?: HostMachineRow[]; /** False for a project with nothing on the desktop (remote-only): an agent starts on one of `hosts` or not at all. Absent (an older desktop) is true. */ here?: boolean }
 
 /** `GET /api/v1/projects/{id}/launch-options` — asked when the ＋ sheet opens.
  * A desktop that predates the route answers 404; that reads as "project folder
@@ -85,7 +85,7 @@ export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow
 export async function getLaunchOptions(projectId: string, signal?: AbortSignal): Promise<LaunchOptions> {
   try {
     const body = await api<Partial<LaunchOptions>>(`/api/v1/projects/${encodeURIComponent(projectId)}/launch-options`, { signal });
-    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}), ...(Array.isArray(body.api_key) && body.api_key.length ? { api_key: body.api_key } : {}), ...(Array.isArray(body.hosts) && body.hosts.length ? { hosts: body.hosts } : {}) };
+    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}), ...(Array.isArray(body.api_key) && body.api_key.length ? { api_key: body.api_key } : {}), ...(Array.isArray(body.hosts) && body.hosts.length ? { hosts: body.hosts } : {}), ...(body.here === false ? { here: false } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
     throw reason;

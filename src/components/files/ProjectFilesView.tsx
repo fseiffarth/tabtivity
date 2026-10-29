@@ -103,8 +103,8 @@ import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGate
 import { ArrowDownIcon, ArrowUpIcon, ArrowsHorizontalIcon, CheckIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
-import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "../mobile/MobileAccessPicker";
-import { projectHostKind } from "../../lib/projectTabHost";
+import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
@@ -470,10 +470,14 @@ export function ProjectFilesView({
   // SLURM support in particular is only known one async probe after mount. So
   // the unavailable view *renders* as Files while the stored value stays put:
   // switch back to a remote project, or let the probe land, and it returns.
+  // No local copy (`isHostPinned`: a VM, or a remote project created without
+  // one): no Local side, no mirror views, no ⧉ — the host is the only tree.
+  const hostPinned = isHostPinned(project);
   const viewGates: SidePanelViewGates = {
     inBox: !!activeBox,
     projectId,
     remote: !!project?.remote,
+    mirror: !hostPinned,
     slurm: slurmSupported,
     remarks: remarksEnabled,
     todo: devTodo,
@@ -509,7 +513,7 @@ export function ProjectFilesView({
   // Every project type may be shared with the phone: the Mobile switch is the
   // whole consent. What the phone then reaches differs by type (`mobileHost`).
   const mobileEligible = !!projectId && !!project;
-  const mobileHost = projectHostKind(project);
+  const mobileHost = phoneReachHost(project);
   const [mobileAccessBusy, setMobileAccessBusy] = useState(false);
   const [mobileAccessError, setMobileAccessError] = useState<string | null>(null);
   // Kept here (not in the pane): the pane unmounts while the view shows Git or
@@ -1659,7 +1663,7 @@ export function ProjectFilesView({
             family instead — square, hover-lit, phone slashed while off. */}
         {/* "Open in <IDE>": only for a project whose tree carries IDE
             markers; the same rows as the pill menu's View group. */}
-        {!activeBox && project && projectId && !isRootScope && (
+        {!activeBox && project && projectId && !isRootScope && !hostPinned && (
           <IdeHeaderButton projectId={projectId} projectName={project.name} />
         )}
         {mobileHostConnected && mobileEligible && (
@@ -1736,7 +1740,7 @@ export function ProjectFilesView({
           {/* Breaker: drop the switch onto its own row so it left-aligns with the
               pin/name (header padding edge) instead of trailing the tags. */}
           <span style={{ flexBasis: "100%", width: 0, height: 0 }} />
-          <FileSourceSwitch source={source} onChange={setSource} />
+          {hostPinned ? <UntestedTag id="sidePanelViews.pinned" /> : <FileSourceSwitch source={source} onChange={setSource} />}
           {/* Run-host picker — which REMOTE machine (primary or a worker) scripts
               and shells launched from this project run on, distinct from the source
               switch's read side. Deliberately absent on Local: there is only one
@@ -1747,6 +1751,7 @@ export function ProjectFilesView({
           {source === "remote" && (
             <RunHostPicker
               projectId={projectId}
+              pinned={hostPinned}
               primaryHost={project.remote.label || project.remote.host}
               computeHosts={project.compute_hosts}
             />
@@ -1784,7 +1789,8 @@ export function ProjectFilesView({
           on the files view — the side panel's switch is always up, and a row
           that appeared only under "Files" would shove the toolbar up and down on
           every view change. */}
-      {compact && !activeBox && project?.remote && projectId && (
+      {/* Not on a pinned project: it has no switch, so the row has no job. */}
+      {compact && !activeBox && project?.remote && !hostPinned && projectId && (
         <div className="side-panel-source side-panel-source--compact">
           <FileSourceSwitch source={source} onChange={setSource} />
           {/* Remote side only, same reason as the full header's copy above — and
@@ -1794,6 +1800,7 @@ export function ProjectFilesView({
           {source === "remote" && (
             <RunHostPicker
               projectId={projectId}
+              pinned={hostPinned}
               primaryHost={project.remote.label || project.remote.host}
               computeHosts={project.compute_hosts}
             />
@@ -1915,7 +1922,7 @@ export function ProjectFilesView({
               </button>
           </ContextMenuPortal>
         )}
-        {projectDir && (
+        {projectDir && !hostPinned && (
           <button
             className="toolbar-btn toolbar-btn--sm"
             onClick={openInOsBrowser}
@@ -2005,6 +2012,7 @@ export function ProjectFilesView({
             projectDir={effectiveGitRoot}
             projectId={onNestedRepo ? undefined : project?.remote ? projectId ?? undefined : undefined}
             remote={!onNestedRepo && !!project?.remote}
+            hostPinned={hostPinned}
             authProjectId={onNestedRepo ? undefined : projectId ?? undefined}
             onChanged={() => effectiveGitRoot && refreshGit(effectiveGitRoot)}
             onWorktreeChanged={onGitWorktreeChanged}

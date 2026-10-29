@@ -1462,7 +1462,7 @@ fn tool_schemas() -> Value {
           "inputSchema": { "type": "object", "properties": {} } },
         {
             "name": "projects_list",
-            "description": concat!("List every ", crate::app_name!(), " project: id, name, status (current/active/inactive), folder, and whether it runs on a remote host."),
+            "description": concat!("List every ", crate::app_name!(), " project: id, name, status (current/active/inactive), folder, whether it runs on a remote host, and whether it is remote-only (its files live only on that host; this machine keeps no copy)."),
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
@@ -1706,7 +1706,7 @@ fn tool_schemas() -> Value {
         },
         {
             "name": "sync_status",
-            "description": concat!("Where each remote project stands with its host (named as `host`): git lockstep (on/off, in step or not, and why), what byte-sync tracks, and any unacknowledged warning that a local file was overwritten or deleted by a sync or lockstep pass. Reads ", crate::app_name!(), "'s recorded state only — it opens no SSH connection, so the answer is as of the last pass, not a fresh probe."),
+            "description": concat!("Where each remote project stands with its host (named as `host`): its `posture` (`mirrored`: this machine keeps a copy; `remote_only`: the files live only on the host and nothing is synced), git lockstep (on/off, in step or not, and why), what byte-sync tracks, and any unacknowledged warning that a local file was overwritten or deleted by a sync or lockstep pass. Reads ", crate::app_name!(), "'s recorded state only — it opens no SSH connection, so the answer is as of the last pass, not a fresh probe."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1833,6 +1833,7 @@ fn projects_list(stores: &Stores) -> Result<Value, String> {
                 "status": p.status,
                 "directory": p.directory().unwrap_or(""),
                 "remote": p.extra.get("remote").is_some_and(|r| !r.is_null()),
+                "remote_only": crate::services::remote::entry_is_remote_only(p),
             })
         })
         .collect();
@@ -3311,6 +3312,9 @@ fn local_checkout(entry: &crate::schema::projects::ProjectEntry) -> Result<(Stri
     };
     let (dir, source) = if entry.extra.get("remote").is_some_and(|r| !r.is_null()) {
         // Never the host: see the note above this section.
+        if crate::services::remote::entry_is_remote_only(entry) {
+            return Err("remote-only project; it keeps no local copy, its files live on the host".to_string());
+        }
         let mirror = field("mirror")
             .ok_or("remote project with no local mirror; its files live on the host")?;
         (mirror, "mirror")
@@ -3495,10 +3499,26 @@ fn sync_status(stores: &Stores, args: &Value) -> Result<Value, String> {
                 })
             })
             .collect();
+        if crate::services::remote::entry_is_remote_only(&entry) {
+            // Nothing to be in step: no local copy exists, so neither engine
+            // runs. Said as the posture, not as a "lockstep off" the user could
+            // read as something to switch on. Loss warnings recorded before a
+            // conversion still show.
+            rows.push(json!({
+                "id": entry.id,
+                "name": entry.name,
+                "host": remote.get("host").and_then(Value::as_str),
+                "posture": "remote_only",
+                "note": "remote-only: the files live only on the host and nothing is synced",
+                "warnings": warnings,
+            }));
+            continue;
+        }
         rows.push(json!({
             "id": entry.id,
             "name": entry.name,
             "host": remote.get("host").and_then(Value::as_str),
+            "posture": "mirrored",
             "lockstep": {
                 "enabled": peer.enabled,
                 "status": peer.status,

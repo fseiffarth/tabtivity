@@ -8,10 +8,22 @@
 
 
 use crate::services::git_peer::{self, BackupRef, GitPeerRegistry, GitPeerState, ReconcileOpts};
-use crate::services::remote::{remote_target_for, RemotePoolState};
+use crate::services::remote::{remote_target_for, RemotePoolState, RemoteTarget};
 use crate::services::remote_sync::SyncManifestState;
 use crate::services::sync_auto::AutoSyncState;
 use crate::tauri_host::Ctx;
+
+/// The project's remote target for a lockstep command that works on the local mirror:
+/// refused for a local project, and with the `{UPPER}_REMOTE_ONLY` sentinel for a
+/// remote-only one (`git_peer::lockstep_refusal`), which has no mirror to pair.
+fn lockstep_target(project_id: &str) -> Result<RemoteTarget, String> {
+    let target = remote_target_for(project_id)
+        .ok_or_else(|| "Git lockstep is only available for SSH remote projects".to_string())?;
+    match git_peer::lockstep_refusal(&target.spec) {
+        Some(refusal) => Err(refusal),
+        None => Ok(target),
+    }
+}
 
 /// Read a project's persisted lockstep state (disabled/synchronized default).
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -33,7 +45,11 @@ pub async fn git_peer_set_enabled(
     let auto = ctx.get::<AutoSyncState>();
     let reg = ctx.get::<GitPeerRegistry>();
     let worker_sync = ctx.get::<crate::services::worker_sync::WorkerSyncState>();
-    if remote_target_for(&project_id).is_none() {
+    // Turning it off stays possible for a remote-only project (it only stops a task);
+    // turning it on needs the mirror.
+    if enabled {
+        lockstep_target(&project_id)?;
+    } else if remote_target_for(&project_id).is_none() {
         return Err("Git lockstep is only available for SSH remote projects".to_string());
     }
     let mut state = git_peer::load_state(&project_id);
@@ -73,8 +89,7 @@ pub async fn git_peer_set_local_authoritative(
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
-    let target = remote_target_for(&project_id)
-        .ok_or("Git lockstep is only available for SSH remote projects")?;
+    let target = lockstep_target(&project_id)?;
     let mut state = git_peer::load_state(&project_id);
     state.local_authoritative = enabled;
     // A mode change voids the early-out: the cached green was judged by the old rules.
@@ -112,8 +127,7 @@ pub async fn git_peer_sync_now(
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
-    let target = remote_target_for(&project_id)
-        .ok_or("Git lockstep is only available for SSH remote projects")?;
+    let target = lockstep_target(&project_id)?;
     let state = git_peer::detect_and_sync(
         op,
         pool,
@@ -147,8 +161,7 @@ pub async fn git_peer_pair_confirm(
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
-    let rt = remote_target_for(&project_id)
-        .ok_or("Git lockstep is only available for SSH remote projects")?;
+    let rt = lockstep_target(&project_id)?;
     let state = git_peer::detect_and_sync(
         op,
         pool,
@@ -170,8 +183,7 @@ pub async fn git_peer_pair_confirm(
 /// List both peers' `refs/tabtivity/backup/*` safety refs, newest first (#28p D6).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_backups(project_id: String) -> Result<Vec<BackupRef>, String> {
-    let rt = remote_target_for(&project_id)
-        .ok_or("Git lockstep is only available for SSH remote projects")?;
+    let rt = lockstep_target(&project_id)?;
     // A `for-each-ref` on each side, one of them over ssh: off the async runtime.
     app_core::rt::blocking("backups", move || git_peer::list_backups(&project_id, &rt.spec)).await
 }
@@ -189,8 +201,7 @@ pub async fn git_peer_restore_backup(
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
-    let rt = remote_target_for(&project_id)
-        .ok_or("Git lockstep is only available for SSH remote projects")?;
+    let rt = lockstep_target(&project_id)?;
     let state = git_peer::restore_backup(
         op,
         pool,
@@ -210,9 +221,7 @@ pub async fn git_peer_restore_backup(
 /// shell, since that is the working copy the user merges/rebases in.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_peer_mirror_dir(project_id: String) -> Result<String, String> {
-    if remote_target_for(&project_id).is_none() {
-        return Err("Git lockstep is only available for SSH remote projects".to_string());
-    }
+    lockstep_target(&project_id)?;
     Ok(crate::services::remote_sync::mirror_dir(&project_id)
         .to_string_lossy()
         .to_string())
@@ -232,8 +241,7 @@ pub async fn git_peer_checkout(
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
-    let rt = remote_target_for(&project_id)
-        .ok_or("Git lockstep is only available for SSH remote projects")?;
+    let rt = lockstep_target(&project_id)?;
     let side = initiating_side.unwrap_or_else(|| "local".to_string());
     let state = git_peer::checkout_lockstep(
         op,
@@ -266,8 +274,7 @@ pub async fn git_peer_resolve(
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
     let auto = ctx.get::<AutoSyncState>();
-    let rt = remote_target_for(&project_id)
-        .ok_or("Git lockstep is only available for SSH remote projects")?;
+    let rt = lockstep_target(&project_id)?;
     let state = git_peer::resolve(
         op,
         pool,

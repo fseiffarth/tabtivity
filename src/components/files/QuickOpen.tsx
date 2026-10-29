@@ -8,7 +8,9 @@
  * `openLinkedFile` + `viewerForPath` (the same channel markdown link-following
  * uses). Fuzzy match + scoring live in the pure, unit-tested `src/lib/fuzzy.ts`.
  *
- * Reads the active project from `useProjectsStore` directly.
+ * Reads the active project from `useProjectsStore` directly. A host-pinned
+ * project (`isHostPinned`) is listed on its host — only while its connection is
+ * up, behind the HPC guard's one confirmed retry.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -20,6 +22,9 @@ import { IS_MAC } from "../../lib/platform";
 import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
 import { openTexWorkspace } from "../../lib/viewers/tex/openTexWorkspace";
 import { useT } from "../../lib/i18n";
+import { isHostPinned } from "../../lib/projectTabHost";
+import { confirmedArg, hpcGuardRefusal, withHpcConfirm } from "../../lib/remote/hpc/hpcGuard";
+import { sshOf, useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import "./QuickOpen.css";
 
 interface PathEntry {
@@ -61,6 +66,9 @@ export function QuickOpen() {
   const [files, setFiles] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
+  // Why a host-pinned project's palette is empty instead of listed: its host
+  // is not connected (`host` names it), or the HPC question was declined.
+  const [hostNote, setHostNote] = useState<{ host: string } | "declined" | null>(null);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -82,14 +90,27 @@ export function QuickOpen() {
   const loadFiles = useCallback(
     async (projectDir: string) => {
       const token = ++fetchToken.current;
-      setLoading(true);
+      const { projects, activeId } = useProjectsStore.getState();
+      const project = projects.find((p) => p.id === activeId);
+      setHostNote(null);
       setFiles([]);
+      // A host-pinned project is listed on the host: never against a dead
+      // session (it would only wait on it).
+      if (project && activeId && isHostPinned(project) && sshOf(useRemoteStatusStore.getState(), activeId) !== "connected") {
+        setHostNote({ host: project.remote?.label || project.remote?.host || "" });
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
       try {
-        const entries = await invoke<PathEntry[]>("list_project_paths", { projectDir });
+        const entries = await withHpcConfirm((confirmed) =>
+          invoke<PathEntry[]>("list_project_paths", { projectDir, ...confirmedArg(confirmed) }),
+        );
         if (token !== fetchToken.current) return; // superseded by a newer open
         setFiles(entries.filter((e) => !e.is_dir).map((e) => e.path));
-      } catch {
+      } catch (e) {
         if (token !== fetchToken.current) return;
+        if (hpcGuardRefusal(e)) setHostNote("declined");
         setFiles([]);
       } finally {
         if (token === fetchToken.current) setLoading(false);
@@ -142,7 +163,7 @@ export function QuickOpen() {
   // Keep the selected row scrolled into view.
   useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${selected}"]`);
-    el?.scrollIntoView({ block: "nearest" });
+    el?.scrollIntoView?.({ block: "nearest" });
   }, [selected, results]);
 
   const openFile = useCallback(
@@ -212,7 +233,13 @@ export function QuickOpen() {
             <div className="qo-empty">{t("quickOpen.loading")}</div>
           ) : results.length === 0 ? (
             <div className="qo-empty">
-              {files.length === 0 ? t("quickOpen.noFiles") : t("quickOpen.noMatches")}
+              {hostNote === "declined"
+                ? t("search.hostDeclined")
+                : hostNote
+                  ? t("projectFilesPane.disconnectedHostOnly", { host: hostNote.host })
+                  : files.length === 0
+                  ? t("quickOpen.noFiles")
+                  : t("quickOpen.noMatches")}
             </div>
           ) : (
             results.map((rel, idx) => (

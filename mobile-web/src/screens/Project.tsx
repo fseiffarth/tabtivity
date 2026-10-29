@@ -57,16 +57,21 @@ const SORT_LABEL: Record<AgentSort, TranslationKey> = {
  *  close again. */
 const CLOSED_HELD_MS = 30_000;
 
+/** A project's type as its line under the header words it: the host word,
+ * with a remote project that keeps no local copy (`remote_only`) apart. */
+type NoteHost = ProjectHost | "remote_only";
 /** The line a project type that limits the phone gets under the header (the
  * desktop says the same in `mobile.hostReach.*`). A local project has none. */
-const HOST_NOTE: Partial<Record<ProjectHost, TranslationKey>> = {
+const HOST_NOTE: Partial<Record<NoteHost, TranslationKey>> = {
   remote: "mobile.project.hostRemote",
+  remote_only: "mobile.project.hostRemoteOnly",
   container: "mobile.project.hostContainer",
   vm: "mobile.project.hostVm",
 };
 /** The flag the × on that line sets, per type (`prefs.ts`). */
-const HOST_NOTE_FLAG: Partial<Record<ProjectHost, MobileFlag>> = {
+const HOST_NOTE_FLAG: Partial<Record<NoteHost, MobileFlag>> = {
   remote: "projectNoteRemote",
+  remote_only: "projectNoteRemoteOnly",
   container: "projectNoteContainer",
   vm: "projectNoteVm",
 };
@@ -304,14 +309,18 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   };
   /** The project types whose line under the header the reader hid with its ×. */
   const [hostNotesGone, setHostNotesGone] = useState(() => new Set(Object.entries(HOST_NOTE_FLAG).flatMap(([host, flag]) => readFlag(flag) ? [host] : [])));
-  const dropHostNote = (host: ProjectHost) => {
+  const dropHostNote = (host: NoteHost) => {
     const flag = HOST_NOTE_FLAG[host];
     if (!flag) return;
     writeFlag(flag, true);
     setHostNotesGone((gone) => new Set(gone).add(host));
   };
   const projectHost = detail?.project.host ?? "local";
-  const hostNote = hostNotesGone.has(projectHost) ? undefined : HOST_NOTE[projectHost];
+  /** Nothing of the project is on this computer (`remote_only`): its tabs run
+   * on its machines alone, so a tab the phone starts names one of them. */
+  const remoteOnly = projectHost === "remote" && detail?.project.remote_only === true;
+  const noteHost: NoteHost = remoteOnly ? "remote_only" : projectHost;
+  const hostNote = hostNotesGone.has(noteHost) ? undefined : HOST_NOTE[noteHost];
   /** The tab whose close is in flight — its ✕ is held until the desktop answers. */
   const [closingId, setClosingId] = useState<string | null>(null);
   /** The card a swipe is closing: it slides out while the desktop answers,
@@ -472,7 +481,9 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * a hold opens the sheet of every choice, which is also where the default
    * is starred. With no agent to start — a host without tmux, a desktop
    * listing none — the tap opens that sheet as before. */
-  const quickTarget = creates ? newTabTarget(detail?.agents ?? [], starredAgent, starredLabel) : undefined;
+  // A remote-only project's agent starts on a machine the sheet names, so
+  // there is no one-tap default.
+  const quickTarget = creates && !remoteOnly ? newTabTarget(detail?.agents ?? [], starredAgent, starredLabel) : undefined;
   const quickLabel = quickTarget?.kind === "api" ? t("newTabMenu.apiKeyEntry", { label: quickTarget.label }) : quickTarget?.label;
   const fabPress = useTapHold(
     () => { if (!quickTarget) setNewTabOpen(true); else if (!creating) void create("agent", quickTarget.agent, undefined, quickTarget.launch); },
@@ -720,9 +731,9 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {detail && (hostNote || folderless) && <p className="notice project-host-note">
       <span>{[
         hostNote,
-        folderless ? (hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[projectHost]) : undefined,
-      ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
-      {hostNote && <button onClick={() => dropHostNote(projectHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
+        folderless ? (remoteOnly ? (hostFilesOffered ? "mobile.project.noFolderRemoteOnlyHost" : "mobile.project.noFolderRemoteOnly") : hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[projectHost]) : undefined,
+      ].flatMap((key) => key ? [t(key)] : []).join(" ")} {(remoteOnly ? isUntested("mobile.project.remoteOnly") : isUntested("mobile-every-project-type")) && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+      {hostNote && <button onClick={() => dropHostNote(noteHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
     </p>}
     {error && <p className="error">{error}</p>}
     <HintQueue hints={tips} vars={{ agentHold: { agent: quickLabel ?? "" } }} />
@@ -836,9 +847,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       headless={!detail.desktop_available}
       creates={creates}
       agentsOnly={createVerdict === "agents"}
+      remoteOnly={remoteOnly}
+      sendsFile={!folderless}
       defaultTarget={quickTarget?.key}
       defaultLabel={quickLabel}
-      onDefault={(key, label) => { writeNewTabAgent(key, label); setStarredAgent(key); setStarredLabel(label); }}
+      onDefault={remoteOnly ? undefined : (key, label) => { writeNewTabAgent(key, label); setStarredAgent(key); setStarredLabel(label); }}
       onClose={() => setNewTabOpen(false)}
       onPick={(kind, agent, mode, launch) => { setNewTabOpen(false); void create(kind, agent, mode, launch); }}
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}

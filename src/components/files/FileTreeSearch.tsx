@@ -1,8 +1,11 @@
 /**
  * In-tree search results for `FileTree` — the flat result list shown in place of
- * the browsed listing whenever the tree's search box holds a query. Two modes,
- * both local-only (their backends walk the canonical local path, so `FileTree`
- * only mounts this for a non-remote-source tree):
+ * the browsed listing whenever the tree's search box holds a query. Two modes;
+ * their backends walk the canonical local path, so `FileTree` mounts this for a
+ * local-source tree, and for a host-pinned project (`hostPinned`), whose
+ * backends answer from the host: the project's `directory` plus a
+ * project-relative `relRoot` (a host folder cannot be resolved back to a
+ * project), behind the HPC guard's one confirmed retry (`withHpcConfirm`):
  *
  *  - **name**: literal ranked filename/path search over the whole project tree
  *    (`list_project_paths`, ranked by `lib/projects/projectSearch`'s `rankNameMatches`).
@@ -37,6 +40,10 @@ import { openFileEntry } from "../../lib/files/openFileEntry";
 import { FileIcon } from "../common/icons/FileIcon";
 import { useT } from "../../lib/i18n";
 import { ArrowUpRightIcon } from "../common/icons/Icon";
+import { confirmedArg, hpcGuardRefusal, withHpcConfirm } from "../../lib/remote/hpc/hpcGuard";
+
+/** `error` state for a content search the user declined on a cluster. */
+const DECLINED = "\u0000declined";
 
 /** The `.ext` (lowercased, dot-included) of a path's basename, matching the
  *  shape `FileIcon` and `FileEntry.extension` use; "" when there is none. */
@@ -66,6 +73,7 @@ export function FileTreeSearch({
   mode,
   caseSensitive,
   scopeRel,
+  hostPinned = false,
   onReveal,
 }: {
   projectDir: string;
@@ -76,6 +84,9 @@ export function FileTreeSearch({
   /** Project-relative folder to confine the search to ("" = whole project).
    *  Filenames are filtered to this subtree; content search walks only it. */
   scopeRel: string;
+  /** The project lives only on its host (`isHostPinned`): search there, with
+   *  `projectDir` (its stored directory) and `scopeRel` as `relRoot`. */
+  hostPinned?: boolean;
   onReveal: (rel: string, isDir: boolean) => void;
 }) {
   const t = useT();
@@ -93,6 +104,9 @@ export function FileTreeSearch({
   // and cached for this projectDir (cleared when the dir changes).
   const [paths, setPaths] = useState<PathEntry[]>([]);
   const [namesLoaded, setNamesLoaded] = useState(false);
+  // The HPC question for the host listing was declined: say so, and do not ask
+  // again on every keystroke (the dir change resets it).
+  const [namesDeclined, setNamesDeclined] = useState(false);
   const pathsFor = useRef<string | null>(null);
 
   const [content, setContent] = useState<SearchMatch[]>([]);
@@ -116,17 +130,23 @@ export function FileTreeSearch({
     if (pathsFor.current === projectDir) return; // already fetched/fetching this dir
     pathsFor.current = projectDir;
     setNamesLoaded(false);
+    setNamesDeclined(false);
     setPaths([]);
     const forDir = projectDir;
-    invoke<PathEntry[]>("list_project_paths", { projectDir })
+    withHpcConfirm((confirmed) =>
+      invoke<PathEntry[]>("list_project_paths", { projectDir, ...confirmedArg(confirmed) }),
+    )
       .then((entries) => {
         if (pathsFor.current !== forDir) return; // dir changed since; stale result
         setPaths(entries);
         setNamesLoaded(true);
       })
-      .catch(() => {
+      .catch((e) => {
         if (pathsFor.current !== forDir) return;
-        pathsFor.current = null; // let a retry re-fetch
+        const declined = hpcGuardRefusal(e) !== null;
+        // A declined walk stays declined for this dir; anything else may retry.
+        if (!declined) pathsFor.current = null;
+        setNamesDeclined(declined);
         setPaths([]);
         setNamesLoaded(true);
       });
@@ -157,12 +177,20 @@ export function FileTreeSearch({
     const id = ++reqId.current;
     setLoading(true);
     const timer = setTimeout(() => {
-      invoke<SearchMatch[]>("project_search", {
-        projectDir: scopeDir,
-        query: trimmed,
-        caseSensitive,
-        maxResults: MAX_CONTENT_RESULTS,
-      })
+      // A host-pinned project names its folder scope relative to the project:
+      // the host walk resolves it below the project's root.
+      const where = hostPinned
+        ? { projectDir, ...(scopeRel ? { relRoot: scopeRel } : {}) }
+        : { projectDir: scopeDir };
+      withHpcConfirm((confirmed) =>
+        invoke<SearchMatch[]>("project_search", {
+          ...where,
+          query: trimmed,
+          caseSensitive,
+          maxResults: MAX_CONTENT_RESULTS,
+          ...confirmedArg(confirmed),
+        }),
+      )
         .then((matches) => {
           if (reqId.current !== id) return;
           setContent(matches);
@@ -174,12 +202,13 @@ export function FileTreeSearch({
           if (reqId.current !== id) return;
           setContent([]);
           setContentSearched(true);
-          setError(String(e));
+          // A declined HPC question is an answer, worded at render.
+          setError(hpcGuardRefusal(e) ? DECLINED : String(e));
           setLoading(false);
         });
     }, CONTENT_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [mode, scopeDir, trimmed, caseSensitive]);
+  }, [mode, scopeDir, trimmed, caseSensitive, hostPinned, projectDir, scopeRel]);
 
   // Opens through the same shared policy `FileTree`/`FileBrowser` use (native
   // viewer in the focused subwindow, reusing an already-open tab for that exact
@@ -223,6 +252,9 @@ export function FileTreeSearch({
   if (mode === "name") {
     if (!namesLoaded && paths.length === 0) {
       return <div className="file-tree-empty">{t("search.searching")}</div>;
+    }
+    if (namesDeclined) {
+      return <div className="file-tree-empty">{t("search.hostDeclined")}</div>;
     }
     if (nameResults.length === 0) {
       return <div className="file-tree-empty">{t("fileTreeSearch.noMatchingFiles")}</div>;
@@ -279,6 +311,9 @@ export function FileTreeSearch({
   }
 
   // content mode
+  if (error === DECLINED) {
+    return <div className="file-tree-empty">{t("search.hostDeclined")}</div>;
+  }
   if (error) {
     return (
       <div className="file-tree-error" style={{ padding: "6px 8px", wordBreak: "break-all" }}>

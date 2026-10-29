@@ -116,7 +116,7 @@ pub mod box_store;
 pub mod fs_confine;
 pub mod prompt_blame;
 pub mod remote;
-pub use remote::{agent_host_move, remote_credentials, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
+pub use remote::{agent_host_move, remote_credentials, remote_scaffold, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
 pub use app_core::services::remote_agents;
 pub mod restore_service;
 pub mod root_mcp;

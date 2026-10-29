@@ -1211,7 +1211,8 @@ fn probe_script_runs_in_a_real_shell_and_parses() {
     let sha = repo_behind_by_one(dir); // leaves `main` checked out, `feat` ahead
     std::fs::write(dir.join("base.txt"), b"edited\n").unwrap(); // tracked, dirty
 
-    let snap = parse_probe_block(&run_sh(dir, PROBE_SCRIPT))
+    // What the host runs: the script behind the hardening `git` function.
+    let snap = parse_probe_block(&run_sh(dir, &hardened_remote_script(PROBE_SCRIPT)))
         .expect("the batched probe must parse its own script's output");
     assert!(snap.is_repo && !snap.probe_error);
     assert!(matches!(&snap.head, Some(HeadRef::Branch { name, .. }) if name == "main"));
@@ -1363,7 +1364,7 @@ fn ancestry_script_runs_in_a_real_shell_and_agrees_with_merge_base() {
     // main is strictly behind feat → (dest=main is ancestor of source=feat) = true,
     // and the reverse false. Plus a self-pair, which is an ancestor of itself.
     let pairs = vec![(main.clone(), feat.clone()), (feat.clone(), feat.clone())];
-    let out = run_sh(dir, &ancestry_script(&pairs));
+    let out = run_sh(dir, &hardened_remote_script(&ancestry_script(&pairs)));
     let got = parse_ancestry_block(&out, 2).expect("batched ancestry must parse");
     assert_eq!(got, vec![(true, false), (true, true)]);
 
@@ -2348,4 +2349,123 @@ fn pairing_into_the_mirror_refuses_to_clobber_unproven_local_files() {
     .into_iter()
     .collect();
     assert!(pairing_collisions(&source, &untracked).is_empty());
+}
+
+/// A remote-only project (a VM included) has no mirror for lockstep to pair: every
+/// mirror-touching lockstep command refuses with the sentinel, and `start` no-ops.
+#[test]
+fn lockstep_refuses_a_remote_only_project() {
+    let spec = |extra: serde_json::Value| -> RemoteSpec {
+        let mut v = serde_json::json!({ "host": "host.example", "remote_path": "/srv/p" });
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(v).unwrap()
+    };
+    assert_eq!(lockstep_refusal(&spec(serde_json::json!({}))), None);
+    assert_eq!(lockstep_refusal(&spec(serde_json::json!({ "remote_only": false }))), None);
+    for posture in [serde_json::json!({ "remote_only": true }), serde_json::json!({ "vm": true })] {
+        let refusal = lockstep_refusal(&spec(posture.clone())).unwrap_or_default();
+        assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{posture}: {refusal}");
+    }
+}
+
+/// `Peer::Remote` runs its background verbs (`status`, `checkout`, `merge`,
+/// `commit`) hardened like `Peer::Local`: hooks pinned off and no fsmonitor, all as
+/// `-c` pairs before the verb, which is followed by the caller's args unchanged.
+#[test]
+fn the_remote_peer_runs_git_hardened_with_hooks_off() {
+    let args = remote_git_args(&["merge", "--ff-only", "-q", "abc123"]);
+    let verb = args.iter().position(|a| a == "merge").expect("the verb survives");
+    assert_eq!(&args[verb..], ["merge", "--ff-only", "-q", "abc123"]);
+    let pairs = &args[..verb];
+    assert!(pairs.len().is_multiple_of(2) && pairs.chunks(2).all(|p| p[0] == "-c"), "{pairs:?}");
+    let has = |kv: &str| pairs.chunks(2).any(|p| p[1] == kv);
+    assert!(has("core.hooksPath="), "hooks off: {pairs:?}");
+    assert!(has("core.fsmonitor=false"), "{pairs:?}");
+    assert!(has("protocol.ext.allow=never"), "{pairs:?}");
+    // Byte-identical to what the local arm hands git, so both parse the same.
+    assert_eq!(args, crate::services::git_hardened::hardened_git_args(&["merge", "--ff-only", "-q", "abc123"]));
+}
+
+/// The batched scripts run `git status` / `merge-base` on the host every poll. Run
+/// through [`hardened_remote_script`] (as `probe` and `ancestry_map` send them), a
+/// repo's `core.fsmonitor` program and its `post-index-change` hook never run.
+#[cfg(unix)]
+#[test]
+fn the_batched_host_scripts_run_no_repo_programs() {
+    use std::os::unix::fs::PermissionsExt;
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_batched_host_scripts_run_no_repo_programs");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    repo_behind_by_one(&dir);
+    let marker = tmp.path().join("marker");
+    let program = |path: &Path, tag: &str| {
+        std::fs::write(path, format!("#!/bin/sh\necho {tag} >> '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let fsmonitor = tmp.path().join("fsmonitor.sh");
+    program(&fsmonitor, "fsmonitor");
+    program(&dir.join(".git").join("hooks").join("post-index-change"), "hook");
+    let set = crate::paths::command_no_window("git")
+        .args(["config", "core.fsmonitor", &fsmonitor.to_string_lossy()])
+        .current_dir(&dir)
+        .status()
+        .unwrap();
+    assert!(set.success());
+    // A tracked file with stale stat data: `git status` refreshes the index.
+    std::fs::write(dir.join("base.txt"), b"edited\n").unwrap();
+
+    let snap = parse_probe_block(&run_sh(&dir, &hardened_remote_script(PROBE_SCRIPT))).expect("parses");
+    assert!(snap.is_repo && snap.dirty_tracked && !snap.probe_error, "{snap:?}");
+    let main = String::from_utf8_lossy(&Peer::Local(dir.clone()).run(&["rev-parse", "main"]).unwrap().stdout)
+        .trim()
+        .to_string();
+    let pairs = vec![(main.clone(), main)];
+    assert!(parse_ancestry_block(&run_sh(&dir, &hardened_remote_script(&ancestry_script(&pairs))), 1).is_some());
+    assert!(!marker.exists(), "a repo program ran: {:?}", std::fs::read_to_string(&marker));
+
+    // The same probe unwrapped (what the host used to run) does run them, on a git
+    // that honours both; that is what the wrapper is for.
+    run_sh(&dir, PROBE_SCRIPT);
+    if !marker.exists() {
+        eprintln!("this git ran neither program unwrapped; the negative check above still holds");
+    }
+}
+
+/// A `diff`/`log -p` a batched script may grow gets the local arm's diff-driver
+/// flags too: a host repo's `diff.external` program runs bare, never through
+/// [`hardened_remote_script`]. Other verbs pass through unchanged.
+#[cfg(unix)]
+#[test]
+fn the_batched_host_scripts_turn_the_diff_drivers_off() {
+    use std::os::unix::fs::PermissionsExt;
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_batched_host_scripts_turn_the_diff_drivers_off");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    repo_behind_by_one(&dir);
+    let marker = tmp.path().join("marker");
+    let external = tmp.path().join("external.sh");
+    std::fs::write(&external, format!("#!/bin/sh\necho external >> '{}'\n", marker.display())).unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let set = crate::paths::command_no_window("git")
+        .args(["config", "diff.external", &external.to_string_lossy()])
+        .current_dir(&dir)
+        .status()
+        .unwrap();
+    assert!(set.success());
+    std::fs::write(dir.join("base.txt"), b"edited\n").unwrap();
+
+    let out = run_sh(&dir, &hardened_remote_script("git diff; git log -p -1 >/dev/null; git rev-parse --verify --quiet HEAD"));
+    assert!(out.contains("+edited"), "git's own diff ran: {out}");
+    assert!(!marker.exists(), "diff.external ran: {:?}", std::fs::read_to_string(&marker));
+    // The control: bare, the same `git diff` runs the planted program.
+    run_sh(&dir, "git diff >/dev/null");
+    assert!(marker.exists(), "the planted diff.external is live");
 }

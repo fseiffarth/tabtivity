@@ -14,7 +14,7 @@ import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ConnectToServer } from "../server/ConnectToServer";
-import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "./MobileAccessPicker";
+import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "./MobileAccessPicker";
 import { projectHostKind } from "../../lib/projectTabHost";
 import type { ProjectEntry } from "../../types";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
@@ -535,7 +535,7 @@ export function MobileSettings() {
       : <>{project.name} <UntestedTag id="mobile-every-project-type" /></>
   );
   const projectRowTitle = (project: ProjectEntry) => {
-    const host = projectHostKind(project);
+    const host = phoneReachHost(project);
     return host === "local" ? undefined : t(HOST_REACH_KEY[host]);
   };
   // With the search empty only the shared rows are listed — a long project
@@ -837,7 +837,7 @@ export function MobileSettings() {
             x={phonePicker.x}
             y={phonePicker.y}
             kind={phonePicker.kind}
-            host={phonePicker.kind === "project" ? projectHostKind(target as ProjectEntry) : undefined}
+            host={phonePicker.kind === "project" ? phoneReachHost(target as ProjectEntry) : undefined}
             enabled={target[MOBILE_ACCESS_KEY] ?? false}
             devices={target[MOBILE_DEVICES_KEY]}
             onApply={(enabled, list) => phonePicker.kind === "project"

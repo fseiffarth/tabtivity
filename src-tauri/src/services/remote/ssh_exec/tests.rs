@@ -11,6 +11,7 @@ fn spec(user: Option<&str>, host: &str, port: Option<u16>, remote_path: &str) ->
         key_auth: None,
         persist_sessions: None,
         vm: None,
+        remote_only: None,
         label: None,
         extra: HashMap::new(),
     }
@@ -1058,6 +1059,50 @@ fn git_ssh_args_shape_target_then_remote_command_last() {
     }
 }
 
+/// With the host's `timeout`, the host git runs under it at the verb's own
+/// ceiling plus the margin (so the local bound reports first); without it the
+/// command is exactly the plain one. Plain words either way — no shell syntax a
+/// non-POSIX login shell could trip on.
+#[test]
+fn a_host_git_call_is_bounded_on_the_host_too() {
+    use crate::services::git_bounded::{LONG_TIMEOUT, READ_TIMEOUT};
+    use crate::services::git_hardened::{hardened_git_args, hooked_git_args};
+    let status = hardened_git_args(&["status", "--porcelain"]);
+    let push = hooked_git_args(&["push"]);
+    assert_eq!(host_timeout_secs(&status), READ_TIMEOUT.as_secs() + 30);
+    assert_eq!(host_timeout_secs(&push), LONG_TIMEOUT.as_secs() + 30);
+    let args = vec!["status".to_string()];
+    assert_eq!(
+        bounded_remote_git_command("/srv/a && git b", &args, Some(150)),
+        "cd '/srv/a && git b' && timeout -k 10 150 git 'status'"
+    );
+    assert_eq!(bounded_remote_git_command("/srv/p", &args, None), remote_git_command("/srv/p", &args));
+    let s = spec(None, "h", None, "/srv/p");
+    assert_eq!(
+        git_ssh_args_within(&s, &args, Some(150)).unwrap().last().unwrap(),
+        "cd '/srv/p' && timeout -k 10 150 git 'status'"
+    );
+}
+
+/// The probe's bounded form runs on this machine's `timeout` (when it has one)
+/// and its output parses — the same words the host gets.
+#[cfg(unix)]
+#[test]
+fn the_host_git_probe_parses_on_a_real_shell() {
+    use crate::services::git_hardened::{parse_git_version, HOST_GIT_PROBE, HOST_GIT_PROBE_BOUNDED};
+    for probe in [HOST_GIT_PROBE_BOUNDED, HOST_GIT_PROBE] {
+        let Ok(out) = std::process::Command::new("sh").args(["-c", probe]).output() else {
+            continue;
+        };
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(parse_git_version(&text).is_some(), "{probe}: {text}");
+        } else {
+            eprintln!("{probe} did not run here; skipped");
+        }
+    }
+}
+
 #[test]
 fn git_ssh_args_includes_port() {
     let s = spec(None, "h", Some(2222), "/p");
@@ -1072,4 +1117,43 @@ fn git_ssh_args_rejects_bad_remote_path_and_host() {
     // ssh runs (it would otherwise be embedded in the remote shell string).
     assert!(git_ssh_args(&spec(None, "h", None, "-rf"), &["status".to_string()]).is_err());
     assert!(git_ssh_args(&spec(None, "-evil", None, "/p"), &["status".to_string()]).is_err());
+}
+
+// ── bounded one-shot helpers (remote_mkdir_p, remote_git_init) ─────────
+
+/// A hung one-shot ssh helper is stopped at its ceiling and says what it was,
+/// instead of holding project creation forever; a quick one answers its output.
+#[cfg(unix)]
+#[test]
+fn a_hung_one_shot_ssh_helper_is_stopped_and_named() {
+    use crate::services::git_bounded::{NOT_A_HANG, TEST_TIMEOUT};
+    use std::time::{Duration, Instant};
+    TEST_TIMEOUT.with(|t| t.set(Some(Duration::from_millis(300))));
+    let mut cmd = std::process::Command::new("sh");
+    cmd.args(["-c", "sleep 30"]);
+    let started = Instant::now();
+    let err = bounded_ssh_output(cmd, "mkdir").expect_err("times out");
+    TEST_TIMEOUT.with(|t| t.set(None));
+    assert!(err.starts_with("mkdir over ssh timed out"), "{err}");
+    assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
+
+    let mut ok = std::process::Command::new("sh");
+    ok.args(["-c", "printf done"]);
+    assert_eq!(bounded_ssh_output(ok, "git init").expect("ran").stdout, b"done");
+}
+
+/// `remote_mkdir_p` and `remote_git_init` run through the bound, never a bare
+/// `.output()` (plan review sibling fix): read off the source so a later edit
+/// cannot quietly unbound them.
+#[test]
+fn the_one_shot_ssh_helpers_are_bounded() {
+    let src = include_str!("../ssh_exec.rs");
+    for name in ["pub fn remote_mkdir_p(", "pub fn remote_git_init("] {
+        let start = src.find(name).unwrap_or_else(|| panic!("{name} not found"));
+        let body = &src[start..];
+        let end = body.find("\n}\n").expect("fn end");
+        let body = &body[..end];
+        assert!(body.contains("bounded_ssh_output("), "{name} is not bounded");
+        assert!(!body.contains(".output()"), "{name} runs a bare .output()");
+    }
 }

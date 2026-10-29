@@ -993,6 +993,13 @@ pub async fn create_tab(
     {
         return Err(CreateRefusal::DesktopUnavailable);
     }
+    // A project that lives only on its host (a remote-only one) has no mirror
+    // for the owner to start a tab in, and its host tabs are the window's to
+    // spawn: refused before a record is written, never a `LocalMirror` launch
+    // (`discovery::launch_place` answers `NotAttachable` for all of it too).
+    if project.pinned {
+        return Err(CreateRefusal::NotAttachable);
+    }
     let agent = match request.kind {
         CreateTabKind::Shell => None,
         CreateTabKind::Agent => Some(
@@ -2236,6 +2243,7 @@ mod tests {
                 status: "active".into(),
                 kind: ScopeKind::Assistant,
                 host: super::super::discovery::ProjectHost::Local,
+                remote_only: false,
                 live_sessions: 0,
                 last_activity: None,
                 pending_reviews: None,
@@ -2252,6 +2260,7 @@ mod tests {
             create: super::super::discovery::CreateVerdict::All,
             primary_host: None,
             machines: Vec::new(),
+            pinned: false,
         };
         let seen: Arc<std::sync::Mutex<Vec<PtyOptions>>> = Arc::default();
         let sink = seen.clone();
@@ -2274,7 +2283,8 @@ mod tests {
 
     /// A `projects.json` with one project of each host type: `local1`, `remote1`
     /// (default mirror), `remote2` (a chosen mirror), `box1` (a container whose
-    /// spec scope is `all`), `box2` (scope `agents`), `vm1`.
+    /// spec scope is `all`), `box2` (scope `agents`), `vm1`, `ronly1` (remote-only,
+    /// with a stale `mirror` key naming the chosen folder).
     fn write_projects(state: &Path) -> std::path::PathBuf {
         let chosen = state.join("chosen-mirror");
         let rows = json!([
@@ -2289,6 +2299,8 @@ mod tests {
               "sandbox": { "enabled": true, "scope": "agents" } },
             { "id": "vm1", "name": "V", "status": "active", "directory": state.join("vm1"),
               "remote": { "host": "example.invalid" }, "vm": { "enabled": true } },
+            { "id": "ronly1", "name": "RO", "status": "active", "directory": state.join("remote-projects").join("ronly1"),
+              "remote": { "host": "example.invalid", "remote_only": true }, "mirror": chosen },
         ]);
         std::fs::write(state.join("projects.json"), rows.to_string()).unwrap();
         chosen
@@ -2392,6 +2404,46 @@ mod tests {
         }
     }
 
+    /// A remote-only project's tabs never launch here: no kind or saved
+    /// location makes one `LocalMirror` — it has no mirror, whatever a stale
+    /// `mirror` key or a leftover default folder says — not a local-model tab
+    /// (D11), and not a scheduler's restart either.
+    #[test]
+    fn a_remote_only_projects_tabs_never_launch_here() {
+        let state = state_dir();
+        let chosen = write_projects(state.path());
+        std::fs::create_dir_all(&chosen).unwrap();
+        std::fs::create_dir_all(crate::services::remote_sync::default_mirror_dir_in(state.path(), "ronly1")).unwrap();
+        let directory = state.path().join("remote-projects").join("ronly1");
+        for kind in ["agent", "shell", "local_agent"] {
+            for location in [None, Some("local"), Some("remote"), Some("host:w1"), Some("bogus")] {
+                assert_eq!(placed(state.path(), "ronly1", kind, location, &directory).unwrap_err(), NotAttachable, "{kind} {location:?}");
+                assert!(restart_options(state.path(), "ronly1", &stored(kind, location, &directory)).is_err(), "{kind} {location:?}");
+            }
+        }
+    }
+
+    /// With no window, the owner starts nothing in a remote-only project: its
+    /// host tabs are the window's to spawn and it has no mirror, so the create
+    /// is refused before a record is written or anything is launched.
+    #[tokio::test]
+    async fn the_owner_creates_nothing_in_a_remote_only_project() {
+        let state = state_dir();
+        write_projects(state.path());
+        let stand_in = crate::services::remote_sync::default_mirror_dir_in(state.path(), "ronly1");
+        let project = ResolvedProject {
+            folder: false,
+            pinned: true,
+            ..scope_of(ProjectHost::Remote, "ronly1", &stand_in, CreateVerdict::Agents)
+        };
+        let (launcher, seen) = recording_launcher();
+        let refused = create_tab(state.path(), b"k", &project, &agent_request("ronly1"), &[claude_choice()], &[], &launcher).await;
+        assert!(matches!(refused, Err(CreateRefusal::NotAttachable)), "{refused:?}");
+        assert!(seen.lock().unwrap().is_empty(), "nothing launched");
+        assert!(!session_file(state.path(), "ronly1").exists(), "no record written");
+        assert!(!stand_in.exists(), "no mirror made");
+    }
+
     fn scope_of(host: ProjectHost, raw_id: &str, root: &Path, create: CreateVerdict) -> ResolvedProject {
         ResolvedProject {
             public: super::super::discovery::PublicProject {
@@ -2400,6 +2452,7 @@ mod tests {
                 status: "active".into(),
                 kind: ScopeKind::Project,
                 host,
+                remote_only: false,
                 live_sessions: 0,
                 last_activity: None,
                 pending_reviews: None,
@@ -2416,6 +2469,7 @@ mod tests {
             create,
             primary_host: None,
             machines: Vec::new(),
+            pinned: false,
         }
     }
 

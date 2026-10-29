@@ -1081,6 +1081,11 @@ export interface RemoteSpec {
    *  forward. Written by the backend at creation/boot, never user-set. What a
    *  VM-aware surface (the pill glyph, the spawn guard) dispatches on. */
   vm?: boolean;
+  /** Remote-only project (`docs/remote_only_projects_plan.md`): no local
+   *  mirror; files, tabs and git all live on the host. Written by the backend
+   *  at creation (or a conversion), read-only to the renderer. Absent = `vm`
+   *  (a VM is remote-only). Read it through `isHostPinned`, never directly. */
+  remote_only?: boolean;
 }
 
 /** Egress policy for a project VM (`docs/vm_projects_plan.md`): `off` = the
@@ -1474,6 +1479,9 @@ export interface ExportPreview {
   directoryMissing: boolean;
   mirror: string | null;
   mirrorMissing: boolean;
+  /** The project keeps no local copy (remote-only): `mirror` is null and the
+   *  counts are 0 — its files can only be packed from the host. */
+  remoteOnly?: boolean;
   files: number;
   bytes: number;
   gitFiles: number;
@@ -1538,6 +1546,49 @@ export interface BundleInfo {
   /** Name of the project a remote bundle's host+path already belongs to. */
   siteConflict?: string;
   suggestedParent: string;
+  /** The project comes back without a local copy (a remote-only bundle that
+   *  carries no tree): no mirror folder is made, so none is asked for. */
+  remoteOnly?: boolean;
+}
+
+/** `remote_project_init_host`'s answer: what the host setup of a remote-only
+ *  project wrote. `gitType` is the project's git type afterwards — `"none"` when
+ *  the host could not `git init`. */
+export interface HostInitReport {
+  written: string[];
+  kept: string[];
+  git: "initialized" | "failed" | "skipped";
+  committed: boolean;
+  gitType: string;
+}
+
+/** `remote_unpair_mirror_preview`'s answer: what "Stop keeping a local copy"
+ *  would leave behind (`docs/remote_only_projects_plan.md` E8). Every count
+ *  blocks the conversion; `stoppedWorkers` is only named. */
+export interface UnpairPreview {
+  lockstepEnabled: boolean;
+  mirrorIsRepo: boolean;
+  commitsNotOnHost: number;
+  uncommitted: number;
+  unpushedSyncEdits: number;
+  localTabs: number;
+  stoppedWorkers: string[];
+  mirrorPath: string;
+  mirrorExists: boolean;
+  /** Where the folder ends up (empty when there is none). */
+  keptAt: string;
+  /** The folder is moved out of the state dir to `keptAt`. */
+  moves: boolean;
+  fingerprint: string;
+}
+
+/** `remote_unpair_mirror`'s answer. */
+export interface UnpairOutcome {
+  entry: ProjectEntry;
+  keptAt: string;
+  moved: boolean;
+  /** The move out failed; the folder is still at `keptAt`. */
+  moveError?: string | null;
 }
 
 /** `import_project_export`'s answer. */

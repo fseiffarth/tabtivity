@@ -29,6 +29,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { formatRemoteTarget, resolveLocalMirror } from "../../types";
+import { isHostPinned } from "../../lib/projectTabHost";
 import type { ComputeHost, GlobalMachine, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
@@ -248,7 +249,12 @@ export function RemoteMachinesWindow({
   const [username, setUsername] = useState("");
   const [remotePath, setRemotePath] = useState(project.remote?.remote_path ?? "");
   const [label, setLabel] = useState("");
-  const [syncCopy, setSyncCopy] = useState(false);
+  const [syncCopyChoice, setSyncCopy] = useState(false);
+  // D4: a synced-copy worker is fed from the mirror, which a remote-only project
+  // does not have — only shared-filesystem / no-sync machines (the backend refuses
+  // the rest too, `add_compute_host`).
+  const noMirror = isHostPinned(project);
+  const syncCopy = syncCopyChoice && !noMirror;
   const [addError, setAddError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -864,6 +870,8 @@ export function RemoteMachinesWindow({
                 <span>{t("remoteMachines.syncCopyLabel")}</span>
                 <Toggle
                   checked={!shared}
+                  // Turning a stale synced worker *off* stays possible.
+                  disabled={noMirror && shared}
                   onChange={(e) =>
                     void patch(
                       w.id,
@@ -873,6 +881,9 @@ export function RemoteMachinesWindow({
                   size="sm"
                 />
               </label>
+              {noMirror && shared && (
+                <div className="settings-help">{t("remoteMachines.syncCopyRemoteOnly")}</div>
+              )}
               {!shared && (
                 <label className="remote-machine-toggle" title={t("remoteMachines.autoSyncTitle")}>
                   <span>{t("remoteMachines.autoSyncLabel")}</span>
@@ -1116,13 +1127,23 @@ export function RemoteMachinesWindow({
 
               <label className="container-settings-toggle" title={t("remoteMachines.sharedFsToggleTitleStep2")}>
                 <span>{t("remoteMachines.syncCopyLabel")}</span>
-                <Toggle checked={syncCopy} onChange={(e) => setSyncCopy(e.target.checked)} size="sm" />
+                <Toggle
+                  checked={syncCopy}
+                  disabled={noMirror}
+                  onChange={(e) => setSyncCopy(e.target.checked)}
+                  size="sm"
+                />
               </label>
               <p className="settings-help">
                 {syncCopy
                   ? t("remoteMachines.syncCopyDescOn")
                   : t("remoteMachines.syncCopyDescOff")}
               </p>
+              {noMirror && (
+                <p className="settings-help">
+                  {t("remoteMachines.syncCopyRemoteOnly")} <UntestedTag id="remoteMachines.syncCopyRemoteOnly" />
+                </p>
+              )}
 
               <label>
                 <span className="remote-machine-add-label">

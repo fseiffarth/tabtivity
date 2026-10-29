@@ -68,9 +68,16 @@ async fn clear_host_bound_state(project_id: &str, manifest: &SyncManifestState) 
             None
         }
     };
+    clear_host_bound_files(project_id);
+    manifest.lock().await.remove(project_id);
+}
+
+/// The on-disk half of [`clear_host_bound_state`], for a caller that already
+/// holds the project's mutation lock (`commands::remote_unpair::remote_unpair_mirror`)
+/// and evicts the manifest cache itself.
+pub(crate) fn clear_host_bound_files(project_id: &str) {
     let _ = fs::remove_file(crate::services::remote_sync::manifest_path(project_id));
     let _ = fs::remove_file(crate::services::git_peer::state_path(project_id));
-    manifest.lock().await.remove(project_id);
 }
 
 /// Compute a `<name>` leaf under `parent` for a remote (SSH) project's local
@@ -726,7 +733,7 @@ pub(crate) fn entry_is_vm(entry: &ProjectEntry) -> bool {
 /// as it is rather than papered over with a copy. No-op when `src` does not
 /// exist. `src` is only removed after the whole copy succeeded, so a failed
 /// fallback leaves the source intact and the move retryable.
-fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
+pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
     if !src.exists() {
         return Ok(());
     }
@@ -741,6 +748,31 @@ fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
     copy_tree_core(src, dst, true)?;
     fs::remove_dir_all(src).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Move the working copy `src` to the free name `dst` (its parent exists):
+/// `rename`, falling back to copy-then-remove only across drives/filesystems
+/// (EXDEV on Unix, ERROR_NOT_SAME_DEVICE on Windows). The copy carries `.git`
+/// and nested repos — it is a move of the tree, history included, and the
+/// source is removed right after; the duplicate-style [`copy_dir_all`] dropped
+/// both and then deleted them. `dst` is free, so any other rename failure (a
+/// file held open, a permission refusal) is reported as `could not move
+/// {what}: …` rather than turned into a duplicate tree. `rename` is
+/// `fs::rename` outside tests.
+fn move_fresh_tree(
+    src: &Path,
+    dst: &Path,
+    what: &str,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    match rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if crate::paths::is_cross_device(&e) => {
+            copy_tree_core(src, dst, true)?;
+            fs::remove_dir_all(src).map_err(|e| e.to_string())
+        }
+        Err(e) => Err(format!("could not move {what}: {e}")),
+    }
 }
 
 /// The ONE recursive tree-copy core behind both copiers ([`move_tree`]'s
@@ -2159,6 +2191,7 @@ pub fn create_project_for_phone(name: &str, device_id: &str) -> Result<String, P
         git_provider: None,
         skip_scaffold: false,
         remote: None,
+        remote_only: false,
         mirror_parent: None,
         vm: None,
     })
@@ -2343,6 +2376,11 @@ fn patch_compute_hosts(
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
             patch(&mut hosts);
+            // The posture is the project's, read off its primary spec; on a
+            // worker the flattened field means nothing and is never stored.
+            for host in &mut hosts {
+                host.spec.remote_only = None;
+            }
             let value = serde_json::to_value(&hosts).map_err(|e| e.to_string())?;
             if hosts.is_empty() {
                 entry.extra.remove("compute_hosts");
@@ -2370,6 +2408,10 @@ pub fn set_project_run_host(
     let value = location
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
+    if let Some(refusal) = run_host_refusal(spec.as_ref(), value.as_deref()) {
+        return Err(refusal);
+    }
 
     patch_project_entry_mirrored(
         &project_id,
@@ -2391,14 +2433,42 @@ pub fn set_project_run_host(
     Ok(value)
 }
 
+/// Why `location` may not be the run host of the project whose primary spec is
+/// `spec`, or `None`. `"local"` is the mirror, and a remote-only project (a VM
+/// included) has none: its shells run on one of its hosts.
+fn run_host_refusal(spec: Option<&RemoteSpec>, location: Option<&str>) -> Option<String> {
+    (location == Some("local") && spec.is_some_and(RemoteSpec::is_remote_only)).then(|| {
+        crate::services::remote::remote_only_refusal(
+            "shells of this project cannot run on this computer; it keeps no local copy. Pick one of its hosts.",
+        )
+    })
+}
+
+/// Why `host` may not be added to the project whose primary spec is `spec`, or
+/// `None`. A **synced-copy** worker (`sync_code` without `shared_fs`) is fed from
+/// the mirror (`services::worker_sync`), and a remote-only project (a VM included)
+/// has none; a shared-filesystem or manual-only worker works unchanged (D4).
+fn compute_host_refusal(spec: Option<&RemoteSpec>, host: &ComputeHost) -> Option<String> {
+    (host.sync_code && !host.shared_fs && spec.is_some_and(RemoteSpec::is_remote_only)).then(|| {
+        crate::services::remote::remote_only_refusal(
+            "this project keeps no local copy to sync code to the machine from; add it as a shared-filesystem machine or with code sync off",
+        )
+    })
+}
+
 /// Add an extra "worker" host to a remote project (the pill's "Add machine").
 /// Mints a stable `id` when the incoming spec has none, then appends it. Returns
 /// the full updated host list. The primary (`Project.remote`) is untouched.
+/// Refuses a synced-copy worker on a remote-only project ([`compute_host_refusal`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn add_compute_host(
     project_id: String,
     mut host: ComputeHost,
 ) -> Result<Vec<ComputeHost>, String> {
+    let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
+    if let Some(refusal) = compute_host_refusal(spec.as_ref(), &host) {
+        return Err(refusal);
+    }
     if host.id.trim().is_empty() {
         host.id = uuid_v4();
     }
@@ -2426,7 +2496,9 @@ pub fn remove_compute_host(
 /// Patch a worker host's toggles (`sync_code` / `pull_outputs` / `auto_connect` /
 /// `shared_fs` / `label` / `user`). Each argument is applied only when `Some`, so a
 /// caller can flip one flag without restating the others. Unknown `host_id` is a
-/// silent no-op (returns the unchanged list).
+/// silent no-op (returns the unchanged list). A patch that would turn a worker of a
+/// remote-only project into a synced copy is refused, exactly as
+/// [`add_compute_host`] refuses adding one ([`HostPatch::apply_checked`]).
 ///
 /// `user` is the worker twin of [`set_project_remote_user`] — the SSH login name,
 /// editable from the same Connect dialog — and clears `key_auth` for the same
@@ -2442,42 +2514,81 @@ pub fn patch_compute_host(
     label: Option<String>,
     user: Option<String>,
 ) -> Result<Vec<ComputeHost>, String> {
-    patch_compute_hosts(&project_id, |hosts| {
+    let patch = HostPatch { sync_code, pull_outputs, auto_connect, shared_fs, label, user };
+    let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
+    let refused = std::sync::Mutex::new(None);
+    let hosts = patch_compute_hosts(&project_id, |hosts| {
         if let Some(h) = hosts.iter_mut().find(|h| h.id == host_id) {
-            if let Some(v) = &user {
-                let t = v.trim();
-                let next = if t.is_empty() {
-                    None
-                } else {
-                    Some(t.to_string())
-                };
-                if h.spec.user != next {
-                    h.spec.user = next;
-                    h.spec.key_auth = None;
-                }
-            }
-            if let Some(v) = shared_fs {
-                h.shared_fs = v;
-            }
-            if let Some(v) = sync_code {
-                h.sync_code = v;
-            }
-            if let Some(v) = pull_outputs {
-                h.pull_outputs = v;
-            }
-            if let Some(v) = auto_connect {
-                h.spec.auto_connect = v.then_some(true);
-            }
-            if let Some(v) = &label {
-                let t = v.trim();
-                h.spec.label = if t.is_empty() {
-                    None
-                } else {
-                    Some(t.to_string())
-                };
+            if let Err(why) = patch.apply_checked(h, spec.as_ref()) {
+                *refused.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why);
             }
         }
-    })
+    })?;
+    match refused.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner) {
+        Some(why) => Err(why),
+        None => Ok(hosts),
+    }
+}
+
+/// The fields [`patch_compute_host`] changes, each only when `Some`.
+#[derive(Default)]
+struct HostPatch {
+    sync_code: Option<bool>,
+    pull_outputs: Option<bool>,
+    auto_connect: Option<bool>,
+    shared_fs: Option<bool>,
+    label: Option<String>,
+    user: Option<String>,
+}
+
+impl HostPatch {
+    /// Apply the patch to `h`, or leave `h` as it was and answer the refusal when
+    /// the patched host is one [`compute_host_refusal`] refuses for the project
+    /// whose primary spec is `spec`. Pure.
+    fn apply_checked(&self, h: &mut ComputeHost, spec: Option<&RemoteSpec>) -> Result<(), String> {
+        let mut next = h.clone();
+        self.apply(&mut next);
+        if let Some(refusal) = compute_host_refusal(spec, &next) {
+            return Err(refusal);
+        }
+        *h = next;
+        Ok(())
+    }
+
+    fn apply(&self, h: &mut ComputeHost) {
+        if let Some(v) = &self.user {
+            let t = v.trim();
+            let next = if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            };
+            if h.spec.user != next {
+                h.spec.user = next;
+                h.spec.key_auth = None;
+            }
+        }
+        if let Some(v) = self.shared_fs {
+            h.shared_fs = v;
+        }
+        if let Some(v) = self.sync_code {
+            h.sync_code = v;
+        }
+        if let Some(v) = self.pull_outputs {
+            h.pull_outputs = v;
+        }
+        if let Some(v) = self.auto_connect {
+            h.spec.auto_connect = v.then_some(true);
+        }
+        if let Some(v) = &self.label {
+            let t = v.trim();
+            h.spec.label = if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            };
+        }
+    }
 }
 
 /// Normalize a list of category tags: trim each, drop blanks, and de-duplicate
@@ -2803,13 +2914,17 @@ fn open_in_file_manager_blocking(path: String) -> Result<(), String> {
 /// disk". Returns the current mirror root (its stored override or the default),
 /// whether that directory still exists on disk (a user may have deleted it), and
 /// a suggested fresh location (`ssh/<name>` under the projects root) to default a
-/// relocation picker to. Errors for a local project.
+/// relocation picker to. Errors for a local project. A remote-only project (VMs
+/// included) answers `remote_only: true` with an empty `path` and `exists:
+/// false`: it has no mirror, and its default path is not one even when an old
+/// folder sits there.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MirrorStatus {
     pub path: String,
     pub exists: bool,
     pub suggested: String,
+    pub remote_only: bool,
 }
 
 ///
@@ -2820,16 +2935,31 @@ pub async fn remote_mirror_status(project_id: String, name: String) -> Result<Mi
 }
 
 fn remote_mirror_status_blocking(project_id: String, name: String) -> Result<MirrorStatus, String> {
-    if crate::services::remote::remote_target_for(&project_id).is_none() {
+    let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Err("not a remote project".to_string());
+    };
+    let suggested = default_remote_mirror(&name, &project_id, &read_projects_list()?);
+    let suggested = suggested.to_string_lossy().to_string();
+    if target.spec.is_remote_only() {
+        return Ok(MirrorStatus { path: String::new(), exists: false, suggested, remote_only: true });
     }
     let dir = crate::services::remote_sync::mirror_dir(&project_id);
-    let suggested = default_remote_mirror(&name, &project_id, &read_projects_list()?);
     Ok(MirrorStatus {
         exists: dir.is_dir(),
         path: dir.to_string_lossy().to_string(),
-        suggested: suggested.to_string_lossy().to_string(),
+        suggested,
+        remote_only: false,
     })
+}
+
+/// Why a mirror relocation (`what`: the act, for the message) is refused for
+/// this spec: a remote-only project (VMs included) has no mirror to point
+/// elsewhere or move, and recording one would mint a local copy. `None` for a
+/// project that keeps one. The E8 conversion back to a mirrored project is the
+/// only sanctioned way to give a remote-only project a mirror.
+pub(crate) fn mirror_relocation_refusal(spec: &RemoteSpec, what: &str) -> Option<String> {
+    spec.is_remote_only()
+        .then(|| crate::services::remote::remote_only_refusal(&format!("{what}: this project keeps no local copy")))
 }
 
 /// Point a remote (SSH) project's local mirror at `path`, creating the directory,
@@ -2838,23 +2968,128 @@ fn remote_mirror_status_blocking(project_id: String, name: String) -> Result<Mir
 /// Used when the user relocates a mirror whose folder was deleted. Returns the
 /// resolved absolute path. Creates a folder and writes `project.json`, so on a
 /// worker.
+///
+/// `keep_local_copy: true` is the Remote-only → Remote conversion (E8's
+/// reverse, `remote_unpair`): only with it is a remote-only project accepted,
+/// and then `remote_only` is removed in the same write that records the
+/// mirror — before the caller turns lockstep on (`git_peer_set_enabled`),
+/// which refuses a remote-only project. VMs are refused (v1). Without it a
+/// remote-only project is refused as before, so the "relocate a missing
+/// mirror" caller can never convert one by accident. A conversion runs under
+/// the project's mutation lock and starts auto-sync when connected; pairing is
+/// the existing lockstep flow, host authoritative.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn set_remote_mirror_dir(project_id: String, path: String) -> Result<String, String> {
-    app_core::rt::try_blocking("project", move || set_remote_mirror_dir_blocking(project_id, path)).await
+pub async fn set_remote_mirror_dir(
+    ctx: Ctx,
+    project_id: String,
+    path: String,
+    keep_local_copy: Option<bool>,
+) -> Result<String, String> {
+    let keep = keep_local_copy == Some(true);
+    if !keep {
+        return app_core::rt::try_blocking("project", move || set_remote_mirror_dir_blocking(project_id, path, false))
+            .await;
+    }
+    let op = crate::services::sync_op::acquire_manual(&project_id).await?;
+    let id = project_id.clone();
+    let resolved = app_core::rt::try_blocking("project", move || set_remote_mirror_dir_blocking(id, path, true)).await?;
+    drop(op);
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+    if crate::services::remote::is_connected(pool, &project_id).await {
+        crate::services::sync_auto::start(
+            ctx.0.clone(),
+            pool.clone(),
+            ctx.get::<SyncManifestState>().clone(),
+            ctx.get::<crate::services::sync_auto::AutoSyncState>(),
+            &project_id,
+        )
+        .await;
+    }
+    Ok(resolved)
 }
 
-fn set_remote_mirror_dir_blocking(project_id: String, path: String) -> Result<String, String> {
-    if crate::services::remote::remote_target_for(&project_id).is_none() {
+pub fn set_remote_mirror_dir_blocking(project_id: String, path: String, keep_local_copy: bool) -> Result<String, String> {
+    let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Err("not a remote project".to_string());
+    };
+    let converting = keep_local_copy && target.spec.is_remote_only();
+    // Before anything is created: the folder would be the mirror being refused.
+    if converting {
+        let entry = crate::services::remote::project_entry(&project_id)?;
+        if let Some(refusal) = crate::commands::remote_unpair::keep_local_copy_refusal(&entry) {
+            return Err(refusal);
+        }
+    } else if let Some(refusal) = mirror_relocation_refusal(&target.spec, "setting a mirror folder") {
+        return Err(refusal);
     }
     let dir = PathBuf::from(path.trim());
     if dir.as_os_str().is_empty() {
         return Err("Mirror path is empty".to_string());
     }
+    if converting {
+        // The folder becomes this project's tree: never a relative path, the
+        // state dir (where `mirror_dir`'s default lives), or another
+        // project's folder or mirror.
+        if !dir.is_absolute() {
+            return Err("the local copy's folder must be an absolute path".to_string());
+        }
+        if dir.starts_with(storage::state_dir()) {
+            return Err("pick a folder outside the app's state folder".to_string());
+        }
+        if let Some(conflict) = find_project_conflict(
+            &read_projects_list()?,
+            &ProjectSite::Local { dir: &dir.to_string_lossy() },
+            Some(&project_id),
+        ) {
+            return Err(conflict_message(&conflict));
+        }
+    }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let resolved = dir.to_string_lossy().to_string();
-    persist_mirror_dir(&project_id, &resolved)?;
+    if converting {
+        // Before the flip, while every tab still reads as pinned: an agent tab
+        // saved with no location would otherwise default to the new mirror.
+        let entry = crate::services::remote::project_entry(&project_id)?;
+        crate::commands::remote_unpair::pin_saved_tabs_to_host(&project_id, &entry.local_file)?;
+        persist_kept_local_copy(&project_id, &resolved)?;
+    } else {
+        persist_mirror_dir(&project_id, &resolved)?;
+    }
     Ok(resolved)
+}
+
+/// [`persist_mirror_dir`] for the Remote-only → Remote conversion: the same
+/// write also drops `remote_only` from the spec (both copies), field-level, so
+/// every other spec key survives. Refuses when the registry no longer reads
+/// remote-only (another writer got there first) or now reads as a VM.
+fn persist_kept_local_copy(project_id: &str, resolved: &str) -> Result<(), String> {
+    patch_project_entry_mirrored(
+        project_id,
+        |entry| {
+            if let Some(refusal) = crate::commands::remote_unpair::keep_local_copy_refusal(entry) {
+                return Err(refusal);
+            }
+            if !crate::services::remote::entry_is_remote_only(entry) {
+                return Err("this project already keeps a local copy".to_string());
+            }
+            let remote = entry
+                .extra
+                .get_mut("remote")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| "not a remote project".to_string())?;
+            remote.remove("remote_only");
+            entry
+                .extra
+                .insert("mirror".to_string(), Value::String(resolved.to_string()));
+            Ok(())
+        },
+        |project, ()| {
+            if let Some(remote) = project.remote.as_mut() {
+                remote.remote_only = None;
+            }
+            project.mirror = Some(resolved.to_string());
+        },
+    )
 }
 
 /// Persist a remote project's chosen mirror root into both `projects.json`
@@ -2895,8 +3130,11 @@ pub fn move_remote_mirror_blocking(
     name: String,
     parent_dir: String,
 ) -> Result<String, String> {
-    if crate::services::remote::remote_target_for(&project_id).is_none() {
+    let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Err("not a remote project".to_string());
+    };
+    if let Some(refusal) = mirror_relocation_refusal(&target.spec, "moving the mirror") {
+        return Err(refusal);
     }
     let parent = PathBuf::from(parent_dir.trim());
     if parent.as_os_str().is_empty() {
@@ -2920,18 +3158,8 @@ pub fn move_remote_mirror_blocking(
 
     let old = crate::services::remote_sync::mirror_dir(&project_id);
     if old.exists() && old != new_root {
-        // A plain rename fails across drives/filesystems. Fall back to
-        // copy-then-remove for that case only; `new_root` is a free name, so any
-        // other failure (a file held open, a permission refusal) is reported
-        // rather than turned into a duplicate tree.
-        match fs::rename(&old, &new_root) {
-            Ok(()) => {}
-            Err(e) if crate::paths::is_cross_device(&e) => {
-                copy_dir_all(&old, &new_root)?;
-                fs::remove_dir_all(&old).map_err(|e| e.to_string())?;
-            }
-            Err(e) => return Err(format!("could not move the mirror: {e}")),
-        }
+        // `new_root` is a free name; a cross-drive move keeps `.git`.
+        move_fresh_tree(&old, &new_root, "the mirror", |a, b| fs::rename(a, b))?;
     } else {
         fs::create_dir_all(&new_root).map_err(|e| e.to_string())?;
     }
@@ -3239,27 +3467,30 @@ fn git_scaffold_commit(dir: &Path) {
     use crate::commands::git::hookless_git_command_in;
     use crate::services::git_bounded::BoundedOutput;
     let _ = hookless_git_command_in(dir, &["add", "-A"]).bounded_output();
-    const MSG: &str = concat!("Initial ", crate::app_name!(), " scaffold");
-    let committed = hookless_git_command_in(dir, &["commit", "-m", MSG])
+    let committed = hookless_git_command_in(dir, &["commit", "-m", SCAFFOLD_COMMIT_MSG])
         .bounded_output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !committed {
-        let _ = hookless_git_command_in(
-            dir,
-            &[
-                "-c",
-                concat!("user.name=", crate::app_name!()),
-                "-c",
-                concat!("user.email=", crate::app_slug!(), "@localhost"),
-                "commit",
-                "-m",
-                MSG,
-            ],
-        )
-        .bounded_output();
+        let mut args = SCAFFOLD_COMMIT_IDENTITY.to_vec();
+        args.extend(["commit", "-m", SCAFFOLD_COMMIT_MSG]);
+        let _ = hookless_git_command_in(dir, &args).bounded_output();
     }
 }
+
+/// The message of the one commit a scaffold is created with (here and on a
+/// remote-only project's host, `services::remote_scaffold`).
+pub(crate) const SCAFFOLD_COMMIT_MSG: &str = concat!("Initial ", crate::app_name!(), " scaffold");
+
+/// The committer a scaffold commit falls back to when git resolves no identity
+/// of its own (a fresh machine or host with no `user.name`/`user.email`), so
+/// the commit never fails for lack of one and leaves HEAD unborn.
+pub(crate) const SCAFFOLD_COMMIT_IDENTITY: [&str; 4] = [
+    "-c",
+    concat!("user.name=", crate::app_name!()),
+    "-c",
+    concat!("user.email=", crate::app_slug!(), "@localhost"),
+];
 
 /// True when `dir` is a git repo whose current branch is **unborn** (no commits
 /// yet — `rev-parse HEAD` fails). Used to decide whether `extend` must seed an
@@ -3550,8 +3781,12 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
 /// working copy for a mount-free remote project (the remote host tree is
 /// never touched here — see `finish_import`/`create_project`). `None` when
 /// there is no local target to repair (e.g. a remote project with no mirror
-/// recorded yet).
+/// recorded yet, or a remote-only one, whose leftover `mirror` pointer is not a
+/// copy it keeps and must not be written into).
 fn scaffold_target_for_entry(entry: &ProjectEntry) -> Option<(PathBuf, bool)> {
+    if crate::services::remote::entry_is_remote_only(entry) {
+        return None;
+    }
     let git_type = entry
         .extra
         .get("git_type")
@@ -4107,6 +4342,14 @@ pub struct CreateProjectRequest {
     /// project root becomes the local sshfs mountpoint for `remote`.
     #[serde(default)]
     pub remote: Option<RemoteSpec>,
+    /// The new remote project keeps **no local copy** (Remote-only,
+    /// `docs/remote_only_projects_plan.md`): no mirror, every tab and git on the
+    /// host. The one way the renderer asks for the posture: a `remote_only` sent
+    /// inside `remote` is dropped ([`strip_renderer_posture`]), and only the
+    /// backend writes the spec field ([`apply_requested_posture`]). Ignored
+    /// without `remote`, and for a VM (remote-only already).
+    #[serde(default)]
+    pub remote_only: bool,
     /// Remote projects only: the user-chosen parent directory for the local
     /// mirror (the dialog's "Local location"). The mirror lands at
     /// `<mirror_parent>/<name>`. Absent → the default `projects-ssh` root.
@@ -4127,8 +4370,89 @@ pub async fn create_project(req: CreateProjectRequest) -> Result<ProjectEntry, S
     app_core::rt::try_blocking("project", move || create_project_blocking(req)).await
 }
 
+/// A renderer-sent spec never carries the posture: `remote_only` is the
+/// backend's to write (from a request's top-level `remoteOnly`, or a
+/// conversion), so one arriving inside `remote` is dropped before anything
+/// stores it (`docs/remote_only_projects_plan.md`, engine rule 1).
+fn strip_renderer_posture(remote: Option<&mut RemoteSpec>) {
+    if let Some(remote) = remote {
+        remote.remote_only = None;
+    }
+}
+
+/// The one place a creation or import writes the posture: the request's
+/// top-level `remoteOnly` becomes `spec.remote_only = Some(true)`, called right
+/// after [`strip_renderer_posture`] so nothing the renderer put inside `remote`
+/// survives. A VM request is left alone (remote-only already, and its
+/// `remote_only` is never written), as is a request without `remote`.
+fn apply_requested_posture(remote: Option<&mut RemoteSpec>, remote_only: bool, is_vm: bool) {
+    if let Some(remote) = remote {
+        if remote_only && !is_vm {
+            remote.remote_only = Some(true);
+        }
+    }
+}
+
+/// What creating a project does on this machine, decided once from the request
+/// so each kind's row is unit-tested ([`remote_creation_plan`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CreationPlan {
+    /// Best-effort `mkdir -p` of the host root (plain Remote, remote-only).
+    mkdir_host: bool,
+    /// A local mirror is resolved, recorded and created.
+    mirror: bool,
+    /// The scaffold (and its `git init` + commit) is written on this machine:
+    /// into the mirror of a plain Remote, into the folder of a local project.
+    local_scaffold: bool,
+    /// Lockstep may be armed (still only when the mirror really is a repo).
+    arm_lockstep: bool,
+    /// The honesty rule: a requested git that left no local `.git` downgrades
+    /// the label. Off where the repo is made on the host, not here.
+    check_local_git: bool,
+}
+
+/// [`CreationPlan`] for a request whose posture was already applied
+/// ([`apply_requested_posture`], or the VM's synthesized spec). A VM project
+/// and a remote-only one keep nothing local but `project.json`: no mirror, no
+/// local scaffold, no lockstep, no local `.git` check (the repo is made on the
+/// host later — the in-guest clone or init for a VM, `remote_project_init_host`
+/// for remote-only). They differ only in the host `mkdir`: a VM's host does not
+/// exist yet.
+fn remote_creation_plan(req: &CreateProjectRequest, is_vm: bool) -> CreationPlan {
+    let Some(remote) = req.remote.as_ref() else {
+        return CreationPlan {
+            mkdir_host: false,
+            mirror: false,
+            local_scaffold: !req.skip_scaffold,
+            arm_lockstep: false,
+            check_local_git: true,
+        };
+    };
+    if is_vm || remote.is_remote_only() {
+        return CreationPlan {
+            mkdir_host: !is_vm,
+            mirror: false,
+            local_scaffold: false,
+            arm_lockstep: false,
+            check_local_git: false,
+        };
+    }
+    CreationPlan {
+        mkdir_host: true,
+        mirror: true,
+        local_scaffold: !req.skip_scaffold,
+        arm_lockstep: true,
+        // A remote `skip_scaffold` leaves its mirror repo-less on purpose
+        // (lockstep keys off that), so there is nothing to check.
+        check_local_git: !req.skip_scaffold,
+    }
+}
+
 pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectEntry, String> {
     let id = uuid_v4();
+    let is_vm = req.vm.as_ref().is_some_and(|v| v.enabled);
+    strip_renderer_posture(req.remote.as_mut());
+    apply_requested_posture(req.remote.as_mut(), req.remote_only, is_vm);
 
     // A VM project IS a remote project (the one architectural decision of
     // `docs/vm_projects_plan.md`): synthesize its RemoteSpec here. Host and
@@ -4136,7 +4460,6 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
     // (`services::vm::record_vm_endpoint`); `key_auth`/`auto_connect` are by
     // construction — the per-VM keypair authenticates, and boot-on-activate
     // rides the ordinary armed auto-connect path with no prompt possible.
-    let is_vm = req.vm.as_ref().is_some_and(|v| v.enabled);
     if is_vm {
         if req.remote.is_some() {
             return Err("a VM project cannot also have an SSH remote".to_string());
@@ -4151,6 +4474,7 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
             key_auth: Some(true),
             persist_sessions: None,
             vm: Some(true),
+            remote_only: None,
             label: Some("VM".to_string()),
             extra: HashMap::new(),
         });
@@ -4205,6 +4529,7 @@ fn create_claimed_project(
     registered: &ProjectsList,
     is_vm: bool,
 ) -> Result<ProjectEntry, String> {
+    let plan = remote_creation_plan(&req, is_vm);
     // Mount-free remote: a remote project's `directory` is a LOCAL per-project
     // state dir that holds its `project.json` (tabs/time/etc.); the project's
     // actual tree lives on the host at `remote.remote_path` and is reached over
@@ -4216,7 +4541,7 @@ fn create_claimed_project(
             // A VM project's host doesn't exist yet — its project dir is
             // created by cloud-init at first boot, so there is nothing to
             // mkdir over SSH here.
-            if !is_vm {
+            if plan.mkdir_host {
                 if let Err(e) = crate::services::ssh_exec::remote_mkdir_p(remote) {
                     eprintln!(
                         "create_project: remote mkdir '{}' failed (create it on the host if needed): {e}",
@@ -4238,13 +4563,15 @@ fn create_claimed_project(
     // whose sync posture is the *inverse* of a network remote's
     // (`docs/vm_projects_plan.md`, "Sync posture"): remote-only by default,
     // zero agent-written bytes on the host, a mirror only ever by explicit
-    // later opt-in.
-    let mirror = if is_vm {
-        None
-    } else {
+    // later opt-in. None for a remote-only project too: it keeps no local copy
+    // at all (`docs/remote_only_projects_plan.md`), and its scaffold and repo
+    // are made on the host by `remote_project_init_host` after the first connect.
+    let mirror = if plan.mirror {
         req.remote.as_ref().map(|_| {
             resolve_remote_mirror(req.mirror_parent.as_deref(), &req.name, &id, registered)
         })
+    } else {
+        None
     };
 
     // A remote project's local `directory` only holds project.json (created
@@ -4259,13 +4586,13 @@ fn create_claimed_project(
         // it like a local project (honoring skip_scaffold); manual sync pushes it.
         if let Some(mirror) = &mirror {
             let mirror_dir = Path::new(mirror);
-            if req.skip_scaffold {
-                let _ = std::fs::create_dir_all(mirror_dir);
-            } else {
+            if plan.local_scaffold {
                 scaffold_project(mirror_dir, git_type != "none").map_err(|e| e.to_string())?;
+            } else {
+                let _ = std::fs::create_dir_all(mirror_dir);
             }
         }
-    } else if !req.skip_scaffold {
+    } else if plan.local_scaffold {
         scaffold_project(&dir, git_type != "none").map_err(|e| e.to_string())?;
     } else {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -4285,9 +4612,10 @@ fn create_claimed_project(
     // worktree. A local `skip_scaffold` skips the template files but still inits
     // the repo, so it is checked the same way; a remote one leaves its mirror
     // repo-less on purpose (lockstep below keys off that), so it is left untouched.
-    // …except a VM project, which has no local tree at all to check — its repo
-    // materializes inside the guest (the in-VM clone, or a `git init` there).
-    if git_type != "none" && !is_vm && !(req.skip_scaffold && req.remote.is_some()) {
+    // …except a VM or remote-only project, which has no local tree at all to
+    // check — its repo materializes on the host (the in-VM clone or a `git init`
+    // there; `remote_project_init_host`, which applies the same downgrade).
+    if git_type != "none" && plan.check_local_git {
         let git_target = mirror.as_deref().map(Path::new).unwrap_or(dir.as_path());
         if !git_target.join(".git").exists() {
             eprintln!(
@@ -4374,7 +4702,7 @@ fn create_claimed_project(
     // `skip_scaffold` creates the mirror without `git init`, and lockstep on a
     // repo-less mirror has no history to seed from. Best-effort — a write failure
     // just leaves lockstep off (its default), never fails project creation.
-    if let Some(mirror) = mirror.as_deref() {
+    if let Some(mirror) = mirror.as_deref().filter(|_| plan.arm_lockstep) {
         // `is_dir()` here is DELIBERATE, unlike the two `.exists()` fixes above (#23 I6):
         // a mirror whose `.git` is a *file* is a linked worktree, and lockstep against a
         // worktree would `reset --hard` a branch backed by an object store the parent
@@ -4422,6 +4750,14 @@ pub struct ImportProjectRequest {
     /// remote directory and the only supported `mode` is "keep".
     #[serde(default)]
     pub remote: Option<RemoteSpec>,
+    /// The new remote project keeps **no local copy** (Remote-only,
+    /// `docs/remote_only_projects_plan.md`): no mirror, every tab and git on the
+    /// host. The one way the renderer asks for the posture: a `remote_only` sent
+    /// inside `remote` is dropped ([`strip_renderer_posture`]), and only the
+    /// backend writes the spec field ([`apply_requested_posture`]). Ignored
+    /// without `remote`, and for a VM (remote-only already).
+    #[serde(default)]
+    pub remote_only: bool,
     /// Remote imports only: the user-chosen parent directory for the local
     /// mirror (the dialog's "Local location"). The mirror lands at
     /// `<mirror_parent>/<name>`. Absent → the default `projects-ssh` root.
@@ -4434,7 +4770,10 @@ pub async fn import_project(req: ImportProjectRequest) -> Result<ProjectEntry, S
     app_core::rt::try_blocking("project", move || import_project_blocking(req)).await
 }
 
-pub fn import_project_blocking(req: ImportProjectRequest) -> Result<ProjectEntry, String> {
+pub fn import_project_blocking(mut req: ImportProjectRequest) -> Result<ProjectEntry, String> {
+    strip_renderer_posture(req.remote.as_mut());
+    // An import never makes a VM project.
+    apply_requested_posture(req.remote.as_mut(), req.remote_only, false);
     if req.name.trim().is_empty() {
         return Err("Project name is invalid".to_string());
     }
@@ -4504,18 +4843,10 @@ pub fn import_project_blocking(req: ImportProjectRequest) -> Result<ProjectEntry
                 copy_dir_all(&source, &dest)?;
             } else {
                 fs::create_dir_all(projects_root()).map_err(|e| e.to_string())?;
-                // A plain rename fails across drives/filesystems (EXDEV on Unix,
-                // ERROR_NOT_SAME_DEVICE on Windows). Fall back to copy-then-remove
-                // for that case only; `dest` was checked absent above, so any other
-                // failure is reported rather than turned into a duplicate tree.
-                match fs::rename(&source, &dest) {
-                    Ok(()) => {}
-                    Err(e) if crate::paths::is_cross_device(&e) => {
-                        copy_dir_all(&source, &dest)?;
-                        fs::remove_dir_all(&source).map_err(|e| e.to_string())?;
-                    }
-                    Err(e) => return Err(format!("could not move the folder: {e}")),
-                }
+                // `dest` was checked absent above. A cross-drive move keeps the
+                // folder's `.git` (the duplicate-style copy used to drop it and
+                // then delete the source).
+                move_fresh_tree(&source, &dest, "the folder", |a, b| fs::rename(a, b))?;
             }
             dest
         }
@@ -4645,9 +4976,11 @@ fn finish_import(
 
     // Remote imports mirror into `<name>` under the chosen "Local location"
     // (`mirror_parent`), defaulting to the `tabtivity/projects-ssh/` root; created up
-    // front so a local-on-remote tab can cwd into it immediately. None for local.
+    // front so a local-on-remote tab can cwd into it immediately. None for local,
+    // and None for a remote-only import: it keeps no local copy at all.
     let mirror = remote
         .as_ref()
+        .filter(|spec| !spec.is_remote_only())
         .map(|_| resolve_remote_mirror(req.mirror_parent.as_deref(), &req.name, &id, &list));
     if let Some(mirror) = &mirror {
         let _ = std::fs::create_dir_all(mirror);
@@ -4716,6 +5049,136 @@ fn finish_import(
     })
 }
 
+/// What [`remote_project_init_host`] did on the host.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostInitReport {
+    /// Project-relative scaffold files created by this call.
+    pub written: Vec<String>,
+    /// Scaffold paths left alone: something was already there.
+    pub kept: Vec<String>,
+    /// `"initialized"` (a repo exists on the host), `"failed"` (it could not be
+    /// made: the project's `git_type` is now `none`), `"skipped"` (no git asked).
+    pub git: String,
+    /// The scaffold commit was made by this call.
+    pub committed: bool,
+    /// The project's `git_type` after the call.
+    pub git_type: String,
+}
+
+/// Why `remote_project_init_host` refuses a project, `None` when it may run:
+/// only a remote-only project is set up on its host. A plain Remote's scaffold
+/// and repo live in its mirror (lockstep carries them over), and a VM project
+/// is set up inside its guest at first boot. Pure.
+fn host_init_refusal(spec: &RemoteSpec) -> Option<String> {
+    if spec.vm == Some(true) {
+        return Some("a VM project is set up inside its virtual machine".to_string());
+    }
+    if !spec.is_remote_only() {
+        return Some("this project keeps a local copy; its scaffold and repository live there".to_string());
+    }
+    None
+}
+
+/// The label downgrade `finish_import` applies when no repo could be made on the
+/// host, for the registry entry: `git_type` `none`, no hosting provider. Pure.
+fn downgrade_entry_git_label(entry: &mut ProjectEntry) {
+    entry
+        .extra
+        .insert("git_type".to_string(), Value::String("none".to_string()));
+    entry.extra.remove("git_provider");
+}
+
+/// [`downgrade_entry_git_label`] for the project's own `project.json`.
+fn downgrade_project_git_label(project: &mut Project) {
+    project.git_type = Some("none".to_string());
+    project.git_provider = None;
+}
+
+/// Set up a new **remote-only** project's folder on its host
+/// (`docs/remote_only_projects_plan.md`, E6b): `mkdir -p` the root, write the
+/// scaffold there when `scaffold` (create-new over SFTP, nothing already there
+/// is touched: `services::remote_scaffold`), and when `git`, `git init` it and
+/// make the scaffold commit (hardened, hooks off). If the host repo cannot be
+/// made, the project's `git_type` is downgraded to `none` (the honesty rule
+/// `finish_import` applies). The creation dialog calls it after the project's
+/// first connect, so a password-auth host works too; it needs that pooled
+/// connection and refuses without one. Idempotent: safe to retry after a
+/// dropped connection. A clone never calls it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn remote_project_init_host(
+    ctx: Ctx,
+    project_id: String,
+    scaffold: bool,
+    git: bool,
+) -> Result<HostInitReport, String> {
+    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+    let target = crate::services::remote::remote_target_for(&project_id)
+        .ok_or_else(|| "not a remote project".to_string())?;
+    if let Some(refusal) = host_init_refusal(&target.spec) {
+        return Err(refusal);
+    }
+    let sftp = crate::services::remote::pooled_sftp(pool, &project_id)
+        .await
+        .ok_or_else(|| "the project is not connected; connect first".to_string())?;
+    let root = target.spec.remote_path.clone();
+    crate::services::sftp::mkdir_on(&sftp, &root).await?;
+    let outcome = if scaffold {
+        crate::services::remote_scaffold::write_scaffold(&sftp, &root, git).await?
+    } else {
+        Default::default()
+    };
+    drop(sftp);
+    app_core::rt::try_blocking("project", move || init_host_git_blocking(&target, git, outcome)).await
+}
+
+/// The git half of [`remote_project_init_host`]: ssh round trips, on a worker.
+fn init_host_git_blocking(
+    target: &crate::services::remote::RemoteTarget,
+    git: bool,
+    outcome: crate::services::remote_scaffold::ScaffoldOutcome,
+) -> Result<HostInitReport, String> {
+    let mut report = HostInitReport {
+        written: outcome.written,
+        kept: outcome.kept,
+        git: "skipped".to_string(),
+        committed: false,
+        git_type: String::new(),
+    };
+    if git {
+        match crate::services::remote_scaffold::init_host_repo(target, &outcome.committable) {
+            Ok(repo) => {
+                report.git = "initialized".to_string();
+                report.committed = repo.committed;
+            }
+            Err(e) => {
+                eprintln!(
+                    "remote_project_init_host: git init '{}' failed; recording git_type=none so the \
+                     project is not labeled git without a repo on the host: {e}",
+                    target.spec.remote_path
+                );
+                report.git = "failed".to_string();
+                patch_project_entry_mirrored(
+                    &target.project_id,
+                    |entry| {
+                        downgrade_entry_git_label(entry);
+                        Ok(())
+                    },
+                    |project, ()| downgrade_project_git_label(project),
+                )?;
+            }
+        }
+    }
+    let entry = crate::services::remote::project_entry(&target.project_id)?;
+    report.git_type = entry
+        .extra
+        .get("git_type")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+        .to_string();
+    Ok(report)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtendProjectRemoteRequest {
@@ -4770,7 +5233,9 @@ struct ExtendPrep {
 /// The guards and reads of [`extend_project_to_remote`], then its first side
 /// effects (the remote root, the state dir) — in that order, so a refused or
 /// unreadable `project.json` stops extend before anything is touched.
-fn extend_prepare_blocking(req: ExtendProjectRemoteRequest) -> Result<ExtendPrep, String> {
+fn extend_prepare_blocking(mut req: ExtendProjectRemoteRequest) -> Result<ExtendPrep, String> {
+    // Extending keeps the local tree as the mirror: never remote-only.
+    strip_renderer_posture(Some(&mut req.remote));
     let entry = crate::services::remote::project_entry(&req.project_id)?;
     let list = read_projects_list()?;
 

@@ -202,6 +202,7 @@ export function ProjectHoverCard({
               {t.label}
             </span>
           ))}
+          {typeTags.some((tag) => tag.key === "remoteOnly") && <UntestedTag id="projectType.tagRemoteOnly" />}
         </span>
       )}
       {project.remote ? (

@@ -24,6 +24,7 @@ import {
   placeForFocused,
 } from "../../../lib/terminal/pythonRun";
 import { RunHostPicker } from "../../tabs/TabLocalityBadges";
+import { isHostPinned } from "../../../lib/projectTabHost";
 import { useRunHostPrefStore } from "../../../stores/remote/runHostPref";
 import {
   isSlurmScript,
@@ -633,6 +634,7 @@ export function TextView({
           fileSideLocation(path, project?.remote?.remote_path) === "remote" && (
             <RunHostPicker
               projectId={projectId}
+              pinned={isHostPinned(project)}
               primaryHost={project?.remote?.label || project?.remote?.host}
               computeHosts={project?.compute_hosts}
             />

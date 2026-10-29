@@ -42,9 +42,10 @@ export interface LocalityMenuState {
 }
 
 /** A tab's effective location, or `"local"` for a missing tab — the `current`
- *  a `LocalityMenu` dots, without the caller importing the tabs helpers. */
-export function tabLocation(tab: TabEntry | undefined): TabLocation {
-  return tab ? effectiveTabLocation(tab) : "local";
+ *  a `LocalityMenu` dots, without the caller importing the tabs helpers.
+ *  `pinned`: the project lives only on its host (`isHostPinned`). */
+export function tabLocation(tab: TabEntry | undefined, pinned = false): TabLocation {
+  return tab ? effectiveTabLocation(tab, { hostPinned: pinned }) : pinned ? "remote" : "local";
 }
 
 /** The file-source badge on a viewer tab: a clickable Local/Remote toggle when
@@ -152,11 +153,15 @@ export function TabTexLinkBadge({
  *  tab kind. Callers gate on the project being remote before rendering it. */
 export function TabLocalityBadge({
   tab,
+  pinned = false,
   primaryHost,
   computeHosts,
   onOpen,
 }: {
   tab: TabEntry;
+  /** The project lives only on its host (`isHostPinned`): the tab runs there
+   *  whatever it stored, so the badge says ☁ and the menu has no Local row. */
+  pinned?: boolean;
   primaryHost?: string;
   computeHosts?: LocalityHost[];
   /** Open the menu anchored under the badge; `startOnMachines` jumps straight to
@@ -166,7 +171,7 @@ export function TabLocalityBadge({
 }) {
   const t = useT();
   if (!isLocatableKind(tab.kind)) return null;
-  const loc = effectiveTabLocation(tab);
+  const loc = effectiveTabLocation(tab, { hostPinned: pinned });
   const hostId = remoteHostIdOf(loc);
   const label = localityHostLabel(loc, { primaryHost, computeHosts });
   return (
@@ -187,10 +192,12 @@ export function TabLocalityBadge({
 /** The two-level locality menu (Local ↔ Remote, then a machine sub-picker). A
  *  worker that holds no code (not shared-fs, sync off) is offered disabled — sync
  *  always stays with the primary; the worker only runs scripts. Rendered in a
- *  portal with a click-away backdrop. */
+ *  portal with a click-away backdrop. On a `pinned` project it is the machine
+ *  list alone: there is no local copy to run in, so no Local row to go back to. */
 export function LocalityMenu({
   menu,
   current,
+  pinned = false,
   primaryHost,
   computeHosts,
   onClose,
@@ -202,6 +209,8 @@ export function LocalityMenu({
   /** The location currently selected (dotted in the menu). A tab's
    *  `effectiveTabLocation`, or a file viewer's run-host preference. */
   current: TabLocation;
+  /** The project lives only on its host (`isHostPinned`). */
+  pinned?: boolean;
   primaryHost?: string;
   computeHosts?: LocalityHost[];
   onClose: () => void;
@@ -222,7 +231,7 @@ export function LocalityMenu({
     loc: TabLocation,
     glyph: ReactNode,
     text: string,
-    opts?: { disabled?: boolean; note?: string; title?: string },
+    opts?: { disabled?: boolean; note?: string; title?: string; tag?: ReactNode },
   ) => (
     <button
       key={loc}
@@ -236,6 +245,7 @@ export function LocalityMenu({
       </span>
       {text}
       {opts?.note && <span className="tab-menu-hint">{opts.note}</span>}
+      {opts?.tag}
     </button>
   );
   return (
@@ -245,7 +255,7 @@ export function LocalityMenu({
       onClose={onClose}
       className="tab-new-menu"
     >
-        {menu.view === "root" ? (
+        {menu.view === "root" && !pinned ? (
           <>
             {carriesConversation && (
               <div className="tab-new-menu-hint" title={t("tabLocality.carriesConversationTitle")}>
@@ -267,14 +277,21 @@ export function LocalityMenu({
           </>
         ) : (
           <>
-            <button
-              className="tab-new-menu-item tab-menu-back"
-              onClick={() => onChangeView("root")}
-            >
-              <span className="tab-new-menu-dot">‹</span>
-              {t("tabLocality.runOnMachine")}
-              <UntestedTag id="tabLocalityBadges.1" />
-            </button>
+            {pinned ? (
+              <div className="tab-new-menu-hint" title={t("tabLocality.pinnedHostTitle")}>
+                {t("tabLocality.runOnMachine")}
+                <UntestedTag id="tabLocality.pinnedHostTitle" />
+              </div>
+            ) : (
+              <button
+                className="tab-new-menu-item tab-menu-back"
+                onClick={() => onChangeView("root")}
+              >
+                <span className="tab-new-menu-dot">‹</span>
+                {t("tabLocality.runOnMachine")}
+                <UntestedTag id="tabLocalityBadges.1" />
+              </button>
+            )}
             {machineItem(
               "remote",
               <CloudIcon />,
@@ -285,12 +302,13 @@ export function LocalityMenu({
                 `host:${h.id}`,
                 <CloudIcon />,
                 h.label || h.host || h.id,
-                workerRunnable(h)
+                workerRunnable(h, pinned)
                   ? undefined
                   : {
                       disabled: true,
                       note: t("tabLocality.syncOff"),
-                      title: t("tabLocality.syncOffTitle"),
+                      title: t(pinned ? "tabLocality.syncOffPinnedTitle" : "tabLocality.syncOffTitle"),
+                      tag: pinned ? <UntestedTag id="tabLocality.syncedCopyPinned" /> : undefined,
                     },
               ),
             )}
@@ -311,10 +329,14 @@ export function LocalityMenu({
  */
 export function RunHostPicker({
   projectId,
+  pinned = false,
   primaryHost,
   computeHosts,
 }: {
   projectId: string;
+  /** The project lives only on its host (`isHostPinned`): no "this computer"
+   *  choice, and a stored `"local"` preference reads as the primary. */
+  pinned?: boolean;
   primaryHost?: string;
   computeHosts?: LocalityHost[];
 }) {
@@ -325,7 +347,7 @@ export function RunHostPicker({
   // Unset ⇒ the primary, which is where a HOST-side run lands with no choice made
   // (`pythonRunPlan`) — and a host-side file is the only case this control is
   // rendered for, so the label cannot lie about a local run it never governs.
-  const current: TabLocation = pref ?? "remote";
+  const current: TabLocation = pref && !(pinned && pref === "local") ? pref : "remote";
   const label = localityHostLabel(current, { primaryHost, computeHosts });
   const onRemote = remoteHostIdOf(current) !== null;
   return (
@@ -342,7 +364,7 @@ export function RunHostPicker({
             key: projectId,
             x: r.left,
             y: r.bottom + 2,
-            view: onRemote ? "machines" : "root",
+            view: onRemote || pinned ? "machines" : "root",
           });
         }}
       >
@@ -353,6 +375,7 @@ export function RunHostPicker({
         <LocalityMenu
           menu={menu}
           current={current}
+          pinned={pinned}
           primaryHost={primaryHost}
           computeHosts={computeHosts}
           onClose={() => setMenu(null)}

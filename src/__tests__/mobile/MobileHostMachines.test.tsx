@@ -116,6 +116,34 @@ describe("Mobile bridge — an agent on a remote project's machine", () => {
     expect(made).not.toHaveBeenCalled();
   });
 
+  it("starts a remote-only project's agent on its hosts alone, saved in the project's folder", async () => {
+    // No mirror, so no phone folder (`scope.cwd` is ""): the tab is saved with
+    // the project's directory as every host tab is; a synced-copy worker has
+    // nothing feeding it (D4), and a create that names no machine starts here.
+    const pinned: ProjectEntry = {
+      ...rem,
+      mirror: null,
+      remote: { ...rem.remote, remote_only: true } as ProjectEntry["remote"],
+      compute_hosts: [
+        { id: "w1", host: "w1.invalid", user: "u", remote_path: "/srv" },
+        { id: "w3", host: "w3.invalid", user: "u", remote_path: "/srv", shared_fs: true },
+      ] as ProjectEntry["compute_hosts"],
+    };
+    useProjectsStore.setState({ projects: [pinned] } as never);
+    for (const host of ["remote", "host:w3"]) {
+      made.mockClear();
+      expect(await create({ host, idempotency_key: `ro-key-${host}-0123456789` })).toMatchObject({ status: "created" });
+      const options = made.mock.calls[0]?.[0] as { cwd: string; spec: Omit<TabEntry, "key"> };
+      expect(options.cwd).toBe("/state/projects/rem");
+      expect(options.spec).toMatchObject({ location: host, cwd: "/state/projects/rem", kind: "agent" });
+    }
+    made.mockClear();
+    expect(await create({ host: "host:w1" })).toMatchObject({ status: "error", code: "host_not_found" });
+    expect(await create({})).toMatchObject({ status: "error", code: "project_ineligible" });
+    expect(await create({ kind: "shell", agent_id: undefined })).toMatchObject({ status: "error", code: "not_attachable" });
+    expect(made).not.toHaveBeenCalled();
+  });
+
   it("starts nothing on a host that runs on this machine", async () => {
     for (const extra of [{ worktree: "w" }, { cloud: "new" }, { api_key: true }, { local: "l1", agent_id: undefined }]) {
       expect(await create({ host: "remote", ...extra })).toMatchObject({ status: "error", code: "invalid_request" });
