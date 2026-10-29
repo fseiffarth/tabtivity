@@ -1886,6 +1886,7 @@ pub fn run() {
             commands::projects::project_folder_exists,
             commands::projects::extend_project_to_remote,
             commands::projects::detach_project_from_remote,
+            commands::projects::remote_project_init_host,
             commands::projects::get_time_today,
             commands::projects::archive_project,
             commands::projects::forget_project,

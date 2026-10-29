@@ -525,6 +525,96 @@ fn a_renderer_sent_remote_only_is_never_stored() {
     });
 }
 
+fn remote_only_spec(remote_path: &str) -> RemoteSpec {
+    RemoteSpec {
+        user: Some("alice".to_string()),
+        host: "nonexistent.invalid".to_string(),
+        port: None,
+        remote_path: remote_path.to_string(),
+        openvpn: None,
+        auto_connect: None,
+        key_auth: None,
+        persist_sessions: None,
+        vm: None,
+        remote_only: None,
+        label: None,
+        extra: Default::default(),
+    }
+}
+
+/// A remote-only creation or import (the request's top-level `remoteOnly`)
+/// stores `remote_only: true` in both copies and keeps nothing local but
+/// `project.json`: no `extra["mirror"]`, no mirror folder under the chosen
+/// parent or the default one, no scaffold, no lockstep state. A git-backed
+/// create keeps its label (the repo is made on the host later by
+/// `remote_project_init_host`).
+#[test]
+fn a_remote_only_project_keeps_nothing_local() {
+    with_isolated_home("remote-only-create-home", |_| {
+        let mirror_parent = tempdir_in_test_projects("remote-only-create-mirror");
+        let entry = create_project_blocking(CreateProjectRequest {
+            name: "host-only".to_string(),
+            directory: String::new(),
+            description: None,
+            git_type: Some("local".to_string()),
+            git_provider: None,
+            skip_scaffold: false,
+            remote: Some(remote_only_spec("/home/alice/host-only")),
+            remote_only: true,
+            mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
+            vm: None,
+        })
+        .expect("create remote-only project");
+        let stored = get_projects()
+            .expect("get projects")
+            .into_iter()
+            .find(|p| p.id == entry.id)
+            .expect("registered");
+        let remote = stored.extra.get("remote").cloned().expect("a remote spec");
+        assert_eq!(remote.get("remote_only"), Some(&serde_json::json!(true)), "projects.json: {remote}");
+        assert!(!stored.extra.contains_key("mirror"), "no mirror recorded");
+        assert_eq!(stored.extra.get("git_type").and_then(|v| v.as_str()), Some("local"));
+        let display: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&entry.local_file).expect("project.json")).unwrap();
+        assert_eq!(display["remote"]["remote_only"], serde_json::json!(true), "project.json: {display}");
+        assert!(display.get("mirror").is_none_or(|m| m.is_null()), "project.json: {display}");
+
+        let state_dir = PathBuf::from(&entry.local_file).parent().expect("state dir").to_path_buf();
+        let names: Vec<String> = fs::read_dir(&state_dir)
+            .expect("state dir")
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["project.json".to_string()], "no mirror, scaffold or lockstep state");
+        assert_eq!(fs::read_dir(mirror_parent.path()).expect("parent").count(), 0, "no mirror under the parent");
+        assert_eq!(app_lib::services::remote_sync::mirror_dir_opt(&entry.id), None);
+
+        let imported = import_project_blocking(ImportProjectRequest {
+            source_dir: String::new(),
+            name: "host-only-import".to_string(),
+            description: None,
+            git_type: Some("none".to_string()),
+            git_provider: None,
+            mode: "keep".to_string(),
+            scaffold_fill_modes: None,
+            manual_validation_confirmed: None,
+            skip_scaffold: false,
+            remote: Some(remote_only_spec("/home/alice/existing")),
+            remote_only: true,
+            mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
+        })
+        .expect("import remote-only project");
+        let stored = get_projects()
+            .expect("get projects")
+            .into_iter()
+            .find(|p| p.id == imported.id)
+            .expect("registered");
+        assert_eq!(stored.extra["remote"]["remote_only"], serde_json::json!(true));
+        assert!(!stored.extra.contains_key("mirror"), "no mirror recorded");
+        assert_eq!(fs::read_dir(mirror_parent.path()).expect("parent").count(), 0, "no mirror under the parent");
+        assert_eq!(app_lib::services::remote_sync::mirror_dir_opt(&imported.id), None);
+    });
+}
+
 #[test]
 fn import_project_copy_creates_missing_scaffolds_without_overwriting_existing_ones() {
     with_isolated_home("copy-home", |_| {

@@ -395,14 +395,17 @@ mod tests {
                 bytes
             }
         };
-        // A VM (remote-only by default): only bytes in the folder count.
+        // A VM (remote-only always: its `vm` outranks a stray
+        // `remote_only: false`): only bytes in the folder count.
         assert!(!mirror_by_posture(Some(&spec(Some(true), None)), probe(false)));
         assert!(mirror_by_posture(Some(&spec(Some(true), None)), probe(true)));
+        assert!(!mirror_by_posture(Some(&spec(Some(true), Some(false))), probe(false)));
+        assert!(mirror_by_posture(Some(&spec(Some(true), Some(false))), probe(true)));
         assert!(!mirror_by_posture(Some(&spec(None, Some(true))), probe(false)));
         // Not remote-only, or no spec: a mirror, without looking.
         probed.set(false);
         assert!(mirror_by_posture(Some(&spec(None, None)), probe(false)));
-        assert!(mirror_by_posture(Some(&spec(Some(true), Some(false))), probe(false)));
+        assert!(mirror_by_posture(Some(&spec(None, Some(false))), probe(false)));
         assert!(mirror_by_posture(None, probe(false)));
         assert!(!probed.get(), "the folder is probed only for a remote-only project");
     }

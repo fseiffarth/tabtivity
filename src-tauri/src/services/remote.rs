@@ -28,6 +28,8 @@ pub mod agent_host_move;
 // Content search and quick open on a remote-only project's host (E6a).
 pub mod host_search;
 pub mod remote_credentials;
+// A remote-only project's scaffold and first commit, made on the host.
+pub mod remote_scaffold;
 pub mod remote_sync;
 // A host tab's conversation, copied from the host over the pooled SFTP session.
 pub mod remote_transcript;
