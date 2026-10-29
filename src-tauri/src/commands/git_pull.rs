@@ -229,7 +229,8 @@ fn fetch_local(dir: &Path, token: Option<&str>, project_id: Option<&str>) -> Res
         cmd.env(crate::app_env!("GIT_TOKEN"), tok);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
     }
-    cmd.output().map_err(|e| e.to_string())
+    // Bounded (#2349), like `git::push_local`.
+    crate::services::git_bounded::output(cmd)
 }
 
 /// Routed like `git::git_push_blocking`: a remote project whose `origin` lives on

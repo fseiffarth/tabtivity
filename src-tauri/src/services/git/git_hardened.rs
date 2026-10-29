@@ -140,6 +140,12 @@ pub(crate) fn hardened_git_args<S: AsRef<str>>(args: &[S]) -> Vec<String> {
     git_args(args, Hooks::Off)
 }
 
+/// [`git_args`] with the hooks left live: what [`run_git_hooked`] runs.
+#[cfg(test)]
+pub(crate) fn hooked_git_args<S: AsRef<str>>(args: &[S]) -> Vec<String> {
+    git_args(args, Hooks::Live)
+}
+
 /// Whether a git call may run the repo's hooks. `Live` only behind
 /// [`require_hook_trust`] — see [`hardened_git_args`].
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -735,6 +741,8 @@ fn run_git_as(
     hooks: Hooks,
 ) -> Result<std::process::Output, String> {
     match target {
+        // Bounded too, at the same verb's ceiling (`run_git_remote`): a stalled
+        // master must not wedge the caller.
         Some(t) => {
             let args = git_args(args, hooks);
             crate::services::ssh_exec::run_git_remote(&t.spec, &args)

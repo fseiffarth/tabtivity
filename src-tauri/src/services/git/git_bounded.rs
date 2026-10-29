@@ -118,8 +118,14 @@ pub(crate) fn timeout_for<S: AsRef<std::ffi::OsStr>>(args: &[S], hooks_live: boo
 /// carries the hardened `core.hooksPath=` pin.
 fn timeout_of(cmd: &Command) -> Duration {
     let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
-    let hooks_off = args.iter().any(|a| a.to_str() == Some("core.hooksPath="));
-    timeout_for(&args, !hooks_off)
+    timeout_for_args(&args)
+}
+
+/// [`timeout_for`] a git argument list as built (`hardened_git_args` & co.):
+/// hooks count as live unless it carries the `core.hooksPath=` pin.
+pub(crate) fn timeout_for_args<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Duration {
+    let hooks_off = args.iter().any(|a| a.as_ref().to_str() == Some("core.hooksPath="));
+    timeout_for(args, !hooks_off)
 }
 
 fn capped(timeout: Duration) -> Duration {
@@ -386,6 +392,23 @@ pub(crate) fn output_within(mut cmd: Command, timeout: Duration) -> Result<Outpu
     whole(run(&mut cmd, Opts { timeout: Some(timeout), ..Opts::default() })?)
 }
 
+/// [`output`] for git wrapped in another program — `ssh … 'cd … && git …'`
+/// (`ssh_exec::run_git_remote`): the ceiling and the timeout's wording come
+/// from `git_args`, the git argument list before it was wrapped, because
+/// [`verb`] can't find the subcommand inside the wrapper's argv. No
+/// [`hazard`] check: the repo is on the other end.
+pub(crate) fn wrapped_output<S: AsRef<std::ffi::OsStr>>(mut cmd: Command, git_args: &[S]) -> Result<Output, String> {
+    let timeout = timeout_for_args(git_args);
+    match run(&mut cmd, Opts { timeout: Some(timeout), no_precheck: true, ..Opts::default() }) {
+        Err(RunError::TimedOut(_)) => Err(format!(
+            "git {} timed out after {} s and was stopped. The connection to the host may be stalled.",
+            verb(git_args).unwrap_or_default(),
+            capped(timeout).as_secs()
+        )),
+        ran => whole(ran?),
+    }
+}
+
 /// [`output`] as a method, for a builder chain:
 /// `hardened_git_command_in(dir, &args).bounded_output()`.
 pub(crate) trait BoundedOutput {
@@ -646,6 +669,25 @@ mod tests {
         !Path::new(&format!("/proc/{pid}")).exists()
     }
 
+    /// A git call wrapped in ssh is stopped at its git verb's ceiling and
+    /// says which git verb it was — not the wrapper's first argument.
+    #[cfg(unix)]
+    #[test]
+    fn a_wrapped_git_call_is_stopped_and_named_by_its_git_verb() {
+        TEST_TIMEOUT.with(|t| t.set(Some(Duration::from_millis(300))));
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let started = Instant::now();
+        let err = wrapped_output(cmd, &["-c", "core.hooksPath=", "status"]).expect_err("times out");
+        TEST_TIMEOUT.with(|t| t.set(None));
+        assert!(err.starts_with("git status timed out"), "{err}");
+        assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
+
+        let mut ok = Command::new("sh");
+        ok.args(["-c", "printf done"]);
+        assert_eq!(wrapped_output(ok, &["status"]).expect("ran").stdout, b"done");
+    }
+
     #[test]
     fn verbs_and_ceilings() {
         assert_eq!(verb(&["-c", "core.hooksPath=", "-C", "x", "status"]).as_deref(), Some("status"));
@@ -659,6 +701,8 @@ mod tests {
         assert_eq!(timeout_for(&["fetch"], false), LONG_TIMEOUT);
         assert_eq!(timeout_for(&["status"], true), READ_TIMEOUT);
         assert_eq!(timeout_for(&["commit"], true), LONG_TIMEOUT);
+        assert_eq!(timeout_for_args(&["-c", "core.hooksPath=", "commit"]), WRITE_TIMEOUT);
+        assert_eq!(timeout_for_args(&["commit"]), LONG_TIMEOUT, "no pin: hooks live");
         let hardened = crate::services::git_hardened::hardened_git_command_in(std::env::temp_dir(), &["status"]);
         assert_eq!(timeout_of(&hardened), READ_TIMEOUT);
         let hooked = crate::services::git_hardened::hooked_git_command_in(std::env::temp_dir(), &["commit"]);

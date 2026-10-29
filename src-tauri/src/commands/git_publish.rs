@@ -26,7 +26,8 @@
 //! `gh`/`glab` login. Publishing from the mirror is refused unless lockstep is
 //! on and reports the two sides in step — otherwise the mirror's history is not
 //! the host's, and publishing would ship the wrong commits
-//! ([`ensure_mirror_in_step`]).
+//! ([`ensure_mirror_in_step`]). A remote-only project (no mirror, a VM
+//! included) publishes from its host, and a local choice is refused.
 //!
 //! Every *follow-up* operation (visibility, unpublish, and `git_push` over in
 //! `commands::git`) then routes to wherever `origin` actually got wired
@@ -172,11 +173,21 @@ pub(crate) enum PublishSite {
     Host,
 }
 
-/// Parse the dialog's "Publish from" choice. Defaults to the local mirror: the
-/// hosting account is this machine's, so that is the side that can actually
-/// authenticate. `"remote"` opts into the host's own `gh`/`glab` login.
-fn parse_publish_from(s: Option<&str>) -> Result<PublishSite, String> {
-    match s.unwrap_or("local").trim().to_ascii_lowercase().as_str() {
+/// Parse the dialog's "Publish from" choice for a remote project. Defaults to
+/// the local mirror: the hosting account is this machine's, so that is the
+/// side that can actually authenticate. `"remote"` opts into the host's own
+/// `gh`/`glab` login.
+///
+/// A remote-only project (`RemoteSpec::is_remote_only`, a VM included) has no
+/// mirror: it defaults to the host, and an explicit local choice is refused
+/// with the `_REMOTE_ONLY` sentinel rather than silently moved to the host.
+fn parse_publish_from(s: Option<&str>, remote_only: bool) -> Result<PublishSite, String> {
+    let choice = s.map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default();
+    match choice.as_str() {
+        "" if remote_only => Ok(PublishSite::Host),
+        "local" | "mirror" if remote_only => Err(crate::services::remote::remote_only_refusal(
+            "this project has no local copy to publish from; publish from the host",
+        )),
         "" | "local" | "mirror" => Ok(PublishSite::Local(PathBuf::new())),
         "remote" | "host" => Ok(PublishSite::Host),
         other => Err(format!(
@@ -186,8 +197,11 @@ fn parse_publish_from(s: Option<&str>) -> Result<PublishSite, String> {
 }
 
 /// A remote project's lockstep mirror, when it actually holds a git repo.
+/// Never for a remote-only project (`mirror_dir_opt`), even when an old
+/// default mirror with a `.git` is still on disk: its origin is not the
+/// project's, and a push or publish there would ship that stale history.
 fn mirror_repo(project_id: &str) -> Option<PathBuf> {
-    let dir = crate::services::remote_sync::mirror_dir(project_id);
+    let dir = crate::services::remote_sync::mirror_dir_opt(project_id)?;
     dir.join(".git").exists().then_some(dir)
 }
 
@@ -315,7 +329,8 @@ fn publish_site(
     if project.remote.is_none() {
         return Ok(PublishSite::Local(local_dir(project)?));
     }
-    match parse_publish_from(publish_from)? {
+    let remote_only = project.remote.as_ref().is_some_and(|r| r.is_remote_only());
+    match parse_publish_from(publish_from, remote_only)? {
         PublishSite::Host => Ok(PublishSite::Host),
         PublishSite::Local(_) => {
             let mirror = mirror_repo(project_id).ok_or_else(|| {
@@ -1125,24 +1140,57 @@ mod tests {
     fn publish_from_defaults_to_the_local_mirror() {
         // Absent and empty both mean "this machine" — the hosting login is local.
         assert!(matches!(
-            parse_publish_from(None),
+            parse_publish_from(None, false),
             Ok(PublishSite::Local(_))
         ));
         assert!(matches!(
-            parse_publish_from(Some("")),
+            parse_publish_from(Some(""), false),
             Ok(PublishSite::Local(_))
         ));
         assert!(matches!(
-            parse_publish_from(Some("mirror")),
+            parse_publish_from(Some("mirror"), false),
             Ok(PublishSite::Local(_))
         ));
     }
 
     #[test]
     fn publish_from_remote_opts_into_the_host() {
-        assert_eq!(parse_publish_from(Some("remote")), Ok(PublishSite::Host));
-        assert_eq!(parse_publish_from(Some("Host")), Ok(PublishSite::Host));
-        assert!(parse_publish_from(Some("elsewhere")).is_err());
+        assert_eq!(parse_publish_from(Some("remote"), false), Ok(PublishSite::Host));
+        assert_eq!(parse_publish_from(Some("Host"), false), Ok(PublishSite::Host));
+        assert!(parse_publish_from(Some("elsewhere"), false).is_err());
+    }
+
+    #[test]
+    fn a_remote_only_project_publishes_from_the_host() {
+        // No mirror: absent/empty default to the host, and asking for the
+        // local side is refused with the sentinel, never quietly moved.
+        assert_eq!(parse_publish_from(None, true), Ok(PublishSite::Host));
+        assert_eq!(parse_publish_from(Some(" "), true), Ok(PublishSite::Host));
+        assert_eq!(parse_publish_from(Some("remote"), true), Ok(PublishSite::Host));
+        let sentinel = format!("{}_REMOTE_ONLY: ", crate::brand::UPPER);
+        for local in ["local", "mirror", "Local"] {
+            let err = parse_publish_from(Some(local), true).expect_err(local);
+            assert!(err.starts_with(&sentinel), "{err}");
+        }
+        assert!(parse_publish_from(Some("elsewhere"), true).is_err());
+    }
+
+    /// The site question is settled from the trusted entry's posture: a
+    /// remote-only project (a VM included) publishes on its host by default,
+    /// and never reaches the mirror lookup.
+    #[test]
+    fn a_remote_only_publish_site_is_the_host() {
+        for key in ["remote_only", "vm"] {
+            let spec: crate::schema::project::RemoteSpec =
+                serde_json::from_value(serde_json::json!({ "host": "h", "remote_path": "/srv/p", key: true }))
+                    .expect("spec");
+            assert!(spec.is_remote_only(), "{key}");
+            let project = Project { remote: Some(spec), ..Default::default() };
+            assert_eq!(publish_site(&project, "no-such-project", None), Ok(PublishSite::Host), "{key}");
+            assert!(publish_site(&project, "no-such-project", Some("mirror"))
+                .expect_err("local refused")
+                .contains("_REMOTE_ONLY"));
+        }
     }
 
     #[test]
