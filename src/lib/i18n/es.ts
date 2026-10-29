@@ -108,7 +108,7 @@ export const dict: Dict = {
   "mobile.newTab.runsOn": "Se ejecuta en",
   "mobile.newTab.thisComputer": "Ordenador (copia local)",
   "mobile.newTab.machinePrimary": "{host} (principal)",
-  "mobile.newTab.machineOffline": "{host} · sin conexión",
+  "mobile.newTab.machineOffline": "Sin conexión",
   "mobile.newTab.machineNote": "El agente se ejecuta en esa máquina a través de la conexión del ordenador. Los archivos, el marcado y el inicio de sesión siguen con la copia del ordenador.",
   "mobile.newTab.machineConnectHint": "Una máquina en gris necesita antes una conexión: conéctala en el proyecto en el ordenador.",
   "mobile.newTab.localGroup": "Modelo local · {model}",

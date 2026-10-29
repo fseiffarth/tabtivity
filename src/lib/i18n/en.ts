@@ -49,7 +49,7 @@ export const enSource = {
   "mobile.newTab.runsOn": "Runs on",
   "mobile.newTab.thisComputer": "Desktop (local copy)",
   "mobile.newTab.machinePrimary": "{host} (primary)",
-  "mobile.newTab.machineOffline": "{host} · not connected",
+  "mobile.newTab.machineOffline": "Not connected",
   "mobile.newTab.machineNote": "The agent runs on that machine over the desktop's connection. Files, Mark up and sign-in stay with the desktop's copy.",
   "mobile.newTab.machineConnectHint": "A greyed-out machine needs a connection first: connect it in the project on the desktop.",
   "mobile.newTab.localGroup": "Local model · {model}",

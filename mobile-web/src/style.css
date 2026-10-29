@@ -340,12 +340,18 @@ small { color:#9498aa; }
 .new-tab-where { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .new-tab-where > small { flex:1 0 100%; padding:0 6px; color:#9da3b6; font-size:.8rem; }
 .new-tab-where > button { min-height:36px; padding:6px 10px; font-size:.8rem; overflow-wrap:anywhere; }
-/* "Runs on": the label beside a compact select (the base select's chevron),
-   the note under both. */
-.new-tab-machine { display:grid; gap:4px; }
-.new-tab-machine > label { display:flex; align-items:center; gap:8px; min-width:0; }
-.new-tab-machine small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
-.new-tab-machine select { flex:1 1 auto; padding:7px 30px 7px 12px; background-position:right 10px center; font-size:.85rem; text-overflow:ellipsis; }
+/* "Runs on": the label beside a field drawn as the compact select, which
+   unfolds the sheets' `.option-list` under it (no native picker); the note
+   under both. Only the chevron's turn moves. */
+.new-tab-machine { display:grid; gap:6px; }
+.new-tab-machine-field { display:flex; align-items:center; gap:8px; min-width:0; }
+.new-tab-machine-field > small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
+.new-tab-machine-toggle { display:flex; flex:1 1 auto; align-items:center; gap:8px; min-width:0; padding:7px 10px 7px 12px; border-color:#3a3e50; border-radius:10px; background:#171a24; color:#fff; font-size:.85rem; text-align:left; }
+.new-tab-machine-toggle.open { border-color:#7c6cff; }
+.new-tab-machine-toggle > span { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.new-tab-machine-toggle > svg { width:16px; height:16px; flex:0 0 auto; fill:none; stroke:#9aa0b4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .15s ease; }
+.new-tab-machine-toggle.open > svg { transform:rotate(180deg); }
+.new-tab-machine-list button { font-size:.9rem; }
 /* The local-model group: the agents grid under a label worded like "Agents start in". */
 .new-tab-local { display:flex; flex-direction:column; gap:6px; }
 .new-tab-local > small { padding:0 6px; color:#9da3b6; font-size:.8rem; overflow-wrap:anywhere; }

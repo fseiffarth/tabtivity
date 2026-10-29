@@ -1,7 +1,7 @@
 /**
  * Starting an agent on a remote project's machine from the phone's ＋.
  *
- * The sheet's "Runs on" dropdown lists the desktop's local copy and each
+ * The sheet's "Runs on" picker lists the desktop's local copy and each
  * machine `launch-options` names under an opaque id, greys out one the desktop
  * is not connected to, and sends the pick as `host`. The sidecar resolves that
  * id to the window's location word; the window then saves the agent at that
@@ -179,13 +179,19 @@ describe("Mobile ＋ sheet — Runs on", () => {
       { id: "m-w1", label: "gpu-1", primary: false, connected: false },
     ]));
     sheet();
-    const picker = await screen.findByRole("combobox", { name: /^Runs on/ });
-    const rows = within(picker).getAllByRole("option") as HTMLOptionElement[];
+    const picker = await screen.findByRole("button", { name: /^Runs on/ });
+    // The app's own list, unfolded in the sheet, never the phone's native picker.
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(picker.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(picker);
+    const list = screen.getByRole("list", { name: /^Runs on/ });
+    const rows = within(list).getAllByRole("button") as HTMLButtonElement[];
     expect(rows.map((row) => [row.textContent, row.disabled])).toEqual([
       ["Desktop (local copy)", false],
       ["h.invalid (primary)", false],
-      ["gpu-1 · not connected", true],
+      ["gpu-1Not connected", true],
     ]);
+    expect(rows[0].getAttribute("aria-current")).toBe("true");
     expect(screen.getByText(/connect it in the project on the desktop/)).toBeTruthy();
   });
 
@@ -195,9 +201,13 @@ describe("Mobile ＋ sheet — Runs on", () => {
       [{ id: "w-main", label: "", main: true }, { id: "w-fix", label: "fix", branch: "fix", main: false }],
     ));
     const onPick = sheet();
-    const picker = await screen.findByRole("combobox", { name: /^Runs on/ });
+    const picker = await screen.findByRole("button", { name: /^Runs on/ });
     expect(screen.getByRole("group", { name: "Agents start in" })).toBeTruthy();
-    fireEvent.change(picker, { target: { value: "m-primary" } });
+    fireEvent.click(picker);
+    fireEvent.click(within(screen.getByRole("list", { name: /^Runs on/ })).getByRole("button", { name: "h.invalid (primary)" }));
+    // The pick folds the list and the field names it.
+    expect(screen.queryByRole("list", { name: /^Runs on/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Runs on.*h\.invalid \(primary\)$/ })).toBeTruthy();
     // A worktree and a cloud session run on the desktop: neither is offered.
     expect(screen.queryByRole("group", { name: "Agents start in" })).toBeNull();
     expect(screen.queryByText("Cloud sessions")).toBeNull();
@@ -209,11 +219,11 @@ describe("Mobile ＋ sheet — Runs on", () => {
     serve(options(undefined));
     sheet();
     await screen.findByText("Cloud sessions");
-    expect(screen.queryByRole("combobox", { name: /^Runs on/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Runs on/ })).toBeNull();
     cleanup();
     serve(options([{ id: "m-primary", label: "h.invalid", primary: true, connected: true }]));
     sheet(vi.fn(), true);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(screen.queryByRole("combobox", { name: /^Runs on/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Runs on/ })).toBeNull();
   });
 });

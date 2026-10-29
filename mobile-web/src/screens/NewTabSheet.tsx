@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type HostMachineRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
@@ -205,21 +205,34 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
  * stays in the list, disabled and saying why, so the reader sees every
  * machine the project has and what to do on the desktop to use it. Without
  * `here` (a remote-only project) there is no copy on this computer to list:
- * the machines alone, the primary shown while none is picked. */
+ * the machines alone, the primary shown while none is picked.
+ *
+ * Not a native `<select>`: the phone's own picker is a system dialog in the
+ * system's colours. The field unfolds the sheets' list (`.option-list`) in
+ * place instead, and a pick folds it again. */
 function MachinePicker({ machines, value, here, onChange }: { machines: HostMachineRow[]; value: string; here: boolean; onChange: (id: string) => void }) {
   const t = useT();
+  const id = useId();
+  const [open, setOpen] = useState(false);
   const name = (row: HostMachineRow) => row.primary ? t("mobile.newTab.machinePrimary", { host: row.label }) : row.label;
   const offline = machines.some((row) => !row.connected);
+  const rows = [...(here ? [{ id: "", label: t("mobile.newTab.thisComputer"), connected: true }] : []), ...machines.map((row) => ({ id: row.id, label: name(row), connected: row.connected }))];
+  const current = rows.find((row) => row.id === (value || (here ? "" : pinnedFallback(machines)?.id))) ?? rows[0];
+  const pick = (next: string) => { onChange(next); setOpen(false); };
   return <div className="new-tab-machine">
-    <label>
-      <small>{t("mobile.newTab.runsOn")}{(here ? isUntested("mobile.newTab.machine") : isUntested("mobile.newTab.remoteOnly")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
-      <select value={value || (here ? "" : pinnedFallback(machines)?.id)} onChange={(event) => onChange(event.target.value)}>
-        {here && <option value="">{t("mobile.newTab.thisComputer")}</option>}
-        {machines.map((row) => <option key={row.id} value={row.id} disabled={!row.connected}>
-          {row.connected ? name(row) : t("mobile.newTab.machineOffline", { host: name(row) })}
-        </option>)}
-      </select>
-    </label>
+    <div className="new-tab-machine-field">
+      <small id={`${id}-label`}>{t("mobile.newTab.runsOn")}{(here ? isUntested("mobile.newTab.machine") : isUntested("mobile.newTab.remoteOnly")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
+      <button className={open ? "new-tab-machine-toggle open" : "new-tab-machine-toggle"} aria-expanded={open} aria-controls={`${id}-list`} aria-labelledby={`${id}-label ${id}-value`} onClick={() => setOpen(!open)}>
+        <span id={`${id}-value`}>{current.label}</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+      </button>
+    </div>
+    {open && <ul className="option-list new-tab-machine-list" id={`${id}-list`} aria-labelledby={`${id}-label`}>{rows.map((row) => <li key={row.id}>
+      <button className={row.id === current.id ? "current" : ""} aria-current={row.id === current.id || undefined} disabled={!row.connected} onClick={() => pick(row.id)}>
+        <span><strong>{row.label}</strong>{!row.connected && <small>{t("mobile.newTab.machineOffline")}</small>}</span>
+        {row.id === current.id && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+      </button>
+    </li>)}</ul>}
     {value && here ? <p className="sheet-note">{t("mobile.newTab.machineNote")}</p>
       : offline ? <p className="sheet-note">{t("mobile.newTab.machineConnectHint")}</p> : null}
   </div>;
