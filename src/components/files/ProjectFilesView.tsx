@@ -1663,7 +1663,7 @@ export function ProjectFilesView({
             family instead — square, hover-lit, phone slashed while off. */}
         {/* "Open in <IDE>": only for a project whose tree carries IDE
             markers; the same rows as the pill menu's View group. */}
-        {!activeBox && project && projectId && !isRootScope && (
+        {!activeBox && project && projectId && !isRootScope && !hostPinned && (
           <IdeHeaderButton projectId={projectId} projectName={project.name} />
         )}
         {mobileHostConnected && mobileEligible && (

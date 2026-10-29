@@ -1479,6 +1479,9 @@ export interface ExportPreview {
   directoryMissing: boolean;
   mirror: string | null;
   mirrorMissing: boolean;
+  /** The project keeps no local copy (remote-only): `mirror` is null and the
+   *  counts are 0 — its files can only be packed from the host. */
+  remoteOnly?: boolean;
   files: number;
   bytes: number;
   gitFiles: number;
@@ -1543,6 +1546,20 @@ export interface BundleInfo {
   /** Name of the project a remote bundle's host+path already belongs to. */
   siteConflict?: string;
   suggestedParent: string;
+  /** The project comes back without a local copy (a remote-only bundle that
+   *  carries no tree): no mirror folder is made, so none is asked for. */
+  remoteOnly?: boolean;
+}
+
+/** `remote_project_init_host`'s answer: what the host setup of a remote-only
+ *  project wrote. `gitType` is the project's git type afterwards — `"none"` when
+ *  the host could not `git init`. */
+export interface HostInitReport {
+  written: string[];
+  kept: string[];
+  git: "initialized" | "failed" | "skipped";
+  committed: boolean;
+  gitType: string;
 }
 
 /** `import_project_export`'s answer. */

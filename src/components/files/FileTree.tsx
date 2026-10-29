@@ -3228,7 +3228,9 @@ export function FileTree({
                       Offered where "Open in a new tab" is (the side panel
                       host); a tree browsing a subfolder still opens the
                       project, since the markers sit at its root. */}
-                  {projectId && (
+                  {/* None on a project pinned to its host: the markers are
+                      read off a local copy it does not have (D6). */}
+                  {projectId && !hostPinned && (
                     <IdeMenuItems projectId={projectId} onClose={() => setContextMenu(null)} />
                   )}
                   <hr />

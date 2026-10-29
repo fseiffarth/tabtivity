@@ -9,7 +9,7 @@
  * without them "Export" is a button that produces a surprise.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const { mockInvoke, mockSave, mockOpen } = vi.hoisted(() => ({
@@ -325,6 +325,71 @@ describe("export dialog", () => {
     );
   });
 
+  /** A remote-only project has no local copy: its tree comes from the host or
+   *  not at all, and "this computer's copy" is never offered (the backend refuses
+   *  `mirrorSource: "local"` for it). */
+  it("packs a remote-only project from the host alone", async () => {
+    useRemoteStatusStore.setState({ byProject: {}, byHost: {} });
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "preview_project_export") {
+        return Promise.resolve(
+          preview({ remote: true, remoteOnly: true, mirror: null, mirrorMissing: true, files: 0, bytes: 0 }),
+        );
+      }
+      if (cmd === "preview_host_export") {
+        return Promise.resolve({
+          files: 500,
+          bytes: 50 * 1024 * 1024,
+          gitFiles: 10,
+          gitBytes: 10 * 1024 * 1024,
+          rebuildableFiles: 0,
+          rebuildableBytes: 0,
+        });
+      }
+      return Promise.resolve({
+        path: "/x", bytes: 1, files: 1, payloadBytes: 1, remote: true, notes: [],
+        skipped: [], skippedCount: 0, agentFiles: 0,
+      });
+    });
+    mockSave.mockResolvedValue("/x");
+    await act(async () => {
+      render(<ProjectExportDialog project={project} onClose={() => {}} />);
+    });
+    expect(screen.queryByRole("radio", { name: /This computer's copy/ })).toBeNull();
+    expect(screen.getByText(/keeps no local copy, so its files are packed straight from the host/)).toBeTruthy();
+    expect(screen.getByText(/Connect the project/)).toBeTruthy();
+
+    // Disconnected: settings only — the tree is not claimed.
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "export_project",
+      expect.objectContaining({
+        req: expect.objectContaining({ includeMirror: false, mirrorSource: "host" }),
+      }),
+    );
+
+    // Connected: the host's tree is measured at once and packed.
+    cleanup();
+    mockInvoke.mockClear();
+    useRemoteStatusStore.getState().setSsh("p1", "connected");
+    await act(async () => {
+      render(<ProjectExportDialog project={project} onClose={() => {}} />);
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("preview_host_export", { projectId: "p1" });
+    expect(screen.getByText(/500 files, 50\.0 MB/)).toBeTruthy();
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith(
+      "export_project",
+      expect.objectContaining({
+        req: expect.objectContaining({ includeMirror: true, mirrorSource: "host" }),
+      }),
+    );
+  });
+
   it("does nothing when the save dialog is cancelled", async () => {
     mockInvoke.mockResolvedValue(preview());
     mockSave.mockResolvedValue(null);
@@ -406,6 +471,17 @@ describe("import dialog", () => {
     expect(screen.getByText(/already the project 'Cluster work'/)).toBeTruthy();
     const importBtn = screen.getByRole("button", { name: "Import" }) as HTMLButtonElement;
     expect(importBtn.disabled).toBe(true);
+  });
+
+  it("asks for no mirror folder for a remote-only bundle", async () => {
+    await chooseBundle(bundle({ remote: true, remoteOnly: true }));
+    expect(screen.getByText(/keeps no local copy: its files stay on the host/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Browse…" })).toBeNull();
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Import" }));
+    });
+    const call = mockInvoke.mock.calls.find(([cmd]) => cmd === "import_project_export");
+    expect((call![1] as { req: { mirrorParent: unknown } }).req.mirrorParent).toBeNull();
   });
 
   it("imports with the chosen name, folder and switches, and reports the result", async () => {
