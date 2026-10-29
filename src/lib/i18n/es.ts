@@ -315,7 +315,7 @@ export const dict: Dict = {
   "mobile.tips.off": "Desactivados",
   "mobile.tips.reset": "Restablecer consejos",
   "mobile.tips.resetHelp": "Todos los consejos de nuevo con plena probabilidad, también los leídos o desactivados",
-  "mobile.tips.hint": "Cada «Leído» en un consejo reduce a la mitad la probabilidad de que vuelva a aparecer.",
+  "mobile.tips.hint": "Como mucho un consejo cada media hora. Cada «Leído» en un consejo reduce a la mitad la probabilidad de que vuelva a aparecer.",
   "mobile.hints.agentDefault": "Toca ☆ junto a un agente para hacerlo predeterminado en este teléfono. Un toque en ＋ abrirá ese agente. El agente predeterminado del escritorio sigue igual.",
   "mobile.hints.composerAttach": "Toca ＋ bajo el cuadro de mensaje para añadir una foto, un archivo o un archivo del proyecto con @.",
   "mobile.hints.composerKeys": "El botón del teclado bajo el cuadro de mensaje muestra Ctrl, Esc, Tab y las flechas.",

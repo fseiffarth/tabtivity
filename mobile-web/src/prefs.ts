@@ -194,3 +194,13 @@ export function readHintReads(storage?: FlagStorage): Record<string, number> {
 export function writeHintReads(reads: Record<string, number> | undefined, storage?: FlagStorage): void {
   writeJson(`${PREFIX}hintReads`, reads, storage);
 }
+
+/** When the last tip card came up on this phone (ms since the epoch), so the
+ * next waits out `HintMessage`'s half hour across reloads too. 0 when none. */
+export function readTipShownAt(storage?: FlagStorage): number {
+  return readJson(`${PREFIX}tipShownAt`, (parsed) => typeof parsed === "number" && Number.isFinite(parsed) ? parsed : 0, 0, storage);
+}
+
+export function writeTipShownAt(at: number | undefined, storage?: FlagStorage): void {
+  writeJson(`${PREFIX}tipShownAt`, at, storage);
+}

@@ -315,7 +315,7 @@ export const dict: Dict = {
   "mobile.tips.off": "Disattivati",
   "mobile.tips.reset": "Reimposta suggerimenti",
   "mobile.tips.resetHelp": "Tutti i suggerimenti di nuovo con piena probabilità, anche quelli letti o disattivati",
-  "mobile.tips.hint": "Ogni «Letto» su un suggerimento ne dimezza la probabilità di ricomparire.",
+  "mobile.tips.hint": "Al massimo un suggerimento ogni mezz'ora. Ogni «Letto» su un suggerimento ne dimezza la probabilità di ricomparire.",
   "mobile.hints.agentDefault": "Tocca ☆ accanto a un agente per renderlo predefinito su questo telefono. Un tocco su ＋ aprirà quell’agente. La scelta predefinita del desktop resta la stessa.",
   "mobile.hints.composerAttach": "Tocca ＋ sotto il campo del messaggio per aggiungere una foto, un file o un file del progetto con @.",
   "mobile.hints.composerKeys": "Il pulsante tastiera sotto il campo del messaggio mostra Ctrl, Esc, Tab e le frecce.",

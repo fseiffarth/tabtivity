@@ -315,7 +315,7 @@ export const dict: Dict = {
   "mobile.tips.off": "Aus",
   "mobile.tips.reset": "Tipps zurücksetzen",
   "mobile.tips.resetHelp": "Alle Tipps wieder mit voller Chance, auch gelesene und ausgeschaltete",
-  "mobile.tips.hint": "Jedes „Gelesen“ halbiert die Chance, dass ein Tipp wieder erscheint.",
+  "mobile.tips.hint": "Höchstens ein Tipp pro halbe Stunde. Jedes „Gelesen“ halbiert die Chance, dass ein Tipp wieder erscheint.",
   "mobile.hints.agentDefault": "Tippe auf ☆ neben einem Agenten, um ihn zum Standard auf diesem Handy zu machen. Ein kurzes Tippen auf ＋ öffnet dann diesen Agenten. Der Standard auf deinem Desktop bleibt gleich.",
   "mobile.hints.composerAttach": "Tippe auf ＋ unter dem Nachrichtenfeld, um ein Foto, eine Datei oder eine @-Projektdatei hinzuzufügen.",
   "mobile.hints.composerKeys": "Die Tastatur-Taste unter dem Nachrichtenfeld zeigt Strg, Esc, Tab und die Pfeiltasten.",

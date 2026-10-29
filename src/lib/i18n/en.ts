@@ -332,7 +332,7 @@ export const enSource = {
   "mobile.tips.off": "Off",
   "mobile.tips.reset": "Reset tips",
   "mobile.tips.resetHelp": "Every tip back at full chance, also the ones you read or turned off",
-  "mobile.tips.hint": "Each Read on a tip halves its chance of showing again.",
+  "mobile.tips.hint": "At most one tip shows every half hour. Each Read on a tip halves its chance of showing again.",
   "mobile.hints.agentDefault": "Tap ☆ beside an agent to make it this phone's default. A quick tap on ＋ will open that agent. Your desktop's default stays the same.",
   "mobile.hints.composerAttach": "Tap ＋ under the message box to add a photo, a file or an @ project file.",
   "mobile.hints.composerKeys": "The keyboard button under the message box shows Ctrl, Esc, Tab and the arrow keys.",

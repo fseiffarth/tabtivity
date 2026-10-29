@@ -315,7 +315,7 @@ export const dict: Dict = {
   "mobile.tips.off": "Désactivées",
   "mobile.tips.reset": "Réinitialiser les astuces",
   "mobile.tips.resetHelp": "Toutes les astuces à nouveau à pleine probabilité, même celles lues ou désactivées",
-  "mobile.tips.hint": "Chaque « Lu » sur une astuce divise par deux sa probabilité de réapparaître.",
+  "mobile.tips.hint": "Au plus une astuce par demi-heure. Chaque « Lu » sur une astuce divise par deux sa probabilité de réapparaître.",
   "mobile.hints.agentDefault": "Touchez ☆ à côté d’un agent pour en faire le choix par défaut de ce téléphone. Un appui sur ＋ ouvrira cet agent. Le choix par défaut de l’ordinateur reste le même.",
   "mobile.hints.composerAttach": "Touchez ＋ sous la zone de message pour ajouter une photo, un fichier ou un fichier du projet avec @.",
   "mobile.hints.composerKeys": "Le bouton clavier sous la zone de message affiche Ctrl, Échap, Tab et les flèches.",
