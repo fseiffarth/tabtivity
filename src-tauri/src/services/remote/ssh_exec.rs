@@ -1200,15 +1200,20 @@ pub fn git_ssh_args(spec: &RemoteSpec, git_args: &[String]) -> Result<Vec<String
 /// that is what lets `commands::git` reuse every existing parser unchanged for
 /// remote projects. The remote `git`'s credentials/SSH keys are the host's own
 /// (the process runs there), so e.g. `push` authenticates with the host login.
+///
+/// Bounded like a local git call: a wedged ControlMaster or a hung host must
+/// not pile blocked workers up behind the git bar's poll — for a remote-only
+/// project every git call takes this path. The ceiling is the git verb's
+/// (`git_bounded::wrapped_output`, read off `git_args` before they are wrapped
+/// into the one ssh command string), and a timeout reaps the ssh child.
 pub fn run_git_remote(
     spec: &RemoteSpec,
     git_args: &[String],
 ) -> Result<std::process::Output, String> {
     let args = git_ssh_args(spec, git_args)?;
-    crate::paths::command_no_window("ssh")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("failed to run git over ssh: {e}"))
+    let mut cmd = crate::paths::command_no_window("ssh");
+    cmd.args(&args);
+    crate::services::git_bounded::wrapped_output(cmd, git_args).map_err(|e| format!("failed to run git over ssh: {e}"))
 }
 
 /// Run a single shell command on `spec`'s host over SSH (riding the shared

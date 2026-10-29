@@ -1117,7 +1117,7 @@ fn is_main_is_the_first_record_not_the_first_path_alphabetically() {
 /// A local-project context rooted at `dir`, i.e. what `worktree_ctx` builds
 /// for any project `projects.json` does not know as remote.
 fn local_ctx(dir: &str) -> WorktreeCtx {
-    worktree_ctx(dir, None, None)
+    worktree_ctx(dir, None, None).unwrap()
 }
 
 #[test]
@@ -1217,6 +1217,79 @@ fn the_remote_worktree_command_is_quoted_argument_by_argument() {
             crate::app_slug!()
         )
     );
+}
+
+/// A remote-only project (a VM included) has no mirror: the local worktree
+/// side is refused with the sentinel, the host side is its only one. A plain
+/// Remote project keeps both.
+#[test]
+fn the_worktree_site_follows_the_posture() {
+    let sentinel = format!("{}_REMOTE_ONLY: ", crate::brand::UPPER);
+    for site in [None, Some("host"), Some("remote")] {
+        assert_eq!(WorktreeSite::resolve(site, true), Ok(WorktreeSite::Host), "{site:?}");
+        assert_eq!(WorktreeSite::resolve(site, false), Ok(WorktreeSite::Host), "{site:?}");
+    }
+    for site in ["mirror", "local"] {
+        assert_eq!(WorktreeSite::resolve(Some(site), false), Ok(WorktreeSite::Local), "{site}");
+        let err = WorktreeSite::resolve(Some(site), true).expect_err(site);
+        assert!(err.starts_with(&sentinel), "{err}");
+    }
+}
+
+/// The git bar's host push is hardened like every host git call
+/// (`run_git_hooked`'s remote arm), with only the hooks left live — it used
+/// to call `run_git_remote` with the bare push args. Its bound is the push's
+/// ceiling, read off the git args: the ssh argv they are wrapped into hides
+/// the verb from `git_bounded::verb`.
+#[test]
+fn the_host_push_is_hardened_and_bounded_at_the_push_ceiling() {
+    use crate::services::git_bounded::{timeout_for_args, verb, LONG_TIMEOUT, READ_TIMEOUT, WRITE_TIMEOUT};
+    use crate::services::git_hardened::hooked_git_args;
+    let push = hooked_git_args(&PUSH_ARGS);
+    for kv in HARDENED_CONFIG.iter().chain(OUTPUT_CONFIG) {
+        assert!(push.windows(2).any(|w| w[0] == "-c" && w[1] == *kv), "{kv} missing: {push:?}");
+    }
+    assert!(!push.iter().any(|a| a == "core.hooksPath="), "the host's pre-push hook stays live: {push:?}");
+    assert_eq!(push[push.len() - 3..], ["-c", "push.autoSetupRemote=true", "push"]);
+    assert_eq!(timeout_for_args(&push), LONG_TIMEOUT);
+    // What `run_git` hands `run_git_remote`: hooks off, so a read is a read
+    // and a commit a write.
+    assert_eq!(timeout_for_args(&hardened_git_args(&["status", "--porcelain"])), READ_TIMEOUT);
+    assert_eq!(timeout_for_args(&hardened_git_args(&["commit", "-m", "x"])), WRITE_TIMEOUT);
+    assert_eq!(timeout_for_args(&hooked_git_args(&["commit", "-m", "x"])), LONG_TIMEOUT);
+
+    let spec: crate::schema::project::RemoteSpec =
+        serde_json::from_value(serde_json::json!({ "host": "h", "remote_path": "/srv/p" })).expect("spec");
+    let ssh = crate::services::ssh_exec::git_ssh_args(&spec, &push).expect("argv");
+    assert_ne!(verb(&ssh).as_deref(), Some("push"), "the wrapped argv cannot name the verb: {ssh:?}");
+}
+
+/// Every host git call goes through `git_hardened::run_git_as` (hardened
+/// args, hooks off unless trust-gated) — lockstep's own `Peer::Remote` arm is
+/// the one other caller. A bare `run_git_remote` elsewhere skips the
+/// hardening, as the push button's host arm once did.
+#[test]
+fn every_host_git_call_goes_through_the_hardened_runner() {
+    const ALLOWED: &[(&str, &str)] = &[("services/git/git_hardened.rs", "run_git_as"), ("services/git/git_peer.rs", "run")];
+    let needle = concat!("run_git_remote", "(");
+    let mut offenders = Vec::new();
+    let mut runner_seen = false;
+    for source in production_sources() {
+        let lines = source.lines();
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim();
+            if source.in_test[i] || t.starts_with("//") || !t.contains(needle) || t.contains(concat!("fn ", "run_git_remote")) {
+                continue;
+            }
+            let func = enclosing_fn(&lines, i);
+            runner_seen |= (source.rel.as_str(), func.as_str()) == ALLOWED[0];
+            if !ALLOWED.iter().any(|(f, n)| *f == source.rel && *n == func) {
+                offenders.push(format!("{}:{} (fn {func}): {t}", source.rel, i + 1));
+            }
+        }
+    }
+    assert!(runner_seen, "the scan no longer sees git_hardened::run_git_as's call");
+    assert!(offenders.is_empty(), "host git outside git_hardened::run_git / run_git_hooked:\n{}", offenders.join("\n"));
 }
 
 #[test]
@@ -1376,7 +1449,7 @@ fn a_locked_worktree_needs_two_forces_and_can_be_unlocked() {
     )
     .unwrap();
 
-    let ctx = worktree_ctx(&root_str, None, None);
+    let ctx = worktree_ctx(&root_str, None, None).unwrap();
     run_worktree_git(
         &ctx,
         &["worktree", "lock", "--reason", "on a removable drive", &wt],
