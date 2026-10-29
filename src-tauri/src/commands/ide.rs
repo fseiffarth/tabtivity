@@ -54,10 +54,14 @@ pub struct IdeCandidate {
 
 /// The directory a project's markers are read from: its tree for a local
 /// project, its local mirror for a remote one — only when that mirror exists,
-/// because there is nothing to open otherwise.
+/// because there is nothing to open otherwise. A remote-only project has no
+/// local copy at all and is refused with the sentinel (its IDE stays hidden in
+/// the cockpit; this is the backend half of that).
 fn project_root(project_id: &str) -> Result<PathBuf, String> {
     let dir = if crate::services::remote::remote_target_for(project_id).is_some() {
-        crate::services::remote_sync::mirror_dir(project_id)
+        crate::services::remote_sync::mirror_dir_opt(project_id).ok_or_else(|| {
+            crate::services::remote::remote_only_refusal("this project has no local copy to open in an IDE")
+        })?
     } else {
         PathBuf::from(
             crate::services::remote::project_directory(project_id)

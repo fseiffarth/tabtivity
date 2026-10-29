@@ -276,6 +276,10 @@ fn dedupe_paths(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
 
 /// Pure root computation.  Explicit remote mirrors are included here; the
 /// state-backed wrapper below adds legacy projects' derived default mirrors.
+/// A `local_only` tab of a remote-only project has no tree to work in, so it
+/// gets no roots at all (`None`: the spawn is refused, never bound to a stale
+/// `extra["mirror"]` or the state dir) — the spawn guard refuses it earlier,
+/// this keeps the fence closed if that guard were ever bypassed.
 pub fn compute_fence_roots(
     boxes: &BoxesList,
     projects: &ProjectsList,
@@ -294,6 +298,9 @@ pub fn compute_fence_roots(
 
     let project = projects.iter().find(|p| p.id == scope_id)?;
     let is_remote = project.extra.contains_key("remote");
+    if local_only && crate::services::remote::entry_is_remote_only(project) {
+        return None;
+    }
     let own = if is_remote && local_only {
         entry_mirror(project).or_else(|| entry_directory(project))?
     } else {
@@ -345,13 +352,12 @@ pub fn attach_roots(
         return None;
     }
     let mut roots = compute_fence_roots(boxes, projects, id, true)?;
-    let mirror = |p: &ProjectEntry| {
-        entry_mirror(p)
-            .unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &p.id))
-    };
+    // A remote member's local copy (`None` for a remote-only one, which a
+    // remote-only `id` itself never reaches: `compute_fence_roots` refused it).
+    let mirror = |p: &ProjectEntry| crate::services::remote::local_copy_in(p, state_dir);
     let project = projects.iter().find(|p| p.id == id)?;
     if project.extra.contains_key("remote") {
-        roots[0] = mirror(project);
+        roots[0] = mirror(project)?;
     }
     let remote_dirs: Vec<PathBuf> = projects
         .iter()
@@ -363,7 +369,7 @@ pub fn attach_roots(
     for b in boxes.iter().filter(|b| b.member_ids.iter().any(|m| m == id)) {
         for m in &b.member_ids {
             if let Some(p) = projects.iter().find(|p| &p.id == m && p.extra.contains_key("remote")) {
-                roots.push(mirror(p));
+                roots.extend(mirror(p));
             }
         }
     }
@@ -488,7 +494,8 @@ fn check_assistant_spawn(
 /// exposes read-only on top of `~/tabtivity/root` — every local project's
 /// directory, every box folder, and every remote project's local mirror (the
 /// explicit one, else the default under the state dir, which the private-state
-/// mask keeps hidden). Pure, so the planner test drives it with lists.
+/// mask keeps hidden); a remote-only project has none and adds nothing. Pure,
+/// so the planner test drives it with lists.
 ///
 /// Deliberately **not** routed through `roots_for_scope`: every root it
 /// returns becomes a read-write `--bind`. These go down the read-only channel
@@ -507,9 +514,7 @@ pub fn root_project_read_only_paths(
     let mut paths: Vec<PathBuf> = Vec::new();
     for p in projects {
         if p.extra.contains_key("remote") {
-            paths.push(entry_mirror(p).unwrap_or_else(|| {
-                crate::services::remote_sync::default_mirror_dir_in(state_dir, &p.id)
-            }));
+            paths.extend(crate::services::remote::local_copy_in(p, state_dir));
         } else if let Some(dir) = entry_directory(p) {
             paths.push(dir);
         }
@@ -575,7 +580,7 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
     } else {
         let project = projects.iter().find(|p| p.id == scope_id)?;
         if local_only && project.extra.contains_key("remote") {
-            roots[0] = crate::services::remote_sync::mirror_dir(scope_id);
+            roots[0] = crate::services::remote::local_copy_in(project, &storage::state_dir())?;
         }
         for b in boxes
             .iter()

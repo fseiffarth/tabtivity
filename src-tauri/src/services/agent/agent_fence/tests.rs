@@ -785,6 +785,59 @@ fn roots_cover_plain_multi_box_and_box_scope() {
     assert!(compute_fence_roots(&boxes, &projects, "box:ghost", false).is_none());
 }
 
+/// A remote-only member (`docs/remote_only_projects_plan.md`, E5) has no
+/// local tree: a `local_only` tab of it gets no roots (refused, never the
+/// stale `mirror` nor the default path), and as a box sibling, an attach
+/// root or a root-fence read-only path it contributes nothing — its
+/// `directory` (the state dir) included. A VM counts the same.
+#[test]
+fn a_remote_only_project_contributes_no_local_root() {
+    let p1 = project("p1", "/work/p1");
+    let mut ro = project("ro", "/state/remote-projects/ro");
+    ro.extra.insert("remote".into(), json!({ "host": "h", "remote_path": "/srv/ro", "remote_only": true }));
+    ro.extra.insert("mirror".into(), json!("/mirrors/stale"));
+    let mut vm = project("vm", "/state/remote-projects/vm");
+    vm.extra.insert("remote".into(), json!({ "host": "127.0.0.1", "remote_path": "/home/u/vm", "vm": true }));
+    let mut plain = project("pl", "/state/remote-projects/pl");
+    plain.extra.insert("remote".into(), json!({ "host": "h", "remote_path": "/srv/pl" }));
+    let boxes = vec![ProjectBox {
+        id: "a".into(),
+        name: "A".into(),
+        member_ids: vec!["p1".into(), "ro".into(), "vm".into(), "pl".into()],
+        folder: Some("/boxes/a".into()),
+        ..ProjectBox::default()
+    }];
+    let projects = vec![p1, ro, vm, plain];
+    let state = Path::new("/state");
+
+    for id in ["ro", "vm"] {
+        assert_eq!(compute_fence_roots(&boxes, &projects, id, true), None, "{id}");
+        assert_eq!(attach_roots(&boxes, &projects, id, state), None, "{id}");
+    }
+    let leaked = |roots: &[PathBuf]| {
+        roots.iter().any(|r| {
+            r == Path::new("/mirrors/stale") || r.starts_with("/state/remote-projects/ro") || r.starts_with("/state/remote-projects/vm")
+        })
+    };
+    let p1_roots = compute_fence_roots(&boxes, &projects, "p1", true).unwrap();
+    assert!(!leaked(&p1_roots), "{p1_roots:?}");
+    assert!(p1_roots.contains(&PathBuf::from("/state/remote-projects/pl")), "a plain Remote member is unchanged");
+    let box_roots = crate::services::box_store::compute_box_allowed_roots(&boxes, &projects, "a").unwrap();
+    assert!(!leaked(&box_roots), "{box_roots:?}");
+    let attach = attach_roots(&boxes, &projects, "p1", state).unwrap();
+    assert!(!leaked(&attach), "{attach:?}");
+    assert!(attach.contains(&crate::services::remote_sync::default_mirror_dir_in(state, "pl")), "{attach:?}");
+
+    // The read-only list keeps absolute paths only, which these are off Windows.
+    if !cfg!(windows) {
+        let on: crate::schema::Settings = serde_json::from_str(r#"{"root_fence_projects_readable":true}"#).unwrap();
+        let readable = root_project_read_only_paths(&on, &projects, &boxes, state);
+        assert!(!readable.iter().any(|p| leaked(&[PathBuf::from(p)])), "{readable:?}");
+        let pl = crate::services::remote_sync::default_mirror_dir_in(state, "pl");
+        assert!(readable.iter().any(|p| Path::new(p) == pl), "{readable:?}");
+    }
+}
+
 #[test]
 fn bwrap_argv_orders_home_mounts_roots_and_command() {
     let roots = vec![PathBuf::from("/home/u/work/p")];

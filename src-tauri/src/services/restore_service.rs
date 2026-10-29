@@ -184,8 +184,9 @@ fn resolves_inside(exec: &str, roots: &[PathBuf]) -> bool {
 }
 
 /// The project's own trees: its directory and (for a remote project) its local
-/// mirror. Canonicalized so the prefix check in [`resolves_inside`] compares like
-/// with like.
+/// mirror — none for a remote-only project, whose default mirror path is not a
+/// tree it owns. Canonicalized so the prefix check in [`resolves_inside`]
+/// compares like with like.
 fn project_roots(project_id: &str) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(dir) = crate::services::sandbox::project_dir_for(project_id) {
@@ -193,7 +194,7 @@ fn project_roots(project_id: &str) -> Vec<PathBuf> {
             roots.push(PathBuf::from(dir));
         }
     }
-    roots.push(crate::services::remote_sync::mirror_dir(project_id));
+    roots.extend(crate::services::remote_sync::mirror_dir_opt(project_id));
     roots
         .iter()
         .map(|r| r.canonicalize().unwrap_or_else(|_| r.clone()))
