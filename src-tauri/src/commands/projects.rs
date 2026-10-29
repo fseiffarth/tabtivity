@@ -2824,13 +2824,17 @@ fn open_in_file_manager_blocking(path: String) -> Result<(), String> {
 /// disk". Returns the current mirror root (its stored override or the default),
 /// whether that directory still exists on disk (a user may have deleted it), and
 /// a suggested fresh location (`ssh/<name>` under the projects root) to default a
-/// relocation picker to. Errors for a local project.
+/// relocation picker to. Errors for a local project. A remote-only project (VMs
+/// included) answers `remote_only: true` with an empty `path` and `exists:
+/// false`: it has no mirror, and its default path is not one even when an old
+/// folder sits there.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MirrorStatus {
     pub path: String,
     pub exists: bool,
     pub suggested: String,
+    pub remote_only: bool,
 }
 
 ///
@@ -2841,16 +2845,31 @@ pub async fn remote_mirror_status(project_id: String, name: String) -> Result<Mi
 }
 
 fn remote_mirror_status_blocking(project_id: String, name: String) -> Result<MirrorStatus, String> {
-    if crate::services::remote::remote_target_for(&project_id).is_none() {
+    let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Err("not a remote project".to_string());
+    };
+    let suggested = default_remote_mirror(&name, &project_id, &read_projects_list()?);
+    let suggested = suggested.to_string_lossy().to_string();
+    if target.spec.is_remote_only() {
+        return Ok(MirrorStatus { path: String::new(), exists: false, suggested, remote_only: true });
     }
     let dir = crate::services::remote_sync::mirror_dir(&project_id);
-    let suggested = default_remote_mirror(&name, &project_id, &read_projects_list()?);
     Ok(MirrorStatus {
         exists: dir.is_dir(),
         path: dir.to_string_lossy().to_string(),
-        suggested: suggested.to_string_lossy().to_string(),
+        suggested,
+        remote_only: false,
     })
+}
+
+/// Why a mirror relocation (`what`: the act, for the message) is refused for
+/// this spec: a remote-only project (VMs included) has no mirror to point
+/// elsewhere or move, and recording one would mint a local copy. `None` for a
+/// project that keeps one. The E8 conversion back to a mirrored project is the
+/// only sanctioned way to give a remote-only project a mirror.
+pub(crate) fn mirror_relocation_refusal(spec: &RemoteSpec, what: &str) -> Option<String> {
+    spec.is_remote_only()
+        .then(|| crate::services::remote::remote_only_refusal(&format!("{what}: this project keeps no local copy")))
 }
 
 /// Point a remote (SSH) project's local mirror at `path`, creating the directory,
@@ -2865,8 +2884,12 @@ pub async fn set_remote_mirror_dir(project_id: String, path: String) -> Result<S
 }
 
 fn set_remote_mirror_dir_blocking(project_id: String, path: String) -> Result<String, String> {
-    if crate::services::remote::remote_target_for(&project_id).is_none() {
+    let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Err("not a remote project".to_string());
+    };
+    // Before anything is created: the folder would be the mirror being refused.
+    if let Some(refusal) = mirror_relocation_refusal(&target.spec, "setting a mirror folder") {
+        return Err(refusal);
     }
     let dir = PathBuf::from(path.trim());
     if dir.as_os_str().is_empty() {
@@ -2916,8 +2939,11 @@ pub fn move_remote_mirror_blocking(
     name: String,
     parent_dir: String,
 ) -> Result<String, String> {
-    if crate::services::remote::remote_target_for(&project_id).is_none() {
+    let Some(target) = crate::services::remote::remote_target_for(&project_id) else {
         return Err("not a remote project".to_string());
+    };
+    if let Some(refusal) = mirror_relocation_refusal(&target.spec, "moving the mirror") {
+        return Err(refusal);
     }
     let parent = PathBuf::from(parent_dir.trim());
     if parent.as_os_str().is_empty() {
@@ -3571,8 +3597,12 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
 /// working copy for a mount-free remote project (the remote host tree is
 /// never touched here — see `finish_import`/`create_project`). `None` when
 /// there is no local target to repair (e.g. a remote project with no mirror
-/// recorded yet).
+/// recorded yet, or a remote-only one, whose leftover `mirror` pointer is not a
+/// copy it keeps and must not be written into).
 fn scaffold_target_for_entry(entry: &ProjectEntry) -> Option<(PathBuf, bool)> {
+    if crate::services::remote::entry_is_remote_only(entry) {
+        return None;
+    }
     let git_type = entry
         .extra
         .get("git_type")

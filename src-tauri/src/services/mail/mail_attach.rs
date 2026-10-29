@@ -210,14 +210,12 @@ fn root_refusal(root: &Path, home: &Path, state_dir: &Path) -> Option<&'static s
 /// The name a root is shown under on the chip: the project or box that owns
 /// it, else the project asked for.
 fn root_label(lists: &Lists, root: &Path, asked: &str) -> String {
-    use crate::services::agent_fence::{entry_directory, entry_mirror};
+    use crate::services::agent_fence::entry_directory;
     let owner = lists.projects.iter().find(|p| {
         let remote = p.extra.contains_key("remote");
         (!remote && entry_directory(p).as_deref() == Some(root))
             || (remote
-                && entry_mirror(p)
-                    .unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(lists.state_dir, &p.id))
-                    == root)
+                && crate::services::remote::local_copy_in(p, lists.state_dir).as_deref() == Some(root))
     });
     if let Some(p) = owner {
         return p.name.clone();
@@ -503,6 +501,24 @@ mod tests {
         assert_eq!(resolve(&lists, "b", "notes.txt").unwrap_err(), NOT_IN_GRANT, "a sibling sharing a name prefix is not inside");
         let unfenced = Lists { granted: None, ..lists };
         assert!(resolve(&unfenced, "b", "notes.txt").is_ok());
+    }
+
+    /// A remote-only project has nothing on this machine to attach: its stale
+    /// `mirror` is not read even when the folder exists, and it labels no root.
+    #[test]
+    fn a_remote_only_project_attaches_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("stale");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("notes.txt"), b"old bytes").unwrap();
+        let projects: ProjectsList = serde_json::from_value(serde_json::json!([
+            {"id":"r","name":"Remote","status":"active","position":0,"local_file":"","directory":"state-dir-of-r",
+             "mirror": stale, "remote": {"host":"h","remote_path":"/srv/r","remote_only":true}}
+        ])).unwrap();
+        let (state, home) = (dir.path().join("state"), dir.path().join("home"));
+        let lists = Lists { projects: &projects, boxes: &Vec::new(), state_dir: &state, home: &home, granted: None };
+        assert!(resolve(&lists, "r", "notes.txt").is_err());
+        assert_eq!(root_label(&lists, &stale, "asked"), "asked", "the stale folder is no project's root");
     }
 
     #[test]

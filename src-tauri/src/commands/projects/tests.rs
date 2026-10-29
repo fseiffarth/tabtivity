@@ -2126,3 +2126,35 @@ fn a_renderer_sent_spec_never_carries_the_posture() {
     .unwrap();
     assert!(!req.remote_only, "absent = a plain Remote");
 }
+
+/// Neither relocation command may mint a mirror for a remote-only project (a
+/// VM included): both refuse with the sentinel; a plain Remote is kept.
+#[test]
+fn a_remote_only_project_refuses_mirror_relocation() {
+    let plain = spec(None, "h.example", None, "/srv/p");
+    let remote_only = RemoteSpec { remote_only: Some(true), ..plain.clone() };
+    let vm = RemoteSpec { vm: Some(true), ..plain.clone() };
+    for pinned in [&remote_only, &vm] {
+        for what in ["setting a mirror folder", "moving the mirror"] {
+            let refusal = mirror_relocation_refusal(pinned, what).expect("refused");
+            assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
+            assert!(refusal.contains(what), "{refusal}");
+        }
+    }
+    assert_eq!(mirror_relocation_refusal(&plain, "moving the mirror"), None);
+    let unpinned = RemoteSpec { vm: Some(true), remote_only: Some(false), ..plain.clone() };
+    assert_eq!(mirror_relocation_refusal(&unpinned, "moving the mirror"), None);
+}
+
+/// Repair scaffold (and the launch-time legacy repair) never writes into a
+/// remote-only project's leftover `mirror` folder; a plain Remote's is kept.
+#[test]
+fn a_remote_only_project_has_no_scaffold_target() {
+    let plain = spec(None, "h.example", None, "/srv/p");
+    let mirrored = remote_entry("p1", "P", &plain, Some("/w/p-mirror"));
+    assert_eq!(scaffold_target_for_entry(&mirrored).map(|(dir, _)| dir), Some(PathBuf::from("/w/p-mirror")));
+    let remote_only = RemoteSpec { remote_only: Some(true), ..plain.clone() };
+    assert_eq!(scaffold_target_for_entry(&remote_entry("p2", "R", &remote_only, Some("/w/stale"))), None);
+    let vm = RemoteSpec { vm: Some(true), ..plain };
+    assert_eq!(scaffold_target_for_entry(&remote_entry("p3", "V", &vm, Some("/w/stale"))), None);
+}

@@ -247,15 +247,25 @@ pub(crate) fn spec_from_value(value: &serde_json::Value) -> Option<RemoteSpec> {
 /// other than the sync engines goes through this (or `mirror_dir_opt`): a
 /// remote-only project's default path must never be taken for a tree, nor
 /// created as one.
+///
+/// Remoteness is the `extra["remote"]` key, as everywhere: an entry whose spec
+/// does not parse still resolves its mirror (as `mirror_dir_opt` does by id),
+/// so a planner moved onto this keeps its old answer for such an entry.
 pub(crate) fn local_copy_in(entry: &ProjectEntry, state_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let spec = spec_from_entry(entry)?;
-    if spec.is_remote_only() {
+    if entry.extra.get("remote").is_none_or(serde_json::Value::is_null) || entry_is_remote_only(entry) {
         return None;
     }
     Some(
         crate::services::fs_confine::mirror_override_dir(entry)
             .unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &entry.id)),
     )
+}
+
+/// Whether this registry entry is a remote project that keeps no local copy
+/// ([`RemoteSpec::is_remote_only`]); `false` for a local project. Pure, for the
+/// planners that walk a project list rather than look one id up.
+pub(crate) fn entry_is_remote_only(entry: &ProjectEntry) -> bool {
+    spec_from_entry(entry).is_some_and(|spec| spec.is_remote_only())
 }
 
 /// The one wording of a refusal a remote-only project answers with:
@@ -988,6 +998,15 @@ mod tests {
         assert_eq!(local_copy_in(&entry("p4", Some("/state/p4"), Some(vm)), state.path()), None);
 
         assert_eq!(local_copy_in(&entry("p5", Some("/work/p5"), None), state.path()), None);
+
+        // A spec that does not parse is still a remote entry with a mirror,
+        // the answer `mirror_dir_opt` gives by id.
+        let mut odd = entry("p6", Some("/state/p6"), None);
+        odd.extra.insert("remote".to_string(), serde_json::json!({ "host": "h" }));
+        assert_eq!(
+            local_copy_in(&odd, state.path()),
+            Some(crate::services::remote_sync::default_mirror_dir_in(state.path(), "p6"))
+        );
         assert!(std::fs::read_dir(state.path()).unwrap().next().is_none(), "a pure resolver");
     }
 

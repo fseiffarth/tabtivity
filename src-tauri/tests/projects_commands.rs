@@ -1237,6 +1237,112 @@ fn export_refuses_vm_projects() {
     });
 }
 
+/// A remote-only project (`docs/remote_only_projects_plan.md`, E5) has no
+/// local copy: the preview measures none (a stale `mirror` included), asking
+/// for this machine's tree is refused before anything is written, and a bundle
+/// without a tree imports remote-only again with no mirror folder minted. The
+/// same bundle carrying a tree lands it as the mirror of a plain Remote.
+#[test]
+fn a_remote_only_project_travels_without_a_local_tree() {
+    with_isolated_home("transfer-ro-home", |home| {
+        let mirror_parent = tempdir_in_test_projects("transfer-ro-mirror");
+        let entry = create_project_blocking(CreateProjectRequest {
+            name: "ro-project".to_string(),
+            directory: String::new(),
+            description: None,
+            git_type: Some("none".to_string()),
+            git_provider: None,
+            skip_scaffold: true,
+            remote: Some(RemoteSpec {
+                user: Some("alice".to_string()),
+                host: "nonexistent.invalid".to_string(),
+                port: None,
+                remote_path: "/home/alice/ro".to_string(),
+                openvpn: None,
+                auto_connect: None,
+                key_auth: None,
+                persist_sessions: None,
+                vm: None,
+                remote_only: None,
+                label: None,
+                extra: Default::default(),
+            }),
+            remote_only: false,
+            mirror_parent: Some(mirror_parent.path().to_string_lossy().to_string()),
+            vm: None,
+        })
+        .expect("create remote project");
+        let id = entry.id.clone();
+        // Make it remote-only the way the backend records it, keeping the old
+        // `mirror` pointer as a stale leftover that must not be read.
+        let registry = app_lib::storage::state_dir().join("projects.json");
+        let mut list: serde_json::Value = serde_json::from_str(&fs::read_to_string(&registry).unwrap()).unwrap();
+        for project in list.as_array_mut().unwrap() {
+            if project["id"] == serde_json::Value::String(id.clone()) {
+                project["remote"]["remote_only"] = serde_json::Value::Bool(true);
+                assert!(project["mirror"].is_string(), "the stale pointer is in place");
+            }
+        }
+        fs::write(&registry, serde_json::to_string_pretty(&list).unwrap()).unwrap();
+
+        let preview = preview_project_export_blocking(id.clone()).expect("preview");
+        assert!(preview.remote && preview.remote_only);
+        assert_eq!(preview.mirror, None);
+        assert_eq!((preview.files, preview.mirror_missing), (0, false));
+
+        let bundle = home.join(concat!("ro.", app_lib::app_slug!(), "proj"));
+        let err = export_project_blocking(full_export(&id, &bundle), &mut |_, _| {})
+            .expect_err("this machine's copy is refused");
+        assert!(err.starts_with(concat!(app_lib::app_upper!(), "_REMOTE_ONLY:")), "{err}");
+        assert!(!bundle.exists(), "nothing may be written for a refused export");
+
+        let mut req = full_export(&id, &bundle);
+        req.include_mirror = false;
+        export_project_blocking(req, &mut |_, _| {}).expect("export without the tree");
+        let info = inspect_project_export_blocking(bundle.to_string_lossy().to_string()).expect("inspect");
+        assert!(info.remote_only && !info.contents.mirror);
+        assert_eq!(info.mirror, None);
+
+        // Import on "another machine": the original is gone from here.
+        let state = app_lib::storage::state_dir().join("remote-projects").join(&id);
+        let list: Vec<serde_json::Value> = serde_json::from_str(&fs::read_to_string(&registry).unwrap()).unwrap();
+        let others: Vec<_> = list.into_iter().filter(|p| p["id"] != serde_json::Value::String(id.clone())).collect();
+        fs::write(&registry, serde_json::to_string_pretty(&others).unwrap()).unwrap();
+        fs::remove_dir_all(&state).unwrap();
+
+        let landing = tempdir_in_test_projects("transfer-ro-landing");
+        let result = import_project_export_blocking(plain_import(&bundle, landing.path())).expect("import");
+        assert_eq!(result.mirror, None);
+        assert!(!result.entry.extra.contains_key("mirror"));
+        assert_eq!(result.entry.extra["remote"]["remote_only"], true);
+        assert!(!result.notes.iter().any(|n| n == "mirrorEmpty"), "{:?}", result.notes);
+        assert!(!state.join("mirror").exists(), "no mirror folder is minted");
+        assert!(state.join("project.json").is_file());
+
+        // The same bundle with a tree: a plain Remote whose mirror is that tree.
+        let mut zip = zip::ZipArchive::new(fs::File::open(&bundle).unwrap()).unwrap();
+        let mut manifest: serde_json::Value = {
+            let raw = zip.by_name(concat!(app_lib::app_slug!(), "-export.json")).unwrap();
+            serde_json::from_reader(raw).unwrap()
+        };
+        drop(zip);
+        manifest["contents"]["mirror"] = serde_json::Value::Bool(true);
+        rewrite_bundle_manifest(&bundle, &manifest);
+        let info = inspect_project_export_blocking(bundle.to_string_lossy().to_string()).expect("inspect");
+        assert!(!info.remote_only, "a tree makes it a plain Remote");
+        let list: Vec<serde_json::Value> = serde_json::from_str(&fs::read_to_string(&registry).unwrap()).unwrap();
+        let others: Vec<_> = list.into_iter().filter(|p| p["id"] != serde_json::Value::String(id.clone())).collect();
+        fs::write(&registry, serde_json::to_string_pretty(&others).unwrap()).unwrap();
+        fs::remove_dir_all(&state).unwrap();
+        let mut req = plain_import(&bundle, landing.path());
+        req.mirror_parent = Some(mirror_parent.path().to_string_lossy().to_string());
+        let mirrored = import_project_export_blocking(req).expect("import with a tree");
+        let mirror = mirrored.mirror.expect("a plain Remote records its mirror");
+        assert!(Path::new(&mirror).is_dir());
+        assert!(mirrored.entry.extra["remote"].get("remote_only").is_none());
+    });
+}
+
 /// Exporting without the file sections still produces a usable bundle: the
 /// settings and tabs travel, the tree does not, and the import says so.
 #[test]
