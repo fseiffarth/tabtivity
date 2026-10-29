@@ -1433,7 +1433,7 @@ async fn create_tab(
     if (project.public.kind == ScopeKind::Assistant) != request.assistant.is_some() {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
-    if let Err(error) = creatable(project, &request.kind) {
+    if let Err(error) = creatable(project, &request.kind, request.host.is_some()) {
         return error;
     }
     // An agent on one of the project's hosts: the opaque machine id becomes
@@ -1751,7 +1751,7 @@ async fn reopen_tab(
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     // A reopen starts an agent tab like a create does.
-    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+    if let Err(error) = creatable(project, &CreateTabKind::Agent, false) {
         return error;
     }
     let request_id = new_request_id();
@@ -1982,7 +1982,7 @@ async fn launch_options(
         // agents wait for the window, so none is listed.
         return (
             StatusCode::OK,
-            Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false })),
+            Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
         );
     }
     match response {
@@ -2000,9 +2000,18 @@ async fn launch_options(
             } else {
                 phone_machines(&state, project).await
             };
+            // A project that lives only on its host has no "this computer":
+            // a worktree, a cloud session, a sign-in, a local model and an API
+            // key all start here, so none is listed (`creatable` refuses them).
+            if project.pinned {
+                return (
+                    StatusCode::OK,
+                    Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "api_key": [], "hosts": hosts, "here": false })),
+                );
+            }
             (
                 StatusCode::OK,
-                Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": sign_in, "local": local, "api_key": api_key, "hosts": hosts })),
+                Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": sign_in, "local": local, "api_key": api_key, "hosts": hosts, "here": true })),
             )
         }
         Ok(DesktopResponse::Error { code, .. }) => api_error(
@@ -3730,7 +3739,7 @@ async fn sign_in_tab(
     if project.public.kind == ScopeKind::Assistant {
         return api_error(StatusCode::BAD_REQUEST, "unsupported_sign_in");
     }
-    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+    if let Err(error) = creatable(project, &CreateTabKind::Agent, false) {
         return error;
     }
     let request = CreateTabRequest {
@@ -3800,7 +3809,7 @@ async fn teleport_tab(
     if tab.public.kind != "agent" || !tab.public.cloud {
         return api_error(StatusCode::BAD_REQUEST, "cloud_tab_required");
     }
-    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+    if let Err(error) = creatable(project, &CreateTabKind::Agent, false) {
         return error;
     }
     let request = CreateTabRequest {
@@ -4125,17 +4134,21 @@ fn is_git_project(project: &super::discovery::ResolvedProject) -> bool {
 /// (`ResolvedProject::create`) against the kind of tab asked for. The tabs of a
 /// remote host, a container or a VM have no local tmux session the phone can
 /// attach to, so a new one there would run where nobody can reach it
-/// (`docs/mobile_every_project_type_plan.md`, phase 1).
+/// (`docs/mobile_every_project_type_plan.md`, phase 1). A project that lives
+/// only on its host (`ResolvedProject::pinned`) takes nothing that starts on
+/// this machine — only a create that names one of its machines (`on_host`).
 fn creatable(
     project: &super::discovery::ResolvedProject,
     kind: &CreateTabKind,
+    on_host: bool,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     use super::discovery::CreateVerdict;
-    let allowed = match project.create {
-        CreateVerdict::All => true,
-        CreateVerdict::Agents => matches!(kind, CreateTabKind::Agent),
-        CreateVerdict::None => false,
-    };
+    let allowed = (on_host || !project.pinned)
+        && match project.create {
+            CreateVerdict::All => true,
+            CreateVerdict::Agents => matches!(kind, CreateTabKind::Agent),
+            CreateVerdict::None => false,
+        };
     if allowed {
         Ok(())
     } else {

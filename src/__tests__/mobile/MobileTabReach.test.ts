@@ -19,6 +19,8 @@ import {
   projectHostKind,
   tabRunsInContainer,
 } from "../../lib/projectTabHost";
+import { HOST_REACH_KEY, phoneReachHost } from "../../components/mobile/MobileAccessPicker";
+import { translateNow } from "../../lib/i18n";
 import table from "./tabLocality.fixture.json";
 import hostTable from "./projectHostReach.fixture.json";
 
@@ -147,6 +149,8 @@ describe("project hosts", () => {
     expect(phoneCreateVerdict(containerProject)).toBe("none");
     expect(phoneCreateVerdict(agentsContainer)).toBe("none");
     expect(phoneCreateVerdict(vmProject)).toBe("none");
+    // On its machines alone: with no host named the bridge has no folder to start in.
+    expect(phoneCreateVerdict(remoteOnlyProject)).toBe("agents");
   });
 
   it("uses the folder the sidecar uses", () => {
@@ -158,6 +162,17 @@ describe("project hosts", () => {
     // A VM has no folder on the host unless the user opted into a mirror.
     expect(phoneProjectFolder(vmProject)).toBe("");
     expect(phoneProjectFolder({ ...vmProject, mirror: "/work/vm-mirror" })).toBe("/work/vm-mirror");
+    // A remote-only project has no local copy, whatever a stale mirror key says.
+    expect(phoneProjectFolder(remoteOnlyProject)).toBe("");
+    expect(phoneProjectFolder({ ...remoteOnlyProject, mirror: "/work/old-mirror" })).toBe("");
+  });
+
+  it("words a remote-only project's phone reach apart from a mirrored one's and a VM's", () => {
+    expect(phoneReachHost(remoteOnlyProject)).toBe("remote_only");
+    expect(phoneReachHost(remoteProject)).toBe("remote");
+    expect(phoneReachHost(vmProject)).toBe("vm");
+    expect(phoneReachHost(base)).toBe("local");
+    expect(translateNow(HOST_REACH_KEY.remote_only)).toMatch(/^Remote-only project: nothing of it is on this computer/);
   });
 });
 

@@ -12,7 +12,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { NewTabSheet } from "../../../mobile-web/src/screens/NewTabSheet";
-import type { TabRow } from "../../../mobile-web/src/api";
+import type { AgentRow, TabRow } from "../../../mobile-web/src/api";
 import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
 const fetchMock = vi.fn();
@@ -307,5 +307,83 @@ describe("Mobile ＋ sheet — API key", () => {
     render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} onPick={vi.fn()} onSendFile={() => undefined} onClose={() => undefined} />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(screen.queryByRole("group", { name: "API key" })).toBeNull();
+  });
+});
+
+describe("Mobile ＋ sheet — a remote-only project", () => {
+  const agents: AgentRow[] = [{ id: "claude", label: "Claude", modes: ["plan"] }];
+  const machines = (primaryUp: boolean) => ({
+    worktrees: [{ id: "w0", label: "", main: true }, { id: "w1", label: "fix", branch: "fix", main: false }],
+    cloud: [{ agent_id: "claude", action: "new", task: false }],
+    sign_in: [{ agent_id: "claude", signed_in: false }],
+    hosts: [
+      { id: "m-primary", label: "h.invalid", primary: true, connected: primaryUp },
+      { id: "m-w1", label: "gpu-1", primary: false, connected: true },
+    ],
+    here: false,
+  });
+  const sheet = (onPick = vi.fn(), headless = false) => {
+    render(<NewTabSheet projectId="p" agents={agents} shells busy={false} headless={headless} agentsOnly remoteOnly sendsFile={false} onPick={onPick} onSendFile={() => {}} onClose={() => {}} />);
+    return onPick;
+  };
+
+  it("lists its machines alone, the primary picked, and starts the agent there", async () => {
+    serve(machines(true));
+    const onPick = sheet();
+    const picker = await screen.findByRole("combobox", { name: /^Runs on/ }) as HTMLSelectElement;
+    expect((within(picker).getAllByRole("option") as HTMLOptionElement[]).map((row) => row.textContent)).toEqual(["h.invalid (primary)", "gpu-1"]);
+    expect(picker.value).toBe("m-primary");
+    // Nothing that runs on this computer: no shell, worktree, cloud, sign-in,
+    // file row, nor the note about the desktop's copy.
+    expect(screen.queryByText("Desktop (local copy)")).toBeNull();
+    expect(screen.queryByRole("button", { name: "New shell" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Agents start in" })).toBeNull();
+    expect(screen.queryByText("Cloud sessions")).toBeNull();
+    expect(screen.queryByText("Sign in to an agent")).toBeNull();
+    expect(screen.queryByText("Send a file from this phone")).toBeNull();
+    expect(screen.queryByText(/stay with the desktop's copy/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+    expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { host: "m-primary" });
+    fireEvent.click(screen.getByRole("button", { name: "plan" }));
+    expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], "plan", { host: "m-primary" });
+  });
+
+  it("starts nothing while its primary is not connected, until a connected machine is picked", async () => {
+    serve(machines(false));
+    const onPick = sheet();
+    const picker = await screen.findByRole("combobox", { name: /^Runs on/ });
+    expect(screen.getByText(/connect it in the project on the desktop/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText("Desktop (local copy)")).toBeNull();
+    fireEvent.change(picker, { target: { value: "m-w1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+    expect(onPick).toHaveBeenCalledWith("agent", agents[0], undefined, { host: "m-w1" });
+  });
+
+  it("starts nothing with no window, and says the window has to be open", async () => {
+    serve(machines(true));
+    sheet(vi.fn(), true);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(await screen.findByText(/starts once the desktop window is open/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText(/starts on the host itself/)).toBeNull();
+  });
+
+  it("is a project screen whose ＋ opens the sheet, never a one-tap agent here", async () => {
+    serve({
+      ...DETAIL,
+      project: { ...DETAIL.project, host: "remote", remote_only: true },
+      folder: false,
+      host_files: true,
+      create: "agents",
+    });
+    render(<Project id="p" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("claude 1");
+    expect(screen.getByText(/Remote-only project: everything runs on the remote host/)).toBeTruthy();
+    expect(screen.getByText(/keeps no copy of its files on the desktop; ☰ Files shows them/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New tab" }));
+    expect(await screen.findByRole("dialog", { name: "New tab" })).toBeTruthy();
+    const posts = fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "POST");
+    expect(posts).toHaveLength(0);
   });
 });

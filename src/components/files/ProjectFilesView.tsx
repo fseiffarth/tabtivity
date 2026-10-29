@@ -103,8 +103,8 @@ import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGate
 import { ArrowDownIcon, ArrowUpIcon, ArrowsHorizontalIcon, CheckIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
-import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "../mobile/MobileAccessPicker";
-import { isHostPinned, projectHostKind } from "../../lib/projectTabHost";
+import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
@@ -513,7 +513,7 @@ export function ProjectFilesView({
   // Every project type may be shared with the phone: the Mobile switch is the
   // whole consent. What the phone then reaches differs by type (`mobileHost`).
   const mobileEligible = !!projectId && !!project;
-  const mobileHost = projectHostKind(project);
+  const mobileHost = phoneReachHost(project);
   const [mobileAccessBusy, setMobileAccessBusy] = useState(false);
   const [mobileAccessError, setMobileAccessError] = useState<string | null>(null);
   // Kept here (not in the pane): the pane unmounts while the view shows Git or

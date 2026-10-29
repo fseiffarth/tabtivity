@@ -1092,7 +1092,9 @@ async function createOnHost(scope: MobileScope, request: CreateRequest, t: Retur
   try {
     created = await useTabsStore.getState().hydrateThenCreateInScope({
       scope: scope.id,
-      cwd: scope.cwd,
+      // A remote-only project has no phone folder (""): its tabs are saved
+      // with the project's directory, as this one is.
+      cwd: scope.cwd || directory,
       localFile: scope.localFile,
       requestHash,
       spec,
