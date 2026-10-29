@@ -416,8 +416,19 @@ pub async fn connect(
     connect_host(pool, project_id, PRIMARY_HOST, password).await
 }
 
+/// Whether connecting `host_id` mints the project's local mirror folder: only
+/// the [`PRIMARY_HOST`] owns a mirror — a worker never does — and a remote-only
+/// project ([`RemoteSpec::is_remote_only`], VM projects included) has none, so
+/// its connect must not leave an empty default mirror behind. `spec` is the
+/// spec [`remote_target_for_host`] resolved for that host (the primary's for
+/// [`PRIMARY_HOST`]).
+fn mints_mirror(spec: &RemoteSpec, host_id: &str) -> bool {
+    host_id == PRIMARY_HOST && !spec.is_remote_only()
+}
+
 /// Open (idempotently) the pooled connection for a specific `(project, host)`.
-/// [`PRIMARY_HOST`] is the project's primary remote (and mints the local mirror);
+/// [`PRIMARY_HOST`] is the project's primary remote (and mints the local mirror
+/// unless the project is remote-only, see [`mints_mirror`]);
 /// any other id is an extra worker host resolved from `compute_hosts`. A no-op for
 /// a local project, an unknown host id, or one already connected. See [`connect`]
 /// for the password/auth contract.
@@ -432,8 +443,8 @@ pub async fn connect_host(
     };
     // SSH-sync Phase 1: ensure the local mirror twin exists for a connected
     // remote project (covers projects created before the mirror was minted at
-    // create time). Only the PRIMARY owns the mirror — a worker never does.
-    if host_id == PRIMARY_HOST {
+    // create time). See [`mints_mirror`] for who owns one.
+    if mints_mirror(&target.spec, host_id) {
         let _ = std::fs::create_dir_all(crate::services::remote_sync::mirror_dir(project_id));
     }
     let key = conn_key(project_id, host_id);
@@ -992,6 +1003,18 @@ mod tests {
 
         assert_eq!(local_copy_in(&entry("p5", Some("/work/p5"), None), state.path()), None);
         assert!(std::fs::read_dir(state.path()).unwrap().next().is_none(), "a pure resolver");
+    }
+
+    /// Only a plain Remote project's primary connect mints the mirror: a worker
+    /// never owns one, and a remote-only or VM project has none.
+    #[test]
+    fn only_a_plain_primary_connect_mints_the_mirror() {
+        assert!(mints_mirror(&spec(), PRIMARY_HOST));
+        assert!(!mints_mirror(&spec(), "h1"));
+        let remote_only = RemoteSpec { remote_only: Some(true), ..spec() };
+        assert!(!mints_mirror(&remote_only, PRIMARY_HOST));
+        let vm = RemoteSpec { vm: Some(true), ..spec() };
+        assert!(!mints_mirror(&vm, PRIMARY_HOST));
     }
 
     #[test]

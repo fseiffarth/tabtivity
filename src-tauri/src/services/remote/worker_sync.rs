@@ -255,6 +255,13 @@ pub async fn sync_worker(
             error: None,
         };
     }
+    // A synced-copy worker is fed from the mirror, and a remote-only project has
+    // none: an explicit sync refuses by name (background callers never get here).
+    if primary_is_remote_only(project_id) {
+        return report_err(remote::remote_only_refusal(
+            "a synced-copy worker needs a local copy of the project",
+        ));
+    }
     let Some(target) = remote::remote_target_for_host(project_id, host_id) else {
         return report_err("unknown worker host".to_string());
     };
@@ -435,9 +442,18 @@ fn short_sha(sha: &str) -> String {
 /// **shared-filesystem** worker never does — it has no copy of its own (its tree IS
 /// the primary's, moved by the primary's own sync), and running git on it would
 /// operate inside the primary's real working tree. A **synced-copy** worker does,
-/// unless `sync_code` is unticked (manual-sync only). Pure, so it is unit-tested.
-fn wants_code_fanout(host: &crate::schema::project::ComputeHost) -> bool {
-    !host.shared_fs && host.sync_code
+/// unless `sync_code` is unticked (manual-sync only) or the project is
+/// `remote_only` (no mirror to bundle from). Pure, so it is unit-tested.
+fn wants_code_fanout(host: &crate::schema::project::ComputeHost, remote_only: bool) -> bool {
+    !remote_only && !host.shared_fs && host.sync_code
+}
+
+/// Whether the project's primary spec is remote-only
+/// ([`crate::schema::project::RemoteSpec::is_remote_only`], VM projects included):
+/// then there is no mirror for any worker to receive code from. By the trusted
+/// registry record; a worker's own flag is never read.
+fn primary_is_remote_only(project_id: &str) -> bool {
+    remote::remote_target_for(project_id).is_some_and(|t| t.spec.is_remote_only())
 }
 
 /// Fan out the current mirror HEAD to **every connected, `sync_code`** worker of a
@@ -451,8 +467,9 @@ pub async fn fan_out(
     project_id: &str,
     force: bool,
 ) {
+    let remote_only = primary_is_remote_only(project_id);
     for host in remote::compute_hosts_for(project_id) {
-        if !wants_code_fanout(&host) {
+        if !wants_code_fanout(&host, remote_only) {
             continue;
         }
         if !remote::is_connected_host(pool, project_id, &host.id).await {
@@ -666,7 +683,8 @@ pub async fn pull_outputs(
 }
 
 /// Kicked by `remote_connect` when a **worker** host connects: bring its tracked
-/// tree up to the current HEAD. Fire-and-forget from the connect path.
+/// tree up to the current HEAD. Fire-and-forget from the connect path. Silent for a
+/// remote-only project (no mirror to send): a connect never raises its refusal.
 pub async fn on_worker_connect(
     ctx: CoreCtx,
     pool: RemotePoolState,
@@ -674,6 +692,9 @@ pub async fn on_worker_connect(
     project_id: &str,
     host_id: &str,
 ) {
+    if primary_is_remote_only(project_id) {
+        return;
+    }
     sync_worker_guarded(&ctx, &pool, &state, project_id, host_id, false).await;
 }
 
@@ -774,11 +795,15 @@ mod tests {
         };
         // A shared-filesystem host is NEVER synced — the load-bearing guard that
         // keeps git off the primary's real working tree — regardless of sync_code.
-        assert!(!wants_code_fanout(&mk(true, true)));
-        assert!(!wants_code_fanout(&mk(true, false)));
+        assert!(!wants_code_fanout(&mk(true, true), false));
+        assert!(!wants_code_fanout(&mk(true, false), false));
         // A synced-copy host is synced iff sync_code is on.
-        assert!(wants_code_fanout(&mk(false, true)));
-        assert!(!wants_code_fanout(&mk(false, false)));
+        assert!(wants_code_fanout(&mk(false, true), false));
+        assert!(!wants_code_fanout(&mk(false, false), false));
+        // A remote-only project has no mirror to fan out from: no host is synced.
+        for (shared_fs, sync_code) in [(true, true), (false, true), (false, false)] {
+            assert!(!wants_code_fanout(&mk(shared_fs, sync_code), true));
+        }
     }
 
     #[test]

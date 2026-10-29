@@ -2104,6 +2104,34 @@ fn a_remote_only_project_refuses_a_local_run_host() {
     }
 }
 
+/// A remote-only project (a VM included) refuses a synced-copy worker, which would
+/// be fed from a mirror it does not have; shared-filesystem and manual-only workers
+/// stay allowed, and a plain Remote project takes every kind.
+#[test]
+fn a_remote_only_project_refuses_a_synced_copy_worker() {
+    let plain = spec(None, "h.example", None, "/srv/p");
+    let remote_only = RemoteSpec { remote_only: Some(true), ..plain.clone() };
+    let vm = RemoteSpec { vm: Some(true), ..plain.clone() };
+    let worker = |sync_code: bool, shared_fs: bool| ComputeHost {
+        id: "w1".into(),
+        sync_code,
+        pull_outputs: false,
+        shared_fs,
+        spec: spec(None, "gpu.example", None, "/srv/p"),
+    };
+    for pinned in [&remote_only, &vm] {
+        let refusal = compute_host_refusal(Some(pinned), &worker(true, false)).expect("refused");
+        assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
+        for (sync_code, shared_fs) in [(true, true), (false, false), (false, true)] {
+            assert_eq!(compute_host_refusal(Some(pinned), &worker(sync_code, shared_fs)), None);
+        }
+    }
+    for (sync_code, shared_fs) in [(true, false), (true, true), (false, false)] {
+        assert_eq!(compute_host_refusal(Some(&plain), &worker(sync_code, shared_fs)), None);
+        assert_eq!(compute_host_refusal(None, &worker(sync_code, shared_fs)), None);
+    }
+}
+
 /// The posture never comes from a renderer-sent spec: create, import and
 /// extend drop a `remote_only` inside `remote` before anything stores it.
 #[test]
