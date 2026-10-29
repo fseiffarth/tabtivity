@@ -173,14 +173,18 @@ export function openConnectionInRoot(opts: {
  * Fire-and-forget for the dialog; never fights a lamp already moving. A failure with
  * a typed password is red; one with none (no master to ride — e.g. Windows, which
  * has no control socket) leaves the project disconnected, as it was before.
+ *
+ * Resolves to `null` once the project is connected (or a connect was already
+ * under way), else to the failure's text — a remote-only creation awaits it,
+ * because its host setup needs the pooled connection.
  */
 export async function connectCreatedRemoteProject(
   projectId: string,
   password: string | null | undefined,
-): Promise<void> {
+): Promise<string | null> {
   const status = () => useRemoteStatusStore.getState();
   const current = status().byProject[projectId]?.ssh ?? "off";
-  if (current === "connected" || current === "connecting") return;
+  if (current === "connected" || current === "connecting") return null;
   const typed = password || null;
   status().setSsh(projectId, "connecting");
   try {
@@ -195,8 +199,10 @@ export async function connectCreatedRemoteProject(
       }),
     );
     status().setSsh(projectId, "connected");
+    return null;
   } catch (error) {
     console.warn("first connect of the new remote project failed", error);
     status().setSsh(projectId, typed === null ? "off" : "error");
+    return String(error);
   }
 }

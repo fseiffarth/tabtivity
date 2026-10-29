@@ -3,7 +3,13 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { GitProvider, ProjectEntry, SandboxToggleOutcome, VmDoctorReport } from "../../types";
+import type {
+  GitProvider,
+  HostInitReport,
+  ProjectEntry,
+  SandboxToggleOutcome,
+  VmDoctorReport,
+} from "../../types";
 import { resolveProjectDirectory } from "../../types";
 import { basename } from "../../lib/paths";
 import { cmdToKind, useTabsStore } from "../../stores/tabs";
@@ -37,6 +43,7 @@ import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
 import { NAMES } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
+import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
 
 /** OS-appropriate command to install git, used by the one-click "Install git"
  *  prompt shown when creating/importing a git-backed project on a machine with
@@ -172,6 +179,21 @@ export function ProjectDialog({
   // registry entry are already written, and creating again would collide with
   // them.
   const [pendingPublish, setPendingPublish] = useState<ProjectEntry | null>(null);
+  // Remote (SSH) projects only (D12/D13): keep the synced local mirror — the
+  // default — or work on the host alone (a remote-only project: no mirror, every
+  // tab, file and git call on the host).
+  const [keepLocalCopy, setKeepLocalCopy] = useState(true);
+  // The remote-only "Connect when I open this project" card (D14). `null` =
+  // untouched, so it follows `autoConnectDefault` until the user answers it.
+  const [autoConnectChoice, setAutoConnectChoice] = useState<boolean | null>(null);
+  // A remote-only New whose host setup (connect → `remote_project_init_host`)
+  // failed after the project was created. A retry runs that setup alone, then
+  // the agent tab the first attempt skipped — the `pendingPublish` pattern.
+  const [pendingInit, setPendingInit] = useState<{
+    project: ProjectEntry;
+    descriptionAgent: string;
+  } | null>(null);
+  const [initializing, setInitializing] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [scaffoldPreview, setScaffoldPreview] = useState<ScaffoldPreviewItem[]>([]);
@@ -211,6 +233,27 @@ export function ProjectDialog({
   // name/git/description body only appears on the final "details" step. Local
   // projects ignore steps and show their single form.
   const showDetails = !isRemoteProject || step === "details";
+  // A remote project created without a local copy (engine rule 1: sent as the
+  // top-level `remoteOnly`, the backend writes the spec field).
+  const remoteOnly = isRemoteProject && !keepLocalCopy;
+  // The browsed host, for the HPC warning (D9) and the auto-connect pre-tick.
+  const remoteTarget = remote.remoteConn
+    ? {
+        user: remote.remoteConn.user ?? undefined,
+        host: remote.remoteConn.host,
+        port: remote.remoteConn.port ?? undefined,
+      }
+    : null;
+  const hostIsHpc = useSettingsStore((s) => isHpcHost(s.settings, remoteTarget));
+  // D14: pre-tick auto-connect only when it can be silent — the dialog signed in
+  // headless with no password at all (key/agent auth; a terminal sign-in may have
+  // typed one) — and never for an OpenVPN tunnel (auto-connecting one reroutes the
+  // machine's traffic without a prompt) or an HPC host (never dialled unattended).
+  const usesVpn = remote.vpnEnabled && remote.vpnConfig !== "";
+  const silentConnect =
+    isRemote && remote.headless && !remote.sshViaTerminal && !remote.remotePassword;
+  const autoConnectDefault = silentConnect && !usesVpn && !hostIsHpc;
+  const autoConnect = remoteOnly && !hostIsHpc && (autoConnectChoice ?? autoConnectDefault);
   // Step order for the footer's Back/Next; Windows non-headless has no browse
   // step (it types the path in the connect step instead).
   const remoteSteps: RemoteStep[] = winManual
@@ -235,8 +278,11 @@ export function ProjectDialog({
   // registration — with the fork created first, so it shares every branch below
   // and only adds the provider row.
   const isForkImport = kind === "import" && !isRemoteProject && importSource === "fork";
+  // A remote-only project can clone too: on the host, in a visible tab (`hostClone`).
   const isCloneImport =
-    (kind === "import" && !isRemoteProject && importSource === "git") || isForkImport;
+    (kind === "import" && (!isRemoteProject || remoteOnly) && importSource === "git") ||
+    isForkImport;
+  const hostClone = remoteOnly && isCloneImport;
   const isHostedFolderImport =
     kind === "import" && !isRemoteProject && importSource === "folder" && folderOrigin !== null;
   // An import whose repository already lives on a host: there is an `origin` to
@@ -272,7 +318,9 @@ export function ProjectDialog({
   // refusal can never disagree about what "already imported" means. A remote
   // project is its host path; a local one is the folder it ends up in, which for
   // a copy import is the destination rather than the source it copies from.
-  const checkedRemote = isRemoteProject ? buildRemoteSpec(safeName) : undefined;
+  // A host clone lands in `<browsed>/<name>`, made empty by the backend, like a New.
+  const remoteJoinsName = kind === "new" || hostClone;
+  const checkedRemote = isRemoteProject ? buildRemoteSpec(safeName, remoteJoinsName) : undefined;
   const checkedDir = isRemoteProject
     ? ""
     : kind === "new" || isCloneImport || mode === "copy"
@@ -335,8 +383,12 @@ export function ProjectDialog({
   // needs `git` too (`git_clone` shells out to it) regardless of gitType.
   // A VM project's git work (init/clone) runs inside the guest, whose baked
   // image carries git — the local machine's PATH is irrelevant there.
+  // A remote-only project's git (init, clone) runs on its host, too.
   const needsGitInstall =
-    !isVmProject && gitAvailable === false && (gitType !== "none" || isCloneImport);
+    !isVmProject &&
+    !remoteOnly &&
+    gitAvailable === false &&
+    (gitType !== "none" || isCloneImport);
 
   // Which provider the publish goes through: the explicit pick, else what the
   // global connection's profile URL says (GitHub when it says nothing).
@@ -836,6 +888,67 @@ export function ProjectDialog({
     }
   };
 
+  /** A remote-only New's host half (F2): the folder exists empty on the host
+   *  (`create_project` made it), and nothing local scaffolds it. Await the first
+   *  pooled connect, then `remote_project_init_host` writes the scaffold and runs
+   *  `git init` there — and only then open the description agent tab, which runs
+   *  on the host and edits what the init just wrote.
+   *
+   *  A failure leaves the created project as it is and the dialog open on the
+   *  error; the button then retries this setup alone (no second create). */
+  const setUpHostFolder = async (project: ProjectEntry, descriptionAgent: string): Promise<boolean> => {
+    setInitializing(true);
+    try {
+      const connectError = await connectCreatedRemoteProject(project.id, remote.remotePassword);
+      if (connectError) throw connectError;
+      const report = await invoke<HostInitReport>("remote_project_init_host", {
+        projectId: project.id,
+        scaffold: !skipScaffold,
+        git: gitType !== "none",
+      });
+      // A host without git downgrades the project to "no git" in both copies;
+      // the store learns it here rather than at the next reload.
+      if (report.gitType !== project.git_type) {
+        useProjectsStore.setState((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === project.id
+              ? { ...p, git_type: report.gitType, git_provider: report.gitType === "none" ? undefined : p.git_provider }
+              : p,
+          ),
+        }));
+      }
+      setPendingInit(null);
+    } catch (err) {
+      setPendingInit({ project, descriptionAgent });
+      setError(t("projectDialog.initHostFailed", { error: String(err) }));
+      return false;
+    } finally {
+      setInitializing(false);
+    }
+    await openDescriptionAgentTab(project, descriptionAgent);
+    return true;
+  };
+
+  /** A clone into a remote-only project: the repository is cloned on the host,
+   *  in one visible shell tab (house rule: a one-click visible tab, never a
+   *  hidden call), into the empty folder `create_project` made. The host init
+   *  is never called — the clone brings its own repository. */
+  const openHostCloneTab = async (project: ProjectEntry) => {
+    // The tab spawns over the project's pooled connection; a failed connect
+    // still opens it, on the pane's own Connect hold.
+    await connectCreatedRemoteProject(project.id, remote.remotePassword);
+    const tabsStore = useTabsStore.getState();
+    tabsStore.setScope(project.id);
+    tabsStore.addTab({
+      label: t("projectDialog.cloneOnHostTab"),
+      cmd: "git",
+      args: ["clone", "--progress", repoUrl.trim(), "."],
+      env: {},
+      cwd: "",
+      kind: "shell",
+    });
+  };
+
   const submit = async () => {
     setError("");
     setBusy(true);
@@ -844,6 +957,11 @@ export function ProjectDialog({
       // publish failed: retry that half by itself.
       if (pendingPublish) {
         if (await publishCreated(pendingPublish)) onClose();
+        return;
+      }
+      // …or only the host setup of a remote-only project did.
+      if (pendingInit) {
+        if (await setUpHostFolder(pendingInit.project, pendingInit.descriptionAgent)) onClose();
         return;
       }
       if (isVmProject) {
@@ -857,13 +975,15 @@ export function ProjectDialog({
           ? selectedScaffoldAgentFills()
           : new Map<string, string[]>();
       const descriptionAgent = selectedDescriptionAgent();
-      const remoteSpec = buildRemoteSpec(safeName);
+      const builtSpec = buildRemoteSpec(safeName, remoteJoinsName);
+      // D14: the remote-only auto-connect card rides the spec as `auto_connect`.
+      const remoteSpec = builtSpec && autoConnect ? { ...builtSpec, auto_connect: true } : builtSpec;
       // Clone first, then import the resulting directory in place: the clone owns
       // getting the files onto the disk, `import_project` owns registering them.
       // A failed clone throws here, so nothing is registered for a tree that
       // isn't there.
       let clonedDir = "";
-      if (isCloneImport) {
+      if (isCloneImport && !hostClone) {
         setCloning(true);
         try {
           clonedDir = isForkImport
@@ -885,18 +1005,22 @@ export function ProjectDialog({
           setCloning(false);
         }
       }
+      // A host clone is *created* (the backend makes `<browsed>/<name>` empty on
+      // the host and inits nothing), then cloned into by a host tab below.
       const project =
-        kind === "new"
+        kind === "new" || hostClone
           ? await invoke<ProjectEntry>("create_project", {
               req: {
                 name,
                 directory: targetDir,
                 description,
                 gitType,
+                gitProvider: hostClone ? originProvider || undefined : undefined,
                 skipScaffold,
                 remote: remoteSpec,
-                // Remote only: chosen local mirror parent (ignored for local).
-                mirrorParent: isRemoteProject ? mirrorParent : undefined,
+                remoteOnly: remoteOnly || undefined,
+                // Remote with a local copy only: the chosen local mirror parent.
+                mirrorParent: isRemoteProject && !remoteOnly ? mirrorParent : undefined,
               },
             })
           : await invoke<ProjectEntry>("import_project", {
@@ -920,8 +1044,9 @@ export function ProjectDialog({
                 manualValidationConfirmed,
                 skipScaffold,
                 remote: remoteSpec,
-                // Remote only: chosen local mirror parent (ignored for local).
-                mirrorParent: isRemoteProject ? mirrorParent : undefined,
+                remoteOnly: remoteOnly || undefined,
+                // Remote with a local copy only: the chosen local mirror parent.
+                mirrorParent: isRemoteProject && !remoteOnly ? mirrorParent : undefined,
               },
             });
       // Turn the container on before the project reaches the store, so activation
@@ -971,6 +1096,15 @@ export function ProjectDialog({
         rememberChosenPath();
       }
       await onProject(created);
+      if (remoteOnly && kind === "new") {
+        if (await setUpHostFolder(created, descriptionAgent)) onClose();
+        return;
+      }
+      if (hostClone) {
+        await openHostCloneTab(created);
+        onClose();
+        return;
+      }
       // The new project's first pooled connect, carrying how this dialog signed in:
       // the typed password, or `viaLogin` when it rides the login terminal's master —
       // never a bare credential-less connect the backend would read as key auth.
@@ -996,6 +1130,7 @@ export function ProjectDialog({
     // already been passed once, and half of them no longer describe anything
     // this click will do.
     (pendingPublish !== null ||
+    pendingInit !== null ||
     // The folder / host path is already a project. Blocked here so a clone never
     // downloads a repository the backend is going to refuse; the backend's own
     // check stays the gate, since this one can be answering a stale list.
@@ -1024,8 +1159,10 @@ export function ProjectDialog({
         !remoteReady
         ? false
         : kind === "new"
-          ? Boolean(name.trim() && safeName && remoteChosenPath && mirrorParent.trim())
-          : Boolean(name.trim() && remoteChosenPath && mirrorParent.trim())
+          ? Boolean(name.trim() && safeName && remoteChosenPath && (remoteOnly || mirrorParent.trim()))
+          : hostClone
+            ? Boolean(name.trim() && safeName && remoteChosenPath && isCloneUrl(repoUrl))
+            : Boolean(name.trim() && remoteChosenPath && (remoteOnly || mirrorParent.trim()))
       : kind === "new"
         ? Boolean(name.trim() && targetDir && safeName)
         : isCloneImport
@@ -1070,10 +1207,10 @@ export function ProjectDialog({
   // remote-basics block for a remote project (so name/description are editable
   // from the moment SSH is toggled on), and inside the details section for a local
   // project. Extracted so the markup isn't duplicated between the two placements.
-  const nameError = pendingPublish ? "" : !name.trim() ? t("projectDialog.nameRequired")
+  const nameError = pendingPublish || pendingInit ? "" : !name.trim() ? t("projectDialog.nameRequired")
     : !safeName && (isVmProject || kind === "new" || isCloneImport || (!isRemoteProject && mode !== "keep"))
       ? t("projectDialog.nameInvalid") : "";
-  const urlError = !pendingPublish && isCloneImport && !isCloneUrl(repoUrl) ? t("projectDialog.urlRequired") : "";
+  const urlError = !pendingPublish && !pendingInit && isCloneImport && !isCloneUrl(repoUrl) ? t("projectDialog.urlRequired") : "";
 
   const nameField = (
     <label>
@@ -1149,6 +1286,30 @@ export function ProjectDialog({
           </span>
         </label>
 
+        {/* D12/D13: under the Remote card, on by default. Off = a remote-only
+            project, chosen here once (converting later is the pill's job). */}
+        {isRemoteProject && (
+          <label className={`toggle-card${keepLocalCopy ? " is-on" : ""}`}>
+            <span className="toggle-card-body">
+              <span className="toggle-card-title">{t("projectDialog.keepLocalCopyTitle")}</span>
+              <span className="toggle-card-desc">{t("projectDialog.keepLocalCopyDesc")}</span>
+            </span>
+            <span className="eld-switch">
+              <input
+                type="checkbox"
+                checked={keepLocalCopy}
+                onChange={(e) => {
+                  setKeepLocalCopy(e.target.checked);
+                  // A fork is created and cloned on this machine; the host-only
+                  // import sources are a folder and a plain clone.
+                  if (!e.target.checked && importSource === "fork") setImportSource("git");
+                }}
+              />
+              <span className="eld-switch-track" aria-hidden="true" />
+            </span>
+          </label>
+        )}
+
         {/* Remote basics: a remote (SSH) project also needs a LOCAL location (its
             synced mirror). Show it plus the shared name/description up front — from
             the moment SSH is toggled on — while the remote location is chosen later
@@ -1156,6 +1317,15 @@ export function ProjectDialog({
             leaf of both `<local location>/<name>` and `<remote path>/<name>`. */}
         {isRemoteProject && (
           <>
+            {remoteOnly ? (
+              <>
+                <div className="project-dialog-path">{t("projectDialog.remoteOnlyHint")}</div>
+                {/* D9: allowed on a tagged cluster host, but said up front. */}
+                {hostIsHpc && (
+                  <div className="project-dialog-path">{t("projectDialog.remoteOnlyHpcWarning")}</div>
+                )}
+              </>
+            ) : (
             <label>
               {t("projectDialog.localLocationLabel")}
               <div className="folder-picker-row">
@@ -1168,6 +1338,7 @@ export function ProjectDialog({
                 {t("projectDialog.localMirrorHint", { name: safeName || "<name>" })}
               </span>
             </label>
+            )}
             {nameField}
             {descriptionField}
           </>
@@ -1183,7 +1354,7 @@ export function ProjectDialog({
 
         {showDetails && (
         <>
-        {kind === "import" && !isRemoteProject && (
+        {kind === "import" && (!isRemoteProject || remoteOnly) && (
           <label>
             {t("projectDialog.importFromLabel")}
             <Dropdown
@@ -1193,7 +1364,10 @@ export function ProjectDialog({
               options={[
                 { value: "folder", label: t("projectDialog.importFolderOpt") },
                 { value: "git", label: t("projectDialog.importGitOpt") },
-                { value: "fork", label: t("projectDialog.importForkOpt") },
+                // A fork is made and cloned on this machine: not for a host-only project.
+                ...(isRemoteProject
+                  ? []
+                  : [{ value: "fork", label: t("projectDialog.importForkOpt") }]),
               ]}
             />
           </label>
@@ -1227,7 +1401,9 @@ export function ProjectDialog({
             />
             {urlError && <span id="project-url-error" className="ssh-optional-hint">{urlError}</span>}
             <span className="ssh-optional-hint">
-              {isForkImport ? (
+              {hostClone ? (
+                t("projectDialog.cloneOnHostHint")
+              ) : isForkImport ? (
                 <>
                   {t("projectDialog.forkHintPre")}{" "}
                   <code>upstream</code> {t("projectDialog.forkHintMid")}{forkCli?.bin ?? "gh / glab"}{t("projectDialog.forkHintPost")}{" "}
@@ -1315,6 +1491,30 @@ export function ProjectDialog({
             block above; here they render only for a local project. */}
         {!isRemoteProject && nameField}
         {!isRemoteProject && descriptionField}
+
+        {/* D14: the pill's auto-connect choice, asked at creation for a project
+            that has nothing to open without its host. Pre-ticked only when it can
+            be silent; the never-prompt path re-checks on every connect anyway. */}
+        {remoteOnly && (
+          <label
+            className={`toggle-card${autoConnect ? " is-on" : ""}`}
+            title={hostIsHpc ? t("autoConnect.hpcTitle") : undefined}
+          >
+            <span className="toggle-card-body">
+              <span className="toggle-card-title">{t("pill.autoConnectOnLaunch")}</span>
+              <span className="toggle-card-desc">{t("remoteConnect.autoConnectTitleEligible")}</span>
+            </span>
+            <span className="eld-switch">
+              <input
+                type="checkbox"
+                checked={autoConnect}
+                disabled={hostIsHpc}
+                onChange={(e) => setAutoConnectChoice(e.target.checked)}
+              />
+              <span className="eld-switch-track" aria-hidden="true" />
+            </span>
+          </label>
+        )}
 
         <h3 className="project-form-heading">{t("projectDialog.gitHostingLabel")}</h3>
         <label>
@@ -1417,7 +1617,9 @@ export function ProjectDialog({
           <span className="ssh-optional-hint">
             {isVmProject
               ? t("projectDialog.publishLaterVmHint")
-              : t("projectDialog.publishLaterRemoteHint")}
+              : remoteOnly
+                ? t("projectDialog.publishLaterRemoteOnlyHint")
+                : t("projectDialog.publishLaterRemoteHint")}
           </span>
         )}
 
@@ -1573,7 +1775,7 @@ export function ProjectDialog({
           </label>
         )}
 
-        {kind === "import" && isRemoteProject && (
+        {kind === "import" && isRemoteProject && !hostClone && (
           <div className="project-dialog-path">
             {t("projectDialog.remoteImportKeepsFolder")}
           </div>
@@ -1669,7 +1871,7 @@ export function ProjectDialog({
             remoteChosenPath ? (
               <span className="remote-chosen-summary">
                 <span className="remote-chosen-text">
-                  {kind === "new"
+                  {remoteJoinsName
                     ? t("projectDialog.remoteDestinationLabel", { path: joinRemotePath(remoteChosenPath, safeName || "<name>") })
                     : t("projectDialog.remoteLocationLabel", { path: remoteChosenPath })}
                 </span>
@@ -1727,7 +1929,7 @@ export function ProjectDialog({
         </div>
         <div className="dialog-fixed-footer">
           {error && <ErrorNote className="project-dialog-error" role="alert" error={error} />}
-          {busy && <div role="status" className="project-dialog-path">{cloning ? t("projectDialog.cloningEllipsis") : publishing ? t("projectDialog.publishingEllipsis") : bootingVm ? t("projectDialog.vmBooting") : t("projectDialog.working")}</div>}
+          {busy && <div role="status" className="project-dialog-path">{cloning ? t("projectDialog.cloningEllipsis") : publishing ? t("projectDialog.publishingEllipsis") : bootingVm ? t("projectDialog.vmBooting") : initializing ? t("projectDialog.initHostWorking") : t("projectDialog.working")}</div>}
         <div className="project-dialog-actions">
           <button type="button" onClick={onClose}>{t("common.cancel")}</button>
           {isRemoteProject && stepIdx > 0 && (
@@ -1751,6 +1953,8 @@ export function ProjectDialog({
                     ? t("projectDialog.working")
                     : pendingPublish
                       ? t("projectDialog.retryPublish")
+                      : pendingInit
+                        ? t("projectDialog.initHostRetry")
                       : kind === "new"
                         ? t("projectDialog.create")
                         : isForkImport

@@ -139,6 +139,25 @@ describe("projectTypeTags — stacked / edge axes", () => {
   });
 });
 
+describe("projectTypeTags — remote-only (no local copy)", () => {
+  it("adds a 'Host only' tag beside the SSH tag, naming the host", () => {
+    const tags = projectTypeTags(entry({ git_type: "local", remote: { ...SSH, remote_only: true } }), false, t);
+    expect(facets(tags)).toEqual([GIT, SSH_TAG, { key: "remoteOnly", label: "Host only", color: SSH_TAG.color }]);
+    expect(tags.find((tag) => tag.key === "remoteOnly")?.title).toContain(formatRemoteTarget(SSH));
+  });
+
+  it("is absent on a plain remote project and on a VM (which has its own glyph)", () => {
+    expect(projectTypeTags(entry({ remote: SSH }), false, t).some((tag) => tag.key === "remoteOnly")).toBe(false);
+    const vm = projectTypeTags(
+      entry({ remote: { ...SSH, vm: true, remote_only: true }, vm: { enabled: true } }),
+      false,
+      t,
+    );
+    expect(vm.some((tag) => tag.key === "remoteOnly")).toBe(false);
+    expect(vm.some((tag) => tag.key === "ssh")).toBe(true);
+  });
+});
+
 describe("gitTypeLabel", () => {
   it("labels remote states with provider · visibility", () => {
     expect(gitTypeLabel("remote-public", "github", t)).toBe("GitHub · public");

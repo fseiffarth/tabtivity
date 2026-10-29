@@ -26,6 +26,7 @@ import { projectStations, useKeyboardSteeringStore } from "../../stores/keyboard
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useT } from "../../lib/i18n";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
@@ -544,7 +545,9 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
    */
   const addAndAudit = async (project: ProjectEntry) => {
     await addProject(project);
-    if (project.remote) useBigFoldersStore.getState().openOnce(project.id);
+    // The big-folder ask is about what to sync into the mirror: a project pinned
+    // to its host (remote-only or VM) has none.
+    if (project.remote && !isHostPinned(project)) useBigFoldersStore.getState().openOnce(project.id);
   };
 
   return (
