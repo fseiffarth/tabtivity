@@ -466,6 +466,9 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("list_dir", "relPath", BodyConfined),
     ("move_path", "destRel", BodyConfined),
     ("project_path_exists", "relPath", BodyConfined),
+    // A folder scope: `host_search::validate_rel_root`, then held inside the
+    // canonical project root (or a host path below the project's root).
+    ("project_search", "relRoot", BodyConfined),
     ("update_gitignore_rule", "relPath", BodyConfined),
     ("write_project_file", "relPath", BodyConfined),
     ("write_project_file_bytes", "relPath", BodyConfined),

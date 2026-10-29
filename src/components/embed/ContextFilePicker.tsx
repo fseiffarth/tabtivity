@@ -14,6 +14,8 @@ import { fuzzyMatch, fuzzyRank } from "../../lib/fuzzy";
 import { useT } from "../../lib/i18n";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { useProjectsStore } from "../../stores/projects";
+import { sshOf, useRemoteStatusStore } from "../../stores/remote/remoteStatus";
+import { confirmedArg, hpcGuardRefusal, withHpcConfirm } from "../../lib/remote/hpc/hpcGuard";
 import { resolveProjectDirectory } from "../../types";
 import "../files/QuickOpen.css";
 
@@ -78,15 +80,15 @@ export function ContextFilePicker({
   const [rootIdx, setRootIdx] = useState(0);
   const activeRoot = roots && roots.length > 0 ? roots[Math.min(rootIdx, roots.length - 1)] : null;
   const listDir = activeRoot?.dir ?? projectDir;
-  // `list_project_paths` walks a local folder, and a host-pinned project's
-  // directory is its state dir, not its files: list nothing rather than that
-  // folder's own bookkeeping, until the host listing lands
-  // (`docs/remote_only_projects_plan.md`, E6a). The match is the registry's
-  // exact directory, the identity the backend resolves too.
-  const hostOnly = useProjectsStore((s) =>
-    !!listDir &&
-    s.projects.some((p) => isHostPinned(p) && resolveProjectDirectory(p) === listDir),
+  // A host-pinned project's files are listed on its host
+  // (`list_project_paths` resolves its stored directory, the registry's exact
+  // one matched here): only while that host is connected — a listing against a
+  // dead session would only wait on it — and behind the HPC guard's retry.
+  const pinned = useProjectsStore((s) =>
+    listDir ? s.projects.find((p) => isHostPinned(p) && resolveProjectDirectory(p) === listDir) : undefined,
   );
+  const pinnedDown = useRemoteStatusStore((s) => !!pinned && sshOf(s, pinned.id) !== "connected");
+  const [declined, setDeclined] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -95,22 +97,29 @@ export function ContextFilePicker({
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    if (!listDir || hostOnly) {
+    setDeclined(false);
+    if (!listDir || pinnedDown) {
       setFiles([]);
       setLoading(false);
       return;
     }
-    invoke<PathEntry[]>("list_project_paths", { projectDir: listDir })
+    withHpcConfirm((confirmed) =>
+      invoke<PathEntry[]>("list_project_paths", { projectDir: listDir, ...confirmedArg(confirmed) }),
+    )
       .then((entries) => {
         if (!alive) return;
         setFiles(entries.filter((e) => !e.is_dir).map((e) => e.path));
       })
-      .catch(() => alive && setFiles([]))
+      .catch((e) => {
+        if (!alive) return;
+        setDeclined(hpcGuardRefusal(e) !== null);
+        setFiles([]);
+      })
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [listDir, hostOnly]);
+  }, [listDir, pinnedDown]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -210,8 +219,10 @@ export function ContextFilePicker({
             <div className="qo-empty">
               {!listDir
                 ? t("contextFilePicker.noProject")
-                : hostOnly
-                  ? t("quickOpen.hostOnly")
+                : pinnedDown
+                  ? t("projectFilesPane.disconnectedHostOnly", { host: pinned?.remote?.label || pinned?.remote?.host || "" })
+                  : declined
+                  ? t("search.hostDeclined")
                   : files.length === 0
                   ? t("quickOpen.noFiles")
                   : t("quickOpen.noMatches")}

@@ -158,7 +158,7 @@ pub const HPC_GUARD: &str = crate::app_env!("HPC_GUARD");
 
 /// Build the refusal a gated command returns: `TABTIVITY_HPC_GUARD <what> <target>`.
 /// `what` is a stable slug the dialog switches its wording on (`du-scan`,
-/// `census`, `host-scan`, `login-node-run`, `connect`), `target` the `user@host:port` being
+/// `census`, `host-scan`, `host-search`, `login-node-run`, `connect`), `target` the `user@host:port` being
 /// protected.
 pub fn guard_error(what: &str, spec: &RemoteSpec) -> String {
     guard_error_for(what, &key_for(spec))
