@@ -6042,6 +6042,7 @@ export const dict: Dict = {
   "tabLocality.primary": "Primario",
   "tabLocality.syncOff": "sync disattivata",
   "tabLocality.syncOffTitle": "Questa macchina non contiene codice — abilita «Sincronizza automaticamente il codice» o il filesystem condiviso in Macchine remote… per eseguire script qui. La sincronizzazione resta con l'host primario.",
+  "tabLocality.syncOffPinnedTitle": "Questa macchina tiene una copia sincronizzata, e un progetto solo remoto non ha una copia locale da cui alimentarla, quindi non contiene codice. Qui esegue schede solo una macchina sul filesystem condiviso dell'host primario.",
   "tabLocality.runHostTitle": "Eseguito su: {label}",
   "tabLocality.runHostSubtitle": "Dove vengono eseguiti Run/Debug e le shell avviate da questo progetto — la macchina, non da quale lato vengono letti i file.",
   "tabLocality.runLabel": "Esegui: {label}",

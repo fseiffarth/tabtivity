@@ -5927,3 +5927,86 @@ async fn a_remote_only_project_starts_nothing_on_this_computer() {
     assert_eq!(*asked.lock().unwrap(), 0, "the window was never asked to start a tab");
     desktop.abort();
 }
+
+/// The one thing a remote-only project takes from the phone (E7, D15): a
+/// create naming one of its listed machines passes `creatable` and reaches
+/// the window as `Create` with that machine's location word. A synced-copy
+/// worker is not listed and cannot be named (nothing feeds it, D4); a worker
+/// on the primary's folder is. A sign-in on its host tab is refused.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_remote_only_project_starts_an_agent_on_a_listed_machine() {
+    let mut host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let path = state_dir.join("projects.json");
+    let mut records: Vec<Value> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    records[0]["remote"]["remote_only"] = true.into();
+    records[0]["compute_hosts"] = json!([
+        { "id": "w1", "user": "alice", "host": "w1.example", "remote_path": "/srv/w" },
+        { "id": "w3", "user": "alice", "host": "w3.example", "remote_path": "/srv/aurora", "shared_fs": true },
+    ]);
+    std::fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+    // The desktop holds the primary's and w3's masters (the seam stands in
+    // for `ssh -O check`); w1's would not matter, it is never listed.
+    let live: host_live::SharedHostLive = Arc::default();
+    for (name, machine) in [("cm-primary", "primary.example"), ("cm-w3", "w3.example"), ("cm-w1", "w1.example")] {
+        let control = state_dir.join(name);
+        std::fs::write(&control, b"").unwrap();
+        crate::services::ssh_exec::TEST_LIVE_MASTERS.lock().unwrap().push(control.clone());
+        let spec = serde_json::from_value(json!({ "user": "alice", "host": machine, "remote_path": "/x" })).unwrap();
+        live.lock().unwrap().insert(&spec, host_live::HostReach { control_path: control, sessions: None });
+    }
+    host.state.catalog = Arc::new(Mutex::new(CatalogCache::with_host_live(live)));
+    let cookie = host.pair_device(&signing_key(96)).await.0;
+    let (p, t) = project_and_tab(&host, &cookie).await;
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let asked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let seen = asked.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let answer = match request {
+                DesktopRequest::LaunchOptions { .. } => DesktopResponse::LaunchOptions {
+                    worktrees: Vec::new(),
+                    cloud: Vec::new(),
+                    sign_in: Vec::new(),
+                    local: None,
+                    api_key: Vec::new(),
+                },
+                DesktopRequest::Create { request, .. } => {
+                    seen.lock().unwrap().push(request.host);
+                    DesktopResponse::Error { code: "unknown_agent".into(), message: "not offered".into() }
+                }
+                _ => DesktopResponse::Seen,
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+    let (status, _, options) = host.send(get_as(&format!("/api/v1/projects/{p}/launch-options"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{options}");
+    let options = json(&options);
+    assert_eq!(options["here"], false, "{options}");
+    let hosts = options["hosts"].as_array().cloned().expect("hosts listed");
+    let rows: Vec<_> = hosts.iter().map(|row| (row["label"].as_str(), row["primary"].as_bool(), row["connected"].as_bool())).collect();
+    assert_eq!(rows, [(Some("primary.example"), Some(true), Some(true)), (Some("w3.example"), Some(false), Some(true))], "{options}");
+
+    for (n, row) in hosts.iter().enumerate() {
+        let body = json!({
+            "project_id": p, "kind": "agent", "agent_id": "claude", "host": row["id"],
+            "idempotency_key": format!("remote-only-host-{n}-0123456789abcdef"),
+        });
+        let (status, _, answer) = host.send(create_request(&p, &cookie, body)).await;
+        assert_ne!(json(&answer)["error"].as_str(), Some("not_attachable"), "{status} {answer}");
+    }
+    assert_eq!(asked.lock().unwrap().as_slice(), [Some("remote".to_string()), Some("host:w3".to_string())], "the window was asked, on each machine");
+
+    let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/tabs/{t}/sign-in"), &cookie, Some(json!({ "idempotency_key": "ro-signin-0123456789abcdef" })))).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("tab_on_host")), "{body}");
+    assert_eq!(asked.lock().unwrap().len(), 2, "the sign-in never reached the window");
+    desktop.abort();
+}

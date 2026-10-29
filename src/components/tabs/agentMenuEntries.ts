@@ -58,7 +58,7 @@ export function agentMachines(opts: {
     { location: "remote", label: localityHostLabel("remote", names) },
     ...(opts.computeHosts ?? []).map((h): AgentMachine => {
       const label = localityHostLabel(`host:${h.id}`, names);
-      return workerRunnable(h)
+      return workerRunnable(h, opts.pinned)
         ? { location: `host:${h.id}`, label }
         : { location: `host:${h.id}`, label: `${label} (${opts.t("tabLocality.syncOff")})`, disabled: true };
     }),

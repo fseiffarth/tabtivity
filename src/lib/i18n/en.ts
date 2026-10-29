@@ -6170,6 +6170,7 @@ export const enSource = {
   "tabLocality.primary": "Primary",
   "tabLocality.syncOff": "sync off",
   "tabLocality.syncOffTitle": "This machine holds no code — enable \"Auto-sync code\" or shared filesystem in Remote machines… to run scripts here. Sync stays with the primary.",
+  "tabLocality.syncOffPinnedTitle": "This machine keeps a synced copy, and a remote-only project has no local copy to sync it from, so it holds no code. Only a worker on the primary's shared filesystem runs tabs here.",
   "tabLocality.runHostTitle": "Runs on: {label}",
   "tabLocality.runHostSubtitle": "Where Run/Debug and shells launched from this project run — the machine, not which side files are read from.",
   "tabLocality.runLabel": "Run: {label}",

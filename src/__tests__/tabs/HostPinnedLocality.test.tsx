@@ -6,7 +6,7 @@
  * viewer's Run: picker drops "this computer" the same way.
  */
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { isHostPinned, remoteOnlyRefusal, REMOTE_ONLY_SENTINEL } from "../../lib/projectTabHost";
 import { BRAND } from "../../lib/brand";
 import { translateNow } from "../../lib/i18n";
@@ -95,6 +95,27 @@ describe("LocalityMenu on a pinned project", () => {
   it("keeps the Local row for an ordinary remote project", () => {
     menu("root", false);
     expect(screen.getByText(translateNow("tabLocality.localMirrorItem"))).toBeTruthy();
+  });
+
+  it("offers a synced-copy worker disabled, since no local copy feeds it", () => {
+    for (const pinned of [true, false]) {
+      render(
+        <LocalityMenu
+          menu={{ key: "t1", x: 0, y: 0, view: "machines" }}
+          current="remote"
+          pinned={pinned}
+          primaryHost="h"
+          computeHosts={[{ id: "w2", host: "w2.invalid" }]}
+          onClose={vi.fn()}
+          onChangeView={vi.fn()}
+          onChoose={vi.fn()}
+        />,
+      );
+      const row = screen.getByText("w2.invalid").closest("button")!;
+      expect(row.disabled).toBe(pinned);
+      if (pinned) expect(row.title).toBe(translateNow("tabLocality.syncOffPinnedTitle"));
+      cleanup();
+    }
   });
 });
 

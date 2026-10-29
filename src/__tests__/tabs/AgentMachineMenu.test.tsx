@@ -40,6 +40,11 @@ describe("agentMachines", () => {
   it("has no Local row on a host-pinned project, and one machine is no list", () => {
     const pinned = agentMachines({ primaryHost: "head.example", computeHosts: hosts, pinned: true, t });
     expect(pinned.map((m) => m.location)).toEqual(["remote", "host:gpu", "host:cold"]);
+    // A synced copy is fed from the mirror a remote-only project lacks (D4):
+    // only a worker on the primary's folder still runs its tabs.
+    expect(pinned[1]).toMatchObject({ disabled: true });
+    const shared = agentMachines({ computeHosts: [{ id: "nfs", host: "nfs.example", shared_fs: true }], pinned: true, t });
+    expect(shared[1].disabled).toBeUndefined();
     // A VM: its primary alone, nothing to choose between.
     const lone = agentMachines({ primaryHost: "vm", pinned: true, t });
     const rows = agentMenuEntries({

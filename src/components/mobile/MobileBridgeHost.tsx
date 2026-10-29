@@ -1055,7 +1055,7 @@ function phoneHostLocation(project: ProjectEntry | undefined, host: string): Tab
   if (host === "remote") return "remote";
   const id = host.startsWith("host:") ? host.slice("host:".length) : "";
   const worker = id ? project.compute_hosts?.find((entry) => entry.id === id) : undefined;
-  return worker && workerRunnable(worker) ? `host:${id}` : null;
+  return worker && workerRunnable(worker, isHostPinned(project)) ? `host:${id}` : null;
 }
 
 /** A plain agent on one of a remote project's hosts, as the tab badge's "Run

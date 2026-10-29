@@ -124,8 +124,10 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
   const pinned = remoteOnly || options.here === false;
   // A machine that went away (or lost its connection) between two answers
   // falls back to this computer rather than starting nowhere — or, in a
-  // remote-only project, to its primary while that one is connected.
-  const primary = pinned ? machines.find((row) => row.primary && row.connected)?.id ?? "" : "";
+  // remote-only project, to the row the picker shows while that one is
+  // connected.
+  const shown = pinned ? pinnedFallback(machines) : undefined;
+  const primary = shown?.connected ? shown.id : "";
   const onMachine = machines.some((row) => row.id === machine && row.connected) ? machine : primary;
   /** The agent starts on this computer's copy. */
   const here = !pinned && !onMachine;
@@ -211,7 +213,7 @@ function MachinePicker({ machines, value, here, onChange }: { machines: HostMach
   return <div className="new-tab-machine">
     <label>
       <small>{t("mobile.newTab.runsOn")}{isUntested("mobile.newTab.machine") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
-      <select value={value || (here ? "" : (machines.find((row) => row.primary) ?? machines[0]).id)} onChange={(event) => onChange(event.target.value)}>
+      <select value={value || (here ? "" : pinnedFallback(machines)?.id)} onChange={(event) => onChange(event.target.value)}>
         {here && <option value="">{t("mobile.newTab.thisComputer")}</option>}
         {machines.map((row) => <option key={row.id} value={row.id} disabled={!row.connected}>
           {row.connected ? name(row) : t("mobile.newTab.machineOffline", { host: name(row) })}
@@ -221,6 +223,14 @@ function MachinePicker({ machines, value, here, onChange }: { machines: HostMach
     {value && here ? <p className="sheet-note">{t("mobile.newTab.machineNote")}</p>
       : offline ? <p className="sheet-note">{t("mobile.newTab.machineConnectHint")}</p> : null}
   </div>;
+}
+
+/** The machine a remote-only project's picker shows while none is picked,
+ * and the one its agent then starts on if connected: the primary, else (a
+ * record whose primary is not listed) the first connected machine. One rule
+ * for both, so the row shown is never one the tiles would not start on. */
+function pinnedFallback(machines: HostMachineRow[]): HostMachineRow | undefined {
+  return machines.find((row) => row.primary) ?? machines.find((row) => row.connected) ?? machines[0];
 }
 
 /** The ★ in a tile's corner: makes that row the ＋'s tap. `label` is the name

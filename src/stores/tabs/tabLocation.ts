@@ -55,9 +55,11 @@ export function localityHostLabel(
  *  code — either it shares the primary's filesystem (`shared_fs`) or it keeps a
  *  synced copy (`sync_code`, default on). A worker with neither has no tree to run
  *  in; sync always stays with the primary, so such a worker is offered disabled.
+ *  On a `pinned` project (`isHostPinned`) a synced copy holds no code either: it
+ *  is fed from the local mirror, which a remote-only project does not have (D4).
  *  The primary (`"primary"`/`undefined`) and the local mirror are always runnable. */
-export function workerRunnable(h: LocalityHost): boolean {
-  return !!h.shared_fs || h.sync_code !== false;
+export function workerRunnable(h: LocalityHost, pinned = false): boolean {
+  return !!h.shared_fs || (!pinned && h.sync_code !== false);
 }
 
 /**
