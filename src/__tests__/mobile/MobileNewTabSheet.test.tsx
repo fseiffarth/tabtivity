@@ -330,9 +330,12 @@ describe("Mobile ＋ sheet — a remote-only project", () => {
   it("lists its machines alone, the primary picked, and starts the agent there", async () => {
     serve(machines(true));
     const onPick = sheet();
-    const picker = await screen.findByRole("combobox", { name: /^Runs on/ }) as HTMLSelectElement;
-    expect((within(picker).getAllByRole("option") as HTMLOptionElement[]).map((row) => row.textContent)).toEqual(["h.invalid (primary)", "gpu-1"]);
-    expect(picker.value).toBe("m-primary");
+    const picker = await screen.findByRole("button", { name: /^Runs on/ });
+    expect(picker.textContent).toBe("h.invalid (primary)");
+    fireEvent.click(picker);
+    const rows = within(screen.getByRole("list", { name: /^Runs on/ })).getAllByRole("button");
+    expect(rows.map((row) => row.textContent)).toEqual(["h.invalid (primary)", "gpu-1"]);
+    expect(rows[0].getAttribute("aria-current")).toBe("true");
     // Nothing that runs on this computer: no shell, worktree, cloud, sign-in,
     // file row, nor the note about the desktop's copy.
     expect(screen.queryByText("Desktop (local copy)")).toBeNull();
@@ -351,11 +354,17 @@ describe("Mobile ＋ sheet — a remote-only project", () => {
   it("starts nothing while its primary is not connected, until a connected machine is picked", async () => {
     serve(machines(false));
     const onPick = sheet();
-    const picker = await screen.findByRole("combobox", { name: /^Runs on/ });
+    const picker = await screen.findByRole("button", { name: /^Runs on/ });
     expect(screen.getByText(/connect it in the project on the desktop/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByText("Desktop (local copy)")).toBeNull();
-    fireEvent.change(picker, { target: { value: "m-w1" } });
+    fireEvent.click(picker);
+    const list = screen.getByRole("list", { name: /^Runs on/ });
+    expect((within(list).getByRole("button", { name: /h\.invalid \(primary\)/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(list).getByRole("button", { name: "gpu-1" }));
+    expect(screen.queryByRole("list", { name: /^Runs on/ })).toBeNull();
+    expect(picker.textContent).toBe("gpu-1");
+    expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Claude" }));
     expect(onPick).toHaveBeenCalledWith("agent", agents[0], undefined, { host: "m-w1" });
   });
@@ -368,8 +377,8 @@ describe("Mobile ＋ sheet — a remote-only project", () => {
       { id: "m-w1", label: "gpu-1", primary: false, connected: true },
     ] });
     const onPick = sheet();
-    const picker = await screen.findByRole("combobox", { name: /^Runs on/ }) as HTMLSelectElement;
-    expect(picker.value).toBe("m-w1");
+    const picker = await screen.findByRole("button", { name: /^Runs on/ });
+    expect(picker.textContent).toBe("gpu-1");
     expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Claude" }));
     expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { host: "m-w1" });
