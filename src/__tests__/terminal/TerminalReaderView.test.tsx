@@ -1183,6 +1183,17 @@ describe("the Reader's live rows", () => {
     fireEvent.keyDown(box, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Codex status" })).toBeNull();
   });
+
+  it("warns under Codex's chat as its recorded limits run low", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex" }] } }));
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript"
+      ? { ...transcript, usage: { session: { used: 91 }, week: { used: 30 } } } : []));
+    term = fakeTerminal(["›", "gpt-6 · 75% context left"]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    expect(await screen.findByText("Heads up: less than 10% of your 5h limit left.")).toBeTruthy();
+    expect(screen.queryByText(/of your weekly limit left/)).toBeNull();
+  });
 });
 
 describe("the Chat switch on the prompt strip", () => {

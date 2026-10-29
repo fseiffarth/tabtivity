@@ -5492,6 +5492,8 @@ export const enSource = {
   "terminal.reader.answerFailed": "The answer did not reach the session (it may have disconnected). Try again, or use the Terminal view.",
   "terminal.reader.working": "Agent is working…",
   "terminal.reader.workingModel": "{model} is working…",
+  "terminal.reader.limitWarnSession": "Heads up: less than {percent}% of your 5h limit left.",
+  "terminal.reader.limitWarnWeek": "Heads up: less than {percent}% of your weekly limit left.",
   "terminal.reader.backgroundSubagents": "Subagents working in the background… ({count})",
   "terminal.reader.shellWorking": "Shell is running…",
   "terminal.reader.shellBackground": "Background shell running…",

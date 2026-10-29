@@ -5326,6 +5326,8 @@ export const dict: Dict = {
   "terminal.reader.answering": "Respondiendo…",
   "terminal.reader.working": "El agente está trabajando…",
   "terminal.reader.workingModel": "{model} está trabajando…",
+  "terminal.reader.limitWarnSession": "Aviso: te queda menos del {percent} % de tu límite de 5 h.",
+  "terminal.reader.limitWarnWeek": "Aviso: te queda menos del {percent} % de tu límite semanal.",
   "terminal.reader.backgroundSubagents": "Subagentes trabajando en segundo plano… ({count})",
   "terminal.reader.shellWorking": "La shell está ejecutando…",
   "terminal.reader.shellBackground": "Shell en segundo plano ejecutándose…",

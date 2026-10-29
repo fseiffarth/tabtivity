@@ -77,6 +77,7 @@ import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPo
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
+import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
 import type { AskedQuestion, RunningShell, TranscriptEntry } from "../../../mobile-web/src/api";
 import type { UntestedId } from "../../lib/untested";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
@@ -1498,6 +1499,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     [storedEntries, clearedAt, chatId],
   );
   const entries = sinceClear ?? storedEntries;
+  /** Codex's own "less than N% of your limit left" heads-up, off the limits
+   * its rollout records (no other CLI's transcript carries them). */
+  const lowLimits = transcript?.available && !sinceClear && !chatId ? limitWarnings(transcript.usage, new Date()) : [];
   /** The open subagent's conversation, once read. */
   const subTranscript = subRead && subRead.token === subToken ? subRead.transcript : null;
   /** The conversation on screen — the session's, or the open subagent's —
@@ -2154,6 +2158,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               <UntestedTag id="terminal.reader.backgroundSubagents" />
             </div>
           )}
+          {!browsed && !openStep && lowLimits.map((warning) => (
+            <div key={warning.window} className="terminal-reader-working terminal-reader-limit-warning" role="status">
+              <span>{t(warning.window === "session" ? "terminal.reader.limitWarnSession" : "terminal.reader.limitWarnWeek", { percent: warning.left })}</span>
+              <UntestedTag id="terminal.reader.limitWarning" />
+            </div>
+          ))}
           {runningShells.map((shell, index) => (
             // Keyed by the call, not its place, so one that is open stays
             // open when a shell before it returns.

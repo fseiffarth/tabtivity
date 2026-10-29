@@ -3875,6 +3875,7 @@ button.terminal-reader-option:hover:not(:disabled) {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+.terminal-reader-limit-warning { color: var(--warning, #f0a35e); }
 .terminal-reader-shell {
   align-self: stretch;
   display: flex;
