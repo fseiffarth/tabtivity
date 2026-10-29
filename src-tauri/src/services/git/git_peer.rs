@@ -279,16 +279,28 @@ fn remote_git_args(args: &[&str]) -> Vec<String> {
 
 /// `script` for [`ssh_exec::run_remote_script`] with every bare `git` in it hardened
 /// like [`remote_git_args`]: a leading shell function `git` that runs the real one
-/// (`command git`) with the same `-c` pairs first. The batched probe runs `git status`
-/// on the host every poll, and without this a host repo's `core.fsmonitor` program
-/// or its `post-index-change` hook would run on every one. The pairs are constants,
-/// each `shell_quote`d. Pure.
+/// (`command git`) with the same `-c` pairs first and, when the script's first word
+/// after `git` is a `git_hardened::DIFF_DRIVER_CMDS` verb, `--no-ext-diff
+/// --no-textconv` straight after it (a script must name the verb first, as every
+/// one here does). The batched probe runs `git status` on the host every poll, and
+/// without this a host repo's `core.fsmonitor` program or its `post-index-change`
+/// hook would run on every one. The pairs are constants, each `shell_quote`d.
+///
+/// Not covered, as for every host git call (`git_hardened::run_git`'s doc): a
+/// host repo's own `filter.<driver>.*` keys, which no fixed `-c` can name. The
+/// host's `.git/config` is the host's business. Pure.
 fn hardened_remote_script(script: &str) -> String {
     let pairs: Vec<String> = crate::services::git_hardened::hardened_git_args::<&str>(&[])
         .iter()
         .map(|a| ssh_exec::shell_quote(a))
         .collect();
-    format!("git() {{ command git {} \"$@\"; }}; {script}", pairs.join(" "))
+    let pairs = pairs.join(" ");
+    let diff_verbs = crate::services::git_hardened::DIFF_DRIVER_CMDS.join("|");
+    format!(
+        "git() {{ case $1 in {diff_verbs}) __git_verb=$1; shift; \
+         command git {pairs} \"$__git_verb\" --no-ext-diff --no-textconv \"$@\";; \
+         *) command git {pairs} \"$@\";; esac; }}; {script}"
+    )
 }
 
 /// The subset of `shas` that `peer` actually has, in one round trip: `git rev-list
@@ -1171,7 +1183,11 @@ fn save_state_at(path: &Path, state: &GitPeerState) -> Result<(), String> {
 /// back to the per-command path below, so a host without a POSIX `sh` still works.
 pub fn probe(peer: &Peer) -> PeerSnapshot {
     if let Peer::Remote(spec) = peer {
-        match ssh_exec::run_remote_script(spec, &hardened_remote_script(PROBE_SCRIPT)) {
+        // Bounded like every per-command host read: a stalled master answers
+        // `probe_error` (which withholds every destructive move) instead of
+        // holding the lockstep pass.
+        let script = hardened_remote_script(PROBE_SCRIPT);
+        match ssh_exec::run_remote_script_within(spec, &script, crate::services::git_bounded::READ_TIMEOUT) {
             Ok(out) => match classify_batched_probe(
                 out.status.code(),
                 &String::from_utf8_lossy(&out.stdout),
@@ -1932,7 +1948,8 @@ fn ancestry_map(peer: &Peer, pairs: &[(String, String)]) -> Vec<(bool, bool)> {
     if let Peer::Remote(spec) = peer {
         let all_hex = pairs.iter().all(|(a, b)| is_hex_sha(a) && is_hex_sha(b));
         if all_hex {
-            if let Ok(out) = ssh_exec::run_remote_script(spec, &hardened_remote_script(&ancestry_script(pairs))) {
+            let script = hardened_remote_script(&ancestry_script(pairs));
+            if let Ok(out) = ssh_exec::run_remote_script_within(spec, &script, crate::services::git_bounded::READ_TIMEOUT) {
                 if let Some(v) =
                     parse_ancestry_block(&String::from_utf8_lossy(&out.stdout), pairs.len())
                 {

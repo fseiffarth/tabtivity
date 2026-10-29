@@ -2132,6 +2132,41 @@ fn a_remote_only_project_refuses_a_synced_copy_worker() {
     }
 }
 
+/// Patching a worker cannot turn it into the synced copy `add_compute_host`
+/// refuses for a remote-only project (a VM included): the refused patch leaves
+/// the host as it was. Any other patch applies, and a plain Remote project takes
+/// the synced copy.
+#[test]
+fn a_worker_patch_cannot_make_a_synced_copy_of_a_remote_only_project() {
+    let plain = spec(None, "h.example", None, "/srv/p");
+    let remote_only = RemoteSpec { remote_only: Some(true), ..plain.clone() };
+    let vm = RemoteSpec { vm: Some(true), ..plain.clone() };
+    let worker = |sync_code: bool, shared_fs: bool| ComputeHost {
+        id: "w1".into(),
+        sync_code,
+        pull_outputs: false,
+        shared_fs,
+        spec: spec(None, "gpu.example", None, "/srv/p"),
+    };
+    let unshare = HostPatch { shared_fs: Some(false), ..HostPatch::default() };
+    let sync = HostPatch { sync_code: Some(true), label: Some("gpu".into()), ..HostPatch::default() };
+    for pinned in [&remote_only, &vm] {
+        for (patch, mut host) in [(&unshare, worker(true, true)), (&sync, worker(false, false))] {
+            let before = serde_json::to_value(&host).unwrap();
+            let err = patch.apply_checked(&mut host, Some(pinned)).expect_err("refused");
+            assert!(err.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{err}");
+            assert_eq!(serde_json::to_value(&host).unwrap(), before, "a refused patch changes nothing");
+        }
+        let mut host = worker(false, true);
+        sync.apply_checked(&mut host, Some(pinned)).expect("a shared-filesystem worker may sync");
+        assert!(host.sync_code);
+        assert_eq!(host.spec.label.as_deref(), Some("gpu"));
+    }
+    let mut host = worker(true, true);
+    unshare.apply_checked(&mut host, Some(&plain)).expect("a plain Remote project takes a synced copy");
+    assert!(!host.shared_fs);
+}
+
 /// The posture never comes from a renderer-sent spec: create, import and
 /// extend drop a `remote_only` inside `remote` before anything stores it.
 #[test]

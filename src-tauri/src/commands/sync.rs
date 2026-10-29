@@ -2291,6 +2291,23 @@ mod tests {
         }
     }
 
+    /// Every byte-sync command checks the posture before it touches `sync.json` or
+    /// the mirror: through `resolve` (which refuses), `refuse_remote_only`, or its
+    /// own `byte_sync_refusal`. A new command that forgets fails here.
+    #[test]
+    fn every_sync_command_checks_the_posture() {
+        let source = include_str!("sync.rs");
+        let production = &source[..source.find("#[cfg(test)]\nmod tests").expect("tests module")];
+        let gates = ["resolve(&project_id", "refuse_remote_only(&project_id", "byte_sync_refusal(&target.spec"];
+        let mut commands = 0;
+        for chunk in production.split("\npub async fn ").skip(1) {
+            let name = chunk.split('(').next().unwrap_or_default();
+            commands += 1;
+            assert!(gates.iter().any(|g| chunk.contains(g)), "{name} does not check the remote-only posture");
+        }
+        assert!(commands >= 15, "the scan found only {commands} commands");
+    }
+
     /// A status pass judged `f` against its old base; a push recorded a new base
     /// before the pass took the lock. The heal (and a prune) must leave the push's
     /// base alone, while an entry nobody touched is still healed.

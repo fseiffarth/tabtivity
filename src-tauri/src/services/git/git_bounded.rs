@@ -396,16 +396,37 @@ pub(crate) fn output_within(mut cmd: Command, timeout: Duration) -> Result<Outpu
 /// (`ssh_exec::run_git_remote`): the ceiling and the timeout's wording come
 /// from `git_args`, the git argument list before it was wrapped, because
 /// [`verb`] can't find the subcommand inside the wrapper's argv. No
-/// [`hazard`] check: the repo is on the other end.
-pub(crate) fn wrapped_output<S: AsRef<std::ffi::OsStr>>(mut cmd: Command, git_args: &[S]) -> Result<Output, String> {
+/// [`hazard`] check: the repo is on the other end. `host_bounded` says whether
+/// the far end stops git on its own (the host's `timeout`); killing the
+/// wrapper here does not, so without it the message says git may still run.
+pub(crate) fn wrapped_output<S: AsRef<std::ffi::OsStr>>(
+    mut cmd: Command,
+    git_args: &[S],
+    host_bounded: bool,
+) -> Result<Output, String> {
     let timeout = timeout_for_args(git_args);
     match run(&mut cmd, Opts { timeout: Some(timeout), no_precheck: true, ..Opts::default() }) {
-        Err(RunError::TimedOut(_)) => Err(format!(
-            "git {} timed out after {} s and was stopped. The connection to the host may be stalled.",
-            verb(git_args).unwrap_or_default(),
-            capped(timeout).as_secs()
+        Err(RunError::TimedOut(_)) => Err(wrapped_timeout_message(
+            &verb(git_args).unwrap_or_default(),
+            capped(timeout).as_secs(),
+            host_bounded,
         )),
         ran => whole(ran?),
+    }
+}
+
+/// [`wrapped_output`]'s timeout error. Pure.
+fn wrapped_timeout_message(verb: &str, secs: u64, host_bounded: bool) -> String {
+    if host_bounded {
+        format!(
+            "git {verb} timed out after {secs} s and was stopped; the host stops it too. \
+             The connection to the host may be stalled."
+        )
+    } else {
+        format!(
+            "git {verb} timed out after {secs} s. This computer stopped waiting, but git may still be \
+             running on the host (it has no `timeout` to stop it). The connection to the host may be stalled."
+        )
     }
 }
 
@@ -678,14 +699,19 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "sleep 30"]);
         let started = Instant::now();
-        let err = wrapped_output(cmd, &["-c", "core.hooksPath=", "status"]).expect_err("times out");
+        let err = wrapped_output(cmd, &["-c", "core.hooksPath=", "status"], true).expect_err("times out");
         TEST_TIMEOUT.with(|t| t.set(None));
         assert!(err.starts_with("git status timed out"), "{err}");
+        assert!(err.contains("the host stops it too"), "{err}");
         assert!(started.elapsed() < NOT_A_HANG, "took {:?}", started.elapsed());
 
         let mut ok = Command::new("sh");
         ok.args(["-c", "printf done"]);
-        assert_eq!(wrapped_output(ok, &["status"]).expect("ran").stdout, b"done");
+        assert_eq!(wrapped_output(ok, &["status"], false).expect("ran").stdout, b"done");
+        // Without the host's own bound the message does not claim git stopped there.
+        let unbounded = wrapped_timeout_message("push", 3600, false);
+        assert!(unbounded.contains("may still be running on the host"), "{unbounded}");
+        assert!(!unbounded.contains("was stopped"), "{unbounded}");
     }
 
     #[test]
