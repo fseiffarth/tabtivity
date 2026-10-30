@@ -1157,3 +1157,55 @@ fn the_one_shot_ssh_helpers_are_bounded() {
         assert!(!body.contains(".output()"), "{name} runs a bare .output()");
     }
 }
+
+// ── parse_session_agent ────────────────────────────────────────────────
+
+/// What `#{pane_start_command}` prints for a session whose target was `target`.
+fn as_tmux_prints(target: &str) -> String {
+    let escaped = target.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$");
+    format!("\"{escaped}\"\n")
+}
+
+const LAUNCH_ID: &str = "11111111-2222-4333-8444-555555555555";
+
+fn agent_env() -> HashMap<String, String> {
+    HashMap::from([
+        ("OTHER".to_string(), "exec nope".to_string()),
+        (crate::app_env!("TAB_UID").to_string(), LAUNCH_ID.to_string()),
+    ])
+}
+
+#[test]
+fn a_session_names_the_agent_its_launch_ran() {
+    for flag in ["--session-id", "--resume"] {
+        let target = remote_command("claude", &[flag.to_string(), LAUNCH_ID.to_string()], &agent_env(), "/w", None);
+        assert_eq!(
+            parse_session_agent(&as_tmux_prints(&target)),
+            Some(HostSessionAgent { cmd: "claude".into(), session_id: LAUNCH_ID.into() }),
+            "{flag}",
+        );
+    }
+    let codex = remote_command("codex", &[], &agent_env(), "/w", None);
+    assert_eq!(parse_session_agent(&as_tmux_prints(&codex)).map(|agent| agent.cmd).as_deref(), Some("codex"));
+}
+
+#[test]
+fn a_session_without_an_agent_launch_names_none() {
+    let shell = remote_command("", &[], &agent_env(), "/w", None);
+    assert_eq!(parse_session_agent(&as_tmux_prints(&shell)), None);
+    let no_uid = remote_command("claude", &[], &HashMap::new(), "/w", None);
+    assert_eq!(parse_session_agent(&as_tmux_prints(&no_uid)), None);
+    let bad_uid = HashMap::from([(crate::app_env!("TAB_UID").to_string(), "x; rm".to_string())]);
+    let bad = remote_command("claude", &[], &bad_uid, "/w", None);
+    assert_eq!(parse_session_agent(&as_tmux_prints(&bad)), None);
+    // An ended session prints nothing.
+    assert_eq!(parse_session_agent(""), None);
+}
+
+#[test]
+fn the_start_command_script_takes_only_a_safe_name() {
+    let script = tmux_start_command_script("app-p--agent-1").unwrap();
+    assert!(script.contains("-t \"$e\"app-p--agent-1\"$c\" '#{pane_start_command}'"), "{script}");
+    assert!(script.ends_with("|| true"));
+    assert_eq!(tmux_start_command_script("a'; reboot"), None);
+}

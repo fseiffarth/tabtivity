@@ -2115,6 +2115,7 @@ pub fn run() {
             commands::remote::remote_tmux_list,
             commands::remote::remote_tmux_kill,
             commands::remote::remote_tmux_rename,
+            commands::remote::remote_tmux_agent,
             // Read-only local/remote host + SSH transport monitoring.
             commands::network::network_host_snapshot,
             commands::network::network_ssh_link_snapshot,

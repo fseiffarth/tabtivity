@@ -845,6 +845,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("remote_connected_targets", Core),
     ("remote_disconnect", Core),
     ("remote_disconnect_all_hosts", Core),
+    ("remote_tmux_agent", Core),
     ("remote_tmux_kill", Core),
     ("remote_tmux_list", Core),
     ("remote_tmux_rename", Core),

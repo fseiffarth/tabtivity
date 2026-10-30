@@ -675,6 +675,56 @@ pub fn valid_tmux_session_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// The agent a host tmux session runs, as its launch recorded it: enough to
+/// bring the session back as the agent tab it was, rather than as a shell onto
+/// it. The closed tab itself is gone after a restart, so the host's own record
+/// is what is left.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSessionAgent {
+    /// The CLI the session was started on (`claude`).
+    pub cmd: String,
+    /// The tab's launch id: its `sessionId`, and `TAB_UID` in the CLI's environment.
+    pub session_id: String,
+}
+
+/// The one-shot printing what the session's pane was started with — the target
+/// [`tmux_wrap_exec`] handed `new-session`, which outlives every client and
+/// every older build's tab. Empty when the session has ended. `None` for a name
+/// that is not safe bare in a script.
+pub fn tmux_start_command_script(session: &str) -> Option<String> {
+    valid_tmux_session_name(session).then(|| {
+        format!(
+            "{HOST_TMUX_EXACT}tmux display-message -p -t \"$e\"{session}\"$c\" '#{{pane_start_command}}' 2>/dev/null || true"
+        )
+    })
+}
+
+/// The agent in a session's start command, in the shape [`remote_command`] writes
+/// it: the tab's `TAB_UID` export, then the last `exec <cli>` of the launch (the
+/// `-lc` line's own). tmux prints the command with one more layer of quoting,
+/// so quotes are dropped rather than parsed. A shell tab, a foreign session and a
+/// tab without a launch id answer `None`. Only these two values leave here: the
+/// line also holds the tab's other exports.
+pub fn parse_session_agent(start_command: &str) -> Option<HostSessionAgent> {
+    let bare: String = start_command.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect();
+    let marker = format!("{}=", crate::app_env!("TAB_UID"));
+    let (_, after) = bare.split_once(&marker)?;
+    let session_id = after.split([' ', ';']).next()?;
+    if !crate::services::agent_session::is_uuid_shaped(session_id) {
+        return None;
+    }
+    let mut words = bare.split_whitespace();
+    let mut cmd = None;
+    while let Some(word) = words.next() {
+        if word == "exec" {
+            cmd = words.next().map(|next| next.trim_end_matches(';'));
+        }
+    }
+    let cmd = cmd.filter(|cmd| !cmd.is_empty() && !cmd.starts_with('$'))?;
+    Some(HostSessionAgent { cmd: cmd.to_string(), session_id: session_id.to_string() })
+}
+
 /// The tmux **rename-session** one-shot (TODO #85): `tmux rename-session -t <old>
 /// <new>`. Both names are `shell_quote`d (the `old` may be an arbitrary foreign
 /// name); the caller MUST have checked `new` with [`valid_tmux_session_name`].

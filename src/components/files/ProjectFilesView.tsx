@@ -62,6 +62,7 @@ import { CliOverviewView } from "../agents/CliOverviewView";
 import { useDialogs } from "../common/PromptDialogs";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { persistentSessionOf } from "../../lib/remote/closeRemoteTab";
+import { hostAgentTabSpec, reopenClosedHostSession } from "../../lib/remote/hostSessionTab";
 import { sessionKindFromName, type TmuxSessionKind } from "../../lib/terminal/tmuxSession";
 import { useRemoteStatusStore, sshOf } from "../../stores/remote/remoteStatus";
 import {
@@ -837,26 +838,39 @@ export function ProjectFilesView({
     return m;
   }, [scopeTabs, scope]);
 
-  // Open a host session in a tab: reveal the owning tab if one exists, else add a
-  // shell tab on THAT host that ATTACHES to the named session (idempotent; `-D`
-  // detaches any other client). The tab carries the name so it reattaches across a
-  // restart, and its locality is the row's host.
-  const openSession = (hostId: string, name: string) => {
+  // Open a host session in a tab: reveal the owning tab if one exists; bring an
+  // agent session back as its agent tab (`lib/remote/hostSessionTab`), so it keeps
+  // its Chat view and resume; else add a shell tab on THAT host that ATTACHES to
+  // the named session (idempotent; `-D` detaches any other client). The tab
+  // carries the name so it reattaches across a restart, and its locality is the
+  // row's host. Asking the host takes a round trip, which a second click must
+  // not turn into a second tab.
+  const openingSessions = useRef(new Set<string>());
+  const openSession = async (hostId: string, name: string) => {
     if (!projectId) return;
-    const ownerKey = sessionOwners.get(`${hostId} ${name}`);
+    const opening = `${hostId} ${name}`;
+    const ownerKey = sessionOwners.get(opening);
     if (ownerKey) {
       useTabsStore.getState().setActive(ownerKey);
       return;
     }
-    useTabsStore.getState().addTabToScope(projectId, {
-      label: tmuxSessionRest(name) !== null ? "session" : name,
-      cmd: "",
-      args: [],
-      cwd: projectDir,
-      kind: "shell",
-      location: hostId === "primary" ? "remote" : `host:${hostId}`,
-      tmuxAttach: name,
-    });
+    if (openingSessions.current.has(opening) || reopenClosedHostSession(projectId, hostId, name)) return;
+    const location = hostId === "primary" ? "remote" : (`host:${hostId}` as const);
+    openingSessions.current.add(opening);
+    const agentTab = await hostAgentTabSpec(projectId, hostId, name, { cwd: projectDir, location }, t);
+    openingSessions.current.delete(opening);
+    useTabsStore.getState().addTabToScope(
+      projectId,
+      agentTab ?? {
+        label: tmuxSessionRest(name) !== null ? "session" : name,
+        cmd: "",
+        args: [],
+        cwd: projectDir,
+        kind: "shell",
+        location,
+        tmuxAttach: name,
+      },
+    );
   };
 
   // Kill a host session (per-row, confirmed). Drops the row optimistically; the
@@ -2625,7 +2639,7 @@ export function ProjectFilesView({
                               owned ? "projectFilesView.revealTabRunning" : "projectFilesView.attachTo",
                               { name: s.name },
                             )}
-                            onClick={() => openSession(hostId, s.name)}
+                            onClick={() => void openSession(hostId, s.name)}
                           >
                             <span className="orange-file-dot" aria-hidden="true">
                               {s.attached ? "●" : "○"}

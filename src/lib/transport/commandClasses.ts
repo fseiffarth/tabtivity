@@ -614,6 +614,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["remote_connected_targets", "core"],
   ["remote_disconnect", "core"],
   ["remote_disconnect_all_hosts", "core"],
+  ["remote_tmux_agent", "core"],
   ["remote_tmux_kill", "core"],
   ["remote_tmux_list", "core"],
   ["remote_tmux_rename", "core"],
