@@ -570,14 +570,25 @@ pub fn agent_id_for_bin(bin: &str) -> Option<&'static str> {
 /// `which` elsewhere): `which` does not exist on Windows, so probing it directly
 /// reported every Windows install — Claude included — as missing.
 pub(crate) fn resolve_spec_path(spec: &AgentSpec) -> Option<std::path::PathBuf> {
-    if let Some(path) = crate::paths::resolve_executable(spec.bin) {
-        return Some(path);
-    }
-    // Tabtivity's own install home first, then the user's.
-    let homes = [crate::services::agent_install::install_root(), crate::paths::home_dir()];
+    crate::paths::resolve_executable(spec.bin)
+        .or_else(|| spec_path_in_homes(spec, &install_homes(), &|path| path.exists()))
+}
+
+/// Tabtivity's own install home first, then the user's.
+fn install_homes() -> [std::path::PathBuf; 2] {
+    [crate::services::agent_install::install_root(), crate::paths::home_dir()]
+}
+
+/// The half of [`resolve_spec_path`] past `PATH`: `spec`'s well-known per-user
+/// install locations under `homes`.
+pub(crate) fn spec_path_in_homes(
+    spec: &AgentSpec,
+    homes: &[std::path::PathBuf],
+    exists: &impl Fn(&std::path::Path) -> bool,
+) -> Option<std::path::PathBuf> {
     homes.iter().find_map(|home| spec.extra_paths.iter().find_map(|rel| {
         let base = home.join(rel);
-        if base.exists() {
+        if exists(&base) {
             return Some(base);
         }
         // On Windows the extra paths omit the executable extension that the
@@ -585,13 +596,31 @@ pub(crate) fn resolve_spec_path(spec: &AgentSpec) -> Option<std::path::PathBuf> 
         if cfg!(target_os = "windows") {
             for ext in ["exe", "cmd", "bat", "ps1"] {
                 let cand = base.with_extension(ext);
-                if cand.exists() {
+                if exists(&cand) {
                     return Some(cand);
                 }
             }
         }
         None
     }))
+}
+
+/// Every registry CLI on this machine with where it lives, in registry order:
+/// [`resolve_spec_path`] for all of them in one pass (`paths::PathLookup`), for
+/// whatever asks about the whole registry. A plain loop over the resolver is
+/// what made listing agents slow on Windows.
+pub(crate) fn installed_specs() -> Vec<(&'static AgentSpec, std::path::PathBuf)> {
+    let lookup = crate::paths::PathLookup::current();
+    let homes = install_homes();
+    AGENTS
+        .iter()
+        .filter_map(|spec| {
+            let path = lookup
+                .resolve(spec.bin)
+                .or_else(|| spec_path_in_homes(spec, &homes, &|path| lookup.exists(path)))?;
+            Some((spec, path))
+        })
+        .collect()
 }
 
 /// True when an agent's binary is reachable on `PATH` or in one of its

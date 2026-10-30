@@ -329,6 +329,12 @@ fn sudo_variant(cmd: &str) -> String {
 /// List every known agent CLI with its current installed status.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_agents() -> Vec<AgentInfo> {
+    app_core::rt::spawn_blocking(list_agents_blocking).await.unwrap_or_default()
+}
+
+fn list_agents_blocking() -> Vec<AgentInfo> {
+    let installed: std::collections::HashSet<&str> =
+        installed_specs().into_iter().map(|(spec, _)| spec.id).collect();
     AGENTS
         .iter()
         .map(|spec| {
@@ -350,7 +356,7 @@ pub async fn list_agents() -> Vec<AgentInfo> {
                 uninstall_cmd_sudo: sudo_variant(&uninstall_cmd),
                 uninstall_cmd,
                 docs: spec.docs.to_string(),
-                installed: spec_is_installed(spec),
+                installed: installed.contains(spec.id),
                 warmup: warmup_args(spec).is_some(),
             }
         })
@@ -2091,6 +2097,29 @@ mod tests {
             .expect("claude has a Windows installer");
         assert!(
             win.contains("irm"),
+    #[test]
+    fn installed_specs_answers_as_the_single_resolver_does() {
+        let installed = installed_specs();
+        for spec in AGENTS {
+            let found = installed.iter().find(|(s, _)| s.id == spec.id).map(|(_, path)| path.clone());
+            assert_eq!(found, resolve_spec_path(spec), "{}", spec.id);
+        }
+    }
+
+    #[test]
+    fn a_path_lookup_finds_a_cli_in_its_install_home() {
+        let home = tempfile::tempdir().unwrap();
+        let spec = find_spec("claude").unwrap();
+        let path = home.path().join(spec.extra_paths[0]);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+        let lookup = crate::paths::PathLookup::current();
+        let homes = [home.path().to_path_buf()];
+        assert_eq!(spec_path_in_homes(spec, &homes, &|p| lookup.exists(p)), Some(path));
+        let other = find_spec("codex").unwrap();
+        assert_eq!(spec_path_in_homes(other, &homes, &|p| lookup.exists(p)), None);
+    }
+
             "expected the PowerShell `irm` installer"
         );
         assert!(
