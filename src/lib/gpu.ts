@@ -56,9 +56,21 @@ export interface GpuProc {
   mem_bytes: number;
 }
 
-/** Both pools of every adapter, summed: the machine's GPU memory. */
+/** Below this much dedicated memory, an adapter with a shared pool is an iGPU's carve-out. */
+const IGPU_CARVE_OUT_MAX = 2 * 1024 ** 3;
+
+function isIntegrated(gpu: GpuSample): boolean {
+  return gpu.shared_total > 0 && gpu.vram_total < IGPU_CARVE_OUT_MAX;
+}
+
+/**
+ * Both pools of every adapter, summed: the machine's GPU memory. Beside a
+ * discrete card an iGPU drops out: its shared pool is system RAM the RAM row
+ * already counts, and adding it would read a 12 GB laptop card as 60 GB.
+ */
 export function gpuTotals(gpus: GpuSample[]): { used: number; total: number } {
-  return gpus.reduce(
+  const discrete = gpus.filter((g) => !isIntegrated(g));
+  return (discrete.length > 0 ? discrete : gpus).reduce(
     (acc, g) => ({
       used: acc.used + g.vram_used + g.shared_used,
       total: acc.total + g.vram_total + g.shared_total,
