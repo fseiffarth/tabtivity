@@ -2165,6 +2165,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * at work or it runs in the background. Its row names the subagent's own
    * model, not the session's. */
   const subagentWorking = openSubagentRunning(subagentPath, sessionEntries, sessionBusy);
+  /** The working row's Stop, as the desktop Chat's: Esc stops the agent's
+   * current turn. */
+  const stopButton = <button type="button" className="transcript-working-stop" disabled={!connected} onClick={() => type("\u001b")} title={t("terminal.reader.stopHint")}>
+    {t("terminal.reader.stop")}{isUntested("mobile.focus.stop") && <em> · {t("mobile.focus.untested")}</em>}
+  </button>;
   const subagentModel = workingModelName(subTranscript?.model);
   /** What the subagent's working row says beside the dots, as the session's
    * does: how long since it was spawned (its entry's stamp, else its own
@@ -2225,6 +2230,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               {subagentFacts.join(" · ")}
               {subagentRowUntested && <em>{subagentFacts.length > 0 && " · "}{t("mobile.focus.untested")}</em>}
             </small>}
+            {/* Esc stops the session's turn: nothing to stop while only a
+                background subagent works on. */}
+            {sessionBusy && stopButton}
           </div>}
           <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} />
         </div>}
@@ -2435,6 +2443,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                       {workFacts.join(" · ")}
                       {isUntested("mobile.focus.workingFacts") && <em> · {t("mobile.focus.untested")}</em>}
                     </small>}
+                    {stopButton}
                   </div>}
                   <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} />
                   {/* A prompt sent while the agent worked waits below its work
