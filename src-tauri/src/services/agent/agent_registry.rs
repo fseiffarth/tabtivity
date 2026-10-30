@@ -277,9 +277,13 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // private Node 24 and installs both under `~/.openclaw` — no root, no
         // onboarding prompt, nothing added to shell rc files.
         install_cmd: "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash",
-        // The Windows installer onboards interactively unless told not to.
+        // The Windows installer onboards interactively unless told not to, and
+        // on a Node it rejects runs `winget install OpenJS.NodeJS.LTS`: that
+        // replaces the machine's Node, and Restart Manager Ctrl+C's every
+        // console running it. So its `-NodeOnly` step puts a private Node in
+        // the launcher dir first, where the main run finds it.
         install_cmd_windows: Some(
-            "$env:OPENCLAW_NO_ONBOARD='1'; irm https://openclaw.ai/install.ps1 | iex",
+            "$env:OPENCLAW_NO_ONBOARD='1'; $s=irm https://openclaw.ai/install.ps1; $n=Join-Path $env:USERPROFILE '.openclaw\\bin'; if (-not (Test-Path (Join-Path $n 'node.exe'))) { & ([scriptblock]::Create($s)) -NodeOnly -NodePrefix $n }; $env:PATH=$n+';'+$env:PATH; $s | iex",
         ),
         extra_paths: &[".openclaw/bin/openclaw", ".local/bin/openclaw"],
         docs: "https://docs.openclaw.ai",
