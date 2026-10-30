@@ -562,6 +562,36 @@ fn is_interrupt_frame(bytes: &[u8]) -> bool {
     bytes == [MouseReportFilter::ESC] || bytes == [0x03]
 }
 
+/// The gaps the phone leaves between the writes of one message (its
+/// `AGENT_KEY_GAP` / `AGENT_SUBMIT_GAP`), kept again where the frames reach the
+/// pane. A cellular link can hold the frames back and hand them over in one
+/// burst; written back to back, an agent TUI reads the line reset, the text
+/// and the Enter as one chunk: a paste, whose CR is a new line, not a submit.
+/// The phone showed the prompt as sent while it sat unsent in Claude's composer
+/// (2026-10-30).
+const INPUT_KEY_GAP: std::time::Duration = std::time::Duration::from_millis(80);
+
+const INPUT_SUBMIT_GAP: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Whether a frame opens with a control byte — a key the TUI reads on its own.
+fn opens_with_key(bytes: &[u8]) -> bool {
+    bytes.first().is_some_and(|&b| b < 0x20 || b == 0x7f)
+}
+
+/// How long after the previous write (`previous_key`: it opened with a control
+/// byte) this frame waits before it goes into the pane. A lone Enter keeps the
+/// submit gap; a key frame, or any frame after one, the key gap. Plain text
+/// after plain text goes at once, so typing never queues.
+fn input_gap(previous_key: bool, bytes: &[u8]) -> std::time::Duration {
+    if bytes == b"\r" {
+        INPUT_SUBMIT_GAP
+    } else if previous_key || opens_with_key(bytes) {
+        INPUT_KEY_GAP
+    } else {
+        std::time::Duration::ZERO
+    }
+}
+
 /// Whether a close for `reason` tells the phone to come back. `replaced` means
 /// another viewer took over; that client must not fight its way back in a
 /// reconnect loop. `session_expired` retries through the phone's silent
@@ -976,6 +1006,9 @@ pub async fn attach(
     // The held Esc came as a frame of its own: the Esc key, an interrupt once
     // it goes out.
     let mut held_esc_key = false;
+    // When the pane was last written to, and whether that write opened with a
+    // key (`input_gap`).
+    let mut last_write: Option<(tokio::time::Instant, bool)> = None;
     // The phone spoke: its session slides (`auth::SESSION_IDLE`). Every frame
     // it sends, not the tick — a tick is the sidecar checking, not the phone.
     let touch = |auth: &Arc<Mutex<AuthStore>>| {
@@ -1043,6 +1076,7 @@ pub async fn attach(
                     // The Esc key the frame path held back: told here, once
                     // it reached the pane.
                     if !held.is_empty() {
+                        last_write = Some((tokio::time::Instant::now(), true));
                         last_input_report = Some(std::time::Instant::now());
                         on_input(std::mem::take(&mut held_esc_key));
                     }
@@ -1078,6 +1112,12 @@ pub async fn attach(
                         if !deliver(&mut ws_tx, Message::Text(ack_frame(input_frames).into())).await { break Ok(()); }
                         continue;
                     }
+                    // A frame that came in a burst waits out the gap the phone
+                    // left before it (`input_gap`).
+                    if let Some((at, previous_key)) = last_write {
+                        tokio::time::sleep_until(at + input_gap(previous_key, &bytes)).await;
+                    }
+                    last_write = Some((tokio::time::Instant::now(), opens_with_key(&bytes)));
                     // The AI switch: nothing typed reaches an agent while it is
                     // off. The frame is still acked — it was handled, by
                     // dropping it — and the phone is told why.
@@ -1204,8 +1244,8 @@ mod tests {
         tmux_window_size_command, MOBILE_SCROLLBACK_LINES,
     };
     use super::{
-        ack_frame, closing_retries, deliver, input_report_due, is_interrupt_frame, replay_frames, OutputQueue, IDLE_TIMEOUT,
-        INPUT_REPORT_INTERVAL, REPLAY_CHUNK, WRITE_TIMEOUT,
+        ack_frame, closing_retries, deliver, input_gap, input_report_due, is_interrupt_frame, replay_frames, OutputQueue,
+        IDLE_TIMEOUT, INPUT_KEY_GAP, INPUT_REPORT_INTERVAL, INPUT_SUBMIT_GAP, REPLAY_CHUNK, WRITE_TIMEOUT,
     };
     use super::MouseReportFilter;
     use crate::services::mobile_control::protocol::{TerminalControl, TerminalEvent, MAX_OUTPUT_QUEUE};
@@ -1383,6 +1423,20 @@ mod tests {
         assert!(!is_interrupt_frame(b"\x1bx"));
         assert!(!is_interrupt_frame(b"go on\r"));
         assert!(!is_interrupt_frame(b""));
+    }
+
+    #[test]
+    fn a_bursted_message_keeps_its_gaps_into_the_pane() {
+        use std::time::Duration;
+        // The phone's message: line reset, text, Enter.
+        assert_eq!(input_gap(false, b"\x01\x0b"), INPUT_KEY_GAP);
+        assert_eq!(input_gap(true, b"write the ideas file"), INPUT_KEY_GAP);
+        assert_eq!(input_gap(false, b"\r"), INPUT_SUBMIT_GAP);
+        // A bracketed paste opens with Esc: a key frame of its own.
+        assert_eq!(input_gap(false, b"\x1b[200~text\x1b[201~"), INPUT_KEY_GAP);
+        // Typing, and a shell line that carries its own Enter, never wait.
+        assert_eq!(input_gap(false, b"a"), Duration::ZERO);
+        assert_eq!(input_gap(false, b"ls -la\r"), Duration::ZERO);
     }
 
     #[tokio::test]
