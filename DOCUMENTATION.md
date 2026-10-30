@@ -448,6 +448,16 @@ remote ones no local branch tracks — capped, with `+N more`. Worktrees cross a
 the same opaque ids the ＋ sheet's "Agents start in" row uses; no path, lock
 reason or full sha is sent. Boxes and the root console have no Git entry.
 
+**Diverged (phone).** A remote project with a local copy has **± Diverged** in
+the project drawer, with a count: the files whose local and host copies disagree
+and the new files only the local copy holds. Tap a file to compare the two
+copies. With **Phone may resolve diverged files** on in the desktop's Mobile
+settings (off by default, and it needs Project files) you can use the host's or
+the local copy, use the newer one, upload new files and complete a deletion,
+per file or for all. Each asks first, as on the desktop. The desktop must be
+open, and connected to the host for the actions; the three-way merge and the
+scan for files only the host holds stay on the desktop.
+
 **Upload here (phone → a project folder).** The phone's project-files drawer
 (**Settings → Mobile → Project files on the phone**, read-only) gains one write
 behind a second host-wide switch, **Phone may add files to projects**

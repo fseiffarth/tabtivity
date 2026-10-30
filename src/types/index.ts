@@ -183,6 +183,11 @@ export interface Settings {
      * only in effect while `project_files` is on too. Read by the sidecar per
      * request. */
     project_uploads?: boolean;
+    /** A paired phone may resolve a remote project's diverged files from its
+     * Diverged list (take a side, upload a new file, complete a deletion).
+     * Unset is off; only in effect while `project_files` is on too. Read by
+     * the sidecar per request. */
+    project_sync?: boolean;
     /** A paired phone's PDF reader may write remarks and highlights into a
      * project PDF (Annotate; appended, never over a file changed since it was
      * read). Unset is off; only in effect while `project_files` is on too. Read

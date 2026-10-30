@@ -25,12 +25,15 @@ import {
   amberPaths,
   localNewPaths,
   pushFailure,
-  splitByNewerSide,
-  deleteSideOf,
-  splitByDeleteSide,
-  withoutChangedOnBoth,
   type SyncResolveOutcome,
 } from "../../stores/remote/sync";
+import {
+  deleteSideOf,
+  mtimeDivergenceCue,
+  splitByDeleteSide,
+  splitByNewerSide,
+  withoutChangedOnBoth,
+} from "../../lib/remote/divergedRows";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
 import { useWindowsStore } from "../../stores/windows";
@@ -40,7 +43,7 @@ import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtySt
 import { coalescedRun, type CoalescedRun } from "../../lib/coalescedRun";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
-import { fmtModified, type SortKey } from "../../lib/viewers/fileUtils";
+import type { SortKey } from "../../lib/viewers/fileUtils";
 import {
   readGitBarSnapshot,
   writeGitBarSnapshot,
@@ -222,66 +225,6 @@ interface SessionTooltip {
   rect: DOMRect;
   hostId: string;
   name: string;
-}
-
-interface MtimeCue {
-  text: string;
-  tone: "remote" | "local" | "neutral";
-  title: string;
-}
-
-/** Which side moved, as a small badge. The verdict comes from the backend's
- *  `host_diverged`/`local_diverged` — each side compared to its own recorded
- *  base, so host/local clock skew can never pick the wrong authority. The
- *  mtimes are kept purely as DISPLAY metadata (the tooltip's "modified when"
- *  lines); the badge's tone/text no longer trusts them. Tone always names the
- *  side the text is about: remote = --warning (orange), local = --success
- *  (green), matching the take-remote/keep-local icon buttons below.
- *
- *  A row only reaches this list once the manifest has recorded a synced base
- *  for it (`amberPaths` reads `state === "amber"`, which `compute_state`
- *  never sets for an untracked path) — so a null mtime here is never "this
- *  file was never synced," it's "this file WAS synced and one side's copy
- *  has since been deleted." The tooltip says so explicitly, since the badge
- *  text alone ("Remote only") reads ambiguously otherwise. Exported for tests. */
-export function mtimeDivergenceCue(
-  t: (key: TranslationKey, params?: Record<string, string | number>) => string,
-  hostMtime: number | null | undefined,
-  localMtime: number | null | undefined,
-  hostDiverged: boolean,
-  localDiverged: boolean,
-  hostChecked: boolean,
-): MtimeCue {
-  const hostLabel =
-    hostMtime != null
-      ? t("projectFilesView.remoteModified", { when: fmtModified(hostMtime) })
-      : t("projectFilesView.remoteDeletedSinceSync");
-  const localLabel =
-    localMtime != null
-      ? t("projectFilesView.localModified", { when: fmtModified(localMtime) })
-      : t("projectFilesView.localDeletedSinceSync");
-  const title = `${hostLabel}\n${localLabel}`;
-  if (hostMtime == null && localMtime == null) {
-    // "Gone on both sides" is a host fact — only claim it when this pass
-    // actually asked the host. A cold pool (or an errored stat) reports every
-    // host mtime as null, and asserting a deletion out of that would put the
-    // Forget action under a false sentence.
-    if (!hostChecked) {
-      const uncheckedLabel = t("projectFilesView.localGoneHostUnchecked");
-      return { text: uncheckedLabel, tone: "neutral", title: `${uncheckedLabel}\n${localLabel}` };
-    }
-    return { text: t("projectFilesView.goneBothSides"), tone: "neutral", title };
-  }
-  if (hostMtime == null) return { text: t("projectFilesView.localOnly"), tone: "local", title };
-  if (localMtime == null) return { text: t("projectFilesView.remoteOnly"), tone: "remote", title };
-  // Both present: use the backend's per-side base comparison, never a
-  // cross-machine mtime comparison.
-  if (hostDiverged && localDiverged)
-    return { text: t("projectFilesView.bothChanged"), tone: "neutral", title };
-  if (hostDiverged) return { text: t("projectFilesView.remoteNewer"), tone: "remote", title };
-  if (localDiverged) return { text: t("projectFilesView.localNewer"), tone: "local", title };
-  // Neither flagged (a self-heal race): nothing actually diverged.
-  return { text: t("projectFilesView.sameTime"), tone: "neutral", title };
 }
 
 

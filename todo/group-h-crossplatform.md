@@ -3743,6 +3743,35 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cl — The phone's Diverged list** (2026-10-30; code-complete, automated
+  tests passing — `MobileDiverged.test.ts`, `MobileDivergedSheet.test.tsx`,
+  `mobile_control::diverged`, `the_diverged_list_goes_through_the_window_behind_its_switches`;
+  ⚠️ never run live). Rationale in `docs/context/mobile_access.md`. Untested ids
+  `mobile.project.diverged`, `mobile.project.sync`.
+  - Needs the sidecar updated and the PWA rebuilt (`npm run backend:stale`,
+    `npm run mobile:bundle`).
+  - [ ] 🖐️ Manual QA, desktop + phone — (1) A remote project with a mirror, one
+    file edited on each side since the last sync, one new local file, Project
+    files on: the drawer shows ± Diverged with a count; the list shows both kinds;
+    tapping a file shows its diff; no action buttons and a note about the switch.
+    (2) Turn on "Phone may resolve diverged files": Use host on one file asks with
+    the size and names the local changes it loses; Cancel moves nothing; confirm
+    and the row goes, on the desktop too. (3) Use local, Use newer and Upload, per
+    file and for all; "Exclude changed on both" keeps a true conflict out of a
+    bulk action. (4) Delete a file on one side: Delete names it and removes the
+    other copy; a file gone from both offers Forget. (5) Open the list, restore
+    that file on the desktop, then confirm the delete on the phone: it is left
+    alone and reported as changed. (6) Disconnect the project: the list says so
+    and the buttons are disabled. Close the window: the list says the desktop is
+    unavailable. (7) A `.env` that diverged is counted as hidden, never listed.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 - [~] **31cj — The phone reaches a remote project's tabs on the host** (2026-10-24;
   window + phone half code-complete, automated tests passing —
   `MobileTabReach.test.ts` (`lists` column of `projectHostReach.fixture.json`),

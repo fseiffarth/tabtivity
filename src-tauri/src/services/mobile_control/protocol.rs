@@ -1478,6 +1478,94 @@ pub enum DesktopRequest {
         #[serde(default)]
         slices: Vec<String>,
     },
+    /// The remote project's diverged files, as the window's status pass reads
+    /// them: only the window holds the SSH session the host side is stat'd
+    /// over. `rel` paths stay on this side; the sidecar seals them
+    /// (`diverged`).
+    SyncDiverged {
+        request_id: String,
+        project_id: String,
+    },
+    /// What a transfer of `paths` would do (`sync_transfer_preview`), for the
+    /// phone's confirmation.
+    SyncPreview {
+        request_id: String,
+        project_id: String,
+        direction: SyncDirection,
+        paths: Vec<String>,
+    },
+    /// One take-a-side, deletion or forget over `paths`. The window checks
+    /// each path against a fresh status pass first: the phone's list may be
+    /// minutes old.
+    SyncResolve {
+        request_id: String,
+        project_id: String,
+        op: SyncOp,
+        paths: Vec<String>,
+    },
+    /// The mirror's copy of one diverged file against the host's (`sync_diff`).
+    SyncDiff {
+        request_id: String,
+        project_id: String,
+        path: String,
+    },
+}
+
+/// Which way a transfer moves bytes: `pull` writes the host's copy over the
+/// mirror's, `push` the mirror's over the host's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncDirection {
+    Pull,
+    Push,
+}
+
+/// What [`DesktopRequest::SyncResolve`] does to its paths. No variant walks a
+/// folder: each path is one file the phone's list showed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncOp {
+    Pull,
+    Push,
+    /// Delete the host copy of a file deleted in the mirror.
+    DeleteHost,
+    /// Delete the mirror copy of a file deleted on the host.
+    DeleteLocal,
+    /// Stop tracking a file gone from both sides.
+    Forget,
+}
+
+/// One row of the window's diverged list. `state` is `amber` (both sides have
+/// a say) or `localnew` (only the mirror holds it); the rest are
+/// `sync_status`'s fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DivergedFile {
+    pub rel: String,
+    pub state: String,
+    #[serde(default)]
+    pub host_mtime: Option<u64>,
+    #[serde(default)]
+    pub local_mtime: Option<u64>,
+    #[serde(default)]
+    pub host_diverged: bool,
+    #[serde(default)]
+    pub local_diverged: bool,
+    #[serde(default)]
+    pub host_checked: bool,
+}
+
+/// `sync_transfer_preview`'s answer, phone-facing as it stands: `destructive`
+/// holds project-relative paths the phone itself named.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncPreviewFacts {
+    pub files: u64,
+    pub bytes: u64,
+    pub overwrites: u64,
+    pub destructive: Vec<String>,
+    pub destructive_total: u64,
+    pub conflicts: u64,
+    pub tracked: u64,
+    pub exact: bool,
 }
 
 impl DesktopRequest {
@@ -1530,7 +1618,11 @@ impl DesktopRequest {
             | Self::LocalModels { request_id }
             | Self::CliOverview { request_id, .. }
             | Self::LocalModelMutate { request_id, .. }
-            | Self::Refresh { request_id, .. } => request_id,
+            | Self::Refresh { request_id, .. }
+            | Self::SyncDiverged { request_id, .. }
+            | Self::SyncPreview { request_id, .. }
+            | Self::SyncResolve { request_id, .. }
+            | Self::SyncDiff { request_id, .. } => request_id,
         }
     }
 
@@ -1565,6 +1657,14 @@ impl DesktopRequest {
             // Polled every few seconds while a markup view or the Focus chat
             // is on screen; a wedged window just shows no card.
             Self::MarkupQuestions { .. } => 3,
+            // One SFTP stat per tracked file; the window then answers with
+            // what it last knew.
+            Self::SyncDiverged { .. } => 15,
+            // A preview walks both sides; a diff reads the host's whole copy.
+            Self::SyncPreview { .. } | Self::SyncDiff { .. } => 30,
+            // Real transfers. Past this the phone is told it does not know
+            // the outcome: the window carries on and the list shows the rest.
+            Self::SyncResolve { .. } => 125,
             _ => 10,
         })
     }
@@ -1581,6 +1681,9 @@ impl DesktopRequest {
             Self::MoveLocation { .. } => 30,
             Self::AssistantModels { .. } => 28,
             Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
+            Self::SyncDiverged { .. } => 12,
+            Self::SyncPreview { .. } | Self::SyncDiff { .. } => 25,
+            Self::SyncResolve { .. } => 120,
             _ => 8,
         })
     }
@@ -1615,8 +1718,12 @@ impl DesktopRequest {
             | Self::MoveWorktree { .. }
             | Self::MoveLocation { .. }
             | Self::SwitchAssistantModel { .. }
-            | Self::LocalModelMutate { .. } => true,
-            Self::Catalog { .. }
+            | Self::LocalModelMutate { .. }
+            | Self::SyncResolve { .. } => true,
+            Self::SyncDiverged { .. }
+            | Self::SyncPreview { .. }
+            | Self::SyncDiff { .. }
+            | Self::Catalog { .. }
             | Self::Activity { .. }
             | Self::GitStates { .. }
             | Self::LaunchOptions { .. }
@@ -1940,6 +2047,11 @@ pub enum DesktopResponse {
         /// rest.
         #[serde(default)]
         git: Option<String>,
+        /// How many files the window last found diverged or new on this side
+        /// (the drawer's count); absent where it has no status for the
+        /// project. Defaulted like the rest.
+        #[serde(default)]
+        diverged: Option<u32>,
     },
     /// Answer to [`DesktopRequest::Activity`]: the agent tabs of every eligible
     /// project that are working, waiting on a decision, or done. Keyed by tmux
@@ -2105,6 +2217,29 @@ pub enum DesktopResponse {
         start_failed: bool,
         #[serde(default)]
         models: Vec<MobileLocalModel>,
+    },
+    /// Answer to [`DesktopRequest::SyncDiverged`]. `connected`: this pass
+    /// reached the host, so the rows are current and the actions can run.
+    Diverged {
+        connected: bool,
+        #[serde(default)]
+        files: Vec<DivergedFile>,
+    },
+    SyncPreview {
+        preview: SyncPreviewFacts,
+    },
+    /// Answer to [`DesktopRequest::SyncResolve`], in counts: why a file failed
+    /// is the backend's sentence, which may name a full path. `skipped` no
+    /// longer stood as the phone saw it.
+    SyncResolved {
+        done: u32,
+        failed: u32,
+        skipped: u32,
+    },
+    /// Answer to [`DesktopRequest::SyncDiff`]. `cut`: `diff` stops short.
+    SyncDiff {
+        diff: String,
+        cut: bool,
     },
     Error {
         code: String,

@@ -34,6 +34,7 @@ use super::{
     chat_changes,
     chat_uncommitted,
     config::{verify_tailscale_serve, HostConfig},
+    diverged,
     discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     git_overview,
@@ -48,7 +49,7 @@ use super::{
     protocol::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
         LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobileMarkupTick, MobilePromptInput, MobileSchedule,
-        MobileScheduleInput, PromptMutation, ScheduleMutation,
+        MobileScheduleInput, PromptMutation, ScheduleMutation, SyncDirection, SyncOp,
         TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
     },
@@ -1184,7 +1185,7 @@ async fn project(
     // and on Windows the nominal path is never a file, so it was never told.
     // A closed desktop refuses the connect at once, on both.
     let request_id = new_request_id();
-    let (desktop_available, agents, statuses, schedules, prompts, timings, closed, git) = match admin::desktop_call(
+    let (desktop_available, agents, statuses, schedules, prompts, timings, closed, git, diverged_count) = match admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Catalog {
             request_id,
@@ -1201,7 +1202,8 @@ async fn project(
             timings,
             closed,
             git,
-        }) => (true, agents, statuses, schedules, prompts, timings, closed, git),
+            diverged: diverged_count,
+        }) => (true, agents, statuses, schedules, prompts, timings, closed, git, diverged_count),
         // No window: the same rows off the state dir (headless owner plan,
         // H1b); the closed row is what the owner closed (H3).
         response if desktop_down(&response) => {
@@ -1218,9 +1220,9 @@ async fn project(
                 None
             };
             let closed = headless::closed_tabs(state_dir, &project.raw_id);
-            (false, agents, readings.statuses, schedules, readings.prompts, readings.timings, closed, git)
+            (false, agents, readings.statuses, schedules, readings.prompts, readings.timings, closed, git, None)
         }
-        _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None),
+        _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None, None),
     };
     let mut public = project.public.clone();
     if is_git_project(project) {
@@ -1295,6 +1297,7 @@ async fn project(
         }
     }
     let host_files = has_host_files(project) && files::files_open(&state.config.state_dir);
+    let diverged_offered = has_diverged_list(project) && files::files_open(&state.config.state_dir);
     (
         StatusCode::OK,
         Json(
@@ -1309,6 +1312,12 @@ async fn project(
                 // What the remote side's switch is called: the primary's label,
                 // as the ＋ sheet's machines are (`machine_label`).
                 "host_label": project.primary_host.as_ref().filter(|_| host_files).map(super::discovery::machine_label),
+                // Whether the drawer offers Diverged (`diverged`), how many
+                // files the window last found there, and whether its actions
+                // answer (`project_sync`).
+                "diverged": diverged_offered,
+                "diverged_count": diverged_count.filter(|_| diverged_offered),
+                "sync_writes": diverged_offered && diverged::sync_open(&state.config.state_dir),
                 // Whether the scope has a folder at all, and what the phone may
                 // create in it (`all`, `agents` or `none`): the phone words the
                 // reason and offers only what these allow, never a project type.
@@ -1938,6 +1947,215 @@ async fn project_git(
         .lock_ok()
         .set(&raw_id, overview.clone(), Instant::now());
     (StatusCode::OK, Json(json!(overview)))
+}
+
+/// Whether a scope has a Diverged list: a remote (not VM) project with a local
+/// mirror. A remote-only project has no second copy to diverge from.
+fn has_diverged_list(project: &super::discovery::ResolvedProject) -> bool {
+    is_git_project(project) && project.host == super::discovery::ProjectHost::Remote
+}
+
+/// The raw id a Diverged request works on. Closed — `files_off` — unless the
+/// browser switch is on, read per request, as the list shows what the library
+/// would; a scope with no mirror is `diverged_unavailable`.
+fn diverged_scope(state: &HostState, phone: &Phone, project_id: &str) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    if !files::files_open(&state.config.state_dir) {
+        return Err(api_error(StatusCode::NOT_FOUND, "files_off"));
+    }
+    let catalog = catalog(state, phone)?;
+    let Some(project) = catalog.project(project_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
+    };
+    if !has_diverged_list(project) {
+        return Err(api_error(StatusCode::NOT_FOUND, "diverged_unavailable"));
+    }
+    Ok(project.raw_id.clone())
+}
+
+/// What the window said to a Diverged request that is not its answer.
+fn diverged_desktop_error(response: Result<DesktopResponse, String>) -> (StatusCode, Json<serde_json::Value>) {
+    match response {
+        Ok(DesktopResponse::Error { code, .. }) if code != "desktop_unavailable" => {
+            eprintln!("mobile: the window refused a Diverged request: {code}");
+            api_error(StatusCode::CONFLICT, "sync_failed")
+        }
+        _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+    }
+}
+
+/// The paths a body's `files` name, for a route that acts on them: at least
+/// one, at most a shown list's worth, and every token one of this project's.
+fn diverged_paths(state: &HostState, raw_id: &str, tokens: &[String]) -> Result<Vec<String>, (StatusCode, Json<serde_json::Value>)> {
+    if tokens.is_empty() || tokens.len() > diverged::MAX_ROWS {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid_request"));
+    }
+    diverged::open_all(&host_key(state), raw_id, tokens).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "file_not_found"))
+}
+
+/// `GET /api/v1/projects/{project_id}/diverged` — the project's diverged and
+/// new files (`diverged::Listing`) and whether the window reached the host.
+/// Read-only, and only with a window: the host side is its SSH session's.
+async fn diverged_list(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let raw_id = match diverged_scope(&state, &phone, &project_id) {
+        Ok(raw_id) => raw_id,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SyncDiverged { request_id: new_request_id(), project_id: raw_id.clone() },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::Diverged { connected, files }) => match diverged::listing(&host_key(&state), &raw_id, files) {
+            Ok(listing) => {
+                let mut answer = json!(listing);
+                answer["connected"] = json!(connected);
+                answer["writes"] = json!(diverged::sync_open(&state.config.state_dir));
+                (StatusCode::OK, Json(answer))
+            }
+            Err(error) => files_error(error),
+        },
+        other => diverged_desktop_error(other),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DivergedPreviewBody {
+    direction: SyncDirection,
+    files: Vec<String>,
+}
+
+/// `POST /api/v1/projects/{project_id}/diverged/preview` with `{ "direction",
+/// "files": [token…] }` — what the transfer would do, for the phone's
+/// confirmation (`sync_transfer_preview`). Reads only, but it prices an act
+/// only `project_sync` allows, so it is closed with the act.
+async fn diverged_preview(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let raw_id = match diverged_scope(&state, &phone, &project_id) {
+        Ok(raw_id) => raw_id,
+        Err(error) => return error,
+    };
+    if !diverged::sync_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "sync_off");
+    }
+    let Ok(DivergedPreviewBody { direction, files }) = serde_json::from_slice(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let paths = match diverged_paths(&state, &raw_id, &files) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SyncPreview { request_id: new_request_id(), project_id: raw_id, direction, paths },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::SyncPreview { preview }) => (StatusCode::OK, Json(json!({ "preview": preview }))),
+        other => diverged_desktop_error(other),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DivergedResolveBody {
+    op: SyncOp,
+    files: Vec<String>,
+}
+
+/// `POST /api/v1/projects/{project_id}/diverged/resolve` with `{ "op",
+/// "files": [token…] }` — take a side, complete a deletion or forget, file by
+/// file, over the commands the desktop's orange view calls. `403 sync_off`
+/// unless `project_sync` is on. Answers `{ done, failed, skipped }`; a window
+/// that overruns the deadline is `desktop_unavailable`, and it is still
+/// working: the phone says it does not know and reads the list again.
+async fn diverged_resolve(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let raw_id = match diverged_scope(&state, &phone, &project_id) {
+        Ok(raw_id) => raw_id,
+        Err(error) => return error,
+    };
+    if !diverged::sync_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "sync_off");
+    }
+    let Ok(DivergedResolveBody { op, files }) = serde_json::from_slice(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let paths = match diverged_paths(&state, &raw_id, &files) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SyncResolve { request_id: new_request_id(), project_id: raw_id, op, paths },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::SyncResolved { done, failed, skipped }) => {
+            (StatusCode::OK, Json(json!({ "done": done, "failed": failed, "skipped": skipped })))
+        }
+        other => diverged_desktop_error(other),
+    }
+}
+
+/// `GET /api/v1/projects/{project_id}/diverged/diff?file=<token>` — the
+/// mirror's copy against the host's as a unified diff (`sync_diff`). The token
+/// names one listed file, so this reads no more than the library would.
+async fn diverged_diff(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let raw_id = match diverged_scope(&state, &phone, &project_id) {
+        Ok(raw_id) => raw_id,
+        Err(error) => return error,
+    };
+    let Some(path) = query.get("file").and_then(|token| diverged::unseal(&host_key(&state), &raw_id, token)) else {
+        return api_error(StatusCode::NOT_FOUND, "file_not_found");
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SyncDiff { request_id: new_request_id(), project_id: raw_id, path },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::SyncDiff { diff, cut }) => (StatusCode::OK, Json(json!({ "diff": diff, "cut": cut }))),
+        other => diverged_desktop_error(other),
+    }
 }
 
 /// `GET /api/v1/projects/{project_id}/launch-options` — what the ＋ sheet can
@@ -7761,6 +7979,10 @@ fn router(state: HostState) -> Router {
             get(launch_options),
         )
         .route("/api/v1/projects/{project_id}/git", get(project_git))
+        .route("/api/v1/projects/{project_id}/diverged", get(diverged_list))
+        .route("/api/v1/projects/{project_id}/diverged/preview", post(diverged_preview))
+        .route("/api/v1/projects/{project_id}/diverged/resolve", post(diverged_resolve))
+        .route("/api/v1/projects/{project_id}/diverged/diff", get(diverged_diff))
         .route(
             "/api/v1/projects/{project_id}/prompts",
             get(prompts).post(prompt_create),

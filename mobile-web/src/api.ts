@@ -124,6 +124,55 @@ export async function getGitOverview(projectId: string, signal?: AbortSignal): P
     throw reason;
   }
 }
+/** One file of the Diverged list. `id` names it to the routes below; `path`
+ * is display text. */
+export interface DivergedRow {
+  id: string;
+  path: string;
+  /** `amber`: both sides have a say. `localnew`: only the local copy exists. */
+  state: "amber" | "localnew";
+  host_mtime?: number;
+  local_mtime?: number;
+  host_diverged: boolean;
+  local_diverged: boolean;
+  host_checked: boolean;
+}
+/** `total`: what this phone may see, `rows` or not. `hidden`: files named as
+ * the library hides them, only counted. `connected`: the desktop reached the
+ * host. `writes`: the actions answer. */
+export interface DivergedList { rows: DivergedRow[]; total: number; hidden: number; connected: boolean; writes: boolean }
+export type SyncDirection = "pull" | "push";
+export type SyncOp = SyncDirection | "delete_host" | "delete_local" | "forget";
+/** What a transfer would do. `destructive`: the files that would lose changes,
+ * a capped list of `destructive_total`. `exact` false: the receiving side could
+ * not be inspected, so what it would lose is unknown, not nothing. */
+export interface SyncPreview { files: number; bytes: number; overwrites: number; destructive: string[]; destructive_total: number; conflicts: number; tracked: number; exact: boolean }
+export interface SyncOutcome { done: number; failed: number; skipped: number }
+
+/** A list reads every tracked file's state on the host through the desktop. */
+const DIVERGED_READ_TIMEOUT = 20_000;
+/** Past the sidecar's own deadline for each (`DesktopRequest::response_timeout`). */
+const SYNC_PREVIEW_TIMEOUT = 35_000;
+const SYNC_RESOLVE_TIMEOUT = 130_000;
+
+/** `GET /api/v1/projects/{id}/diverged` — the desktop must be open. */
+export function getDiverged(projectId: string, signal?: AbortSignal): Promise<DivergedList> {
+  return api<DivergedList>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged`, { signal }, DIVERGED_READ_TIMEOUT);
+}
+/** `POST …/diverged/preview` — what moving these files would do. */
+export async function previewDiverged(projectId: string, direction: SyncDirection, files: string[]): Promise<SyncPreview> {
+  const { preview } = await api<{ preview: SyncPreview }>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/preview`, { method: "POST", body: JSON.stringify({ direction, files }) }, SYNC_PREVIEW_TIMEOUT);
+  return preview;
+}
+/** `POST …/diverged/resolve` — never sent twice: a timeout is an unknown outcome. */
+export function resolveDiverged(projectId: string, op: SyncOp, files: string[]): Promise<SyncOutcome> {
+  return api<SyncOutcome>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/resolve`, { method: "POST", body: JSON.stringify({ op, files }) }, SYNC_RESOLVE_TIMEOUT);
+}
+/** `GET …/diverged/diff?file=` — the local copy against the host's. */
+export function getDivergedDiff(projectId: string, file: string): Promise<{ diff: string; cut: boolean }> {
+  return api<{ diff: string; cut: boolean }>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/diff?file=${encodeURIComponent(file)}`, undefined, SYNC_PREVIEW_TIMEOUT);
+}
+
 /** One agent tab in the cross-project activity list: an ordinary tab row plus
  * the project it lives in, because that list is flat and a tab label on its own
  * does not say where the session is. */
@@ -168,6 +217,14 @@ export interface ProjectDetail {
    * on its host, read over the desktop's connection (`?on=host`). Absent (an
    * older desktop) is none. */
   host_files?: boolean;
+  /** Whether the drawer offers Diverged (`DivergedSheet`): a remote project
+   * with a local copy, the file switch on. Absent (an older desktop) is none. */
+  diverged?: boolean;
+  /** How many files the desktop last found diverged or new; absent or null
+   * where it has no status for the project. */
+  diverged_count?: number | null;
+  /** Whether the list's actions answer (`project_sync`). */
+  sync_writes?: boolean;
   /** What the remote side's switch is called: the host's display name, else
    * its host name — the label the ＋ sheet's machines carry. Absent (an older
    * desktop): the switch says "Remote computer". */

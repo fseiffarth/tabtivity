@@ -88,6 +88,7 @@ import { finishAlert } from "../../lib/alertDone";
 import { useAlertsFeed, type AlertsFeed } from "../files/useAlertsFeed";
 import { agentTurnEdges, type AgentTurnEdge, type MobileAgentState } from "../../lib/mobileAgentTurns";
 import { freshGitDot, gitDotRows, type MobileGitDot, type MobileGitStateRow } from "../../lib/mobileGitDots";
+import { divergedCount, divergedDiff, divergedList, divergedPreview, divergedResolve, type MobileDivergedFile, type MobileSyncOp, type MobileSyncPreview } from "../../lib/mobileDiverged";
 import { mobileSubagentCount } from "../../lib/mobileSubagents";
 import {
   desktopTimeZone,
@@ -322,11 +323,19 @@ type DesktopRequest =
   | { type: "refresh"; request_id: string; project_id?: string | null; slices: string[] }
   | { type: "local_models"; request_id: string }
   | { type: "local_model_mutate"; request_id: string; action: LocalModelAction }
-  | { type: "cli_overview"; request_id: string; refresh?: boolean };
+  | { type: "cli_overview"; request_id: string; refresh?: boolean }
+  | { type: "sync_diverged"; request_id: string; project_id: string }
+  | { type: "sync_preview"; request_id: string; project_id: string; direction: "pull" | "push"; paths: string[] }
+  | { type: "sync_resolve"; request_id: string; project_id: string; op: MobileSyncOp; paths: string[] }
+  | { type: "sync_diff"; request_id: string; project_id: string; path: string };
 type DesktopResponse =
-| { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot }
+| { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot; diverged?: number }
   | { status: "activity"; statuses: AgentTabStatus[]; prompts: AgentTabPrompts[] }
   | { status: "git_states"; states: MobileGitStateRow[] }
+  | { status: "diverged"; connected: boolean; files: MobileDivergedFile[] }
+  | { status: "sync_preview"; preview: MobileSyncPreview }
+  | { status: "sync_resolved"; done: number; failed: number; skipped: number }
+  | { status: "sync_diff"; diff: string; cut: boolean }
   | { status: "activated" }
   | { status: "created"; tmux_session: string }
   | { status: "launch_options"; worktrees: MobileWorktree[]; cloud: MobileCloudLaunch[]; sign_in: MobileSignInOption[]; local?: MobileLocalLaunch; api_key?: MobileApiKeyLaunch[] }
@@ -3055,6 +3064,7 @@ async function handleRequest(
       timings: agentTimings(request.project_id),
       closed: closedAgentTabRows(request.project_id),
       git: await projectGitDot(request.project_id),
+      diverged: divergedCount(request.project_id),
     };
     case "activity": return { status: "activity", statuses: allAgentStatuses(), prompts: allAgentPrompts() };
     case "git_states": return { status: "git_states", states: gitDotRows(allMobileScopes().flatMap((scope) => scope.project ?? [])) };
@@ -3103,6 +3113,11 @@ async function handleRequest(
     // Both check the host-wide switch first (`lib/mobileLocalModels`).
     case "local_models": return localModelsList();
     case "local_model_mutate": return localModelMutate(request.action);
+    // The phone's Diverged list; the sidecar has checked its switches.
+    case "sync_diverged": return divergedList(request.project_id);
+    case "sync_preview": return divergedPreview(request.project_id, request.direction, request.paths);
+    case "sync_resolve": return divergedResolve(request.project_id, request.op, request.paths);
+    case "sync_diff": return divergedDiff(request.project_id, request.path);
     // The side panel's CLIs view's reading; the sidecar cuts it for the phone
     // (no account, no path-naming panel line).
     case "cli_overview": return {
@@ -3143,6 +3158,8 @@ export function mutationDomain(type: DesktopRequest["type"]): string | null {
     case "schedule_mutate": case "prompt_mutate": case "hold_prompt": case "edit_held_prompt": case "markup_answer": case "markup_dismiss": return "schedules";
     // Phone loads, unloads and starts run one at a time, in arrival order.
     case "local_model_mutate": return "local_models";
+    // Long transfers wait on each other, not on anything else.
+    case "sync_resolve": return "sync";
     default: return null;
   }
 }

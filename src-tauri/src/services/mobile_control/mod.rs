@@ -13,6 +13,7 @@ pub mod chat_changes;
 pub mod chat_uncommitted;
 pub mod config;
 pub mod discovery;
+pub mod diverged;
 pub mod drop_sweep;
 pub mod files;
 pub mod git_overview;

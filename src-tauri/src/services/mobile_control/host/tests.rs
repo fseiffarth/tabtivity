@@ -4407,6 +4407,138 @@ async fn the_file_search_answers_sealed_rows_and_trails_while_the_drawer_is_on()
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+/// The Diverged list: offered for a remote project with a mirror, read through
+/// the window behind the files switch, acted on only behind `project_sync` too.
+/// What crosses is project-relative text and sealed tokens; a hidden name is
+/// only counted, and no token but this list's names a file to move.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
+    let host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let mirror = state_dir.join("mirrors").join(RAW_PROJECT);
+    std::fs::create_dir_all(&mirror).unwrap();
+    std::fs::write(
+        state_dir.join("projects.json"),
+        serde_json::to_vec(&json!([{
+            "id": RAW_PROJECT,
+            "name": "Aurora",
+            "status": "active",
+            "directory": state_dir.join("remote-projects").join(RAW_PROJECT).to_string_lossy(),
+            "mirror": mirror.to_string_lossy(),
+            concat!(crate::app_slug!(), "_mobile_access"): true,
+            "remote": { "user": "alice", "host": "primary.example", "remote_path": "/srv/aurora" },
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    let switches = |sync: bool, files: bool| {
+        std::fs::write(
+            state_dir.join("settings.json"),
+            json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_sync": sync } }).to_string(),
+        )
+        .unwrap();
+    };
+    let cookie = host.pair_device(&signing_key(73)).await.0;
+    let (_, _, projects) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    let p = json(&projects)["projects"][0]["id"].as_str().expect("project id").to_string();
+    let base = format!("/api/v1/projects/{p}/diverged");
+    let refused = |answer: (StatusCode, HeaderMap, String)| (answer.0, json(&answer.2)["error"].clone());
+
+    switches(true, false);
+    let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+    assert_eq!((json(&detail)["diverged"].as_bool(), json(&detail)["sync_writes"].as_bool()), (Some(false), Some(false)), "{detail}");
+    assert_eq!(refused(host.send(get_as(&base, &cookie)).await), (StatusCode::NOT_FOUND, json!("files_off")));
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let resolved: Arc<Mutex<Vec<(SyncOp, Vec<String>)>>> = Arc::default();
+    let seen = resolved.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let row = |rel: &str, state: &str| crate::services::mobile_control::protocol::DivergedFile {
+                rel: rel.into(),
+                state: state.into(),
+                host_mtime: Some(20),
+                local_mtime: Some(10),
+                host_diverged: true,
+                local_diverged: false,
+                host_checked: true,
+            };
+            let answer = match request {
+                DesktopRequest::SyncDiverged { project_id, .. } => {
+                    assert_eq!(project_id, RAW_PROJECT);
+                    DesktopResponse::Diverged { connected: true, files: vec![row("src/a.txt", "amber"), row(".env", "amber"), row("new.txt", "localnew")] }
+                }
+                DesktopRequest::SyncPreview { direction, paths, .. } => {
+                    assert_eq!((direction, paths.as_slice()), (SyncDirection::Pull, ["src/a.txt".to_string()].as_slice()));
+                    DesktopResponse::SyncPreview { preview: crate::services::mobile_control::protocol::SyncPreviewFacts { files: 1, exact: true, ..Default::default() } }
+                }
+                DesktopRequest::SyncResolve { op, paths, .. } => {
+                    seen.lock().unwrap().push((op, paths));
+                    DesktopResponse::SyncResolved { done: 1, failed: 0, skipped: 0 }
+                }
+                DesktopRequest::SyncDiff { path, .. } => DesktopResponse::SyncDiff { diff: format!("diff of {path}"), cut: false },
+                _ => DesktopResponse::Seen,
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+
+    // The browser switch alone: the list reads, nothing else does.
+    switches(false, true);
+    let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+    assert_eq!((json(&detail)["diverged"].as_bool(), json(&detail)["sync_writes"].as_bool()), (Some(true), Some(false)), "{detail}");
+    let (status, _, body) = host.send(get_as(&base, &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = json(&body);
+    assert_eq!((list["connected"].as_bool(), list["writes"].as_bool()), (Some(true), Some(false)), "{body}");
+    assert_eq!((list["total"].as_u64(), list["hidden"].as_u64()), (Some(2), Some(1)), "{body}");
+    let rows = list["rows"].as_array().expect("rows");
+    assert_eq!(rows[0]["path"], "src/a.txt", "{body}");
+    assert_eq!(rows[1]["state"], "localnew", "{body}");
+    for raw in [RAW_PROJECT, ".env", "/srv/aurora", "alice", mirror.to_str().unwrap()] {
+        assert!(!body.contains(raw), "{raw} crossed: {body}");
+    }
+    let token = rows[0]["id"].as_str().expect("token").to_string();
+    let act = json!({ "op": "pull", "files": [token] });
+    assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await), (StatusCode::FORBIDDEN, json!("sync_off")));
+    let price = json!({ "direction": "pull", "files": [token] });
+    assert_eq!(refused(host.send(request_as("POST", &format!("{base}/preview"), &cookie, Some(price.clone()))).await), (StatusCode::FORBIDDEN, json!("sync_off")));
+    let (status, _, body) = host.send(get_as(&format!("{base}/diff?file={token}"), &cookie)).await;
+    assert_eq!((status, json(&body)["diff"].as_str()), (StatusCode::OK, Some("diff of src/a.txt")), "a compare needs no write switch");
+
+    // Both on.
+    switches(true, true);
+    let (status, _, body) = host.send(request_as("POST", &format!("{base}/preview"), &cookie, Some(price))).await;
+    assert_eq!((status, json(&body)["preview"]["files"].as_u64()), (StatusCode::OK, Some(1)), "{body}");
+    let (status, _, body) = host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await;
+    assert_eq!((status, json(&body)["done"].as_u64()), (StatusCode::OK, Some(1)), "{body}");
+    assert_eq!(resolved.lock().unwrap().as_slice(), [(SyncOp::Pull, vec!["src/a.txt".to_string()])]);
+
+    // Not this list's token, not a shape it knows, not this origin: nothing reaches the window.
+    let browser = files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "src/a.txt").unwrap();
+    let foreign = json!({ "op": "pull", "files": [browser] });
+    assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(foreign))).await), (StatusCode::NOT_FOUND, json!("file_not_found")));
+    for wrong in [json!({ "op": "pull", "files": [] }), json!({ "op": "wipe", "files": [token] }), json!({ "op": "pull", "files": [token], "force": true })] {
+        assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(wrong))).await), (StatusCode::BAD_REQUEST, json!("invalid_request")));
+    }
+    let foreign_origin = Request::builder()
+        .method("POST")
+        .uri(format!("{base}/resolve"))
+        .header(header::ORIGIN, "https://evil.example")
+        .header(header::COOKIE, cookie_pair(&cookie))
+        .body(Body::from(act.to_string()))
+        .expect("request");
+    assert_eq!(refused(host.send(foreign_origin).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+    assert_eq!(resolved.lock().unwrap().len(), 1, "only the good request got through");
+    desktop.abort();
+}
+
 /// The 📁's remote side: offered for a remote project (with no mirror on
 /// disk too) and only behind the files switch, named by the host's label
 /// (as the ＋ sheet's machines are) and nothing else of it; with no master to ride every remote-side route says `host_offline`,

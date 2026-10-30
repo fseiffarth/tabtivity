@@ -1137,6 +1137,20 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .git-rows > li.git-more > span { color:#9da3b6; text-align:center; }
 .git-rows .git-quiet { color:#9da3b6; font-style:normal; }
 .git-rows .git-mark { margin-left:6px; }
+.diverged-bulk { display:grid; gap:6px; padding:0 2px; }
+.diverged-exclude { display:flex; align-items:center; gap:8px; min-height:36px; color:#9da3b6; font-size:.8rem; }
+.diverged-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.diverged-actions button { display:inline-flex; align-items:center; gap:5px; min-height:38px; padding:0 10px; border:1px solid #2c3a55; border-radius:9px; background:#10131b; color:#dbe4f6; font:inherit; font-size:.76rem; }
+.diverged-actions button.danger { border-color:#6b2f38; color:#ffb4c0; }
+.diverged-actions button:disabled { opacity:.45; }
+.diverged-row { gap:6px !important; }
+.diverged-name { display:block; width:100%; padding:0; border:0; background:none; color:inherit; font:inherit; font-size:.8rem; line-height:1.35; text-align:left; overflow-wrap:anywhere; }
+.git-rows > li.diverged-row > small.diverged-cue { font-size:.68rem; letter-spacing:.03em; text-transform:none; color:#9da3b6; }
+.git-rows > li.diverged-row > small.diverged-cue.remote { color:#f0b35a; }
+.git-rows > li.diverged-row > small.diverged-cue.local { color:#56d364; }
+.diverged-when, .git-rows > li.diverged-row > small.diverged-when { color:#9da3b6; font-size:.7rem; letter-spacing:0; text-transform:none; white-space:pre-line; }
+.diverged-ask { display:grid; gap:4px; max-height:44dvh; overflow:auto; }
+.diverged-ask ul { margin:0; padding:0 6px 4px 22px; color:#dbe4f6; font-size:.8rem; overflow-wrap:anywhere; }
 .git-remote > summary { cursor:pointer; }
 .git-remote > .git-rows { padding-top:6px; }
 .readable-empty button { margin-top:6px; }

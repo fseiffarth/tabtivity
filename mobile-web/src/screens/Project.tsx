@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
+import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
 import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
@@ -207,6 +208,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   /** The read-only git overview (`GitSheet`), for a project scope only: a box
    * or the root console has no repo of its own. */
   const [gitOpen, setGitOpen] = useState(false);
+  /** The Diverged list (`DivergedSheet`), for a remote project with a local copy. */
+  const [divergedOpen, setDivergedOpen] = useState(false);
   const screenRef = useRef<HTMLElement | null>(null);
   /** The latest `back`, for the swipe listener that outlives a render. */
   const backRef = useRef(back);
@@ -229,6 +232,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * computer's file cards stay `filesOffered`'s. */
   const hostFilesOffered = !!detail?.host_files && !assistantScope;
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project" && !folderless;
+  const divergedOffered = !!detail?.diverged && !assistantScope;
   /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
    * host with none (Windows) nothing can be opened, scheduled or sent to from
    * here, so the ＋ sheet keeps only its send-a-file row, each card's ◷ and
@@ -245,7 +249,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const fabOffered = !detail || creates || !folderless;
   /** Whether the drawer has anything to hold, once the host has answered:
    * no ☰ and no swipe else. */
-  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || hostFilesOffered || gitOffered);
+  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || hostFilesOffered || gitOffered || divergedOffered);
   /** What a right→left swipe over a card (`data-swipe-close`) does, read at
    * the swipe: the listener below outlives the render that installed it, and
    * would otherwise close against that render's list. Set further down, once
@@ -715,6 +719,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       </div>
     </div>}
     {gitOpen && detail && <GitSheet projectId={id} label={detail.project.label} onClose={() => setGitOpen(false)} />}
+    {divergedOpen && detail && <DivergedSheet projectId={id} label={detail.project.label} onClose={() => setDivergedOpen(false)} onChanged={() => void load()} />}
     {/* Only once the host has answered: `!detail?.desktop_available` was also
         true while the first load was in flight, so every project opened on a
         "Desktop unavailable" notice that vanished a moment later. */}
@@ -880,7 +885,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         closing the file comes back to the list it was opened from. */}
     {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onDeleteAll={removeAllFiles} onClose={() => setGalleryOpen(false)} />}
     {drawerOpen && detail && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setDrawerOpen(false)}
-      browse={filesOffered || hostFilesOffered} here={filesOffered} host={hostFilesOffered} hostLabel={detail.host_label} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
+      browse={filesOffered || hostFilesOffered} here={filesOffered} host={hostFilesOffered} hostLabel={detail.host_label} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered || divergedOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
         {outbox.length > 0 && <button
           role="menuitem"
           aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })}
@@ -890,6 +895,10 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           role="menuitem"
           onClick={() => { setDrawerOpen(false); setGitOpen(true); }}
         ><span aria-hidden="true" className="project-menu-icon">⎇</span><span><strong>{t("mobile.gitSheet.menu")}</strong>{isUntested("mobile.project.gitOverview") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span></button>}
+        {divergedOffered && <button
+          role="menuitem"
+          onClick={() => { setDrawerOpen(false); setDivergedOpen(true); }}
+        ><span aria-hidden="true" className="project-menu-icon">±</span><span><strong>{t("mobile.diverged.menu")}</strong>{isUntested("mobile.project.diverged") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>{!!detail?.diverged_count && <small className="project-menu-count">{detail.diverged_count}</small>}</button>}
         {isUntested("mobile.project.drawerMenu") && <p className="project-menu-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </div> : undefined} />}
     {/* A card's file: a picture opens in Mark up — its card is a markup under
