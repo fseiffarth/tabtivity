@@ -526,6 +526,14 @@ jobs:
     # `privacy` gates every package job: a build that leaks must never become a
     # downloadable artifact, let alone a release asset.
     needs: [test-windows, privacy, brand]
+    # A short target dir: MSBuild's file tracker cannot write a log at 260
+    # characters or more, and whisper.cpp's Vulkan shader generator is a nested
+    # cmake project whose try-compile logs reach 267 under the checkout's own
+    # target/ (FTK1011, which cmake reports as a broken C compiler). The whole
+    # dir moves, not cargo's `build-dir` alone: tauri-build reads the target dir
+    # off OUT_DIR.
+    env:
+      CARGO_TARGET_DIR: D:/a/t
 
     steps:
       - name: Checkout
@@ -547,7 +555,8 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: . -> target
+          # Relative to the checkout: this is CARGO_TARGET_DIR.
+          workspaces: . -> ../../t
 
       - name: Install frontend dependencies
         run: npm ci --ignore-scripts
@@ -579,11 +588,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tabtivity-${{ github.sha }}-windows-nsis
-          # Tauri 2 on Windows puts bundles in the project-root target/ when
-          # CARGO_TARGET_DIR is overridden by swatinem/rust-cache.
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            target/release/bundle/nsis/*.exe
+          path: ${{ env.CARGO_TARGET_DIR }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
   # Pinned to 24.04, not `ubuntu-latest`: the runner distro is an input to the
   # shipped artifact, so it should move when we say so, not when GitHub reflags

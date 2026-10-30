@@ -32,6 +32,11 @@ on (`scripts/lib/voice_gpu.sh`). Both sit on `whisper-rs-sys`, not `whisper-rs`,
 whose `vulkan` feature fails to compile where bindgen falls back to the bundled
 bindings. Measurements and open risks: `docs/voice_gpu_plan.md`.
 
+On Windows, `voice-vulkan` needs a target dir of about 22 characters or fewer.
+whisper.cpp's shader generator is a nested cmake project, and MSBuild's file
+tracker cannot write a log path of 260 characters: `FTK1011`, which cmake reports
+as a broken C compiler. CI builds in `D:/a/t`; elsewhere set `CARGO_TARGET_DIR`.
+
 Whisper never tells its caller where a load landed and carries on without a
 GPU by itself, so `gpu.rs` reads the answer from its load log. The renderer
 shows that `VoiceDevice`, never the `voice_gpu` setting. A state, made per
