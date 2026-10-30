@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasSignInTab, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInDone, signInPageKeys } from "../../../mobile-web/src/terminal/signIn";
 import { readSelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
+import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { SignInSheet } from "../../../mobile-web/src/screens/SignInSheet";
 import { NewTabSheet } from "../../../mobile-web/src/screens/NewTabSheet";
 
@@ -174,6 +175,138 @@ describe("a sign-in page the CLI pages in its own window", () => {
     expect(restarted.lines[14]).toContain("U5DmJpS38OLQaW9fQ");
     expect(readSignInPage(rows("some output", "  (1–2 of 9 lines)"), null)).toBeNull();
     expect(readSignInPage(AGY_PAGE_END, null)).toBeNull();
+  });
+});
+
+/** The same page off Antigravity 1.4.11 at 42×24 (1.4.5 draws it the same) and
+ * as the phone holds it: `readableScreen` has dropped the logo, the page's rules
+ * and every blank run, so the rows over the note are no longer its lines. */
+const readable = (...frame: string[]) => readableScreen({
+  length: frame.length,
+  getLine: (row) => (frame[row] === undefined ? undefined : { translateToString: () => frame[row] }),
+}).lines;
+const AGY_READABLE_TOP = readable(
+  "",
+  "     ▄▀▀▄",
+  "    ▀▀▀▀▀▀",
+  "   ▀▀▀▀▀▀▀▀",
+  "  ▄▀▀    ▀▀▄",
+  " ▄▀▀      ▀▀▄",
+  "",
+  " Your browser should open automatically.",
+  " If not:",
+  "",
+  " https://accounts.google.com/o/oauth2/aut",
+  " h?access_type=offline&client_id=10710060",
+  " 60591-tmhssin2h21lcre235vtolojh4g403ep.a",
+  " pps.googleusercontent.com&code_challenge",
+  " =nn6DAZSg-fG1Y8AoQMsTjdzi9wVnKFi-kLjsd75",
+  " y_zA&code_challenge_method=S256&prompt=c",
+  " onsent&redirect_uri=https%3A%2F%2Fantigr",
+  " avity.google%2Foauth-callback&response_t",
+  " ype=code&scope=https%3A%2F%2Fwww.googlea",
+  " pis.com%2Fauth%2Fcloud-platform+https%3A",
+  "  (1–20 of 40 lines)",
+  "",
+  "  shift+up/down Navigate",
+);
+const AGY_READABLE_MIDDLE = readable(
+  " onsent&redirect_uri=https%3A%2F%2Fantigr",
+  " avity.google%2Foauth-callback&response_t",
+  " ype=code&scope=https%3A%2F%2Fwww.googlea",
+  " pis.com%2Fauth%2Fcloud-platform+https%3A",
+  " %2F%2Fwww.googleapis.com%2Fauth%2Fuserin",
+  " fo.email+https%3A%2F%2Fwww.googleapis.co",
+  " m%2Fauth%2Fuserinfo.profile+https%3A%2F%",
+  " 2Fwww.googleapis.com%2Fauth%2Fcclog+http",
+  " s%3A%2F%2Fwww.googleapis.com%2Fauth%2Fex",
+  " perimentsandconfigs+https%3A%2F%2Fwww.go",
+  " ogleapis.com%2Fauth%2Faicode+openid&stat",
+  " e=VqAg5KI_R-EElU7gri1IQg",
+  "",
+  " Copy and paste the URL or click on the",
+  " link below:",
+  " ────────────────────────────────────────",
+  " → Click here to authenticate",
+  " ────────────────────────────────────────",
+  "",
+  " If you aren't automatically redirected,",
+  "  (17–36 of 40 lines)",
+  "",
+  "  shift+up/down Navigate",
+);
+const AGY_READABLE_END = readable(
+  " %2F%2Fwww.googleapis.com%2Fauth%2Fuserin",
+  " fo.email+https%3A%2F%2Fwww.googleapis.co",
+  " m%2Fauth%2Fuserinfo.profile+https%3A%2F%",
+  " 2Fwww.googleapis.com%2Fauth%2Fcclog+http",
+  " s%3A%2F%2Fwww.googleapis.com%2Fauth%2Fex",
+  " perimentsandconfigs+https%3A%2F%2Fwww.go",
+  " ogleapis.com%2Fauth%2Faicode+openid&stat",
+  " e=VqAg5KI_R-EElU7gri1IQg",
+  "",
+  " Copy and paste the URL or click on the",
+  " link below:",
+  " ────────────────────────────────────────",
+  " → Click here to authenticate",
+  " ────────────────────────────────────────",
+  "",
+  " If you aren't automatically redirected,",
+  " paste the authorization code below:",
+  "",
+  " authorization code...",
+  "",
+  "  (21–40 of 40 lines)",
+  "",
+  "  shift+up/down Navigate",
+);
+
+describe("a paged sign-in page on the phone's reading view", () => {
+  it("places each kept row on its page line, and reads the whole link", () => {
+    const top = readSignInPage(AGY_READABLE_TOP, null)!;
+    expect(top.first).toBe(1);
+    expect(readPagedSignIn(top)).toBeNull();
+    expect(signInPageKeys(top)).toEqual(Array(20).fill(SHIFT_DOWN));
+
+    const middle = readSignInPage(AGY_READABLE_MIDDLE, top)!;
+    expect(middle.first).toBe(17);
+    expect(signInPageKeys(middle)).toEqual(Array(4).fill(SHIFT_DOWN));
+
+    const whole = readSignInPage(AGY_READABLE_END, middle)!;
+    expect(signInPageKeys(whole)).toEqual([]);
+    const signIn = readPagedSignIn(whole)!;
+    expect(new URL(signIn.url).searchParams.get("state")).toBe("VqAg5KI_R-EElU7gri1IQg");
+    expect(new URL(signIn.url).searchParams.get("scope")).toContain("openid");
+    expect(signIn.flow).toBe("code");
+  });
+
+  it("starts no page on the first-run terms, whose note is the same shape", () => {
+    expect(readSignInPage(readable(
+  "Terms of Service & Data Use",
+  "",
+  "AI coding agents are known to have certain",
+  "security risks, including autonomous code",
+  "execution, data exfiltration, prompt",
+  "injection and supply chain risks. Ensure",
+  "that you monitor and verify all actions",
+  "taken by the agent.",
+  "",
+  "------------------------------------------",
+  "",
+  "  > [x] Yes, I agree to help improve",
+  "      Antigravity CLI by allowing Google",
+  "      to collect and use my Interactions",
+  "      data, subject to the Google",
+  "      Antigravity CLI Terms of Service",
+  "      and Google Privacy Policy. I",
+  "  (1–17 of 26 lines)",
+  "",
+  "    [Previous]      [Done]",
+  "",
+  "  ↑/↓ Navigate · enter Toggle",
+  "  shift+↑/↓ Scroll",
+  "                      Gemini 3.1 Pro · low",
+    ), null)).toBeNull();
   });
 });
 
