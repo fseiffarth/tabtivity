@@ -5444,7 +5444,7 @@ export const enSource = {
   "terminal.reader.voice.reading": "Reading the answer… the mic listens again after it.",
   "terminal.reader.voice.waiting": "Waiting for the agent… the mic listens again when it is done.",
   "terminal.reader.voice.readAloud": "Read aloud",
-  "terminal.reader.voice.readAloudHint": "Speak each new answer when the agent's turn ends. The stop key (Settings → Shortcuts) or a send stops the voice.",
+  "terminal.reader.voice.readAloudHint": "Say when the agent starts working, and speak each new answer when its turn ends. The stop key (Settings → Shortcuts) or a send stops the voice.",
   "terminal.reader.voice.handsFree": "Hands-free",
   "terminal.reader.voice.handsFreeHint": "The mic sends after a pause — with a chime and a moment to say “stop” — and listens again once the answer is over.",
   "terminal.reader.voice.code": "code block",

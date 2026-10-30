@@ -28,9 +28,11 @@ unless you pick another).
 
 ## Read-aloud
 
-The **Read aloud** chip under the conversation speaks each new answer with
-the system voice once the agent's turn has ended. Code blocks are announced,
-not spelled out. It never speaks over your dictation, and a tab you are not
+The **Read aloud** chip under the conversation says when the agent starts
+working ("Opus is working") and speaks each new answer with the system voice
+once the agent's turn has ended. A turn that wrote more than three messages
+is read by its last one. Code blocks are announced, not spelled out. It never
+speaks over your dictation, and a tab you are not
 looking at waits until you show it. The stop key (**Ctrl+Shift+Q**, Settings
 → Shortcuts) or any send stops the voice — never the agent. Settings → Voice
 sets how fast it reads.

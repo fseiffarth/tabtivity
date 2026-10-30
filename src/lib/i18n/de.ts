@@ -5304,7 +5304,7 @@ export const dict: Dict = {
   "terminal.reader.voice.reading": "Liest die Antwort vor … danach hört das Mikrofon wieder zu.",
   "terminal.reader.voice.waiting": "Wartet auf den Agenten … wenn er fertig ist, hört das Mikrofon wieder zu.",
   "terminal.reader.voice.readAloud": "Vorlesen",
-  "terminal.reader.voice.readAloudHint": "Jede neue Antwort vorlesen, wenn der Agent fertig ist. Die Stopp-Taste (Einstellungen → Tastenkürzel) oder ein Senden hält die Stimme an.",
+  "terminal.reader.voice.readAloudHint": "Ansagen, wenn der Agent zu arbeiten beginnt, und jede neue Antwort vorlesen, wenn er fertig ist. Die Stopp-Taste (Einstellungen → Tastenkürzel) oder ein Senden hält die Stimme an.",
   "terminal.reader.voice.handsFree": "Freihändig",
   "terminal.reader.voice.handsFreeHint": "Das Mikrofon sendet nach einer Pause – mit einem Ton und einem Moment, um „stopp“ zu sagen – und hört wieder zu, sobald die Antwort vorbei ist.",
   "terminal.reader.voice.code": "Codeblock",

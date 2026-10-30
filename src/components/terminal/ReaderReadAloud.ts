@@ -18,8 +18,8 @@ import { useTauriListener } from "../../hooks/useTauriListener";
 
 /** A chunk the OS voice says whole; short, so a stop is heard at once. */
 const SPEAK_CHUNK = 300;
-/** More new answers than this at one turn's end is a session swapped in or
- * read in, not news. */
+/** More new answers than this at one turn's end are the agent talking between
+ * tool calls, or a session swapped in: only the last is said. */
 const MAX_SPOKEN_AT_ONCE = 3;
 /** How long after a turn's end its answer may still arrive to be read. */
 const DUE_LIMIT_MS = 10_000;
@@ -37,14 +37,16 @@ export interface SpokenTurn {
  * spoken by the OS voice (`voice_speak`) — once, and only a short new tail:
  * what the first read brought, or "earlier" reveals, is history. Nothing is
  * read while the user dictates, nor while the pane is hidden; an answer that
- * came while it was hidden is read when it is shown again.
+ * came while it was hidden is read when it is shown again. When a turn begins
+ * (`turnStart`) the working row's words are said, once; a turn that began
+ * unseen is not caught up on, since by then it is no news.
  *
  * `say` reads anything else in the same voice (a question card, for
  * hands-free); `speaking` is whether one of this tab's reads is being said,
  * `owed` also while a turn's answer is still to come; `stop` ends it (the
  * stop key, the indicator, a send).
  */
-export function useReaderReadAloud({ readId, enabled, visible, listening, turns, turnEnd, working }: {
+export function useReaderReadAloud({ readId, enabled, visible, listening, turns, turnEnd, working, turnStart, workingLine }: {
   /** Prefix of this tab's read ids (its PTY id). */
   readId: string;
   enabled: boolean;
@@ -55,6 +57,10 @@ export function useReaderReadAloud({ readId, enabled, visible, listening, turns,
   /** The last ended turn's key (`useAgentTurn`), `null` while one runs. */
   turnEnd: string | null;
   working: boolean;
+  /** The last turn begun since watching began (`useAgentTurn`). */
+  turnStart: number | null;
+  /** What the working row says (`Opus is working…`). */
+  workingLine: string;
 }) {
   const t = useT();
   const uiLanguage = useI18nStore((s) => s.lang);
@@ -104,10 +110,10 @@ export function useReaderReadAloud({ readId, enabled, visible, listening, turns,
    * that ends with no answer (only tool calls) owes nothing after a while. */
   const [due, setDue] = useState(false);
   useEffect(() => {
-    if (!due) return;
+    if (!due || !visible) return;
     const timer = setTimeout(() => setDue(false), DUE_LIMIT_MS);
     return () => clearTimeout(timer);
-  }, [due]);
+  }, [due, visible]);
   const firstEnd = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     // What had ended before this look is no news.
@@ -150,10 +156,19 @@ export function useReaderReadAloud({ readId, enabled, visible, listening, turns,
     if (fresh.length === 0) return;
     for (const turn of fresh) known.current.add(turn.key);
     setDue(false);
-    if (listening || fresh.length > MAX_SPOKEN_AT_ONCE) return;
+    if (listening) return;
     const code = t("terminal.reader.voice.code");
-    for (const turn of fresh) sayRef.current(turn.key, spokenText(turn.text, code));
+    for (const turn of fresh.slice(fresh.length > MAX_SPOKEN_AT_ONCE ? -1 : 0)) sayRef.current(turn.key, spokenText(turn.text, code));
   }, [turns, due, enabled, visible, listening, t]);
+
+  /** The turn already announced, or passed over. */
+  const announced = useRef<number | null>(null);
+  useEffect(() => {
+    if (turnStart === null || turnStart === announced.current) return;
+    announced.current = turnStart;
+    if (!enabled || !visible || listening) return;
+    sayRef.current(`working:${turnStart}`, workingLine.replace(/…$/, "."));
+  }, [turnStart, workingLine, enabled, visible, listening]);
 
   // Hidden, or off: the voice goes quiet.
   useEffect(() => {

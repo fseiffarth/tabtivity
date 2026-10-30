@@ -5282,7 +5282,7 @@ export const dict: Dict = {
   "terminal.reader.voice.reading": "Lecture de la réponse… le micro écoute à nouveau ensuite.",
   "terminal.reader.voice.waiting": "En attente de l’agent… le micro écoute à nouveau quand il a fini.",
   "terminal.reader.voice.readAloud": "Lire à voix haute",
-  "terminal.reader.voice.readAloudHint": "Lire chaque nouvelle réponse quand l’agent a fini son tour. La touche d’arrêt (Réglages → Raccourcis) ou un envoi arrête la voix.",
+  "terminal.reader.voice.readAloudHint": "Annoncer quand l’agent commence à travailler et lire chaque nouvelle réponse quand il a fini son tour. La touche d’arrêt (Réglages → Raccourcis) ou un envoi arrête la voix.",
   "terminal.reader.voice.handsFree": "Mains libres",
   "terminal.reader.voice.handsFreeHint": "Le micro envoie après une pause — avec un signal sonore et un instant pour dire « stop » — et écoute à nouveau une fois la réponse terminée.",
   "terminal.reader.voice.code": "bloc de code",

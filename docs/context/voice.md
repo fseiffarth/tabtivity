@@ -74,6 +74,13 @@ waits in the CLI's queue, so the `done` of the turn already running is not
 its turn's: the end must be of a turn begun after the send, or follow a new
 answer.
 
+The start of a turn is said too (the working row's words, once a turn). Only
+a hook record names a turn (`agentTurnStartedAt`, which tool calls and
+answered approvals do not move), so a tab with no hook record, a popout
+included, stays quiet here: its lamp dims between tool calls and would repeat
+it. One turn can write many answers, a record each; past three, only the last
+is read.
+
 The phone reads the busy row off the live screen (`agentWork`) rather than
 polling the desktop's agent status, whose report may run the CLI for its
 usage panel: the turn is over once the busy row was seen and is gone for

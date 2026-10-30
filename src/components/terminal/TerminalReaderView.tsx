@@ -1161,6 +1161,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The working row's name for the agent, as the phone's says it: the model
    * the session prints, its first word (`Opus is working…`). */
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];
+  const workingLine = workingModel ? t("terminal.reader.workingModel", { model: workingModel }) : t("terminal.reader.working");
   const typeIntoPane = useCallback((keys: string[]) => typePaneKeys(ptyId, keys), [ptyId]);
   /** Esc in the composer, once no status panel or subagent is open: the key
    * the terminal would get — it stops the turn, closes the CLI's own menus —
@@ -1547,7 +1548,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
 
   // Voice (docs/desktop_voice_plan.md step 4): read-aloud speaks the session's
-  // new answer once its turn ends; hands-free (experimental) loops the mic
+  // working row as a turn begins and its new answer once the turn ends; hands-free (experimental) loops the mic
   // around it. Both speak the session's conversation, not an open subagent's.
   const voiceSettings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
@@ -1572,6 +1573,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     turns: sessionTurns,
     turnEnd: agentTurn.endKey,
     working: agentTurn.working,
+    turnStart: agentTurn.startKey,
+    workingLine,
   });
   /** Hands-free: a settled utterance that picks a row of the dialog on screen
    * answers it as a click would. */
@@ -2130,7 +2133,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           ) : !browsed && live.working && (
             <div className="terminal-reader-working" role="status">
               <span className="terminal-reader-working-dots" aria-hidden="true"><i /><i /><i /></span>
-              <span>{workingModel ? t("terminal.reader.workingModel", { model: workingModel }) : t("terminal.reader.working")}</span>
+              <span>{workingLine}</span>
               {(live.working.elapsed || live.working.tokens) && (
                 <small>{[live.working.elapsed, live.working.tokens && t("terminal.reader.workingTokens", { count: live.working.tokens })].filter(Boolean).join(" · ")}</small>
               )}

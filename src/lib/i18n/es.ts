@@ -5280,7 +5280,7 @@ export const dict: Dict = {
   "terminal.reader.voice.reading": "Leyendo la respuesta… después el micrófono vuelve a escuchar.",
   "terminal.reader.voice.waiting": "Esperando al agente… cuando termine, el micrófono vuelve a escuchar.",
   "terminal.reader.voice.readAloud": "Leer en voz alta",
-  "terminal.reader.voice.readAloudHint": "Leer cada respuesta nueva cuando el agente termina su turno. La tecla de parada (Ajustes → Atajos) o un envío detiene la voz.",
+  "terminal.reader.voice.readAloudHint": "Avisar cuando el agente empieza a trabajar y leer cada respuesta nueva cuando termina su turno. La tecla de parada (Ajustes → Atajos) o un envío detiene la voz.",
   "terminal.reader.voice.handsFree": "Manos libres",
   "terminal.reader.voice.handsFreeHint": "El micrófono envía tras una pausa —con un aviso sonoro y un momento para decir «stop»— y vuelve a escuchar cuando termina la respuesta.",
   "terminal.reader.voice.code": "bloque de código",

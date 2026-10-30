@@ -43,6 +43,7 @@ function emit(event: string, payload: unknown) {
   });
 }
 
+const spoken = () => invoke.mock.calls.filter(([command]) => command === "voice_speak");
 const wait = (ms: number) => act(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
 const status: VoiceStatus = {
@@ -187,10 +188,43 @@ describe("hands-free and read-aloud in the Chat", () => {
     entries = [PROMPT, { kind: "answer", text: "Fixed it.\n```ts\nx()\n```\nDone.", at: "2026-09-30T08:01:00Z" }];
     noteAgentTurn("p:agent-1", "done");
     await wait(2600);
-    const speak = invoke.mock.calls.find(([command]) => command === "voice_speak");
+    const speak = spoken().slice(-1)[0];
     expect(speak?.[1]).toEqual(expect.objectContaining({ chunks: ["Fixed it. code block. Done."], replace: false }));
     emit("voice:speaking", { readId: (speak?.[1] as { id: string }).id, state: "started" });
     fireEvent.keyDown(box, { key: "Q", code: "KeyQ", ctrlKey: true, shiftKey: true });
     expect(invoke).toHaveBeenCalledWith("voice_speak_stop");
+  }, 15_000);
+
+  it("says the working row once a turn, not after tool calls or an answered approval", async () => {
+    await open({ voice_read_aloud: true });
+    noteAgentTurn("p:agent-1", "done");
+    await wait(500);
+    noteAgentTurn("p:agent-1", "working");
+    await wait(500);
+    noteAgentTurn("p:agent-1", "working");
+    noteAgentTurn("p:agent-1", "decision");
+    await wait(500);
+    noteAgentTurn("p:agent-1", "working");
+    await wait(500);
+    expect(spoken().map(([, args]) => (args as { chunks: string[] }).chunks)).toEqual([["Agent is working."]]);
+  }, 15_000);
+
+  it("says nothing of a turn already running when it opens", async () => {
+    noteAgentTurn("p:agent-1", "done");
+    noteAgentTurn("p:agent-1", "working");
+    await open({ voice_read_aloud: true });
+    await wait(600);
+    expect(spoken()).toEqual([]);
+  }, 15_000);
+
+  it("reads only the last message of a turn that wrote more than three", async () => {
+    await open({ voice_read_aloud: true });
+    noteAgentTurn("p:agent-1", "working");
+    await wait(500);
+    entries = [PROMPT, ...[1, 2, 3, 4, 5].map((n) => ({ kind: "answer", text: `Step ${n}.`, at: `2026-09-30T08:0${n}:00Z` }))];
+    noteAgentTurn("p:agent-1", "done");
+    await wait(2600);
+    expect(spoken().slice(-1)[0]?.[1]).toEqual(expect.objectContaining({ chunks: ["Step 5."] }));
+    expect(spoken().filter(([, args]) => (args as { chunks: string[] }).chunks[0].startsWith("Step"))).toHaveLength(1);
   }, 15_000);
 });
