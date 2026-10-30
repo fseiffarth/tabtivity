@@ -86,6 +86,8 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} dispose() {} } }
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
+vi.mock("../../crashReporter", () => ({ reportFrontendIssue: vi.fn() }));
+
 let terminalWebgl: boolean | undefined;
 vi.mock("../../stores/settings", () => ({
   useSettingsStore: vi.fn((sel: (s: object) => unknown) =>
@@ -94,7 +96,8 @@ vi.mock("../../stores/settings", () => ({
   resolveTheme: (s: string) => s,
 }));
 
-import { TerminalView, RENDERER_RELEASE_MS } from "../../components/terminal/TerminalView";
+import { TerminalView, RENDERER_RELEASE_MS, WEBGL_LOSS_RETRIES } from "../../components/terminal/TerminalView";
+import { reportFrontendIssue } from "../../crashReporter";
 
 function giveLayout(on: boolean) {
   for (const [prop, value] of [
@@ -220,6 +223,7 @@ describe("TerminalView — renderer hibernation of long-hidden panes", () => {
 describe("TerminalView — renderer choice (WebGL, else xterm's DOM renderer)", () => {
   beforeEach(() => {
     invoke.mockClear();
+    vi.mocked(reportFrontendIssue).mockClear();
     addons.length = 0;
     terminals.length = 0;
     terminalWebgl = true;
@@ -240,18 +244,62 @@ describe("TerminalView — renderer choice (WebGL, else xterm's DOM renderer)", 
     expect(addons).toHaveLength(1);
     expect(live("webgl")).toHaveLength(0);
     expect(terminals[0].disposed).toBe(false);
+    expect(reportFrontendIssue).toHaveBeenCalledWith(
+      "terminal-webgl",
+      "renderer failed to load: Error: no WebGL2 context",
+    );
   });
 
-  it("a lost WebGL context drops the addon and leaves the DOM renderer", async () => {
+  it("a pane in view that loses its context gets a new one, terminal untouched", async () => {
     await mountOpen("p:lost");
     expect(webgl.lose).not.toBeNull();
     await act(async () => {
       webgl.lose?.();
     });
-    expect(live("webgl")).toHaveLength(0);
-    // Nothing reloads in its place, and the terminal (buffer, PTY) is untouched.
-    expect(addons).toHaveLength(1);
+    expect(addons).toHaveLength(2);
+    expect(live("webgl")).toHaveLength(1);
     expect(terminals[0].disposed).toBe(false);
     expect(invoke.mock.calls.some(([cmd]) => cmd === "pty_kill")).toBe(false);
+    expect(reportFrontendIssue).toHaveBeenCalledWith("terminal-webgl", "context lost, 1 in this pane");
+  });
+
+  it("a hidden pane that loses its context spends no new one until it is shown", async () => {
+    const show = await mountOpen("p:lost-hidden");
+    await show(false);
+    await act(async () => {
+      webgl.lose?.();
+    });
+    expect(addons).toHaveLength(1);
+    expect(live("webgl")).toHaveLength(0);
+
+    await show(true);
+    expect(addons).toHaveLength(2);
+    expect(live("webgl")).toHaveLength(1);
+  });
+
+  it("gives up after WEBGL_LOSS_RETRIES, and the flag clears the count", async () => {
+    const show = await mountOpen("p:lost-cap");
+    for (let i = 0; i <= WEBGL_LOSS_RETRIES; i += 1) {
+      await act(async () => {
+        webgl.lose?.();
+      });
+    }
+    expect(addons).toHaveLength(1 + WEBGL_LOSS_RETRIES);
+    expect(live("webgl")).toHaveLength(0);
+    expect(reportFrontendIssue).toHaveBeenLastCalledWith(
+      "terminal-webgl",
+      `context lost, ${WEBGL_LOSS_RETRIES + 1} in this pane; staying on the DOM renderer`,
+    );
+
+    terminalWebgl = false;
+    await show(true);
+    terminalWebgl = true;
+    await show(true);
+    expect(live("webgl")).toHaveLength(1);
+
+    await act(async () => {
+      webgl.lose?.();
+    });
+    expect(live("webgl")).toHaveLength(1);
   });
 });

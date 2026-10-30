@@ -22,6 +22,12 @@ function report(kind: string, message: string, stack?: string): void {
   });
 }
 
+/** A handled failure worth finding later, for what has no devtools to show it
+ *  in: same crash.log, same dedupe and cap. */
+export function reportFrontendIssue(kind: string, message: string): void {
+  report(kind, message);
+}
+
 export function installCrashReporter(): void {
   window.addEventListener("error", (event) => {
     report(
