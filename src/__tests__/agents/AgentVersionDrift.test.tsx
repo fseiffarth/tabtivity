@@ -16,6 +16,8 @@
  *     being silenced forever.
  *  4. **A matching version says nothing.** An agent still on the verified
  *     release gets a chip and no warning.
+ *  5. **An update check outlives the panel.** The backend stores the answer and
+ *     `agent_versions` hands it back, so reopening asks no registry.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -85,6 +87,17 @@ function backend(versions: unknown[]) {
 
 const calls = (cmd: string) => invokeMock.mock.calls.filter(([name]) => name === cmd);
 
+const updateRow = (overrides: Record<string, unknown> = {}) => ({
+  agent: "codex",
+  current: "0.153.4",
+  latest: "0.170.0",
+  updateAvailable: true,
+  checkable: true,
+  error: null,
+  checkedAt: Math.floor(Date.now() / 1000) - 3 * 86_400,
+  ...overrides,
+});
+
 beforeEach(() => {
   invokeMock.mockReset();
   backend([report()]);
@@ -137,6 +150,38 @@ describe("agent CLI version drift", () => {
     expect(await screen.findByText("0.151.0")).toBeTruthy();
     expect(screen.queryByText(new RegExp(String.raw`not the one ${BRAND.display} was verified against`))).toBeNull();
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+
+  it("shows a stored update check on opening, and asks no registry for it", async () => {
+    backend([report({ update: updateRow() })]);
+    const first = panel();
+    await screen.findByRole("button", { name: "Update to 0.170.0" });
+    first.unmount();
+
+    panel();
+    await screen.findByRole("button", { name: "Update to 0.170.0" });
+    expect(screen.getByText("0.170.0").getAttribute("title")).toBe("Checked 3 days ago");
+    expect(calls("check_agent_updates")).toHaveLength(0);
+  });
+
+  it("says when a stored 'up to date' was checked", async () => {
+    backend([report({ update: updateRow({ latest: "0.153.4", updateAvailable: false }) })]);
+    panel();
+    const status = (await screen.findByText("up to date")).closest(".agents-status");
+    expect(status?.getAttribute("title")).toBe("Checked 3 days ago");
+  });
+
+  it("keeps a check's answer when the re-read that follows has none stored", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_agents") return Promise.resolve([agent("codex", "Codex")]);
+      if (cmd === "agent_versions") return Promise.resolve([report()]);
+      if (cmd === "check_agent_updates") return Promise.resolve([updateRow({ checkedAt: undefined })]);
+      return Promise.resolve(null);
+    });
+    panel();
+    await userEvent.click(await screen.findByRole("button", { name: "Check for update" }));
+    await waitFor(() => expect(calls("agent_versions")).toHaveLength(2));
+    await screen.findByRole("button", { name: "Update to 0.170.0" });
   });
 
   it("says a CLI nobody has checked cannot be asked, instead of guessing a flag", async () => {

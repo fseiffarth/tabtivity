@@ -12,7 +12,8 @@ import { cliInstallsByAdmin } from "../../lib/transport/linkState";
 import { runInstallInTab } from "../../lib/installCommand";
 import type { CustomAgent } from "../../types";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
-import { useT } from "../../lib/i18n";
+import { useI18nStore, useT } from "../../lib/i18n";
+import { relativeToNow } from "../../lib/agents/agentSchedule";
 import { noteInstalledAgents, notifyAgentRegistryChanged } from "../../lib/agents/agentRegistry";
 import { loginIdForCmd } from "../../lib/agents/signInLaunch";
 import { useAgentVersionNoticeStore } from "../../stores/agents/agentVersionNotice";
@@ -76,6 +77,7 @@ export function AgentsPanel({
   installedExtras?: (a: AgentInfo) => ReactNode;
 }) {
   const t = useT();
+  const lang = useI18nStore((s) => s.lang);
   // A hosted server: the administrator installs CLIs (#2354).
   const adminInstalls = cliInstallsByAdmin();
   const { settings, updateSettings } = useSettingsStore();
@@ -106,7 +108,8 @@ export function AgentsPanel({
   // Per-agent installed version + drift verdict, keyed by agent id.
   const [versions, setVersions] = useState<Record<string, AgentVersionReport>>({});
   const [checkingVersions, setCheckingVersions] = useState(false);
-  // Newest published release per installed CLI — only after a click.
+  // Newest published release per installed CLI: a click asks, the backend keeps
+  // the answer, and `agent_versions` hands it back to the next panel.
   const [updates, setUpdates] = useState<Record<string, AgentUpdateReport>>({});
   /** The CLIs whose own "Check for update" is in flight. */
   const [checkingUpdates, setCheckingUpdates] = useState<Record<string, true>>({});
@@ -165,6 +168,8 @@ export function AgentsPanel({
     invoke<AgentVersionReport[]>("agent_versions", { refresh: recheck })
       .then((rows) => {
         setVersions(Object.fromEntries(rows.map((row) => [row.agent, row])));
+        const stored = rows.flatMap((row) => (row.update ? [[row.agent, row.update] as const] : []));
+        setUpdates((u) => ({ ...u, ...Object.fromEntries(stored) }));
         useAgentVersionNoticeStore.getState().update(rows);
         // Version-dependent startup options (OpenCode v2 variants) may have
         // become known during this probe, including on a first installation.
@@ -238,8 +243,9 @@ export function AgentsPanel({
   };
 
   // Run the CLI's own installer again, which fetches the newest release (into
-  // Tabtivity's install home, ahead of a host copy on PATH). Same live log as an
-  // install; the card stays in the installed list throughout.
+  // Tabtivity's install home, ahead of a host copy on PATH), or its own update
+  // verb where the installer cannot. Same live log as an install; the card stays
+  // in the installed list throughout.
   const updateAgent = async (id: string) => {
     setInstalling(id);
     setErrors(({ [id]: _drop, ...rest }) => rest);
@@ -378,6 +384,10 @@ export function AgentsPanel({
     // Newest release known but the installed one unreadable: no claim of an
     // update, but the installer can still be run again for it.
     const unreadUpdate = !!(update && !update.updateAvailable && update.latest && !current);
+    // A stored answer can be old; its age is what keeps "up to date" honest.
+    const checkedTitle = update?.checkedAt
+      ? t("agents.updateCheckedAt", { when: relativeToNow(new Date(update.checkedAt * 1000), new Date(), lang) })
+      : undefined;
     const facts = report ? (
       <>
         {current && (
@@ -393,7 +403,9 @@ export function AgentsPanel({
             <span className="agents-version-arrow" aria-hidden="true">
               →
             </span>
-            <span className="agents-version is-new">{update.latest}</span>
+            <span className="agents-version is-new" title={checkedTitle}>
+              {update.latest}
+            </span>
           </>
         )}
         {report.supported && (
@@ -411,7 +423,9 @@ export function AgentsPanel({
           </button>
         )}
         {update && !update.updateAvailable && !update.error && update.latest && current && (
-          <AgentsStatus tone="ok">{t("agents.updatesNone")}</AgentsStatus>
+          <AgentsStatus tone="ok" title={checkedTitle}>
+            {t("agents.updatesNone")}
+          </AgentsStatus>
         )}
         {update?.error && (
           <span className="agents-note" title={update.error}>

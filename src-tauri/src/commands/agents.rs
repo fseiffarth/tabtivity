@@ -1614,12 +1614,14 @@ pub async fn agent_overview(refresh: Option<bool>) -> Vec<crate::services::cli_o
 ///
 /// Only installed agents are probed, at most once a day per unchanged
 /// executable (`PROBE_TTL`), all of them concurrently. `refresh` skips the
-/// cache; that is what the panel's own re-check means.
+/// cache; that is what the panel's own re-check means. Each row carries the
+/// CLI's last stored "Check for update", judged against this answer, so a card
+/// shows it again without a request and a release since installed is not offered.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_versions(
     refresh: Option<bool>,
 ) -> Vec<crate::services::agent_versions::VersionReport> {
-    use crate::services::agent_versions as versions;
+    use crate::services::{agent_latest, agent_versions as versions};
 
     let refresh = refresh.unwrap_or(false);
     let store = versions::load();
@@ -1627,10 +1629,8 @@ pub async fn agent_versions(
         std::collections::HashMap::new();
     let mut probes = Vec::new();
 
-    for spec in AGENTS {
-        let Some(path) = resolve_spec_path(spec) else {
-            continue;
-        };
+    let installed = installed_specs();
+    for (spec, path) in installed.iter().cloned() {
         // Installed, but nobody has checked what it answers: say so rather than
         // guessing a flag at a binary that may open a TUI instead.
         if !versions::is_supported(spec.id) {
@@ -1652,10 +1652,6 @@ pub async fn agent_versions(
                 continue;
             }
         }
-        // `AGENTS` is a const slice in static memory, so the borrow outlives
-        // the spawned task — spelled out because that is what makes it
-        // spawnable rather than a lifetime that happens to work.
-        let spec: &'static AgentSpec = spec;
         probes.push(tokio::spawn(async move {
             let result = probe_agent_version(spec, &path).await;
             (spec, path, result)
@@ -1674,28 +1670,18 @@ pub async fn agent_versions(
     }
 
     // Registry order, so the rows line up with the Manage Agents list.
-    AGENTS
-        .iter()
-        .filter_map(|spec| ready.remove(spec.id))
+    let checks = agent_latest::load();
+    installed
+        .into_iter()
+        .filter_map(|(spec, path)| {
+            let mut report = ready.remove(spec.id)?;
+            report.update = checks.get(spec.id).map(|checked| {
+                let current = agent_latest::current_version(spec.id, &path, report.version.clone());
+                agent_latest::UpdateReport::new(spec.id, current, checked)
+            });
+            Some(report)
+        })
         .collect()
-}
-
-/// One installed CLI against its newest published release
-/// (`services::agent_latest`).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentUpdateReport {
-    agent: String,
-    /// The installed version, when it could be read: the CLI's `--version`
-    /// recipe, else the package metadata beside its executable.
-    current: Option<String>,
-    /// The newest published version.
-    latest: Option<String>,
-    /// Both versions read and `latest` genuinely newer — never `latest` alone.
-    update_available: bool,
-    /// Whether a registry is known for this CLI at all.
-    checkable: bool,
-    error: Option<String>,
 }
 
 /// Ask installed CLIs' registries for their newest release — each Manage CLIs
@@ -1704,10 +1690,11 @@ pub struct AgentUpdateReport {
 /// request per CLI that has a known registry, all at once, each settled on its
 /// own so one registry being down costs only its row. The installed versions
 /// are re-read first, so a CLI that updated itself since the last probe is not
-/// offered the update it already has.
+/// offered the update it already has. Each answer is stored for `agent_versions`
+/// to hand back.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn check_agent_updates(id: Option<String>) -> Vec<AgentUpdateReport> {
-    use crate::services::{agent_latest, agent_versions};
+pub async fn check_agent_updates(id: Option<String>) -> Vec<crate::services::agent_latest::UpdateReport> {
+    use crate::services::agent_latest;
 
     let mut probed: std::collections::HashMap<String, Option<String>> = agent_versions(Some(true))
         .await
@@ -1715,15 +1702,10 @@ pub async fn check_agent_updates(id: Option<String>) -> Vec<AgentUpdateReport> {
         .map(|report| (report.agent, report.version))
         .collect();
     let mut checks = Vec::new();
-    for spec in AGENTS.iter().filter(|spec| id.as_deref().is_none_or(|id| id == spec.id)) {
-        let Some(path) = resolve_spec_path(spec) else {
-            continue;
-        };
+    let installed = installed_specs();
+    for (spec, path) in installed.into_iter().filter(|(spec, _)| id.as_deref().is_none_or(|id| id == spec.id)) {
         let source = agent_latest::source_for(spec.id);
-        let current = probed
-            .remove(spec.id)
-            .flatten()
-            .or_else(|| source.and_then(|source| agent_latest::installed_version_near(&path, source)));
+        let current = agent_latest::current_version(spec.id, &path, probed.remove(spec.id).flatten());
         checks.push(tokio::spawn(async move {
             let latest = match source {
                 Some(source) => Some(agent_latest::fetch_latest(source).await),
@@ -1738,24 +1720,8 @@ pub async fn check_agent_updates(id: Option<String>) -> Vec<AgentUpdateReport> {
         let Ok((agent, current, latest)) = check.await else {
             continue;
         };
-        let (latest, error) = match latest {
-            Some(Ok(version)) => (Some(version), None),
-            Some(Err(error)) => (None, Some(error)),
-            None => (None, None),
-        };
-        let update_available = matches!(
-            (&current, &latest),
-            (Some(current), Some(latest))
-                if agent_versions::version_cmp(latest, current) == std::cmp::Ordering::Greater
-        );
-        reports.push(AgentUpdateReport {
-            agent: agent.to_string(),
-            checkable: agent_latest::source_for(agent).is_some(),
-            current,
-            latest,
-            update_available,
-            error,
-        });
+        let checked = agent_latest::remember(agent, latest);
+        reports.push(agent_latest::UpdateReport::new(agent, current, &checked));
     }
     reports
 }

@@ -567,6 +567,9 @@ pub struct VersionReport {
     pub cached: bool,
     /// Whether the user has already dismissed the notice for this version.
     pub dismissed: bool,
+    /// This CLI's last "Check for update", when it has had one
+    /// (`services::agent_latest`).
+    pub update: Option<crate::services::agent_latest::UpdateReport>,
 }
 
 impl VersionReport {
@@ -587,6 +590,7 @@ impl VersionReport {
             checked_at: 0,
             cached: false,
             dismissed: false,
+            update: None,
         }
     }
 
@@ -609,6 +613,7 @@ impl VersionReport {
             error: seen.error.clone(),
             checked_at: seen.checked_at,
             cached,
+            update: None,
         }
     }
 }
