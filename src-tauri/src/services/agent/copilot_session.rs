@@ -8,7 +8,8 @@
 //! agent home (`services::agent_home`), so that is the only store read — never
 //! the user's own. Read out of the 1.0.102 and 1.0.103 runtimes' event schema
 //! (`schemas/session-events.schema.json`) and checked against live sessions of
-//! both through a BYOK stub model (`docs/third_party_update_checklist.md`).
+//! both, and of 1.0.105, through a BYOK stub model
+//! (`docs/third_party_update_checklist.md`).
 //!
 //! Resume: Copilot takes `--session-id <uuid>` as "create it, or resume it when
 //! it exists", so a tab pins its own conversation by id ([`resolve`]) instead of

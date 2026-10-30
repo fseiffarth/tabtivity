@@ -514,6 +514,40 @@ describe("the desktop Reader's live screen", () => {
     expect(live.status?.branch).toBe("develop");
   });
 
+  it("reads a permission dialog over the rule that names the session", () => {
+    // Claude Code 2.1.314 keeps the session's name on screen during a dialog:
+    // a labelled rule under its footer, with no input box below it.
+    const live = readReaderLive(plainBuffer([
+      "❯ remove the old file",
+      "",
+      "  Removing probe-file",
+      "  ⎿  $ rm -f probe-file",
+      "",
+      "─".repeat(76),
+      " Bash command",
+      " Remove probe-file",
+      "╌".repeat(76),
+      " rm -f probe-file",
+      "╌".repeat(76),
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. Yes, and don't ask again for rm commands in this project",
+      "   3. Yes, and switch to auto mode · auto mode handles these prompts for you",
+      "   4. No",
+      "",
+      " Esc to cancel · Tab to amend",
+      `${"─".repeat(60)} MyProject ─`,
+    ]), "Claude", 76);
+    expect(live.stray).toBe(false);
+    expect(live.question?.title).toBe("Do you want to proceed?");
+    expect(live.question?.options.map((option) => option.label)).toEqual([
+      "Yes",
+      "Yes, and don't ask again for rm commands in this project",
+      "Yes, and switch to auto mode · auto mode handles these prompts for you",
+      "No",
+    ]);
+  });
+
   it("leaves a dialog answered before the last prompt alone", () => {
     const answered = readReaderLive(plainBuffer([
       "Do you want to proceed?", "❯ 1. Yes", "  2. No", "", "> and now the tests", "", "⏺ Running them.", "> ",
