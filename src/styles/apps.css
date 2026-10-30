@@ -759,8 +759,27 @@
   background: var(--control-bg);
   color: var(--text-primary) !important;
   -webkit-text-fill-color: var(--text-primary);
+  font-size: var(--text-md);
+  line-height: 1.3;
   text-align: left;
+  white-space: nowrap;
   cursor: var(--cur-pointer, pointer);
+}
+
+/* A row with an Untested pill lays label and pill out side by side, pill on
+   the right — the same as a tagged .context-menu button. As a plain inline
+   run the pill wrapped under its label in the 150px menu. Project names in
+   the box list may be long, so only those rows wrap. */
+.project-switcher-add-menu button.untested,
+.project-switcher-box-add-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-switcher-box-add-list button {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .project-switcher-add-menu button:hover {
