@@ -10,6 +10,8 @@ pub use agent::{
     assistant_model_probe, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
     model_rows, opencode_models, opencode_session, opencode_store, transcript_watch,
 };
+#[cfg(unix)]
+pub use agent::codex_package;
 pub mod api;
 pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
 pub mod calendar;

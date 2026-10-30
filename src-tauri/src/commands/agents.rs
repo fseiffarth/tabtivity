@@ -415,6 +415,23 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
     }
 }
 
+/// What brings the installed `spec` up to date: its installer again, or, for a
+/// CLI whose installer cannot (`agent_install::self_update_argv`), its own
+/// update verb on the copy every other command resolves to. That copy is not
+/// always in the install home, so the two stay one binary rather than the
+/// installer adding a second, and a host copy gets it too: it cannot update
+/// itself from inside a fence.
+fn update_command(spec: &AgentSpec) -> Result<std::process::Command, String> {
+    let Some(argv) = crate::services::agent_install::self_update_argv(spec.id) else {
+        return installer_command(spec);
+    };
+    let bin = resolve_spec_path(spec).ok_or_else(|| format!("{} is not installed.", spec.label))?;
+    let mut c = crate::paths::command_no_window(&bin);
+    c.args(argv).stdin(std::process::Stdio::null());
+    into_install_home(&mut c)?;
+    Ok(c)
+}
+
 /// Point an installer at Tabtivity's own install home: create it, hand over
 /// its environment and [`agent_install_path`].
 fn into_install_home(c: &mut std::process::Command) -> Result<(), String> {
@@ -464,12 +481,14 @@ pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
     if spec_is_installed(spec) {
         return Ok(format!("{} is already installed.", spec.label));
     }
-    run_installer(ctx.0.clone(), spec)
+    prefetch_release(&ctx.0, spec).await;
+    run_installer(ctx.0.clone(), spec, installer_command)
 }
 
 /// Update an installed agent CLI: its official installer run again, which
 /// fetches the newest release — into Tabtivity's install home, whose launcher
-/// dirs come ahead of any host copy on PATH (`services::agent_install`). Same
+/// dirs come ahead of any host copy on PATH (`services::agent_install`) — or
+/// its own update verb where the installer cannot ([`update_command`]). Same
 /// `agent-install-progress` stream as [`install_agent`].
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
@@ -477,8 +496,29 @@ pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
     if !spec_is_installed(spec) {
         return Err(format!("{} is not installed.", spec.label));
     }
-    run_installer(ctx.0.clone(), spec)
+    prefetch_release(&ctx.0, spec).await;
+    run_installer(ctx.0.clone(), spec, update_command)
 }
+
+/// Get Codex's package down before its installer runs, whose own download gives
+/// up on a slow line (`services::codex_package`). Only a head start: when it
+/// fails, the installer still has its own download.
+#[cfg(unix)]
+async fn prefetch_release(ctx: &CoreCtx, spec: &'static AgentSpec) {
+    if spec.id != "codex" || server_installs_are_the_helpers(spec.id).is_err() {
+        return;
+    }
+    let emit = |line: &str| {
+        ctx.emit("agent-install-progress", serde_json::json!({ "id": spec.id, "line": line }));
+    };
+    let home = crate::services::agent_install::install_root();
+    if let Err(error) = crate::services::codex_package::prefetch(&home, emit).await {
+        emit(&format!("Couldn't fetch the package ({error}); leaving it to the installer."));
+    }
+}
+
+#[cfg(not(unix))]
+async fn prefetch_release(_ctx: &CoreCtx, _spec: &'static AgentSpec) {}
 
 /// On a server (hosted plan §5.1) the CLI install root belongs to the CLI
 /// account, not to any user's daemon — not even the admin's: installs,
@@ -493,9 +533,13 @@ fn server_installs_are_the_helpers(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Run `spec`'s installer, streaming its output; the body of [`install_agent`]
-/// and [`update_agent`].
-fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, String> {
+/// Run `spec`'s installer (or `command`'s stand-in for it), streaming its
+/// output; the body of [`install_agent`] and [`update_agent`].
+fn run_installer(
+    ctx: CoreCtx,
+    spec: &'static AgentSpec,
+    command: fn(&AgentSpec) -> Result<std::process::Command, String>,
+) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
 
     server_installs_are_the_helpers(spec.id)?;
@@ -512,12 +556,21 @@ fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, Strin
     let mut lines: Vec<String> = Vec::new();
     let mut retried_npm_reify = false;
     let status = loop {
-        let mut child = installer_command(spec)?
+        let mut child = command(spec)?
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("failed to launch installer: {e}"))?;
 
+        // An installer's shell line merges this into stdout; a CLI's own update
+        // verb does not, and says why it failed here.
+        let stderr = child.stderr.take().map(|stderr| {
+            let emit = emit.clone();
+            std::thread::spawn(move || {
+                let lines = BufReader::new(stderr).lines().map_while(Result::ok);
+                lines.inspect(|line| emit(line)).collect::<Vec<String>>()
+            })
+        });
         if let Some(stdout) = child.stdout.take() {
             for line in BufReader::new(stdout).lines() {
                 let line = match line {
@@ -527,6 +580,9 @@ fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, Strin
                 emit(&line);
                 lines.push(line);
             }
+        }
+        if let Some(Ok(errors)) = stderr.map(std::thread::JoinHandle::join) {
+            lines.extend(errors);
         }
 
         let status = child
@@ -2042,28 +2098,6 @@ mod tests {
     }
 
     #[test]
-    fn windows_shell_flags_powershell_only_commands() {
-        // `irm … | iex` is PowerShell syntax.
-        assert_eq!(
-            windows_shell("irm https://claude.ai/install.ps1 | iex"),
-            "PowerShell"
-        );
-        // npm/python installs run in either shell.
-        assert_eq!(
-            windows_shell("npm install -g @google/gemini-cli"),
-            "PowerShell or Command Prompt"
-        );
-    }
-
-    #[test]
-    fn claude_has_a_powershell_windows_installer() {
-        let claude = find_spec("claude").expect("claude in registry");
-        let win = claude
-            .install_cmd_windows
-            .expect("claude has a Windows installer");
-        assert!(
-            win.contains("irm"),
-    #[test]
     fn installed_specs_answers_as_the_single_resolver_does() {
         let installed = installed_specs();
         for spec in AGENTS {
@@ -2086,6 +2120,28 @@ mod tests {
         assert_eq!(spec_path_in_homes(other, &homes, &|p| lookup.exists(p)), None);
     }
 
+    #[test]
+    fn windows_shell_flags_powershell_only_commands() {
+        // `irm … | iex` is PowerShell syntax.
+        assert_eq!(
+            windows_shell("irm https://claude.ai/install.ps1 | iex"),
+            "PowerShell"
+        );
+        // npm/python installs run in either shell.
+        assert_eq!(
+            windows_shell("npm install -g @google/gemini-cli"),
+            "PowerShell or Command Prompt"
+        );
+    }
+
+    #[test]
+    fn claude_has_a_powershell_windows_installer() {
+        let claude = find_spec("claude").expect("claude in registry");
+        let win = claude
+            .install_cmd_windows
+            .expect("claude has a Windows installer");
+        assert!(
+            win.contains("irm"),
             "expected the PowerShell `irm` installer"
         );
         assert!(

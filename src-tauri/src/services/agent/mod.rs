@@ -57,6 +57,10 @@ pub mod agent_versions;
 // (docs/cli_overview_plan.md).
 pub mod cli_overview;
 pub mod codex_bind;
+// Codex's release package, fetched ahead of its installer with no deadline and
+// a resumable `.part`; the installer's own download has neither.
+#[cfg(unix)]
+pub mod codex_package;
 // Codex's own SQLite thread store (`~/.codex/state_<n>.sqlite`), read
 // read-only for the model a Codex tab is running now that its releases
 // no longer write the JSONL rollout the model tag used to come from.
