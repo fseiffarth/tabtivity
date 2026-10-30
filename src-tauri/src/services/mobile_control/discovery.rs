@@ -1718,10 +1718,11 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
 }
 
 /// Every local folder a drop box (inbox, outbox) may sit in: each project's
-/// phone folder ([`mobile_root`]), each box folder and root's work folder —
-/// whatever their Mobile switch says, since an agent fills the outbox with
-/// the phone off too. What `drop_sweep` walks; an unreadable registry lists
-/// nothing of its own. `root_dir` is `paths::root_work_dir()`.
+/// phone folder ([`mobile_root`]), each box folder, root's work folder and
+/// each Tabby chat's own ([`chat_folders`]) — whatever their Mobile switch
+/// says, since an agent fills the outbox with the phone off too. What
+/// `drop_sweep` walks; an unreadable registry lists nothing of its own.
+/// `root_dir` is `paths::root_work_dir()`.
 pub(super) fn drop_box_roots(state_dir: &Path, root_dir: &Path) -> Vec<PathBuf> {
     fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Vec<T> {
         fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
@@ -1736,9 +1737,30 @@ pub(super) fn drop_box_roots(state_dir: &Path, root_dir: &Path) -> Vec<PathBuf> 
             .filter_map(|p| mobile_root(state_dir, p)),
     );
     roots.extend(boxes.iter().filter_map(|b| b.folder.as_deref()).map(PathBuf::from));
+    roots.extend(chat_folders(state_dir));
     let mut seen = std::collections::HashSet::new();
     roots.retain(|root| seen.insert(root.clone()));
     roots
+}
+
+/// Every Tabby chat's folder on disk, where the files sent to it land
+/// (`host::drop_box`, `commands::terminal::pty_drop_files`). Read off the disk,
+/// not the session file: a chat that was replaced leaves its folder behind.
+/// A link in place of `work` or of a chat is not one.
+fn chat_folders(state_dir: &Path) -> Vec<PathBuf> {
+    let work = crate::services::assistant::work_root(state_dir);
+    if fs::symlink_metadata(&work).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(&work) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_str().is_some_and(crate::services::agent_session::is_uuid_shaped))
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect()
 }
 
 /// Whether a scope's per-phone list (`None`: every phone) names `device_id`.
