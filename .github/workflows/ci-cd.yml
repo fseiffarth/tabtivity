@@ -32,6 +32,14 @@ env:
   # illegal instruction on a user's older one. whisper-rs-sys hands GGML_* to
   # cmake. OFF builds for AVX2/FMA (docs/desktop_voice_plan.md, step 0).
   GGML_NATIVE: "OFF"
+  # The bundles' speech GPU backend (docs/voice_gpu_plan.md). LunarG's SDK, not
+  # the runner's packages: Ubuntu 24.04's glslc and headers are older than what
+  # whisper.cpp's Vulkan shaders were measured with. Windows has no other source.
+  # The SDK is 1.4.363 plus a final `.0`, spelled at each use: the privacy check reads a
+  # four-part number as an IP address.
+  VULKAN_SDK_RELEASE: "1.4.363"
+  VULKAN_SDK_SHA256_LINUX: "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43"
+  VULKAN_SDK_SHA256_WINDOWS: "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141"
 
 # Every job's timeout-minutes is about one and a half to two times its longest
 # green run (2026-10), so a hung test fails the job instead of holding the
@@ -542,8 +550,24 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --ignore-scripts
 
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $installer = "$env:RUNNER_TEMP\vulkansdk.exe"
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_RELEASE.0/windows/vulkansdk-windows-X64-$env:VULKAN_SDK_RELEASE.0.exe" -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $env:VULKAN_SDK_SHA256_WINDOWS) { throw "Vulkan SDK checksum mismatch" }
+          $root = "C:\VulkanSDK\$env:VULKAN_SDK_RELEASE.0"
+          $install = Start-Process $installer -ArgumentList "--root `"$root`" --accept-licenses --default-answer --confirm-command install" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Vulkan SDK install failed" }
+          # The loader ships with the app: ggml reaches for it on any use of
+          # whisper, even on the CPU, and a PC without a GPU driver has none.
+          Copy-Item "$root\Bin\vulkan-1.dll" src-tauri\vulkan-1.dll
+          "VULKAN_SDK=$root" >> $env:GITHUB_ENV
+          "$root\Bin" >> $env:GITHUB_PATH
+
       - name: Build release bundles
-        run: npm run tauri:build -- --bundles nsis
+        run: npm run tauri:build -- --bundles nsis --features voice-vulkan --config "$env:GITHUB_WORKSPACE\src-tauri\tauri.vulkan-loader.conf.json"
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -589,7 +613,17 @@ jobs:
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             librsvg2-dev \
+            libvulkan-dev \
             patchelf
+
+      - name: Install the Vulkan SDK
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/vulkansdk.tar.xz" "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_RELEASE.0/linux/vulkansdk-linux-x86_64-$VULKAN_SDK_RELEASE.0.tar.xz"
+          echo "$VULKAN_SDK_SHA256_LINUX  $RUNNER_TEMP/vulkansdk.tar.xz" | sha256sum -c
+          mkdir -p "$RUNNER_TEMP/vulkan"
+          tar -xJf "$RUNNER_TEMP/vulkansdk.tar.xz" -C "$RUNNER_TEMP/vulkan"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vulkan/$VULKAN_SDK_RELEASE.0/x86_64" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/vulkan/$VULKAN_SDK_RELEASE.0/x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -616,7 +650,7 @@ jobs:
           # linuxdeploy/appimagetool cannot FUSE-mount themselves. Extracting
           # instead is the supported workaround and is a no-op elsewhere.
           APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: npm run tauri:bundle
+        run: npm run tauri:bundle -- --features voice-vulkan
 
       - name: Upload AppImage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -725,7 +759,7 @@ jobs:
         # and set APPLE_SIGNING_IDENTITY + APPLE_ID + APPLE_PASSWORD +
         # APPLE_TEAM_ID (or APPLE_API_KEY_ID/APPLE_API_ISSUER/APPLE_API_KEY_PATH)
         # from repo secrets here before running the build.
-        run: npm run tauri:build -- --bundles dmg --target universal-apple-darwin
+        run: npm run tauri:build -- --bundles dmg --target universal-apple-darwin --features voice-metal
 
       - name: Rename universal DMG
         run: |
