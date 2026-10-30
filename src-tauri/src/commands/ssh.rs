@@ -302,17 +302,12 @@ fn web_url_to_open(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 
-/// Run a built command, returning stdout on success or the trimmed stderr (or a
-/// generic message) on failure. `what` names the binary for error messages.
-fn capture(cmd: Command, what: &str) -> Result<String, String> {
-    capture_raw(cmd, what).map_err(|(explained, _)| explained)
-}
-
-/// [`capture`] keeping ssh's raw stderr alongside the explained message, for the
-/// one caller that must tell a *local* failure (a wrong key passphrase) from a
-/// server-side one before deciding whether to try another auth method — see
-/// [`run_ssh_auth`]. The explained form is deliberately lossy, so the choice
-/// cannot be made from it.
+/// Run a built command, returning stdout on success or `(explained, raw stderr)`
+/// on failure (a generic message and no stderr when it printed nothing). `what`
+/// names the binary for error messages. The explained form is deliberately lossy,
+/// so a caller that decides on what ssh said (a wrong key passphrase vs a
+/// server-side failure in [`run_ssh_auth`], a dead network in [`probe_verdict`])
+/// reads the raw half.
 fn capture_raw(mut cmd: Command, what: &str) -> Result<String, (String, String)> {
     let output = cmd
         .output()
@@ -346,20 +341,21 @@ fn askpass_refusal_raw(
     kind: crate::services::ssh_common::SecretKind,
     askpass: &crate::services::ssh_common::Askpass,
     result: Result<String, (String, String)>,
-) -> Result<String, (String, bool)> {
+) -> Result<String, (String, String, bool)> {
     let Err((explained, raw)) = result else {
-        return result.map_err(|(e, _)| (e, false));
+        return result.map_err(|(e, r)| (e, r, false));
     };
     // Both reads must happen before the guard drops (it deletes its files).
     if crate::services::ssh_common::secret_rejected_locally(kind, Some(askpass), &raw) {
-        return Err((crate::services::ssh_common::wrong_passphrase_error(), true));
+        return Err((crate::services::ssh_common::wrong_passphrase_error(), raw, true));
     }
     match askpass.refused_prompt() {
         Some(prompt) => Err((
             crate::services::ssh_common::unexpected_prompt_error(&prompt),
+            raw,
             false,
         )),
-        None => Err((explained, false)),
+        None => Err((explained, raw, false)),
     }
 }
 
@@ -383,44 +379,60 @@ pub(crate) fn run_ssh_auth(
     password: Option<&str>,
     remote: &[&str],
 ) -> Result<String, String> {
+    run_ssh_auth_raw(user, host, port, password, remote).map_err(|(explained, _)| explained)
+}
+
+/// [`run_ssh_auth`] keeping ssh's raw stderr alongside the explained message, for
+/// the caller that must classify a failure ([`ssh_probe`]). The explained form is
+/// written for a person and says "No route to the host", so a classifier reading
+/// it matches nothing; the raw half is empty when ssh never ran.
+fn run_ssh_auth_raw(
+    user: &Option<String>,
+    host: &str,
+    port: Option<u16>,
+    password: Option<&str>,
+    remote: &[&str],
+) -> Result<String, (String, String)> {
     use crate::services::ssh_common::SecretKind;
 
+    let never_ran = |e: String| (e, String::new());
     let Some(pw) = password.filter(|p| !p.is_empty()) else {
-        let base = ssh_base_args(user, host, port)?;
+        let base = ssh_base_args(user, host, port).map_err(never_ran)?;
         let mut cmd = crate::paths::command_no_window("ssh");
         cmd.args(&base);
         cmd.args(remote);
-        return capture(cmd, "ssh").map_err(|err| {
+        return capture_raw(cmd, "ssh").map_err(|(err, raw)| {
             // `BatchMode=yes` never asks for an encrypted key's passphrase, so a
             // locked key surfaces as a bare "Permission denied (publickey)" with
             // nothing pointing at the actual cause. Name it.
-            match crate::services::ssh_common::locked_key_hint(user, host, port) {
+            let err = match crate::services::ssh_common::locked_key_hint(user, host, port) {
                 Some(hint) => format!("{err}\n\n{hint}"),
                 None => err,
-            }
+            };
+            (err, raw)
         });
     };
 
     let kinds = crate::services::ssh_common::secret_attempt_order(user, host, port);
     let last = kinds.len() - 1;
-    let mut error = String::new();
+    let mut error = (String::new(), String::new());
     for (i, kind) in kinds.iter().copied().enumerate() {
         if kind == SecretKind::Password {
             // Never hand a password to a host whose key has not been vetted — the
             // one thing `accept-new` does not cover (see `guard_first_contact`).
             // A passphrase needs no such gate: it never leaves this machine.
-            crate::services::ssh_common::guard_first_contact(host, port)?;
+            crate::services::ssh_common::guard_first_contact(host, port).map_err(never_ran)?;
         }
-        let base = match kind {
-            SecretKind::Password => ssh_password_base_args(user, host, port)?,
-            SecretKind::KeyPassphrase => {
-                crate::services::ssh_common::ssh_passphrase_base_args(user, host, port)?
-            }
-        };
+        let base = if kind == SecretKind::Password {
+            ssh_password_base_args(user, host, port)
+        } else {
+            crate::services::ssh_common::ssh_passphrase_base_args(user, host, port)
+        }
+        .map_err(never_ran)?;
         match run_one_secret_attempt(kind, pw, &base, remote) {
             Ok(out) => return Ok(out),
-            Err((explained, rejected_locally)) => {
-                error = explained;
+            Err((explained, raw, rejected_locally)) => {
+                error = (explained, raw);
                 // Definitively a wrong passphrase: retrying it as a login password
                 // would disclose a local secret to the host.
                 if rejected_locally || i == last {
@@ -434,7 +446,7 @@ pub(crate) fn run_ssh_auth(
 
 /// One authentication attempt for [`run_ssh_auth`]: build `ssh` (or `sshpass`)
 /// with the askpass shim for `kind` attached, run it, and return stdout or
-/// `(explained, raw stderr)`.
+/// `(explained, raw stderr, rejected locally)`.
 ///
 /// The askpass guard must outlive the ssh run — the shim is invoked *during*
 /// authentication — so it stays in scope until `capture_raw` returns, and its
@@ -444,8 +456,8 @@ fn run_one_secret_attempt(
     secret: &str,
     base: &[String],
     remote: &[&str],
-) -> Result<String, (String, bool)> {
-    let build_err = |e: String| (e, false);
+) -> Result<String, (String, String, bool)> {
+    let build_err = |e: String| (e, String::new(), false);
 
     #[cfg(unix)]
     {
@@ -492,7 +504,7 @@ fn run_one_secret_attempt(
             cmd.arg("ssh");
             cmd.args(base);
             cmd.args(remote);
-            capture_raw(cmd, "sshpass").map_err(|(e, _)| (e, false))
+            capture_raw(cmd, "sshpass").map_err(|(e, raw)| (e, raw, false))
         } else {
             Err(build_err(
                 "password auth needs OpenSSH 8.4+ or sshpass — update OpenSSH, \
@@ -679,6 +691,9 @@ pub struct SshProbe {
 /// connects — or a network that is down outright after a wake) is unreachable too:
 /// no credential was judged, so a re-try replays nothing. Any text that got as far
 /// as authentication is a "no", whatever else it says.
+///
+/// `err` is ssh's **raw** stderr: the markers are OpenSSH's own words, which
+/// `explain_ssh_error` rewrites (see [`probe_verdict`]).
 fn ssh_unreachable(err: &str) -> bool {
     const MARKERS: [&str; 11] = [
         "Connection timed out",
@@ -699,6 +714,27 @@ fn ssh_unreachable(err: &str) -> bool {
         && MARKERS
             .iter()
             .any(|m| err.contains(&m.to_ascii_lowercase()))
+}
+
+/// The probe's answer from one authenticated run: the explained message is what
+/// the user reads, the raw stderr is what gets classified.
+///
+/// The two must not swap. Classifying the explained text made every real network
+/// failure (timed out, no route, no DNS) read as "the host said no", so a dropped
+/// host was never re-tried and only a tunnel coming up could recover it.
+fn probe_verdict(result: Result<String, (String, String)>) -> SshProbe {
+    match result {
+        Ok(_) => SshProbe {
+            ok: true,
+            unreachable: false,
+            error: String::new(),
+        },
+        Err((explained, raw)) => SshProbe {
+            ok: false,
+            unreachable: ssh_unreachable(&raw),
+            error: explained,
+        },
+    }
 }
 
 /// Silently probe whether this host is reachable *and* authenticates right now,
@@ -728,18 +764,7 @@ pub async fn ssh_probe(
         use crate::services::remote_credentials as creds;
         let _dial = crate::services::ssh_common::declared_dial(background, &user, &host, port);
         let saved = creds::get(&creds::ssh_account(&user, &host, port));
-        match run_ssh_auth(&user, &host, port, saved.as_deref(), &["true"]) {
-            Ok(_) => SshProbe {
-                ok: true,
-                unreachable: false,
-                error: String::new(),
-            },
-            Err(e) => SshProbe {
-                ok: false,
-                unreachable: ssh_unreachable(&e),
-                error: e,
-            },
-        }
+        probe_verdict(run_ssh_auth_raw(&user, &host, port, saved.as_deref(), &["true"]))
     })
     .await
     .unwrap_or_else(|e| SshProbe {
@@ -1054,6 +1079,40 @@ mod tests {
         ] {
             assert!(!ssh_unreachable(err), "should not be unreachable: {err}");
         }
+    }
+
+    /// The failures a dropped network really produces, through the same two steps
+    /// `ssh_probe` takes: `capture_raw` explains them, `probe_verdict` classifies.
+    #[cfg(unix)]
+    #[test]
+    fn probe_classifies_a_network_failure_from_what_ssh_said() {
+        for stderr in [
+            "ssh: connect to host build.example port 22: Connection timed out",
+            "ssh: connect to host build.example port 22: No route to host",
+            "ssh: connect to host build.example port 22: Network is unreachable",
+            "ssh: Could not resolve hostname build.example: Name or service not known",
+            "ssh: Could not resolve hostname build.example: Temporary failure in name resolution",
+        ] {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "printf '%s\n' \"$1\" >&2; exit 255", "sh", stderr]);
+            let probe = probe_verdict(capture_raw(cmd, "ssh"));
+            assert!(!probe.ok, "{stderr}");
+            assert!(probe.unreachable, "should be unreachable: {stderr}");
+            // The user still reads the explanation, not OpenSSH's line.
+            assert_ne!(probe.error, stderr);
+        }
+    }
+
+    /// The explained wording is free to change: nothing reads it to decide.
+    #[test]
+    fn probe_keeps_a_rejection_a_rejection() {
+        let raw = "alice@build.example: Permission denied (publickey,password).";
+        let probe = probe_verdict(Err(("explained".to_string(), raw.to_string())));
+        assert!(!probe.ok && !probe.unreachable);
+        assert_eq!(probe.error, "explained");
+        // A failure ssh never ran for has no stderr to call a network failure.
+        let probe = probe_verdict(Err(("failed to run ssh".to_string(), String::new())));
+        assert!(!probe.unreachable);
     }
 
     #[test]

@@ -130,6 +130,15 @@ machines window's **Reconnect all** (`reconnectAllHosts`) is the click for
 whatever is left: every host not connected, no opt-in needed, never a prompt,
 the errors named under the button.
 
+Everything above leans on `SshProbe.unreachable`, and until 2026-10-30 that flag
+was false for the failures it exists for. `ssh_probe` classified the message
+`explain_ssh_error` had already rewritten for a person ("No route to the host…"),
+which holds none of OpenSSH's phrases, so a timeout, a missing route or a failed
+DNS lookup read as "the host said no": no re-try, and a project recovered only
+through a tunnel coming up, which is why reconnecting seemed to need the VPN even
+on the network that doesn't. The classifier reads ssh's raw stderr now
+(`run_ssh_auth_raw`, `probe_verdict`), and the explained text stays for display.
+
 Finally, none of this is the only line of defence: the backend refuses a
 background dial to a tagged host inside the ssh-argv builders themselves
 (`docs/context/hpc_careful_mode.md`, "The dial policy"). The frontend gates decide
