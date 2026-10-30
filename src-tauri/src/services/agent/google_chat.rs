@@ -223,7 +223,7 @@ fn agy_store(home: &Path) -> Option<AgyStore> {
 
 /// The main conversations Antigravity ran in `directory`, newest first.
 fn agy_folder(store: &AgyStore, directory: &str) -> Option<Vec<String>> {
-    let canonical = std::fs::canonicalize(directory).ok();
+    let canonical = std::fs::canonicalize(directory).ok().map(crate::paths::without_verbatim_prefix);
     let mut query = store.summaries.prepare("SELECT conversation_id, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = '' ORDER BY last_modified_time DESC LIMIT 512").ok()?;
     let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).ok()?;
     let mut ids = Vec::new();
