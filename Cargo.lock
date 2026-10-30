@@ -6662,6 +6662,7 @@ dependencies = [
  "webkit2gtk",
  "webview2-com",
  "whisper-rs",
+ "whisper-rs-sys",
  "windows 0.62.2",
  "xcb",
  "zbus 4.4.0",

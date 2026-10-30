@@ -50,7 +50,8 @@
         "depends": [
           "libwebkit2gtk-4.1-0",
           "libgtk-3-0",
-          "libasound2"
+          "libasound2",
+          "libvulkan1"
         ],
         "recommends": [
           "bubblewrap",
