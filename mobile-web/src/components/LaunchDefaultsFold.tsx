@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { agentComposerKey, agentModelsFor } from "../../../src/lib/agents/agentPrefaces";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ApiError, getLaunchDefaults, saveLaunchDefaults, type LaunchDefaults } from "../api";
@@ -35,6 +36,7 @@ export function LaunchDefaultsFold({ tabId }: { tabId: string }) {
   const cap = loaded?.capabilities;
   if (!loaded || !cap || (!cap.model && cap.efforts.length === 0)) return null;
   const { saved } = loaded;
+  const known = loaded.cli ? agentModelsFor(loaded.cli, loaded.models ? { [agentComposerKey(loaded.cli)]: loaded.models } : undefined) : [];
   const changed = model.trim() !== saved.model || effort !== saved.effort;
   const save = async (next: { model: string; effort: string }) => {
     setSaving(true);
@@ -56,6 +58,10 @@ export function LaunchDefaultsFold({ tabId }: { tabId: string }) {
     <summary>{t("terminal.reader.defaultsTitle", { value })}{isUntested("mobile.model.launchDefaults") && <span className="untested">{t("mobile.focus.untested")}</span>}</summary>
     <p className="sheet-note">{t("terminal.reader.defaultsNote")}</p>
     {cap.model && <label>{t("agents.defaultModel")}<input value={model} maxLength={256} placeholder={t("agents.defaultsCli")} spellCheck={false} autoCapitalize="none" autoCorrect="off" disabled={saving} onChange={(event) => setModel(event.target.value)} /></label>}
+    {cap.model && known.length > 0 && <select aria-label={t("agents.defaultsKnownModels")} value={known.includes(model) ? model : ""} disabled={saving} onChange={(event) => setModel(event.target.value)}>
+      <option value="" disabled>{t("agents.defaultsKnownModels")}</option>
+      {known.map((name) => <option key={name} value={name}>{name}</option>)}
+    </select>}
     {cap.efforts.length > 0 && <label>{t("agents.defaultEffort")}<select value={effort} disabled={saving} onChange={(event) => setEffort(event.target.value)}>
       <option value="">{t("agents.defaultsCli")}</option>
       {cap.efforts.map((level) => <option key={level} value={level}>{level}</option>)}

@@ -5327,8 +5327,9 @@ fn launch_defaults_cli(
 }
 
 /// `GET /api/v1/tabs/{id}/launch-defaults` — `{ saved: { model, effort },
-/// capabilities }`: the model and effort new sessions of the tab's CLI start
-/// on (Manage CLIs → Default model and effort) and what that CLI can take.
+/// capabilities, cli, models }`: the model and effort new sessions of the
+/// tab's CLI start on (Manage CLIs → Default model and effort), what that CLI
+/// can take, its command and the user's own model-name list (`null` when none).
 async fn launch_defaults(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5349,6 +5350,10 @@ async fn launch_defaults(
         Json(json!({
             "saved": crate::services::agent_defaults::saved_in(&settings, &cli),
             "capabilities": crate::services::agent_defaults::capabilities(&cli),
+            "cli": cli,
+            // The user's own list from Settings → Agents, when they set one
+            // for this CLI; the built-in names live in the phone's bundle.
+            "models": settings.agent_models.as_ref().and_then(|all| all.get(&cli.to_lowercase())),
         })),
     )
 }

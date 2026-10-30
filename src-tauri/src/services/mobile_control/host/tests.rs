@@ -836,6 +836,12 @@ async fn launch_defaults_are_the_tabs_cli_and_keep_every_other_setting() {
     let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
     assert_eq!(status, StatusCode::OK, "answered: {body}");
     assert_eq!(json(&body)["saved"], json!({ "model": "", "effort": "" }));
+    assert_eq!(json(&body)["cli"], "claude");
+    assert!(json(&body)["models"].is_null(), "{body}");
+    seeded["agent_models"] = json!({ "claude": ["opus", "haiku"], "codex": ["gpt"] });
+    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
+    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
+    assert_eq!(json(&body)["models"], json!(["opus", "haiku"]));
     assert_eq!(json(&body)["capabilities"]["model"], true);
     assert!(json(&body)["capabilities"]["efforts"].as_array().expect("efforts").contains(&json!("high")));
 

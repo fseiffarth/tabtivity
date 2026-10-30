@@ -52,6 +52,27 @@ describe("Mobile model sheet — launch defaults", () => {
     expect(puts).toEqual([{ model: "sonnet", effort: "max" }, { model: "", effort: "" }]);
   });
 
+  it("offers the CLI's known model names, the user's own list first", async () => {
+    hostAnswering({ ...CLAUDE, saved: { model: "", effort: "" }, cli: "claude", models: null });
+    render(<LaunchDefaultsFold tabId="t1" />);
+    fireEvent.click(await screen.findByText("Default for new tabs: CLI default"));
+    const names = (box: HTMLElement) => [...box.querySelectorAll("option")].map((option) => option.value).filter(Boolean);
+    const picker = screen.getByRole<HTMLSelectElement>("combobox", { name: "Saved model names" });
+    expect(names(picker)).toEqual(["opus", "sonnet", "haiku", "fable"]);
+    fireEvent.change(picker, { target: { value: "haiku" } });
+    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Default model" }).value).toBe("haiku");
+    cleanup();
+    hostAnswering({ ...CLAUDE, cli: "claude", models: ["sonnet"] });
+    render(<LaunchDefaultsFold tabId="t1" />);
+    fireEvent.click(await screen.findByText("Default for new tabs: opus · high"));
+    expect(names(screen.getByRole("combobox", { name: "Saved model names" }))).toEqual(["sonnet"]);
+    cleanup();
+    hostAnswering({ ...CLAUDE, cli: "codex", models: null });
+    render(<LaunchDefaultsFold tabId="t1" />);
+    fireEvent.click(await screen.findByText("Default for new tabs: opus · high"));
+    expect(screen.queryByRole("combobox", { name: "Saved model names" })).toBeNull();
+  });
+
   it("names a refusal and keeps the draft", async () => {
     hostAnswering({ ...CLAUDE, saved: { model: "", effort: "" } }, { status: 400, error: "invalid_model" });
     render(<LaunchDefaultsFold tabId="t1" />);

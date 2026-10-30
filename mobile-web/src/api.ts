@@ -762,6 +762,10 @@ export function rememberModelRows(tabId: string, rows: ModelRows): Promise<{ kep
 export interface LaunchDefaults {
   saved: { model: string; effort: string };
   capabilities: { model: boolean; efforts: string[]; effort_requires_model: boolean };
+  /** The tab's CLI command and the user's own model names for it (Settings →
+   * Agents); absent from a host build older than the dropdown. */
+  cli?: string;
+  models?: string[] | null;
 }
 
 /** `GET /api/v1/tabs/{id}/launch-defaults` — the model and effort new sessions
