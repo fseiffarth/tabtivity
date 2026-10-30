@@ -4452,7 +4452,8 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
 
     let socket = host.state.config.control_dir.join("desktop-control.sock");
     let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
-    let resolved: Arc<Mutex<Vec<(SyncOp, Vec<String>)>>> = Arc::default();
+    type Resolved = Vec<(SyncOp, Vec<String>)>;
+    let resolved: Arc<Mutex<Resolved>> = Arc::default();
     let seen = resolved.clone();
     let desktop = tokio::spawn(async move {
         loop {
