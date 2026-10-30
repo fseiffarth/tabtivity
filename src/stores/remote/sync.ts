@@ -593,7 +593,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
           const why = pushFailure(result);
           if (why) fail(rel, why);
           // Unforced, a host copy that moved blocks the file: nothing went.
-          else if (result?.conflicts.length) fail(rel, "changed on the host");
+          else if (result?.conflicts?.length) fail(rel, "changed on the host");
         }
       } catch (e) {
         fail(rel, e);
