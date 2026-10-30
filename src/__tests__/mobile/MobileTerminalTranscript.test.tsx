@@ -355,14 +355,14 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     // message as the agent wrote it; there is no copy-everything button over
     // the chat, and none on the bubbles either.
     expect(screen.queryByRole("button", { name: "Copy the session text" })).toBeNull();
-    fireEvent.contextMenu(answers[1] as HTMLElement);
+    fireEvent.click(answers[1] as HTMLElement);
     const sheet = () => within(screen.getByRole("dialog", { name: "Message" }));
     fireEvent.click(sheet().getByRole("button", { name: "Copy message" }));
     await settle();
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("Done: the **✕** empties the draft. See [the docs](https://example.com).");
     sheet().getByText("Copied");
     fireEvent.click(sheet().getByRole("button", { name: "Close" }));
-    fireEvent.contextMenu(prompt);
+    fireEvent.click(prompt);
     fireEvent.click(sheet().getByRole("button", { name: "Copy message" }));
     await settle();
     expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith("add a clear button");
@@ -450,54 +450,62 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(card.querySelector(".asked-none")?.textContent).toBe("Not answered");
   });
 
-  it("opens a message's menu on a click-hold, and leaves a flick of the chat alone", async () => {
+  it("opens a message's menu on a tap, and leaves a flick of the chat alone", async () => {
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
     const prompt = within(screen.getByTestId("session-transcript")).getByRole("group", { name: "Your prompt" });
 
-    // A finger that wanders is scrolling the chat, and the hold is off.
-    fireEvent.pointerDown(prompt, { button: 0, pointerId: 1, clientX: 40, clientY: 200 });
-    fireEvent.pointerMove(prompt, { button: 0, pointerId: 1, clientX: 44, clientY: 130 });
-    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 500)); });
+    // A finger that wanders is scrolling the chat (or dragging a selection).
+    fireEvent.pointerDown(prompt, { button: 0, pointerId: 1, pointerType: "touch", clientX: 40, clientY: 200 });
+    fireEvent.click(prompt, { clientX: 44, clientY: 130 });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // A touch's long-press is the phone's own selection, never the menu.
+    fireEvent.pointerDown(prompt, { button: 0, pointerId: 1, pointerType: "touch", clientX: 40, clientY: 200 });
+    expect(fireEvent.contextMenu(prompt)).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
 
     // A finger that stays opens the menu for that bubble.
-    fireEvent.pointerDown(prompt, { button: 0, pointerId: 1, clientX: 40, clientY: 200 });
-    fireEvent.pointerMove(prompt, { button: 0, pointerId: 1, clientX: 42, clientY: 203 });
-    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 500)); });
+    fireEvent.pointerDown(prompt, { button: 0, pointerId: 1, pointerType: "touch", clientX: 40, clientY: 200 });
+    fireEvent.click(prompt, { clientX: 42, clientY: 203 });
     const sheet = within(screen.getByRole("dialog", { name: "Message" }));
     sheet.getByText("add a clear button");
     sheet.getByRole("button", { name: "Copy message" });
+    expect(sheet.queryByRole("button", { name: /^Select text/ })).toBeNull();
+    fireEvent.click(sheet.getByRole("button", { name: "Close" }));
+
+    // A mouse's right-click asks for it too.
+    fireEvent.pointerDown(prompt, { button: 2, pointerId: 2, pointerType: "mouse", clientX: 40, clientY: 200 });
+    expect(fireEvent.contextMenu(prompt)).toBe(false);
+    screen.getByRole("dialog", { name: "Message" });
   });
 
-  it("lets a message's text be selected in part and copies only what is marked", async () => {
+  it("lets a message's text be selected in place, and a tap that clears the selection opens nothing", async () => {
     localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("fetch", sidecarFetch(() => STORED));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
 
-    const answers = screen.getByTestId("session-transcript").querySelectorAll(".readable-turn.agent.answer");
-    fireEvent.contextMenu(answers[1] as HTMLElement);
-    const sheet = () => within(screen.getByRole("dialog", { name: "Message" }));
-    fireEvent.click(sheet().getByRole("button", { name: /^Select text/ }));
-    const text = screen.getByTestId("message-select-text");
-    expect(text.textContent).toBe("Done: the **✕** empties the draft. See [the docs](https://example.com).");
-    // Nothing marked yet: Copy still takes the whole message.
-    sheet().getByRole("button", { name: "Copy message" });
-
+    const answer = screen.getByTestId("session-transcript").querySelectorAll(".readable-turn.agent.answer")[1] as HTMLElement;
+    const words = answer.querySelector("p")?.firstChild as Text;
     const range = document.createRange();
-    range.setStart(text.firstChild as Text, 6);
-    range.setEnd(text.firstChild as Text, 9);
-    act(() => {
-      window.getSelection()?.removeAllRanges();
-      window.getSelection()?.addRange(range);
-      document.dispatchEvent(new Event("selectionchange"));
-    });
-    fireEvent.click(sheet().getByRole("button", { name: "Copy selection" }));
-    await settle();
-    expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith("the");
+    range.setStart(words, 0);
+    range.setEnd(words, 4);
     window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    // The click that ends a drag-select leaves the selection be.
+    fireEvent.click(answer);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(window.getSelection()?.toString()).toBe("Done");
+    // The tap that clears it is only that.
+    fireEvent.pointerDown(answer, { button: 0, pointerId: 1, pointerType: "touch" });
+    window.getSelection()?.removeAllRanges();
+    fireEvent.click(answer);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // A link in the bubble answers its own tap.
+    fireEvent.click(answer.querySelector(".md-link") as HTMLElement);
+    expect(screen.queryByRole("dialog", { name: "Message" })).toBeNull();
   });
 
   it("pins the prompt the scroll position is reading the answer to, and a tap returns to it", async () => {

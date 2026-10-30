@@ -139,7 +139,7 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
     const answers = screen.getByTestId("session-transcript").querySelectorAll(".readable-turn.agent.answer");
-    fireEvent.contextMenu(answers[1] as HTMLElement);
+    fireEvent.click(answers[1] as HTMLElement);
     const sheet = () => within(screen.getByRole("dialog", { name: "Message" }));
     fireEvent.click(sheet().getByRole("button", { name: /^Read aloud/ }));
     // The reading model: the prose, then the code block by its length.
@@ -159,7 +159,7 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
     const bubble = screen.getByTestId("session-transcript").querySelector(".readable-turn.user") as HTMLElement;
-    fireEvent.contextMenu(bubble);
+    fireEvent.click(bubble);
     fireEvent.click(within(screen.getByRole("dialog", { name: "Message" })).getByRole("button", { name: /^Read aloud/ }));
     expect(spoken.map((utterance) => utterance.text)).toEqual(["add a clear button to the composer"]);
   });
@@ -306,7 +306,7 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
     await settle();
     const answer = screen.getByTestId("session-transcript").querySelector(".readable-turn.agent.answer") as HTMLElement;
     const read = () => {
-      fireEvent.contextMenu(answer);
+      fireEvent.click(answer);
       const sheet = within(screen.getByRole("dialog", { name: "Message" }));
       fireEvent.click(sheet.getByRole("button", { name: /^Read aloud/ }));
       fireEvent.click(sheet.getByRole("button", { name: "Close" }));

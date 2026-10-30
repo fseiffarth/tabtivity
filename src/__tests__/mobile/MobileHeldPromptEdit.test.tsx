@@ -136,7 +136,7 @@ describe(`${BRAND.display} Mobile held prompt edit`, () => {
   const waitingRule = (id: string, message: string) => ({ id, enabled: true, message, rule: { type: "once", at: "2026-09-15T05:50:00.000Z" } });
 
   function openMenu(words: string) {
-    fireEvent.contextMenu(bubble(words)!);
+    fireEvent.click(bubble(words)!);
   }
 
   it("holding Send interrupts the working agent and types the prompt straight in, never holding it", async () => {

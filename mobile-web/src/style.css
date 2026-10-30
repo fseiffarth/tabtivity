@@ -970,15 +970,15 @@ body.terminal-open { min-height:0; overflow:hidden; }
    output and raw screen rows (`.agent` without `.answer`) stay flat. */
 .readable-turn.agent.answer { width:auto; max-width:92%; padding:8px 12px; border-radius:16px 16px 16px 4px; background:#1d2030; color:#e3e6f2; }
 /* A message carries no buttons: what can be done with it — copy it, hear it
-   read — is a click-hold on the bubble away (`useMessageMenu`), so the chat
-   spends its width on words. The system's own long-press callout would fight
-   that press, so it is off over a bubble. */
-.readable-turn.user,.readable-turn.agent.answer { position:relative; -webkit-touch-callout:none; }
+   read — is a tap on the bubble away (`useMessageMenu`), so the chat spends
+   its width on words. A hold is the phone's own: it selects text right in the
+   bubble, with the system's handles and callout. */
+.readable-turn.user,.readable-turn.agent.answer { position:relative; }
 .readable-turn.agent.answer .readable-line { padding-left:0; text-indent:0; }
 /* A slash command (`CommandDivider`) steers the CLI rather than talking to
    the agent, so it is no bubble: a hairline across the chat with the command
    centred on it, in the prompt's violet. */
-.readable-command { display:flex; align-items:center; gap:10px; width:100%; margin:6px 0; color:#a99cf0; font:500 .8rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; -webkit-touch-callout:none; }
+.readable-command { display:flex; align-items:center; gap:10px; width:100%; margin:6px 0; color:#a99cf0; font:500 .8rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
 .readable-command::before,.readable-command::after { content:""; flex:1 1 0; min-width:16px; border-top:1px solid #3a3466; }
 .readable-command.interrupted { color:#ff8a93; }
 .readable-command.interrupted::before,.readable-command.interrupted::after { border-top-color:#6d3b46; }
@@ -1537,10 +1537,6 @@ span.files-close { background:transparent; }
 .local-models-list .local-model-tabs { color:#8fb8ff; }
 .local-models-list .transcript-working-dots { vertical-align:middle; }
 .local-models-start { min-height:48px; }
-/* Select text (`MessageMenu`): the message again, as plain text the phone's
-   own selection handles and callout work on — the bubble's hold is the menu,
-   so it cannot be selected in place. */
-.message-select-text { max-height:52dvh; overflow:auto; overscroll-behavior:contain; padding:10px 12px; border-radius:13px; background:#1e2230; color:#e3e6f2; font:400 .92rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif; white-space:pre-wrap; overflow-wrap:anywhere; -webkit-user-select:text; user-select:text; -webkit-touch-callout:default; }
 /* A tapped chat link's address (`LinkSheet`): the host alone, then all of it. */
 .link-sheet-target { display:grid; gap:4px; margin:0 0 10px; padding:10px 12px; border-radius:13px; background:#1e2230; color:#e3e6f2; }
 .link-sheet-target strong { font:650 .98rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; overflow-wrap:anywhere; }

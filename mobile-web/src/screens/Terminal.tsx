@@ -4,7 +4,7 @@ import { AgentStatusMark } from "../components/AgentStatusPill";
 import { HintQueue, type HintKey } from "../components/HintMessage";
 import { RunningShells, shownShells } from "../components/RunningShells";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
-import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
+import { useMessageMenu, type TapHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
 import { LaunchDefaultsFold } from "../components/LaunchDefaultsFold";
@@ -218,14 +218,14 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
   /** The pane's width, for a CLI that wrapped its own rows against it. */
   columns?: number;
 }) {
-  const { hold, menu } = useMessageMenu();
+  const { tap, menu } = useMessageMenu();
   if (!chat) return <>{lines.map((line) => <ReadableRow key={line.key} line={line} />)}</>;
   return <>{chatTurns(lines, agent, columns).map((turn) => {
     const shown = turn.role === "user" ? (turn.prompt ?? turn.lines) : (turn.answer ?? turn.lines);
     const rows = shown.map((line) => <ReadableRow key={line.key} line={line} />);
     // A message is a bubble — a prompt or an answer; tool output and raw
-    // screen rows are not one, and a hold on them opens nothing.
-    const press = turn.role === "user" || turn.answer ? hold(`screen:${turn.key}`, () => readableText(shown)) : undefined;
+    // screen rows are not one, and a tap on them opens nothing.
+    const press = turn.role === "user" || turn.answer ? tap(`screen:${turn.key}`, () => readableText(shown)) : undefined;
     const command = turn.role === "user" ? slashCommand(readableText(shown)) : null;
     if (command) return <Fragment key={turn.key}><CommandDivider command={command} label={promptLabel} press={press} /></Fragment>;
     return turn.role === "user"
@@ -238,11 +238,11 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
  * a turn of the CLI's own dial, so its name reads as a rule across the chat.
  * A one-word setting rides on the rule (`/model opus`); the text of a `/goal`
  * or `/plan` is the reader's own words, so it follows as an ordinary prompt
- * bubble. Both keep the prompt's hold menu. */
+ * bubble. Both keep the prompt's message menu. */
 function CommandDivider({ command, label, press }: {
   command: SlashCommand;
   label: string;
-  press?: HoldHandlers;
+  press?: TapHandlers;
 }) {
   const inline = commandArgsInline(command.args);
   return <>
@@ -379,7 +379,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
 }) {
   // One bubble per record, keyed by its time (`transcriptTurns`).
   const turns = useMemo(() => transcriptTurns(entries), [entries]);
-  const { hold, menu } = useMessageMenu();
+  const { tap, menu } = useMessageMenu();
   const { links, sheet: linkSheet } = useChatLinks();
   const t = useT();
   // A messenger's day chip over the first message of each day (`dayOpeners`).
@@ -404,11 +404,11 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
           <span className="readable-command-text"><span aria-hidden="true">■ </span>{t("tabBar.statusInterrupted")}{isUntested("mobile.transcript.interrupted") && <em> · {t("mobile.focus.untested")}</em>}</span>
         </div>
       : turn.questions
-      ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={hold(turn.key, () => turn.text)} />
+      ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)} />
       : turn.command
-      ? <CommandDivider command={turn.command} label={promptLabel} press={hold(turn.key, () => turn.text)} />
+      ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} />
       : turn.kind === "prompt"
-      ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...hold(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
+      ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...tap(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
           <PromptBody text={turn.text} links={links} inbox={inbox} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
           {time}
@@ -423,7 +423,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
                 {isUntested("mobile.link.ack") && <em>{t("mobile.newTab.untested")}</em>}
               </small>}
         </div>
-      : <div className={turn.plan ? "readable-turn agent answer plan" : "readable-turn agent answer"} role={turn.plan ? "group" : undefined} aria-label={turn.plan ? planLabel : undefined} {...hold(turn.key, () => turn.text)}>
+      : <div className={turn.plan ? "readable-turn agent answer plan" : "readable-turn agent answer"} role={turn.plan ? "group" : undefined} aria-label={turn.plan ? planLabel : undefined} {...tap(turn.key, () => turn.text)}>
           {turn.plan && <small className="transcript-plan-head">{planLabel}{planUntested && <em> · {planUntested}</em>}</small>}
           <AnswerText text={turn.text} links={links} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
@@ -564,7 +564,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
   notAnswered: string;
   untested: string;
   time: ReactNode;
-  press: HoldHandlers;
+  press: TapHandlers;
 }) {
   return <div className="transcript-screen transcript-asked" role="group" aria-label={label} {...press}>
     <small>{label}{untested && <> · {untested}</>}</small>
@@ -2011,7 +2011,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     },
     [markupTarget, workingModel, markupDialog, tab.local_model, markupPickModel, tab.id],
   );
-  /** A shell's Focus has no messages to hold for a menu (`useMessageMenu`), so
+  /** A shell's Focus has no messages to tap for a menu (`useMessageMenu`), so
    * it copies what the reading view shows: the revealed history, the open
    * chunk, then the live tail. */
   const copyReadable = async () => {

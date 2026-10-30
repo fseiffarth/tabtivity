@@ -5,12 +5,15 @@ import { speechTag } from "../speechLang";
 import { currentSpeechId, readMessage, speechOutputSupported, stopSpeaking, subscribeSpeech } from "../speechOutput";
 import { useBackLayer } from "../backStack";
 
-/** How long a finger rests on a bubble before its menu opens. Long enough
- * that a flick of the chat is never a press, short enough to feel like the
- * platform's own hold. */
+/** How long a finger rests before a press is a hold (the new-tab button's,
+ * a chat link's). Long enough that a flick of the chat is never a press,
+ * short enough to feel like the platform's own hold. */
 export const HOLD_MS = 450;
-/** A press that wanders this far is a scroll, not a hold. */
-const HOLD_SLOP = 12;
+/** A press that wanders this far is a scroll or a selection, not a tap. */
+const TAP_SLOP = 12;
+/** What inside a bubble answers a tap itself (a link, an inbox picture, a
+ * resend button): a tap there is its, not the message menu's. */
+const OWN_TAP = "a, button, input, textarea, select, label, [role=button], [role=link], .md-link";
 
 /** The first words of a message, for the sheet's note: which bubble is being
  * acted on, since the sheet covers the chat it came from. */
@@ -19,41 +22,28 @@ function preview(text: string): string {
   return line.length > 90 ? `${line.slice(0, 89)}…` : line;
 }
 
-/** The part of the message the reader has marked in the select view, or
- * "" when the selection is empty or lies outside it. */
-function selectedIn(host: HTMLElement | null): string {
+/** Some text is selected on the page — a tap that only clears it, or ends
+ * a drag that made it, is no ask for the menu. */
+function hasSelection(): boolean {
   const selection = window.getSelection();
-  if (!host || !selection || selection.isCollapsed || selection.rangeCount === 0) return "";
-  const range = selection.getRangeAt(0);
-  return host.contains(range.commonAncestorContainer) ? selection.toString() : "";
+  return !!selection && !selection.isCollapsed && selection.toString() !== "";
 }
 
 /**
- * What can be done with one chat message: copy it, pick part of it to copy,
- * or have the phone read it aloud. A prompt and an answer offer the same —
- * the reader's own words are read back as readily as the agent's.
+ * What can be done with one chat message: copy it or have the phone read it
+ * aloud. A prompt and an answer offer the same — the reader's own words are
+ * read back as readily as the agent's.
  *
  * It is a sheet rather than buttons beside the bubble: the chat is the whole
  * screen on a phone, and two controls per message crowd it. The bubble holds
- * what was said and nothing else; a click-hold on it asks what to do with it.
+ * what was said and nothing else; a tap on it asks what to do with it, and a
+ * hold is the phone's own text selection, right in the bubble.
  */
 function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; onEdit?: () => void; onClose: () => void }) {
   useBackLayer(onClose);
   const t = useT();
   const speaking = useSyncExternalStore(subscribeSpeech, currentSpeechId) === id;
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
-  // Select text: the bubble itself cannot be selected — its hold is this
-  // menu — so the message is laid out again here as plain text the phone's
-  // own selection handles work on, and Copy takes what they mark.
-  const [selecting, setSelecting] = useState(false);
-  const [picked, setPicked] = useState(false);
-  const selectHost = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!selecting) return;
-    const track = () => setPicked(selectedIn(selectHost.current) !== "");
-    document.addEventListener("selectionchange", track);
-    return () => document.removeEventListener("selectionchange", track);
-  }, [selecting]);
   // A copy says so and then gets out of the way; a failed one stays to be read.
   useEffect(() => {
     if (!note || note.error) return;
@@ -61,9 +51,8 @@ function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; 
     return () => window.clearTimeout(timer);
   }, [note, onClose]);
   const copy = async () => {
-    const part = selecting ? selectedIn(selectHost.current) : "";
     try {
-      await navigator.clipboard.writeText(part || text);
+      await navigator.clipboard.writeText(text);
       setNote({ text: t("mobile.focus.copied") });
     } catch {
       setNote({ text: t("mobile.focus.copyFailed"), error: true });
@@ -83,21 +72,9 @@ function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; 
       <span className="sheet-grip" aria-hidden="true" />
       <header>
         <button className="sheet-close" onClick={onClose} aria-label={t("mobile.focus.messageMenuClose")}>✕</button>
-        <h2>{title} {isUntested("mobile.focus.messageMenu") && <small>{t("mobile.focus.untested")}</small>}</h2>
+        <h2>{title} {(isUntested("mobile.focus.messageMenu") || isUntested("mobile.focus.tapSelect")) && <small>{t("mobile.focus.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>
-      {selecting ? <>
-        <p className={note?.error ? "sheet-note error" : "sheet-note"} role={note ? "status" : undefined}>{note ? note.text : <>{t("mobile.focus.selectHint")}{isUntested("mobile.focus.selectText") && <> · {t("mobile.focus.untested")}</>}</>}</p>
-        <div ref={selectHost} className="message-select-text" data-testid="message-select-text">{text}</div>
-        <ul className="option-list">
-          <li>
-            <button onPointerDown={(event) => event.preventDefault()} onClick={copy}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h8" /></svg>
-              <span><strong>{t(picked ? "mobile.focus.copySelection" : "mobile.focus.copyMessage")}</strong></span>
-            </button>
-          </li>
-        </ul>
-      </> : <>
       <p className={note?.error ? "sheet-note error" : "sheet-note"} role={note ? "status" : undefined}>{note ? note.text : preview(text)}</p>
       <ul className="option-list">
         {/* Only a prompt the agent has not taken in yet has one: its words
@@ -114,12 +91,6 @@ function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; 
             <span><strong>{t("mobile.focus.copyMessage")}</strong></span>
           </button>
         </li>
-        <li>
-          <button onClick={() => setSelecting(true)}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h9M5 17h6M15 14v7M13 14h4M13 21h4" /></svg>
-            <span><strong>{t("mobile.focus.selectText")}</strong>{isUntested("mobile.focus.selectText") && <small>{t("mobile.focus.untested")}</small>}</span>
-          </button>
-        </li>
         {speechOutputSupported() && <li>
           <button className={speaking ? "current" : ""} onClick={read}>
             {speaking
@@ -129,63 +100,54 @@ function MessageMenu({ id, text, onEdit, onClose }: { id: string; text: string; 
           </button>
         </li>}
       </ul>
-      </>}
     </section>
   </div>;
 }
 
-/** The handlers a bubble spreads to open its menu on a click-hold — and, on a
- * mouse, on the right-click that means the same thing. */
-export interface HoldHandlers {
+/** The handlers a bubble spreads to open its menu on a tap — and, on a
+ * mouse, on a right-click. */
+export interface TapHandlers {
   onPointerDown: (event: React.PointerEvent) => void;
-  onPointerMove: (event: React.PointerEvent) => void;
-  onPointerUp: () => void;
-  onPointerCancel: () => void;
+  onClick: (event: React.MouseEvent) => void;
   onContextMenu: (event: React.MouseEvent) => void;
 }
 
 /**
- * The message menu for a chat: `hold(id, text)` on every bubble, `menu` once
- * beside them. The message is read at the moment of the press and kept — a
+ * The message menu for a chat: `tap(id, text)` on every bubble, `menu` once
+ * beside them. The message is read at the moment of the tap and kept — a
  * shown bubble never changes, and neither does what the menu acts on. `edit`
  * is given for a prompt whose words can still change (a held prompt).
+ *
+ * A hold is left to the phone: it selects the words under the finger, with
+ * the system's own handles and copy bar, so the bubble's text is picked in
+ * place. A finger that wanders is scrolling or dragging a selection, and a
+ * tap that only clears a selection is just that — neither opens the menu.
  */
-export function useMessageMenu(): { hold: (id: string, text: () => string, edit?: () => void) => HoldHandlers; menu: React.ReactNode } {
+export function useMessageMenu(): { tap: (id: string, text: () => string, edit?: () => void) => TapHandlers; menu: React.ReactNode } {
   const [target, setTarget] = useState<{ id: string; text: string; edit?: () => void } | null>(null);
-  const timer = useRef(0);
-  const from = useRef<{ x: number; y: number } | null>(null);
-  const cancel = useCallback(() => {
-    window.clearTimeout(timer.current);
-    timer.current = 0;
-    from.current = null;
-  }, []);
-  useEffect(() => cancel, [cancel]);
-  const open = useCallback((id: string, text: () => string, edit?: () => void) => {
-    cancel();
-    // The browser's own hold may have selected the words under the finger;
-    // this menu is the answer to that press, not a selection.
-    window.getSelection()?.removeAllRanges();
-    setTarget({ id, text: text(), edit });
-  }, [cancel]);
+  const down = useRef<{ x: number; y: number; mouse: boolean; selected: boolean } | null>(null);
   const close = useCallback(() => setTarget(null), []);
-  const hold = useCallback((id: string, text: () => string, edit?: () => void): HoldHandlers => ({
+  const tap = useCallback((id: string, text: () => string, edit?: () => void): TapHandlers => ({
     onPointerDown: (event) => {
-      if (event.button !== 0) return;
-      from.current = { x: event.clientX, y: event.clientY };
-      window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(() => open(id, text, edit), HOLD_MS);
+      down.current = { x: event.clientX, y: event.clientY, mouse: event.pointerType === "mouse", selected: hasSelection() };
     },
-    onPointerMove: (event) => {
-      const start = from.current;
-      if (!start) return;
-      if (Math.abs(event.clientX - start.x) > HOLD_SLOP || Math.abs(event.clientY - start.y) > HOLD_SLOP) cancel();
+    onClick: (event) => {
+      const start = down.current;
+      down.current = null;
+      if (start && (start.selected || Math.abs(event.clientX - start.x) > TAP_SLOP || Math.abs(event.clientY - start.y) > TAP_SLOP)) return;
+      if (hasSelection()) return;
+      const own = event.target instanceof Element ? event.target.closest(OWN_TAP) : null;
+      if (own && event.currentTarget.contains(own)) return;
+      setTarget({ id, text: text(), edit });
     },
-    onPointerUp: cancel,
-    onPointerCancel: cancel,
+    // A touch's long-press `contextmenu` is the phone starting its selection;
+    // only a mouse's right-click asks for the menu.
     onContextMenu: (event) => {
+      if (!down.current?.mouse) return;
       event.preventDefault();
-      open(id, text, edit);
+      down.current = null;
+      setTarget({ id, text: text(), edit });
     },
-  }), [cancel, open]);
-  return { hold, menu: target && <MessageMenu id={target.id} text={target.text} onEdit={target.edit} onClose={close} /> };
+  }), []);
+  return { tap, menu: target && <MessageMenu id={target.id} text={target.text} onEdit={target.edit} onClose={close} /> };
 }

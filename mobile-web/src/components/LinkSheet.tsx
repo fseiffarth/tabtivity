@@ -75,7 +75,8 @@ export interface LinkHandlers {
  * Tappable links for a chat: `links` on every formatted message, `sheet` once
  * beside them. A tap on a link (`data-href`, set only for an address
  * `chatLinkUrl` accepts) opens `LinkSheet`; nothing opens without it. A press
- * held long enough to be the message menu's is that menu's, not a tap.
+ * held long enough to be a hold is the phone selecting the link's words, not
+ * a tap.
  */
 export function useChatLinks(): { links: LinkHandlers; sheet: React.ReactNode } {
   const [url, setUrl] = useState<string | null>(null);
