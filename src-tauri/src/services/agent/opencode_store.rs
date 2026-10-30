@@ -58,7 +58,7 @@ const CHANGE_TAIL: i64 = 2000;
 /// Components of the store below its home (`.local/share/opencode/opencode.db`).
 const DB_DEPTH: usize = 4;
 /// The names read from the store; each must be a table, never a view.
-const STORE_TABLES: &[&str] = &["session", "session_v2", "session_message", "message", "part"];
+const STORE_TABLES: &[&str] = &["session", "session_v2", "session_message", "session_part", "message", "part"];
 
 fn table_exists(conn: &Connection, table: &str) -> bool {
     conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(()))
@@ -553,7 +553,15 @@ fn fingerprint(conn: &Connection, session: &str) -> Option<String> {
             "SELECT count(*), max(time_updated) FROM session_message WHERE session_id = ?1",
             [session], |row| Ok((row.get(0)?, row.get(1)?)),
         ).ok()?;
-        return Some(format!("oc2:{session}:{count}:{}", updated.unwrap_or(0)));
+        let (parts, part_at): (i64, Option<i64>) = if table_exists(conn, "session_part") {
+            conn.query_row(
+                "SELECT count(*), max(time_updated) FROM session_part WHERE session_id = ?1",
+                [session], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).ok()?
+        } else {
+            (0, None)
+        };
+        return Some(format!("oc2:{session}:{count}:{}:{parts}:{}", updated.unwrap_or(0), part_at.unwrap_or(0)));
     }
     let (messages, message_at): (i64, Option<i64>) = conn
         .query_row(
@@ -639,22 +647,37 @@ fn read_entries(conn: &Connection, session: &str) -> Option<(Vec<TranscriptEntry
 /// Synthetic/system/compaction records never become user turns. Query by seq
 /// (the durable admission order), not IDs that can precede queued prompts.
 /// The kind is the row's `type` column — `data` holds no `type` of its own
-/// (OpenCode 2.1.3) — put back into the message as `type`.
+/// (OpenCode 2.1.3) — put back into the message as `type`. An assistant
+/// message's `session_part` rows, when it has any, are its `content`, as
+/// OpenCode reads them back: 2.2.4 still writes inline and only keeps part rows
+/// up to date, for a later release to move `content` there and leave it empty.
 fn v2_messages(conn: &Connection, session: &str, tail: i64) -> Option<(Vec<(i64, Value)>, bool)> {
     let mut stmt = conn.prepare(
-        "SELECT time_created, type, data FROM session_message WHERE session_id = ?1
+        "SELECT id, time_created, type, data FROM session_message WHERE session_id = ?1
          ORDER BY seq DESC LIMIT ?2",
     ).ok()?;
-    let mut rows: Vec<(i64, Option<String>, String)> = stmt.query_map(rusqlite::params![session, tail + 1], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    let mut rows: Vec<(String, i64, Option<String>, String)> = stmt.query_map(rusqlite::params![session, tail + 1], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
     }).ok()?.filter_map(Result::ok).collect();
     let truncated = rows.len() as i64 > tail;
     rows.truncate(tail as usize);
     rows.reverse();
-    let messages = rows.into_iter().filter_map(|(at, kind, data)| {
+    let mut parts = table_exists(conn, "session_part").then(|| {
+        conn.prepare("SELECT data FROM session_part WHERE message_id = ?1 ORDER BY ordinal")
+    }).transpose().ok()?;
+    let messages = rows.into_iter().filter_map(|(id, at, kind, data)| {
         let mut message: Value = serde_json::from_str(&data).ok()?;
         if let (Some(kind), Some(fields)) = (kind, message.as_object_mut()) {
             fields.entry("type").or_insert(Value::String(kind));
+        }
+        if message["type"] == "assistant" && message.get("content").is_some() {
+            let content: Vec<Value> = parts.as_mut().and_then(|stmt| {
+                let rows = stmt.query_map([&id], |row| row.get::<_, String>(0)).ok()?;
+                Some(rows.filter_map(Result::ok).filter_map(|part| serde_json::from_str(&part).ok()).collect())
+            }).unwrap_or_default();
+            if !content.is_empty() {
+                message["content"] = Value::Array(content);
+            }
         }
         Some((at, message))
     }).collect();
@@ -1098,5 +1121,40 @@ mod tests {
         assert_eq!(chats.len(), 1);
         assert_eq!((chats[0].title.as_str(), chats[0].last.as_deref()), ("question", Some("follow-up")));
         assert_eq!(chats[0].updated, 30);
+    }
+
+    #[test]
+    fn a_v2_assistant_message_reads_its_part_rows_over_an_empty_content() {
+        use serde_json::json;
+        let (db, conn) = store();
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT,
+               time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, agent TEXT);
+             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER,
+               time_created INTEGER, time_updated INTEGER, data TEXT);
+             CREATE TABLE session_part (message_id TEXT, session_id TEXT, ordinal INTEGER, type TEXT, call_id TEXT,
+               time_created INTEGER, time_updated INTEGER, data TEXT);
+             INSERT INTO session_v2 VALUES ('ses_v2', NULL, 'v2', 20, 30, NULL, 'Test', 'build');",
+        ).unwrap();
+        for (seq, kind, data) in [
+            (1, "user", json!({"text":"question"})),
+            (2, "assistant", json!({"content":[],"time":{"completed":40}})),
+            (3, "assistant", json!({"content":[{"type":"text","text":"inline"}],"time":{"completed":50}})),
+        ] {
+            conn.execute("INSERT INTO session_message VALUES (?1, 'ses_v2', ?2, ?3, ?3, ?3, ?4)",
+                rusqlite::params![format!("msg_{seq}"), kind, seq, data.to_string()]).unwrap();
+        }
+        let part = |ordinal: i64, data: serde_json::Value| {
+            conn.execute("INSERT INTO session_part VALUES ('msg_2', 'ses_v2', ?1, 'text', NULL, 40, 40, ?2)",
+                rusqlite::params![ordinal, data.to_string()]).unwrap();
+        };
+        part(1, json!({"type":"text","text":"second"}));
+        part(0, json!({"type":"text","text":"first"}));
+        let transcript = session_transcript(&db, "v2", None, Some("ses_v2"), None, None, 100).unwrap();
+        let turns: Vec<_> = kinds(&transcript).into_iter().filter(|(kind, _)| *kind != "agent").collect();
+        assert_eq!(turns, [("prompt", "question"), ("answer", "first"), ("answer", "second"), ("answer", "inline")]);
+        // A part alone moves the session on: its message row need not change.
+        part(2, json!({"type":"text","text":"third"}));
+        assert!(!session_transcript(&db, "v2", None, Some("ses_v2"), None, transcript.version.as_deref(), 100).unwrap().unchanged);
     }
 }
