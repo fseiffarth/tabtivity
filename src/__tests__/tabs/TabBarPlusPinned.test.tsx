@@ -12,7 +12,7 @@
  * would consist of — is the + being a descendant of the scrolling strip again.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act, cleanup } from "@testing-library/react";
+import { render, act, cleanup, fireEvent } from "@testing-library/react";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
 import { readFileSync } from "node:fs";
 
@@ -80,6 +80,18 @@ async function renderBar(tabCount: number): Promise<HTMLElement> {
   });
   return container;
 }
+
+describe("the + menu's agent list", () => {
+  it("is read again on each opening: an install in a terminal tab sends no event", async () => {
+    const container = await renderBar(1);
+    const reads = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === "list_agents").length;
+    const before = reads();
+    await act(async () => {
+      fireEvent.click(container.querySelector(".tab-new-btn")!);
+    });
+    expect(reads()).toBe(before + 1);
+  });
+});
 
 describe("the subwindow + is outside the scrolling tab strip", () => {
   it("renders the + as a direct child of the bar, never inside the strip", async () => {

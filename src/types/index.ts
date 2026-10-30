@@ -480,9 +480,10 @@ export interface Settings {
    *  `false` = the agent lists the changes first (**Make these changes**). */
   pdf_markup_direct?: boolean;
   /** Built-in agent registry ids shown without searching in the compact Agents
-   *  group of the + tab menu. Set by the 🧠 menu's “+ tab” chips. Unset keeps
-   *  the familiar Claude/Codex/Gemini quick picks; an empty array is a deliberate
-   *  choice to show agents only after searching. */
+   *  group of the + tab menu. Set by the 🧠 menu's “+ tab” chips; a CLI installed
+   *  while the app runs joins it (`noteInstalledAgents`). Unset keeps the familiar
+   *  Claude/Codex/Gemini quick picks; an empty array is a deliberate choice to
+   *  show agents only after searching. */
   compact_tab_agents?: string[];
   /** Built-in agent registry ids the root console's + menus offer, set by the
    *  🧠 menu's "Root" chips. Opt-in: unset or empty offers none there (root

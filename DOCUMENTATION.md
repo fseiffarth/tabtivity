@@ -1597,7 +1597,9 @@ remote git at all.
 - `compact_tab_agents` lists the built-in agent ids shown before a search in the
   `+` menu's compact Agents group. Unset means the familiar Claude/Codex/Gemini
   quick picks; an **empty list** is a deliberate choice to show agents only after
-  searching, and is not the same as unset.
+  searching, and is not the same as unset. A CLI that turns up installed while
+  the app runs joins the list (`noteInstalledAgents`); one seen installed since
+  launch keeps the chip the user left it with, through Reinstall too.
 - `mobile_indicator` controls the Mobile host-status control in the header;
   unset means visible whenever the Mobile host is enabled.
 - `keyboard_shortcuts` holds per-action chord overrides (Settings → Shortcuts).

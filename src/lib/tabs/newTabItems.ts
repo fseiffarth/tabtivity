@@ -207,8 +207,9 @@ export function buildSignInTabSpec(
  *  effect that depends on it). */
 export const EMPTY_CUSTOM_AGENTS: CustomAgent[] = [];
 
-/** The useful first-launch shortlist. Once the user touches a 🧠 "+ tab" chip,
- *  their persisted list (including an intentional empty one) takes over. */
+/** The useful first-launch shortlist. Once the user touches a 🧠 "+ tab" chip or
+ *  installs a CLI (`noteInstalledAgents`), the persisted list (including an
+ *  intentional empty one) takes over. */
 export const DEFAULT_COMPACT_AGENT_IDS = ["claude", "codex", "gemini"];
 
 /** The installed built-in commands from the backend's agent registry. Agent

@@ -13,7 +13,7 @@ import { runInstallInTab } from "../../lib/installCommand";
 import type { CustomAgent } from "../../types";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useT } from "../../lib/i18n";
-import { notifyAgentRegistryChanged } from "../../lib/agents/agentRegistry";
+import { noteInstalledAgents, notifyAgentRegistryChanged } from "../../lib/agents/agentRegistry";
 import { loginIdForCmd } from "../../lib/agents/signInLaunch";
 import { useAgentVersionNoticeStore } from "../../stores/agents/agentVersionNotice";
 import {
@@ -148,7 +148,12 @@ export function AgentsPanel({
   }, [customCmdsKey]);
 
   const refresh = () => {
-    invoke<AgentInfo[]>("list_agents").then(setAgents).catch(() => setAgents([]));
+    invoke<AgentInfo[]>("list_agents")
+      .then((rows) => {
+        setAgents(rows);
+        noteInstalledAgents(rows);
+      })
+      .catch(() => setAgents([]));
   };
   useEffect(refresh, []);
   // Version drift is read separately from the agent list on purpose: listing
