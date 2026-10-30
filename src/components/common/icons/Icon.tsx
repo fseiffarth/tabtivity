@@ -685,6 +685,16 @@ export function KeyboardIcon(p: IconProps) {
   );
 }
 
+/** A microphone — the Chat's hands-free voice is on. */
+export function MicIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" />
+    </Frame>
+  );
+}
+
 /** The working mark's ▶, filled rather than outlined ({@link PlayIcon} is the
  *  Run button's): the tab strip's and the phone's status glyph. As a typed
  *  character it was whatever the window's font fallback found — the U+FE0E

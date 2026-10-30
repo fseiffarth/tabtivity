@@ -59,6 +59,9 @@ Without a headset the mic is muted while the voice speaks, so it never hears
 itself; the stop key interrupts. With **Headset mode** on (Settings → Voice)
 you are heard while it reads, and talking over the voice stops it.
 
+Keyboard steering hides the Chat's box and its chips, but hands-free goes on
+listening: a small mic on the steering badge says so.
+
 ## On the phone
 
 The Focus view's mic dictates with the phone's speech (on the device where it

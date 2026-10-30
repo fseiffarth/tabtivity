@@ -935,6 +935,27 @@ button.steering-legend-hub:hover::before {
   right: auto;
   left: -5px;
 }
+/* The Chat's hands-free is on: a mic on the rim the unfold key leaves free.
+   The folded badge has its exit key there, so the mic moves up. */
+.steering-legend-mic {
+  position: absolute;
+  left: -5px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+}
+.steering-legend-fab-button .steering-legend-mic {
+  left: auto;
+  bottom: auto;
+  right: -5px;
+  top: -4px;
+}
 
 /* Keyboard select's legend (TerminalView, Ctrl+Shift+X): the steering legend,
    pinned to the bottom of its own pane instead of the window. */
