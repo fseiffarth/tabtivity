@@ -10959,6 +10959,7 @@ export const enSource = {
   "mobile.home.needsYou": "Needs you",
   "mobile.home.needsShowAll": "Show all {count}",
   "mobile.home.needsWorking": "{count} working · see Agents",
+  "mobile.home.continueFailed": "Could not send \"continue\": {reason}",
   "mobile.home.connected": "Connected",
   "mobile.home.offline": "Offline",
   "mobile.home.emptyActiveTitle": "Nothing active",

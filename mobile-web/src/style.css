@@ -471,7 +471,12 @@ small { color:#9498aa; }
 /* The ✓ rides beside the row, never inside it: a button in a button is invalid
    markup and would fold finishing the thing into the tap that opens it. */
 .mobile-alert-row-wrap { display:flex; align-items:center; }
-.mobile-alert-row-wrap .mobile-alert-row { flex:1 1 auto; min-width:0; }
+.mobile-alert-row-wrap .mobile-alert-row,.mobile-alert-row-wrap .home-needs-row { flex:1 1 auto; min-width:0; }
+/* ▶ Continue beside an interrupted row: the ✓'s height, in the interrupted
+   mark's colours (`.agent-status.interrupted`). */
+.home-needs-continue { display:inline-flex; align-items:center; gap:5px; height:38px; flex:0 0 auto; margin-right:var(--sp-2); padding:0 10px; border-radius:11px; border-color:#ff8a93; background:#46202a; color:#ff8a93; font-size:var(--fs-sub); font-weight:700; }
+.home-needs-continue > span { font-size:.7rem; }
+.home-needs-continue:disabled { opacity:.55; }
 /* The board card's own check, same size and same square, so a tick means one
    thing across the phone (`.todo-check`). */
 .mobile-alert-done { width:38px; height:38px; flex:0 0 auto; margin-right:var(--sp-2); padding:0; border-radius:11px; border-color:#776db4; background:#24203b; color:#fff; font-size:1rem; font-weight:800; }
@@ -497,7 +502,7 @@ button.mobile-alert-row { cursor:pointer; }
    into its cuts). `--oct-edge` is the border colour, so a state retints both.
    Borderless elements need only the clip. The outer shadows go: a clip would
    cut them off anyway. */
-.home-screen .search,.home-screen .activity-sort select,.home-screen .mobile-alerts-error,.home-screen .mobile-alert-done,.home-screen .cards > button.card,.home-screen .error,.home-screen .notice,.home-screen .inbox-upload,.home-screen .inbox-upload button {
+.home-screen .search,.home-screen .activity-sort select,.home-screen .mobile-alerts-error,.home-screen .mobile-alert-done,.home-screen .home-needs-continue,.home-screen .cards > button.card,.home-screen .error,.home-screen .notice,.home-screen .inbox-upload,.home-screen .inbox-upload button {
   --oct:10px; --oct-edge:#383c4d;
   --oct-corners:linear-gradient(to bottom right, var(--oct-lc, var(--oct-edge)) calc(50% + var(--oct-lw, 1px)), transparent 0) top left / var(--oct) var(--oct) no-repeat border-box,
     linear-gradient(to bottom left, var(--oct-edge) calc(50% + 1px), transparent 0) top right / var(--oct) var(--oct) no-repeat border-box,
@@ -507,7 +512,7 @@ button.mobile-alert-row { cursor:pointer; }
   clip-path:polygon(var(--oct) 0,calc(100% - var(--oct)) 0,100% var(--oct),100% calc(100% - var(--oct)),calc(100% - var(--oct)) 100%,var(--oct) 100%,0 calc(100% - var(--oct)),0 var(--oct));
 }
 .home-screen .cards > button.card { --oct:12px; }
-.home-screen .activity-sort select,.home-screen .mobile-alert-done,.home-screen .inbox-upload { --oct:8px; }
+.home-screen .activity-sort select,.home-screen .mobile-alert-done,.home-screen .home-needs-continue,.home-screen .inbox-upload { --oct:8px; }
 .home-screen .inbox-upload button { --oct:6px; }
 .home-screen .search,.home-screen .activity-sort select { --oct-edge:#3a3e50; border-color:var(--oct-edge); }
 .home-screen .search { background:var(--oct-corners),#171a24; }
@@ -515,6 +520,7 @@ button.mobile-alert-row { cursor:pointer; }
 .home-screen .mobile-alerts-error { --oct-edge:#6d3b46; border-color:var(--oct-edge); background:var(--oct-corners),rgba(60,30,38,.6); }
 .home-screen .cards > button.card { border-color:var(--oct-edge); background:var(--oct-corners),rgba(28,31,43,.92); }
 .home-screen .mobile-alert-done { --oct-edge:#776db4; border-color:var(--oct-edge); background:var(--oct-corners),#24203b; }
+.home-screen .home-needs-continue { --oct-edge:#ff8a93; border-color:var(--oct-edge); background:var(--oct-corners),#46202a; }
 .home-screen .cards > button.card.in-plan { --oct-edge:#7b6ee0; }
 .home-screen .cards > button.card.in-goal { --oct-edge:#4fb3c0; }
 .home-screen .cards > button.card.has-tab-color { --oct-lc:var(--tab-color); --oct-lw:3px; border-left-color:var(--tab-color); }

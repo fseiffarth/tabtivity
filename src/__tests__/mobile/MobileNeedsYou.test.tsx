@@ -75,6 +75,42 @@ describe("Mobile home — Needs you", () => {
     expect(await screen.findByText("Alpha · done-1")).toBeTruthy();
   });
 
+  it("sends \"continue\" to an interrupted tab from beside its row, without opening it", async () => {
+    serve([tab("cut", "interrupted", { working_at: 1_000 }), tab("asking", "question", { working_at: 2_000 })]);
+    const held: { url: string; body: unknown }[] = [];
+    const served = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/held")) {
+        held.push({ url, body: JSON.parse(String(init?.body)) });
+        return new Response(JSON.stringify({ id: "h1" }), { status: 200 });
+      }
+      return served(input, init);
+    });
+    const opened: string[] = [];
+    render(<Home tabby={() => {}} open={noop} openTab={(_project, row) => opened.push(row.id)} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha · cut");
+    // Only the cut-off turn is offered one; a question is answered in the tab.
+    const buttons = within(group()).getAllByRole("button", { name: /Send "continue"/ });
+    expect(buttons).toHaveLength(1);
+    fireEvent.click(buttons[0]);
+    await waitFor(() => expect(held).toEqual([{ url: "/api/v1/tabs/cut/held", body: { message: "continue" } }]));
+    expect(opened).toEqual([]);
+    await waitFor(() => expect(within(group()).queryByRole("button", { name: /Send "continue"/ })).toBeNull());
+  });
+
+  it("offers no continue while the desktop's AI switch is off", async () => {
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.startsWith("/api/v1/activity")) return new Response(JSON.stringify({ tabs: [tab("cut", "interrupted", { working_at: 1_000 })], desktop_available: true, ai_off: true }), { status: 200 });
+      if (url.startsWith("/api/v1/alerts")) return new Response(JSON.stringify({ alerts: { enabled: false, items: [] } }), { status: 200 });
+      return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+    });
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha · cut");
+    expect(within(group()).queryByRole("button", { name: /Send "continue"/ })).toBeNull();
+  });
+
   it("shows three rows, then the rest in place", async () => {
     serve([1, 2, 3, 4, 5].map((n) => tab(`ask-${n}`, "question", { working_at: n })));
     render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);

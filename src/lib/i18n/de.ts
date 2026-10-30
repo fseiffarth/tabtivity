@@ -10867,6 +10867,7 @@ export const dict: Dict = {
   "mobile.home.needsYou": "Braucht dich",
   "mobile.home.needsShowAll": "Alle {count} zeigen",
   "mobile.home.needsWorking": "{count} arbeiten · zu den Agenten",
+  "mobile.home.continueFailed": "„continue“ konnte nicht gesendet werden: {reason}",
   "mobile.home.connected": "Verbunden",
   "mobile.home.offline": "Offline",
   "mobile.home.emptyActiveTitle": "Nichts aktiv",
