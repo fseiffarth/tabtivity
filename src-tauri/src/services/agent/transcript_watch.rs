@@ -15,6 +15,12 @@
 //! are at least [`MIN_GAP`] apart, so an agent streaming records costs one read
 //! a second at most — never more than the old poll's two.
 //!
+//! NTFS tells a folder's watcher of a write only once the writer closes its
+//! handle or someone else opens the file, so on Windows a CLI that keeps its
+//! rollout or SQLite log open wrote silently and its chat moved on the backstop
+//! alone. There the thread also looks at the armed files itself ([`LOOK_EVERY`],
+//! [`Looks`]); a change it finds goes through the same folding.
+//!
 //! `AppHandle`-free: the sink is a plain callback ([`install`]), which the
 //! command layer points at its event emitter.
 
@@ -33,6 +39,9 @@ use notify::{EventKind, RecursiveMode, Watcher as _};
 pub const SETTLE: Duration = Duration::from_millis(250);
 /// The least time between two notifications for one watch id.
 pub const MIN_GAP: Duration = Duration::from_secs(1);
+/// How often the armed files are looked at, where their events cannot be
+/// relied on (the module header): a `stat` each, no window round trip.
+pub const LOOK_EVERY: Option<Duration> = if cfg!(windows) { Some(Duration::from_millis(500)) } else { None };
 
 /// Which entries of a watched folder count as a change.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -76,6 +85,18 @@ impl Target {
                 .is_some_and(|n| n.starts_with(prefix.as_str()) && !n.ends_with("-shm")),
             Rule::Created => created,
             Rule::Any => true,
+        }
+    }
+
+    /// The files this target counts changes of, as they stand. A creation is
+    /// a folder change, which every platform reports.
+    fn files(&self) -> Vec<PathBuf> {
+        match &self.rule {
+            Rule::Exact(name) => vec![self.dir.join(name)],
+            Rule::Created => Vec::new(),
+            Rule::Prefix(_) | Rule::Any => std::fs::read_dir(&self.dir)
+                .map(|entries| entries.flatten().map(|entry| entry.path()).filter(|path| self.matches(path, false)).collect())
+                .unwrap_or_default(),
         }
     }
 }
@@ -168,6 +189,11 @@ impl Registry {
         self.subs.get(id)
     }
 
+    /// Every armed id with its targets.
+    fn armed(&self) -> Vec<(String, Vec<Target>)> {
+        self.subs.iter().map(|(id, targets)| (id.clone(), targets.clone())).collect()
+    }
+
     /// The ids one changed `path` concerns.
     fn matching(&self, path: &Path, created: bool) -> Vec<String> {
         self.subs
@@ -209,6 +235,34 @@ impl Debouncer {
         }
         self.last.retain(|_, at| now.saturating_duration_since(*at) < MIN_GAP);
         ready
+    }
+}
+
+/// What each armed file looked like last time.
+#[derive(Debug, Default)]
+struct Looks(HashMap<PathBuf, (u64, Option<std::time::SystemTime>)>);
+
+impl Looks {
+    /// The ids in `armed` with a file that differs from the last look. A file
+    /// not seen before only starts being followed: the read that armed the
+    /// watch has it, and a new one is its creation's event.
+    fn changed(&mut self, armed: &[(String, Vec<Target>)]) -> Vec<String> {
+        let mut seen = HashMap::new();
+        let mut ids = Vec::new();
+        for (id, targets) in armed {
+            let mut moved = false;
+            for path in targets.iter().flat_map(Target::files) {
+                let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+                let stamp = (meta.len(), meta.modified().ok());
+                moved |= self.0.get(&path).is_some_and(|last| *last != stamp);
+                seen.insert(path, stamp);
+            }
+            if moved {
+                ids.push(id.clone());
+            }
+        }
+        self.0 = seen;
+        ids
     }
 }
 
@@ -358,10 +412,11 @@ impl Births {
 fn run(rx: mpsc::Receiver<notify::Result<notify::Event>>, state: Weak<Mutex<State>>, sink: Sink) {
     let mut debounce = Debouncer::default();
     let mut births = Births::default();
+    let mut looks = Looks::default();
+    let mut next_look = LOOK_EVERY.map(|every| Instant::now() + every);
     loop {
-        let wait = debounce
-            .next_due()
-            .map_or(Duration::from_secs(3600), |at| at.saturating_duration_since(Instant::now()));
+        let wake = debounce.next_due().into_iter().chain(next_look).min();
+        let wait = wake.map_or(Duration::from_secs(3600), |at| at.saturating_duration_since(Instant::now()));
         match rx.recv_timeout(wait) {
             Ok(Ok(event)) => {
                 if let Some(created) = classify(&event.kind) {
@@ -384,6 +439,18 @@ fn run(rx: mpsc::Receiver<notify::Result<notify::Event>>, state: Weak<Mutex<Stat
             }
             Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+        if let (Some(at), Some(every)) = (next_look, LOOK_EVERY) {
+            let now = Instant::now();
+            if now >= at {
+                next_look = Some(now + every);
+                let Some(state) = state.upgrade() else { return };
+                // Copied out: a read arming its watch must not wait on the disk.
+                let armed = state.lock_ok().registry.armed();
+                for id in looks.changed(&armed) {
+                    debounce.note(&id, now);
+                }
+            }
         }
         let due = debounce.take_due(Instant::now());
         if due.is_empty() {
@@ -462,6 +529,54 @@ mod tests {
         // Ids are independent.
         d.note("b", later);
         assert_eq!(d.take_due(later + SETTLE).len(), 2);
+    }
+
+    #[test]
+    fn a_look_reports_the_ids_whose_files_changed_since_the_last() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().to_path_buf();
+        std::fs::write(dir.join("s.jsonl"), "one").unwrap();
+        std::fs::write(dir.join("db-wal"), "one").unwrap();
+        std::fs::write(dir.join("db-shm"), "one").unwrap();
+        let armed = vec![
+            ("file".to_string(), vec![Target { dir: dir.clone(), rule: Rule::Exact("s.jsonl".into()) }]),
+            ("store".to_string(), vec![Target { dir: dir.clone(), rule: Rule::Prefix("db".into()) }]),
+            ("new".to_string(), vec![Target { dir: dir.clone(), rule: Rule::Created }]),
+        ];
+        let mut looks = Looks::default();
+        assert!(looks.changed(&armed).is_empty(), "the first look only starts following");
+        assert!(looks.changed(&armed).is_empty(), "nothing moved");
+        std::fs::write(dir.join("s.jsonl"), "one two").unwrap();
+        assert_eq!(looks.changed(&armed), vec!["file".to_string()]);
+        assert!(looks.changed(&armed).is_empty(), "reported once");
+        std::fs::write(dir.join("db-shm"), "a reader's own open").unwrap();
+        assert!(looks.changed(&armed).is_empty(), "a -shm is not a change");
+        std::fs::write(dir.join("db-wal"), "one two").unwrap();
+        assert_eq!(looks.changed(&armed), vec!["store".to_string()]);
+    }
+
+    /// The case the looks are for: no closing the file, no other reader.
+    #[cfg(windows)]
+    #[test]
+    fn a_write_through_a_handle_held_open_is_noticed() {
+        use std::io::Write as _;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("s.jsonl");
+        let mut held = std::fs::File::create(&file).unwrap();
+        held.write_all(b"one\n").unwrap();
+        held.flush().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let tx = Mutex::new(tx);
+        let watch = TranscriptWatch::start(move |id| {
+            let _ = tx.lock_ok().send(id.to_string());
+        });
+        assert!(watch.arm("h", vec![Target::file(&file).unwrap()]));
+        std::thread::sleep(LOOK_EVERY.unwrap() * 3);
+        while rx.try_recv().is_ok() {}
+        held.write_all(b"two\n").unwrap();
+        held.flush().unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).ok().as_deref(), Some("h"));
+        drop(held);
     }
 
     #[test]
