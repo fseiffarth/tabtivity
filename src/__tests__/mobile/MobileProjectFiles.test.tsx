@@ -1016,7 +1016,7 @@ describe("Mobile project — a remote project's files on its host", () => {
   /** A remote project: this computer's mirror (`files`, unless `mirror` is
    * off) and the host's side (`host_files`); `offline` makes the host's
    * routes answer as with no connection on the desktop. */
-  function remoteHost({ mirror = true, offline = false } = {}) {
+  function remoteHost({ mirror = true, offline = false, remoteOnly = false } = {}) {
     return vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url === "/api/v1/projects/p1/outbox") return new Response(JSON.stringify({ files: [] }), { status: 200 });
@@ -1032,13 +1032,14 @@ describe("Mobile project — a remote project's files on its host", () => {
       if (url === "/api/v1/projects/p1/files") return new Response(JSON.stringify(ROOT), { status: 200 });
       if (url.startsWith("/api/v1/projects/p1/files")) return new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
       return new Response(JSON.stringify({
-        project: { id: "p1", label: "Alpha", status: "active", host: "remote" },
+        project: { id: "p1", label: "Alpha", status: "active", host: "remote", ...(remoteOnly ? { remote_only: true } : {}) },
         desktop_available: true,
         agents: [],
         tabs: [],
         files: mirror,
         host_files: true,
         folder: mirror,
+        ...(remoteOnly ? { create: "agents" } : {}),
       }), { status: 200 });
     });
   }
@@ -1097,5 +1098,16 @@ describe("Mobile project — a remote project's files on its host", () => {
     const library = screen.getByRole("dialog", { name: "Files" });
     expect(within(library).queryByRole("group", { name: "Which computer's files" })).toBeNull();
     expect(await within(library).findByText("The desktop is not connected to the remote computer. Connect the project on the desktop, then try again.")).toBeTruthy();
+  });
+
+  it("renders a remote-only project like the folderless case: the host's tree alone, read-only", async () => {
+    vi.stubGlobal("fetch", remoteHost({ mirror: false, remoteOnly: true }));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    expect(await screen.findByText(/keeps no copy of its files on the desktop; ☰ Files shows them on the remote computer/)).toBeTruthy();
+    expect(screen.queryByText(/no local copy of its files yet/)).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Project menu" }));
+    const library = screen.getByRole("dialog", { name: "Files" });
+    expect(within(library).queryByRole("group", { name: "Which computer's files" })).toBeNull();
+    await within(library).findByRole("button", { name: "Open the folder data" });
   });
 });

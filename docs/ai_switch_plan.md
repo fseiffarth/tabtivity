@@ -1,6 +1,6 @@
 # AI switch: one power button that stops new AI use
 
-*Status: built 2026-10-20 (uncommitted), never run live. Deviations from
+*Status: built 2026-10-20, landed on develop `08306d8b`, never run live. Deviations from
 the first draft are marked **(as built)**.*
 
 ## Why

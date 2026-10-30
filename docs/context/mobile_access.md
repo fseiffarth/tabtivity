@@ -181,6 +181,37 @@ holds the rule back, neither typed nor removed. Cancelled rules simply leave the
 held-prompt chip; each pass logs one line. A sent collected prompt's history
 row keeps saying *queued*.
 
+## Resolving diverged files (the Diverged list)
+
+The desktop's orange view at phone width (`diverged.rs`, `lib/mobileDiverged.ts`,
+`DivergedSheet.tsx`): a remote project's diverged files and new local files, a
+compare on tap, and the take-a-side, upload and delete actions. **It runs in the
+window, unlike the 📁 library's remote side:** that one rides the desktop's
+ControlMaster read-only, but a status pass and a transfer need the window's
+pooled SFTP session, the manifest and `sync_op`, so they call the same commands
+the orange view calls. With no window the list is `desktop_unavailable`. Reading
+sits behind `project_files`, since it shows no more than the library would;
+acting, and the preview that prices it, also need
+`tabtivity_mobile_host.project_sync` (default off). The window's connection lamp
+is forgotten when the desktop switches project, so `connected` is the lamp **or**
+a status pass that stat'd a file on the host.
+
+Paths cross as display text plus a token sealed under this list's own binding: a
+browser token never names a transfer. Hidden names (`files::hidden`) are only
+counted. A failure crosses as a count, because the backend's sentences can name
+full paths. Three rules keep a stale phone from losing data:
+- **The window re-reads status before every act** and skips, and reports, any
+  file that no longer stands as the row offered it (`stillStands`). A deletion
+  also meets `sync_apply_delete`'s own live premise.
+- **A new file is pushed unforced**, so one that appeared on the host in the
+  meantime is a failure, not an overwrite.
+- **A resolve is never retried.** Past its 120 s deadline the window may still be
+  working, so the phone says the outcome is unknown and reads the list again.
+
+The three-way merge stays on the desktop (the phone compares, read-only), and so
+does the scan for files only the host holds: it is a recursive host walk behind
+the HPC guard, which a phone must not start or prompt for.
+
 ## Writing into a project (Upload here)
 
 The one route by which a phone puts a file into a visible project folder

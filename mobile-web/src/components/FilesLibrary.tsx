@@ -288,7 +288,7 @@ const CHECK = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5
  * and its PDFs become no cards on the project screen. With the desktop not
  * connected to the host it says so.
  */
-export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, showTab: showTabOffer, linked, side = "here", onSide }: {
+export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, showTab: showTabOffer, linked, side = "here", onSide, hostLabel }: {
   projectId: string;
   /** The project's name: the root's title. */
   label: string;
@@ -308,6 +308,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   side?: FilesSide;
   /** Both sides are there: the root shows the switch, which calls this. */
   onSide?: (side: FilesSide) => void;
+  /** The remote side's name on the switch; without one, "Remote computer". */
+  hostLabel?: string;
 }) {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
@@ -880,7 +882,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     <div className="files-library-body">
       {atRoot && onSide && <div className="terminal-view-switch files-side-switch" role="group" aria-label={t("mobile.files.side.label")}>
         <button className={onHost ? "" : "selected"} aria-pressed={!onHost} onClick={() => onSide("here")}>{t("mobile.files.side.here")}</button>
-        <button className={onHost ? "selected" : ""} aria-pressed={onHost} onClick={() => onSide("host")}>{t("mobile.files.side.host")}</button>
+        <button className={onHost ? "selected" : ""} aria-pressed={onHost} onClick={() => onSide("host")}>{hostLabel || t("mobile.files.side.host")}</button>
       </div>}
       <input ref={searchBox} className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search"
         placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}

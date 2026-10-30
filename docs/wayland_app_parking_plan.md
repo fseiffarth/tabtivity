@@ -1,10 +1,11 @@
 # GNOME/Wayland: launched apps in the Apps view and parked on project switch
 
-Status: plan (2026-10-26), nothing implemented. Written from three read-only
+Status: implemented and landed on develop 2026-10-26 (A1a `756b9fd3` through
+the final review `d658df66`); never run live. Written from three read-only
 investigations (tracking, parking backend, switch flow + frontend). None could
 reach the X display from the fence, so live window facts are still owed.
-Handoff: `docs/wayland_app_parking_handoff.md` (not written yet; the
-implementers create it).
+Handoff: `docs/wayland_app_parking_handoff.md` (per-step notes and the final
+review's "Flagged for user").
 
 ## Fixed decisions (user, 2026-10-26 — reviewers may not undo)
 

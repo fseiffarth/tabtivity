@@ -66,6 +66,7 @@ import {
   RailSwitchSideIcon,
 } from "../common/EdgeRailIcons";
 import { availableSidePanelViews } from "../files/sidePanelViews";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { useDevTodoAvailable } from "../files/DevTodoView";
 import { useHpcJobsStore } from "../../stores/remote/hpc/hpcJobs";
 import { HostKeyConfirmDialog } from "../common/HostKeyConfirmDialog";
@@ -407,6 +408,9 @@ export function AppShell() {
   const activeRemote = useProjectsStore(
     (s) => !!s.projects.find((p) => p.id === activeId)?.remote,
   );
+  const activePinned = useProjectsStore((s) =>
+    isHostPinned(s.projects.find((p) => p.id === activeId)),
+  );
   // The edge rail offers every view the panel's own view row does for this
   // scope — the same table (`sidePanelViews`), so the two never read
   // differently. SLURM is only known once the panel's probe ran; the rail
@@ -416,6 +420,7 @@ export function AppShell() {
     inBox: scope.startsWith(BOX_SCOPE_PREFIX),
     projectId: activeId,
     remote: activeRemote,
+    mirror: !activePinned,
     slurm: activeSlurm,
     remarks: remarksEnabled,
     todo: devTodo,

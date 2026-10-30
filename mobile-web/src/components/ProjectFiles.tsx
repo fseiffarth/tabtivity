@@ -27,7 +27,7 @@ export { FileGlyph, asViewerFile } from "./FilesLibrary";
  * it opens on the one it was last put away on (`readFilesSide`), and its
  * root's switch moves between them.
  */
-export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true, here = true, host = false }: {
+export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true, here = true, host = false, hostLabel }: {
   projectId: string;
   /** The project's name, the drawer's heading and the library root's title. */
   label: string;
@@ -51,6 +51,8 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   here?: boolean;
   /** The remote project's tree on its host is there too (`host_files`). */
   host?: boolean;
+  /** What the root's switch calls the remote side (`host_label`). */
+  hostLabel?: string;
 }) {
   const t = useT();
   const both = here && host;
@@ -83,7 +85,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
 
   if (libraryShown) {
     return <FilesLibrary key={side} projectId={projectId} label={label} onClose={direct ? onClose : closeLibrary}
-      markup={markup} showTab={showTab} linked={linked} side={side} onSide={both ? pickSide : undefined} />;
+      markup={markup} showTab={showTab} linked={linked} side={side} onSide={both ? pickSide : undefined} hostLabel={hostLabel} />;
   }
 
   return <div className="sheet-backdrop files-drawer-backdrop" role="presentation" onClick={onClose}>

@@ -1,6 +1,10 @@
 # Phone access for every project type
 
-*Status: plan, 2026-10-21, reviewed the same day (see "Plan review"). Nothing built.*
+*Status: plan, 2026-10-21, reviewed the same day (see "Plan review"). Phase 1
+landed on develop 2026-10-21 (handoff final review `11c2f9b9`), never run live;
+handoff: `docs/mobile_every_project_type_handoff.md`. Phase 2's remote-host
+part landed through `docs/mobile_remote_host_tabs_plan.md`; its container and
+VM tabs are still open.*
 
 ## Why
 

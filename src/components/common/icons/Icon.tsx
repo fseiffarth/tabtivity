@@ -578,6 +578,16 @@ export function CloudIcon(p: IconProps) {
   );
 }
 
+/** A phone — a paired phone is in this project or tab. */
+export function PhoneIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="7" y="3" width="10" height="18" rx="2" />
+      <path d="M11 18h2" />
+    </Frame>
+  );
+}
+
 /** A house — this machine, the local mirror. */
 export function HomeIcon(p: IconProps) {
   return (
@@ -681,6 +691,16 @@ export function KeyboardIcon(p: IconProps) {
       <rect x="2.5" y="6" width="19" height="12" rx="2" />
       <path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M6.5 13.5h.01M17.5 13.5h.01" />
       <path d="M9.5 14h5" />
+    </Frame>
+  );
+}
+
+/** A microphone — the Chat's hands-free voice is on. */
+export function MicIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" />
     </Frame>
   );
 }

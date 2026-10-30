@@ -41,6 +41,9 @@ import { MarkdownView } from "./fileViewer/MarkdownView";
 import { TexView } from "./fileViewer/TexView";
 import { TexWorkspaceView } from "./fileViewer/TexWorkspaceView";
 import { ImageView } from "./fileViewer/ImageView";
+import { isHostPinned } from "../../lib/projectTabHost";
+import { useDialogs } from "../common/PromptDialogs";
+import { useT } from "../../lib/i18n";
 
 interface Props {
   /** Which built-in viewer to render with. */
@@ -130,6 +133,12 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
   }, [path, projectId]);
 
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
+  // A host-pinned project (VM, remote-only) has no local copy: every file it
+  // shows is read from the host, there is no other side to switch to, and the
+  // tab carries no source badge (on such a project it would say nothing).
+  const hostPinned = isHostPinned(project);
+  const t = useT();
+  const { showMessage, dialogs } = useDialogs();
 
   // A viewer tab is opened against one fixed absolute path (mirror OR host). For
   // a remote project this manual override lets the SAME tab show the other side
@@ -151,7 +160,7 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
   }, [path, projectId]);
   const rel = useMemo(() => autoSyncRel(project, path), [project, path]);
   const mirrorRoot = useMemo(() => localMirrorRootFor(project), [project]);
-  const effectiveSource: FileSource = sideOverride ?? source ?? "none";
+  const effectiveSource: FileSource = hostPinned ? "remote" : (sideOverride ?? source ?? "none");
   const effectivePath = useMemo(() => {
     if (!project?.remote || !rel) return path;
     if (effectiveSource === "remote") return resolvePath(project.remote.remote_path, rel);
@@ -160,11 +169,11 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
   }, [project, rel, effectiveSource, mirrorRoot, path]);
 
   useEffect(() => {
-    if (tabKey) useFileSourcesStore.getState().setSource(tabKey, effectiveSource);
+    if (tabKey && !hostPinned) useFileSourcesStore.getState().setSource(tabKey, effectiveSource);
     return () => {
       if (tabKey) useFileSourcesStore.getState().clearSource(tabKey);
     };
-  }, [tabKey, effectiveSource]);
+  }, [tabKey, effectiveSource, hostPinned]);
 
   // Disconnected remote project: reading a remote-native (SFTP) file would block
   // on the dead pool and each nested viewer would flash its own red read error.
@@ -193,13 +202,14 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
     // every mounted viewer tab of every backgrounded remote project fired an
     // SFTP stat the moment the pool (re)connected. Re-shown, this re-runs and
     // probes once.
-    if (!remoteRoot || !rel || sshState !== "connected" || !visible) return;
+    // A host-pinned project has no switch, so nothing to probe for.
+    if (!remoteRoot || !rel || sshState !== "connected" || !visible || hostPinned) return;
     let cancelled = false;
     fileMtime(resolvePath(remoteRoot, rel), projectId)
       .then(() => { if (!cancelled) setRemoteMissing(false); })
       .catch(() => { if (!cancelled) setRemoteMissing(true); });
     return () => { cancelled = true; };
-  }, [remoteRoot, rel, sshState, projectId, visible]);
+  }, [remoteRoot, rel, sshState, projectId, visible, hostPinned]);
   // Mirror the Local/Remote switch out to the tab strip so its file-source badge
   // is a clickable toggle (not just a glyph): switching applies only when this
   // remote project's file has a counterpart on the other side (`rel`). Cleared
@@ -207,7 +217,7 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
   useEffect(() => {
     if (!tabKey) return;
     const store = useFileSourcesStore.getState();
-    if (project?.remote && rel) {
+    if (project?.remote && rel && !hostPinned) {
       store.setControls(tabKey, {
         current: effectiveSource === "remote" ? "remote" : "local",
         set: setSideOverride,
@@ -219,7 +229,7 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
     return () => {
       if (tabKey) useFileSourcesStore.getState().clearControls(tabKey);
     };
-  }, [tabKey, project?.remote, rel, effectiveSource, remoteMissing]);
+  }, [tabKey, project?.remote, rel, effectiveSource, remoteMissing, hostPinned]);
 
   // A `.tex` tab that is really a WORKSPACE, healing itself (#tex-structure).
   // `viewer` is persisted, so a `.tex` opened as a bare editor before the
@@ -258,6 +268,16 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
   }
 
   const openExternally = () => {
+    // A host file is not on this computer, so no app here can open it: say
+    // where a copy comes from (the file tree's Download to…) instead of
+    // handing the OS a path it does not have — the tree's own rule.
+    if (effectiveSource === "remote") {
+      void showMessage({
+        title: t("fileTree.hostFileExternalTitle"),
+        body: t("fileTree.hostFileExternalBody", { name: fileName }),
+      });
+      return;
+    }
     useWindowsStore
       .getState()
       .openFile(effectivePath, undefined, projectId, "side_file_tree")
@@ -343,7 +363,7 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
     view = <TextView path={effectivePath} onOpenExternally={openExternally} tabKey={tabKey} groupId={groupId} />;
   }
   const sourceSwitch =
-    project?.remote && rel
+    project?.remote && rel && !hostPinned
       ? {
           current: (effectiveSource === "remote" ? "remote" : "local") as "local" | "remote",
           onChange: setSideOverride,
@@ -356,7 +376,9 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
       {/* The side the viewer's bytes come from (`useFileSource`): the Mark up
           gate and SyncTeX read it. Until `file_source` answers, a remote
           project's file counts as remote — the side that offers less. */}
-      <FileSourceContext.Provider value={sideOverride ?? source ?? (project?.remote ? "remote" : "none")}>
+      <FileSourceContext.Provider
+        value={hostPinned ? "remote" : (sideOverride ?? source ?? (project?.remote ? "remote" : "none"))}
+      >
       <ViewerHeaderInfoContext.Provider value={{ path: effectivePath, projectId, sourceSwitch }}>
         {/* A single relative host so the marker/laser presentation overlay can
             sit over ANY viewer without each one wiring it in (see
@@ -384,6 +406,7 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
           </ViewerErrorBoundary>
           {!presenting && <PresentationOverlay />}
         </div>
+        {dialogs}
       </ViewerHeaderInfoContext.Provider>
       </FileSourceContext.Provider>
       </PaneVisibleContext.Provider>

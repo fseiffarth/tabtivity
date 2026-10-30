@@ -282,7 +282,9 @@ pub fn watch_root_for(project_id: &str) -> Option<PathBuf> {
         return dir.is_dir().then_some(dir);
     }
     if crate::services::remote::remote_target_for(project_id).is_some() {
-        let mirror = crate::services::remote_sync::mirror_dir(project_id);
+        // A remote-only project has no local tree to watch; its default
+        // mirror path is not one, even if an old folder still sits there.
+        let mirror = crate::services::remote_sync::mirror_dir_opt(project_id)?;
         return mirror.is_dir().then_some(mirror);
     }
     let dir = crate::services::remote::project_directory(project_id)?;

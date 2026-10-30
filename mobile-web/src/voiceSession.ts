@@ -45,7 +45,7 @@ type AudioWindow = Window & { AudioContext?: typeof AudioContext; webkitAudioCon
 /** The screen stays on while dictating: a phone that blanks takes the
  * microphone with it. The browser drops the lock whenever the page is hidden,
  * so it is asked for again each time the page comes back. */
-function holdScreenAwake(scope: Window): () => void {
+export function holdScreenAwake(scope: Window): () => void {
   const wakeLock = (scope.navigator as WakeLockNavigator).wakeLock;
   if (!wakeLock) return () => {};
   let released = false;
@@ -66,7 +66,7 @@ function holdScreenAwake(scope: Window): () => void {
   };
 }
 
-interface MicMeter {
+export interface MicMeter {
   track: MediaStreamTrack;
   close(): void;
 }
@@ -78,7 +78,7 @@ interface MicMeter {
  * listens, never errs, and returns no words — and a second capture beside the
  * recognizer's own starves one of the two there.
  */
-async function openMicMeter(scope: Window, onLevel: (level: number) => void): Promise<MicMeter | undefined> {
+export async function openMicMeter(scope: Window, onLevel: (level: number) => void): Promise<MicMeter | undefined> {
   const audioWindow = scope as AudioWindow;
   const Context = audioWindow.AudioContext ?? audioWindow.webkitAudioContext;
   const devices = scope.navigator.mediaDevices;

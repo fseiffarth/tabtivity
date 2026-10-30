@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -15,6 +15,9 @@ import { projectTypeTags } from "./projectTypeTags";
 import { OrbitSpinner } from "../common/OrbitSpinner";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { formatWorkedTime } from "../../lib/formatWorkedTime";
+
+const POPUP_GAP = 6;
+const POPUP_MARGIN = 8;
 
 type Translator = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
@@ -176,6 +179,26 @@ export function ProjectHoverCard({
   const t = useT();
   const { popupPos, timeToday, cpu, scaffoldMissing, isLiveProject, timerPaused } = state;
   const gitState = useGitDirtyStore((s) => s.byId[project.id]);
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  // Place the card under its anchor (centred or start-aligned), then clamp it
+  // horizontally into the window: a pill at the strip's edge must not push the
+  // card's left part off-screen (same as TabHoverCard).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!popupPos || !el) {
+      setPos(null);
+      return;
+    }
+    const { width } = el.getBoundingClientRect();
+    const left = popupPos.alignment === "start" ? popupPos.x : popupPos.x - width / 2;
+    const next = {
+      left: Math.max(POPUP_MARGIN, Math.min(left, window.innerWidth - POPUP_MARGIN - width)),
+      top: popupPos.y + POPUP_GAP,
+    };
+    setPos((prev) => (prev && prev.left === next.left && prev.top === next.top ? prev : next));
+  }, [popupPos, project, timeToday, cpu, scaffoldMissing, gitState, showTags]);
   if (!popupPos) return null;
 
   const description = projectDescription(project);
@@ -186,8 +209,15 @@ export function ProjectHoverCard({
 
   return createPortal(
     <div
-      className={`project-pill-popup${popupPos.alignment === "start" ? " anchor-start" : ""}`}
-      style={{ left: popupPos.x, top: popupPos.y }}
+      ref={ref}
+      className="project-pill-popup"
+      style={{
+        left: pos?.left ?? popupPos.x,
+        top: pos?.top ?? popupPos.y,
+        // JS owns the position (clamped), so drop the class's centring transform.
+        transform: "none",
+        visibility: pos ? "visible" : "hidden",
+      }}
     >
       {description && <span className="pill-popup-description">{description}</span>}
       {typeTags.length > 0 && (
@@ -202,6 +232,7 @@ export function ProjectHoverCard({
               {t.label}
             </span>
           ))}
+          {typeTags.some((tag) => tag.key === "remoteOnly") && <UntestedTag id="projectType.tagRemoteOnly" />}
         </span>
       )}
       {project.remote ? (

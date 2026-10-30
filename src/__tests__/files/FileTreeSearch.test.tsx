@@ -7,7 +7,10 @@
  *   scope) and opens hits through the shared `openFileEntry` policy;
  * - the view-switcher toolbar no longer offers a Search view (tripwire);
  * - a remote-source listing shows the "switch to Local" hint instead of the
- *   search box (its backends walk the local path).
+ *   search box (its backends walk the local path);
+ * - a host-pinned project searches its host: the project directory plus a
+ *   project-relative `relRoot`, and one `confirmed` retry after the HPC
+ *   question (`docs/remote_only_projects_plan.md`, E6a/F4).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
@@ -28,6 +31,8 @@ import { useTabsStore } from "../../stores/tabs";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useFileSourcePrefStore } from "../../stores/remote/fileSourcePref";
 import { clearFileViewSnapshots } from "../../lib/projects/fileViewSnapshots";
+import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
+import { HPC_GUARD } from "../../lib/remote/hpc/hpcGuard";
 
 const PROJECT: ProjectEntry = {
   id: "p1",
@@ -305,5 +310,76 @@ describe("in-tree project search", () => {
     const hint = document.querySelector(".file-tree-search-remote-hint");
     expect(hint).toBeTruthy();
     expect(hint!.textContent).toContain("switch the source to Local");
+  });
+
+  describe("on a host-pinned project", () => {
+    const PINNED = {
+      ...PROJECT,
+      remote: { host: "h", user: "u", remote_path: "/srv/p1", remote_only: true },
+    } as ProjectEntry;
+    const refusal = `${HPC_GUARD} host-search u@h:22`;
+
+    beforeEach(() => {
+      useProjectsStore.setState({ projects: [PINNED], activeId: "p1", loaded: true, sidePanelFolderByProject: {} });
+      useRemoteStatusStore.setState({ byProject: { p1: { ssh: "connected", vpn: "off" } }, byHost: {} });
+    });
+
+    it("offers search and passes the project directory with the folder as relRoot", async () => {
+      await renderPanel();
+      expect(document.querySelector(".file-tree-search-remote-hint")).toBeNull();
+      fireEvent.click(await screen.findByText("sub"));
+      await screen.findByText("deep.txt");
+      searchInput();
+      fireEvent.click(screen.getByRole("button", { name: "Content" }));
+      fireEvent.change(searchInput(), { target: { value: "hello" } });
+      const [scoped] = await waitForSearchCalls(1);
+      expect(scoped).toEqual({ projectDir: "/p/p1", relRoot: "sub", query: "hello", caseSensitive: false, maxResults: 500 });
+      fireEvent.click(screen.getByRole("button", { name: "root" }));
+      const calls = await waitForSearchCalls(2);
+      expect(calls[1]).toEqual({ projectDir: "/p/p1", query: "hello", caseSensitive: false, maxResults: 500 });
+      expect(await screen.findByText(/see/)).toBeTruthy();
+    });
+
+    it("an HPC-tagged host asks once, then retries with confirmed", async () => {
+      const request = vi.fn().mockResolvedValue(true);
+      useHpcGuardStore.setState({ request });
+      const base = mockInvoke.getMockImplementation()!;
+      mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+        (cmd === "project_search" || cmd === "list_project_paths") && !args?.confirmed
+          ? Promise.reject(refusal)
+          : base(cmd, args),
+      );
+      await renderPanel();
+      searchInput();
+      fireEvent.click(screen.getByRole("button", { name: "Content" }));
+      fireEvent.change(searchInput(), { target: { value: "hello" } });
+      const calls = await waitForSearchCalls(2);
+      expect(request).toHaveBeenCalledWith("host-search", "u@h:22");
+      expect(calls[0]).not.toHaveProperty("confirmed");
+      expect(calls[1]).toMatchObject({ projectDir: "/p/p1", confirmed: true });
+      expect(await screen.findByText(/see/)).toBeTruthy();
+    });
+
+    it("a declined question says so and does not search", async () => {
+      useHpcGuardStore.setState({ request: vi.fn().mockResolvedValue(false) });
+      const base = mockInvoke.getMockImplementation()!;
+      mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+        cmd === "project_search" || cmd === "list_project_paths" ? Promise.reject(refusal) : base(cmd, args),
+      );
+      await renderPanel();
+      fireEvent.change(searchInput(), { target: { value: "readme" } });
+      expect(await screen.findByText(/Not searched/)).toBeTruthy();
+      // Name mode keeps its answer for this directory: typing on does not ask again.
+      fireEvent.change(searchInput(), { target: { value: "readm" } });
+      await act(async () => {});
+      expect(mockInvoke.mock.calls.filter(([c]) => c === "list_project_paths")).toHaveLength(1);
+    });
+
+    it("disconnected, nothing is searched", async () => {
+      useRemoteStatusStore.setState({ byProject: { p1: { ssh: "off", vpn: "off" } }, byHost: {} });
+      await renderPanel();
+      expect(document.querySelector(".file-tree-search-input")).toBeNull();
+      expect(mockInvoke.mock.calls.filter(([c]) => c === "project_search" || c === "list_project_paths")).toHaveLength(0);
+    });
   });
 });

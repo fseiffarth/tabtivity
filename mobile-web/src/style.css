@@ -199,6 +199,7 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
    the card's border tinted to match, so a tab in either mode stands out in a
    list of look-alikes. A tab colour keeps its left edge. */
 .agent-mode-mark { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 6px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 16%, transparent); font-size:.66rem; font-weight:800; letter-spacing:.05em; line-height:1; }
+.agent-mode-mark.host { display:inline-block; min-width:0; max-width:14em; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .agent-mode-mark.plan { color:#b3a8ff; }
 .agent-mode-mark.goal { color:#6fd6e0; }
 /* Subagents at work (`SubagentCount`): the mode pills' shape in the accent,
@@ -340,12 +341,18 @@ small { color:#9498aa; }
 .new-tab-where { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .new-tab-where > small { flex:1 0 100%; padding:0 6px; color:#9da3b6; font-size:.8rem; }
 .new-tab-where > button { min-height:36px; padding:6px 10px; font-size:.8rem; overflow-wrap:anywhere; }
-/* "Runs on": the label beside a compact select (the base select's chevron),
-   the note under both. */
-.new-tab-machine { display:grid; gap:4px; }
-.new-tab-machine > label { display:flex; align-items:center; gap:8px; min-width:0; }
-.new-tab-machine small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
-.new-tab-machine select { flex:1 1 auto; padding:7px 30px 7px 12px; background-position:right 10px center; font-size:.85rem; text-overflow:ellipsis; }
+/* "Runs on": the label beside a field drawn as the compact select, which
+   unfolds the sheets' `.option-list` under it (no native picker); the note
+   under both. Only the chevron's turn moves. */
+.new-tab-machine { display:grid; gap:6px; }
+.new-tab-machine-field { display:flex; align-items:center; gap:8px; min-width:0; }
+.new-tab-machine-field > small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
+.new-tab-machine-toggle { display:flex; flex:1 1 auto; align-items:center; gap:8px; min-width:0; padding:7px 10px 7px 12px; border-color:#3a3e50; border-radius:10px; background:#171a24; color:#fff; font-size:.85rem; text-align:left; }
+.new-tab-machine-toggle.open { border-color:#7c6cff; }
+.new-tab-machine-toggle > span { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.new-tab-machine-toggle > svg { width:16px; height:16px; flex:0 0 auto; fill:none; stroke:#9aa0b4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .15s ease; }
+.new-tab-machine-toggle.open > svg { transform:rotate(180deg); }
+.new-tab-machine-list button { font-size:.9rem; }
 /* The local-model group: the agents grid under a label worded like "Agents start in". */
 .new-tab-local { display:flex; flex-direction:column; gap:6px; }
 .new-tab-local > small { padding:0 6px; color:#9da3b6; font-size:.8rem; overflow-wrap:anywhere; }
@@ -360,6 +367,11 @@ small { color:#9498aa; }
 .new-tab-cloud-agent { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 0 8px; }
 .new-tab-cloud-agent > strong { flex:1 1 auto; min-width:0; color:#aeb4c8; font-size:.9rem; font-weight:600; overflow-wrap:anywhere; }
 .new-tab-cloud-agent > button { min-height:36px; padding:6px 10px; font-size:.8rem; }
+/* The model sheet's launch defaults: the fold above, its fields stacked. */
+.launch-defaults[open] { display:grid; gap:10px; padding-bottom:8px; }
+.launch-defaults > .sheet-note { padding:0; }
+.launch-defaults input { padding:10px; border-radius:10px; }
+.launch-defaults-actions { display:flex; flex-wrap:wrap; gap:8px; }
 /* Home: slim bar, large title, one segmented switch, then inset groups with
    hairline rows. No gradients: accent for actions and selection, colour for
    state. The project screen shares the gutter and the ground. */
@@ -460,7 +472,12 @@ small { color:#9498aa; }
 /* The ✓ rides beside the row, never inside it: a button in a button is invalid
    markup and would fold finishing the thing into the tap that opens it. */
 .mobile-alert-row-wrap { display:flex; align-items:center; }
-.mobile-alert-row-wrap .mobile-alert-row { flex:1 1 auto; min-width:0; }
+.mobile-alert-row-wrap .mobile-alert-row,.mobile-alert-row-wrap .home-needs-row { flex:1 1 auto; min-width:0; }
+/* ▶ Continue beside an interrupted row: the ✓'s height, in the interrupted
+   mark's colours (`.agent-status.interrupted`). */
+.home-needs-continue { display:inline-flex; align-items:center; gap:5px; height:38px; flex:0 0 auto; margin-right:var(--sp-2); padding:0 10px; border-radius:11px; border-color:#ff8a93; background:#46202a; color:#ff8a93; font-size:var(--fs-sub); font-weight:700; }
+.home-needs-continue > span { font-size:.7rem; }
+.home-needs-continue:disabled { opacity:.55; }
 /* The board card's own check, same size and same square, so a tick means one
    thing across the phone (`.todo-check`). */
 .mobile-alert-done { width:38px; height:38px; flex:0 0 auto; margin-right:var(--sp-2); padding:0; border-radius:11px; border-color:#776db4; background:#24203b; color:#fff; font-size:1rem; font-weight:800; }
@@ -486,7 +503,7 @@ button.mobile-alert-row { cursor:pointer; }
    into its cuts). `--oct-edge` is the border colour, so a state retints both.
    Borderless elements need only the clip. The outer shadows go: a clip would
    cut them off anyway. */
-.home-screen .search,.home-screen .activity-sort select,.home-screen .mobile-alerts-error,.home-screen .mobile-alert-done,.home-screen .cards > button.card,.home-screen .error,.home-screen .notice,.home-screen .inbox-upload,.home-screen .inbox-upload button {
+.home-screen .search,.home-screen .activity-sort select,.home-screen .mobile-alerts-error,.home-screen .mobile-alert-done,.home-screen .home-needs-continue,.home-screen .cards > button.card,.home-screen .error,.home-screen .notice,.home-screen .inbox-upload,.home-screen .inbox-upload button {
   --oct:10px; --oct-edge:#383c4d;
   --oct-corners:linear-gradient(to bottom right, var(--oct-lc, var(--oct-edge)) calc(50% + var(--oct-lw, 1px)), transparent 0) top left / var(--oct) var(--oct) no-repeat border-box,
     linear-gradient(to bottom left, var(--oct-edge) calc(50% + 1px), transparent 0) top right / var(--oct) var(--oct) no-repeat border-box,
@@ -496,7 +513,7 @@ button.mobile-alert-row { cursor:pointer; }
   clip-path:polygon(var(--oct) 0,calc(100% - var(--oct)) 0,100% var(--oct),100% calc(100% - var(--oct)),calc(100% - var(--oct)) 100%,var(--oct) 100%,0 calc(100% - var(--oct)),0 var(--oct));
 }
 .home-screen .cards > button.card { --oct:12px; }
-.home-screen .activity-sort select,.home-screen .mobile-alert-done,.home-screen .inbox-upload { --oct:8px; }
+.home-screen .activity-sort select,.home-screen .mobile-alert-done,.home-screen .home-needs-continue,.home-screen .inbox-upload { --oct:8px; }
 .home-screen .inbox-upload button { --oct:6px; }
 .home-screen .search,.home-screen .activity-sort select { --oct-edge:#3a3e50; border-color:var(--oct-edge); }
 .home-screen .search { background:var(--oct-corners),#171a24; }
@@ -504,6 +521,7 @@ button.mobile-alert-row { cursor:pointer; }
 .home-screen .mobile-alerts-error { --oct-edge:#6d3b46; border-color:var(--oct-edge); background:var(--oct-corners),rgba(60,30,38,.6); }
 .home-screen .cards > button.card { border-color:var(--oct-edge); background:var(--oct-corners),rgba(28,31,43,.92); }
 .home-screen .mobile-alert-done { --oct-edge:#776db4; border-color:var(--oct-edge); background:var(--oct-corners),#24203b; }
+.home-screen .home-needs-continue { --oct-edge:#ff8a93; border-color:var(--oct-edge); background:var(--oct-corners),#46202a; }
 .home-screen .cards > button.card.in-plan { --oct-edge:#7b6ee0; }
 .home-screen .cards > button.card.in-goal { --oct-edge:#4fb3c0; }
 .home-screen .cards > button.card.has-tab-color { --oct-lc:var(--tab-color); --oct-lw:3px; border-left-color:var(--tab-color); }
@@ -953,16 +971,18 @@ body.terminal-open { min-height:0; overflow:hidden; }
    output and raw screen rows (`.agent` without `.answer`) stay flat. */
 .readable-turn.agent.answer { width:auto; max-width:92%; padding:8px 12px; border-radius:16px 16px 16px 4px; background:#1d2030; color:#e3e6f2; }
 /* A message carries no buttons: what can be done with it — copy it, hear it
-   read — is a click-hold on the bubble away (`useMessageMenu`), so the chat
-   spends its width on words. The system's own long-press callout would fight
-   that press, so it is off over a bubble. */
-.readable-turn.user,.readable-turn.agent.answer { position:relative; -webkit-touch-callout:none; }
+   read — is a tap on the bubble away (`useMessageMenu`), so the chat spends
+   its width on words. A hold is the phone's own: it selects text right in the
+   bubble, with the system's handles and callout. */
+.readable-turn.user,.readable-turn.agent.answer { position:relative; }
 .readable-turn.agent.answer .readable-line { padding-left:0; text-indent:0; }
 /* A slash command (`CommandDivider`) steers the CLI rather than talking to
    the agent, so it is no bubble: a hairline across the chat with the command
    centred on it, in the prompt's violet. */
-.readable-command { display:flex; align-items:center; gap:10px; width:100%; margin:6px 0; color:#a99cf0; font:500 .8rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; -webkit-touch-callout:none; }
+.readable-command { display:flex; align-items:center; gap:10px; width:100%; margin:6px 0; color:#a99cf0; font:500 .8rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
 .readable-command::before,.readable-command::after { content:""; flex:1 1 0; min-width:16px; border-top:1px solid #3a3466; }
+.readable-command.interrupted { color:#ff8a93; }
+.readable-command.interrupted::before,.readable-command.interrupted::after { border-top-color:#6d3b46; }
 .readable-command-text { flex:0 1 auto; min-width:0; max-width:80%; text-align:center; overflow-wrap:anywhere; }
 .readable-lines.transcript { font:400 .9rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif; }
 /* The stored session holds one bubble per message the agent wrote, so the
@@ -1117,6 +1137,20 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .git-rows > li.git-more > span { color:#9da3b6; text-align:center; }
 .git-rows .git-quiet { color:#9da3b6; font-style:normal; }
 .git-rows .git-mark { margin-left:6px; }
+.diverged-bulk { display:grid; gap:6px; padding:0 2px; }
+.diverged-exclude { display:flex; align-items:center; gap:8px; min-height:36px; color:#9da3b6; font-size:.8rem; }
+.diverged-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.diverged-actions button { display:inline-flex; align-items:center; gap:5px; min-height:38px; padding:0 10px; border:1px solid #2c3a55; border-radius:9px; background:#10131b; color:#dbe4f6; font:inherit; font-size:.76rem; }
+.diverged-actions button.danger { border-color:#6b2f38; color:#ffb4c0; }
+.diverged-actions button:disabled { opacity:.45; }
+.diverged-row { gap:6px !important; }
+.diverged-name { display:block; width:100%; padding:0; border:0; background:none; color:inherit; font:inherit; font-size:.8rem; line-height:1.35; text-align:left; overflow-wrap:anywhere; }
+.git-rows > li.diverged-row > small.diverged-cue { font-size:.68rem; letter-spacing:.03em; text-transform:none; color:#9da3b6; }
+.git-rows > li.diverged-row > small.diverged-cue.remote { color:#f0b35a; }
+.git-rows > li.diverged-row > small.diverged-cue.local { color:#56d364; }
+.diverged-when, .git-rows > li.diverged-row > small.diverged-when { color:#9da3b6; font-size:.7rem; letter-spacing:0; text-transform:none; white-space:pre-line; }
+.diverged-ask { display:grid; gap:4px; max-height:44dvh; overflow:auto; }
+.diverged-ask ul { margin:0; padding:0 6px 4px 22px; color:#dbe4f6; font-size:.8rem; overflow-wrap:anywhere; }
 .git-remote > summary { cursor:pointer; }
 .git-remote > .git-rows { padding-top:6px; }
 .readable-empty button { margin-top:6px; }
@@ -1143,6 +1177,10 @@ body.terminal-open { min-height:0; overflow:hidden; }
    does not shuffle the row on every repaint. */
 .transcript-working-facts { min-width:0; margin-left:auto; overflow:hidden; color:#787f93; font-size:.72rem; font-variant-numeric:tabular-nums; white-space:nowrap; text-overflow:ellipsis; }
 .transcript-working-facts em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+/* The working row's Stop, after the facts: the desktop Chat's pill. */
+.transcript-working-stop { flex:none; margin-left:auto; padding:2px 10px; border:1px solid #3a3f52; border-radius:999px; background:transparent; color:#c8cde0; font:500 .72rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; }
+.transcript-working-facts + .transcript-working-stop { margin-left:0; }
+.transcript-working-stop em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
 /* A running shell, under the working row: its `$` where the dots are, and the
    agent's few words on it cut to one line. */
 .transcript-shell-mark { width:15px; text-align:center; color:#8fb8ff; font:600 .78rem/1 ui-monospace,SFMono-Regular,Menlo,monospace; }
@@ -1289,6 +1327,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .voice-feedback { margin:6px 6px 0; padding:9px 11px; border-radius:9px; background:#29253d; color:#e8e3ff; font-size:.86rem; overflow-wrap:anywhere; }
 .voice-feedback.error { background:#3b2027; color:#ffb4c0; }
 .voice-feedback em { margin-left:6px; color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+/* Hands-free's line is the large tap target that cancels the send window or
+   stops the voice reading the answer. */
+button.voice-feedback.hands-free { display:block; box-sizing:border-box; width:calc(100% - 12px); min-height:52px; border:0; text-align:left; font:inherit; font-size:.92rem; cursor:pointer; }
 .danger { color:#ff9aa6; }
 /* The facts row buttons' bottom sheet: a phone list in place of walking a TUI
    dialog with the arrow keys. */
@@ -1329,6 +1370,14 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .usage-notes li { display:flex; flex-wrap:wrap; gap:8px; padding:9px 11px; border-radius:10px; background:#1a1e29; font-size:.84rem; }
 .usage-notes strong { color:#c9cddb; }
 .usage-notes span { color:#9da4b8; overflow-wrap:anywhere; }
+/* Home → Agent CLIs sheet: one card per CLI, its windows as the status
+   sheet's meters. */
+.cli-overview-list { display:grid; gap:9px; margin:0; padding:0; list-style:none; }
+.cli-overview-card { display:grid; gap:7px; padding:11px; border:1px solid #383c4d; border-radius:12px; background:#1a1e29; }
+.cli-overview-card > small { color:#9da4b8; }
+.cli-overview-head { display:flex; gap:8px; align-items:baseline; }
+.cli-overview-head strong { flex:1; min-width:0; overflow-wrap:anywhere; }
+.cli-overview-plan { padding:1px 8px; border:1px solid #4a5068; border-radius:999px; color:#c9cddb; font-size:.78rem; }
 .usage-today { display:grid; gap:4px; padding:11px; border-top:1px solid #383c4d; }
 .usage-today strong { font-size:.9rem; }
 .usage-today span { color:#c9cddb; font-size:.86rem; }
@@ -1457,7 +1506,7 @@ span.files-close { background:transparent; }
 /* A remote project's side switch above the search box: the terminal view
    switch, as wide as the box, its two sides alike. */
 .files-side-switch { margin:0 4px; }
-.files-side-switch button { flex:1 1 0; }
+.files-side-switch button { flex:1 1 0; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 /* The search box under the head, and a hit's folder above its times. */
 .files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
 /* Upload here: one line under the search box, as wide as it, the arrow in a
@@ -1507,10 +1556,6 @@ span.files-close { background:transparent; }
 .local-models-list .local-model-tabs { color:#8fb8ff; }
 .local-models-list .transcript-working-dots { vertical-align:middle; }
 .local-models-start { min-height:48px; }
-/* Select text (`MessageMenu`): the message again, as plain text the phone's
-   own selection handles and callout work on — the bubble's hold is the menu,
-   so it cannot be selected in place. */
-.message-select-text { max-height:52dvh; overflow:auto; overscroll-behavior:contain; padding:10px 12px; border-radius:13px; background:#1e2230; color:#e3e6f2; font:400 .92rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif; white-space:pre-wrap; overflow-wrap:anywhere; -webkit-user-select:text; user-select:text; -webkit-touch-callout:default; }
 /* A tapped chat link's address (`LinkSheet`): the host alone, then all of it. */
 .link-sheet-target { display:grid; gap:4px; margin:0 0 10px; padding:10px 12px; border-radius:13px; background:#1e2230; color:#e3e6f2; }
 .link-sheet-target strong { font:650 .98rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; overflow-wrap:anywhere; }

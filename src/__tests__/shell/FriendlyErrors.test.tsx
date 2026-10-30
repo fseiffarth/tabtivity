@@ -3,6 +3,7 @@ import { act, fireEvent, render } from "@testing-library/react";
 import { friendlyError } from "../../lib/errors";
 import { translate, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../../components/common/ErrorNote";
+import { BRAND } from "../../lib/brand";
 
 const t = (key: TranslationKey) => translate("en", key);
 const summaryKey = (raw: string) => {
@@ -32,6 +33,12 @@ describe("friendlyError", () => {
     ["bash: rsync: command not found", "errors.programMissing"],
   ])("%s → %s", (raw, key) => {
     expect(summaryKey(raw)).toBe(key);
+  });
+
+  it("words a remote-only refusal wherever it surfaces, even one that also names a file error", () => {
+    const raw = `${BRAND.upper}_REMOTE_ONLY: moving the mirror: this project keeps no local copy (os error 2)`;
+    expect(summaryKey(raw)).toBe("tabs.remoteOnlyRefused");
+    expect(summaryKey("REMOTE_ONLY: something")).toBeNull();
   });
 
   it("keeps the raw text as the detail", () => {

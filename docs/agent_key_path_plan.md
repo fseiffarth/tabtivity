@@ -1,8 +1,8 @@
 # One agent-API-key path (#2389)
 
-*Status: built on branch `hosted` (2026-10-10, steps 1–5), never run live.
-Settles open problem 1 of `docs/server.md` before `hosted` → `develop`
-(#2386).*
+*Status: built on branch `hosted` (2026-10-10, steps 1–5), since merged into
+`develop`; never run live. Settles open problem 1 of `docs/server.md` before
+`hosted` → `develop` (#2386).*
 
 ## Why
 

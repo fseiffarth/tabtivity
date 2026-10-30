@@ -25,7 +25,11 @@
 
 // An agent tab's conversation taken along when it moves between here and a host.
 pub mod agent_host_move;
+// Content search and quick open on a remote-only project's host (E6a).
+pub mod host_search;
 pub mod remote_credentials;
+// A remote-only project's scaffold and first commit, made on the host.
+pub mod remote_scaffold;
 pub mod remote_sync;
 // A host tab's conversation, copied from the host over the pooled SFTP session.
 pub mod remote_transcript;
@@ -224,7 +228,7 @@ pub fn project_directory(project_id: &str) -> Option<String> {
 /// The `RemoteSpec` mirrored into a `projects.json` entry's flattened
 /// `extra["remote"]`, or `None` for a local project. Pure, so the "remote iff a
 /// spec is present" mapping is testable without the real state dir.
-fn spec_from_entry(entry: &ProjectEntry) -> Option<RemoteSpec> {
+pub(crate) fn spec_from_entry(entry: &ProjectEntry) -> Option<RemoteSpec> {
     spec_from_value(entry.extra.get("remote")?)
 }
 
@@ -233,6 +237,58 @@ fn spec_from_entry(entry: &ProjectEntry) -> Option<RemoteSpec> {
 /// dir). `None` when the value is not a spec (`null`, a malformed object).
 pub(crate) fn spec_from_value(value: &serde_json::Value) -> Option<RemoteSpec> {
     serde_json::from_value(value.clone()).ok()
+}
+
+/// A remote project's **local copy** — the folder on this machine its tree is
+/// mirrored into: the explicit `extra["mirror"]`, else the default
+/// `<state_dir>/remote-projects/<id>/mirror`. `None` for a remote-only project
+/// ([`RemoteSpec::is_remote_only`], VM projects included), which has none, and
+/// for a local project, which is not mirrored. Pure over the entry and an
+/// explicit state dir, so the root planners stay testable;
+/// `remote_sync::mirror_dir_opt` is the same answer by project id.
+///
+/// Every caller that resolves "a remote project's local tree" for something
+/// other than the sync engines goes through this (or `mirror_dir_opt`): a
+/// remote-only project's default path must never be taken for a tree, nor
+/// created as one.
+///
+/// Remoteness is the `extra["remote"]` key, as everywhere: an entry whose spec
+/// does not parse still resolves its mirror (as `mirror_dir_opt` does by id),
+/// so a planner moved onto this keeps its old answer for such an entry.
+pub(crate) fn local_copy_in(entry: &ProjectEntry, state_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    if entry.extra.get("remote").is_none_or(serde_json::Value::is_null) || entry_is_remote_only(entry) {
+        return None;
+    }
+    Some(
+        crate::services::fs_confine::mirror_override_dir(entry)
+            .unwrap_or_else(|| crate::services::remote_sync::default_mirror_dir_in(state_dir, &entry.id)),
+    )
+}
+
+/// Whether this registry entry is a remote project that keeps no local copy
+/// ([`RemoteSpec::is_remote_only`]); `false` for a local project. Pure, for the
+/// planners that walk a project list rather than look one id up.
+pub(crate) fn entry_is_remote_only(entry: &ProjectEntry) -> bool {
+    spec_from_entry(entry).is_some_and(|spec| spec.is_remote_only())
+}
+
+/// Whether the project's registry record reads remote-only **now**. The
+/// background sync loops (`git_peer`, `sync_auto`) capture the spec when they
+/// start, so each pass asks this again once it holds the project's mutation
+/// lock: a Remote → Remote-only conversion (`commands::remote_unpair`)
+/// writes the flag under that lock, and a pass that waited behind it must end
+/// rather than act on the old spec. `false` when the record cannot be read.
+pub fn is_remote_only_now(project_id: &str) -> bool {
+    remote_target_for(project_id).is_some_and(|t| t.spec.is_remote_only())
+}
+
+/// The one wording of a refusal a remote-only project answers with:
+/// `{UPPER}_REMOTE_ONLY: <what>`. The prefix is the sentinel the cockpit matches
+/// to word each refusal in its own language (`remoteOnlyRefusal` in
+/// `src/lib/projectTabHost.ts`), so every refusal is built here and the raw
+/// text after it is only a fallback.
+pub fn remote_only_refusal(what: &str) -> String {
+    format!("{}_REMOTE_ONLY: {what}", crate::brand::UPPER)
 }
 
 /// The extra "worker" hosts mirrored into a `projects.json` entry's flattened
@@ -247,9 +303,15 @@ fn compute_hosts_from_entry(entry: &ProjectEntry) -> Vec<ComputeHost> {
 }
 
 /// [`compute_hosts_from_entry`] over the raw `compute_hosts` value of a record
-/// read some other way; `[]` when it is not a list of hosts.
+/// read some other way; `[]` when it is not a list of hosts. A worker's
+/// `remote_only` is dropped: the posture is the project's (its primary spec's),
+/// so a stale one on a worker can never pin or unpin anything.
 pub(crate) fn compute_hosts_from_value(value: &serde_json::Value) -> Vec<ComputeHost> {
-    serde_json::from_value(value.clone()).unwrap_or_default()
+    let mut hosts: Vec<ComputeHost> = serde_json::from_value(value.clone()).unwrap_or_default();
+    for host in &mut hosts {
+        host.spec.remote_only = None;
+    }
+    hosts
 }
 
 /// The extra worker hosts declared for `project_id`, read from the always-local
@@ -378,8 +440,19 @@ pub async fn connect(
     connect_host(pool, project_id, PRIMARY_HOST, password).await
 }
 
+/// Whether connecting `host_id` mints the project's local mirror folder: only
+/// the [`PRIMARY_HOST`] owns a mirror — a worker never does — and a remote-only
+/// project ([`RemoteSpec::is_remote_only`], VM projects included) has none, so
+/// its connect must not leave an empty default mirror behind. `spec` is the
+/// spec [`remote_target_for_host`] resolved for that host (the primary's for
+/// [`PRIMARY_HOST`]).
+fn mints_mirror(spec: &RemoteSpec, host_id: &str) -> bool {
+    host_id == PRIMARY_HOST && !spec.is_remote_only()
+}
+
 /// Open (idempotently) the pooled connection for a specific `(project, host)`.
-/// [`PRIMARY_HOST`] is the project's primary remote (and mints the local mirror);
+/// [`PRIMARY_HOST`] is the project's primary remote (and mints the local mirror
+/// unless the project is remote-only, see [`mints_mirror`]);
 /// any other id is an extra worker host resolved from `compute_hosts`. A no-op for
 /// a local project, an unknown host id, or one already connected. See [`connect`]
 /// for the password/auth contract.
@@ -394,8 +467,8 @@ pub async fn connect_host(
     };
     // SSH-sync Phase 1: ensure the local mirror twin exists for a connected
     // remote project (covers projects created before the mirror was minted at
-    // create time). Only the PRIMARY owns the mirror — a worker never does.
-    if host_id == PRIMARY_HOST {
+    // create time). See [`mints_mirror`] for who owns one.
+    if mints_mirror(&target.spec, host_id) {
         let _ = std::fs::create_dir_all(crate::services::remote_sync::mirror_dir(project_id));
     }
     let key = conn_key(project_id, host_id);
@@ -778,6 +851,7 @@ mod tests {
             key_auth: None,
             persist_sessions: None,
             vm: None,
+            remote_only: None,
             label: None,
             extra: HashMap::new(),
         }
@@ -885,6 +959,7 @@ mod tests {
                 key_auth: None,
                 persist_sessions: None,
                 vm: None,
+                remote_only: None,
                 label: None,
                 extra: HashMap::new(),
             },
@@ -917,6 +992,81 @@ mod tests {
         assert_eq!(hosts[0].id, "h1");
         assert_eq!(hosts[0].spec.host, "gpu-2.example");
         assert!(hosts[0].sync_code); // serde default_true survives a round trip
+    }
+
+    /// The local copy of each posture, over a tempdir state: an explicit
+    /// mirror wins, else the default under the state dir; a remote-only or VM
+    /// project (whatever stale `mirror` it carries) and a local project have
+    /// none. Nothing is created.
+    #[test]
+    fn local_copy_in_resolves_per_posture() {
+        let state = tempfile::tempdir().unwrap();
+        let explicit = state.path().join("chosen").join("p1");
+        let mut with_mirror = entry("p1", Some("/state/p1"), Some(spec()));
+        with_mirror
+            .extra
+            .insert("mirror".to_string(), serde_json::Value::String(explicit.to_string_lossy().into_owned()));
+        assert_eq!(local_copy_in(&with_mirror, state.path()), Some(explicit));
+
+        let default = entry("p2", Some("/state/p2"), Some(spec()));
+        assert_eq!(
+            local_copy_in(&default, state.path()),
+            Some(crate::services::remote_sync::default_mirror_dir_in(state.path(), "p2"))
+        );
+
+        let remote_only = RemoteSpec { remote_only: Some(true), ..spec() };
+        let mut pinned = entry("p3", Some("/state/p3"), Some(remote_only));
+        pinned.extra.insert("mirror".to_string(), serde_json::Value::String("/stale/mirror".into()));
+        assert_eq!(local_copy_in(&pinned, state.path()), None);
+
+        let vm = RemoteSpec { vm: Some(true), ..spec() };
+        assert_eq!(local_copy_in(&entry("p4", Some("/state/p4"), Some(vm)), state.path()), None);
+        // A VM's `vm` outranks a stray `remote_only: false`: still no mirror.
+        let unpinned_vm = RemoteSpec { vm: Some(true), remote_only: Some(false), ..spec() };
+        assert_eq!(local_copy_in(&entry("p6", Some("/state/p6"), Some(unpinned_vm)), state.path()), None);
+
+        assert_eq!(local_copy_in(&entry("p5", Some("/work/p5"), None), state.path()), None);
+
+        // A spec that does not parse is still a remote entry with a mirror,
+        // the answer `mirror_dir_opt` gives by id.
+        let mut odd = entry("p6", Some("/state/p6"), None);
+        odd.extra.insert("remote".to_string(), serde_json::json!({ "host": "h" }));
+        assert_eq!(
+            local_copy_in(&odd, state.path()),
+            Some(crate::services::remote_sync::default_mirror_dir_in(state.path(), "p6"))
+        );
+        assert!(std::fs::read_dir(state.path()).unwrap().next().is_none(), "a pure resolver");
+    }
+
+    /// Only a plain Remote project's primary connect mints the mirror: a worker
+    /// never owns one, and a remote-only or VM project has none.
+    #[test]
+    fn only_a_plain_primary_connect_mints_the_mirror() {
+        assert!(mints_mirror(&spec(), PRIMARY_HOST));
+        assert!(!mints_mirror(&spec(), "h1"));
+        let remote_only = RemoteSpec { remote_only: Some(true), ..spec() };
+        assert!(!mints_mirror(&remote_only, PRIMARY_HOST));
+        let vm = RemoteSpec { vm: Some(true), ..spec() };
+        assert!(!mints_mirror(&vm, PRIMARY_HOST));
+    }
+
+    #[test]
+    fn the_refusal_carries_the_sentinel() {
+        let msg = remote_only_refusal("no local copy");
+        assert_eq!(msg, concat!(crate::app_upper!(), "_REMOTE_ONLY: no local copy"));
+    }
+
+    /// A worker's `remote_only` is meaningless and never read: the hosts parse
+    /// with it dropped, so only the primary spec decides the posture.
+    #[test]
+    fn a_worker_ignores_the_remote_only_flag() {
+        let mut host = serde_json::to_value(compute_host("h1", "gpu-2.example")).unwrap();
+        host["remote_only"] = serde_json::Value::Bool(true);
+        let hosts = compute_hosts_from_value(&serde_json::json!([host]));
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].spec.remote_only, None);
+        assert!(!hosts[0].spec.is_remote_only());
+        assert!(!hosts[0].spec.extra.contains_key("remote_only"));
     }
 
     #[test]

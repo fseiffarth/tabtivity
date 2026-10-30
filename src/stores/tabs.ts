@@ -43,6 +43,7 @@ import type {
   WindowBounds,
 } from "./tabs/types";
 import { nextGroupId, nextKey } from "./tabs/ids";
+import { isLocatableKind, isRemoteLocation } from "./tabs/tabLocation";
 import {
   type DetachedDockTarget,
   allGroups,
@@ -533,6 +534,13 @@ interface TabsStore {
    * project is no longer attached to.
    */
   detachScopeFromRemote: (scope: string, oldDir: string, newDir: string) => void;
+  /**
+   * Remote-only → Remote (`keep_local_copy`): pin every agent/shell tab of `scope`
+   * that does not already name a host to the primary (`"remote"`). Under the pin
+   * they all ran there; once the project keeps a local copy again an unset agent
+   * would default to the mirror and respawn there without its host session.
+   */
+  pinScopeTabsToHost: (scope: string) => void;
   retargetTabs: (oldAbs: string, newAbs: string) => void;
   removeTab: (key: string) => void; // drop; collapse empty groups/splits
   // The same close, aimed at a named scope instead of the active one. The
@@ -1655,6 +1663,20 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const layout = s.layoutByScope[scope] ?? null;
       const focused = s.focusedGroupByScope[scope] ?? null;
       return writeScope(s, scope, nextTabs, layout, focused);
+    });
+  },
+
+  pinScopeTabsToHost: (scope) => {
+    set((s) => {
+      const tabs = s.tabsByScope[scope] ?? [];
+      let changed = false;
+      const nextTabs = tabs.map((t) => {
+        if (!isLocatableKind(t.kind) || isRemoteLocation(t.location)) return t;
+        changed = true;
+        return { ...t, location: "remote" as const };
+      });
+      if (!changed) return {};
+      return writeScope(s, scope, nextTabs, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
     });
   },
 

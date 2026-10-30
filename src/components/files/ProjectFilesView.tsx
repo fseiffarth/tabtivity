@@ -25,12 +25,15 @@ import {
   amberPaths,
   localNewPaths,
   pushFailure,
-  splitByNewerSide,
-  deleteSideOf,
-  splitByDeleteSide,
-  withoutChangedOnBoth,
   type SyncResolveOutcome,
 } from "../../stores/remote/sync";
+import {
+  deleteSideOf,
+  mtimeDivergenceCue,
+  splitByDeleteSide,
+  splitByNewerSide,
+  withoutChangedOnBoth,
+} from "../../lib/remote/divergedRows";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
 import { useWindowsStore } from "../../stores/windows";
@@ -40,7 +43,7 @@ import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtySt
 import { coalescedRun, type CoalescedRun } from "../../lib/coalescedRun";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
-import { fmtModified, type SortKey } from "../../lib/viewers/fileUtils";
+import type { SortKey } from "../../lib/viewers/fileUtils";
 import {
   readGitBarSnapshot,
   writeGitBarSnapshot,
@@ -55,9 +58,11 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { UntestedTag } from "../common/UntestedTag";
 import { SyncHostOnlyFiles } from "./SyncHostOnlyFiles";
 import { AgentSchedulesView } from "../agents/AgentSchedulesView";
+import { CliOverviewView } from "../agents/CliOverviewView";
 import { useDialogs } from "../common/PromptDialogs";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { persistentSessionOf } from "../../lib/remote/closeRemoteTab";
+import { hostAgentTabSpec, reopenClosedHostSession } from "../../lib/remote/hostSessionTab";
 import { sessionKindFromName, type TmuxSessionKind } from "../../lib/terminal/tmuxSession";
 import { useRemoteStatusStore, sshOf } from "../../stores/remote/remoteStatus";
 import {
@@ -103,8 +108,8 @@ import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGate
 import { ArrowDownIcon, ArrowUpIcon, ArrowsHorizontalIcon, CheckIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
-import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "../mobile/MobileAccessPicker";
-import { projectHostKind } from "../../lib/projectTabHost";
+import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
@@ -221,66 +226,6 @@ interface SessionTooltip {
   rect: DOMRect;
   hostId: string;
   name: string;
-}
-
-interface MtimeCue {
-  text: string;
-  tone: "remote" | "local" | "neutral";
-  title: string;
-}
-
-/** Which side moved, as a small badge. The verdict comes from the backend's
- *  `host_diverged`/`local_diverged` — each side compared to its own recorded
- *  base, so host/local clock skew can never pick the wrong authority. The
- *  mtimes are kept purely as DISPLAY metadata (the tooltip's "modified when"
- *  lines); the badge's tone/text no longer trusts them. Tone always names the
- *  side the text is about: remote = --warning (orange), local = --success
- *  (green), matching the take-remote/keep-local icon buttons below.
- *
- *  A row only reaches this list once the manifest has recorded a synced base
- *  for it (`amberPaths` reads `state === "amber"`, which `compute_state`
- *  never sets for an untracked path) — so a null mtime here is never "this
- *  file was never synced," it's "this file WAS synced and one side's copy
- *  has since been deleted." The tooltip says so explicitly, since the badge
- *  text alone ("Remote only") reads ambiguously otherwise. Exported for tests. */
-export function mtimeDivergenceCue(
-  t: (key: TranslationKey, params?: Record<string, string | number>) => string,
-  hostMtime: number | null | undefined,
-  localMtime: number | null | undefined,
-  hostDiverged: boolean,
-  localDiverged: boolean,
-  hostChecked: boolean,
-): MtimeCue {
-  const hostLabel =
-    hostMtime != null
-      ? t("projectFilesView.remoteModified", { when: fmtModified(hostMtime) })
-      : t("projectFilesView.remoteDeletedSinceSync");
-  const localLabel =
-    localMtime != null
-      ? t("projectFilesView.localModified", { when: fmtModified(localMtime) })
-      : t("projectFilesView.localDeletedSinceSync");
-  const title = `${hostLabel}\n${localLabel}`;
-  if (hostMtime == null && localMtime == null) {
-    // "Gone on both sides" is a host fact — only claim it when this pass
-    // actually asked the host. A cold pool (or an errored stat) reports every
-    // host mtime as null, and asserting a deletion out of that would put the
-    // Forget action under a false sentence.
-    if (!hostChecked) {
-      const uncheckedLabel = t("projectFilesView.localGoneHostUnchecked");
-      return { text: uncheckedLabel, tone: "neutral", title: `${uncheckedLabel}\n${localLabel}` };
-    }
-    return { text: t("projectFilesView.goneBothSides"), tone: "neutral", title };
-  }
-  if (hostMtime == null) return { text: t("projectFilesView.localOnly"), tone: "local", title };
-  if (localMtime == null) return { text: t("projectFilesView.remoteOnly"), tone: "remote", title };
-  // Both present: use the backend's per-side base comparison, never a
-  // cross-machine mtime comparison.
-  if (hostDiverged && localDiverged)
-    return { text: t("projectFilesView.bothChanged"), tone: "neutral", title };
-  if (hostDiverged) return { text: t("projectFilesView.remoteNewer"), tone: "remote", title };
-  if (localDiverged) return { text: t("projectFilesView.localNewer"), tone: "local", title };
-  // Neither flagged (a self-heal race): nothing actually diverged.
-  return { text: t("projectFilesView.sameTime"), tone: "neutral", title };
 }
 
 
@@ -470,10 +415,14 @@ export function ProjectFilesView({
   // SLURM support in particular is only known one async probe after mount. So
   // the unavailable view *renders* as Files while the stored value stays put:
   // switch back to a remote project, or let the probe land, and it returns.
+  // No local copy (`isHostPinned`: a VM, or a remote project created without
+  // one): no Local side, no mirror views, no ⧉ — the host is the only tree.
+  const hostPinned = isHostPinned(project);
   const viewGates: SidePanelViewGates = {
     inBox: !!activeBox,
     projectId,
     remote: !!project?.remote,
+    mirror: !hostPinned,
     slurm: slurmSupported,
     remarks: remarksEnabled,
     todo: devTodo,
@@ -509,7 +458,7 @@ export function ProjectFilesView({
   // Every project type may be shared with the phone: the Mobile switch is the
   // whole consent. What the phone then reaches differs by type (`mobileHost`).
   const mobileEligible = !!projectId && !!project;
-  const mobileHost = projectHostKind(project);
+  const mobileHost = phoneReachHost(project);
   const [mobileAccessBusy, setMobileAccessBusy] = useState(false);
   const [mobileAccessError, setMobileAccessError] = useState<string | null>(null);
   // Kept here (not in the pane): the pane unmounts while the view shows Git or
@@ -889,26 +838,39 @@ export function ProjectFilesView({
     return m;
   }, [scopeTabs, scope]);
 
-  // Open a host session in a tab: reveal the owning tab if one exists, else add a
-  // shell tab on THAT host that ATTACHES to the named session (idempotent; `-D`
-  // detaches any other client). The tab carries the name so it reattaches across a
-  // restart, and its locality is the row's host.
-  const openSession = (hostId: string, name: string) => {
+  // Open a host session in a tab: reveal the owning tab if one exists; bring an
+  // agent session back as its agent tab (`lib/remote/hostSessionTab`), so it keeps
+  // its Chat view and resume; else add a shell tab on THAT host that ATTACHES to
+  // the named session (idempotent; `-D` detaches any other client). The tab
+  // carries the name so it reattaches across a restart, and its locality is the
+  // row's host. Asking the host takes a round trip, which a second click must
+  // not turn into a second tab.
+  const openingSessions = useRef(new Set<string>());
+  const openSession = async (hostId: string, name: string) => {
     if (!projectId) return;
-    const ownerKey = sessionOwners.get(`${hostId} ${name}`);
+    const opening = `${hostId} ${name}`;
+    const ownerKey = sessionOwners.get(opening);
     if (ownerKey) {
       useTabsStore.getState().setActive(ownerKey);
       return;
     }
-    useTabsStore.getState().addTabToScope(projectId, {
-      label: tmuxSessionRest(name) !== null ? "session" : name,
-      cmd: "",
-      args: [],
-      cwd: projectDir,
-      kind: "shell",
-      location: hostId === "primary" ? "remote" : `host:${hostId}`,
-      tmuxAttach: name,
-    });
+    if (openingSessions.current.has(opening) || reopenClosedHostSession(projectId, hostId, name)) return;
+    const location = hostId === "primary" ? "remote" : (`host:${hostId}` as const);
+    openingSessions.current.add(opening);
+    const agentTab = await hostAgentTabSpec(projectId, hostId, name, { cwd: projectDir, location }, t);
+    openingSessions.current.delete(opening);
+    useTabsStore.getState().addTabToScope(
+      projectId,
+      agentTab ?? {
+        label: tmuxSessionRest(name) !== null ? "session" : name,
+        cmd: "",
+        args: [],
+        cwd: projectDir,
+        kind: "shell",
+        location,
+        tmuxAttach: name,
+      },
+    );
   };
 
   // Kill a host session (per-row, confirmed). Drops the row optimistically; the
@@ -1659,7 +1621,7 @@ export function ProjectFilesView({
             family instead — square, hover-lit, phone slashed while off. */}
         {/* "Open in <IDE>": only for a project whose tree carries IDE
             markers; the same rows as the pill menu's View group. */}
-        {!activeBox && project && projectId && !isRootScope && (
+        {!activeBox && project && projectId && !isRootScope && !hostPinned && (
           <IdeHeaderButton projectId={projectId} projectName={project.name} />
         )}
         {mobileHostConnected && mobileEligible && (
@@ -1736,7 +1698,7 @@ export function ProjectFilesView({
           {/* Breaker: drop the switch onto its own row so it left-aligns with the
               pin/name (header padding edge) instead of trailing the tags. */}
           <span style={{ flexBasis: "100%", width: 0, height: 0 }} />
-          <FileSourceSwitch source={source} onChange={setSource} />
+          {hostPinned ? <UntestedTag id="sidePanelViews.pinned" /> : <FileSourceSwitch source={source} onChange={setSource} />}
           {/* Run-host picker — which REMOTE machine (primary or a worker) scripts
               and shells launched from this project run on, distinct from the source
               switch's read side. Deliberately absent on Local: there is only one
@@ -1747,6 +1709,7 @@ export function ProjectFilesView({
           {source === "remote" && (
             <RunHostPicker
               projectId={projectId}
+              pinned={hostPinned}
               primaryHost={project.remote.label || project.remote.host}
               computeHosts={project.compute_hosts}
             />
@@ -1784,7 +1747,8 @@ export function ProjectFilesView({
           on the files view — the side panel's switch is always up, and a row
           that appeared only under "Files" would shove the toolbar up and down on
           every view change. */}
-      {compact && !activeBox && project?.remote && projectId && (
+      {/* Not on a pinned project: it has no switch, so the row has no job. */}
+      {compact && !activeBox && project?.remote && !hostPinned && projectId && (
         <div className="side-panel-source side-panel-source--compact">
           <FileSourceSwitch source={source} onChange={setSource} />
           {/* Remote side only, same reason as the full header's copy above — and
@@ -1794,6 +1758,7 @@ export function ProjectFilesView({
           {source === "remote" && (
             <RunHostPicker
               projectId={projectId}
+              pinned={hostPinned}
               primaryHost={project.remote.label || project.remote.host}
               computeHosts={project.compute_hosts}
             />
@@ -1915,7 +1880,7 @@ export function ProjectFilesView({
               </button>
           </ContextMenuPortal>
         )}
-        {projectDir && (
+        {projectDir && !hostPinned && (
           <button
             className="toolbar-btn toolbar-btn--sm"
             onClick={openInOsBrowser}
@@ -2005,6 +1970,7 @@ export function ProjectFilesView({
             projectDir={effectiveGitRoot}
             projectId={onNestedRepo ? undefined : project?.remote ? projectId ?? undefined : undefined}
             remote={!onNestedRepo && !!project?.remote}
+            hostPinned={hostPinned}
             authProjectId={onNestedRepo ? undefined : projectId ?? undefined}
             onChanged={() => effectiveGitRoot && refreshGit(effectiveGitRoot)}
             onWorktreeChanged={onGitWorktreeChanged}
@@ -2673,7 +2639,7 @@ export function ProjectFilesView({
                               owned ? "projectFilesView.revealTabRunning" : "projectFilesView.attachTo",
                               { name: s.name },
                             )}
-                            onClick={() => openSession(hostId, s.name)}
+                            onClick={() => void openSession(hostId, s.name)}
                           >
                             <span className="orange-file-dot" aria-hidden="true">
                               {s.attached ? "●" : "○"}
@@ -2942,6 +2908,8 @@ export function ProjectFilesView({
       )}
 
       {view === "agents" && <AgentSchedulesView scope={scope} active={active} />}
+
+      {view === "clis" && <CliOverviewView active={active} />}
 
       {view === "windows" && (
         <div className="side-panel-scroll" style={{ flex: 1, overflowY: "auto", padding: 4 }}>

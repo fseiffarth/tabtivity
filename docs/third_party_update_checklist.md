@@ -82,6 +82,12 @@ Build, not the third-party `@vibe-kit/grok-cli` it used to.
   last session" flags used on relaunch/restore.
 - `src/lib/agents/agentPrefaces.ts` — default slash commands offered per agent
   (`/clear`, `/compact`, `/new`, `/status`, …) and `DEFAULT_AGENT_MODELS`.
+- `services/agent/agent_defaults.rs` — per-CLI startup model/effort defaults.
+  Verified startup flags come from vendor references and installed `--help`
+  (2026-10-29); OpenCode v2 uses `provider/model#variant`, Codex uses quoted
+  `-c model_reasoning_effort=…`, Kimi has boolean thinking, and Vibe/Goose use
+  their native model environment variables. Recheck capabilities when flags
+  change; model IDs and supported effort subsets remain account/model-specific.
 - `src/lib/agents/prompt/prompt.ts` — `looksLikeDecisionPrompt`: the regexes that turn a
   tab's output tail into the "needs a decision" lamp (pointer glyphs, numbered
   choices, yes/no pairs). Every agent's approval prompt has to keep matching.

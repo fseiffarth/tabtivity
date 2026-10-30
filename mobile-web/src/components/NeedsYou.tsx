@@ -1,7 +1,7 @@
 import { useState, type ComponentType, type ReactNode } from "react";
 import type { IconProps } from "../../../src/components/common/icons/Icon";
 import { lastPrompt } from "../agentPrompts";
-import { getActivity, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts } from "../api";
+import { getActivity, holdPrompt, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts } from "../api";
 import { describeFailure } from "../connection";
 import { SECTION_ICON } from "../glyphs";
 import { ageLabel } from "../terminal/fileLabels";
@@ -54,6 +54,10 @@ const DONE_LABEL: Record<MobileAlertItem["kind"], TranslationKey> = {
   task: "filesAlerts.doneTask",
 };
 
+/** What the ▶ beside an interrupted row sends — the desktop tab strip's word
+ * (`TabContinueButton`). */
+const CONTINUE_PROMPT = "continue";
+
 /** When the row's state began, as the desktop stamped it: a question since its
  * last output, a finished tab since its turn ended. */
 function since(tab: ActivityTab): number | undefined {
@@ -93,10 +97,18 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
   // wrong card.
   const [finishing, setFinishing] = useState<string | null>(null);
   const [error, setError] = useState("");
+  /** The desktop's AI switch: off, no ▶ is offered, as on its tab strip. */
+  const [aiOff, setAiOff] = useState(false);
+  // The interrupted turns a ▶ was sent for, by tab and the moment the turn was
+  // cut, so the button goes until the next poll shows the new turn — and comes
+  // back for a later cut of the same tab.
+  const [continuing, setContinuing] = useState<string | null>(null);
+  const [continued, setContinued] = useState<ReadonlySet<string>>(() => new Set());
   useVisiblePoll((signal) => getActivity(signal)
     .then((body) => {
       if (signal.aborted) return;
       setTabs(Array.isArray(body.tabs) ? body.tabs : []);
+      setAiOff(body.ai_off === true);
       setNow(Date.now());
     })
     // Keep the last answer: the project list's own notice says the link
@@ -120,6 +132,22 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
     }
   };
 
+  const resume = async (tab: ActivityTab, key: string) => {
+    if (continuing) return;
+    setContinuing(key);
+    setError("");
+    try {
+      // Held, not typed: the desktop types it at the tab's next safe idle
+      // point, which for a cut-off turn is now.
+      await holdPrompt(tab.id, CONTINUE_PROMPT);
+      setContinued((keys) => new Set(keys).add(key));
+    } catch (reason) {
+      setError(t("mobile.home.continueFailed", { reason: describeFailure(reason) }));
+    } finally {
+      setContinuing(null);
+    }
+  };
+
   const listed = tabs ?? [];
   const asking = listed
     .filter((tab) => tab.agent_status === "question" || tab.agent_status === "interrupted")
@@ -136,16 +164,32 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
     ...[...asking, ...finished].map((tab, index) => {
       const at = since(tab);
       const asked = lastPrompt(tab);
+      const resumeKey = `${tab.id}:${at ?? ""}`;
+      const offerContinue = tab.agent_status === "interrupted" && tab.available && !aiOff && !continued.has(resumeKey);
+      const row = <button className="home-needs-row" disabled={!tab.available} onClick={() => open(tab.project_id, tab)}>
+        {tab.agent_status && <AgentStatusMark status={tab.agent_status} />}
+        <span className="home-needs-copy">
+          <span className="home-needs-title">{`${tab.project_label} · ${tab.label}`}{tab.agent_status === "done" && index === asking.length && isUntested("mobile.home.seenDone") && <span className="untested">{t("mobile.newTab.untested")}</span>}{offerContinue && isUntested("mobile.home.continue") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+          {asked && <small>{asked.text}</small>}
+        </span>
+        {at !== undefined && <time>{ageLabel((now - at) / 1000, t)}</time>}
+      </button>;
       return {
         key: `tab-${tab.id}`,
-        node: <button className="home-needs-row" disabled={!tab.available} onClick={() => open(tab.project_id, tab)}>
-          {tab.agent_status && <AgentStatusMark status={tab.agent_status} />}
-          <span className="home-needs-copy">
-            <span className="home-needs-title">{`${tab.project_label} · ${tab.label}`}{tab.agent_status === "done" && index === asking.length && isUntested("mobile.home.seenDone") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
-            {asked && <small>{asked.text}</small>}
-          </span>
-          {at !== undefined && <time>{ageLabel((now - at) / 1000, t)}</time>}
-        </button>,
+        // The ▶ sits beside the row, as the alerts' ✓ does: sending
+        // "continue" is not the tap that opens the tab.
+        node: offerContinue
+          ? <div className="mobile-alert-row-wrap">
+            {row}
+            <button
+              className="home-needs-continue"
+              disabled={continuing !== null}
+              onClick={() => void resume(tab, resumeKey)}
+              title={t("tabBar.continueTitle")}
+              aria-label={t("tabBar.continueTitle")}
+            ><span aria-hidden="true">▶</span>{continuing === resumeKey ? "…" : t("tabBar.continue")}</button>
+          </div>
+          : row,
       };
     }),
     ...alertItems.map((item, index) => {

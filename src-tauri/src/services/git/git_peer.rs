@@ -261,12 +261,46 @@ impl Peer {
             Peer::Local(dir) => {
                 crate::services::git_bounded::output(crate::services::git_hardened::hookless_git_command_in(dir, args))
             }
-            Peer::Remote(spec) => {
-                let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-                ssh_exec::run_git_remote(spec, &owned)
-            }
+            // The same hardening on the host: these are the same background verbs,
+            // in a host tree whatever runs there can write. Hooks off, as above.
+            Peer::Remote(spec) => ssh_exec::run_git_remote(spec, &remote_git_args(args)),
         }
     }
+}
+
+/// The argument list [`Peer::run`] hands `git` on the host:
+/// `git_hardened::hardened_git_args` (hooks off, no fsmonitor/ext protocol, pinned
+/// output config), the twin of the local arm's `hookless_git_command_in`. The `-c`
+/// pairs only precede the verb, so the output every parser here reads is unchanged.
+/// Pure.
+fn remote_git_args(args: &[&str]) -> Vec<String> {
+    crate::services::git_hardened::hardened_git_args(args)
+}
+
+/// `script` for [`ssh_exec::run_remote_script`] with every bare `git` in it hardened
+/// like [`remote_git_args`]: a leading shell function `git` that runs the real one
+/// (`command git`) with the same `-c` pairs first and, when the script's first word
+/// after `git` is a `git_hardened::DIFF_DRIVER_CMDS` verb, `--no-ext-diff
+/// --no-textconv` straight after it (a script must name the verb first, as every
+/// one here does). The batched probe runs `git status` on the host every poll, and
+/// without this a host repo's `core.fsmonitor` program or its `post-index-change`
+/// hook would run on every one. The pairs are constants, each `shell_quote`d.
+///
+/// Not covered, as for every host git call (`git_hardened::run_git`'s doc): a
+/// host repo's own `filter.<driver>.*` keys, which no fixed `-c` can name. The
+/// host's `.git/config` is the host's business. Pure.
+fn hardened_remote_script(script: &str) -> String {
+    let pairs: Vec<String> = crate::services::git_hardened::hardened_git_args::<&str>(&[])
+        .iter()
+        .map(|a| ssh_exec::shell_quote(a))
+        .collect();
+    let pairs = pairs.join(" ");
+    let diff_verbs = crate::services::git_hardened::DIFF_DRIVER_CMDS.join("|");
+    format!(
+        "git() {{ case $1 in {diff_verbs}) __git_verb=$1; shift; \
+         command git {pairs} \"$__git_verb\" --no-ext-diff --no-textconv \"$@\";; \
+         *) command git {pairs} \"$@\";; esac; }}; {script}"
+    )
 }
 
 /// The subset of `shas` that `peer` actually has, in one round trip: `git rev-list
@@ -277,7 +311,7 @@ impl Peer {
 /// An annotated tag's object sha resolves to the commit it points at rather than being
 /// echoed verbatim, so it drops out of the result. That only forfeits a delta hint (a
 /// bigger bundle), never correctness — which is the safe direction for the caller.
-fn known_shas(peer: &Peer, shas: &[String]) -> Vec<String> {
+pub(crate) fn known_shas(peer: &Peer, shas: &[String]) -> Vec<String> {
     if shas.is_empty() {
         return Vec::new();
     }
@@ -1149,7 +1183,11 @@ fn save_state_at(path: &Path, state: &GitPeerState) -> Result<(), String> {
 /// back to the per-command path below, so a host without a POSIX `sh` still works.
 pub fn probe(peer: &Peer) -> PeerSnapshot {
     if let Peer::Remote(spec) = peer {
-        match ssh_exec::run_remote_script(spec, PROBE_SCRIPT) {
+        // Bounded like every per-command host read: a stalled master answers
+        // `probe_error` (which withholds every destructive move) instead of
+        // holding the lockstep pass.
+        let script = hardened_remote_script(PROBE_SCRIPT);
+        match ssh_exec::run_remote_script_within(spec, &script, crate::services::git_bounded::READ_TIMEOUT) {
             Ok(out) => match classify_batched_probe(
                 out.status.code(),
                 &String::from_utf8_lossy(&out.stdout),
@@ -1910,7 +1948,8 @@ fn ancestry_map(peer: &Peer, pairs: &[(String, String)]) -> Vec<(bool, bool)> {
     if let Peer::Remote(spec) = peer {
         let all_hex = pairs.iter().all(|(a, b)| is_hex_sha(a) && is_hex_sha(b));
         if all_hex {
-            if let Ok(out) = ssh_exec::run_remote_script(spec, &ancestry_script(pairs)) {
+            let script = hardened_remote_script(&ancestry_script(pairs));
+            if let Ok(out) = ssh_exec::run_remote_script_within(spec, &script, crate::services::git_bounded::READ_TIMEOUT) {
                 if let Some(v) =
                     parse_ancestry_block(&String::from_utf8_lossy(&out.stdout), pairs.len())
                 {
@@ -3809,8 +3848,19 @@ pub fn emit_status(ctx: &CoreCtx, project_id: &str, state: &GitPeerState) {
     );
 }
 
-/// Start the per-project lockstep task (idempotent; no-op for a local project or a
-/// project whose lockstep toggle is off). Attaches a narrowly-scoped `.git` watcher
+/// Why lockstep cannot run for a remote project, or `None` when it can: a
+/// remote-only project ([`RemoteSpec::is_remote_only`], VM projects included) has no
+/// local mirror to pair with the host. The `{UPPER}_REMOTE_ONLY` refusal every
+/// mirror-touching lockstep command answers with, and the no-op gate of [`start`].
+/// Pure.
+pub fn lockstep_refusal(spec: &RemoteSpec) -> Option<String> {
+    spec.is_remote_only().then(|| {
+        crate::services::remote::remote_only_refusal("git lockstep needs a local copy of the project")
+    })
+}
+
+/// Start the per-project lockstep task (idempotent; no-op for a local project, a
+/// remote-only one ([`lockstep_refusal`]), or a project whose lockstep toggle is off). Attaches a narrowly-scoped `.git` watcher
 /// on the local mirror and spawns the host-poll loop. Runs one reconcile immediately.
 pub async fn start(
     ctx: CoreCtx,
@@ -3859,7 +3909,9 @@ async fn start_now(
     let Some(target) = remote_target_for(project_id) else {
         return;
     };
-    if !load_state(project_id).enabled {
+    // A remote-only project has no mirror to keep in step (whatever a stale
+    // `git_peer.json` says): no watcher, no poll, nothing minted.
+    if lockstep_refusal(&target.spec).is_some() || !load_state(project_id).enabled {
         return;
     }
     // A host tagged HPC gets no background poll loop: every tick runs `git` in the
@@ -3984,8 +4036,11 @@ async fn poll_loop(
     match crate::services::sync_op::acquire(&project_id).await {
         Ok(op) => {
             // Stopped while it waited for the lock (a disconnect behind a long
-            // transfer, lockstep turned off): never start a pass after that.
-            if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            // transfer, lockstep turned off), or the project stopped keeping a
+            // local copy (the spec above predates it): never start a pass after that.
+            if stopping.load(std::sync::atomic::Ordering::SeqCst)
+                || crate::services::remote::is_remote_only_now(&project_id)
+            {
                 return;
             }
             let s = detect_and_sync(
@@ -4077,8 +4132,9 @@ async fn poll_loop(
 
 /// One background lockstep pass under the project's mutation lock
 /// (`services::sync_op`); a lock that could not be taken skips the pass. `false`
-/// when the loop was stopped while it waited for the lock: no pass ran, and the
-/// loop ends.
+/// when the loop was stopped while it waited for the lock, or the project
+/// turned remote-only meanwhile (`remote::is_remote_only_now`, read under the
+/// lock the conversion writes under): no pass ran, and the loop ends.
 async fn guarded_pass(
     ctx: &CoreCtx,
     pool: &RemotePoolState,
@@ -4090,7 +4146,9 @@ async fn guarded_pass(
 ) -> bool {
     match crate::services::sync_op::acquire(project_id).await {
         Ok(op) => {
-            if stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            if stopping.load(std::sync::atomic::Ordering::SeqCst)
+                || crate::services::remote::is_remote_only_now(project_id)
+            {
                 return false;
             }
             let s = detect_and_sync(op, pool, manifest, auto, project_id, spec, ReconcileOpts::default()).await;

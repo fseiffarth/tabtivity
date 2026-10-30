@@ -215,13 +215,35 @@ struct SyncProgress {
     total: usize,
 }
 
+/// Why byte-sync cannot run for a remote project, or `None` when it can: a
+/// remote-only project ([`crate::schema::project::RemoteSpec::is_remote_only`], VM
+/// projects included) has no local mirror to sync with, so every transfer, diff and
+/// `sync.json` write answers the `{UPPER}_REMOTE_ONLY` sentinel. Pure.
+fn byte_sync_refusal(spec: &crate::schema::project::RemoteSpec) -> Option<String> {
+    spec.is_remote_only()
+        .then(|| crate::services::remote::remote_only_refusal("byte-sync needs a local copy of the project"))
+}
+
+/// [`byte_sync_refusal`] for the three `sync.json` writers that bypass [`resolve`]
+/// (they need no session): a local project passes, as before.
+fn refuse_remote_only(project_id: &str) -> Result<(), String> {
+    match remote_target_for(project_id).and_then(|t| byte_sync_refusal(&t.spec)) {
+        Some(refusal) => Err(refusal),
+        None => Ok(()),
+    }
+}
+
 /// Resolve the remote target + live pooled SFTP session for `project_id`, erroring
-/// if the project is local or its connection is cold (reconnect first).
+/// if the project is local, remote-only ([`byte_sync_refusal`]) or its connection
+/// is cold (reconnect first).
 async fn resolve(
     project_id: &str,
     pool: &RemotePoolState,
 ) -> Result<(RemoteTarget, Arc<Sftp>), String> {
     let target = remote_target_for(project_id).ok_or_else(|| "not a remote project".to_string())?;
+    if let Some(refusal) = byte_sync_refusal(&target.spec) {
+        return Err(refusal);
+    }
     // A contained mail reader has no mirror at all: "pull this to the host"
     // would be the exfiltration path with the user's click on it
     // (`services::mail_reader`). The trusted `projects.json` record decides.
@@ -297,6 +319,7 @@ pub async fn sync_mark_selected(
     selected: bool,
     is_dir: bool,
 ) -> Result<(), String> {
+    refuse_remote_only(&project_id)?;
     let manifest = ctx.get::<SyncManifestState>();
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, &project_id);
@@ -327,6 +350,7 @@ pub async fn sync_set_auto(
     auto: bool,
     is_dir: bool,
 ) -> Result<(), String> {
+    refuse_remote_only(&project_id)?;
     let manifest = ctx.get::<SyncManifestState>();
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, &project_id);
@@ -431,6 +455,10 @@ pub async fn sync_scan_host_new(
     let manifest = ctx.get::<SyncManifestState>();
     let target =
         remote_target_for(&project_id).ok_or_else(|| "not a remote project".to_string())?;
+    // Refused before the HPC question: there is no mirror to compare the host with.
+    if let Some(refusal) = byte_sync_refusal(&target.spec) {
+        return Err(refusal);
+    }
     if crate::services::hpc_mode::is_hpc_spec(&target.spec) && confirmed != Some(true) {
         return Err(crate::services::hpc_mode::guard_error("host-scan", &target.spec));
     }
@@ -553,6 +581,16 @@ pub async fn sync_big_folders(
     let manifest = ctx.get::<SyncManifestState>();
     let target =
         remote_target_for(&project_id).ok_or_else(|| "not a remote project".to_string())?;
+    // A remote-only project has no mirror to census and nothing to exclude from
+    // byte-sync: an empty scan, before the HPC question (the on-connect census
+    // probes every remote project).
+    if byte_sync_refusal(&target.spec).is_some() {
+        return Ok(BigFolderScan {
+            folders: Vec::new(),
+            host_scanned: false,
+            host_error: None,
+        });
+    }
 
     // The refusal comes BEFORE any work, so the retry the dialog offers repeats
     // nothing: a refused call did not walk the mirror either.
@@ -671,6 +709,7 @@ pub async fn sync_set_excluded(
     rel_paths: Vec<String>,
     excluded: bool,
 ) -> Result<(), String> {
+    refuse_remote_only(&project_id)?;
     let manifest = ctx.get::<SyncManifestState>();
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, &project_id);
@@ -700,11 +739,14 @@ pub async fn sync_status(
 ) -> Result<Vec<SyncStatusEntry>, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
-    // A local project has no sync; return empty rather than erroring (callers may
-    // probe indiscriminately).
+    // A local project has no sync, and a remote-only one no mirror; return empty
+    // rather than erroring (callers may probe indiscriminately).
     let Some(target) = remote_target_for(&project_id) else {
         return Ok(Vec::new());
     };
+    if byte_sync_refusal(&target.spec).is_some() {
+        return Ok(Vec::new());
+    }
     // Snapshot the whole manifest under the lock; re-stat outside it. The full
     // snapshot (not just the (k,v) list) lets `is_auto` walk ancestor folder
     // markers to resolve each row's effective auto-sync flag.
@@ -2227,9 +2269,44 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        apply_status_heal, diff_mirror_vs_host, diff_no_index_command, drop_tracked_files, rewrite_diff_labels,
-        ContentRebase,
+        apply_status_heal, byte_sync_refusal, diff_mirror_vs_host, diff_no_index_command, drop_tracked_files,
+        rewrite_diff_labels, ContentRebase,
     };
+
+    /// Byte-sync refuses a remote-only project (a VM included) with the sentinel, and
+    /// leaves a plain Remote project alone.
+    #[test]
+    fn byte_sync_refuses_a_remote_only_project() {
+        let spec = |extra: serde_json::Value| -> crate::schema::project::RemoteSpec {
+            let mut v = serde_json::json!({ "host": "host.example", "remote_path": "/srv/p" });
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(v).unwrap()
+        };
+        assert_eq!(byte_sync_refusal(&spec(serde_json::json!({}))), None);
+        assert_eq!(byte_sync_refusal(&spec(serde_json::json!({ "remote_only": false }))), None);
+        let sentinel = concat!(crate::app_upper!(), "_REMOTE_ONLY: ");
+        for posture in [serde_json::json!({ "remote_only": true }), serde_json::json!({ "vm": true })] {
+            let refusal = byte_sync_refusal(&spec(posture.clone())).unwrap_or_default();
+            assert!(refusal.starts_with(sentinel), "{posture}: {refusal}");
+        }
+    }
+
+    /// Every byte-sync command checks the posture before it touches `sync.json` or
+    /// the mirror: through `resolve` (which refuses), `refuse_remote_only`, or its
+    /// own `byte_sync_refusal`. A new command that forgets fails here.
+    #[test]
+    fn every_sync_command_checks_the_posture() {
+        let source = include_str!("sync.rs");
+        let production = &source[..source.find("#[cfg(test)]\nmod tests").expect("tests module")];
+        let gates = ["resolve(&project_id", "refuse_remote_only(&project_id", "byte_sync_refusal(&target.spec"];
+        let mut commands = 0;
+        for chunk in production.split("\npub async fn ").skip(1) {
+            let name = chunk.split('(').next().unwrap_or_default();
+            commands += 1;
+            assert!(gates.iter().any(|g| chunk.contains(g)), "{name} does not check the remote-only posture");
+        }
+        assert!(commands >= 15, "the scan found only {commands} commands");
+    }
 
     /// A status pass judged `f` against its old base; a push recorded a new base
     /// before the pass took the lock. The heal (and a prune) must leave the push's

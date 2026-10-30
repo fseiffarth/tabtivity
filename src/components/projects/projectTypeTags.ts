@@ -101,6 +101,16 @@ export function projectTypeTags(
       color: "#58a6ff",
       title: t("projectType.titleRemoteHost", { target: formatRemoteTarget(project.remote) }),
     });
+    // Remote-only (no local copy): beside the SSH tag, in its colour — a facet
+    // of the same connection axis, not a new one. A VM carries its own ▣ glyph.
+    if (project.remote.remote_only === true && !project.vm?.enabled && project.remote.vm !== true) {
+      tags.push({
+        key: "remoteOnly",
+        label: t("projectType.tagRemoteOnly"),
+        color: "#58a6ff",
+        title: t("projectType.titleRemoteOnly", { target: formatRemoteTarget(project.remote) }),
+      });
+    }
   }
   if (scaffoldMissing) {
     tags.push({

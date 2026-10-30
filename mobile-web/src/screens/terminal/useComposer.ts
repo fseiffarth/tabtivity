@@ -36,6 +36,7 @@ import {
 import { DICTATION_START, settleDictation, type DictationProgress } from "../../voiceInput";
 import { type DictationSession } from "../../voiceSession";
 import { paintMicLevel } from "../../../../shared/voice";
+import { type SendGuard } from "../../../../shared/handsFree";
 import {
   type VoiceNote, UNDO_RELOADS, CODEX_AGENT, type InboxUpload, liftedDraft, uploadInFlight,
   withAttachments,
@@ -149,7 +150,7 @@ export function useComposerUploads({
  * and Undo. */
 export function useComposerSend({
   tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
-  dictateButton, connectedRef, voiceRequest, voiceProgress, sendTimers, commandSentAt, lastOutputAt,
+  dictateButton, connectedRef, voiceRequest, voiceProgress, sendGuard, voiceOpen, sendTimers, commandSentAt, lastOutputAt,
   settleQueue, bracketedPaste, screenRows, viewportRows, connected, setAiOffAt, aiOffRef, ctrl,
   setCtrl, setSendFailed, setDraft, draft, uploadsRef, editing, setEditing, editingRef, editSending,
   setEditSending, liveScreen, setLastSent, slashCliKey, agentKey, usedSlash, setUsedSlash,
@@ -172,6 +173,10 @@ export function useComposerSend({
   connectedRef: MutableRefObject<boolean>;
   voiceRequest: MutableRefObject<number>;
   voiceProgress: MutableRefObject<DictationProgress>;
+  /** Hands-free's send guard and whether the recognizer holds unsettled words
+   * (`useHandsFree`): a send ends both. */
+  sendGuard: MutableRefObject<SendGuard | undefined>;
+  voiceOpen: MutableRefObject<boolean>;
   sendTimers: MutableRefObject<number[]>;
   commandSentAt: MutableRefObject<number>;
   lastOutputAt: MutableRefObject<number>;
@@ -360,6 +365,8 @@ export function useComposerSend({
       paintMicLevel(dictateButton.current, null);
     }
     voiceProgress.current = DICTATION_START;
+    sendGuard.current?.reset();
+    voiceOpen.current = false;
     setListening(false);
     setVoicePreview("");
     setVoiceStatus(null);
@@ -840,7 +847,7 @@ export function useComposerSend({
     setClearRefused(false);
     if (sendAgentText(NEW_CONVERSATION_COMMAND)) startedOver();
   };
-  return { type, press, clearPending, deliver, sendAgentText, forgetDictation, subagentTarget, submitDraft, submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow, pullQueued, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation };
+  return { type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft, submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow, pullQueued, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation };
 }
 
 /** The composer's chips and menus (Commit, the `/` menu, the Plan/Goal

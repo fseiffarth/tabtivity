@@ -1239,7 +1239,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
     labels: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
   },
   assistant: { labels: ["assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"] },
-  voice: { aliases: "settings.searchAlias.voice", labels: ["settings.voice.model", "settings.voice.lang"] },
+  voice: { aliases: "settings.searchAlias.voice", labels: ["settings.voice.model", "settings.voice.lang", "settings.voice.gpu"] },
   remoteFeatures: { labels: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"] },
   vm: { aliases: "settings.searchAlias.vm", labels: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"] },
   mobile: { aliases: "settings.searchAlias.mobile", labels: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"] },
@@ -2350,6 +2350,15 @@ export function SettingsDialog({
               checked={experimentalEnabled(settings, "assistant")}
               onChange={(e) => void updateSettings({ assistant: e.target.checked })}
               help={t("settings.assistantHelp")}
+            />
+
+            {/* The Chat's hands-free voice loop; its chip appears beside
+                read-aloud only while this is on. */}
+            <ToggleCard
+              label={<>{t("settings.voiceHandsFree")} <UntestedTag id="terminal.reader.voice.handsFree" /></>}
+              checked={experimentalEnabled(settings, "voice_hands_free")}
+              onChange={(e) => void updateSettings({ voice_hands_free: e.target.checked })}
+              help={t("settings.voiceHandsFreeHelp")}
             />
 
             {/* Mail is ONE switch. It used to be two — this gate plus a

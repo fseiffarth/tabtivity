@@ -32,6 +32,7 @@ import {
   PRESENTING_CHANGED,
   usePrivacyCurtainStore,
 } from "../../lib/window/privacyCurtain";
+import { pdfPresentLabel, takePresentResume, writeLastPresent } from "../../lib/viewers/pdfPresent";
 import { usePresentationStore } from "../../stores/viewers/presentation";
 
 const presenting = (on: boolean, kind: "pdf" | "deck" | null = on ? "pdf" : null, curtain = true) =>
@@ -51,8 +52,9 @@ beforeEach(() => {
   invoke.mockClear();
   emit.mockClear();
   presentingNow = { presenting: false, kind: null, curtain: true };
-  usePrivacyCurtainStore.setState({ presenting: false, auto: true, up: false });
+  usePrivacyCurtainStore.setState({ presenting: false, auto: true, up: false, presented: null });
   usePresentationStore.setState({ presenting: 0, armed: 0 });
+  localStorage.clear();
 });
 
 afterEach(() => {
@@ -182,6 +184,85 @@ describe("<PrivacyCurtain />", () => {
     } finally {
       window.removeEventListener("keydown", behind);
     }
+  });
+
+  describe("Back to fullscreen", () => {
+    const back = () => screen.queryByRole("button", { name: /Back to fullscreen/ });
+    const opens = () => invoke.mock.calls.filter(([cmd]) => cmd === "open_presenter_window");
+    const last = { path: "/p/talk.pdf", scope: "p", page: 7 };
+
+    it("appears once the PDF closes and reopens it, curtain up, on the sheet it was left on", async () => {
+      writeLastPresent(last);
+      render(<PrivacyCurtain />);
+      await act(async () => {});
+      presenting(true);
+      expect(back()).toBeNull();
+
+      presenting(false);
+      fireEvent.click(back()!);
+      expect(opens()).toEqual([
+        ["open_presenter_window", { label: pdfPresentLabel(last.path), fullscreen: true, monitor: null }],
+      ]);
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      // No second click while the window opens: it would leave a resume behind.
+      expect(back()).toBeNull();
+      expect(takePresentResume(pdfPresentLabel(last.path))).toEqual(last);
+      await act(async () => {});
+      expect(screen.getByRole("dialog")).toBeTruthy();
+
+      // That talk ends the same way.
+      presenting(true);
+      presenting(false);
+      expect(back()).not.toBeNull();
+    });
+
+    it("comes back, leaving no resume, when the window fails to open", async () => {
+      writeLastPresent(last);
+      render(<PrivacyCurtain />);
+      await act(async () => {});
+      presenting(true);
+      presenting(false);
+      invoke.mockImplementationOnce(() => Promise.reject(new Error("no window")));
+      fireEvent.click(back()!);
+      await act(async () => {});
+      expect(back()).not.toBeNull();
+      expect(takePresentResume(pdfPresentLabel(last.path))).toBeNull();
+    });
+
+    it("is not offered after a deck, without a record, or by the shortcut", async () => {
+      render(<PrivacyCurtain />);
+      await act(async () => {});
+      presenting(true);
+      presenting(false);
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(back()).toBeNull();
+      fireEvent.click(screen.getByText("Show"));
+
+      writeLastPresent(last);
+      presenting(true, "deck");
+      presenting(false);
+      expect(back()).toBeNull();
+      fireEvent.click(screen.getByText("Show"));
+
+      await act(async () => {
+        key({ key: "H", ctrlKey: true, shiftKey: true, altKey: true });
+      });
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(back()).toBeNull();
+    });
+
+    it("is forgotten once the window is shown", async () => {
+      writeLastPresent(last);
+      render(<PrivacyCurtain />);
+      await act(async () => {});
+      presenting(true);
+      presenting(false);
+      fireEvent.click(screen.getByText("Show"));
+      await act(async () => {
+        key({ key: "H", ctrlKey: true, shiftKey: true, altKey: true });
+      });
+      expect(back()).toBeNull();
+    });
   });
 
   it("the shortcut raises every window, and pressed again shows this one", async () => {

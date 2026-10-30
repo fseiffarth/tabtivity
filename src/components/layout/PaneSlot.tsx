@@ -23,7 +23,7 @@ import {
 import type { HostConnState } from "../../stores/remote/remoteStatus";
 import { shouldPersistTab, shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
 import { mobileTmuxReadyKey } from "../../lib/terminal/mobileTmuxReady";
-import { tabRunsInContainer } from "../../lib/projectTabHost";
+import { isHostPinned, tabRunsInContainer } from "../../lib/projectTabHost";
 import { resolveLocalMirror, resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { MOBILE_ACCESS_KEY } from "../../lib/brand";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
@@ -129,12 +129,12 @@ function PaneSlotImpl({
   // remote project switched away from never un-holds.
   const paneRemoteProj = !!paneProject?.remote;
   const paneDisconnected = paneRemoteProj && projectSsh !== "connected";
-  const vmProject = !!paneProject?.vm?.enabled;
+  const hostPinned = isHostPinned(paneProject);
   // A terminal pane runs on a remote host when its effective locality resolves
   // to one (primary or a worker). Held while THAT host's pool is down: spawning
   // `ssh -tt` now would block on the dead pool. Multi-host: a pane on gpu-2
   // holds iff gpu-2 is down, independent of the primary (plan §4.5).
-  const location = effectiveTabLocation(tab, { vmProject });
+  const location = effectiveTabLocation(tab, { hostPinned });
   const rawHostId = remoteHostIdOf(location);
   // A tab naming a worker that no longer exists (machine removed) falls back
   // to the primary — matching the backend's wrap_pty_options (plan §8).
@@ -149,11 +149,15 @@ function PaneSlotImpl({
       : paneHostId
         ? hostSsh?.[paneHostId]?.ssh
         : undefined;
+  // A host-pinned project (VM, remote-only) has no local copy to fall back
+  // on, so its Files tab — which on a plain remote project browses the mirror
+  // while offline — holds too, on the primary's pool (the tree it lists); its
+  // terminals always resolve to a host above.
   const holdRemoteTerminal =
     paneRemoteProj &&
-    isPtyTabKind(tab.kind) &&
-    paneHostId !== null &&
-    paneHostSsh !== "connected";
+    (isPtyTabKind(tab.kind)
+      ? paneHostId !== null && paneHostSsh !== "connected"
+      : hostPinned && tab.kind === "files" && projectSsh !== "connected");
   // The label of the host this pane runs on (primary host, or the worker's
   // label), for the hold placeholder + hover card.
   const paneHostLabel =
@@ -171,7 +175,8 @@ function PaneSlotImpl({
   // FileBrowser re-lists on `projectDir` change, so it swaps back to the remote
   // tree once the pool connects. (Resolved here, not inside TabPane, because
   // the popout has no projects store to resolve it.)
-  const filesProjectDir = paneDisconnected
+  // A host-pinned project has no mirror: its Files tab holds instead (above).
+  const filesProjectDir = paneDisconnected && !hostPinned
     ? localTabCwd(
         { kind: "files" },
         { isRemoteProject: true, projectDirectory, mirror, fallback: tab.cwd },
@@ -183,6 +188,7 @@ function PaneSlotImpl({
     isRemoteProject: paneRemoteProj,
     projectDirectory,
     mirror,
+    hostPinned,
     fallback: tab.cwd,
   });
   // Run this tab inside the project's session container when the toggle is
@@ -236,7 +242,7 @@ function PaneSlotImpl({
   const terminalSleepable = isSleepableTerminalTab(tab, { inPopout, drawnElsewhere });
   const ptyId = isPtyTabKind(tab.kind) ? `${scopeKey}:${tab.key}` : null;
   const spawnIdentity = terminalSleepable
-    ? `${terminalSpawnKey(tabTerminalSpawn(tab, scopeKey, { terminalCwd, sandbox, tmuxSession, vmProject }))}|${holdRemoteTerminal}`
+    ? `${terminalSpawnKey(tabTerminalSpawn(tab, scopeKey, { terminalCwd, sandbox, tmuxSession, hostPinned }))}|${holdRemoteTerminal}`
     : "";
   const sleepable = sleepAfterMs != null && (viewerSleepable || terminalSleepable);
   const hidden = sleepable && !visible;
@@ -290,7 +296,7 @@ function PaneSlotImpl({
         terminalCwd={terminalCwd}
         sandbox={sandbox}
         tmuxSession={tmuxSession}
-        vmProject={vmProject}
+        hostPinned={hostPinned}
       />
     </PaneSleepHoldContext.Provider>
   );

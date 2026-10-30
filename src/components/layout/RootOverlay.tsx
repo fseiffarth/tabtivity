@@ -32,6 +32,7 @@ import { dividerFraction } from "../../stores/tabs/layoutTree";
 import { canDuplicateTab, isSingletonTabKind } from "../../stores/tabs/tabKinds";
 import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
+import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { registerHostBoundTab } from "../../lib/remote/hostBound";
 import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { tabColorCss } from "../../lib/theme/tabColors";
@@ -1051,6 +1052,7 @@ function GroupStrip({
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
+                noteTabClose(e.currentTarget);
                 closeTab(tab.key);
               }}
             >

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { observeStripResize } from "../../lib/observeStripResize";
+import { closedTabSlotHeld, useClosedTabSlot } from "../../lib/tabs/closedTabSlot";
 
 /**
  * The horizontally-scrolling tab strip + flanking chevrons — the SAME overflow
@@ -76,10 +77,11 @@ export function ScrollingTabStrip({
   useEffect(() => {
     updateScrollState();
   }, [revision, updateScrollState]);
+  useClosedTabSlot(stripRef, `${revision}|${activeKey}`);
   useEffect(() => {
-    if (activeKey === undefined) return;
-    stripRef.current
-      ?.querySelector<HTMLElement>(".tab.active")
+    const el = stripRef.current;
+    if (activeKey === undefined || !el || closedTabSlotHeld(el)) return;
+    el.querySelector<HTMLElement>(".tab.active")
       ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [activeKey, revision]);
 

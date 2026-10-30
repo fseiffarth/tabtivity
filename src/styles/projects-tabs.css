@@ -1010,13 +1010,6 @@
   box-shadow: var(--shadow-2);
 }
 
-/* A project name in a left-docked file viewer sits at the outer window edge.
-   Keep its card under that name, but grow it inward (to the right) instead of
-   centering it across the window border. */
-.project-pill-popup.anchor-start {
-  transform: translate(0, 6px);
-}
-
 .pill-popup-path {
   font-size: 11px;
   font-style: italic;
@@ -1310,6 +1303,14 @@
   --app-scrollbar: none;
 }
 
+/* lib/tabs/closedTabSlot: the width a closed tab took from a scrolled strip,
+   kept so the scroll position, and with it the × under the pointer, stays. */
+.tab-strip::after {
+  content: "";
+  flex: 0 0 var(--tab-slot-slack, 0px);
+  align-self: stretch;
+}
+
 /* Chevron buttons that flank the strip when it overflows. */
 .tab-scroll-btn {
   flex-shrink: 0;
@@ -1415,6 +1416,12 @@
 
 .tab:not(.active):not(:hover) .tab-label {
   opacity: 0.7;
+}
+
+/* A tab held in a narrower closed tab's slot (lib/tabs/closedTabSlot). */
+.tab[data-slot-held] .tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* #56: inline tab rename. The label is swapped for a borderless input that
@@ -3138,6 +3145,12 @@ html:not(.show-untested-tags) .untested-tag {
   overflow-y: auto;
 }
 
+/* Flipped by Dropdown when the menu would run past the window's bottom edge. */
+.dropdown-menu.dropdown-menu-up {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
+
 /* Full-width variant: use when a Dropdown replaces a block form <select> so the
    trigger fills its field width (label above, value left, caret right). */
 .dropdown.dropdown-block {
@@ -3645,6 +3658,19 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompts-view .settings-section-title > .settings-btn { margin-left: auto; }
 .agent-prompts-section:first-child .settings-section-title { padding-top: 0; border-top: none; }
 
+/* CLI overview (side panel → CLIs): the Agents view's cards, one per CLI. */
+.cli-overview-head { display: flex; align-items: baseline; gap: 8px; }
+.cli-overview-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cli-overview-plan { padding: 1px 7px; border: 1px solid var(--border-color); border-radius: 999px; font-size: 11px; color: var(--text-secondary); }
+.cli-overview-facts { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.cli-overview-meter { display: flex; flex-direction: column; gap: 3px; }
+.cli-overview-meter > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.cli-overview-meter > div:first-child span:last-child { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.cli-overview-meter small { color: var(--text-muted); font-size: 11px; }
+.cli-overview-bar { height: 6px; overflow: hidden; background: var(--bg-hover); border-radius: 3px; }
+.cli-overview-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.cli-overview-bar.high > span { background: var(--warning, #f0a35e); }
+
 /* Prompt chart: one horizontal time axis, drafts on a strip above it. The
    card treatment follows `.todo-card` (solid surface plus a static shadow
    whose opacity changes); nothing here animates a box-shadow. */
@@ -3990,3 +4016,15 @@ html:not(.show-untested-tags) .untested-tag {
   font-size: 12px;
 }
 .md-prompt .md-prompt-preview.file-tree-empty { padding: 8px; }
+
+/* Phone mark (components/mobile/PhoneHereMark): a paired phone is in this
+   project or holds this tab. Faded while its screen is away. */
+.phone-here-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--accent);
+}
+.phone-here-mark.is-away {
+  opacity: 0.45;
+}

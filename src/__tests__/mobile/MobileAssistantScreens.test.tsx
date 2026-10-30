@@ -3,8 +3,8 @@
  * the list) — the last chat, started again when it has no process, or a new
  * one on the desktop's default launch (`TabbyOpen`) — and the Focus chat, whose
  * head switches the CLI or relaunches it by the host's opaque launch ids, with
- * every folder-shaped affordance (files, outbox, inbox uploads, Commit, Mark
- * up, schedules) left out.
+ * every project-shaped affordance (files, outbox, Commit, Mark up, schedules)
+ * left out. The composer's + stays: its files land in the chat's own folder.
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -230,18 +230,29 @@ describe("Mobile assistant — the Focus chat", () => {
     });
   };
 
-  it("offers no attach, Commit, file drawer or outbox for a chat, and reads none of them", async () => {
+  it("offers no Commit, file drawer or outbox for a chat, and reads none of them", async () => {
     serve();
     const { container } = render(<Terminal tab={TAB} project="scope" back={() => {}} />);
     await settle();
     expect(screen.getByLabelText("Message agent")).toBeTruthy();
-    expect(container.querySelector(".composer-add")).toBeNull();
     expect(container.querySelector(".composer-commit")).toBeNull();
     expect(container.querySelector(".drawer-open")).toBeNull();
     expect(container.querySelector(".terminal-gallery")).toBeNull();
     expect(urls().filter((url) => /outbox|uncommitted|markup/.test(url))).toEqual([]);
     // The one scope read is the launches, for the head's CLI dropdown.
     expect(urls().filter((url) => /\/projects\//.test(url))).toEqual(["/api/v1/projects/scope/launch-options"]);
+  });
+
+  it("keeps the composer's + as a project chat has it, minus the project file", async () => {
+    serve();
+    const { container } = render(<Terminal tab={TAB} project="scope" back={() => {}} />);
+    await settle();
+    const add = container.querySelector<HTMLButtonElement>(".composer-add");
+    expect(add).toBeTruthy();
+    fireEvent.click(add!);
+    const sheet = await screen.findByRole("dialog", { name: "Add to the message" });
+    const tiles = within(sheet).getAllByRole("button").map((button) => button.className).filter((name) => name.startsWith("attach-tile"));
+    expect(tiles.map((name) => name.replace("attach-tile attach-tile-", ""))).toEqual(["camera", "gallery", "files", "desktop"]);
   });
 
   it("names its CLI in the head, and a pick starts a fresh chat on it in place of every other", async () => {

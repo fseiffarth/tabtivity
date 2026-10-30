@@ -105,6 +105,7 @@ ALLOW=(
   "test-ubuntu|Restore the last run's failed tests|the list persists in the git dir"
   "test-ubuntu|Save this run's failed tests|the list persists in the git dir"
   "package-linux|Build release bundles|release packaging (npm run tauri:bundle), not a code gate"
+  "package-linux|Install the Vulkan SDK|release packaging only: the bundles' GPU backend needs it, the gates build without it"
   "package-linux|Upload AppImage|artifact upload"
   "package-linux|Upload DEB|artifact upload"
   "package-server|Build server package|release packaging (scripts/package-server-deb.sh), not a code gate"

@@ -60,6 +60,7 @@ import { DragGhost, SplitPreviewOverlay } from "./CenterPanel";
 import { TabDropPlaceholder } from "../tabs/TabDropPlaceholder";
 import { NewTabMenu } from "../tabs/NewTabMenu";
 import { agentMachines } from "../tabs/agentMenuEntries";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { TabColorPicker } from "../tabs/TabColorPicker";
 import { TabMarkBadge } from "../tabs/TabMarkBadge";
@@ -122,6 +123,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
+import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 
 
@@ -275,6 +277,8 @@ export function DetachedCenterPanel({
   // `!!remoteInfo` put the Local/Remote badge on every local project's tabs.
   const [localityMenu, setLocalityMenu] = useState<LocalityMenuState | null>(null);
   const isRemote = !!remoteInfo?.project?.remote;
+  // A VM or remote-only project: its tabs run only on its hosts.
+  const hostPinned = isHostPinned(remoteInfo?.project);
   const primaryHost = remoteInfo?.primaryHost;
   const computeHosts = remoteInfo?.computeHosts;
   // One bar element per group, so a per-tab drag can hit-test the bar it's over.
@@ -1296,6 +1300,8 @@ export function DetachedCenterPanel({
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    // The × is its own click (see `TabBar`).
+    if ((e.target as HTMLElement).closest(".tab-close")) return;
     onActivate(tab.key);
     const startX = e.clientX;
     const startY = e.clientY;
@@ -1536,6 +1542,7 @@ export function DetachedCenterPanel({
                   {isRemote && (
                     <TabLocalityBadge
                       tab={tab}
+                      pinned={hostPinned}
                       primaryHost={primaryHost}
                       computeHosts={computeHosts}
                       onOpen={(r, startOnMachines) =>
@@ -1552,6 +1559,7 @@ export function DetachedCenterPanel({
                     className="tab-close"
                     onClick={(e) => {
                       e.stopPropagation();
+                      noteTabClose(e.currentTarget);
                       onClose(tab.key);
                     }}
                     title={t("detachedTabs.closeTab")}
@@ -1684,6 +1692,7 @@ export function DetachedCenterPanel({
                       isRemoteProject: isRemote,
                       projectDirectory: resolveProjectDirectory(remoteInfo?.project ?? null),
                       mirror: resolveLocalMirror(remoteInfo?.project),
+                      hostPinned,
                       fallback: tab.cwd,
                     })}
                   />
@@ -1908,10 +1917,11 @@ export function DetachedCenterPanel({
               onClose={() => setAddMenu(null)}
               onManageAgents={() => setAgentDialogOpen(true)}
               machines={
-                isRemote && !remoteInfo?.project?.vm?.enabled
-                  ? agentMachines({ primaryHost, computeHosts, t })
+                isRemote
+                  ? agentMachines({ primaryHost, computeHosts, pinned: hostPinned, t })
                   : undefined
               }
+              hostPinned={hostPinned}
             />
           );
         })()}
@@ -2069,7 +2079,8 @@ export function DetachedCenterPanel({
       {localityMenu && (
         <LocalityMenu
           menu={localityMenu}
-          current={tabLocation(byKey.get(localityMenu.key))}
+          current={tabLocation(byKey.get(localityMenu.key), hostPinned)}
+          pinned={hostPinned}
           primaryHost={primaryHost}
           computeHosts={computeHosts}
           onClose={() => setLocalityMenu(null)}
@@ -2090,6 +2101,7 @@ export function DetachedCenterPanel({
             tab={tab}
             scope={scope}
             isRemote={isRemote}
+            hostPinned={hostPinned}
             primaryHost={primaryHost}
             computeHosts={computeHosts}
             anchorX={hoverTab.x}

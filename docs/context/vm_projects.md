@@ -38,12 +38,26 @@ tier forbids. So: **no mirror by default** (zero agent-written bytes on the
 host; the overlay IS the working tree, and the delete/rebuild confirms say so
 by name), lockstep not armed, and locality **pinned** to the VM — the silent
 remote→local fallback that exists elsewhere in tab spawning is a hard refusal
-here, enforced twice: `effectiveTabLocation`'s `vmProject` pin keeps the
+here, enforced twice: `effectiveTabLocation`'s `hostPinned` pin keeps the
 frontend from building a local spawn (overriding even a stored
 `location: "local"`, which lives in agent-writable layout state), and
-`commands::terminal::vm_spawn_refusal` refuses at the backend against the
-state-dir record an in-VM agent cannot write. A down VM refuses with the
-`TABTIVITY_VM_DOWN` sentinel rather than downgrading to a host shell.
+`services::launch_prep::pinned_spawn_refusal` (`Pin::Vm`) refuses at the
+backend against the state-dir record an in-VM agent cannot write. A down VM
+refuses with the `TABTIVITY_VM_DOWN` sentinel rather than downgrading to a host
+shell. No frontend code maps that sentinel yet: the terminal prints the
+backend's text (the "Boot VM" placeholder is a G.26 follow-up).
+
+This posture now has a name: **a VM project is a remote-only project plus
+boot** (`docs/context/remote_projects.md` § Remote-only). `RemoteSpec::
+is_remote_only()` is true for every VM (the VM outranks any `remote_only`
+value), and the frontend's `isHostPinned` likewise, so the mirror, sync,
+lockstep, locality, search, git-on-host, TeX build and phone rules are the
+shared ones; only boot, egress, the per-VM identity, `_VM_DOWN` and the mail
+reader stay VM-only. Inherited from the shared rules: a VM refuses byte-sync, a
+local run host and agent moves to this machine, and its search and quick open
+walk the guest over SSH. A VM's `remote_only` is never written, and both
+Remote ⇄ Remote-only conversions refuse a VM: the VM's later opt-in mirror (G.26)
+must stay manual-pull-only, and the conversion pairs through ordinary lockstep.
 
 ## Egress is a knob because pretending otherwise is theater
 

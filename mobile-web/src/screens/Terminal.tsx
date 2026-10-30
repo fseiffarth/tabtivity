@@ -4,9 +4,10 @@ import { AgentStatusMark } from "../components/AgentStatusPill";
 import { HintQueue, type HintKey } from "../components/HintMessage";
 import { RunningShells, shownShells } from "../components/RunningShells";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
-import { useMessageMenu, type HoldHandlers } from "../components/MessageMenu";
+import { useMessageMenu, type TapHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
+import { LaunchDefaultsFold } from "../components/LaunchDefaultsFold";
 import { ConfirmSheet } from "../components/ConfirmSheet";
 import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
@@ -38,6 +39,8 @@ import {
   sentName,
   getTabWorktrees,
   moveTabWorktree,
+  getTabLocations,
+  moveTabLocation,
   getAssistantModels,
   switchAssistantModel,
   uploadToInbox,
@@ -50,6 +53,7 @@ import {
   type AskedQuestion,
   type TabRow,
   type TabWorktrees,
+  type TabLocations,
   type AssistantModels,
 } from "../api";
 import { describeFailure } from "../connection";
@@ -91,7 +95,7 @@ import { agentWork } from "../terminal/agentBusy";
 import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
 import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
-import { commandArgsInline, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
+import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
@@ -128,6 +132,8 @@ import { useModelPicker, useModelPickerAnswers } from "./terminal/useModelPicker
 import { useSignInPageWalk } from "./terminal/useSignInPageWalk";
 import { useLiveQuestion } from "./terminal/useLiveQuestion";
 import { useVoiceInput } from "./terminal/useVoiceInput";
+import { useHandsFree } from "./terminal/useHandsFree";
+import { type SendGuard } from "../../../shared/handsFree";
 import {
   type VoiceNote, TRANSCRIPT_STEP, UNDO_RELOADS, LINK_WAIT_MS, type InboxUpload, leafOfReference,
   liftedDraft, uploadInFlight, withAttachments, type ChatInbox,
@@ -215,14 +221,14 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
   /** The pane's width, for a CLI that wrapped its own rows against it. */
   columns?: number;
 }) {
-  const { hold, menu } = useMessageMenu();
+  const { tap, menu } = useMessageMenu();
   if (!chat) return <>{lines.map((line) => <ReadableRow key={line.key} line={line} />)}</>;
   return <>{chatTurns(lines, agent, columns).map((turn) => {
     const shown = turn.role === "user" ? (turn.prompt ?? turn.lines) : (turn.answer ?? turn.lines);
     const rows = shown.map((line) => <ReadableRow key={line.key} line={line} />);
     // A message is a bubble — a prompt or an answer; tool output and raw
-    // screen rows are not one, and a hold on them opens nothing.
-    const press = turn.role === "user" || turn.answer ? hold(`screen:${turn.key}`, () => readableText(shown)) : undefined;
+    // screen rows are not one, and a tap on them opens nothing.
+    const press = turn.role === "user" || turn.answer ? tap(`screen:${turn.key}`, () => readableText(shown)) : undefined;
     const command = turn.role === "user" ? slashCommand(readableText(shown)) : null;
     if (command) return <Fragment key={turn.key}><CommandDivider command={command} label={promptLabel} press={press} /></Fragment>;
     return turn.role === "user"
@@ -235,11 +241,11 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
  * a turn of the CLI's own dial, so its name reads as a rule across the chat.
  * A one-word setting rides on the rule (`/model opus`); the text of a `/goal`
  * or `/plan` is the reader's own words, so it follows as an ordinary prompt
- * bubble. Both keep the prompt's hold menu. */
+ * bubble. Both keep the prompt's message menu. */
 function CommandDivider({ command, label, press }: {
   command: SlashCommand;
   label: string;
-  press?: HoldHandlers;
+  press?: TapHandlers;
 }) {
   const inline = commandArgsInline(command.args);
   return <>
@@ -376,7 +382,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
 }) {
   // One bubble per record, keyed by its time (`transcriptTurns`).
   const turns = useMemo(() => transcriptTurns(entries), [entries]);
-  const { hold, menu } = useMessageMenu();
+  const { tap, menu } = useMessageMenu();
   const { links, sheet: linkSheet } = useChatLinks();
   const t = useT();
   // A messenger's day chip over the first message of each day (`dayOpeners`).
@@ -394,12 +400,18 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
     </div>}
     {turn.kind === "agent"
       ? <SubagentCard turn={turn} label={agentLabel} untested={agentUntested} time={time} busy={busy} onOpen={onOpenAgent} />
+      // The user cut the turn off: a rule across the chat, as a slash
+      // command is, in the interrupted mark's colour.
+      : turn.kind === "interrupted"
+      ? <div className="readable-command interrupted" role="separator">
+          <span className="readable-command-text"><span aria-hidden="true">■ </span>{t("tabBar.statusInterrupted")}{isUntested("mobile.transcript.interrupted") && <em> · {t("mobile.focus.untested")}</em>}</span>
+        </div>
       : turn.questions
-      ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={hold(turn.key, () => turn.text)} />
+      ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)} />
       : turn.command
-      ? <CommandDivider command={turn.command} label={promptLabel} press={hold(turn.key, () => turn.text)} />
+      ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} />
       : turn.kind === "prompt"
-      ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...hold(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
+      ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...tap(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
           <PromptBody text={turn.text} links={links} inbox={inbox} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
           {time}
@@ -414,7 +426,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
                 {isUntested("mobile.link.ack") && <em>{t("mobile.newTab.untested")}</em>}
               </small>}
         </div>
-      : <div className={turn.plan ? "readable-turn agent answer plan" : "readable-turn agent answer"} role={turn.plan ? "group" : undefined} aria-label={turn.plan ? planLabel : undefined} {...hold(turn.key, () => turn.text)}>
+      : <div className={turn.plan ? "readable-turn agent answer plan" : "readable-turn agent answer"} role={turn.plan ? "group" : undefined} aria-label={turn.plan ? planLabel : undefined} {...tap(turn.key, () => turn.text)}>
           {turn.plan && <small className="transcript-plan-head">{planLabel}{planUntested && <em> · {planUntested}</em>}</small>}
           <AnswerText text={turn.text} links={links} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
@@ -555,7 +567,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
   notAnswered: string;
   untested: string;
   time: ReactNode;
-  press: HoldHandlers;
+  press: TapHandlers;
 }) {
   return <div className="transcript-screen transcript-asked" role="group" aria-label={label} {...press}>
     <small>{label}{untested && <> · {untested}</>}</small>
@@ -614,9 +626,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * session's link and exit, so there is no local session to wait for. */
   const cloudTab = tab.cloud === true;
   const t = useT();
-  /** A chat of the assistant scope: it has no folder behind it, so the
-   * affordances that reach one are gone — the files drawer, the outbox, inbox
-   * uploads (the composer's **+**), Commit and Mark up. */
+  /** A chat of the assistant scope: it has no project folder behind it, so
+   * the affordances that reach one are gone — the files drawer, the outbox,
+   * Commit and Mark up. The composer's **+** stays: its files land in the
+   * chat's own folder (the sidecar's `drop_box`), as a desktop drop does. */
   const bare = useScopeKind(projectOfTab) === "assistant";
   const project = bare ? undefined : projectOfTab;
   const host = useRef<HTMLDivElement>(null);
@@ -649,6 +662,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const connectedRef = useRef(false);
   const voiceRequest = useRef(0);
   const voiceProgress = useRef<DictationProgress>(DICTATION_START);
+  /** Hands-free (`focusHandsFree`): the send guard the dictation feeds, and
+   * whether the recognizer holds words it has not settled yet. */
+  const sendGuard = useRef<SendGuard>();
+  const voiceOpen = useRef(false);
+  /** The user stopped the mic: what it still settles is plain dictation. */
+  const voiceStopping = useRef(false);
   const copiedTimer = useRef<number>();
   const sendTimers = useRef<number[]>([]);
   /** When this screen last sent a slash command, and last drew output from
@@ -813,7 +832,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * newer one further down (the reader already shows a prompt, and a pinned
    * older one would read as the question to the answer below it). Read off
    * the chat as drawn (`data-prompt`), so the stored session and the screen
-   * reading pin alike, with the bubble's own time (`.transcript-time`). The subagent index sticks over the top of the chat:
+   * reading pin alike, with the bubble's own time (`.transcript-time`). A
+   * prompt the read left behind "Show earlier turns" rides on that button,
+   * so the turn that opens on its answers pins it too. The subagent index sticks over the top of the chat:
    * a bubble behind it is out of sight too, and the pin sits under it
    * (`pinnedTop`, px below the view's top) — drawn over it, it was hidden. */
   const [pinnedPrompt, setPinnedPrompt] = useState("");
@@ -839,7 +860,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     }
     pinnedPromptEl.current = owner;
     setPinnedPrompt((owner?.dataset.prompt ?? "").trim());
-    setPinnedTime(owner?.querySelector(":scope > .transcript-time")?.textContent ?? "");
+    setPinnedTime(owner?.dataset.promptTime ?? owner?.querySelector(":scope > .transcript-time")?.textContent ?? "");
   }, []);
   /** Whether Terminal view is panned to the newest rows. Kept from the box's
    * own scroll events rather than measured when it is wanted: a resize is the
@@ -935,6 +956,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [worktreeChoices, setWorktreeChoices] = useState<TabWorktrees | null>(null);
   const [worktreeMoving, setWorktreeMoving] = useState("");
   const [worktreeNote, setWorktreeNote] = useState<TranslationKey | "">("");
+  /** The ⌂/☁ chip's sheet, the desktop tab badge's machine menu: the same
+   * four as the ⎇ chip's. */
+  const [locationSheet, setLocationSheet] = useState(false);
+  const [locationChoices, setLocationChoices] = useState<TabLocations | null>(null);
+  const [locationMoving, setLocationMoving] = useState("");
+  const [locationNote, setLocationNote] = useState<TranslationKey | "">("");
   /** A Tabby chat's model chip: its `/model` is off, so the sheet lists what
    * the desktop's own chip lists and a pick restarts the chat on it. */
   const [assistantSheet, setAssistantSheet] = useState(false);
@@ -1095,7 +1122,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * switch is on for it (`detail.files`) — null while off, or unknown. */
   const [filesLabel, setFilesLabel] = useState<string | null>(null);
   /** Which sides the drawer's library has (`detail.files`, `detail.host_files`). */
-  const [filesSides, setFilesSides] = useState({ here: true, host: false });
+  const [filesSides, setFilesSides] = useState<{ here: boolean; host: boolean; hostLabel?: string }>({ here: true, host: false });
   /** The files drawer, the project screen's own, opened here by a right→left
    * swipe over the output. */
   const [filesOpen, setFilesOpen] = useState(false);
@@ -1295,12 +1322,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     readableHost, earlier, revealed, setRevealed, revealAnchor,
   });
   const {
-    type, press, clearPending, deliver, sendAgentText, forgetDictation, subagentTarget, submitDraft,
+    type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft,
     submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow,
     pullQueued, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation,
   } = useComposerSend({
     tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
-    dictateButton, connectedRef, voiceRequest, voiceProgress, sendTimers, commandSentAt,
+    dictateButton, connectedRef, voiceRequest, voiceProgress, sendGuard, voiceOpen, sendTimers, commandSentAt,
     lastOutputAt, settleQueue, bracketedPaste, screenRows, viewportRows, connected, setAiOffAt,
     aiOffRef, ctrl, setCtrl, setSendFailed, setDraft, draft, uploadsRef, editing, setEditing,
     editingRef, editSending, setEditSending, liveScreen, setLastSent, slashCliKey, agentKey,
@@ -1362,6 +1389,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * so its facts row reads like Claude's. */
   // The cleared conversation's figures are not the new chat's.
   const storedUsage = sinceClear ? undefined : transcript?.usage;
+  /** The prompt the oldest turn answers, left behind "Show earlier turns",
+   * and its time as its bubble would show it. */
+  const cutPrompt = transcript?.truncated && !sinceClear ? transcript.cutPrompt : undefined;
+  const cutPromptMoment = chatMoment(cutPrompt?.at);
+  const cutPromptTime = cutPromptMoment ? chatTime(cutPromptMoment) : undefined;
   const contextLeft = status?.context ?? (storedUsage?.contextLeft != null ? `${storedUsage.contextLeft}%` : undefined);
   const limitTime = new Date(limitsNow);
   const shownLimits = limits.session || limits.week ? limits : sessionLimits(storedUsage, limitTime);
@@ -1562,6 +1594,50 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           : "mobile.worktree.unreadable");
       });
   };
+  /** The ⌂/☁ chip: the desktop tab badge's locality menu, as a sheet. The
+   * list is the sidecar's (`TabLocations`); a pick has the desktop stop the
+   * CLI, carry the conversation over where it can and restart it there. The
+   * tab keeps its id, so this view stays on it. */
+  const openLocationSheet = () => {
+    setLocationNote("");
+    setLocationChoices(null);
+    setLocationSheet(true);
+    getTabLocations(tab.id).then(setLocationChoices, () => {
+      setLocationChoices({ locations: [], carries: false });
+      setLocationNote("mobile.location.unreadable");
+    });
+  };
+  const chooseLocation = (id: string) => {
+    if (locationMoving) return;
+    if (id === locationChoices?.current) {
+      setLocationSheet(false);
+      return;
+    }
+    setLocationNote("");
+    setLocationMoving(id);
+    moveTabLocation(tab.id, id)
+      .then(() => {
+        setLocationMoving("");
+        setLocationSheet(false);
+        // As after a worktree move: the agent restarted elsewhere.
+        commandSentAt.current = Date.now();
+        for (const delay of [0, ...UNDO_RELOADS]) {
+          window.setTimeout(() => {
+            transcriptVersion.current = undefined;
+            setTranscriptReload((count) => count + 1);
+          }, delay);
+        }
+      })
+      .catch((error) => {
+        const code = error instanceof ApiError ? error.code : "";
+        setLocationMoving("");
+        setLocationNote(code === "move_failed" ? "mobile.location.failed"
+          : code === "tab_busy" ? "mobile.worktree.busy"
+          : code === "host_offline" ? "mobile.location.hostOffline"
+          : code === "desktop_unavailable" ? "mobile.location.offline"
+          : "mobile.location.unreadable");
+      });
+  };
   const openModeSheet = () => {
     if (modes.length === 0 && !fixedMode) {
       cycleMode();
@@ -1646,7 +1722,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           : "terminal.reader.assistantModelFailed");
       });
   };
-  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || statusSheet || desktopSheet || gallery
+  // Manage CLIs' startup defaults for this CLI, under the model sheet's rows.
+  const launchDefaults = tab.kind === "agent" && !tab.local_model && !tab.assistant_launch && !tab.on_host
+    ? <LaunchDefaultsFold tabId={tab.id} />
+    : undefined;
+  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
@@ -1767,7 +1847,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(project)}`, { signal: controller.signal })
         .then((detail) => {
           setFilesLabel(detail.files || detail.host_files ? detail.project.label : null);
-          setFilesSides({ here: !!detail.files, host: !!detail.host_files });
+          setFilesSides({ here: !!detail.files, host: !!detail.host_files, hostLabel: detail.host_label });
         })
         .catch(() => {});
     };
@@ -1919,7 +1999,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   );
   const {
     questionAsk, questionContext, questionTabs, questionTabFocus, questionTabSubmit,
-    questionContextShown, questionSignature, questionSent, sentSignature, answerQuestion,
+    questionContextShown, questionSignature, questionHeld, questionSent, sentSignature, answerQuestion,
     stepQuestion, answerQuestionText,
   } = useLiveQuestion({
     clearPending, deliver, agentLabel, liveTail, liveQuestion,
@@ -1984,7 +2064,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     },
     [markupTarget, workingModel, markupDialog, tab.local_model, markupPickModel, tab.id],
   );
-  /** A shell's Focus has no messages to hold for a menu (`useMessageMenu`), so
+  /** A shell's Focus has no messages to tap for a menu (`useMessageMenu`), so
    * it copies what the reading view shows: the revealed history, the open
    * chunk, then the live tail. */
   const copyReadable = async () => {
@@ -2018,11 +2098,26 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     stream.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
     followReadable(true);
   };
+  /** The mic's start, for hands-free to open it again once a turn is over. */
+  const startVoiceRef = useRef<() => Promise<void>>(async () => {});
+  const {
+    handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, stopLoop,
+    toggleHandsFree, handsFreeLine: handsFreeLineFor,
+  } = useHandsFree({
+    tab, t, sendGuard, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation,
+    connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
+    questionSignature, questionAsk, answerQuestion, transcript,
+  });
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
     tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
     setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
     setVoiceFailure, forgetDictation, submitDraftRef,
+    handsFree: {
+      on: handsFreeRef, guard: handsFreeGuard, sendGuard, voiceOpen, voiceStopping,
+      pick: voicePickRef, awaitTurn: awaitTurnRef, stopLoop,
+    },
   });
+  startVoiceRef.current = startVoice;
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language ? { language: note.language } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
@@ -2031,6 +2126,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const voiceLine = voiceProblem ? sayVoice(voiceProblem)
     : voicePreview ? t("mobile.voice.heard", { text: voicePreview })
     : voiceStatus ? sayVoice(voiceStatus) : "";
+  const handsFreeLine = handsFreeLineFor(voiceProblem !== null);
   /** What the sheet paints: the live step, or — between the tap and the
    * session's redraw — the answered one, listed but not tappable, so the sheet
    * does not blink empty on the way to the next step. */
@@ -2081,6 +2177,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     current: model.id === assistantModels?.current,
     pending: model.id === assistantSwitching,
   }));
+  const locationOptions: SheetOption[] = (locationChoices?.locations ?? []).map((row) => ({
+    key: row.id,
+    label: row.here ? t("mobile.newTab.thisComputer") : row.primary ? t("mobile.newTab.machinePrimary", { host: row.label }) : row.label,
+    ...(row.connected ? {} : { description: t("mobile.newTab.machineOffline") }),
+    current: row.id === locationChoices?.current,
+    pending: row.id === locationMoving,
+  }));
   const worktreeOptions: SheetOption[] = (worktreeChoices?.worktrees ?? []).map((row) => ({
     key: row.id,
     ...worktreeChoiceText({ branch: row.branch, name: row.label, main: row.main }, t),
@@ -2089,7 +2192,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }));
   /** The composer's ＋ sheet. The camera, gallery, phone and desktop tiles
    * put a file in the mirror's inbox, which a tab on the remote host cannot
-   * read (`tab_on_host`): such a tab keeps only the project reference. */
+   * read (`tab_on_host`): such a tab keeps only the project reference. A
+   * Tabby chat has no project to reference, so it keeps the other four. */
   const allAttachTiles: AttachTile[] = [
     { key: "camera", tone: "camera", label: t("mobile.add.camera"), hint: t("mobile.add.cameraHint"), untested: "mobile.add.camera",
       icon: <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3.5" /></svg> },
@@ -2102,7 +2206,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     { key: "project", tone: "project", label: t("mobile.add.project"), hint: t("mobile.add.projectHint"),
       icon: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8" /></svg> },
   ];
-  const attachTiles = tab.on_host ? allAttachTiles.filter((tile) => tile.key === "project") : allAttachTiles;
+  const attachTiles = tab.on_host ? allAttachTiles.filter((tile) => tile.key === "project")
+    : bare ? allAttachTiles.filter((tile) => tile.key !== "project").map((tile) => tile.untested ? tile : { ...tile, untested: "mobile.tabby.attach" })
+    : allAttachTiles;
   const desktopOptions: SheetOption[] = (desktopImages ?? []).map((image) => ({
     key: image.id,
     label: image.name,
@@ -2119,6 +2225,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * at work or it runs in the background. Its row names the subagent's own
    * model, not the session's. */
   const subagentWorking = openSubagentRunning(subagentPath, sessionEntries, sessionBusy);
+  /** The working row's Stop, as the desktop Chat's: Esc stops the agent's
+   * current turn. */
+  const stopButton = <button type="button" className="transcript-working-stop" disabled={!connected} onClick={() => type("\u001b")} title={t("terminal.reader.stopHint")}>
+    {t("terminal.reader.stop")}{isUntested("mobile.focus.stop") && <em> · {t("mobile.focus.untested")}</em>}
+  </button>;
   const subagentModel = workingModelName(subTranscript?.model);
   /** What the subagent's working row says beside the dots, as the session's
    * does: how long since it was spawned (its entry's stamp, else its own
@@ -2179,6 +2290,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               {subagentFacts.join(" · ")}
               {subagentRowUntested && <em>{subagentFacts.length > 0 && " · "}{t("mobile.focus.untested")}</em>}
             </small>}
+            {/* Esc stops the session's turn: nothing to stop while only a
+                background subagent works on. */}
+            {sessionBusy && stopButton}
           </div>}
           <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} />
         </div>}
@@ -2253,6 +2367,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         }}>
           <span><strong>{t("mobile.speech.auto")} {isUntested("mobile.focus.readAloud") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{t(speechAvailable ? "mobile.speech.autoHint" : "mobile.speech.unavailable")}</small></span>
           {readAloud && speechAvailable && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+        </button>
+        {/* Hands-free: a pause sends the dictation after a chime and a cancel
+            window, and the mic opens again once the answer is over. The
+            screen must stay on and this page open — a web page cannot keep
+            the microphone from a pocket. */}
+        <button role="menuitemcheckbox" aria-checked={handsFree && voiceAvailable} aria-disabled={voiceAvailable ? undefined : "true"} className={voiceAvailable ? undefined : "unavailable"} onClick={() => {
+          if (!voiceAvailable) return;
+          writeFlag("focusHandsFree", toggleHandsFree(unlockSpeech));
+          setFocusMenu(false);
+        }}>
+          <span><strong>{t("mobile.voice.handsFree")} {isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</strong><small>{t(voiceAvailable ? "mobile.voice.handsFreeHint" : "mobile.voice.unavailable")}</small></span>
+          {handsFree && voiceAvailable && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
         </button>
         <button role="menuitemcheckbox" aria-checked={voiceRemote && voiceLocalOffered} aria-disabled={voiceLocalOffered ? undefined : "true"} className={voiceLocalOffered ? undefined : "unavailable"} onClick={() => {
           if (!voiceLocalOffered) return;
@@ -2349,10 +2475,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 : <div className="readable-empty"><strong>{t("mobile.transcript.empty")}</strong><span>{t("mobile.transcript.emptyHint")}</span>{transcript?.available === false && <button onClick={() => setView("terminal")}>{t("mobile.transcript.toTerminal")}</button>}</div>)
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
-                  {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
+                  {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
                   <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
-                    <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.onScreen") && <> · {t("mobile.focus.untested")}</>}</small>
+                    <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
                         it — in Claude Code's permission dialog the file and the
                         diff it is asking about. Bounded by `readSelectPrompt`
@@ -2377,6 +2503,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                       {workFacts.join(" · ")}
                       {isUntested("mobile.focus.workingFacts") && <em> · {t("mobile.focus.untested")}</em>}
                     </small>}
+                    {stopButton}
                   </div>}
                   <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} />
                   {/* A prompt sent while the agent worked waits below its work
@@ -2418,7 +2545,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </>}
     </div>
     <div className="terminal-controls">
-      {tab.kind === "agent" && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
+      {tab.kind === "agent" && handsFreeLine && (handsFreeLine.run
+        ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={handsFreeLine.run}>{handsFreeLine.text}{isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</button>
+        : <div className="voice-feedback hands-free" role="status" aria-live="polite">{handsFreeLine.text}</div>)}
+      {tab.kind === "agent" && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
       {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}
@@ -2512,6 +2642,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openWorktreeSheet} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {statusBranch ?? linkedBranch ?? cwdBranch ?? t("terminal.reader.worktreeButton")}</span></button>
           : status?.branch && <span className="fact-branch">⎇ {status.branch}</span>}
         {tab.worktree_movable && isUntested("mobile.facts.worktreeSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+        {/* As the desktop tab's ⌂/☁ badge: where a remote project's agent runs. */}
+        {tab.location_movable && <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openLocationSheet} aria-haspopup="dialog" aria-expanded={locationSheet} title={t("mobile.location.hint")}><span className="fact-action-label">{tab.on_host && tab.host_label ? t("mobile.location.remoteNamed", { name: tab.host_label }) : t(tab.on_host ? "mobile.location.remote" : "mobile.location.here")}</span></button>}
+        {tab.location_movable && isUntested("mobile.facts.locationSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
         {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
         {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
@@ -2551,16 +2684,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
-          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
+          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : handsFree && speaking ? stopSpeaking : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
         </div>
         <div className="composer-bar">
           {tab.kind === "agent" && <>
-            {!bare && <>
             <input ref={fileInput} type="file" accept={ANY_FILE_ACCEPT} multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-file-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={galleryInput} type="file" accept="image/*,video/*" multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-gallery-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-camera-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <button className={`composer-add${addSheet ? " open" : ""}`} disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
-            </>}
             {/* Folds the key row below in and out; it starts folded. */}
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
             {/* Plan / Goal / Clear sit centred between the keys button and Send, evenly spaced. */}
@@ -2609,6 +2740,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         options={effortOptions}
         waiting={t(connected ? "mobile.model.waitingSession" : "mobile.model.waitingConnection")}
         busy={effortOptions.length === 0}
+        footer={launchDefaults}
         onPick={chooseEffort}
         onClose={closeModelSheet}
       />
@@ -2631,6 +2763,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           ? "mobile.model.waitingConnection"
           : answered ? "mobile.model.waitingSession" : "terminal.reader.modelWaiting")}
         busy={modelPreview ? heldPick !== null : shownStep != null && (pickerStep == null || reveal != null || effortFor != null)}
+        footer={launchDefaults}
         onPick={chooseModel}
         onClose={closeModelSheet}
       />}</div>}
@@ -2705,6 +2838,19 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       onPick={chooseWorktree}
       onClose={() => { if (!worktreeMoving) setWorktreeSheet(false); }}
     />}
+    {locationSheet && <OptionSheet
+      title={t("mobile.location.title")}
+      note={locationNote
+        ? { text: t(locationNote), error: true }
+        : locationChoices && locationChoices.locations.length > 1
+          ? { text: t(locationChoices.carries ? "mobile.location.carries" : "mobile.location.fresh", { agent: agentLabel }) }
+          : undefined}
+      options={locationOptions}
+      waiting={t(locationChoices === null ? "mobile.location.loading" : locationNote ? "mobile.location.retry" : "mobile.location.none")}
+      busy={locationMoving !== ""}
+      onPick={chooseLocation}
+      onClose={() => { if (!locationMoving) setLocationSheet(false); }}
+    />}
     {statusSheet && <StatusSheet tab={tab} live={status} onLimits={rememberLimits} onClose={() => setStatusSheet(false)} signIn={signInWay} />}
     {signInSheet && <SignInSheet
       tabId={tab.id}
@@ -2746,7 +2892,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
     </BackNest></div>}
     {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
-      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles} here={filesSides.here} host={filesSides.host}
+      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles} here={filesSides.here} host={filesSides.host} hostLabel={filesSides.hostLabel}
         markup={markupFor && { tabId: markupFor.tabId, onSend: markupFor.onSend, agent: markupFor.agent, model: markupFor.model, pickModel: markupFor.pickModel, toChat: markupFor.toChat, dialog: markupFor.dialog }} showTab={markupNewTab?.show} />
     </BackNest></div>}
 

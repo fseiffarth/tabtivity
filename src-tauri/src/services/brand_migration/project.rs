@@ -400,7 +400,8 @@ exit 0
 }
 
 /// Bring a project to the current names when it is opened: its folder (the
-/// local mirror, for a remote project). Returns at once while the name is
+/// local mirror, for a remote project; nothing for a remote-only one, whose
+/// host tree `on_remote_connect` covers). Returns at once while the name is
 /// unchanged; safe to call on every activation.
 pub fn on_project_open(project_id: &str) {
     let pair = crate::brand::PAIR;
@@ -408,7 +409,7 @@ pub fn on_project_open(project_id: &str) {
         return;
     }
     let root = if crate::services::remote::remote_target_for(project_id).is_some() {
-        Some(crate::services::remote_sync::mirror_dir(project_id))
+        crate::services::remote_sync::mirror_dir_opt(project_id)
     } else {
         crate::services::sandbox::project_dir_for(project_id).map(std::path::PathBuf::from)
     };

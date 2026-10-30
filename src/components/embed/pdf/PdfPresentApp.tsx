@@ -43,7 +43,9 @@ import {
   pdfPresentSeedEvent,
   resetClock,
   startClock,
+  takePresentResume,
   toggleClock,
+  writeLastPresent,
   writePresentScreen,
 } from "../../../lib/viewers/pdfPresent";
 import { type PresentBlank, PdfPresentBar } from "./PdfPresentBar";
@@ -193,21 +195,26 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
   const seededRef = useRef(false);
 
   useEffect(() => {
+    const applySeed = (next: PdfPresentSeed) => {
+      seededRef.current = true;
+      setSeed(next);
+      // A re-seed (the reader pressed Present again, from a different sheet)
+      // moves this window to where they now are. The clamp needs the page
+      // count, which the load effect below re-applies once the document is open.
+      setPage(clampPage(next.page, countRef.current || next.page));
+    };
     const unlisten = subscribeTauri(() =>
-      listen<PdfPresentSeed>(pdfPresentSeedEvent(label), (e) => {
-        seededRef.current = true;
-        setSeed(e.payload);
-        // A re-seed (the reader pressed Present again, from a different sheet)
-        // moves this window to where they now are. The clamp needs the page
-        // count, which the load effect below re-applies once the document is open.
-        setPage(clampPage(e.payload.page, countRef.current || e.payload.page));
-      }),
+      listen<PdfPresentSeed>(pdfPresentSeedEvent(label), (e) => applySeed(e.payload)),
     );
+
+    // Reopened from the curtain: this window already knows where it left off.
+    const resumed = takePresentResume(label);
+    if (resumed) applySeed(resumed);
 
     // Ask, and keep asking until answered: this window and the editor's listener
     // race on open, and a dropped first request would leave a blank projector
     // with nothing to press.
-    void emit(PDF_PRESENT_READY, { label });
+    if (!seededRef.current) void emit(PDF_PRESENT_READY, { label });
     const retry = setInterval(() => {
       if (seededRef.current) return;
       void emit(PDF_PRESENT_READY, { label });
@@ -218,6 +225,11 @@ export function PdfPresentApp({ label }: PdfPresentAppProps) {
       unlisten();
     };
   }, [label]);
+
+  // Kept as it goes, for the curtain's way back (`pdfPresent.ts`).
+  useEffect(() => {
+    if (seed) writeLastPresent({ path: seed.path, scope: seed.scope, page });
+  }, [seed, page]);
 
   // --- the document --------------------------------------------------------
 

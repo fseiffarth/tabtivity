@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { Calendar, Occurrence } from "../../types";
 import {
   addDays,
   datePart,
+  daysBetween,
   formatTime,
   spanCoversDate,
   todayStr,
@@ -16,6 +17,8 @@ import { useArrivedMarks } from "../../stores/calendar/arrivals";
 
 /** Rows of chips a cell shows before collapsing the rest into "+N more". */
 const MAX_ROWS = 4;
+/** A press that travels less than this many pixels is a click, not a move-drag. */
+const CLICK_SLOP_PX = 4;
 
 interface Props {
   /** The weeks to draw, as rows of 7 dates (`monthGrid`). */
@@ -31,6 +34,9 @@ interface Props {
   /** Double-click a day → create an all-day event on it. */
   onCreateOn: (date: string) => void;
   onOpen: (occurrence: Occurrence) => void;
+  /** A bar was dragged onto another day: shift the event by this many whole
+   *  days. Only the day changes — the time of day and the length are kept. */
+  onMoveDays: (occurrence: Occurrence, days: number) => void;
   /** Right-click, on a day cell or on a bar. A bar reports the day under the
    *  cursor, not the event's first day: a week-long bar is right-clicked
    *  somewhere, and that somewhere is where a paste belongs. */
@@ -153,6 +159,7 @@ export function MonthView({
   onSelect,
   onCreateOn,
   onOpen,
+  onMoveDays,
   onMenu,
   weekStart,
 }: Props) {
@@ -160,6 +167,53 @@ export function MonthView({
   const arrived = useArrivedMarks();
   const lang = useI18nStore((s) => s.lang);
   const today = todayStr();
+  const [drag, setDrag] = useState<{ occ: Occurrence; over: string } | null>(null);
+  const justDragged = useRef(false);
+
+  /**
+   * Press on a bar → drag it to another day. Pointer-based, not HTML5
+   * drag-and-drop (WebKitGTK does not deliver a usable one — see `TimeGrid`).
+   * The day under the cursor is found by the cells' `data-date`, since a drag
+   * crosses week rows. The delta is measured from the day that was grabbed, so
+   * a multi-day bar moves by how far it was pulled, wherever it was held.
+   */
+  function startDrag(e: React.PointerEvent, occ: Occurrence, grabbed: string) {
+    if (e.button !== 0 || e.pointerType === "touch") return;
+    const originX = e.clientX;
+    const originY = e.clientY;
+    let moved = false;
+    let over = grabbed;
+
+    const dayAt = (x: number, y: number): string | null => {
+      for (const el of document.elementsFromPoint?.(x, y) ?? []) {
+        const d = (el as HTMLElement).dataset?.date;
+        if (d) return d;
+      }
+      return null;
+    };
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - originX, ev.clientY - originY) < CLICK_SLOP_PX) return;
+      moved = true;
+      over = dayAt(ev.clientX, ev.clientY) ?? over;
+      setDrag({ occ, over });
+    };
+    const finish = (cancelled: boolean) => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      setDrag(null);
+      if (!moved) return;
+      // The click that follows this release must not open the editor.
+      justDragged.current = true;
+      setTimeout(() => (justDragged.current = false), 0);
+      if (!cancelled && over !== grabbed) onMoveDays(occ, daysBetween(grabbed, over));
+    };
+    const onUp = () => finish(false);
+    const onCancel = () => finish(true);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+  }
 
   const labels = useMemo(() => {
     const days = Array.from({ length: 7 }, (_, i) => weekdayLabel(lang, i, "short"));
@@ -200,9 +254,11 @@ export function MonthView({
                 if (!inMonth) classes.push("cal-month-day-out");
                 if (date === today) classes.push("cal-month-day-today");
                 if (date === selected) classes.push("cal-month-day-selected");
+                if (drag && drag.over === date) classes.push("cal-month-day-drop");
                 return (
                   <div
                     key={date}
+                    data-date={date}
                     className={classes.join(" ")}
                     style={{ left: `${(ci / 7) * 100}%`, width: `${100 / 7}%` }}
                     onClick={() => onSelect(date)}
@@ -238,6 +294,9 @@ export function MonthView({
                     calendarColor(calendars, occ.calendarId),
                   );
                   const spanning = occ.allDay || bar.span > 1;
+                  const dragging =
+                    drag?.occ.eventId === occ.eventId &&
+                    drag.occ.occurrenceStart === occ.occurrenceStart;
                   return (
                     <div
                       key={`${occ.eventId}:${occ.occurrenceStart}:${bar.col}`}
@@ -247,7 +306,8 @@ export function MonthView({
                         (bar.clippedStart ? " cal-month-bar-clip-start" : "") +
                         (bar.clippedEnd ? " cal-month-bar-clip-end" : "") +
                         (occ.status === "cancelled" ? " cal-block-cancelled" : "") +
-                        (arrived[occ.eventId] ? " arrived" : "")
+                        (arrived[occ.eventId] ? " arrived" : "") +
+                        (dragging ? " cal-month-bar-dragging" : "")
                       }
                       style={{
                         left: `calc(${(bar.col / 7) * 100}% + 3px)`,
@@ -255,8 +315,17 @@ export function MonthView({
                         top: `calc(var(--cal-daynum-h) + ${bar.lane} * var(--cal-bar-h))`,
                         color,
                       }}
+                      onPointerDown={(e) => {
+                        const row = (e.currentTarget as HTMLElement).parentElement;
+                        const rect = row?.getBoundingClientRect();
+                        const ci = rect
+                          ? Math.min(6, Math.max(0, Math.floor(((e.clientX - rect.left) / rect.width) * 7)))
+                          : bar.col;
+                        startDrag(e, occ, week[ci] ?? week[bar.col]);
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (justDragged.current) return;
                         onSelect(datePart(occ.start));
                         onOpen(occ);
                       }}

@@ -716,7 +716,10 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
   // no in-dialog connection is made (the live login happens in the root terminal
   // at activation), so the spec is built straight from the typed address + the
   // manually-entered remote path.
-  const buildRemoteSpec = (safeName: string) => {
+  // `joinName`: whether the project's folder is `<chosen>/<name>` (a new one, made
+  // by the backend) rather than the chosen folder itself (an import). A clone into
+  // a remote-only project is an import that still needs its own empty folder.
+  const buildRemoteSpec = (safeName: string, joinName: boolean = kind === "new") => {
     if (!isRemoteProject) return undefined;
     const openvpn =
       vpnEnabled && vpnConfig
@@ -731,7 +734,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
         host: remoteConn.host,
         port: remoteConn.port ?? undefined,
         remote_path:
-          kind === "new" ? joinRemotePath(remoteChosenPath, safeName) : remoteChosenPath,
+          joinName ? joinRemotePath(remoteChosenPath, safeName) : remoteChosenPath,
         openvpn,
       };
     }
@@ -745,7 +748,7 @@ export function useRemoteSession({ kind }: { kind: "new" | "import" }) {
         user: parsed.user ?? undefined,
         host: parsed.host,
         port: parsed.port ?? undefined,
-        remote_path: kind === "new" ? joinRemotePath(path, safeName) : path,
+        remote_path: joinName ? joinRemotePath(path, safeName) : path,
         openvpn,
       };
     }

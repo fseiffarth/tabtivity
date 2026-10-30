@@ -66,6 +66,14 @@ describe("Mobile project screen — tabs on the remote host", () => {
     expect(screen.getByText(/and its tabs on the remote host while the desktop is connected to it/)).toBeTruthy();
   });
 
+  it("names the machine on the chip when the host sends one", async () => {
+    vi.stubGlobal("fetch", host(detail([hostTab({ host_label: "gpu-box" }), localTab])));
+    render(<Project id="p1" back={() => {}} terminal={vi.fn()} />);
+    await screen.findByText("Host Claude");
+    const chips = Array.from(document.querySelectorAll(".tab-card-meta .agent-mode-mark")).map((chip) => chip.textContent);
+    expect(chips).toEqual(["gpu-box"]);
+  });
+
   it("says to connect the project on the desktop, and never restarts an unreachable host tab", async () => {
     const fetchMock = host(detail([hostTab({ available: false, host_down: true })]));
     vi.stubGlobal("fetch", fetchMock);

@@ -12,7 +12,7 @@
  * handler, because the seed arrives before the file is open.
  */
 
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import {
   PDF_PRESENT_READY,
   TALK_TARGETS,
@@ -24,11 +24,41 @@ import {
   nextTarget,
   pdfPresentLabel,
   pdfPresentSeedEvent,
+  readLastPresent,
   resetClock,
   startClock,
+  takePresentResume,
   toggleClock,
+  writeLastPresent,
 } from "../../lib/viewers/pdfPresent";
 import { parsePresentParam, presenterLabel } from "../../lib/viewers/deck/present";
+import { storageKey } from "../../lib/brand";
+
+describe("back to fullscreen", () => {
+  const last = { path: "/p/talk.pdf", scope: "p", page: 7 };
+  const label = pdfPresentLabel(last.path);
+
+  beforeEach(() => localStorage.clear());
+
+  it("seeds only a window asked to resume, and only once", () => {
+    writeLastPresent(last);
+    expect(takePresentResume(label)).toBeNull();
+
+    writeLastPresent({ ...last, resume: true });
+    expect(takePresentResume(pdfPresentLabel("/p/other.pdf"))).toBeNull();
+    expect(takePresentResume(label)).toEqual(last);
+    expect(takePresentResume(label)).toBeNull();
+    // The record stays for the next way back.
+    expect(readLastPresent()).toEqual({ ...last, resume: false });
+  });
+
+  it("reads a broken record as none, and a root file's scope as null", () => {
+    localStorage.setItem(storageKey("pdfPresent.last"), "{");
+    expect(readLastPresent()).toBeNull();
+    writeLastPresent({ path: "/t.pdf", scope: null, page: 1 });
+    expect(readLastPresent()).toEqual({ path: "/t.pdf", scope: null, page: 1, resume: false });
+  });
+});
 
 describe("pdf present labels", () => {
   it("derives one label per path, so a second Present re-uses the window", () => {

@@ -46,6 +46,8 @@ export interface AgentUpdateReport {
 }
 
 export interface AgentInfo {
+  /** Native startup choices; absent while running an older backend. */
+  launch_defaults?: { model: boolean; efforts: string[]; effort_requires_model?: boolean };
   id: string;
   label: string;
   bin: string;

@@ -569,6 +569,29 @@ pub async fn remote_tmux_rename(
     .await
 }
 
+/// The agent a host tmux session runs, for the Sessions view opening one whose
+/// tab is gone (`ssh_exec::parse_session_agent`). `None` for a session that holds
+/// no agent, has ended, or has a name unsafe to script. `host_id` defaults to the
+/// primary.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn remote_tmux_agent(
+    project_id: String,
+    host_id: Option<String>,
+    session: String,
+) -> Result<Option<crate::services::ssh_exec::HostSessionAgent>, String> {
+    let host_id = host_id.unwrap_or_else(|| remote::PRIMARY_HOST.to_string());
+    let target = remote::remote_target_for_host(&project_id, &host_id)
+        .ok_or_else(|| "not a remote project host".to_string())?;
+    let Some(script) = crate::services::ssh_exec::tmux_start_command_script(&session) else {
+        return Ok(None);
+    };
+    app_core::rt::try_blocking("remote", move || {
+        let out = crate::services::ssh_exec::run_remote_script(&target.spec, &script)?;
+        Ok(crate::services::ssh_exec::parse_session_agent(&String::from_utf8_lossy(&out.stdout)))
+    })
+    .await
+}
+
 /// On-demand resource check for an already-connected remote project (the
 /// warning dialog's "Recheck" action). Unlike the fire-and-forget check
 /// `remote_connect` runs on connect, this one is awaited and its result

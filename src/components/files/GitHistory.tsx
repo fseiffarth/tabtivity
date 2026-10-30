@@ -133,6 +133,9 @@ interface Props {
   projectId?: string;
   /** True for SSH remote projects (gates the lockstep UI). */
   remote?: boolean;
+  /** The remote project has no local copy (`isHostPinned`): its one repo is the
+   *  host's, so there is no lockstep to pair and no mirror worktree site. */
+  hostPinned?: boolean;
   /** The project whose git credentials a fetch uses — any project kind, unlike
    *  `projectId`; absent on a nested repo (its own remote, no provider token). */
   authProjectId?: string;
@@ -400,7 +403,7 @@ export function GitHistory(props: Props) {
   return <GitHistoryView key={props.projectDir} {...props} />;
 }
 
-function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChanged, pullRequest, onWorktreeChanged, actionsBusy = false, connected = true }: Props) {
+function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, authProjectId, onChanged, pullRequest, onWorktreeChanged, actionsBusy = false, connected = true }: Props) {
   const t = useT();
   // Every destructive git question below is asked in the panel's own dialog —
   // the native `confirm()` these used arrives themeless, titled with the page
@@ -434,7 +437,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
   const gitArgs = useMemo(() => gitWorktreeArgs(worktreeSelection), [worktreeSelection]);
   const contextVersion = useRef(0);
   // Git lockstep (#28n): only meaningful for SSH remote projects.
-  const lockstepEligible = !!(remote && projectId);
+  const lockstepEligible = !!(remote && projectId) && !hostPinned;
   const [lockstep, setLockstep] = useState<GitPeerState | null>(null);
   const [lockstepBusy, setLockstepBusy] = useState(false);
   // #28p D6: null = the Backups list is closed.
@@ -1429,7 +1432,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
         <div className="git-worktree-header">
           <span className="git-worktree-title">{t("gitHistory.worktrees")}</span>
           <UntestedTag id="gitHistory.1" />
-          {remote && (
+          {remote && !hostPinned && (
             // #23 I2: two repos, two answers. `git_publish`'s "Publish from"
             // selector is the precedent — where the bytes are is not where the
             // operation runs, and for a remote project `projectDir` is the mirror.

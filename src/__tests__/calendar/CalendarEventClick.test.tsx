@@ -96,6 +96,7 @@ describe("calendar event click", () => {
         onSelect={vi.fn()}
         onCreateOn={onCreateOn}
         onOpen={onOpen}
+        onMoveDays={vi.fn()}
         onMenu={vi.fn()}
         weekStart={1}
       />,

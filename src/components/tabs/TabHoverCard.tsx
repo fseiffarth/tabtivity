@@ -158,6 +158,9 @@ export function TabHoverCard({
   /** Whether the owning project is a remote (SSH) one — gates the locality
    *  line. The detached window is inert to the projects store and omits it. */
   isRemote = false,
+  /** The owning project lives only on its host (`isHostPinned`): the line says
+   *  where the tab really runs, whatever location it stored. */
+  hostPinned = false,
   /** Primary host name + worker machines, so the locality line can name the
    *  concrete machine ("Primary (gpu-1)", "gpu-2") not just "on host". Omitted by
    *  the detached window (inert to the projects store) → falls back to "on host". */
@@ -169,6 +172,7 @@ export function TabHoverCard({
   tab: TabEntry;
   scope: string;
   isRemote?: boolean;
+  hostPinned?: boolean;
   primaryHost?: string;
   computeHosts?: LocalityHost[];
   anchorX: number;
@@ -226,7 +230,7 @@ export function TabHoverCard({
       : t(KIND_LABEL_KEY[tab.kind]),
   ];
   if (isRemote && isLocatableKind(tab.kind)) {
-    const loc = effectiveTabLocation(tab);
+    const loc = effectiveTabLocation(tab, { hostPinned });
     if (remoteHostIdOf(loc) === null) {
       kindBits.push(t("tabHoverCard.localMirror"));
     } else {

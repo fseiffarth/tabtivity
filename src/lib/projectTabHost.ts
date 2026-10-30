@@ -13,8 +13,42 @@
  * project record (`remote`, `vm`, `sandbox`), never from a path.
  */
 import { effectiveTabLocation, localTabCwd, type TabKind, type TabLocation } from "../stores/tabs";
-import { resolveLocalMirror, resolveProjectDirectory, type ProjectEntry } from "../types";
+import { resolveLocalMirror, resolveProjectDirectory, type ProjectEntry, type RemoteSpec } from "../types";
+import { BRAND } from "./brand";
+import { translateNow } from "./i18n";
 import { ROOT_SCOPE } from "./terminal/ptyId";
+
+/** The project shape {@link isHostPinned} reads, structural so the tab
+ * helpers (`stores/tabs/tabLocation`) can ask it of their own narrow types. */
+export type HostPinProject = {
+  vm?: { enabled?: boolean };
+  remote?: Partial<RemoteSpec>;
+};
+
+/** Tabs and files of this project live only on its host: a VM project, or a
+ *  remote project created without a local copy
+ *  (`docs/remote_only_projects_plan.md`). No mirror, locality pinned. The TS
+ *  twin of `RemoteSpec::is_remote_only` (the spec's `vm` or `remote_only`;
+ *  a VM stays pinned even with `remote_only: false`), OR'd with the VM
+ *  record so a VM is pinned however its spec reads. */
+export function isHostPinned(p: HostPinProject | null | undefined): boolean {
+  if (!p) return false;
+  if (p.vm?.enabled) return true;
+  if (!p.remote) return false;
+  return p.remote.vm === true || p.remote.remote_only === true;
+}
+
+/** The marker the backend puts in front of what it refused for a host-pinned
+ *  project (`{UPPER}_REMOTE_ONLY: <what>`, engine rule 4). */
+export const REMOTE_ONLY_SENTINEL = `${BRAND.upper}_REMOTE_ONLY`;
+
+/** The translated line for a refusal the backend gave because the project has
+ *  no local copy, or `null` for any other error (print that as it is). The
+ *  backend's own text after the marker is English and never shown. */
+export function remoteOnlyRefusal(err: unknown): string | null {
+  const text = err instanceof Error ? err.message : String(err);
+  return text.includes(`${REMOTE_ONLY_SENTINEL}:`) ? translateNow("tabs.remoteOnlyRefused") : null;
+}
 
 /** The type word the sidecar's list rows carry (`discovery::ProjectHost`). */
 export type ProjectHostKind = "local" | "remote" | "container" | "vm";
@@ -58,8 +92,9 @@ export function tabRunsInContainer(
 /** Whether the phone can attach to `tab` of scope `scopeKey`: it has a local
  * tmux session. A local project's (and a box's, root's, the assistant's) tabs
  * always do; a remote or VM project's only when the tab is local by the
- * window's own rule (`effectiveTabLocation`); a container project's only when
- * it runs on the host. The rule of the sidecar's `runs_on_this_machine`. */
+ * window's own rule (`effectiveTabLocation`, pinned for a VM); a remote-only
+ * project's never, since nothing of it runs here; a container project's only
+ * when it runs on the host. The rule of the sidecar's `runs_on_this_machine`. */
 export function phoneReachesTab(
   project: ProjectEntry | null | undefined,
   tab: { kind: TabKind; location?: TabLocation },
@@ -67,9 +102,9 @@ export function phoneReachesTab(
 ): boolean {
   switch (projectHostKind(project)) {
     case "remote":
-      return effectiveTabLocation(tab) === "local";
+      return !isHostPinned(project) && effectiveTabLocation(tab) === "local";
     case "vm":
-      return effectiveTabLocation(tab, { vmProject: true }) === "local";
+      return effectiveTabLocation(tab, { hostPinned: true }) === "local";
     case "container":
       return !tabRunsInContainer(project, tab.kind, scopeKey);
     case "local":
@@ -78,8 +113,9 @@ export function phoneReachesTab(
 }
 
 /** Whether the phone's tab list may hold `tab`: every tab it reaches here,
- * and every tab of a remote (not VM) project, since a tab that runs on the
- * project's host is reached over the desktop's own SSH connection
+ * and every tab of a remote (not VM) project, remote-only included, since a
+ * tab that runs on the project's host is reached over the desktop's own SSH
+ * connection
  * (`docs/mobile_remote_host_tabs_plan.md`). The catalog's listing rule at
  * table level: the sidecar narrows further (tmux name, `persist_sessions`,
  * kind, the host's master alive), and the window only acts on tmux names the
@@ -95,9 +131,11 @@ export function phoneListsTab(
 
 /** What the phone may create in the project: anything in a local one (and in a
  * box, root, the assistant); only agents in a remote one, where they run in
- * the local mirror; nothing in a container or a VM (phase 1). A remote project
- * whose mirror does not exist yet is the sidecar's `none`; the window cannot
- * see that, and `launch_prep` makes the mirror at spawn. */
+ * the local mirror — or, in a remote-only one, on one of its machines alone
+ * (`createOnHost`; with no host named, `phoneProjectFolder` is "" and the
+ * create is refused); nothing in a container or a VM (phase 1). A remote
+ * project whose mirror does not exist yet is the sidecar's `none`; the window
+ * cannot see that, and `launch_prep` makes the mirror at spawn. */
 export function phoneCreateVerdict(project: ProjectEntry | null | undefined): PhoneCreateVerdict {
   switch (projectHostKind(project)) {
     case "local":
@@ -115,13 +153,16 @@ export function phoneCreateVerdict(project: ProjectEntry | null | undefined): Ph
  * a local or container project's directory; a remote project's local mirror
  * (the entry's own, else `<directory>/mirror`, as a local tab of it runs in);
  * a VM project's only if the user opted into a mirror, else "" (no folder on
- * the host, so the folder-shaped handlers answer `project_ineligible`). */
+ * the host, so the folder-shaped handlers answer `project_ineligible`); a
+ * remote-only project's never ("": it has no local copy, whatever an old
+ * `mirror` key says). */
 export function phoneProjectFolder(project: ProjectEntry): string {
   const mirror = resolveLocalMirror(project);
   switch (projectHostKind(project)) {
     case "vm":
       return mirror ?? "";
     case "remote":
+      if (isHostPinned(project)) return "";
       return localTabCwd(
         { kind: "agent" },
         { isRemoteProject: true, projectDirectory: resolveProjectDirectory(project), mirror, fallback: "" },

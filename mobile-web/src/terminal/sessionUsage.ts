@@ -28,3 +28,22 @@ export function sessionLimits(usage: SessionUsage | undefined, now: Date): Limit
   if (!usage) return {};
   return { session: meter("Current session", usage.session, now), week: meter("Current week", usage.week, now) };
 }
+
+/** Codex's heads-up steps: a window with less than this many percent left. */
+const WARN_LEFT = [5, 10, 25, 50];
+
+export interface LimitWarning { window: "session" | "week"; left: number }
+
+/** The heads-up Codex's own terminal prints as a limit runs low ("less than
+ * 25% of your 5h limit left"), per window: the smallest step the stored
+ * reading has gone under. A window that has rolled over warns of nothing. */
+export function limitWarnings(usage: SessionUsage | undefined, now: Date): LimitWarning[] {
+  const limits = sessionLimits(usage, now);
+  const warnings: LimitWarning[] = [];
+  for (const window of ["session", "week"] as const) {
+    const used = limits[window]?.percent;
+    const left = used == null ? undefined : WARN_LEFT.find((step) => used >= 100 - step);
+    if (left != null) warnings.push({ window, left });
+  }
+  return warnings;
+}

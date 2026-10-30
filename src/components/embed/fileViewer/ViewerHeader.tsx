@@ -9,6 +9,7 @@ import { useSyncStore } from "../../../stores/remote/sync";
 import { useT } from "../../../lib/i18n";
 import { ArrowUpRightIcon } from "../../common/icons/Icon";
 import { openLinkedFile } from "./openLinked";
+import { isHostPinned } from "../../../lib/projectTabHost";
 
 /** The file identity a `ViewerHeader` needs to offer file-scoped actions (the
  *  auto-sync toggle, the Local/Remote source switch) without every sub-viewer
@@ -28,11 +29,13 @@ export const ViewerHeaderInfoContext = createContext<{
 
 /** A remote project's local-mirror root, or `null` for a local project / one
  *  with no resolvable mirror. Shared by `autoSyncRel` and the Local/Remote
- *  switch's path-building — both need the exact same root. */
+ *  switch's path-building — both need the exact same root. A host-pinned
+ *  project (VM, remote-only) has no mirror at all, so it answers `null` too
+ *  rather than the default `<state dir>/mirror` path nothing ever fills. */
 export function localMirrorRootFor(
   project: ReturnType<typeof useProjectsStore.getState>["projects"][number] | undefined,
 ): string | null {
-  if (!project?.remote) return null;
+  if (!project?.remote || isHostPinned(project)) return null;
   const projectDir = resolveProjectDirectory(project);
   return resolveLocalMirror(project) ?? (projectDir ? `${projectDir}/mirror` : null);
 }
@@ -73,7 +76,8 @@ function AutoSyncHeaderToggle({ path, projectId }: { path: string; projectId: st
   );
   const setAuto = useSyncStore((s) => s.setAuto);
   const sshState = useRemoteStatusStore((s) => (projectId ? s.byProject[projectId]?.ssh : undefined));
-  if (!project?.remote || !rel || !projectId) return null;
+  // A host-pinned project syncs nothing: no toggle.
+  if (!project?.remote || !rel || !projectId || isHostPinned(project)) return null;
   const connected = sshState === "connected";
   return (
     <button

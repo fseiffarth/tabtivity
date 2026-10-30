@@ -110,5 +110,5 @@ export function useLiveQuestion({
     if (!deliver(writes)) return;
     setQuestionSent({ signature: questionSignature, number: option.number });
   };
-  return { questionAsk, questionContext, questionTabs, questionTabFocus, questionTabSubmit, questionContextShown, questionSignature, questionSent, sentSignature, answerQuestion, stepQuestion, answerQuestionText };
+  return { questionAsk, questionContext, questionTabs, questionTabFocus, questionTabSubmit, questionContextShown, questionSignature, questionHeld, questionSent, sentSignature, answerQuestion, stepQuestion, answerQuestionText };
 }

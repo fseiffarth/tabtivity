@@ -21,6 +21,8 @@ split the files by git.
 
 Both run only while the project is connected. Hosts tagged HPC get no
 background sync; manual actions still work.
+A remote-only project (Keep a local copy off) and a VM project have no mirror,
+so neither engine runs and there is nothing to sync; see `remote-projects`.
 
 ## The rule to remember
 
