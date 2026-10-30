@@ -62,6 +62,7 @@ export const UNTESTED = {
   "settings.showUntestedTags": { area: "settings", what: "General page · show or hide every untested tag" },
   "settings.privacyCurtain": { area: "settings", what: "General page · Hide other windows while presenting: on, presenting a PDF or deck covers the main window and every popout (a deck keeps its presenter view, with a corner Show chip); Show lifts one window; capture-protected on Windows/macOS, browser windows too; desktop reminders wait until the talk ends" },
   "privacyCurtain.title": { area: "shell", what: "Privacy curtain over a window while presenting: opaque, keys and clicks reach nothing behind it, the window comes back unchanged on Show" },
+  "privacyCurtain.backToFullscreen": { area: "shell", what: "Privacy curtain after a fullscreen PDF closes: Back to fullscreen reopens it on the sheet it was left on and the remembered screen, in any curtained window, with the curtain still up; a deck or the manual shortcut offers only Show" },
   "settings.headlessRemote": { area: "settings", what: "Remote page · Headless remote connections off: each SSH/OpenVPN login opens as a root-console login tab whose terminal runs ssh/openvpn itself (no shell before or after it); once the login exits the tab shows exited and the next request opens a fresh one; a login tab is never restored after a relaunch (screen 2026-10-15 #1)" },
 
   // --- agents — Agent sessions, schedules and the prompt chart ------

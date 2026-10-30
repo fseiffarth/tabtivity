@@ -10622,6 +10622,7 @@ export const enSource = {
   "privacyCurtain.title": "Hidden while presenting",
   "privacyCurtain.body": "This window is covered so a screen share can't show it.",
   "privacyCurtain.show": "Show",
+  "privacyCurtain.backToFullscreen": "Back to fullscreen",
   "shortcut.terminalCopy": "Terminal: copy the selection",
   "shortcut.terminalPaste": "Terminal: paste",
   "shortcut.terminalKeySelect": "Terminal: keyboard select",

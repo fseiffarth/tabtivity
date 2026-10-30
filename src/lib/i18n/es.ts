@@ -10385,6 +10385,7 @@ export const dict: Dict = {
   "privacyCurtain.title": "Oculta mientras presentas",
   "privacyCurtain.body": "Esta ventana está cubierta para que una pantalla compartida no la muestre.",
   "privacyCurtain.show": "Mostrar",
+  "privacyCurtain.backToFullscreen": "Volver a pantalla completa",
   "shortcut.terminalCopy": "Terminal: copiar la selección",
   "shortcut.terminalPaste": "Terminal: pegar",
   "shortcut.terminalKeySelect": "Terminal: selección con teclado",

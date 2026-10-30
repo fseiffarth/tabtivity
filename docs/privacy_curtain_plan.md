@@ -210,6 +210,10 @@ curtain store from step 2.
   3. Press Esc on the PDF. The curtains stay. Click **Show** in the main
      window: it comes back exactly as it was (terminal sizes, scroll
      positions); the popout stays curtained until its own **Show**.
+     Instead of **Show**, click **Back to fullscreen** in either window: the
+     PDF comes back on the sheet you left, on the same screen, curtains up.
+     It works after closing the PDF's tab too. A deck or the shortcut offers
+     only **Show**.
   4. Set a calendar alarm a minute ahead and present through it. No desktop
      notification during the talk (the phone gets one); it appears when the
      PDF window closes.

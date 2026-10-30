@@ -29,8 +29,8 @@
  * making the editor tab drive it would only mean two places to press the same
  * arrow key.
  *
- * Pure, so both windows and the tests share it — bar the remembered screen
- * below, which is one localStorage key both windows read.
+ * Pure, so both windows and the tests share it — bar the remembered screen and
+ * the last talk below, localStorage keys the windows share.
  */
 
 import { storageKey } from "../brand";
@@ -134,6 +134,58 @@ export function writePresentScreen(pick: MonitorPick): void {
   } catch {
     // A blocked store only costs the memory of the choice.
   }
+}
+
+// --- back to fullscreen ------------------------------------------------------
+//
+// Esc on the present window leaves every other window curtained
+// (`lib/window/privacyCurtain`), often mid-talk, so the curtain offers the way
+// back. The present window keeps its file and sheet here as it goes, which finds
+// a window closed any way at all, and the sheet is the one it was left on rather
+// than the one the tab still shows: the tab is not a remote control. `resume`
+// asks the next present window to seed itself from this record: no tab answers,
+// so the button works with the tab gone and no tab's older page can win the race.
+
+interface PdfPresentLast extends PdfPresentSeed {
+  resume?: boolean;
+}
+
+const LAST_KEY = storageKey("pdfPresent.last");
+
+export function readLastPresent(): PdfPresentLast | null {
+  try {
+    const raw = localStorage.getItem(LAST_KEY);
+    if (!raw) return null;
+    const v: unknown = JSON.parse(raw);
+    if (!v || typeof v !== "object") return null;
+    const { path, scope, page, resume } = v as Record<string, unknown>;
+    if (typeof path !== "string" || !path || !Number.isInteger(page)) return null;
+    return {
+      path,
+      scope: typeof scope === "string" ? scope : null,
+      page: page as number,
+      resume: resume === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function writeLastPresent(last: PdfPresentLast): void {
+  try {
+    localStorage.setItem(LAST_KEY, JSON.stringify(last));
+  } catch {
+    // A blocked store only costs the way back: the curtain offers just Show.
+  }
+}
+
+/** The seed the curtain left for the present window `label`, once. */
+export function takePresentResume(label: string): PdfPresentSeed | null {
+  const last = readLastPresent();
+  if (!last?.resume || pdfPresentLabel(last.path) !== label) return null;
+  const { path, scope, page } = last;
+  writeLastPresent({ path, scope, page });
+  return { path, scope, page };
 }
 
 // --- the talk clock (the present window's bottom bar) -----------------------

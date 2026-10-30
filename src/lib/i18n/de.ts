@@ -10389,6 +10389,7 @@ export const dict: Dict = {
   "privacyCurtain.title": "Beim Präsentieren verborgen",
   "privacyCurtain.body": "Dieses Fenster ist verdeckt, damit eine Bildschirmfreigabe es nicht zeigt.",
   "privacyCurtain.show": "Anzeigen",
+  "privacyCurtain.backToFullscreen": "Zurück zum Vollbild",
   "shortcut.terminalCopy": "Terminal: Auswahl kopieren",
   "shortcut.terminalPaste": "Terminal: einfügen",
   "shortcut.terminalKeySelect": "Terminal: Tastaturauswahl",
