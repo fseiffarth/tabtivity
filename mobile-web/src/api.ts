@@ -41,7 +41,7 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** A vendor cloud session (`src/lib/agents/cloudSessions.ts`): Focus shows its screen and the session's link, never a wait for a local session. */ cloud?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string; /** The facts row's ⎇ chip can move this agent to another worktree of its project (`getTabWorktrees`, `moveTabWorktree`), as the desktop Reader's can. */ worktree_movable?: boolean; /** The tab runs on its remote project's host (or a worker), reached over the desktop's SSH connection: `available` only while that connection is up; files, Mark up, sign-in and (with no window) schedules cannot reach it. Absent on an older host. */ on_host?: boolean; /** An `on_host` tab whose host the desktop holds no connection to: it reads "connect on the desktop". Without it, an unavailable `on_host` tab is a session that ended on the host. */ host_down?: boolean }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** A vendor cloud session (`src/lib/agents/cloudSessions.ts`): Focus shows its screen and the session's link, never a wait for a local session. */ cloud?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string; /** The facts row's ⎇ chip can move this agent to another worktree of its project (`getTabWorktrees`, `moveTabWorktree`), as the desktop Reader's can. */ worktree_movable?: boolean; /** The facts row's locality chip can move this agent of a remote project between the desktop's copy and the project's machines (`getTabLocations`, `moveTabLocation`), as the desktop tab's ⌂/☁ badge can. */ location_movable?: boolean; /** The tab runs on its remote project's host (or a worker), reached over the desktop's SSH connection: `available` only while that connection is up; files, Mark up, sign-in and (with no window) schedules cannot reach it. Absent on an older host. */ on_host?: boolean; /** The machine an `on_host` tab runs on: its display name, else its host name. Absent on an older host, which leaves the chip's generic word. */ host_label?: string; /** An `on_host` tab whose host the desktop holds no connection to: it reads "connect on the desktop". Without it, an unavailable `on_host` tab is a session that ended on the host. */ host_down?: boolean }
 export interface TabWorktree { label: string; branch?: string }
 export interface SubagentWorktree extends TabWorktree { count: number }
 /** `default`: the desktop's default agent (`default_agent_cmd`), the one
@@ -165,9 +165,13 @@ export interface ClosedTabRow { id: string; label: string; agent: string; closed
 export interface ProjectDetail {
   project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
   /** Whether the file browser also has a remote side: a remote project's tree
-   * on its host, read over the desktop's connection (`?on=host`). The host is
-   * never named. Absent (an older desktop) is none. */
+   * on its host, read over the desktop's connection (`?on=host`). Absent (an
+   * older desktop) is none. */
   host_files?: boolean;
+  /** What the remote side's switch is called: the host's display name, else
+   * its host name — the label the ＋ sheet's machines carry. Absent (an older
+   * desktop): the switch says "Remote computer". */
+  host_label?: string;
   /** Whether the host has a folder to give the phone for this project (a remote
    * project before its first sync, a VM without a mirror: no). Without one the
    * project screen hides the files, Git and send-a-file entries and says why.
@@ -709,6 +713,30 @@ export async function getTabWorktrees(tabId: string): Promise<TabWorktrees> {
  * move_failed` means it restarted in its old folder. */
 export function moveTabWorktree(tabId: string, worktree: string): Promise<{ moved: "carried" | "fresh" }> {
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktree`, { method: "POST", body: JSON.stringify({ worktree }) }, WORKTREE_MOVE_TIMEOUT);
+}
+
+/** One place the locality chip can move an agent tab to: the desktop's own
+ * copy (`here`, no label of its own) or one of the project's machines. */
+export interface TabLocationRow extends HostMachineRow { here: boolean }
+export interface TabLocations { locations: TabLocationRow[]; current?: string; carries: boolean }
+
+/** `GET /api/v1/tabs/{id}/locations` — asked when the locality chip's sheet opens. */
+export async function getTabLocations(tabId: string): Promise<TabLocations> {
+  const body = await api<Partial<TabLocations>>(`/api/v1/tabs/${encodeURIComponent(tabId)}/locations`);
+  return { locations: body.locations ?? [], ...(body.current ? { current: body.current } : {}), carries: body.carries === true };
+}
+
+/** Past the sidecar's 35 s wait on the desktop: the move stops the CLI and
+ * copies the conversation over ssh before the respawn. */
+const LOCATION_MOVE_TIMEOUT = 40_000;
+
+/** `POST /api/v1/tabs/{id}/location` — move the agent tab to that place, as
+ * the desktop tab's ⌂/☁ badge does: the desktop stops its CLI, takes the
+ * conversation along where the CLI allows and restarts it there. `409
+ * move_failed` means it restarted where it was; `409 host_offline` that the
+ * desktop holds no connection to that machine. */
+export function moveTabLocation(tabId: string, location: string): Promise<{ moved: "carried" | "fresh" }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/location`, { method: "POST", body: JSON.stringify({ location }) }, LOCATION_MOVE_TIMEOUT);
 }
 
 /** One model of a Tabby chat's sheet: `id` is what a switch sends, the words

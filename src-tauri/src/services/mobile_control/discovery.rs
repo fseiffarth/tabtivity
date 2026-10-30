@@ -395,14 +395,25 @@ pub struct PublicTab {
     /// remote, not a VM) — the window's own test in `agentWorktreeSwitch.ts`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub worktree_movable: bool,
+    /// The facts row's locality chip can move this agent tab between this
+    /// machine (the mirror) and the project's hosts (`TabLocations`/
+    /// `MoveLocation`), as the desktop tab's ⌂/☁ badge can: a resumable agent
+    /// of a remote (not VM) project whose hosts the phone reaches, with
+    /// somewhere else to go.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub location_movable: bool,
     /// The tab runs on its project's remote host, and the phone reaches it
     /// through the desktop's ssh master for that host
-    /// (`docs/mobile_remote_host_tabs_plan.md`): the phone wears an "on host"
-    /// chip and hides what would act on this machine (the inbox, desktop
-    /// images, Mark up's Submit, sign-in). Only the flag crosses — never the
-    /// host, worker, path or socket.
+    /// (`docs/mobile_remote_host_tabs_plan.md`): the phone wears a chip naming
+    /// it ([`Self::host_label`]) and hides what would act on this machine (the
+    /// inbox, desktop images, Mark up's Submit, sign-in).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub on_host: bool,
+    /// The machine an `on_host` tab runs on, the primary or a worker, by its
+    /// [`machine_label`]. All of it that crosses: never its worker id, user,
+    /// path or socket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_label: Option<String>,
     /// An `on_host` tab whose host the last round found no master for: the
     /// desktop is not connected to it. Without it, an unavailable `on_host` tab
     /// is one whose session ended on the host. A flag only; nothing raw.
@@ -462,6 +473,10 @@ pub struct ResolvedTab {
     /// `session_id` name nothing on this machine: every reader that would look
     /// them up in local files (transcript, readings, worktrees, git) skips it.
     pub place: TabPlace,
+    /// The window's location word for where it runs: `"local"` for a tab
+    /// here, `"remote"` or `"host:<id>"` for a host tab. Never crosses the
+    /// browser API (the phone gets [`ResolvedProject::machines`]' opaque ids).
+    pub location: String,
 }
 
 /// Where a project's tabs run, a type word and nothing more (it crosses the
@@ -531,6 +546,13 @@ pub struct ResolvedProject {
     /// nothing of it runs here, so a tab the phone starts in it must name one
     /// of [`Self::machines`] (`host::creatable`).
     pub pinned: bool,
+}
+
+/// What the phone calls a machine: the record's display name, else the host
+/// name, at most 120 characters. The only thing about a host that crosses the
+/// browser API (the ＋ sheet's machines, the 📁 library's remote side).
+pub fn machine_label(spec: &RemoteSpec) -> String {
+    spec.label.as_deref().map(str::trim).filter(|label| !label.is_empty()).unwrap_or(&spec.host).chars().take(120).collect()
 }
 
 /// One machine of a remote project, as the phone's ＋ offers it
@@ -636,20 +658,17 @@ impl ProjectHosts {
         if !self.persist {
             return Vec::new();
         }
-        let label_of = |spec: &RemoteSpec| {
-            spec.label.as_deref().map(str::trim).filter(|label| !label.is_empty()).unwrap_or(&spec.host).chars().take(120).collect()
-        };
         let primary = self.primary.iter().map(|spec| HostMachine {
             location: "remote".to_string(),
             spec: spec.clone(),
-            label: label_of(spec),
+            label: machine_label(spec),
             primary: true,
             runnable: true,
         });
         let workers = self.workers.iter().filter(|h| !h.id.is_empty()).map(|h| HostMachine {
             location: format!("host:{}", h.id),
             spec: h.spec.clone(),
-            label: label_of(&h.spec),
+            label: machine_label(&h.spec),
             primary: false,
             runnable: h.shared_fs || (h.sync_code && !self.pinned),
         });
@@ -1476,8 +1495,7 @@ fn host_of_tab<'a>(source: &'a ScopeSource, tab: &SavedTab, shells: bool, host_t
         return None;
     }
     let hosts = source.hosts.as_ref().filter(|hosts| hosts.persist)?;
-    let saved = tab.location.as_ref().and_then(Value::as_str);
-    let location = if source.pinned && host_location(saved).is_none() { Some("remote") } else { saved };
+    let location = saved_host_location(source, tab);
     let listed_kind = match tab.kind.as_str() {
         "agent" => resumable(tab) && !tab.sign_in && !tab.cloud,
         "shell" => shells,
@@ -1491,6 +1509,22 @@ fn host_of_tab<'a>(source: &'a ScopeSource, tab: &SavedTab, shells: bool, host_t
         return None;
     }
     hosts.spec_for(location)
+}
+
+/// A tab's saved location, read as a remote-only project reads it: there an
+/// unset or `"local"` one is the primary's.
+fn saved_host_location<'a>(source: &ScopeSource, tab: &'a SavedTab) -> Option<&'a str> {
+    let saved = tab.location.as_ref().and_then(Value::as_str);
+    if source.pinned && host_location(saved).is_none() { Some("remote") } else { saved }
+}
+
+/// The window's location word for a host tab at `location`
+/// ([`host_location`]), as [`HostMachine::location`] spells it.
+fn host_location_word(location: Option<&str>) -> String {
+    match host_location(location) {
+        Some(HostLocation::Worker(id)) => format!("host:{id}"),
+        _ => "remote".to_string(),
+    }
 }
 
 /// The catalog's listing rule at the window's table level
@@ -1828,7 +1862,9 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
         subagent_worktrees: Vec::new(),
         assistant_launch: None,
         worktree_movable: false,
+        location_movable: false,
         on_host: false,
+        host_label: None,
         host_down: false,
     };
     ResolvedProject {
@@ -1858,6 +1894,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             since: None,
             local_model: false,
             place: TabPlace::Here,
+            location: "local".into(),
         }],
         devices,
         host: ProjectHost::Local,
@@ -1963,6 +2000,15 @@ fn resolve_scope(
     } else {
         read_session(state_dir, &source.raw_id)
     };
+    let machines = source
+        .hosts
+        .as_ref()
+        .filter(|_| listing.host_tabs)
+        .map(ProjectHosts::machines)
+        .unwrap_or_default();
+    // Where an agent tab could run instead: the mirror (none in a remote-only
+    // project) and every machine that holds the code.
+    let places = usize::from(!source.pinned) + machines.iter().filter(|machine| machine.runnable).count();
     let mut tabs = Vec::new();
     // project-tree-read: ok — this is the state-dir terminal-session snapshot.
     for tab in session.tab_layout {
@@ -2065,9 +2111,21 @@ fn resolve_scope(
                 && resumable(&tab)
                 && source.kind == ScopeKind::Project
                 && matches!(source.host, ProjectHost::Local | ProjectHost::Container),
+            // The window's `isLocatableKind` + `carriesAcrossHosts` scope: a
+            // plain agent (not a sign-in, cloud or local-model tab).
+            location_movable: tab.kind == "agent"
+                && chat.is_none()
+                && resumable(&tab)
+                && !tab.sign_in
+                && !tab.cloud
+                && source.kind == ScopeKind::Project
+                && source.host == ProjectHost::Remote
+                && places >= 2,
             on_host: on_host.is_some(),
+            host_label: on_host.as_ref().map(machine_label),
             host_down: on_host.is_some() && host_reach.is_none(),
         };
+        let location = if on_host.is_some() { host_location_word(saved_host_location(&source, &tab)) } else { "local".to_string() };
         tabs.push(ResolvedTab {
             public,
             tmux_name: tmux.to_string(),
@@ -2081,15 +2139,10 @@ fn resolve_scope(
                 Some(spec) => TabPlace::Host { spec: Box::new(spec), control_path: host_reach.map(|reach| reach.control_path.clone()) },
                 None => TabPlace::Here,
             },
+            location,
         });
     }
     let last_activity = tabs.iter().filter_map(|t| t.public.last_activity).max();
-    let machines = source
-        .hosts
-        .as_ref()
-        .filter(|_| listing.host_tabs)
-        .map(ProjectHosts::machines)
-        .unwrap_or_default();
     let public = PublicProject {
         id: key_id(host_key, "project", &[&source.raw_id]),
         label: source.label.chars().take(120).collect(),

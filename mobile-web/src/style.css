@@ -199,6 +199,7 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
    the card's border tinted to match, so a tab in either mode stands out in a
    list of look-alikes. A tab colour keeps its left edge. */
 .agent-mode-mark { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 6px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 16%, transparent); font-size:.66rem; font-weight:800; letter-spacing:.05em; line-height:1; }
+.agent-mode-mark.host { display:inline-block; min-width:0; max-width:14em; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .agent-mode-mark.plan { color:#b3a8ff; }
 .agent-mode-mark.goal { color:#6fd6e0; }
 /* Subagents at work (`SubagentCount`): the mode pills' shape in the accent,
@@ -1491,7 +1492,7 @@ span.files-close { background:transparent; }
 /* A remote project's side switch above the search box: the terminal view
    switch, as wide as the box, its two sides alike. */
 .files-side-switch { margin:0 4px; }
-.files-side-switch button { flex:1 1 0; }
+.files-side-switch button { flex:1 1 0; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 /* The search box under the head, and a hit's folder above its times. */
 .files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
 /* Upload here: one line under the search box, as wide as it, the arrow in a

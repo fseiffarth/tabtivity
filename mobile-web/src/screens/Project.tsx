@@ -880,7 +880,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         closing the file comes back to the list it was opened from. */}
     {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onDeleteAll={removeAllFiles} onClose={() => setGalleryOpen(false)} />}
     {drawerOpen && detail && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setDrawerOpen(false)}
-      browse={filesOffered || hostFilesOffered} here={filesOffered} host={hostFilesOffered} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
+      browse={filesOffered || hostFilesOffered} here={filesOffered} host={hostFilesOffered} hostLabel={detail.host_label} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
         {outbox.length > 0 && <button
           role="menuitem"
           aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })}

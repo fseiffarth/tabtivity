@@ -1949,7 +1949,8 @@ async fn a_host_tab_is_listed_on_host_and_refuses_what_would_act_here() {
     let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
     let tab = &json(&detail)["tabs"][0];
     assert_eq!((tab["on_host"].as_bool(), tab["available"].as_bool()), (Some(true), Some(true)), "{detail}");
-    for raw in ["primary.example", "/srv/aurora", "cm-primary", RAW_PROJECT, "9d0f-session", "alice"] {
+    assert_eq!(tab["host_label"].as_str(), Some("primary.example"), "{detail}");
+    for raw in ["/srv/aurora", "cm-primary", RAW_PROJECT, "9d0f-session", "alice"] {
         assert!(!detail.contains(raw), "{raw} crossed: {detail}");
     }
     let any = json!({});
@@ -4407,8 +4408,8 @@ async fn the_file_search_answers_sealed_rows_and_trails_while_the_drawer_is_on()
 }
 
 /// The 📁's remote side: offered for a remote project (with no mirror on
-/// disk too) and only behind the files switch, never naming the host;
-/// with no master to ride every remote-side route says `host_offline`,
+/// disk too) and only behind the files switch, named by the host's label
+/// (as the ＋ sheet's machines are) and nothing else of it; with no master to ride every remote-side route says `host_offline`,
 /// never dials; a local project has no remote side; a local token is no
 /// remote-side token.
 #[cfg(unix)]
@@ -4430,7 +4431,8 @@ async fn the_remote_side_of_the_files_rides_the_desktops_master_or_says_host_off
     .unwrap();
     let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
     assert_eq!((json(&detail)["files"].as_bool(), json(&detail)["host_files"].as_bool()), (Some(false), Some(true)), "{detail}");
-    for raw in ["primary.example", "/srv/aurora", "alice"] {
+    assert_eq!(json(&detail)["host_label"].as_str(), Some("primary.example"), "{detail}");
+    for raw in ["/srv/aurora", "alice"] {
         assert!(!detail.contains(raw), "{raw} crossed: {detail}");
     }
     // The refresher's socket is not there: offline, without `ssh -G` or a dial.
@@ -6165,5 +6167,85 @@ async fn a_remote_only_project_starts_an_agent_on_a_listed_machine() {
     let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/tabs/{t}/sign-in"), &cookie, Some(json!({ "idempotency_key": "ro-signin-0123456789abcdef" })))).await;
     assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("tab_on_host")), "{body}");
     assert_eq!(asked.lock().unwrap().len(), 2, "the sign-in never reached the window");
+    desktop.abort();
+}
+
+/// The facts row's locality chip on a remote project's agent: `locations`
+/// lists this computer and each machine that holds the code, by opaque id,
+/// with the masters the desktop holds — answered by the sidecar alone — and
+/// a move names one back. The window gets `MoveLocation` with the location
+/// word; the current place, an unknown id and a machine the desktop is not
+/// connected to never reach it.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_agent_moves_between_this_computer_and_the_projects_machines() {
+    let mut host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let path = state_dir.join("projects.json");
+    let mut records: Vec<Value> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    records[0]["compute_hosts"] = json!([
+        { "id": "w1", "user": "alice", "host": "w1.example", "remote_path": "/srv/w" },
+        { "id": "w2", "user": "alice", "host": "w2.example", "remote_path": "/srv/w", "sync_code": false },
+    ]);
+    std::fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+    // The desktop holds the primary's master only.
+    let live: host_live::SharedHostLive = Arc::default();
+    let control = state_dir.join("cm-locate-primary");
+    std::fs::write(&control, b"").unwrap();
+    crate::services::ssh_exec::TEST_LIVE_MASTERS.lock().unwrap().push(control.clone());
+    let spec = serde_json::from_value(json!({ "user": "alice", "host": "primary.example", "remote_path": "/x" })).unwrap();
+    live.lock().unwrap().insert(&spec, host_live::HostReach { control_path: control, sessions: None });
+    host.state.catalog = Arc::new(Mutex::new(CatalogCache::with_host_live(live)));
+    let cookie = host.pair_device(&signing_key(97)).await.0;
+    let (p, t) = project_and_tab(&host, &cookie).await;
+    let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+    assert_eq!(json(&detail)["tabs"][0]["location_movable"], true, "{detail}");
+
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}/locations"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for raw in ["host:", "\"remote\"", "\"local\"", "/srv/", "alice", "9d0f-session"] {
+        assert!(!body.contains(raw), "{raw} crossed: {body}");
+    }
+    let listed = json(&body);
+    let rows = listed["locations"].as_array().cloned().expect("locations");
+    let shape: Vec<_> = rows.iter().map(|row| (row["here"].as_bool(), row["label"].as_str(), row["connected"].as_bool())).collect();
+    assert_eq!(
+        shape,
+        [(Some(true), Some(""), Some(true)), (Some(false), Some("primary.example"), Some(true)), (Some(false), Some("w1.example"), Some(false))],
+        "a worker without the code is not listed: {body}"
+    );
+    assert_eq!(listed["current"], rows[1]["id"], "it runs on the primary: {body}");
+    assert_eq!(listed["carries"], true, "Claude with a session: {body}");
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = asked.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let answer = match request {
+                DesktopRequest::MoveLocation { location, .. } => {
+                    seen.lock().unwrap().push(location);
+                    DesktopResponse::WorktreeMoved { moved: "carried".into() }
+                }
+                _ => DesktopResponse::Seen,
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+    let mv = |id: &Value| request_as("POST", &format!("/api/v1/tabs/{t}/location"), &cookie, Some(json!({ "location": id })));
+    let (status, _, body) = host.send(mv(&rows[0]["id"])).await;
+    assert_eq!((status, json(&body)["moved"].as_str()), (StatusCode::OK, Some("carried")), "{body}");
+    let (status, _, body) = host.send(mv(&rows[1]["id"])).await;
+    assert_eq!(status, StatusCode::OK, "already there: {body}");
+    let (status, _, body) = host.send(mv(&rows[2]["id"])).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("host_offline")), "{body}");
+    let (status, _, body) = host.send(mv(&json!("no-such-place"))).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_FOUND, Some("location_not_found")), "{body}");
+    assert_eq!(asked.lock().unwrap().as_slice(), ["local".to_string()], "the window was asked once, for this computer");
     desktop.abort();
 }

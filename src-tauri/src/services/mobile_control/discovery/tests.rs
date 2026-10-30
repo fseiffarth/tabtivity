@@ -1603,9 +1603,27 @@ fn remote_host_tabs_are_listed_by_the_record_and_reached_through_the_snapshot() 
 
     let wire = serde_json::to_string(&project.tabs.iter().map(|t| &t.public).collect::<Vec<_>>()).unwrap();
     assert!(wire.contains(r#""on_host":true"#), "{wire}");
-    for raw in ["primary.example", "w1.example", "w1", "/srv/", "cm-", &primary_session, "sess-1", "alice"] {
+    // Each tab is named by the machine it runs on, and nothing else of it crosses.
+    assert_eq!(by_label("on primary").public.host_label.as_deref(), Some("primary.example"));
+    assert_eq!(by_label("on the worker").public.host_label.as_deref(), Some("w1.example"));
+    for raw in ["/srv/", "cm-", &primary_session, "sess-1", "alice"] {
         assert!(!wire.contains(raw), "{raw} crossed: {wire}");
     }
+}
+
+/// The locality chip's facts: a host tab knows the location word it runs at
+/// (never on the wire), and a plain resumable agent of a remote project with
+/// a second place to go is `location_movable` — where host tabs are listed
+/// at all, never in a VM project.
+#[test]
+fn a_remote_projects_agent_tabs_know_their_location_and_may_move() {
+    let (dir, _) = host_tab_state(None, false);
+    let project = load_hosts(dir.path(), &HostLive::default(), true);
+    let rows: Vec<_> = project.tabs.iter().map(|t| (t.public.label.as_str(), t.location.as_str(), t.public.location_movable)).collect();
+    assert_eq!(rows, [("on primary", "remote", true), ("on the worker", "host:w1", true)]);
+    let wire = serde_json::to_string(&project.tabs.iter().map(|t| &t.public).collect::<Vec<_>>()).unwrap();
+    assert!(wire.contains(r#""location_movable":true"#) && !wire.contains("host:w1"), "{wire}");
+    assert!(load_hosts(dir.path(), &HostLive::default(), false).tabs.iter().all(|t| !t.public.location_movable));
 }
 
 /// No host session exists for a minted name while the project does not

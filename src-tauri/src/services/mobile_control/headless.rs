@@ -2046,7 +2046,9 @@ mod tests {
                 subagent_worktrees: Vec::new(),
                 assistant_launch: None,
                 worktree_movable: false,
+                location_movable: false,
                 on_host: false,
+                host_label: None,
                 host_down: false,
             },
             tmux_name: concat!(crate::app_slug!(), "-x").into(),
@@ -2058,6 +2060,7 @@ mod tests {
             since: None,
             local_model: false,
             place: super::super::discovery::TabPlace::Here,
+            location: "local".into(),
         }
     }
 

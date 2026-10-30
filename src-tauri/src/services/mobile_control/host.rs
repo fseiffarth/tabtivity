@@ -1294,6 +1294,7 @@ async fn project(
             tab.subagent_worktrees = subagents;
         }
     }
+    let host_files = has_host_files(project) && files::files_open(&state.config.state_dir);
     (
         StatusCode::OK,
         Json(
@@ -1303,8 +1304,11 @@ async fn project(
                 // root console or a project the phone has no folder of.
                 "files": is_git_project(project) && files::files_open(&state.config.state_dir),
                 // Whether the 📁 has a remote side too (`host_files`): the same
-                // switch, and a remote project's primary host. Never which host.
-                "host_files": has_host_files(project) && files::files_open(&state.config.state_dir),
+                // switch, and a remote project's primary host.
+                "host_files": host_files,
+                // What the remote side's switch is called: the primary's label,
+                // as the ＋ sheet's machines are (`machine_label`).
+                "host_label": project.primary_host.as_ref().filter(|_| host_files).map(super::discovery::machine_label),
                 // Whether the scope has a folder at all, and what the phone may
                 // create in it (`all`, `agents` or `none`): the phone words the
                 // reason and offers only what these allow, never a project type.
@@ -5107,7 +5111,7 @@ fn worktree_desktop_error(response: Result<DesktopResponse, String>) -> (StatusC
             match code.as_str() {
                 "desktop_unavailable" | "tab_not_ready" => StatusCode::SERVICE_UNAVAILABLE,
                 "tab_not_found" | "worktree_not_found" | "model_not_found" => StatusCode::NOT_FOUND,
-                "not_movable" | "tab_busy" | "move_failed" | "not_assistant_chat" | "switch_failed" => StatusCode::CONFLICT,
+                "not_movable" | "tab_busy" | "move_failed" | "not_assistant_chat" | "switch_failed" | "host_offline" => StatusCode::CONFLICT,
                 _ => StatusCode::BAD_REQUEST,
             },
             &code,
@@ -5195,6 +5199,147 @@ async fn move_tab_worktree(
             project_id,
             tmux_session,
             worktree,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::WorktreeMoved { moved }) => (StatusCode::OK, Json(json!({ "moved": moved }))),
+        other => worktree_desktop_error(other),
+    }
+}
+
+/// The phone's opaque id for running `raw_id`'s tab at the window's location
+/// word `location`: [`machine_id`] for a host, and the same derivation over
+/// `"local"` for this machine.
+fn location_id(host_key: &[u8], raw_id: &str, location: &str) -> String {
+    super::discovery::key_id(host_key, "host", &[raw_id, location])
+}
+
+/// A tab the locality chip may move, with its project: an agent tab the
+/// catalog flagged `location_movable`, else `409 not_movable`.
+fn locatable_tab(
+    snapshot: &super::discovery::Catalog,
+    tab_id: &str,
+) -> Result<(super::discovery::ResolvedProject, ResolvedTab), (StatusCode, Json<serde_json::Value>)> {
+    let Some((project, tab)) = snapshot.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    if tab.public.kind != "agent" {
+        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
+    }
+    if !tab.public.location_movable {
+        return Err(api_error(StatusCode::CONFLICT, "not_movable"));
+    }
+    Ok((project.clone(), tab.clone()))
+}
+
+/// `GET /api/v1/tabs/{id}/locations` — where the facts row's locality chip
+/// can move this agent tab of a remote project, as the desktop tab badge's
+/// menu lists it: this machine (the mirror; none in a remote-only project)
+/// and each host that holds the code, by opaque id, with whether the
+/// desktop holds that host's connection now; the one it runs at, and whether
+/// its CLI takes the conversation along (`agent_host_move`: Claude with a
+/// session). Answered here: the sidecar alone knows the masters.
+async fn tab_locations(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let (project, tab) = match locatable_tab(&snapshot, &tab_id) {
+        Ok(found) => found,
+        Err(error) => return error,
+    };
+    let key = host_key(&state);
+    let mut locations = Vec::new();
+    if !project.pinned {
+        locations.push(json!({ "id": location_id(&key, &project.raw_id, "local"), "label": "", "here": true, "primary": false, "connected": true }));
+    }
+    for mut machine in phone_machines(&state, &project).await {
+        machine["here"] = false.into();
+        locations.push(machine);
+    }
+    let carries = tab.cmd == "claude" && tab.session_id.as_deref().is_some_and(|id| !id.is_empty());
+    (
+        StatusCode::OK,
+        Json(json!({
+            "locations": locations,
+            "current": location_id(&key, &project.raw_id, &tab.location),
+            "carries": carries,
+        })),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveLocationBody {
+    location: String,
+}
+
+/// `POST /api/v1/tabs/{id}/location` with `{ "location": "<id>" }` — move
+/// the agent tab to a place `locations` listed (`DesktopRequest::MoveLocation`):
+/// the desktop stops its CLI, carries the conversation over where the CLI
+/// allows and respawns the tab there. A host is only asked for while the
+/// desktop holds its master — the window rides it and never dials for a phone.
+/// Answers `{ "moved": "carried" | "fresh" }`; `409 move_failed` left the tab
+/// where it was.
+async fn move_tab_location(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    // The move respawns the agent's CLI.
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
+    let Ok(MoveLocationBody { location: asked }) = serde_json::from_slice::<MoveLocationBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let (project, tab) = match locatable_tab(&snapshot, &tab_id) {
+        Ok(found) => found,
+        Err(error) => return error,
+    };
+    let key = host_key(&state);
+    let location = if !project.pinned && asked == location_id(&key, &project.raw_id, "local") {
+        "local".to_string()
+    } else {
+        let Some(machine) = project
+            .machines
+            .iter()
+            .find(|machine| machine.runnable && machine_id(&key, &project.raw_id, machine) == asked)
+        else {
+            return api_error(StatusCode::NOT_FOUND, "location_not_found");
+        };
+        if !master_up(&state, &machine.spec).await {
+            return api_error(StatusCode::CONFLICT, "host_offline");
+        }
+        machine.location.clone()
+    };
+    if location == tab.location {
+        return (StatusCode::OK, Json(json!({ "moved": "carried" })));
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::MoveLocation {
+            request_id: new_request_id(),
+            project_id: project.raw_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            location,
         },
     )
     .await;
@@ -7640,6 +7785,8 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/undo-clear", post(undo_clear))
         .route("/api/v1/tabs/{tab_id}/worktrees", get(tab_worktrees))
         .route("/api/v1/tabs/{tab_id}/worktree", post(move_tab_worktree))
+        .route("/api/v1/tabs/{tab_id}/locations", get(tab_locations))
+        .route("/api/v1/tabs/{tab_id}/location", post(move_tab_location))
         .route("/api/v1/tabs/{tab_id}/assistant-models", get(assistant_models))
         .route("/api/v1/tabs/{tab_id}/launch-defaults", get(launch_defaults).put(save_launch_defaults))
         .route("/api/v1/tabs/{tab_id}/model-rows", get(model_rows).post(remember_model_rows))

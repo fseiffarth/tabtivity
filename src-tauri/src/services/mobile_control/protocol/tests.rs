@@ -297,6 +297,22 @@ fn a_tabby_model_switch_names_the_tab_pair_and_a_model_name_only() {
 }
 
 #[test]
+fn location_moves_name_the_tab_pair_and_a_location_word() {
+    let request = DesktopRequest::MoveLocation {
+        request_id: "request-locate".into(),
+        project_id: "raw-project".into(),
+        tmux_session: "raw-tmux".into(),
+        location: "host:w1".into(),
+    };
+    assert_eq!(request.request_id(), "request-locate");
+    assert!(request.is_mutation());
+    assert!(request.desktop_timeout() < request.response_timeout());
+    let json = serde_json::to_value(&request).expect("serialize move");
+    assert_eq!(json["type"], "move_location");
+    assert_eq!(json["location"], "host:w1");
+}
+
+#[test]
 fn worktree_moves_name_the_tab_pair_and_an_opaque_worktree_only() {
     let request = DesktopRequest::MoveWorktree {
         request_id: "request-move".into(),

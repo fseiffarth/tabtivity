@@ -5,6 +5,7 @@ import { subscribeTauri } from "../../hooks/useTauriListener";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
+import { switchTabLocation } from "../../stores/agents/agentLocationSwitch";
 import {
   ROOT_SCOPE,
   effectiveTabLocation,
@@ -310,6 +311,7 @@ type DesktopRequest =
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
   | { type: "tab_worktrees"; request_id: string; project_id: string; tmux_session: string }
   | { type: "move_worktree"; request_id: string; project_id: string; tmux_session: string; worktree: string }
+  | { type: "move_location"; request_id: string; project_id: string; tmux_session: string; location: string }
   | { type: "assistant_models"; request_id: string; project_id: string; tmux_session: string }
   | { type: "switch_assistant_model"; request_id: string; project_id: string; tmux_session: string; model: string }
   | { type: "desktop_images"; request_id: string; project_id: string }
@@ -2782,6 +2784,40 @@ async function moveTabWorktree(
   return { status: "worktree_moved", moved: result };
 }
 
+/** The phone picked a place on the locality chip's sheet: the desktop tab
+ * badge's move (`switchTabLocation`), the conversation along where the CLI
+ * allows. The sidecar resolved the opaque id to `location` and checked that
+ * host's connection; this window checks the word against the project again
+ * (a worker that holds no code, a Local row a remote-only project has none
+ * of). Refused while the agent works or waits on a question, as the ⎇ move
+ * is — the restart would end the turn. */
+async function moveTabLocation(projectId: string, tmuxSession: string, location: string): Promise<DesktopResponse> {
+  const scope = mobileScope(projectId);
+  if (!scope) {
+    return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  }
+  const tab = scheduleTargetTab(scope.id, tmuxSession);
+  if (!tab) return { status: "error", code: "tab_not_found", message: "Tab not found" };
+  const project = scope.project;
+  if (tab.kind !== "agent" || !project?.remote || project.vm?.enabled) {
+    return { status: "error", code: "not_movable", message: "This agent cannot move to another machine" };
+  }
+  const pinned = isHostPinned(project);
+  const worker = project.compute_hosts?.find((host) => `host:${host.id}` === location);
+  const known = location === "remote" || (location === "local" && !pinned) || (worker !== undefined && workerRunnable(worker, pinned));
+  if (!known) return { status: "error", code: "location_not_found", message: "That machine is not there any more" };
+  const to = location as TabLocation;
+  if (effectiveTabLocation(tab, { hostPinned: pinned }) === to) return { status: "worktree_moved", moved: "carried" };
+  if (agentTabState(`${scope.id}:${tab.key}`) !== "idle") {
+    return { status: "error", code: "tab_busy", message: "The agent is at work or waiting for an answer" };
+  }
+  const moved = await switchTabLocation(scope.id, tab, to);
+  if (moved === "failed") {
+    return { status: "error", code: "move_failed", message: "The conversation could not be moved; the agent restarted where it was" };
+  }
+  return { status: "worktree_moved", moved };
+}
+
 /** A Tabby chat the phone's model chip may switch, with the models its CLI can
  * run (`assistantModelRows` — the desktop Tabby's model dropdown lists the same), or
  * the refusal to answer with. Any other tab's `/model` is its CLI's own. */
@@ -3055,6 +3091,7 @@ async function handleRequest(
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);
     case "tab_worktrees": return tabWorktrees(request.project_id, request.tmux_session);
     case "move_worktree": return moveTabWorktree(request.project_id, request.tmux_session, request.worktree, t);
+    case "move_location": return moveTabLocation(request.project_id, request.tmux_session, request.location);
     case "assistant_models": return tabAssistantModels(request.project_id, request.tmux_session);
     case "switch_assistant_model": return switchTabAssistantModel(request.project_id, request.tmux_session, request.model);
     case "desktop_images": return desktopImagesFor(request.project_id);
@@ -3099,7 +3136,7 @@ const mutationQueues = new Map<string, Promise<unknown>>();
  * `MobileMutationList.test.ts` holds the two in step (exported for it). */
 export function mutationDomain(type: DesktopRequest["type"]): string | null {
   switch (type) {
-    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": case "move_worktree": case "switch_assistant_model": return "tabs";
+    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": case "move_worktree": case "move_location": case "switch_assistant_model": return "tabs";
     case "todo_mutate": case "alert_resolve": case "calendar_mutate": return "board";
     case "mail_mark": case "mail_reply": return "mail";
     // A markup answer queues its prompt as a phone hold does.

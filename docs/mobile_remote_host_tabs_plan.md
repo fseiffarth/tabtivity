@@ -193,8 +193,10 @@ What the code already gives us (verified 2026-10-24):
   `access_revoked`.
 - **What crosses the browser API:** one new boolean on `PublicTab`,
   `on_host` (true for a host tab), and the codes `host_offline` (HTTP and
-  terminal close reason) and `tab_on_host`. No host name, worker id, path,
-  socket path or tmux name crosses (AGENTS: `mobile_control`).
+  terminal close reason) and `tab_on_host`. No worker id, user, path, socket
+  path or tmux name crosses (AGENTS: `mobile_control`). Since 2026-10-30 the
+  tab's `host_label` does: the machine's display name, else its host name, as
+  the ＋ sheet's machines already carried.
 - **Routes that would act on this machine for a host tab** — each answers
   `409 tab_on_host` (the phone hides the control):
   - inbox upload (`host.rs` `inbox_upload`, `POST /tabs/{id}/inbox`, the

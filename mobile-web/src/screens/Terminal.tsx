@@ -39,6 +39,8 @@ import {
   sentName,
   getTabWorktrees,
   moveTabWorktree,
+  getTabLocations,
+  moveTabLocation,
   getAssistantModels,
   switchAssistantModel,
   uploadToInbox,
@@ -51,6 +53,7 @@ import {
   type AskedQuestion,
   type TabRow,
   type TabWorktrees,
+  type TabLocations,
   type AssistantModels,
 } from "../api";
 import { describeFailure } from "../connection";
@@ -953,6 +956,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [worktreeChoices, setWorktreeChoices] = useState<TabWorktrees | null>(null);
   const [worktreeMoving, setWorktreeMoving] = useState("");
   const [worktreeNote, setWorktreeNote] = useState<TranslationKey | "">("");
+  /** The ⌂/☁ chip's sheet, the desktop tab badge's machine menu: the same
+   * four as the ⎇ chip's. */
+  const [locationSheet, setLocationSheet] = useState(false);
+  const [locationChoices, setLocationChoices] = useState<TabLocations | null>(null);
+  const [locationMoving, setLocationMoving] = useState("");
+  const [locationNote, setLocationNote] = useState<TranslationKey | "">("");
   /** A Tabby chat's model chip: its `/model` is off, so the sheet lists what
    * the desktop's own chip lists and a pick restarts the chat on it. */
   const [assistantSheet, setAssistantSheet] = useState(false);
@@ -1113,7 +1122,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * switch is on for it (`detail.files`) — null while off, or unknown. */
   const [filesLabel, setFilesLabel] = useState<string | null>(null);
   /** Which sides the drawer's library has (`detail.files`, `detail.host_files`). */
-  const [filesSides, setFilesSides] = useState({ here: true, host: false });
+  const [filesSides, setFilesSides] = useState<{ here: boolean; host: boolean; hostLabel?: string }>({ here: true, host: false });
   /** The files drawer, the project screen's own, opened here by a right→left
    * swipe over the output. */
   const [filesOpen, setFilesOpen] = useState(false);
@@ -1585,6 +1594,50 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           : "mobile.worktree.unreadable");
       });
   };
+  /** The ⌂/☁ chip: the desktop tab badge's locality menu, as a sheet. The
+   * list is the sidecar's (`TabLocations`); a pick has the desktop stop the
+   * CLI, carry the conversation over where it can and restart it there. The
+   * tab keeps its id, so this view stays on it. */
+  const openLocationSheet = () => {
+    setLocationNote("");
+    setLocationChoices(null);
+    setLocationSheet(true);
+    getTabLocations(tab.id).then(setLocationChoices, () => {
+      setLocationChoices({ locations: [], carries: false });
+      setLocationNote("mobile.location.unreadable");
+    });
+  };
+  const chooseLocation = (id: string) => {
+    if (locationMoving) return;
+    if (id === locationChoices?.current) {
+      setLocationSheet(false);
+      return;
+    }
+    setLocationNote("");
+    setLocationMoving(id);
+    moveTabLocation(tab.id, id)
+      .then(() => {
+        setLocationMoving("");
+        setLocationSheet(false);
+        // As after a worktree move: the agent restarted elsewhere.
+        commandSentAt.current = Date.now();
+        for (const delay of [0, ...UNDO_RELOADS]) {
+          window.setTimeout(() => {
+            transcriptVersion.current = undefined;
+            setTranscriptReload((count) => count + 1);
+          }, delay);
+        }
+      })
+      .catch((error) => {
+        const code = error instanceof ApiError ? error.code : "";
+        setLocationMoving("");
+        setLocationNote(code === "move_failed" ? "mobile.location.failed"
+          : code === "tab_busy" ? "mobile.worktree.busy"
+          : code === "host_offline" ? "mobile.location.hostOffline"
+          : code === "desktop_unavailable" ? "mobile.location.offline"
+          : "mobile.location.unreadable");
+      });
+  };
   const openModeSheet = () => {
     if (modes.length === 0 && !fixedMode) {
       cycleMode();
@@ -1673,7 +1726,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const launchDefaults = tab.kind === "agent" && !tab.local_model && !tab.assistant_launch && !tab.on_host
     ? <LaunchDefaultsFold tabId={tab.id} />
     : undefined;
-  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || statusSheet || desktopSheet || gallery
+  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
@@ -1794,7 +1847,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(project)}`, { signal: controller.signal })
         .then((detail) => {
           setFilesLabel(detail.files || detail.host_files ? detail.project.label : null);
-          setFilesSides({ here: !!detail.files, host: !!detail.host_files });
+          setFilesSides({ here: !!detail.files, host: !!detail.host_files, hostLabel: detail.host_label });
         })
         .catch(() => {});
     };
@@ -2123,6 +2176,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     description: model.description,
     current: model.id === assistantModels?.current,
     pending: model.id === assistantSwitching,
+  }));
+  const locationOptions: SheetOption[] = (locationChoices?.locations ?? []).map((row) => ({
+    key: row.id,
+    label: row.here ? t("mobile.newTab.thisComputer") : row.primary ? t("mobile.newTab.machinePrimary", { host: row.label }) : row.label,
+    ...(row.connected ? {} : { description: t("mobile.newTab.machineOffline") }),
+    current: row.id === locationChoices?.current,
+    pending: row.id === locationMoving,
   }));
   const worktreeOptions: SheetOption[] = (worktreeChoices?.worktrees ?? []).map((row) => ({
     key: row.id,
@@ -2582,6 +2642,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openWorktreeSheet} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {statusBranch ?? linkedBranch ?? cwdBranch ?? t("terminal.reader.worktreeButton")}</span></button>
           : status?.branch && <span className="fact-branch">⎇ {status.branch}</span>}
         {tab.worktree_movable && isUntested("mobile.facts.worktreeSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+        {/* As the desktop tab's ⌂/☁ badge: where a remote project's agent runs. */}
+        {tab.location_movable && <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openLocationSheet} aria-haspopup="dialog" aria-expanded={locationSheet} title={t("mobile.location.hint")}><span className="fact-action-label">{tab.on_host && tab.host_label ? t("mobile.location.remoteNamed", { name: tab.host_label }) : t(tab.on_host ? "mobile.location.remote" : "mobile.location.here")}</span></button>}
+        {tab.location_movable && isUntested("mobile.facts.locationSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
         {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
         {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
@@ -2775,6 +2838,19 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       onPick={chooseWorktree}
       onClose={() => { if (!worktreeMoving) setWorktreeSheet(false); }}
     />}
+    {locationSheet && <OptionSheet
+      title={t("mobile.location.title")}
+      note={locationNote
+        ? { text: t(locationNote), error: true }
+        : locationChoices && locationChoices.locations.length > 1
+          ? { text: t(locationChoices.carries ? "mobile.location.carries" : "mobile.location.fresh", { agent: agentLabel }) }
+          : undefined}
+      options={locationOptions}
+      waiting={t(locationChoices === null ? "mobile.location.loading" : locationNote ? "mobile.location.retry" : "mobile.location.none")}
+      busy={locationMoving !== ""}
+      onPick={chooseLocation}
+      onClose={() => { if (!locationMoving) setLocationSheet(false); }}
+    />}
     {statusSheet && <StatusSheet tab={tab} live={status} onLimits={rememberLimits} onClose={() => setStatusSheet(false)} signIn={signInWay} />}
     {signInSheet && <SignInSheet
       tabId={tab.id}
@@ -2816,7 +2892,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
     </BackNest></div>}
     {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
-      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles} here={filesSides.here} host={filesSides.host}
+      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles} here={filesSides.here} host={filesSides.host} hostLabel={filesSides.hostLabel}
         markup={markupFor && { tabId: markupFor.tabId, onSend: markupFor.onSend, agent: markupFor.agent, model: markupFor.model, pickModel: markupFor.pickModel, toChat: markupFor.toChat, dialog: markupFor.dialog }} showTab={markupNewTab?.show} />
     </BackNest></div>}
 

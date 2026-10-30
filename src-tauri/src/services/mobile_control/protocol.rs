@@ -1321,6 +1321,18 @@ pub enum DesktopRequest {
         tmux_session: String,
         worktree: String,
     },
+    /// Move this agent tab of a remote project to `location` — the window's
+    /// location word (`"local"`, `"remote"`, `"host:<id>"`), which the sidecar
+    /// resolved from an opaque id the facts row's locality chip listed: the
+    /// desktop tab badge's `switchTabLocation`, the conversation taken along
+    /// where the CLI allows (`services::agent_host_move`). Answered with
+    /// `WorktreeMoved`.
+    MoveLocation {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+        location: String,
+    },
     /// The models this Tabby chat can be switched to — the model chip's sheet,
     /// as on the desktop Reader (`assistantModelChoices`): Claude's aliases,
     /// Codex's catalog or the installed Ollama models, for the CLI the chat
@@ -1505,6 +1517,7 @@ impl DesktopRequest {
             | Self::UndoClear { request_id, .. }
             | Self::TabWorktrees { request_id, .. }
             | Self::MoveWorktree { request_id, .. }
+            | Self::MoveLocation { request_id, .. }
             | Self::AssistantModels { request_id, .. }
             | Self::SwitchAssistantModel { request_id, .. }
             | Self::AgentStatus { request_id, .. }
@@ -1537,6 +1550,9 @@ impl DesktopRequest {
             // Waits for the old CLI to exit (`switchAgentWorktree`, up to
             // 3 s) before the move and the respawn.
             Self::MoveWorktree { .. } => 20,
+            // The same wait, then the conversation copied over ssh
+            // (`agent_tab_move_host`) before the respawn.
+            Self::MoveLocation { .. } => 35,
             // Waits for the old CLI to exit (`switchAssistantModel`, up to
             // 3 s) before the respawn on the new model.
             Self::SwitchAssistantModel { .. } => 20,
@@ -1562,6 +1578,7 @@ impl DesktopRequest {
             Self::MailReply { .. } => 60,
             Self::AgentStatus { .. } | Self::CliOverview { .. } => 20,
             Self::MoveWorktree { .. } | Self::SwitchAssistantModel { .. } => 15,
+            Self::MoveLocation { .. } => 30,
             Self::AssistantModels { .. } => 28,
             Self::GitStates { .. } | Self::MarkupQuestions { .. } => 2,
             _ => 8,
@@ -1596,6 +1613,7 @@ impl DesktopRequest {
             | Self::MarkupAnswer { .. }
             | Self::MarkupDismiss { .. }
             | Self::MoveWorktree { .. }
+            | Self::MoveLocation { .. }
             | Self::SwitchAssistantModel { .. }
             | Self::LocalModelMutate { .. } => true,
             Self::Catalog { .. }
@@ -2032,10 +2050,11 @@ pub enum DesktopResponse {
         #[serde(default)]
         carries: bool,
     },
-    /// Answers [`DesktopRequest::MoveWorktree`]: `carried` (the conversation
-    /// goes on there) or `fresh` (the CLI started a new one there). A move
-    /// that failed — the tab came back in its old folder — is the error
-    /// `move_failed`.
+    /// Answers [`DesktopRequest::MoveWorktree`] and
+    /// [`DesktopRequest::MoveLocation`]: `carried` (the conversation goes on
+    /// there) or `fresh` (the CLI started a new one there). A move that
+    /// failed — the tab came back in its old folder or on its old machine —
+    /// is the error `move_failed`.
     WorktreeMoved {
         moved: String,
     },
