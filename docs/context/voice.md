@@ -23,6 +23,32 @@ the reply. The Chat already drives the live interactive session
 that: it works the same for every CLI the Reader shows, keeps the session's
 tools, permission mode and history, and launches nothing per utterance.
 
+## Which device whisper runs on
+
+Plain `voice` is the CPU. `voice-vulkan` (Linux, Windows) and `voice-metal`
+(macOS) build a GPU backend in; they are not in `default`, because Vulkan needs
+`glslc` at build time and links the loader. Bundles and the dev build turn them
+on (`scripts/lib/voice_gpu.sh`). Both sit on `whisper-rs-sys`, not `whisper-rs`,
+whose `vulkan` feature fails to compile where bindgen falls back to the bundled
+bindings. Measurements and open risks: `docs/voice_gpu_plan.md`.
+
+Whisper never tells its caller where a load landed and carries on without a
+GPU by itself, so `gpu.rs` reads the answer from its load log. The renderer
+shows that `VoiceDevice`, never the `voice_gpu` setting. A state, made per
+session, is what picks the backend, so a cached model still reports afresh.
+`flash_attn` is on for the GPU only: whisper-rs defaults it off, and the
+measured speed is with it.
+
+Whisper runs in the app's process, so a driver crash ends the window. Before
+each load and each session's first run a marker is written, and removed after;
+one found that this run did not write means the step never came back, and
+whisper stays on the CPU until the user picks **Try the GPU again**
+(`voice_gpu_retry`). A clean quit clears only this run's own marker, or the
+guard would be gone by the launch after the crash. The first crash still
+happens, and the switch cannot stop ggml creating its Vulkan instance, which it
+does on any use of whisper. That is also why Windows ships `vulkan-1.dll`
+rather than delay-loading it: staying on the CPU would not avoid the call.
+
 ## One listener per machine
 
 The mic belongs to one Chat tab at a time (`voice::ACTIVE`); a new start

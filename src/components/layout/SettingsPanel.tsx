@@ -1239,7 +1239,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
     labels: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
   },
   assistant: { labels: ["assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"] },
-  voice: { aliases: "settings.searchAlias.voice", labels: ["settings.voice.model", "settings.voice.lang"] },
+  voice: { aliases: "settings.searchAlias.voice", labels: ["settings.voice.model", "settings.voice.lang", "settings.voice.gpu"] },
   remoteFeatures: { labels: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"] },
   vm: { aliases: "settings.searchAlias.vm", labels: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"] },
   mobile: { aliases: "settings.searchAlias.mobile", labels: ["settings.mobileIndicator", "mobile.phones.only", "mobile.device.sections", "mobile.device.projects"] },

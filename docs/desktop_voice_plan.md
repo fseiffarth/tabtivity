@@ -142,8 +142,9 @@ Defaults chosen here (an implementer may not change them; the user may):
   Dictation and read-aloud are not.
 - **Default model: multilingual `small` q5_1** (~190 MB), good enough for
   German and English on the CPU. The catalog also offers `base` q5_1 (~60 MB,
-  fast and rough) and `large-v3-turbo` q5_0 (~550 MB, best, about 2–4 s per
-  sentence on the CPU). It runs on the CPU only; a GPU backend is step 8.
+  fast and rough) and `large-v3-turbo` q5_0 (~550 MB, best; measured 14 s for an
+  11 s clip on the CPU, 1.1 s on the GPU, not the 2–4 s first estimated).
+  The GPU backend landed as step 8: `docs/voice_gpu_plan.md`.
 - **Commands are `Client` class.** The microphone and speakers belong to the
   machine the user sits at (`services::command_class`). A browser client hides
   the mic button.
@@ -303,8 +304,9 @@ cmake-rs setting `CMAKE_OSX_ARCHITECTURES`, with `GGML_NATIVE=OFF` now set.
 - `set_initial_prompt(&str)`, `set_language(Option<&str>)`,
   `set_detect_language(bool)`. `WhisperContext`, `WhisperState` and
   `WhisperVadContext` are `Send + Sync`.
-- Features: default empty = CPU only; `vulkan`/`metal`/`cuda`/`openmp` stay
-  off (step 8).
+- Features: default empty = CPU only; `vulkan`/`metal` are step 8's
+  (`docs/voice_gpu_plan.md`, turned on through `whisper-rs-sys`);
+  `cuda`/`openmp` stay off.
 
 **`tts` 0.26.3** (Windows/macOS only, as planned: on Linux it would link
 `libspeechd`).
@@ -887,7 +889,8 @@ both are fine, phase 2 is dropped. If either is not, phase 2 starts.
 
 ### 8. GPU and more voices
 
-- A GPU backend for whisper.cpp: Vulkan on Linux/Windows, Metal on macOS.
+- Done: a GPU backend for whisper.cpp, Vulkan on Linux/Windows, Metal on macOS
+  (`docs/voice_gpu_plan.md`).
 - More voices per language and a speaking rate that follows the Settings
   slider, for whichever engines exist by then.
 

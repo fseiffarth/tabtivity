@@ -7,6 +7,9 @@ import {
   VOICE_MODEL_LABELS,
   VOICE_MODELS,
   VOICE_PAUSE_MS,
+  retryVoiceGpu,
+  voiceDeviceLabel,
+  voiceDeviceWhy,
   voiceErrorKey,
   voiceLangOptions,
   voiceModelInstallCommand,
@@ -28,7 +31,9 @@ const PAUSES = [1000, 1500, 2000, 3000] as const;
  * model the Chat dictates with — installed in a tab, one click — and the
  * language it listens in; read-aloud's speed on the system voice (the one
  * voice engine of phase 1); headset mode, in which talking over the voice
- * stops it; and the pause after which hands-free sends.
+ * stops it; the pause after which hands-free sends; and whether speech may
+ * use the GPU, with what the last dictation really ran on
+ * (docs/voice_gpu_plan.md).
  */
 export function VoiceSettings() {
   const t = useT();
@@ -36,8 +41,9 @@ export function VoiceSettings() {
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const [status, setStatus] = useState<VoiceStatus | null>(null);
   const [problem, setProblem] = useState<TranslationKey | null>(null);
+  const refresh = () => voiceStatus().then(setStatus, (error: unknown) => setProblem(voiceErrorKey(error)));
   useEffect(() => {
-    void voiceStatus().then(setStatus, (error: unknown) => setProblem(voiceErrorKey(error)));
+    void refresh();
   }, []);
 
   const model = settings?.voice_model ?? DEFAULT_VOICE_MODEL;
@@ -50,6 +56,11 @@ export function VoiceSettings() {
     } catch (error) {
       setProblem(voiceErrorKey(error));
     }
+  };
+
+  const retryGpu = async () => {
+    await retryVoiceGpu().catch((error: unknown) => setProblem(voiceErrorKey(error)));
+    await refresh();
   };
 
   return (
@@ -107,6 +118,28 @@ export function VoiceSettings() {
         onChange={(e) => void updateSettings({ voice_headset: e.target.checked })}
         help={t("settings.voice.headsetHelp")}
       />
+      {status?.gpuBuilt && (
+        <ToggleCard
+          label={<>{t("settings.voice.gpu")} <UntestedTag id="settings.voice.gpu" /></>}
+          checked={settings?.voice_gpu ?? true}
+          onChange={(e) => void updateSettings({ voice_gpu: e.target.checked })}
+          help={t("settings.voice.gpuHelp")}
+        />
+      )}
+      {status?.gpuCrashed && (
+        <SettingRow
+          label={t("settings.voice.gpuCrashed")}
+          help={t("settings.voice.gpuCrashedHelp")}
+          control={<button type="button" className="settings-btn" onClick={() => void retryGpu()}>{t("settings.voice.gpuRetry")}</button>}
+        />
+      )}
+      {status?.device && (
+        <SettingRow
+          label={<>{t("settings.voice.device")} <UntestedTag id="terminal.reader.voice.device" /></>}
+          help={voiceDeviceWhy(status.device, t) ?? t("settings.voice.deviceHelp")}
+          control={<span>{voiceDeviceLabel(status.device, t)}</span>}
+        />
+      )}
       <SettingRow
         label={t("settings.voice.pause")}
         help={t("settings.voice.pauseHelp")}

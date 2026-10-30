@@ -19,6 +19,7 @@
 
 pub mod capture;
 pub mod cpu;
+pub mod gpu;
 pub mod models;
 pub mod phantom;
 pub mod resample;
@@ -180,6 +181,12 @@ pub struct VoiceStatus {
     /// Why read-aloud cannot run; `None` when it can.
     pub speak: Option<VoiceError>,
     pub session: Option<SessionInfo>,
+    /// Whether this build can use a GPU at all.
+    pub gpu_built: bool,
+    /// The last GPU attempt never came back: the CPU until [`gpu_retry`].
+    pub gpu_crashed: bool,
+    /// Where the last load landed, `None` before the first.
+    pub device: Option<gpu::VoiceDevice>,
 }
 
 pub fn status() -> VoiceStatus {
@@ -197,7 +204,15 @@ pub fn status() -> VoiceStatus {
         },
         speak: tts::availability(),
         session: ACTIVE.lock_ok().as_ref().map(|a| a.info()),
+        gpu_built: gpu::BUILT,
+        gpu_crashed: gpu::crashed(),
+        device: gpu::last(),
     }
+}
+
+/// Forget a crash: the next listen tries the GPU again.
+pub fn gpu_retry() {
+    gpu::disarm();
 }
 
 /// What `voice_listen_start` asks for, checked by [`ListenRequest::validate`].
@@ -210,6 +225,8 @@ pub struct ListenRequest {
     pub pause_ms: u32,
     pub headset: bool,
     pub prompt: Option<String>,
+    /// The `voice_gpu` setting.
+    pub gpu: bool,
 }
 
 /// The hands-free pause's range (plan step 2).
@@ -325,7 +342,7 @@ pub fn listen_start(ctx: &CoreCtx, req: ListenRequest) -> Result<u64, VoiceError
     let session = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
     let owner = Owner::Tab { client, key: req.tab_key.clone() };
     let vad_model = Some(models::vad_entry()).filter(|e| models::installed(e)).map(models::model_path);
-    let transcriber = stt::Factory { model: models::model_path(model), vad_model };
+    let transcriber = stt::Factory { model: models::model_path(model), vad_model, gpu: req.gpu };
     let config = session::SessionConfig::from_request(session, owner.clone(), &req);
     let thread = {
         let ctx = ctx.clone();
@@ -456,6 +473,7 @@ mod tests {
             pause_ms: 1500,
             headset: false,
             prompt: None,
+            gpu: true,
         }
     }
 

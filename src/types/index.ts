@@ -664,9 +664,11 @@ export interface Settings {
    *  the backend round-trips them through its catch-all. `voice_rate` is the
    *  read-aloud speed (a multiplier, unset: 1); `voice_read_aloud` and
    *  `voice_hands_free_on` are the Chat chips' state — read answers aloud,
-   *  and the hands-free loop, which needs the experimental flag below too. */
+   *  and the hands-free loop, which needs the experimental flag below too.
+   *  `voice_gpu`: whether speech may use the GPU (unset: yes). */
   voice_model?: string;
   voice_lang?: string;
+  voice_gpu?: boolean;
   voice_headset?: boolean;
   voice_pause_ms?: number;
   voice_rate?: number;

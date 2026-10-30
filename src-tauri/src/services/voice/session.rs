@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use app_core::CoreCtx;
 use serde::{Deserialize, Serialize};
 
+use super::gpu::VoiceDevice;
 use super::vad::{Vad, VadConfig, VadEvent, RATE};
 use super::{phantom, ListenRequest, Owner, VoiceError, EV_ERROR, EV_FINAL, EV_LEVEL, EV_PARTIAL, EV_STATE, EV_VAD};
 
@@ -177,6 +178,11 @@ pub trait Transcriber {
     fn confirm_speech(&mut self, _audio: &[f32]) -> bool {
         true
     }
+
+    /// The device this transcriber landed on, when it has one to report.
+    fn device(&self) -> Option<VoiceDevice> {
+        None
+    }
 }
 
 /// Builds the session's [`Transcriber`] on the worker thread.
@@ -251,6 +257,9 @@ struct StateEvent {
     state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<VoiceError>,
+    /// Where whisper runs, from the first state after the load on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device: Option<VoiceDevice>,
 }
 
 #[derive(Serialize)]
@@ -280,7 +289,7 @@ enum Job {
 }
 
 enum Done {
-    Loaded(Result<(), VoiceError>),
+    Loaded(Result<Option<VoiceDevice>, VoiceError>),
     Partial { segment: u64, outcome: Result<Transcript, VoiceError> },
     Final { segment: u64, outcome: Result<Transcript, VoiceError> },
 }
@@ -294,7 +303,7 @@ fn worker<F: TranscriberFactory>(
 ) {
     let mut transcriber = match factory.load(&config, cancel.clone()) {
         Ok(t) => {
-            let _ = done.send(Done::Loaded(Ok(())));
+            let _ = done.send(Done::Loaded(Ok(t.device())));
             t
         }
         Err(e) => {
@@ -334,6 +343,7 @@ struct Listener {
     cancel: Arc<AtomicBool>,
     jobs: Sender<Job>,
     vad: Vad,
+    device: Option<VoiceDevice>,
     segment: u64,
     /// Finals queued and not yet answered.
     pending_finals: usize,
@@ -354,7 +364,8 @@ impl Listener {
     }
 
     fn state(&self, state: &'static str, reason: Option<VoiceError>) {
-        self.ctx.emit(EV_STATE, StateEvent { session: self.config.session, state, reason });
+        let device = self.device.clone();
+        self.ctx.emit(EV_STATE, StateEvent { session: self.config.session, state, reason, device });
     }
 
     fn queue_final(&mut self, audio: Vec<f32>) {
@@ -518,6 +529,7 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
         control: control.clone(),
         cancel: cancel.clone(),
         jobs: jobs_tx,
+        device: None,
         segment: 0,
         pending_finals: 0,
         partial_running: false,
@@ -554,10 +566,13 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
             Err(RecvTimeoutError::Disconnected) => break Err(VoiceError::ModelFailed),
         }
     };
-    if let Err(e) = loaded {
-        listener.to_owner(EV_ERROR, ErrorEvent { session, code: e });
-        listener.state("stopped", Some(e));
-        return;
+    match loaded {
+        Ok(device) => listener.device = device,
+        Err(e) => {
+            listener.to_owner(EV_ERROR, ErrorEvent { session, code: e });
+            listener.state("stopped", Some(e));
+            return;
+        }
     }
 
     let (frames_tx, frames_rx) = mpsc::sync_channel(64);

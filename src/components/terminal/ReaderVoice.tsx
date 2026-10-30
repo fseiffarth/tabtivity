@@ -11,10 +11,13 @@ import {
   voiceErrorKey,
   voiceInputOffered,
   voiceLangOptions,
+  voiceDeviceLabel,
+  voiceDeviceWhy,
   voiceLangTag,
   voiceModelInstallCommand,
   voiceStatus,
   type DesktopDictation,
+  type VoiceDevice,
   type VoiceLangChoice,
   type VoiceModel,
   type VoiceModelState,
@@ -88,6 +91,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const [install, setInstall] = useState<{ models: VoiceModelState[]; pick: VoiceModel } | null>(null);
   /** While a session runs: the model it listens with and the catalog's speech models. */
   const [using, setUsing] = useState<{ models: VoiceModelState[]; id: VoiceModel } | null>(null);
+  /** Where the running session's model landed, once it has. */
+  const [device, setDevice] = useState<VoiceDevice | null>(null);
   const [guardPhase, setGuardPhase] = useState<GuardPhase>("idle");
   /** Hands-free sent at this time; the mic is paused until the turn is over. */
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
@@ -129,6 +134,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     setPhase("off");
     setHeard("");
     setUsing(null);
+    setDevice(null);
   };
 
   /** Hands-free waits for the turn what was sent (or answered) starts. */
@@ -170,8 +176,10 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
         mode: loop ? "handsFree" : "dictate",
         pauseMs: settings?.voice_pause_ms ?? VOICE_PAUSE_MS.default,
         headset: settings?.voice_headset ?? false,
+        gpu: settings?.voice_gpu ?? true,
       }, {
         onPreparing: () => setPhase("preparing"),
+        onDevice: setDevice,
         // Also the backend's "sound is back" after a muted-mic warning.
         onStart: () => {
           setProblem(null);
@@ -396,6 +404,12 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
         options={voiceLangOptions(t)}
       />
       <UntestedTag id="terminal.reader.voice.langPicker" />
+      {device && (
+        <>
+          <span title={voiceDeviceWhy(device, t)}>{voiceDeviceLabel(device, t)}</span>
+          <UntestedTag id="terminal.reader.voice.device" />
+        </>
+      )}
     </div>
   ) : null;
   const strip = (line || install || picker) ? (

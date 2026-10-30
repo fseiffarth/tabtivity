@@ -83,6 +83,41 @@ export interface VoiceStatus {
   listen: VoiceErrorCode | null;
   speak: VoiceErrorCode | null;
   session: VoiceSessionInfo | null;
+  /** Whether this build can use a GPU at all. */
+  gpuBuilt: boolean;
+  /** The last GPU attempt never came back: the CPU until `retryVoiceGpu`. */
+  gpuCrashed: boolean;
+  /** Where the last load landed, null before the first. */
+  device: VoiceDevice | null;
+}
+
+/** `services::voice::gpu::CpuReason`. */
+export type VoiceCpuReason = "not-built" | "no-gpu" | "off" | "crashed";
+
+/** Where whisper really runs (`services::voice::gpu`, docs/voice_gpu_plan.md):
+ * what a load got, never what the setting asked for. */
+export type VoiceDevice = { kind: "gpu"; name: string | null } | { kind: "cpu"; reason: VoiceCpuReason };
+
+/** Every reason the backend can send, said in the UI language: one added in
+ * Rust without a row here fails the build. */
+export const VOICE_CPU_REASON_KEYS: Record<VoiceCpuReason, TranslationKey> = {
+  "not-built": "terminal.reader.voice.cpu.notBuilt",
+  "no-gpu": "terminal.reader.voice.cpu.noGpu",
+  off: "terminal.reader.voice.cpu.off",
+  crashed: "terminal.reader.voice.cpu.crashed",
+};
+
+type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
+
+/** `GPU · <card>` or `CPU`. */
+export function voiceDeviceLabel(device: VoiceDevice, t: Translate): string {
+  if (device.kind === "cpu") return t("terminal.reader.voice.deviceCpu");
+  return device.name ? t("terminal.reader.voice.deviceGpu", { name: device.name }) : t("terminal.reader.voice.deviceGpuNoName");
+}
+
+/** Why a load landed on the CPU; nothing to explain on the GPU. */
+export function voiceDeviceWhy(device: VoiceDevice, t: Translate): string | undefined {
+  return device.kind === "cpu" ? t(VOICE_CPU_REASON_KEYS[device.reason]) : undefined;
 }
 
 export const VOICE_EVENTS = {
@@ -101,7 +136,7 @@ export type VoiceState = "preparing" | "listening" | "paused" | "stopped";
 export interface LevelEvent { session: number; level: number }
 export interface VadEvent { session: number; segment: number; state: "start" | "end" }
 export interface TextEvent { session: number; segment: number; text: string }
-export interface StateEvent { session: number; state: VoiceState; reason?: VoiceErrorCode }
+export interface StateEvent { session: number; state: VoiceState; reason?: VoiceErrorCode; device?: VoiceDevice }
 export interface ErrorEvent { session: number; code: VoiceErrorCode }
 /** What became of a read (`voice_speak`); `done` comes after the mic's mute
  * tail, so the room is quiet by then. */
@@ -159,10 +194,17 @@ export function voiceModelInstallCommand(model: string): Promise<string> {
   return invoke<string>("voice_model_install_script", { id: model });
 }
 
+/** Forget that a GPU attempt crashed the app: the next listen tries it again. */
+export function retryVoiceGpu(): Promise<void> {
+  return invoke("voice_gpu_retry");
+}
+
 /** What the composer is told while a dictation runs. */
 export interface DesktopDictationHandlers {
   /** The model is loading. */
   onPreparing(): void;
+  /** The model loaded, here. */
+  onDevice(device: VoiceDevice): void;
   /** The mic is open. */
   onStart(): void;
   /** Speech started (`open`) or ended; until its final, the segment is unsettled. */
@@ -185,6 +227,8 @@ export interface DesktopDictationOptions {
   mode: ListenMode;
   pauseMs: number;
   headset: boolean;
+  /** The `voice_gpu` setting. */
+  gpu: boolean;
 }
 
 export interface DesktopDictation {
@@ -245,6 +289,7 @@ export async function startDesktopDictation(
         break;
       case VOICE_EVENTS.state: {
         const state = payload as StateEvent;
+        if (state.device) handlers.onDevice(state.device);
         if (state.state === "preparing") handlers.onPreparing();
         else if (state.state === "listening") {
           handlers.onPaused(false);
@@ -274,6 +319,7 @@ export async function startDesktopDictation(
       mode: options.mode,
       pauseMs: options.pauseMs,
       headset: options.headset,
+      gpu: options.gpu,
     });
   } catch (error) {
     for (const off of unlisten.splice(0)) off();
@@ -315,6 +361,30 @@ export function voiceSpeakStop(): Promise<void> {
 /** Stop whichever session holds the mic (the header indicator's click). */
 export function stopVoiceSession(session: number): Promise<void> {
   return invoke("voice_listen_stop", { session });
+}
+
+/** Follow where the running session's whisper landed, machine-wide:
+ * `voice:state` broadcasts; null once the session stopped. */
+export function watchVoiceDevice(onChange: (device: VoiceDevice | null) => void): () => void {
+  let live = true;
+  let off: UnlistenFn | undefined;
+  void listen<StateEvent>(VOICE_EVENTS.state, (e) => {
+    if (e.payload.state === "stopped") onChange(null);
+    else if (e.payload.device) onChange(e.payload.device);
+  }).then((unlisten) => {
+    if (live) off = unlisten;
+    else unlisten();
+  });
+  void voiceStatus().then(
+    (status) => {
+      if (live && status.session) onChange(status.device);
+    },
+    () => {},
+  );
+  return () => {
+    live = false;
+    off?.();
+  };
 }
 
 /** Follow who holds the mic, machine-wide: `voice:owner` broadcasts, after

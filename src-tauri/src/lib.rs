@@ -1794,6 +1794,7 @@ pub fn run() {
             commands::vm::remote_download_size,
             commands::vm::remote_download_to,
             commands::voice::voice_status,
+            commands::voice::voice_gpu_retry,
             commands::voice::voice_model_install_script,
             commands::voice::voice_listen_start,
             commands::voice::voice_listen_pause,

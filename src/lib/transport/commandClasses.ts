@@ -766,6 +766,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["vm_set_spec", "admin"],
   ["vm_shutdown", "admin"],
   ["vm_status", "admin"],
+  ["voice_gpu_retry", "client"],
   ["voice_listen_pause", "client"],
   ["voice_listen_start", "client"],
   ["voice_listen_stop", "client"],

@@ -37,6 +37,13 @@ looking at waits until you show it. The stop key (**Ctrl+Shift+Q**, Settings
 → Shortcuts) or any send stops the voice — never the agent. Settings → Voice
 sets how fast it reads.
 
+While you dictate, the row under the composer says what the speech model runs
+on: **GPU** and the card's name, or **CPU**, with the reason in its tooltip.
+The GPU is usually many times faster, and it is used by itself where it works.
+Settings → Voice can turn it off; if the app ever stops while the GPU is working
+on speech, dictation stays on the processor until you choose **Try the GPU
+again** there.
+
 On Linux the system voice is speech-dispatcher; if none answers, read-aloud
 says it is unavailable.
 

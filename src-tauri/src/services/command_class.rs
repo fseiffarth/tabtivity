@@ -1015,6 +1015,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("vm_status", Admin),
     // commands/voice.rs — the microphone and speakers are the machine the
     // user sits at; a browser client hides the mic button.
+    ("voice_gpu_retry", Client),
     ("voice_listen_pause", Client),
     ("voice_listen_start", Client),
     ("voice_listen_stop", Client),
