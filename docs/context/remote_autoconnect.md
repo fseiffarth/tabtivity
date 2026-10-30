@@ -139,6 +139,16 @@ through a tunnel coming up, which is why reconnecting seemed to need the VPN eve
 on the network that doesn't. The classifier reads ssh's raw stderr now
 (`run_ssh_auth_raw`, `probe_verdict`), and the explained text stays for display.
 
+That made the headless VPN step live for those failures, so it has its own limits.
+It runs on the first attempt only, never from a re-try: polkit authenticates each
+`pkexec`, so a timer that dialled the tunnel would raise a system prompt at every
+backoff step. It skips a tunnel already up or connecting, and it asks
+`vpn_can_connect_silently`, since a saved password alone doesn't mean the connect
+can finish without a prompt. A dropped host therefore never brings a tunnel up by
+itself: the dead-host path has no VPN step, and its re-tries don't either. On a
+network that needs the tunnel it stays red until one comes up, from the header, an
+armed launch tunnel or a project activation, and that reconnects it.
+
 Finally, none of this is the only line of defence: the backend refuses a
 background dial to a tagged host inside the ssh-argv builders themselves
 (`docs/context/hpc_careful_mode.md`, "The dial policy"). The frontend gates decide

@@ -46,7 +46,14 @@ import { useSettingsStore, whenSettingsLoaded } from "./settings";
 import { mayAutoTouch, targetOfSpec } from "../lib/remote/hpc/hpcHost";
 import { machineArmsHost, syncConnectedMachinesInto } from "../lib/remote/machineSync";
 import { PRIMARY_HOST, useRemoteStatusStore } from "./remote/remoteStatus";
-import { markVpnConnected, markVpnConnecting, markVpnError, releaseVpn } from "./remote/vpn/vpnStatus";
+import {
+  markVpnConnected,
+  markVpnConnecting,
+  markVpnError,
+  releaseVpn,
+  useVpnStatusStore,
+} from "./remote/vpn/vpnStatus";
+import { canConnectVpnSilently, connectVpnSilently } from "../lib/remote/vpn/vpnConnect";
 import { useConnectDialogStore } from "./remote/connectDialog";
 // Static on purpose (§6 of docs/performance_plan.md): both stores sit in the
 // startup chunk anyway, so an `await import()` here split nothing and only drew
@@ -314,14 +321,18 @@ function abandonAutoConnect(projectId: string, hostId?: string): void {
  *     the keychain itself). The tunnel is left alone — on the network that doesn't
  *     need it, it is never brought up.
  *  3. *Unreachable* (not "credential rejected" — see the backend's `ssh_unreachable`;
- *     no tunnel fixes a wrong password) and the project has an `.ovpn` whose
- *     passphrase is saved → bring the tunnel up from the keychain and re-probe.
+ *     no tunnel fixes a wrong password), the project has an `.ovpn` that can connect
+ *     with no prompt, and that tunnel is not already up or coming up → bring it up
+ *     from the keychain and re-probe.
  *  4. Anything else → red lamp. No prompt; only a host nothing answered is re-tried.
  *
  * Fire-and-forget: it never blocks a switch. Local tabs restore and work on the
  * mirror regardless, and remote panes stay held until the pool is actually up.
  * An unreachable host is re-tried (`scheduleUnreachableRetry`); `retry` marks such a
- * re-try, which never re-opens the tunnel's login tab the first attempt already offered.
+ * re-try, which only looks for the host. It never touches the tunnel: polkit
+ * authenticates each `pkexec`, so a timer that dialled one would raise a system
+ * prompt every backoff step, and the host may be back without one (the site that
+ * needs no tunnel). The first attempt already offered it.
  */
 async function autoConnectPrimary(
   projectId: string,
@@ -445,22 +456,19 @@ async function autoConnectPrimary(
     let probe = await invoke<SshProbe>("ssh_probe", sshArgs);
 
     const config = remote.openvpn?.config;
-    if (!probe.ok && probe.unreachable && config && stillActive()) {
-      const vpnSaved = await invoke<boolean>("vpn_has_saved_password", { config }).catch(
-        () => false,
-      );
-      if (vpnSaved) {
+    if (!probe.ok && probe.unreachable && config && !retry && stillActive()) {
+      const username = remote.openvpn?.username;
+      // A live or in-flight tunnel is not ours to dial again: a second `pkexec` for
+      // nothing, and re-marking it would read as a tunnel coming up.
+      const tunnel = useVpnStatusStore.getState().byConfig[config];
+      const live =
+        tunnel === "connected" ||
+        tunnel === "connecting" ||
+        (await invoke<boolean>("openvpn_status", { config }).catch(() => false));
+      if (!live && (await canConnectVpnSilently(config, username))) {
         markVpnConnecting(projectId, config);
         try {
-          await invoke("openvpn_connect", {
-            config,
-            username: remote.openvpn?.username ?? null,
-            password: null,
-            keyPassphrase: null,
-            // No checkbox behind an auto-connect: authenticate from the keychain,
-            // and leave it exactly as we found it.
-            remember: null,
-          });
+          await connectVpnSilently(config, username);
           markVpnConnected(projectId, config);
           // The only disclosure on this path: auto-connect never prompts, so this
           // toast (and the header indicator it lights) is the whole of what the user
