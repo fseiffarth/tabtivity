@@ -713,6 +713,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("prepare_local_launch", Core),
     ("prepare_text_completion", Core),
     ("pull_ollama_model", Admin),
+    ("restart_ollama_server", Admin),
     ("search_ollama_registry", Core),
     ("stop_ollama_model", Admin),
     ("vibe_install_strategy", Core),

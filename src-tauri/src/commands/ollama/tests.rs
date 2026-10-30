@@ -1,5 +1,25 @@
 use super::*;
 
+/// A restart names Ollama's own programs exactly, never a pattern that could
+/// reach some other process.
+#[test]
+fn a_restart_stops_only_ollamas_own_programs() {
+    for (bin, args) in STOP_UNOWNED_SERVER {
+        assert!(matches!(*bin, "taskkill" | "pkill"));
+        assert!(args.last().unwrap().to_lowercase().starts_with("ollama"));
+    }
+}
+
+/// A spawned server only ever raises Ollama's default: a GPU large enough for a
+/// higher one keeps it, and no GPU at all still needs room for an agent's prompt.
+#[test]
+fn a_spawned_server_raises_only_the_small_gpu_context_default() {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    assert_eq!(spawned_context_length(0), Some(32_768));
+    assert_eq!(spawned_context_length(12 * GIB), Some(32_768));
+    assert_eq!(spawned_context_length(24 * GIB), None);
+}
+
 /// An interrupted-pull list that does not parse keeps its entries: a new
 /// pull fails to record itself rather than replacing them with its own.
 #[test]

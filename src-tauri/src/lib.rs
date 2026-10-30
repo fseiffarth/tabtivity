@@ -2453,6 +2453,7 @@ pub fn run() {
             commands::ollama::prepare_local_launch,
             commands::ollama::ensure_ollama_running,
             commands::ollama::ensure_ollama_running_unattended,
+            commands::ollama::restart_ollama_server,
             commands::ollama::ollama_server_kind,
             // Ollama model management
             commands::ollama::ollama_is_installed,

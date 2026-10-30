@@ -9,6 +9,7 @@ import {
   ToggleRow,
 } from "../layout/settingsUi";
 import { formatBytes as fmtBytes } from "../../lib/formatBytes";
+import { placementLabel } from "../../lib/agents/ollamaPlacement";
 import { UntestedTag } from "../common/UntestedTag";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dropdown } from "../common/Dropdown";
@@ -30,6 +31,7 @@ interface OllamaModelInfo {
   family: string | null;
   running: boolean;
   size_vram: number;
+  loaded_size?: number;
 }
 
 /** How a chosen models-download location would be applied (mirrors backend
@@ -1202,7 +1204,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <span className="ollama-model-name">{m.name}</span>
                   {m.running && (
                     <span className={`ollama-live${m.size_vram > 0 ? " gpu" : ""}`}>
-                      {t("ollama.inMemory")} · {m.size_vram > 0 ? `GPU ${fmtBytes(m.size_vram)}` : "CPU"}
+                      {t("ollama.inMemory")} · {placementLabel(m, fmtBytes)}
                     </span>
                   )}
                 </div>

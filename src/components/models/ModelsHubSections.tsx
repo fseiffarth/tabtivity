@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 import { useSettingsStore } from "../../stores/settings";
 import { useOllamaAutoloadStore } from "../../stores/agents/ollamaAutoload";
 import { useOllamaUpgradeStore } from "../../stores/agents/ollamaUpgrade";
+import { placementLabel } from "../../lib/agents/ollamaPlacement";
 import type { LocalModelInfo } from "../../stores/agents/ollamaActivity";
+import { shortOnContext } from "../../lib/agents/ollamaContext";
 import type { OllamaModelUpdate } from "../../lib/agents/localDrivers";
 import { runInstallInTab, type InstallShellKind } from "../../lib/installCommand";
 import {
@@ -499,7 +501,7 @@ function ModelFacts({ m, t, resident }: { m: LocalModelInfo; t: TFn; resident: b
       )}
       {resident && (
         <span className={`lm-fact lm-place ${m.size_vram > 0 ? "gpu" : "cpu"}`}>
-          {m.size_vram > 0 ? `GPU ${formatBytes(m.size_vram)}` : "CPU"}
+          {placementLabel(m, formatBytes)}
         </span>
       )}
       {hasCapability(m, "vision") && (
@@ -793,6 +795,8 @@ export function LocalModelsSection({
     autoload,
     roles,
     rootOffModels,
+    restartingOllama,
+    restartOllama,
     checkUpdates,
     upgradeOllama,
     pausePull,
@@ -1047,6 +1051,7 @@ export function LocalModelsSection({
         : t("localModel.running");
     const downloadCount = Object.keys(downloads).length + paused.length;
     const showIgpu = installed && models.length > 0 && gpuStatus?.igpu_dropped;
+    const contextShort = shortOnContext(models);
     return (
       <div className="lm-page">
         <div className="lm-status">
@@ -1079,6 +1084,18 @@ export function LocalModelsSection({
           </div>
           {installed && (
             <div className="lm-status-actions">
+              {status !== "stopped" && (
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  disabled={restartingOllama}
+                  title={t("localModel.restartOllamaTitle")}
+                  onClick={restartOllama}
+                >
+                  {restartingOllama ? t("localModel.restartingOllama") : t("localModel.restartOllama")}{" "}
+                  <UntestedTag id="localModel.restartOllama" />
+                </button>
+              )}
               {/* The check is the page's one outbound request, so it stays a
                   button: a manifest-digest HEAD per installed model, only when
                   clicked. A found update shows on its card; what has no other
@@ -1113,6 +1130,20 @@ export function LocalModelsSection({
         <div className="lm-banners">
           {notices}
           {showIgpu && igpuNote}
+          {contextShort.length > 0 && (
+            <div className="local-model-igpu-notice">
+              <div className="local-model-igpu-text">
+                {t("localModel.contextShort", {
+                  names: contextShort.map((m) => m.name).join(", "),
+                  size: contextShort[0].context_length ?? 0,
+                })}{" "}
+                <UntestedTag id="localModel.contextShort" />
+              </div>
+              <button type="button" className={igpuBtn} disabled={restartingOllama} onClick={restartOllama}>
+                {restartingOllama ? t("localModel.restartingOllama") : t("localModel.restartOllama")}
+              </button>
+            </div>
+          )}
         </div>
         {machine}
         {installed && downloadCount > 0 && (
@@ -1334,7 +1365,7 @@ export function LocalModelsSection({
                     <CaveatChip m={m} t={t} />
                     <CapabilityChips m={m} t={t} />
                     <span className={m.size_vram > 0 ? "gpu" : "cpu"}>
-                      {m.size_vram > 0 ? `GPU ${formatBytes(m.size_vram)}` : "CPU"}
+                      {placementLabel(m, formatBytes)}
                     </span>
                   </span>
                 </button>

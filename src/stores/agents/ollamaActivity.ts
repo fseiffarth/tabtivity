@@ -29,6 +29,10 @@ export interface LocalModelInfo {
   /** Total size on disk. Roughly what loading it will cost in RAM (or VRAM),
       which is the question the Machine group's meters above are there for. */
   size: number;
+  /** Bytes held while resident; see `placementLabel` before showing either. */
+  loaded_size?: number;
+  /** The context window it is loaded with; see `shortOnContext`. */
+  context_length?: number | null;
   /**
    * Ollama's own capability list. **Empty means "couldn't ask"**, never "none"
    * — see the backend's `model_capabilities`. Hence `lacksTools` tests for a

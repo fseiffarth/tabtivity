@@ -575,6 +575,7 @@ mod tests {
             expires_at: None,
             pinned: false,
             expires_in_secs: running.then_some(240),
+            context_length: None,
             remote: false,
         }
     }

@@ -1044,6 +1044,7 @@ returns true. The panel uses backend commands from `commands/ollama.rs`:
 | `load_ollama_model` | Loads a model into memory (`device`: `gpu` / `cpu`, default auto) with `keep_alive = -1` and waits; emits `ollama-load-progress` (`loading` → `success`/`error`). |
 | `load_installed_ollama_model` | The phone's load: only a name `/api/tags` lists (exact or `:latest`, never a prefix or a cloud model), Ollama picks the device, answers at once with the listed name and loads on a detached thread with the same events; refusals are bare codes (`ollama_not_running`, `model_not_installed`, `model_not_local`). |
 | `stop_ollama_model` | Unloads a model from memory with `keep_alive = 0`. |
+| `restart_ollama_server` | Stops the local Ollama server, whoever started it, and starts it again (`systemctl restart` for the system service). Refuses a server on another machine with `ollama_remote`. |
 | `delete_ollama_model` | Deletes a local model through `/api/delete`. |
 | `prepare_local_agent` | Writes an isolated per-model Vibe config and returns `VIBE_HOME` plus alias. |
 

@@ -293,6 +293,8 @@ export const UNTESTED = {
   "detachedClose.title": { area: "layout", what: "DetachedCloseChoice · Close this window?" },
   "lessons.intro": { area: "layout", what: "LessonsMenu · Short guided walkthroughs for common tasks. Pick one — it points things out step by step,…" },
   "localModel.igpuDropped": { area: "layout", what: "LocalModelMenu · A model is loaded, but none of it is on the GPU. This Ollama version drops integrated GPU…" },
+  "localModel.restartOllama": { area: "layout", what: "Models & agents overlay · Local models · Restart Ollama" },
+  "localModel.contextShort": { area: "layout", what: "Models & agents overlay · Local models · notice that a loaded model's context is too small for agents" },
   "localModel.skillsLibrary": { area: "layout", what: "LocalModelMenu · Skills library…" },
   "localModel.manageAgents": { area: "layout", what: "LocalModelMenu · Manage CLIs… opens the Models & agents overlay's Agents & CLIs tab" },
   "localModel.manageLocalModels": { area: "layout", what: "LocalModelMenu · Manage local models… / Install Ollama… opens the overlay's Ollama tab" },

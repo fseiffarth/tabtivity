@@ -50,6 +50,10 @@ pub struct OllamaModelInfo {
     /// Whole seconds until Ollama unloads it; `None` when pinned, idle, or the
     /// expiry is unreadable or already past.
     pub expires_in_secs: Option<u64>,
+    /// The context window it is loaded with (`/api/ps` `context_length`), which
+    /// is the server's choice, not the model's limit. `None` unless `running`,
+    /// or when this Ollama does not report it.
+    pub context_length: Option<u64>,
     /// An Ollama cloud model (its `/api/tags` entry names a `remote_host` /
     /// `remote_model`): listed, but there is nothing on this machine to load.
     pub remote: bool,
@@ -509,6 +513,7 @@ fn models_detailed() -> Result<Vec<OllamaModelInfo>, String> {
                 expires_at,
                 pinned,
                 expires_in_secs,
+                context_length: ps.and_then(|p| p.context_length),
                 remote: is_remote_entry(m),
                 name,
             }
@@ -525,6 +530,8 @@ struct PsEntry {
     size: u64,
     /// `expires_at`, verbatim (RFC 3339).
     expires_at: Option<String>,
+    /// `context_length`: the context window it is loaded with.
+    context_length: Option<u64>,
 }
 
 /// The resident models in an `/api/ps` body, keyed by name. A body that is not
@@ -543,6 +550,7 @@ fn ps_entries(ps_body: &str) -> std::collections::HashMap<String, PsEntry> {
                     vram: m["size_vram"].as_u64().unwrap_or(0),
                     size: m["size"].as_u64().unwrap_or(0),
                     expires_at: m["expires_at"].as_str().map(String::from),
+                    context_length: m["context_length"].as_u64(),
                 },
             ))
         })
@@ -2572,6 +2580,15 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
         cmd.env(IGPU_ENABLE_VAR, "1");
     }
 
+    // The same entitlement, for the context window: see
+    // [`spawned_context_length`]. A value the user set is left alone.
+    if std::env::var_os(CONTEXT_LENGTH_VAR).is_none() {
+        let vram = crate::gpustat::snapshot().iter().map(|g| g.vram_total).max().unwrap_or(0);
+        if let Some(n) = spawned_context_length(vram) {
+            cmd.env(CONTEXT_LENGTH_VAR, n.to_string());
+        }
+    }
+
     let pid = crate::paths::spawn_reaped(cmd)
         .map_err(|e| format!("failed to start ollama serve: {e}"))?;
     // Recorded before the wait, not after: a server that came up too slowly for
@@ -2586,6 +2603,92 @@ fn ensure_running(ask_password: bool) -> Result<(), String> {
     }
 
     Err("ollama serve started but did not become reachable within 8 s".to_string())
+}
+
+/// What stops an Ollama server this run did not start: the desktop app first,
+/// which would otherwise bring its server straight back. Matched by exact
+/// process name, so nothing but Ollama's own programs is touched.
+#[cfg(target_os = "windows")]
+const STOP_UNOWNED_SERVER: &[(&str, &[&str])] = &[
+    ("taskkill", &["/F", "/IM", "ollama app.exe"]),
+    ("taskkill", &["/F", "/T", "/IM", "ollama.exe"]),
+];
+#[cfg(target_os = "macos")]
+const STOP_UNOWNED_SERVER: &[(&str, &[&str])] =
+    &[("pkill", &["-x", "Ollama"]), ("pkill", &["-x", "ollama"])];
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const STOP_UNOWNED_SERVER: &[(&str, &[&str])] = &[("pkill", &["-x", "ollama"])];
+
+/// Stop the local Ollama server and start it again, whoever started it. The one
+/// place a server Tabtivity only *used* is stopped ([`OwnedServer`]): the user
+/// pressed Restart and confirmed that it stops everything Ollama is doing.
+///
+/// Refusal: `ollama_remote` for a server on another machine. The bare code
+/// `ollama_still_running` means it outlived the stop.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn restart_ollama_server() -> Result<(), String> {
+    // Waits for the old server to go and the new one to answer.
+    app_core::rt::try_blocking("restart", restart_server).await
+}
+
+fn restart_server() -> Result<(), String> {
+    let addr = ollama_addr()?;
+    if !addr_is_loopback(&addr) {
+        return Err("ollama_remote".to_owned());
+    }
+
+    // The unit keeps its own environment, and whatever this run owned of it.
+    #[cfg(target_os = "linux")]
+    if addr == DEFAULT_OLLAMA_ADDR && ollama_under_systemd() {
+        let restarted = std::process::Command::new("systemctl")
+            .args(["restart", "ollama"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if restarted && wait_for_ollama(Instant::now() + Duration::from_secs(8)) {
+            return owner_gate(&addr);
+        }
+        return Err("ollama serve restarted but did not become reachable within 8 s".to_string());
+    }
+
+    shutdown_owned_server();
+    if ollama_listening() {
+        for (bin, args) in STOP_UNOWNED_SERVER {
+            let _ = crate::paths::command_no_window(bin)
+                .args(*args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while ollama_listening() {
+        if Instant::now() >= deadline {
+            return Err("ollama_still_running".to_owned());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    ensure_running(true)
+}
+
+/// The environment variable that sets a server's default context window.
+const CONTEXT_LENGTH_VAR: &str = "OLLAMA_CONTEXT_LENGTH";
+
+/// The context window a server Tabtivity spawns gets, or `None` to keep Ollama's
+/// own default. Pure + tested.
+///
+/// Below 24 GiB of VRAM Ollama defaults to 4096, while OpenCode's system prompt
+/// and tools alone run to about 11 000 tokens. The excess is cut with no error:
+/// the agent loses the user's message and every tool result. Nothing on the
+/// OpenAI-compatible API can raise it: `/v1` ignores `num_ctx`, and its next
+/// request reloads a model warmed with a larger one back to the default. So it
+/// has to be the server's default. Larger GPUs already default higher.
+fn spawned_context_length(vram_total: u64) -> Option<u32> {
+    const OLLAMA_LARGER_DEFAULT_VRAM: u64 = 24 * 1024 * 1024 * 1024;
+    (vram_total < OLLAMA_LARGER_DEFAULT_VRAM).then_some(32_768)
 }
 
 /// Whether an already-resolved `host:port` points at this machine. Takes the
@@ -3714,11 +3817,12 @@ mod phone_control_tests {
                 vram: 26_783_818_710,
                 size: 26_783_818_710,
                 expires_at: Some("2319-01-14T10:20:46.070730299+01:00".into()),
+                context_length: Some(262_144),
             }
         );
         assert_eq!(
             ps["qwen3:8b"],
-            PsEntry { vram: 0, size: 7_100_000_000, expires_at: None }
+            PsEntry { vram: 0, size: 7_100_000_000, expires_at: None, context_length: None }
         );
         assert!(ps_entries("garbage").is_empty());
         assert!(ps_entries(r#"{"models":[]}"#).is_empty());

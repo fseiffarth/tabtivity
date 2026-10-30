@@ -319,6 +319,29 @@ export function useModelsHub(active: boolean) {
       );
   };
 
+  // Restart the server, whoever started it. It stops everything Ollama is doing
+  // (other programs' requests too), so it asks first.
+  const [restartingOllama, setRestartingOllama] = useState(false);
+  const restartOllama = async () => {
+    const ok = await confirmAction({
+      title: t("localModel.restartConfirmTitle"),
+      body: t("localModel.restartConfirmBody"),
+      confirmLabel: t("localModel.restartOllama"),
+      danger: true,
+    });
+    if (!ok) return;
+    setRestartingOllama(true);
+    setError(null);
+    try {
+      await invoke("restart_ollama_server");
+      await fetchModels();
+    } catch (e) {
+      setError(e === "ollama_remote" ? t("localModel.restartRemote") : t("localModel.restartFailed"));
+    } finally {
+      setRestartingOllama(false);
+    }
+  };
+
   // One click, both questions — the models *and* the server they run on
   // (`lib/agents/ollamaUpdateActions`, shared with the Ollama panel).
   const checkUpdates = () => runOllamaUpdateCheck(t);
@@ -468,6 +491,8 @@ export function useModelsHub(active: boolean) {
     /** The clear-conversations dialogs: render where the surface stays
      *  mounted (the hover dropdown closes under a portaled dialog). */
     dialogs,
+    restartingOllama,
+    restartOllama,
     checkUpdates,
     upgradeOllama,
     updateModel,
