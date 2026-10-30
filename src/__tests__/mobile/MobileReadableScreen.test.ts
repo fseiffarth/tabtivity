@@ -183,6 +183,48 @@ describe(`${BRAND.display} Mobile readable terminal view`, () => {
     expect(screen.lines[1].spans.map((span) => span.text).join("")).toBe("Worked for 2m 10s");
   });
 
+  it("keeps the rows a full-width rule was printed against apart", () => {
+    // Nothing between a rule filling its row and the next row but the terminal's
+    // own wrap: xterm marks that row wrapped, yet it never continued the rule.
+    const rows = readableScreen(plainBuffer([
+      "1 more notice hidden",
+      "",
+      `${"─".repeat(60)} my-project ─`,
+      `${WRAP}❯ Try "edit <filepath> to..."`,
+      "─".repeat(76),
+      `${WRAP}  ⏵⏵ auto mode on (shift+tab to cycle)`,
+    ])).lines;
+    expect(rows.map((line) => line.text)).toEqual([
+      "1 more notice hidden",
+      "",
+      "my-project",
+      "❯ Try \"edit <filepath> to...\"",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    ]);
+    expect(rows[2].frameText).toBeDefined();
+    expect(rows[4].afterRule).toBe(true);
+  });
+
+  it("keeps a footer's rows apart where ConPTY sent them padded with no line break", () => {
+    // OpenCode 2.2.0's mini on Windows, as captured: only the terminal's own
+    // wrap stands between these rows.
+    const pad = (text: string) => text.padEnd(40);
+    const rows = readableScreen(plainBuffer([
+      pad("Build · gemma4:e4b · 953ms"),
+      `${WRAP}${pad("")}`,
+      `${WRAP}${pad("┃  Ask anything…")}`,
+      `${WRAP}${pad("")}`,
+      `${WRAP}${pad("Build · gemma4:e4b · 2.1K (2%) · Ollama")}`,
+    ])).lines.map((line) => line.text.trim()).filter(Boolean);
+    expect(rows[0]).toBe("Build · gemma4:e4b · 953ms");
+    expect(rows[rows.length - 1]).toBe("Build · gemma4:e4b · 2.1K (2%) · Ollama");
+  });
+
+  it("still joins a line that ran over the edge, a blank at the wrap included", () => {
+    const rows = readableScreen(plainBuffer(["one two ", `${WRAP}three`])).lines;
+    expect(rows.map((line) => line.text)).toEqual(["one two three"]);
+  });
+
   it("keeps a divider label's style without its bright border spans", () => {
     const [line] = readableScreen(styledBuffer([
       { text: "─ ", fg: 15 },

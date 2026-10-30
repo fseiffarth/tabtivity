@@ -6,6 +6,29 @@ function plainBuffer(rows: string[]): ReadableBufferLike {
   return { length: rows.length, getLine: (row) => (rows[row] === undefined ? undefined : { translateToString: () => rows[row] }) };
 }
 
+describe("readReaderLive on an idle Claude Code box under a wrapping terminal", () => {
+  const WIDTH = 76;
+  const rows: [string, boolean][] = [
+    [" Get to finished work sooner with Opus 5.5.", false],
+    ["", false],
+    [`${"─".repeat(WIDTH - 13)} my-project ─`, false],
+    ["❯ Try \"edit <filepath> to...\"", true],
+    ["─".repeat(WIDTH), false],
+    ["  ⏵⏵ auto mode on (shift+tab to cycle)", true],
+  ];
+  const buffer: ReadableBufferLike = {
+    length: rows.length,
+    getLine: (row) => rows[row] && { isWrapped: rows[row][1], translateToString: () => rows[row][0] },
+  };
+
+  it("finds the input box, so the chat does not point at the terminal", () => {
+    const live = readReaderLive(buffer, "Claude", WIDTH);
+    expect(live.stray).toBe(false);
+    expect(live.screen).toEqual([]);
+    expect(live.status?.mode).toBe("auto");
+  });
+});
+
 /** Claude Code's permission prompt, as the phone's Focus tests paint it. */
 const PERMISSION = [
   "> fix the strings",

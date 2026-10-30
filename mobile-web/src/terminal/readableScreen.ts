@@ -174,6 +174,25 @@ const RIGHT_EDGE = /\s*[│┃┆┇┊┋]\s*$/u;
 const LABELLED_RULE = /^\s*[╭┌┏╔]?[─━═]+\s+\S.*?\s+[─━═]+[╮┐┓╗]?\s*$/u;
 const RULE_LEFT = /^\s*[╭┌┏╔]?[─━═]+\s+/u;
 const RULE_RIGHT = /\s+[─━═]+[╮┐┓╗]?\s*$/u;
+/** How a rule goes on when it really did wrap: more of its strokes. */
+const RULE_CONTINUES = /^[─━═]/u;
+/** How a row ends that its program filled with blanks: text that really ran
+ * over the edge leaves one blank there at most. */
+const PADDED_END = / {2,}$/u;
+
+/** Whether a wrapped row is a row of its own all the same: one that does not go
+ * on with the rule filling the row above. A rule drawn to the last column leaves
+ * the next row to the terminal's own wrap when no line break is sent, so xterm
+ * marks that row wrapped; joined, Claude Code's input line and mode row vanished
+ * into its frame, and the Reader took the idle box for a screen it cannot read
+ * (`ReaderLive.stray`). Windows' ConPTY does the same to every row of a TUI's
+ * footer, sending each padded to the last column with no line break between
+ * them (OpenCode 2.2.0): a padded row was finished, whatever follows it. */
+function startsOwnRow(above: ReadableSpan[], spans: ReadableSpan[]) {
+  const text = spanText(above);
+  if (PADDED_END.test(text)) return true;
+  return text.trim() !== "" && (BORDER_ONLY.test(text) || LABELLED_RULE.test(text)) && !RULE_CONTINUES.test(spanText(spans));
+}
 
 /** Drops `count` characters from the front of a span run, in place. */
 function trimSpansLeft(spans: ReadableSpan[], count: number) {
@@ -448,16 +467,16 @@ export function readableRange(
   }
   cutSidePanel(physical.map((entry) => entry.spans));
 
-  for (const { row, wrapped, spans } of physical) {
+  physical.forEach(({ row, wrapped, spans }, index) => {
     const previous = joined[joined.length - 1];
-    if (wrapped && previous) {
+    if (wrapped && previous && !startsOwnRow(physical[index - 1].spans, spans)) {
       // A wrapped continuation belongs to the line above it: join first, and
       // let the trim and the frame stripping run over the completed line.
       spans.forEach((span) => pushSpan(previous.spans, span));
-      continue;
+      return;
     }
     joined.push({ key: `r${row}`, text: "", spans });
-  }
+  });
   joined.forEach((line) => { line.text = spanText(trimTrailing(line.spans)); });
 
   const lines: ReadableLine[] = [];
