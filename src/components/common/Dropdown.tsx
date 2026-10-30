@@ -1,5 +1,5 @@
 import { isInActiveModal } from "../../hooks/useModalFocus";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface DropdownOption {
   value: string;
@@ -13,7 +13,9 @@ export interface DropdownOption {
  * themes. Used for the file-browser sort, the LaTeX engine selector, etc.
  *
  * Closes on outside click / Escape and reflects the selected option with a
- * trailing caret on the trigger.
+ * trailing caret on the trigger. Opens downward; when the menu would run past
+ * the window's bottom edge (a picker in the composer strip) and there is more
+ * room above, it opens upward instead.
  */
 export function Dropdown({
   value,
@@ -37,7 +39,18 @@ export function Dropdown({
   placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [up, setUp] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!open) { setUp(false); return; }
+    const menu = ref.current?.querySelector<HTMLElement>(".dropdown-menu");
+    const trigger = ref.current?.querySelector<HTMLElement>(".dropdown-trigger");
+    if (!menu || !trigger) return;
+    const below = window.innerHeight - trigger.getBoundingClientRect().bottom;
+    const above = trigger.getBoundingClientRect().top;
+    setUp(menu.offsetHeight + 4 > below && above > below);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -92,7 +105,7 @@ export function Dropdown({
         <span className="dropdown-caret">▾</span>
       </button>
       {open && (
-        <div className="context-menu dropdown-menu" role="listbox">
+        <div className={`context-menu dropdown-menu${up ? " dropdown-menu-up" : ""}`} role="listbox">
           {options.map((o) => (
             <button
               key={o.value}

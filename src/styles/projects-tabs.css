@@ -3131,6 +3131,12 @@ html:not(.show-untested-tags) .untested-tag {
   overflow-y: auto;
 }
 
+/* Flipped by Dropdown when the menu would run past the window's bottom edge. */
+.dropdown-menu.dropdown-menu-up {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
+
 /* Full-width variant: use when a Dropdown replaces a block form <select> so the
    trigger fills its field width (label above, value left, caret right). */
 .dropdown.dropdown-block {
