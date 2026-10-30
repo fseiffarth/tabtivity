@@ -19,6 +19,7 @@ import { OverlayApprovals } from "../layout/OverlayApprovals";
 import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
 import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
+import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { MailAccountMenu } from "./MailAccountMenu";
 import { MailPane } from "./MailPane";
 import { MailMessageView } from "./MailMessageView";
@@ -278,6 +279,7 @@ function MailOverlay({ open }: { open: boolean }) {
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
+                      noteTabClose(e.currentTarget);
                       void closeTab(tab);
                     }}
                   >

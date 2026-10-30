@@ -123,6 +123,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
+import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 
 
@@ -1299,6 +1300,8 @@ export function DetachedCenterPanel({
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    // The × is its own click (see `TabBar`).
+    if ((e.target as HTMLElement).closest(".tab-close")) return;
     onActivate(tab.key);
     const startX = e.clientX;
     const startY = e.clientY;
@@ -1556,6 +1559,7 @@ export function DetachedCenterPanel({
                     className="tab-close"
                     onClick={(e) => {
                       e.stopPropagation();
+                      noteTabClose(e.currentTarget);
                       onClose(tab.key);
                     }}
                     title={t("detachedTabs.closeTab")}

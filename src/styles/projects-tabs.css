@@ -1303,6 +1303,14 @@
   --app-scrollbar: none;
 }
 
+/* lib/tabs/closedTabSlot: the width a closed tab took from a scrolled strip,
+   kept so the scroll position, and with it the × under the pointer, stays. */
+.tab-strip::after {
+  content: "";
+  flex: 0 0 var(--tab-slot-slack, 0px);
+  align-self: stretch;
+}
+
 /* Chevron buttons that flank the strip when it overflows. */
 .tab-scroll-btn {
   flex-shrink: 0;
@@ -1408,6 +1416,12 @@
 
 .tab:not(.active):not(:hover) .tab-label {
   opacity: 0.7;
+}
+
+/* A tab held in a narrower closed tab's slot (lib/tabs/closedTabSlot). */
+.tab[data-slot-held] .tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* #56: inline tab rename. The label is swapped for a borderless input that

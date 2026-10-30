@@ -83,6 +83,7 @@ import { carriesAcrossHosts, switchTabLocation } from "../../stores/agents/agent
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { closeTabWithConfirm } from "../../lib/remote/closeRemoteTab";
+import { closedTabSlotHeld, noteTabClose, useClosedTabSlot } from "../../lib/tabs/closedTabSlot";
 import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
 import { registerHostBoundTab } from "../../lib/remote/hostBound";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
@@ -424,7 +425,11 @@ const TabItem = memo(function TabItem({
       )}
       <button
         className="tab-close"
-        onClick={(e) => { e.stopPropagation(); closeTabWithConfirm(tab.key); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          noteTabClose(e.currentTarget);
+          closeTabWithConfirm(tab.key);
+        }}
         // The chord closes the ACTIVE tab, so only the active tab's ×
         // claims it — on any other it would name a key that closes a
         // different tab than the one being pointed at.
@@ -750,6 +755,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   }, []);
 
   const activeKey = group?.activeKey ?? null;
+  useClosedTabSlot(stripRef, `${tabs.map((tb) => tb.key).join(",")}|${activeKey}`);
 
   // Looking at a tab clears its "needs attention" flag — activating a tab (click,
   // keyboard switch, or mounting with it already active) makes it the one on screen.
@@ -783,8 +789,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // end, or switched to by keyboard — scrolls into view (mirrors the popout's
   // `ScrollingTabStrip`); clicks reveal through `revealTab` in the commit path.
   useEffect(() => {
-    if (!activeKey) return;
-    const tabEl = stripRef.current?.querySelector<HTMLElement>(".tab.active");
+    const strip = stripRef.current;
+    if (!activeKey || !strip || closedTabSlotHeld(strip)) return;
+    const tabEl = strip.querySelector<HTMLElement>(".tab.active");
     if (tabEl) revealTab(tabEl);
   }, [activeKey, tabs.length, revealTab]);
 
@@ -1247,6 +1254,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     // Dismiss the hover card the moment a click/drag begins so it never lingers
     // over a drag ghost or the pane below.
     setHoverTab(null);
+    // The × is its own click: a press there neither activates the tab nor, on
+    // the active one, starts a rename, either of which would move the × away.
+    if ((e.target as HTMLElement).closest(".tab-close")) return;
     // While this tab is being inline-renamed, the label is an <input>: don't
     // hijack its pointer into a tab drag (lets the caret/selection work).
     if (editingKey === tab.key) return;
