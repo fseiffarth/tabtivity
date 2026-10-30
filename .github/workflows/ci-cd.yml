@@ -40,6 +40,8 @@ env:
   VULKAN_SDK_RELEASE: "1.4.363"
   VULKAN_SDK_SHA256_LINUX: "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43"
   VULKAN_SDK_SHA256_WINDOWS: "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141"
+  # LunarG's runtime components zip of that same release: the installer's Bin has no vulkan-1.dll.
+  VULKAN_RUNTIME_SHA256_WINDOWS: "a25a927aa8b9f0371048f1861cf88ac3b9bc9b1fb332c42d897c8ab32695769a"
 
 # Every job's timeout-minutes is about one and a half to two times its longest
 # green run (2026-10), so a hung test fails the job instead of holding the
@@ -562,7 +564,11 @@ jobs:
           if ($install.ExitCode -ne 0) { throw "Vulkan SDK install failed" }
           # The loader ships with the app: ggml reaches for it on any use of
           # whisper, even on the CPU, and a PC without a GPU driver has none.
-          Copy-Item "$root\Bin\vulkan-1.dll" src-tauri\vulkan-1.dll
+          $runtime = "$env:RUNNER_TEMP\vulkanrt.zip"
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_RELEASE.0/windows/VulkanRT-X64-$env:VULKAN_SDK_RELEASE.0-Components.zip" -OutFile $runtime
+          if ((Get-FileHash $runtime -Algorithm SHA256).Hash -ne $env:VULKAN_RUNTIME_SHA256_WINDOWS) { throw "Vulkan runtime checksum mismatch" }
+          Expand-Archive $runtime -DestinationPath "$env:RUNNER_TEMP\vulkanrt"
+          Copy-Item "$env:RUNNER_TEMP\vulkanrt\VulkanRT-X64-$env:VULKAN_SDK_RELEASE.0-Components\x64\vulkan-1.dll" src-tauri\vulkan-1.dll
           "VULKAN_SDK=$root" >> $env:GITHUB_ENV
           "$root\Bin" >> $env:GITHUB_PATH
 
