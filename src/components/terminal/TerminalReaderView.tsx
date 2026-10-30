@@ -422,10 +422,11 @@ const PromptText = memo(function PromptText({ text, unlinked = false }: { text: 
 /** What a subagent's card or list row opens: its handle and what it says. */
 type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">;
 
-function Turn({ turn, cutLabel, planLabel, agentLabel, use24h, onOpenAgent }: {
+function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent }: {
   turn: TranscriptTurn;
   cutLabel: string;
   planLabel: string;
+  interruptedLabel: string;
   agentLabel: string;
   use24h: boolean;
   onOpenAgent: (turn: SubagentPick) => void;
@@ -450,6 +451,15 @@ function Turn({ turn, cutLabel, planLabel, agentLabel, use24h, onOpenAgent }: {
         {turn.finished && <TabStatusMark stateClass="finished" />}
         {openable && <span className="terminal-reader-subagent-chevron" aria-hidden="true">›</span>}
       </button>
+    );
+  }
+  if (turn.kind === "interrupted") {
+    // The user cut the turn off: a rule like a slash command's, in the
+    // interrupted ring's colour.
+    return (
+      <div className="terminal-reader-command interrupted" role="separator">
+        <span><span aria-hidden="true">■ </span>{interruptedLabel} <UntestedTag id="terminal.reader.interrupted" /></span>
+      </div>
     );
   }
   if (turn.command) {
@@ -2076,7 +2086,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                     <span>{chatDayLabel(moment, now, dayLabels)}</span>
                   </div>
                 )}
-                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} />
+                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} />
               </Fragment>
             );
           })}

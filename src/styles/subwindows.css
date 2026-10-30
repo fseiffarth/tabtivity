@@ -2643,6 +2643,9 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-command span {
   font-family: var(--font-mono);
 }
+.terminal-reader-command.interrupted {
+  color: var(--status-interrupted);
+}
 .terminal-reader-day {
   justify-content: center;
 }

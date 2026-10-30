@@ -944,7 +944,8 @@ export interface AskedQuestion {
  * `role` its kind, and `subagent` the handle that reads its own conversation
  * (`getTranscript`) — absent until its CLI has recorded where that lives. */
 export interface TranscriptEntry {
-  kind: "prompt" | "answer" | "agent";
+  /** `interrupted`: the user cut the turn off; `text` is the CLI's own words. */
+  kind: "prompt" | "answer" | "agent" | "interrupted";
   text: string;
   at?: string;
   cut?: boolean;

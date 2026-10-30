@@ -113,6 +113,20 @@ describe("the agent pane's Reader", () => {
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
   });
 
+  it("draws a turn the user cut off as an Interrupted rule, not an answer", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript"
+        ? { ...transcript, entries: [transcript.entries[0], { kind: "interrupted", text: "[Request interrupted by user]", at: "2026-09-30T08:00:30Z" }] }
+        : []));
+    reader(host);
+    await screen.findByText("fix the parser");
+    const rule = host.querySelector(".terminal-reader-command.interrupted");
+    expect(rule?.getAttribute("role")).toBe("separator");
+    expect(rule?.textContent).toContain("■ Interrupted");
+    expect(host.querySelector(".terminal-reader-turn.agent")).toBeNull();
+    expect(host.textContent).not.toContain("[Request interrupted");
+  });
+
   it("pins the prompt a long turn left behind Show earlier turns", async () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "agent_tab_transcript"

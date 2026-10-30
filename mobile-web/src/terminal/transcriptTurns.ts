@@ -12,7 +12,7 @@ export interface TranscriptTurn {
    * so a position-based key re-keyed — and re-mounted — every bubble on every
    * new record, which is what made the chat jump while the agent worked. */
   key: string;
-  kind: "prompt" | "answer" | "agent";
+  kind: TranscriptEntry["kind"];
   text: string;
   /** Some of the text was bounded by the desktop. */
   cut: boolean;

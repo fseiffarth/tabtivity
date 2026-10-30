@@ -390,6 +390,27 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     expect(plan.querySelector("h1")?.textContent).toBe("Merge");
   });
 
+  it("draws a turn the user cut off as an Interrupted rule across the chat", async () => {
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
+    vi.stubGlobal("fetch", sidecarFetch(() => ({
+      ...STORED,
+      entries: [
+        { kind: "prompt", text: "run the suite", at: "2026-09-27T10:00:00Z" },
+        { kind: "answer", text: "Running it.", at: "2026-09-27T10:00:01Z" },
+        { kind: "interrupted", text: "[Request interrupted by user]", at: "2026-09-27T10:00:02Z" },
+      ],
+    })));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+
+    const chat = screen.getByTestId("session-transcript");
+    const rule = chat.querySelector(".readable-command.interrupted");
+    expect(rule?.getAttribute("role")).toBe("separator");
+    expect(rule?.textContent).toContain("■ Interrupted");
+    expect(chat.querySelectorAll(".readable-turn.agent.answer")).toHaveLength(1);
+    expect(chat.textContent).not.toContain("[Request interrupted");
+  });
+
   it("keeps a question the agent asked in the chat with its answer", async () => {
     localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
     vi.stubGlobal("fetch", sidecarFetch(() => ({

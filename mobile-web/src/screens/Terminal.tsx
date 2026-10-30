@@ -397,6 +397,12 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
     </div>}
     {turn.kind === "agent"
       ? <SubagentCard turn={turn} label={agentLabel} untested={agentUntested} time={time} busy={busy} onOpen={onOpenAgent} />
+      // The user cut the turn off: a rule across the chat, as a slash
+      // command is, in the interrupted mark's colour.
+      : turn.kind === "interrupted"
+      ? <div className="readable-command interrupted" role="separator">
+          <span className="readable-command-text"><span aria-hidden="true">■ </span>{t("tabBar.statusInterrupted")}{isUntested("mobile.transcript.interrupted") && <em> · {t("mobile.focus.untested")}</em>}</span>
+        </div>
       : turn.questions
       ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={hold(turn.key, () => turn.text)} />
       : turn.command

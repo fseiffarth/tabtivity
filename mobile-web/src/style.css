@@ -974,6 +974,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
    centred on it, in the prompt's violet. */
 .readable-command { display:flex; align-items:center; gap:10px; width:100%; margin:6px 0; color:#a99cf0; font:500 .8rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; -webkit-touch-callout:none; }
 .readable-command::before,.readable-command::after { content:""; flex:1 1 0; min-width:16px; border-top:1px solid #3a3466; }
+.readable-command.interrupted { color:#ff8a93; }
+.readable-command.interrupted::before,.readable-command.interrupted::after { border-top-color:#6d3b46; }
 .readable-command-text { flex:0 1 auto; min-width:0; max-width:80%; text-align:center; overflow-wrap:anywhere; }
 .readable-lines.transcript { font:400 .9rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif; }
 /* The stored session holds one bubble per message the agent wrote, so the

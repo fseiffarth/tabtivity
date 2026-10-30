@@ -88,8 +88,9 @@ pub(crate) const MAX_SUBAGENT_DEPTH: usize = 8;
 /// One turn of the conversation as the phone shows it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranscriptEntry {
-    /// `prompt` (the user's), `answer` (the agent's text) or `agent` (a
-    /// subagent it spawned; `text` is what it was sent to do).
+    /// `prompt` (the user's), `answer` (the agent's text), `agent` (a
+    /// subagent it spawned; `text` is what it was sent to do) or
+    /// `interrupted` (the user cut the turn off; `text` is the CLI's own words).
     pub kind: String,
     pub text: String,
     /// The record's own timestamp, as written (RFC 3339), when it has one.
@@ -2031,8 +2032,10 @@ fn claude_records(value: &Value) -> Vec<Record> {
     let placeholder = value.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
         && value.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true);
     match value.get("type").and_then(Value::as_str) {
-        Some("user") => agent_session::claude_prompt_in_record(value)
-            .map(|text| Record::Turn("prompt", text))
+        // Esc mid-turn: Claude notes it as a user record of its own words.
+        Some("user") => claude_interrupt(value)
+            .map(|text| Record::Turn("interrupted", text))
+            .or_else(|| agent_session::claude_prompt_in_record(value).map(|text| Record::Turn("prompt", text)))
             .into_iter()
             .collect(),
         // A slash command typed at the prompt, as current releases record it.
@@ -2074,6 +2077,25 @@ fn claude_records(value: &Value) -> Vec<Record> {
         }
         _ => Vec::new(),
     }
+}
+
+/// The notice Claude writes when the user cuts a turn off —
+/// `[Request interrupted by user]`, `… for tool use]` — as a string or as a
+/// lone text block of a `user` record. `None` for anything else.
+fn claude_interrupt(value: &Value) -> Option<String> {
+    if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let text = match value.pointer("/message/content")? {
+        Value::String(text) => text.as_str(),
+        Value::Array(blocks) => match blocks.as_slice() {
+            [block] if block.get("type").and_then(Value::as_str) == Some("text") => block.get("text")?.as_str()?,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let text = text.trim();
+    (text.starts_with("[Request interrupted") && text.ends_with(']')).then(|| text.to_string())
 }
 
 /// What one Copilot event adds to the conversation: a prompt, an answer, a
@@ -2262,7 +2284,8 @@ struct WorkflowRun {
 /// reader skips it) and the assistant's `output_text`. The `event_msg` copies
 /// of the same messages are not read, so nothing shows twice; function calls,
 /// their outputs and reasoning items are stepped over. A `/goal` has no
-/// message of its own and is read off the event that sets it. A turn Codex
+/// message of its own and is read off the event that sets it, and an
+/// interrupted turn off its `turn_aborted` event. A turn Codex
 /// ended on an error (a hit usage limit, a policy refusal) has no message
 /// either: the error rides on its `task_complete` event, and is shown as the
 /// answer, as Claude writes its limit notice into the conversation.
@@ -2272,6 +2295,12 @@ fn codex_entry(value: &Value) -> Option<(&'static str, String)> {
         "response_item" => {}
         "event_msg" if payload.get("type").and_then(Value::as_str) == Some("thread_goal_updated") => {
             return agent_session::codex_prompt_in_record(value).map(|text| ("prompt", text));
+        }
+        // Esc mid-turn. Its `<turn_aborted>` note to the model is a
+        // `developer` message, which is not read.
+        "event_msg" if payload.get("type").and_then(Value::as_str) == Some("turn_aborted") => {
+            let reason = payload.get("reason").and_then(Value::as_str).unwrap_or("interrupted");
+            return (reason == "interrupted").then(|| ("interrupted", reason.to_string()));
         }
         "event_msg" if payload.get("type").and_then(Value::as_str) == Some("task_complete") => {
             let message = payload.pointer("/error/message")?.as_str()?.trim();

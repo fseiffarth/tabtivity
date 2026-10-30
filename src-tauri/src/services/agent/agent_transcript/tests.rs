@@ -26,6 +26,49 @@ fn a_codex_turn_ended_by_an_error_shows_it_as_an_answer() {
 }
 
 #[test]
+fn an_interrupted_turn_is_an_entry_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = dir.path().join("s.jsonl");
+    std::fs::write(
+        &claude,
+        concat!(
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"run the suite\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Running it.\"}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_A\",\"content\":\"The user doesn't want to proceed\",\"is_error\":true}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"[Request interrupted by user for tool use]\"}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[Request interrupted by user]\"}}\n",
+            // A prompt that only quotes the notice is still the user's.
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[Request interrupted by user] — why does this show?\"}}\n",
+        ),
+    )
+    .unwrap();
+    let read = read_transcript(&claude, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(
+        kinds(&read),
+        vec![
+            ("prompt", "run the suite"),
+            ("answer", "Running it."),
+            ("interrupted", "[Request interrupted by user for tool use]"),
+            ("interrupted", "[Request interrupted by user]"),
+        ]
+    );
+
+    let codex = dir.path().join("rollout.jsonl");
+    std::fs::write(
+        &codex,
+        concat!(
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"run the suite\"}]}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"<turn_aborted>\\nThe previous turn was interrupted on purpose.\\n</turn_aborted>\"}]}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"t1\",\"reason\":\"interrupted\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"t2\",\"reason\":\"replaced\"}}\n",
+        ),
+    )
+    .unwrap();
+    let read = read_transcript(&codex, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(kinds(&read), vec![("prompt", "run the suite"), ("interrupted", "interrupted")]);
+}
+
+#[test]
 fn a_claude_plan_put_up_for_approval_is_an_answer_marked_as_the_plan() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s.jsonl");
