@@ -656,7 +656,13 @@ impl HomeFile {
         {
             let mut tmp = tempfile::NamedTempFile::new_in(&self.dir.path)?;
             tmp.write_all(bytes)?;
-            tmp.persist(self.path()).map_err(|e| e.error)?;
+            // `std::fs::rename`, not `persist`: tempfile's move hands the
+            // path to `MoveFileExW` as is and fails past `MAX_PATH` (260)
+            // where long paths are off; std adds the `\\?\` prefix itself.
+            // Synced skills in an agent home run well past it.
+            let tmp = tmp.into_temp_path();
+            std::fs::rename(&tmp, self.path())?;
+            let _ = tmp.keep();
             Ok(())
         }
     }
@@ -1025,6 +1031,21 @@ mod tests {
         assert!(outside.join("session/keep").is_dir());
         assert!(root.remove_tree("../outside").is_err());
         assert!(root.subdir_existing("missing").is_none());
+    }
+
+    /// Past Windows' 260-character `MAX_PATH` with long paths off, where
+    /// tempfile's `persist` failed and took the whole `agent_global` layer
+    /// with it. Runs everywhere; the Windows CI leg is the one that bites.
+    #[test]
+    fn a_write_lands_past_the_windows_path_limit_and_replaces_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let rel = format!("{}/{}/file.txt", "a".repeat(120), "b".repeat(120));
+        let file = HomeFile::open(&home, &rel).unwrap();
+        assert!(file.path().as_os_str().len() > 260);
+        file.write(b"one").unwrap();
+        file.write(b"two").unwrap();
+        assert_eq!(file.read().unwrap(), b"two");
     }
 
     #[test]

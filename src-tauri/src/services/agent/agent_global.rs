@@ -163,7 +163,16 @@ pub fn apply_to_home(state_dir: &Path, home: &Path) -> io::Result<()> {
                     }
                 }
             }
-            dst.write(&bytes)?;
+            // One file that cannot be written must not cost the rest of the
+            // layer — the merged configs below carry settings like Codex's
+            // Windows sandbox. A copy placed before stays recorded as ours.
+            if let Err(e) = dst.write(&bytes) {
+                eprintln!("agent_global: copy {rel} into {}: {e}", home.display());
+                if previous.files.contains(rel) {
+                    placed.push(rel.clone());
+                }
+                continue;
+            }
         }
         // Also repairs a copy an earlier spawn left non-executable.
         let _ = dst.set_exec_bits(exec_bits(&src));
@@ -1018,6 +1027,24 @@ mod tests {
         apply_to_home(&state, &home).unwrap();
         assert!(!home.join(".claude/skills/a/SKILL.md").exists());
         assert!(home.join(".claude/CLAUDE.md").is_file());
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_written_does_not_cost_the_rest_of_the_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        let layer = global_dir_in(&state);
+        write(&layer.join(".claude/CLAUDE.md"), "global");
+        write(&layer.join(".claude/skills/a/SKILL.md"), "skill");
+        write(&layer.join(".codex/config.toml"), "[windows]\nsandbox = \"elevated\"\n");
+        // A directory where the first file goes: its write fails.
+        write(&home.join(".claude/CLAUDE.md/inside"), "x");
+        apply_to_home(&state, &home).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join(".claude/skills/a/SKILL.md")).unwrap(), "skill");
+        let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(codex.contains("sandbox = \"elevated\""), "{codex}");
+        assert!(home.join(MANIFEST).is_file());
     }
 
     #[cfg(unix)]
