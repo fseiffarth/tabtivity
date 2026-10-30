@@ -286,6 +286,50 @@ describe(`${BRAND.display} Mobile chat turns`, () => {
     expect(parts.context.map((row) => row.text.trim())).toEqual(["Ran 4 shell commands"]);
   });
 
+  it("keeps the steps of Claude Code's Submit page, whose answers sit between its tab row and its question", () => {
+    // The answers are the block the context ends at: the row two blocks up
+    // went unread, and the phone's card had no way back to an answer.
+    const tail = [
+      { key: "tabs", text: "←  ☒ Bubbles  ☒ Menu  ✔ Submit  →", spans: [
+        { text: "←  ☒ Bubbles  ☒ Menu  " },
+        { text: "✔ Submit", background: "#555" },
+        { text: "  →" },
+      ] },
+      ...lines(
+        "",
+        "Review your answers",
+        "",
+        " ● Which phone chat bubbles should get native press-and-hold text selection?",
+        "   → Prompts and answers",
+        " ● Once a hold selects text, how should the message menu open?",
+        "   → Tap the bubble (Recommended)",
+        "",
+        "Ready to submit your answers?",
+        "",
+        "❯ 1. Submit answers",
+        "  2. Cancel",
+        "",
+        "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+      ),
+    ];
+    const question = readSelectPrompt(tail, "Claude");
+    expect(question?.options.map((option) => option.label)).toEqual(["Submit answers", "Cancel"]);
+    const parts = questionParts(tail, question!);
+    expect(parts.tabs).toEqual([{ label: "Bubbles", answered: true }, { label: "Menu", answered: true }]);
+    expect(parts.tabSubmit).toBe(true);
+    expect(parts.tabFocus).toBe(2);
+    expect(parts.tabKeys).toBe("arrows");
+    expect(parts.ask.map((row) => row.text)).toEqual(["Ready to submit your answers?"]);
+    // The answers stay a list, as drawn.
+    expect(parts.context.map((row) => row.text)).toEqual([
+      "Review your answers", "",
+      " ● Which phone chat bubbles should get native press-and-hold text selection?",
+      "   → Prompts and answers",
+      " ● Once a hold selects text, how should the message menu open?",
+      "   → Tap the bubble (Recommended)",
+    ]);
+  });
+
   it("never reads the empty box's own placeholder as a prompt", () => {
     expect(isPromptEcho({ text: "> Try \"fix the failing test\"" })).toBe(false);
     expect(isPromptEcho({ text: "› Type your message or @path/to/file" })).toBe(false);
