@@ -52,6 +52,7 @@ use super::{
         TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
     },
+    presence,
     pty_bridge::{self, TerminalRegistry},
     remarks,
     scheduler,
@@ -89,6 +90,9 @@ struct HostState {
     auth: Arc<Mutex<AuthStore>>,
     catalog: Arc<Mutex<CatalogCache>>,
     terminal_registry: TerminalRegistry,
+    /// The project screens phones have read lately, for the desktop's phone
+    /// marks (admin `Presence`).
+    sightings: presence::Sightings,
     /// How a tab is started with no window (headless owner plan, H1b).
     spawner: HeadlessSpawner,
     /// The headless git dots and agent readings, per project, so the phone's
@@ -1161,6 +1165,9 @@ async fn project(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
+    // The project screen reads this every 5 s while it is on screen: the
+    // desktop marks the scope as being looked into (`presence.rs`).
+    state.sightings.saw(phone.device_id(), &project.raw_id);
     let mut tabs = project
         .tabs
         .iter()
@@ -5542,6 +5549,10 @@ async fn terminal(
     // Everything but a shell runs an AI: its input obeys the AI switch.
     let ai = tab.public.kind != "shell";
     let tmux = tab.tmux_name.clone();
+    let viewer = pty_bridge::Viewer {
+        device_id: phone.device_id().to_string(),
+        project_id: tab_project.raw_id.clone(),
+    };
     let registry = state.terminal_registry.clone();
     let auth = state.auth.clone();
     let token = cookie_token(&headers).unwrap_or_default().to_string();
@@ -5577,6 +5588,7 @@ async fn terminal(
             let _ = pty_bridge::attach(
                 socket,
                 target,
+                viewer,
                 registry,
                 auth,
                 token,
@@ -7938,6 +7950,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
         auth: auth.clone(),
         catalog: Arc::new(Mutex::new(CatalogCache::with_host_live(host_live.clone()))),
         terminal_registry: TerminalRegistry::default(),
+        sightings: presence::Sightings::default(),
         spawner: HeadlessSpawner::default(),
         readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
         runner: Arc::new(scheduler::TmuxRunner::new(&state_dir, None)),
@@ -7984,12 +7997,16 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     let admin_origin = Some(config.origin.clone());
     let port = config.host.port;
     let lookup_state = state.clone();
+    let presence_state = state.clone();
     let admin_context = admin::AdminContext {
         auth,
         port,
         origin: admin_origin,
         shutdown: shutdown_tx.clone(),
         agent_tab: Some(Arc::new(move |tmux: &str| agent_tab_ref(&lookup_state, tmux))),
+        presence: Some(Arc::new(move || {
+            (presence_state.sightings.current(), presence_state.terminal_registry.viewers())
+        })),
         state_dir: Some(state_dir.clone()),
     };
     tokio::spawn(async move {

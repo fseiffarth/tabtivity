@@ -68,6 +68,7 @@ import {
   type LocalityMenuState,
 } from "./TabLocalityBadges";
 import { texPdfPartner, useTexPdfCandidates } from "../../lib/viewers/tex/texPdfLink";
+import { TabPhoneMark } from "../mobile/PhoneHereMark";
 import {
   startCursorPoll,
   desktopCursor,
@@ -385,6 +386,8 @@ const TabItem = memo(function TabItem({
           ◷
         </span>
       )}
+      {/* A paired phone holds this tab open (stores/phonePresence). */}
+      <TabPhoneMark tmuxSession={tab.tmuxSession} />
       {/* Viewer file-source badge — remote-native (host SFTP) vs local
           mirror, a clickable toggle when the file exists on both sides.
           Shared with the detached strip (see TabLocalityBadges). */}

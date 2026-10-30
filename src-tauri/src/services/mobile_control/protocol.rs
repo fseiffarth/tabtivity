@@ -2126,6 +2126,10 @@ pub enum AdminRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,
     },
+    /// Which phone is in which project or tab right now, for the desktop's
+    /// phone marks (`presence.rs`). A sidecar older than this answers an
+    /// error, which the desktop shows as no marks.
+    Presence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2146,9 +2150,36 @@ pub enum AdminResponse {
     Devices {
         devices: Vec<AdminDevice>,
     },
+    Presence {
+        projects: Vec<ProjectPresence>,
+        tabs: Vec<TabPresence>,
+    },
     Error {
         message: String,
     },
+}
+
+/// A phone reading a scope's project screen lately (`presence::SIGHTING_TTL`).
+/// `project_id` is the desktop's raw scope id (a project id, `box:<id>`,
+/// `root`); only paired phones are named.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectPresence {
+    pub project_id: String,
+    pub device_id: String,
+    pub device_name: String,
+}
+
+/// A phone holding a tab's terminal. `watched` is false while the phone's page
+/// is not on screen (a pocketed phone keeps its socket).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TabPresence {
+    pub tmux_session: String,
+    pub project_id: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub watched: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

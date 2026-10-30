@@ -19,6 +19,7 @@ import {
 import { useTimerStore } from "../../stores/timer";
 import { PillStatusBars } from "./PillStatusBars";
 import { PillTabMarks } from "./PillTabMarks";
+import { ProjectPhoneMark } from "../mobile/PhoneHereMark";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { adoptSyncOutcome, isResumableAgentTab, syncWorkspace, useTabsStore } from "../../stores/tabs";
@@ -2775,6 +2776,8 @@ export function ProjectPill({
         )}
         {/* Important / Urgent tabs of this project (tab right-click menu). */}
         <PillTabMarks scope={project.id} />
+        {/* A paired phone is in this project (stores/phonePresence). */}
+        <ProjectPhoneMark scope={project.id} />
         {/* VM state glyph (`docs/vm_projects_plan.md`): the standard remote
             lamps already say "connected" — this adds the one thing they can't,
             whether the machine itself is up. Click opens the VM dialog. */}

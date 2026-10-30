@@ -3996,3 +3996,15 @@ html:not(.show-untested-tags) .untested-tag {
   font-size: 12px;
 }
 .md-prompt .md-prompt-preview.file-tree-empty { padding: 8px; }
+
+/* Phone mark (components/mobile/PhoneHereMark): a paired phone is in this
+   project or holds this tab. Faded while its screen is away. */
+.phone-here-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--accent);
+}
+.phone-here-mark.is-away {
+  opacity: 0.45;
+}

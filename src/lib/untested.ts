@@ -818,6 +818,8 @@ export const UNTESTED = {
   "mobile.newTab.remoteOnly": { area: "mobile", what: "NewTabSheet · remote-only project: Runs on lists its machines alone (no Desktop row), the primary preselected (else the first connected machine when no primary is listed); nothing starts while none is connected (connect hint); no shell/worktree/cloud/local-model/API-key/sign-in/send-a-file rows; with no window the 'needs the desktop window' line" },
   "mobile.project.remoteOnly": { area: "mobile", what: "Project · remote-only project: header line 'everything runs on the remote host' (own × flag), no-folder line pointing at ☰ Files, no one-tap ＋ quick create and no ★ default" },
   "mobile.hostReach.remoteOnly": { area: "mobile", what: "Phone access picker / file panel phone button / Settings → Mobile row: a remote-only project's reach line (host tabs and host files only)" },
+  "phoneHere.projectTitle": { area: "mobile", what: "Project pill · phone mark while a paired phone has the project's screen open (gone ~12 s after it leaves or its screen turns off) or holds one of its tabs; faded when that tab's phone is pocketed; the tooltip names the phones" },
+  "phoneHere.tabTitle": { area: "mobile", what: "Tab · phone mark while a paired phone holds the tab open (terminal or Chat), faded while that phone's screen is away; the tooltip names the phone; gone when the phone leaves the tab" },
 
   // --- monitoring — System monitor ----------------------------------
   "systemMonitorPane.1": { area: "monitoring", what: "SystemMonitorPane · Logged in" },

@@ -578,6 +578,16 @@ export function CloudIcon(p: IconProps) {
   );
 }
 
+/** A phone — a paired phone is in this project or tab. */
+export function PhoneIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="7" y="3" width="10" height="18" rx="2" />
+      <path d="M11 18h2" />
+    </Frame>
+  );
+}
+
 /** A house — this machine, the local mirror. */
 export function HomeIcon(p: IconProps) {
   return (

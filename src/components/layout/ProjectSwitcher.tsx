@@ -22,6 +22,7 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { GIT_DOT_TICK_MS, gitDotProbedAt, gitDotsDue, remoteGitDotStep, useGitDirtyStore } from "../../stores/gitDirty";
 import { useRemoteStatusStore, type ConnState } from "../../stores/remote/remoteStatus";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
+import { usePhonePresencePoll } from "../../stores/phonePresence";
 import { projectStations, useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { useFastMode } from "../../lib/agents/fastMode";
@@ -209,6 +210,8 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     [gitDotTargets],
   );
   const quiesce = useQuiesce();
+  // Feeds the phone marks on the pills and tabs.
+  usePhonePresencePoll();
   // Fast mode withdraws the dots entirely: this is a `git status` per local
   // project every 12–36 s, for projects the user is not currently in, and the dot
   // it feeds is the definition of an aid — the project's own file view says the

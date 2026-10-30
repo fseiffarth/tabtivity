@@ -110,6 +110,7 @@ impl Fixture {
                 auth: Arc::new(Mutex::new(auth)),
                 catalog: Arc::new(Mutex::new(CatalogCache::default())),
                 terminal_registry: TerminalRegistry::default(),
+                sightings: Default::default(),
                 spawner: HeadlessSpawner::default(),
                 readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
                 runner,

@@ -10,14 +10,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::{
     auth::AuthStore,
     protocol::{
-        AdminRequest, AdminResponse, DesktopRequest, DesktopResponse, MAX_CONTROL_MESSAGE,
-        MAX_DESKTOP_RESPONSE,
+        AdminRequest, AdminResponse, DesktopRequest, DesktopResponse, ProjectPresence,
+        TabPresence, MAX_CONTROL_MESSAGE, MAX_DESKTOP_RESPONSE,
     },
+    pty_bridge::HeldTab,
     push::{self, AgentTabRef, Notice, NoticeKind},
 };
 
 /// Resolves a tmux session to the agent tab a phone knows it as.
 pub type AgentTabLookup = Arc<dyn Fn(&str) -> Option<AgentTabRef> + Send + Sync>;
+
+/// Where the phones are right now (`presence.rs`): the project screens read
+/// lately as `(device_id, project_id)`, and the tabs held.
+pub type PresenceLookup = Arc<dyn Fn() -> (Vec<(String, String)>, Vec<HeldTab>) + Send + Sync>;
 
 /// Everything the admin plane answers from, shared by every transport.
 #[derive(Clone)]
@@ -29,6 +34,9 @@ pub struct AdminContext {
     /// The sidecar's catalog, for agent notices. `None` answers every agent
     /// turn with nothing sent.
     pub agent_tab: Option<AgentTabLookup>,
+    /// The sidecar's sightings and terminal viewers, for the desktop's phone
+    /// marks. `None` answers that no phone is anywhere.
+    pub presence: Option<PresenceLookup>,
     /// The state dir whose `agent_tasks.json` a revoke or Lock down sweeps
     /// for what the phone left behind (`phone_origin`, #2348). `None` sweeps
     /// nothing.
@@ -194,6 +202,10 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
         Ok(AdminRequest::Devices) => AdminResponse::Devices {
             devices: auth.lock_ok().devices(),
         },
+        Ok(AdminRequest::Presence) => {
+            let (seen, held) = context.presence.as_ref().map(|lookup| lookup()).unwrap_or_default();
+            presence_response(&auth.lock_ok().devices(), seen, held)
+        }
         Ok(AdminRequest::Revoke { device_id }) => {
             let revoked = auth.lock_ok().revoke(&device_id);
             match revoked {
@@ -252,6 +264,36 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
         }
         Err(message) => AdminResponse::Error { message },
     }
+}
+
+/// The admin `Presence` answer: every row named by its phone, and a row whose
+/// phone is no longer paired (revoked while its socket closes) dropped.
+fn presence_response(
+    devices: &[super::protocol::AdminDevice],
+    seen: Vec<(String, String)>,
+    held: Vec<HeldTab>,
+) -> AdminResponse {
+    let name = |id: &str| devices.iter().find(|d| d.id == id).map(|d| d.name.clone());
+    let projects = seen
+        .into_iter()
+        .filter_map(|(device_id, project_id)| {
+            Some(ProjectPresence { device_name: name(&device_id)?, device_id, project_id })
+        })
+        .collect();
+    let mut tabs: Vec<TabPresence> = held
+        .into_iter()
+        .filter_map(|tab| {
+            Some(TabPresence {
+                device_name: name(&tab.viewer.device_id)?,
+                device_id: tab.viewer.device_id,
+                project_id: tab.viewer.project_id,
+                tmux_session: tab.tmux_session,
+                watched: tab.watched,
+            })
+        })
+        .collect();
+    tabs.sort_by(|a, b| a.tmux_session.cmp(&b.tmux_session));
+    AdminResponse::Presence { projects, tabs }
 }
 
 #[cfg(unix)]
@@ -998,6 +1040,36 @@ mod frame_tests {
     /// and shutdown answer `Ok` (forget-all cancelling every phone's rules),
     /// and shutdown actually flips the watch.
     #[test]
+    fn presence_names_each_phone_and_drops_an_unpaired_one() {
+        use super::super::{protocol::AdminDevice, pty_bridge::Viewer};
+        let devices = [AdminDevice {
+            id: "phone-a".into(),
+            name: "Pixel".into(),
+            created_at: 0,
+            last_seen_at: None,
+            online: true,
+            hidden_sections: vec![],
+        }];
+        let held = |device: &str, tmux: &str, watched| HeldTab {
+            tmux_session: tmux.into(),
+            viewer: Viewer { device_id: device.into(), project_id: "p".into() },
+            watched,
+        };
+        let answer = presence_response(
+            &devices,
+            vec![("phone-a".into(), "p".into()), ("gone".into(), "p".into())],
+            vec![held("phone-a", "t2", false), held("gone", "t3", true), held("phone-a", "t1", true)],
+        );
+        let AdminResponse::Presence { projects, tabs } = answer else { panic!("presence answer") };
+        assert_eq!(
+            projects,
+            vec![ProjectPresence { project_id: "p".into(), device_id: "phone-a".into(), device_name: "Pixel".into() }],
+        );
+        let rows: Vec<_> = tabs.iter().map(|t| (t.tmux_session.as_str(), t.device_name.as_str(), t.watched)).collect();
+        assert_eq!(rows, vec![("t1", "Pixel", true), ("t2", "Pixel", false)]);
+    }
+
+    #[test]
     fn admin_requests_map_to_their_responses() {
         let dir = tempfile::tempdir().unwrap();
         let auth = AuthStore::open(&dir.path().join("mobile-control"), "https://desk.example".into())
@@ -1022,6 +1094,7 @@ mod frame_tests {
                     devices: None,
                 })
             })),
+            presence: None,
             state_dir: Some(dir.path().to_path_buf()),
         };
         let respond = |request| admin_response(request, &context);

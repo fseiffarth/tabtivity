@@ -35,6 +35,25 @@ struct ViewerSlot {
     /// bundle — counts as watching, which is what holding the slot used to
     /// mean for every viewer.
     hidden: AtomicBool,
+    /// Who holds it, for the desktop's phone marks (admin `Presence`).
+    viewer: Viewer,
+}
+
+/// The phone holding a tab and the scope the tab is in — the desktop's own
+/// ids, never sent to a phone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Viewer {
+    pub device_id: String,
+    pub project_id: String,
+}
+
+/// A held tab, as the desktop's phone marks read it ([`TerminalRegistry::viewers`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldTab {
+    pub tmux_session: String,
+    pub viewer: Viewer,
+    /// The page is in front of someone (see [`TerminalRegistry::is_watched`]).
+    pub watched: bool,
 }
 
 type ViewerSlots = Arc<Mutex<HashMap<String, Arc<ViewerSlot>>>>;
@@ -96,20 +115,33 @@ impl TerminalRegistry {
             .is_some_and(|slot| !slot.hidden.load(Ordering::Acquire))
     }
 
+    /// Every tab a phone holds right now, and whether it is on screen.
+    pub fn viewers(&self) -> Vec<HeldTab> {
+        self.busy
+            .lock_ok()
+            .iter()
+            .map(|(name, slot)| HeldTab {
+                tmux_session: name.clone(),
+                viewer: slot.viewer.clone(),
+                watched: !slot.hidden.load(Ordering::Acquire),
+            })
+            .collect()
+    }
+
     /// Claims the tab, displacing an existing viewer if there is one.
     ///
     /// A phone that is backgrounded before its `detached` frame flushes leaves
     /// the slot held until the idle reaper (`IDLE_TIMEOUT`) fires, and the user
     /// was locked out of their own agent for minutes after glancing at another
     /// app. The newest viewer wins instead.
-    async fn acquire(&self, name: &str) -> Result<BusyGuard, String> {
+    async fn acquire(&self, name: &str, viewer: Viewer) -> Result<BusyGuard, String> {
         let deadline = tokio::time::Instant::now() + EVICTION_WAIT;
         loop {
             {
                 let mut busy = self.busy.lock_ok();
                 match busy.get(name) {
                     None => {
-                        let slot = Arc::new(ViewerSlot::default());
+                        let slot = Arc::new(ViewerSlot { viewer: viewer.clone(), ..ViewerSlot::default() });
                         busy.insert(name.to_string(), slot.clone());
                         return Ok(BusyGuard {
                             name: name.into(),
@@ -863,6 +895,7 @@ impl Drop for PtySession {
 pub async fn attach(
     socket: WebSocket,
     target: AttachTarget,
+    viewer: Viewer,
     registry: TerminalRegistry,
     auth: Arc<Mutex<AuthStore>>,
     token: String,
@@ -882,7 +915,7 @@ pub async fn attach(
     on_seen: impl Fn(),
 ) -> Result<(), String> {
     let tmux_name = target.name().to_string();
-    let guard = registry.acquire(&tmux_name).await?;
+    let guard = registry.acquire(&tmux_name, viewer).await?;
     // Do this before the live attach starts redrawing. The browser receives it
     // before every PTY byte below, and tmux's clear/redraw then leaves these
     // lines in xterm's normal scrollback buffer above the live screen. The
@@ -1443,12 +1476,12 @@ mod tests {
     async fn a_reconnecting_viewer_evicts_the_previous_one() {
         use super::TerminalRegistry;
         let registry = TerminalRegistry::default();
-        let first = registry.acquire(concat!(crate::app_slug!(), "-p--agent-1")).await.expect("first");
+        let first = registry.acquire(concat!(crate::app_slug!(), "-p--agent-1"), super::Viewer::default()).await.expect("first");
         assert!(registry.is_busy(concat!(crate::app_slug!(), "-p--agent-1")));
         assert!(!first.evicted());
         let waiter = {
             let registry = registry.clone();
-            tokio::spawn(async move { registry.acquire(concat!(crate::app_slug!(), "-p--agent-1")).await })
+            tokio::spawn(async move { registry.acquire(concat!(crate::app_slug!(), "-p--agent-1"), super::Viewer::default()).await })
         };
         // The incumbent is asked to leave; releasing hands the slot over.
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
@@ -1468,7 +1501,7 @@ mod tests {
         use super::TerminalRegistry;
         let registry = TerminalRegistry::default();
         assert!(!registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")), "nobody attached");
-        let viewer = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3")).await.expect("viewer");
+        let viewer = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3"), super::Viewer::default()).await.expect("viewer");
         // A phone that never reports (an older bundle) counts as watching.
         assert!(registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
         assert!(!viewer.hidden());
@@ -1486,9 +1519,24 @@ mod tests {
         viewer.set_visible(false);
         drop(viewer);
         assert!(!registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
-        let next = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3")).await.expect("next viewer");
+        let next = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3"), super::Viewer::default()).await.expect("next viewer");
         assert!(registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
         drop(next);
+    }
+
+    /// The desktop's phone marks: who holds which tab, on screen or not.
+    #[tokio::test]
+    async fn viewers_name_the_phone_and_scope_holding_each_tab() {
+        use super::{HeldTab, TerminalRegistry, Viewer};
+        let registry = TerminalRegistry::default();
+        let name = concat!(crate::app_slug!(), "-p--agent-4");
+        let viewer = Viewer { device_id: "phone-a".into(), project_id: "p".into() };
+        let held = registry.acquire(name, viewer.clone()).await.expect("viewer");
+        assert_eq!(registry.viewers(), vec![HeldTab { tmux_session: name.into(), viewer: viewer.clone(), watched: true }]);
+        held.set_visible(false);
+        assert_eq!(registry.viewers(), vec![HeldTab { tmux_session: name.into(), viewer, watched: false }]);
+        drop(held);
+        assert!(registry.viewers().is_empty());
     }
 
     #[test]
@@ -1513,8 +1561,8 @@ mod tests {
     async fn an_incumbent_that_never_leaves_still_yields_session_busy() {
         use super::TerminalRegistry;
         let registry = TerminalRegistry::default();
-        let _held = registry.acquire(concat!(crate::app_slug!(), "-p--agent-2")).await.expect("first");
-        match registry.acquire(concat!(crate::app_slug!(), "-p--agent-2")).await {
+        let _held = registry.acquire(concat!(crate::app_slug!(), "-p--agent-2"), super::Viewer::default()).await.expect("first");
+        match registry.acquire(concat!(crate::app_slug!(), "-p--agent-2"), super::Viewer::default()).await {
             Ok(_) => panic!("a held slot must not be handed over"),
             Err(reason) => assert_eq!(reason, "session_busy"),
         }

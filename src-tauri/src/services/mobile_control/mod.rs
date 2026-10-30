@@ -27,6 +27,7 @@ pub mod markup;
 pub mod markup_pdf;
 pub mod outbox;
 pub mod phone_origin;
+pub mod presence;
 pub mod limits;
 pub mod protocol;
 pub mod pty_bridge;
