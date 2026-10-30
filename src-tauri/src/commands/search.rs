@@ -343,6 +343,7 @@ pub fn project_search_blocking(
             let joined = rel.split('/').fold(project_root.clone(), |p, seg| p.join(seg));
             let scoped = joined
                 .canonicalize()
+                .map(crate::paths::without_verbatim_prefix)
                 .map_err(|e| format!("invalid search folder '{rel}': {e}"))?;
             if !scoped.starts_with(&project_root) {
                 return Err(format!("search folder '{rel}' is outside the project"));
