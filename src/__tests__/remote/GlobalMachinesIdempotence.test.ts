@@ -79,8 +79,8 @@ describe("globalMachines — a no-op status write must not notify", () => {
     const unsub = useGlobalMachinesStore.subscribe(seen);
 
     await useGlobalMachinesStore.getState().probeAll();
-    // This is the valuable half: `probeAll` writes EVERY machine at once, so on a
-    // fleet of N an unchanged sweep used to invalidate the whole list at once.
+    // This is the valuable half: `probeAll` lands one write per machine, so on a
+    // fleet of N an unchanged sweep would otherwise invalidate the list N times.
     expect(seen).not.toHaveBeenCalled();
 
     unsub();
