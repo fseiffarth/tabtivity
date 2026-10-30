@@ -101,9 +101,11 @@ export function isTerminalAutoReply(data: string): boolean {
 
 /** Clear any startup junk already sitting in a shell's readline buffer before
  *  auto-typing a command. No-op for agent TUIs: their prompt behavior is not a
- *  POSIX shell line editor. */
-export function initialInputForPty(input: string, kind: TabKind): string {
-  return kind === "shell" ? `\x15${input}` : input;
+ *  POSIX shell line editor. No-op for a shell on a Windows console too: neither
+ *  PowerShell nor cmd.exe binds Ctrl+U, so it lands in the line as a literal
+ *  `^U` glued to the command's first word (`^U$w : not recognized`). */
+export function initialInputForPty(input: string, kind: TabKind, windowsConsole = false): string {
+  return kind === "shell" && !windowsConsole ? `\x15${input}` : input;
 }
 
 /** Whether terminal text shows an agent CLI's folder-trust question. Wording

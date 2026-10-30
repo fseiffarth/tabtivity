@@ -1507,9 +1507,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           // Typed on the user's behalf — they triggered the flow that
           // opened this tab with a command, so its work counts as asked-for.
           noteUserInput(id);
+          // A Windows host's ssh or container tab still ends in a POSIX shell.
+          const onRemote = !localOnly && (!!remoteHostId ||
+            !!useProjectsStore.getState().projects.find((p) => p.id === projectId)?.remote);
           writePtyInput(
             id,
-            PTY_ENCODER.encode(initialInputForPty(initialInput, kind)),
+            PTY_ENCODER.encode(initialInputForPty(initialInput, kind, IS_HOST_WINDOWS && !sandbox && !onRemote)),
           ).catch(console.error);
           initialEnterTimer.current = setTimeout(() => {
             initialInputPending.current = false;
