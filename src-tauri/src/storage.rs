@@ -729,6 +729,27 @@ pub fn project_key(id: &str) -> String {
     }
 }
 
+/// `id` as one path component: unchanged when it already is one, else
+/// [`project_key`]. For folders already named after a raw id, which plain
+/// [`project_key`] would orphan when the id holds a dot or a space.
+pub fn plain_component(id: &str) -> std::borrow::Cow<'_, str> {
+    let mut parts = Path::new(id).components();
+    let one = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None));
+    if one && !id.contains(['/', '\\', '\0']) {
+        id.into()
+    } else {
+        project_key(id).into()
+    }
+}
+
+/// `<state_dir>/remote-projects/<id>/` — a remote project's local state. Every
+/// join goes through here: `git_peer_status` and `local_loss_list` pass on an id
+/// from their arguments unchecked, and on a server those come from a browser, so
+/// an id like `../../x` must stay inside this folder.
+pub fn remote_project_dir_in(state_dir: &Path, project_id: &str) -> std::path::PathBuf {
+    state_dir.join("remote-projects").join(&*plain_component(project_id))
+}
+
 /// `<state_dir>/sessions/` — the root of the per-project session state that used
 /// to live inside each project tree.
 pub fn sessions_root() -> std::path::PathBuf {
@@ -853,6 +874,23 @@ pub(crate) fn uuid_v4() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plain id keeps the folder it always had; anything else stays one level
+    /// under `remote-projects/`, wherever it tried to point.
+    #[test]
+    fn a_project_id_cannot_leave_remote_projects() {
+        let state = Path::new("state");
+        let root = state.join("remote-projects");
+        for id in ["0b9d8f3e-2c1a", "with.dot", "with space", "a..b"] {
+            assert_eq!(remote_project_dir_in(state, id), root.join(id), "{id:?}");
+        }
+        for id in ["", ".", "..", "../x", "../../etc", "a/b", "a\\b", "a/", "/abs", "\\abs", "C:x", "a\0b"] {
+            let dir = remote_project_dir_in(state, id);
+            assert_eq!(dir.parent(), Some(root.as_path()), "{id:?}");
+            let name = dir.file_name().and_then(|name| name.to_str()).unwrap();
+            assert!(!name.contains(['/', '\\', '\0']) && name != "..", "{id:?}");
+        }
+    }
 
     // ── FileLock ───────────────────────────────────────────────────────────
 

@@ -84,20 +84,16 @@ pub struct WorkerSyncReport {
 /// the local state dir, per host. Independent of the mirror so it survives a mirror
 /// relocation.
 fn worker_state_path(project_id: &str, host_id: &str) -> PathBuf {
-    storage::state_dir()
-        .join("remote-projects")
-        .join(project_id)
+    storage::remote_project_dir_in(&storage::state_dir(), project_id)
         .join("workers")
-        .join(format!("{host_id}.json"))
+        .join(format!("{}.json", storage::plain_component(host_id)))
 }
 
 /// The local scratch path for a worker's outbound bundle (beside its state file).
 fn local_bundle_path(project_id: &str, host_id: &str) -> PathBuf {
-    storage::state_dir()
-        .join("remote-projects")
-        .join(project_id)
+    storage::remote_project_dir_in(&storage::state_dir(), project_id)
         .join("workers")
-        .join(format!("{host_id}.bundle"))
+        .join(format!("{}.bundle", storage::plain_component(host_id)))
 }
 
 fn read_record(project_id: &str, host_id: &str) -> WorkerRecord {
@@ -594,9 +590,7 @@ fn outputs_dest(project_id: &str, label: &str) -> PathBuf {
     } else {
         safe
     };
-    storage::state_dir()
-        .join("remote-projects")
-        .join(project_id)
+    storage::remote_project_dir_in(&storage::state_dir(), project_id)
         .join("outputs")
         .join(safe)
 }

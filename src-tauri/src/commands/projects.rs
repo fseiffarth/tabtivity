@@ -29,7 +29,7 @@ pub(crate) use crate::services::project_registry::{
 /// SFTP/SSH. This path becomes the project's `directory` (a stable local key the
 /// fs/git/terminal commands resolve to a `RemoteTarget`).
 pub(crate) fn remote_project_state_dir(id: &str) -> std::path::PathBuf {
-    storage::state_dir().join("remote-projects").join(id)
+    storage::remote_project_dir_in(&storage::state_dir(), id)
 }
 
 /// Drop the per-project state that is bound to **one specific host**: the byte-sync
