@@ -1635,7 +1635,7 @@ fn moving_a_synced_card_deletes_the_server_copy_first() {
     std::fs::write(&f.calendar, serde_json::to_string(&data).unwrap()).unwrap();
 
     let (_, changes) = f.call_unreviewed("todo_update", json!({ "id": id, "calendar": "Work" }));
-    let [delete, upsert] = changes.as_slice() else { panic!("two rows: {changes:?}") };
+    let [delete, upsert] = changes.as_slice() else { panic!("two rows, got {}", changes.len()) };
     assert_eq!((delete.kind, delete.op), ("task", "delete"));
     assert_eq!(delete.row["calendar_id"], "default");
     assert_eq!(delete.row["caldav_href"], "/cal/personal/t.ics");
@@ -1928,7 +1928,7 @@ fn events_move_between_calendars_by_id_or_all_at_once() {
     let (r, changes) = f.call("calendar_move_events", json!({ "ids": [a, a], "to": "Work" }));
     assert_eq!(r["isError"], false, "{r}");
     assert_eq!(text(&r)["moved"], json!([a]), "a repeated id moves once");
-    let [change] = changes.as_slice() else { panic!("one row: {changes:?}") };
+    let [change] = changes.as_slice() else { panic!("one row, got {}", changes.len()) };
     assert_eq!((change.kind, change.op, change.local), ("event", "upsert", false));
     assert_eq!(change.row["id"], a, "a move keeps the event's identity");
     assert_eq!(change.row["end"], "2026-09-18T10:30", "and its times");
@@ -2003,7 +2003,7 @@ fn moving_a_synced_event_deletes_the_server_copy_first() {
     mark_synced(&f, &a, "/cal/personal/a.ics");
 
     let (_, changes) = f.call_unreviewed("calendar_move_events", json!({ "ids": [a], "to": "Work" }));
-    let [delete, upsert] = changes.as_slice() else { panic!("two rows: {changes:?}") };
+    let [delete, upsert] = changes.as_slice() else { panic!("two rows, got {}", changes.len()) };
     assert_eq!((delete.kind, delete.op), ("event", "delete"));
     assert_eq!(delete.row["calendar_id"], "default", "addressed in the calendar it left");
     assert_eq!(delete.row["caldav_href"], "/cal/personal/a.ics");

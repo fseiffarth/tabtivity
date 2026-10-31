@@ -2175,10 +2175,10 @@ mod tests {
             assert!(gate(other, true).unwrap_err().contains("reserved"), "{scope:?}");
         }
         // Not a uuid-shaped uid: it would become a path component.
-        for uid in ["", "..", "../x", "root", "a/b", "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a1"] {
+        for bad in ["", "..", "../x", "root", "a/b", "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a1"] {
             let mut opts = base();
-            opts.env.insert(crate::app_env!("TAB_UID").into(), uid.into());
-            assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), "{uid:?}");
+            opts.env.insert(crate::app_env!("TAB_UID").into(), bad.into());
+            assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), "{bad:?}");
         }
         let mut no_uid = base();
         no_uid.env.clear();

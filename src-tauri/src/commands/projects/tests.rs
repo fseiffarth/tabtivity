@@ -43,9 +43,9 @@ use crate::services::project_registry::{drop_legacy_trash_project, drop_reserved
 fn uuid_v4_is_a_real_v4_uuid() {
     let a = uuid_v4();
     assert_eq!(a.len(), 36);
-    assert!(crate::services::agent_session::is_uuid_shaped(&a), "{a}");
+    assert!(crate::services::agent_session::is_uuid_shaped(&a));
     assert_eq!(&a[14..15], "4");
-    assert!(matches!(&a[19..20], "8" | "9" | "a" | "b"), "{a}");
+    assert!(matches!(&a[19..20], "8" | "9" | "a" | "b"));
     assert_ne!(a, uuid_v4());
 }
 
