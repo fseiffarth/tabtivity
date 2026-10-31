@@ -84,6 +84,15 @@ export async function withHpcConfirm<T>(attempt: (confirmed: boolean) => Promise
 }
 
 /**
+ * The `confirmed` argument of a [`withHpcConfirm`] attempt, spread into the
+ * invoke's arguments: absent on the first try, so a call that is never refused
+ * sends exactly what it sent before the guard wrapped it.
+ */
+export function confirmedArg(confirmed: boolean): { confirmed?: true } {
+  return confirmed ? { confirmed: true } : {};
+}
+
+/**
  * Ask before doing something on a tagged host that only the **frontend** knows
  * about — a Python or script run landing on a login node, where there is no
  * backend command to refuse (the run is a terminal tab like any other). Returns

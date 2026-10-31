@@ -40,8 +40,12 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * honoured, cleared by Reset tips. `hintsOff` is the tips' Turn off tips
  * button, undone under This device → Tips.
  * `limitBars` shows the facts row's usage limits as bars rather than
- * percentages, off unset. */
-export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff";
+ * percentages, off unset. `focusHandsFree` is the Focus composer's hands-free
+ * loop (`shared/handsFree.ts`): a pause sends the dictation after a cancel
+ * window and the mic opens again once the answer is over, off unset.
+ * `voiceBrief` reads answers aloud in brief — headings and first sentences
+ * (`shared/voiceReading.ts`) — rather than whole, off unset. */
+export type MobileFlag = "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff" | "focusHandsFree" | "voiceBrief";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
@@ -92,8 +96,10 @@ export function writeFlag(name: MobileFlag, value: boolean, storage?: FlagStorag
  * tap on the project screen's ＋ starts (`newTabDefault.ts`), an id the
  * desktop's catalog lists, or `api:<id>` / `local:<id>` for the sheet's API and
  * local-model rows, whose `newTabLabel` is the name it was starred under; unset,
- * the desktop's default agent is used. */
-export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen" | "newTabAgent" | "newTabLabel";
+ * the desktop's default agent is used. `voiceRate` is read-aloud's speaking
+ * rate, one of `speechOutput.ts` `READING_RATES`, stepped by "faster" /
+ * "slower"; unset, the voice's own pace. */
+export type MobileChoice = "agentsSort" | "projectTabsSort" | "speechLang" | "mailAccount" | "theme" | "desktopTheme" | "markupInstruction" | "markupApply" | "markupAsk" | "markupOpen" | "newTabAgent" | "newTabLabel" | "voiceRate";
 
 export function readChoice<T extends string>(name: MobileChoice, accept: (value: unknown) => value is T, fallback: T, storage?: FlagStorage): T {
   try {
@@ -187,4 +193,14 @@ export function readHintReads(storage?: FlagStorage): Record<string, number> {
 
 export function writeHintReads(reads: Record<string, number> | undefined, storage?: FlagStorage): void {
   writeJson(`${PREFIX}hintReads`, reads, storage);
+}
+
+/** When the last tip card came up on this phone (ms since the epoch), so the
+ * next waits out `HintMessage`'s half hour across reloads too. 0 when none. */
+export function readTipShownAt(storage?: FlagStorage): number {
+  return readJson(`${PREFIX}tipShownAt`, (parsed) => typeof parsed === "number" && Number.isFinite(parsed) ? parsed : 0, 0, storage);
+}
+
+export function writeTipShownAt(at: number | undefined, storage?: FlagStorage): void {
+  writeJson(`${PREFIX}tipShownAt`, at, storage);
 }

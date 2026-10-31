@@ -718,10 +718,67 @@ fn hook_body_is_no_op_without_env_and_bakes_dir() {
     assert!(body.contains("\"session_id\""));
     assert!(body.contains("\"permission_mode\""));
     assert!(body.contains(".mode"));
+    assert!(body.contains("forked_from_id"));
     // The container twin bakes the container-side path, POSIX-style.
     let twin = posix_hook_script_body(concat!("/c/Users/x/AppData/Roaming/", crate::app_slug!(), "/live_sessions"));
     assert!(twin.starts_with("#!/bin/sh"));
     assert!(twin.contains(concat!("/c/Users/x/AppData/Roaming/", crate::app_slug!(), "/live_sessions")));
+}
+
+/// `/fork` starts a thread with no `SessionStart` the matcher lets through, so
+/// the fork's rollout is what moves the record (Codex 0.166.0, payloads and
+/// rollout header as captured). The move comes on the fork's first event, or a
+/// restart mid-turn would resume the parent.
+#[cfg(unix)]
+#[test]
+fn a_codex_tab_follows_its_fork_and_nothing_else_that_forked() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("hook.sh");
+    let live = dir.path().join("live");
+    std::fs::write(&script, hook_script_body(&live.to_string_lossy())).unwrap();
+    let uid = "66666666-6666-4666-8666-666666666666";
+    let parent = "01a18e92-e049-7d11-b744-6b4974752c34";
+    let fork = "01a18e93-61d1-7b43-88ec-612383137525";
+    let other = "01a18e94-0000-7000-8000-000000000000";
+    let event = |sid: &str, name: &str, rollout: &str| {
+        format!(r#"{{"session_id":"{sid}","hook_event_name":"{name}","transcript_path":"{rollout}"}}"#)
+    };
+    let rollout = |name: &str, meta: &str| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, format!("{{\"type\":\"session_meta\",\"payload\":{{{meta}}}}}\n{{\"type\":\"turn_context\"}}\n")).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let start = format!(r#"{{"session_id":"{parent}","hook_event_name":"SessionStart","source":"startup"}}"#);
+    let (rec, _) = run_hook(&script, &live, uid, Some("codex"), false, &start);
+    assert_eq!(rec.as_deref(), Some(parent));
+    let turn = || std::fs::read_to_string(live.join(format!("{uid}.turn"))).unwrap_or_default();
+
+    // A thread that is no fork, a subagent forked off this one, a user's fork
+    // of some other thread: none of them is the tab.
+    let plain = rollout("plain.jsonl", r#""thread_source":"user""#);
+    let subagent = rollout("subagent.jsonl", &format!(r#""forked_from_id":"{parent}","thread_source":"subagent""#));
+    let unrelated = rollout("unrelated.jsonl", &format!(r#""forked_from_id":"{other}","thread_source":"user""#));
+    for path in [&plain, &subagent, &unrelated, &dir.path().join("gone.jsonl").to_string_lossy().into_owned()] {
+        let (rec, _) = run_hook(&script, &live, uid, Some("codex"), false, &event(fork, "UserPromptSubmit", path));
+        assert_eq!(rec.as_deref(), Some(parent), "{path}");
+        assert!(!turn().starts_with("working"), "{path}");
+    }
+
+    // The tab's own fork moves the record at its first prompt, and its turn
+    // marks count from there.
+    assert!(live.join(format!("{uid}.src")).exists());
+    let forked = rollout("fork.jsonl", &format!(r#""forked_from_id":"{parent}","source":"cli","thread_source":"user""#));
+    let (rec, _) = run_hook(&script, &live, uid, Some("codex"), false, &event(fork, "UserPromptSubmit", &forked));
+    assert_eq!(rec.as_deref(), Some(fork));
+    assert!(turn().starts_with("working"));
+    assert!(!live.join(format!("{uid}.src")).exists(), "no source word says how a fork came about");
+    let (rec, _) = run_hook(&script, &live, uid, Some("codex"), false, &event(fork, "Stop", &forked));
+    assert_eq!(rec.as_deref(), Some(fork));
+    assert!(turn().starts_with("done"));
+
+    // The parent is somebody else now.
+    let (rec, _) = run_hook(&script, &live, uid, Some("codex"), false, &event(parent, "Stop", &plain));
+    assert_eq!(rec.as_deref(), Some(fork));
 }
 
 /// Run the POSIX hook body as the agents would: `sh <script>` with the tab

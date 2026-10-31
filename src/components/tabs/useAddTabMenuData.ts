@@ -12,7 +12,7 @@ import {
   type BuiltInAgentStatus,
 } from "../../lib/tabs/newTabItems";
 import { listLocalDrivers, type LocalDriverInfo } from "../../lib/agents/localDrivers";
-import { AGENT_REGISTRY_CHANGED_EVENT } from "../../lib/agents/agentRegistry";
+import { AGENT_REGISTRY_CHANGED_EVENT, noteInstalledAgents } from "../../lib/agents/agentRegistry";
 import { ROOT_SCOPE } from "../../stores/tabs";
 
 /** The data behind an add-tab ("+") menu — see {@link useAddTabMenuData}. */
@@ -42,6 +42,8 @@ export interface AddTabMenuData {
    *  In the root scope, further narrowed to the agents whose 🧠 "Root" chip is
    *  on (`rootAllowedAgentBins`). */
   enabledAgents: Set<string> | null;
+  /** Re-read the installed CLIs: for a menu that stays mounted, on each opening. */
+  refreshAgents: () => void;
   /** The default agent's (`default_agent_cmd`, "claude" when unset) binary —
    *  the setting holds a registry id, which is not always the command
    *  (`antigravity` launches `agy`). What Ctrl+1 opens (`agentShortcutSlots`). */
@@ -116,7 +118,10 @@ export function useAddTabMenuData(
   >(null);
   const refreshInstalledAgents = useCallback(() => {
     void invoke<(BuiltInAgentStatus & { id: string })[]>("list_agents")
-      .then(setAgentStatuses)
+      .then((rows) => {
+        setAgentStatuses(rows);
+        noteInstalledAgents(rows);
+      })
       .catch(() => setAgentStatuses([]));
   }, []);
   useEffect(() => {
@@ -188,6 +193,7 @@ export function useAddTabMenuData(
     localModelOffInRoot,
     localDrivers,
     enabledAgents,
+    refreshAgents: refreshInstalledAgents,
     defaultAgentBin,
     vibeForLocalModel,
     compactAgentBins,

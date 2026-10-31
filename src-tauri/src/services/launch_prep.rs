@@ -505,34 +505,89 @@ fn scope_root_for<'a>(local: &'a str, remote: Option<&'a str>, mirror: &'a str, 
     else { local }
 }
 
-/// The VM tier's spawn-refusal decision (`docs/vm_projects_plan.md`), pure so
-/// the no-local-fallback guard is testable: for a VM project a local spawn is
-/// refused outright (the untrusted agent stepping outside the boundary, never
-/// a downgrade), and a spawn while the VM is down refuses with the
-/// `TABTIVITY_VM_DOWN` sentinel the frontend turns into a boot action. `None`
-/// (spawn proceeds) for every non-VM project.
-fn vm_spawn_refusal(
-    is_vm: bool,
-    vm_running: bool,
-    local_only: bool,
-    tab_id: &str,
-) -> Option<String> {
-    if !is_vm {
-        return None;
+/// Where a project's tabs are pinned, by its record in the state-dir
+/// `projects.json`: nowhere (a local or plain Remote project), to the host (a
+/// remote-only project keeps no local copy), or into its VM (remote-only plus
+/// the boot, `docs/vm_projects_plan.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pin {
+    None,
+    RemoteOnly,
+    Vm,
+}
+
+impl Pin {
+    /// The pin of a project whose primary spec is `spec` (`None`: local). A VM
+    /// spec pins as a VM however its `remote_only` reads.
+    fn of(spec: Option<&crate::schema::project::RemoteSpec>) -> Pin {
+        match spec {
+            Some(spec) if crate::services::vm::is_vm_spec(spec) => Pin::Vm,
+            Some(spec) if spec.is_remote_only() => Pin::RemoteOnly,
+            _ => Pin::None,
+        }
     }
-    if local_only {
-        return Some(
+}
+
+/// The pinned tiers' spawn-refusal decision, pure so the no-local-fallback
+/// guard is testable. A pinned project has no tree on this machine, so a
+/// `local_only` spawn is refused outright, never downgraded:
+/// - a VM project refuses it as the untrusted agent stepping outside the
+///   boundary, and a spawn while the VM is down (`running` false) refuses with
+///   the `{UPPER}_VM_DOWN` sentinel rather than falling back to a host shell;
+/// - a remote-only project refuses it with the `{UPPER}_REMOTE_ONLY` sentinel
+///   (`remote::remote_only_refusal`). `local_agent` (local-model) tabs are
+///   always `local_only`, so they are refused here too.
+///
+/// `None` (spawn proceeds) for an unpinned project and for a host spawn.
+fn pinned_spawn_refusal(pin: Pin, running: bool, local_only: bool, tab_id: &str) -> Option<String> {
+    match pin {
+        Pin::None => None,
+        Pin::Vm if local_only => Some(
             "This project lives inside its VM — tabs never run on the host. \
              Open the tab on the VM instead."
                 .to_string(),
-        );
-    }
-    if !vm_running {
-        return Some(format!(
+        ),
+        Pin::Vm if !running => Some(format!(
             "{UPPER}_VM_DOWN: the VM for this project is not running; tab '{tab_id}' was not spawned. Boot the VM (activate the project or click its lamp) and retry."
-        ));
+        )),
+        Pin::Vm => None,
+        Pin::RemoteOnly if local_only => Some(crate::services::remote::remote_only_refusal(&format!(
+            "tab '{tab_id}' would run on this computer, but this project keeps no local copy. Open the tab on the host instead."
+        ))),
+        Pin::RemoteOnly => None,
     }
-    None
+}
+
+/// A remote-only project's tab on a **synced-copy** worker (`sync_code &&
+/// !shared_fs`): that copy was fed from the mirror the project no longer keeps
+/// (a Remote → Remote-only conversion leaves such workers behind, and a tab
+/// saved on one would restore there), so it would run on stale or missing
+/// code. Refused with the `{UPPER}_REMOTE_ONLY` sentinel, like adding such a
+/// worker (`add_compute_host`). A shared-filesystem worker, or one with code
+/// sync off (the user's own tree), runs as before (D4). Pure.
+fn synced_worker_spawn_refusal(
+    pin: Pin,
+    host: Option<&crate::schema::project::ComputeHost>,
+    tab_id: &str,
+) -> Option<String> {
+    let host = host?;
+    (pin == Pin::RemoteOnly && host.sync_code && !host.shared_fs).then(|| {
+        crate::services::remote::remote_only_refusal(&format!(
+            "tab '{tab_id}' would run on {}, whose copy of the code came from the local copy this project no longer keeps. \
+             Open the tab on the primary host or a shared-filesystem machine.",
+            host.display_label()
+        ))
+    })
+}
+
+/// The folder a `local_only` tab of the remote project `entry` runs in — its
+/// local copy, created when missing — or `None` when the project keeps none
+/// (a remote-only project: [`pinned_spawn_refusal`] has refused such a spawn
+/// already, and nothing here may mint the default mirror folder for it).
+fn local_tab_mirror(entry: &crate::schema::projects::ProjectEntry, state_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mirror = crate::services::remote::local_copy_in(entry, state_dir)?;
+    let _ = std::fs::create_dir_all(&mirror);
+    Some(mirror)
 }
 
 /// What [`prepare`] hands back: the rewritten options, ready for the PTY (or
@@ -768,23 +823,27 @@ pub async fn prepare(
         crate::services::sandbox::enforce_spawn_authority(&mut opts);
     }
 
-    // VM-tier hard refusals (`docs/vm_projects_plan.md`): for a VM project the
-    // remote→local fallback that exists elsewhere is not a perf surprise but
-    // the untrusted agent stepping outside the boundary — so a local spawn is
-    // refused outright, and a spawn while the VM is down refuses with a
-    // sentinel (the frontend offers a boot action) rather than downgrading to
-    // a host shell. Checked against the state-dir `projects.json` (the record
-    // an in-VM agent cannot write), like the authority flags above.
+    // Pinned-tier hard refusals (`docs/vm_projects_plan.md`,
+    // `docs/remote_only_projects_plan.md`): a VM or remote-only project has no
+    // tree on this machine, so the remote→local fallback that exists elsewhere
+    // is refused outright — for a VM it is the untrusted agent stepping outside
+    // the boundary — and a spawn while the VM is down refuses with a sentinel
+    // rather than downgrading to a host shell. Checked against the state-dir
+    // `projects.json` (the record an in-VM agent cannot write), like the
+    // authority flags above, so a planted `location: "local"` in a layout
+    // cannot pull a tab off the host. Before the mirror-cwd step below, which
+    // creates the mirror folder.
     if let Some(pid) = opts.project_id.as_deref().filter(|_| !assistant) {
-        let is_vm = crate::services::remote::remote_target_for(pid)
-            .is_some_and(|t| crate::services::vm::is_vm_spec(&t.spec));
-        if let Some(refusal) = vm_spawn_refusal(
-            is_vm,
-            is_vm && crate::services::vm::is_running(pid),
-            opts.local_only,
-            &opts.id,
-        ) {
+        let pin = Pin::of(crate::services::remote::remote_target_for(pid).map(|t| t.spec).as_ref());
+        let running = pin == Pin::Vm && crate::services::vm::is_running(pid);
+        if let Some(refusal) = pinned_spawn_refusal(pin, running, opts.local_only, &opts.id) {
             return Err(refusal);
+        }
+        if let Some(host_id) = opts.remote_host_id.as_deref().filter(|h| *h != crate::services::remote::PRIMARY_HOST) {
+            let host = crate::services::remote::compute_hosts_for(pid).into_iter().find(|h| h.id == host_id);
+            if let Some(refusal) = synced_worker_spawn_refusal(pin, host.as_ref(), &opts.id) {
+                return Err(refusal);
+            }
         }
     }
 
@@ -795,8 +854,13 @@ pub async fn prepare(
     if opts.local_only && !assistant {
         if let Some(pid) = opts.project_id.clone() {
             if crate::services::remote::remote_target_for(&pid).is_some() {
-                let mirror = crate::services::remote_sync::mirror_dir(&pid);
-                let _ = std::fs::create_dir_all(&mirror);
+                let entry = crate::services::remote::project_entry(&pid)?;
+                let mirror = local_tab_mirror(&entry, &state_dir).ok_or_else(|| {
+                    crate::services::remote::remote_only_refusal(&format!(
+                        "tab '{}' would run on this computer, but this project keeps no local copy.",
+                        opts.id
+                    ))
+                })?;
                 opts.cwd = mirror.to_string_lossy().into_owned();
             }
         }
@@ -876,6 +940,8 @@ pub async fn prepare(
     // resolution `spawn_pty` used to do; it no longer does, to avoid resolving
     // twice.)
     // (A chat's session is resolved once its argv is built, below.)
+    // Some resolvers consume --continue (Copilot pins a --session-id instead).
+    let requested_resume = crate::services::agent_defaults::resumed(&opts.cmd, &opts.args);
     if !assistant {
         // OpenCode's session plugin is listed per release (a directory for 2,
         // the file for 1.x): probe first, so the resolve lists the one this
@@ -973,6 +1039,13 @@ pub async fn prepare(
     // The push token, if `grant_lanes` minted one; its binding learns the fence
     // scope once the fence is decided below.
     let push_token = opts.env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned();
+
+    // Model defaults cannot affect MCP authority. In particular Vibe's native
+    // VIBE_ACTIVE_MODEL is also an older local-model tab's marker, so inject
+    // it only after grant_lanes has decided every lane from the original tab.
+    if !assistant && !requested_resume {
+        crate::services::agent_defaults::apply(&mut opts);
+    }
 
     // A local OpenCode is offered exactly the models Ollama has loaded (see
     // `services::local_drivers::opencode_loaded_models_config`) — handed over as an
@@ -1683,8 +1756,6 @@ mod tests {
         assert_eq!(env[crate::app_env!("SCOPE")], "p1");
     }
 
-    // ── vm_spawn_refusal: the VM tier's no-local-fallback guard ────────────
-
     #[test]
     fn old_tmux_drops_every_carrier_and_only_carriers() {
         use crate::services::agent_api_keys::{
@@ -1719,29 +1790,132 @@ mod tests {
         assert_eq!(env[GEMINI_BASE_ENV], "https://gateway.example");
     }
 
+    // ── pinned_spawn_refusal: the pinned tiers' no-local-fallback guard ────
+
+    fn spec_json(extra: serde_json::Value) -> crate::schema::project::RemoteSpec {
+        let mut base = serde_json::json!({ "host": "h.example", "remote_path": "/srv/p" });
+        base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
     #[test]
-    fn non_vm_projects_spawn_freely() {
-        assert_eq!(vm_spawn_refusal(false, false, true, "t1"), None);
-        assert_eq!(vm_spawn_refusal(false, false, false, "t1"), None);
+    fn the_pin_comes_from_the_spec_and_a_vm_outranks_its_flag() {
+        assert_eq!(Pin::of(None), Pin::None);
+        assert_eq!(Pin::of(Some(&spec_json(serde_json::json!({})))), Pin::None);
+        assert_eq!(Pin::of(Some(&spec_json(serde_json::json!({ "remote_only": false })))), Pin::None);
+        assert_eq!(Pin::of(Some(&spec_json(serde_json::json!({ "remote_only": true })))), Pin::RemoteOnly);
+        assert_eq!(Pin::of(Some(&spec_json(serde_json::json!({ "vm": true })))), Pin::Vm);
+        assert_eq!(Pin::of(Some(&spec_json(serde_json::json!({ "vm": true, "remote_only": false })))), Pin::Vm);
+    }
+
+    #[test]
+    fn unpinned_projects_spawn_freely() {
+        for running in [false, true] {
+            assert_eq!(pinned_spawn_refusal(Pin::None, running, true, "t1"), None);
+            assert_eq!(pinned_spawn_refusal(Pin::None, running, false, "t1"), None);
+        }
     }
 
     #[test]
     fn vm_local_spawn_is_refused_even_with_the_vm_up() {
         // The refusal is about the boundary, not availability: a host shell
         // for a VM project is never a fallback, running VM or not.
-        assert!(vm_spawn_refusal(true, true, true, "t1").is_some());
-        assert!(vm_spawn_refusal(true, false, true, "t1").is_some());
+        for running in [false, true] {
+            let msg = pinned_spawn_refusal(Pin::Vm, running, true, "t1").unwrap();
+            assert!(msg.contains("inside its VM"), "{msg}");
+        }
     }
 
     #[test]
     fn vm_down_refuses_with_the_boot_sentinel() {
-        let msg = vm_spawn_refusal(true, false, false, "t1").unwrap();
+        let msg = pinned_spawn_refusal(Pin::Vm, false, false, "t1").unwrap();
         assert!(msg.starts_with(concat!(crate::app_upper!(), "_VM_DOWN:")), "{msg}");
     }
 
     #[test]
     fn vm_up_remote_spawn_proceeds() {
-        assert_eq!(vm_spawn_refusal(true, true, false, "t1"), None);
+        assert_eq!(pinned_spawn_refusal(Pin::Vm, true, false, "t1"), None);
+    }
+
+    #[test]
+    fn a_remote_only_local_spawn_is_refused_with_its_sentinel() {
+        // `running` is a VM's lamp; it never lets a remote-only tab run here.
+        for running in [false, true] {
+            let msg = pinned_spawn_refusal(Pin::RemoteOnly, running, true, "t1").unwrap();
+            assert!(msg.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{msg}");
+            assert!(msg.contains("'t1'"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn a_remote_only_host_spawn_proceeds() {
+        for running in [false, true] {
+            assert_eq!(pinned_spawn_refusal(Pin::RemoteOnly, running, false, "t1"), None);
+        }
+    }
+
+    #[test]
+    fn a_remote_only_tab_on_a_synced_copy_worker_is_refused() {
+        let worker = |shared_fs: bool, sync_code: bool| -> crate::schema::project::ComputeHost {
+            serde_json::from_value(serde_json::json!({
+                "id": "gpu", "host": "gpu.example", "remote_path": "/w",
+                "shared_fs": shared_fs, "sync_code": sync_code,
+            }))
+            .expect("worker")
+        };
+        let msg = synced_worker_spawn_refusal(Pin::RemoteOnly, Some(&worker(false, true)), "t1").unwrap();
+        assert!(msg.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{msg}");
+        assert!(msg.contains("'t1'") && msg.contains("gpu.example"), "{msg}");
+        // D4: a shared-filesystem worker, or one with code sync off, runs.
+        assert_eq!(synced_worker_spawn_refusal(Pin::RemoteOnly, Some(&worker(true, true)), "t1"), None);
+        assert_eq!(synced_worker_spawn_refusal(Pin::RemoteOnly, Some(&worker(false, false)), "t1"), None);
+        // A plain Remote project's synced worker is fed from its mirror.
+        assert_eq!(synced_worker_spawn_refusal(Pin::None, Some(&worker(false, true)), "t1"), None);
+        assert_eq!(synced_worker_spawn_refusal(Pin::RemoteOnly, None, "t1"), None);
+    }
+
+    /// A refused remote-only spawn creates no mirror folder: the local-tab
+    /// mirror step answers `None` for it and leaves the default path absent,
+    /// while a plain Remote project still gets its mirror made.
+    #[test]
+    fn the_local_tab_mirror_is_never_minted_for_a_remote_only_project() {
+        let state = tempfile::tempdir().unwrap();
+        let entry = |id: &str, remote: serde_json::Value| -> ProjectEntry {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": id, "status": "active", "position": 0, "local_file": "",
+                "remote": remote,
+            }))
+            .unwrap()
+        };
+        let pinned = [
+            entry("ro", serde_json::json!({ "host": "h", "remote_path": "/srv/p", "remote_only": true })),
+            entry("vm", serde_json::json!({ "host": "127.0.0.1", "remote_path": "/p", "vm": true })),
+        ];
+        for project in &pinned {
+            assert_eq!(local_tab_mirror(project, state.path()), None, "{}", project.id);
+            let default = crate::services::remote_sync::default_mirror_dir_in(state.path(), &project.id);
+            assert!(!default.exists(), "{} minted {}", project.id, default.display());
+        }
+        let plain = entry("plain", serde_json::json!({ "host": "h", "remote_path": "/srv/p" }));
+        let made = local_tab_mirror(&plain, state.path()).unwrap();
+        assert_eq!(made, crate::services::remote_sync::default_mirror_dir_in(state.path(), "plain"));
+        assert!(made.is_dir());
+    }
+
+    /// In [`prepare`] the pinned refusal runs before the local-tab mirror step
+    /// (which creates the mirror folder), so a refused remote-only or VM spawn
+    /// returns its sentinel before any mirror path is resolved or created.
+    #[test]
+    fn prepare_refuses_a_pinned_spawn_before_the_mirror_step() {
+        let source = include_str!("launch_prep.rs");
+        let start = source.find("pub async fn prepare(").expect("prepare");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+        let refusal = body.find("pinned_spawn_refusal(").expect("the pinned refusal is in prepare");
+        let mirror = body.find("local_tab_mirror(").expect("the mirror step is in prepare");
+        assert!(refusal < mirror, "the pinned refusal must precede the mirror step");
+        for resolver in ["mirror_dir", "local_copy_in", "local_tab_mirror"] {
+            assert!(!body[..refusal].contains(resolver), "{resolver} runs before the pinned refusal");
+        }
     }
 
     #[test]

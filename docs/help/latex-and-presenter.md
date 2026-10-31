@@ -96,6 +96,9 @@ slide), and the panel is only a small chip in its corner.
 - On Windows and macOS the covered windows, and any open browser windows, are
   also hidden from screen capture, so a share shows them black. Linux has no
   way to do that, so there the panel is the only cover.
+- After you close a fullscreen PDF, the panel also offers **Back to
+  fullscreen**, which reopens it on the sheet you left. Your other windows
+  stay covered.
 - Desktop calendar reminders wait until the presentation ends. Reminders on
   your phone still arrive at once.
 - **Ctrl+Shift+Alt+H** covers every window without presenting, for calls

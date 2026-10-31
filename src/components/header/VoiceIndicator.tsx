@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
-import { stopVoiceSession, voiceInputOffered, watchVoiceOwner, type OwnerEvent } from "../../lib/voice/desktopVoice";
+import {
+  stopVoiceSession,
+  voiceDeviceLabel,
+  voiceInputOffered,
+  watchVoiceDevice,
+  watchVoiceOwner,
+  type OwnerEvent,
+  type VoiceDevice,
+} from "../../lib/voice/desktopVoice";
 import { UntestedTag } from "../common/UntestedTag";
 
 /**
@@ -12,10 +20,13 @@ import { UntestedTag } from "../common/UntestedTag";
 export function VoiceIndicator() {
   const t = useT();
   const [owner, setOwner] = useState<OwnerEvent | null>(null);
+  const [device, setDevice] = useState<VoiceDevice | null>(null);
   useEffect(() => (voiceInputOffered() ? watchVoiceOwner(setOwner) : undefined), []);
+  useEffect(() => (voiceInputOffered() ? watchVoiceDevice(setDevice) : undefined), []);
   if (!owner?.session || !owner.owner) return null;
   const session = owner.session;
-  const label = t("terminal.reader.voice.indicator");
+  const stop = t("terminal.reader.voice.indicator");
+  const label = device ? `${stop} · ${voiceDeviceLabel(device, t)}` : stop;
   return (
     <button
       type="button"

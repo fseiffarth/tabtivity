@@ -19,6 +19,7 @@ import {
 import { useTimerStore } from "../../stores/timer";
 import { PillStatusBars } from "./PillStatusBars";
 import { PillTabMarks } from "./PillTabMarks";
+import { ProjectPhoneMark } from "../mobile/PhoneHereMark";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { adoptSyncOutcome, isResumableAgentTab, syncWorkspace, useTabsStore } from "../../stores/tabs";
@@ -40,7 +41,10 @@ import { autoConnectEligibility } from "./autoConnectEligibility";
 import { describeDetectedSpecSource, sanitizeName } from "../../lib/projects/scaffold";
 import { useSavedCredential } from "../../lib/projects/useSavedCredential";
 import { isHpcHost, targetOfSpec } from "../../lib/remote/hpc/hpcHost";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { useRemoteMachinesStore, type DroppedGlobalMachine } from "../../stores/remote/remoteMachines";
+import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
+import { KeepLocalCopyDialog, StopLocalCopyDialog } from "./LocalCopyDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { PasswordInput } from "../common/PasswordInput";
 import { FolderPickerDialog } from "../common/FolderPickerDialog";
@@ -416,8 +420,11 @@ function PublishWindow({
     project.git_type === "remote-public" ? "public" : "private",
   );
   // Which side runs the CLI. Defaults to this machine (for a remote project, its
-  // lockstep mirror): the provider login lives here, not on the work remote.
-  const [publishFrom, setPublishFrom] = useState<PublishFrom>("local");
+  // lockstep mirror): the provider login lives here, not on the work remote. A
+  // project pinned to its host has no local copy, so only the host can publish
+  // (the backend refuses "local" for it).
+  const hostPinned = isHostPinned(project);
+  const [publishFrom, setPublishFrom] = useState<PublishFrom>(hostPinned ? "remote" : "local");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
@@ -498,7 +505,7 @@ function PublishWindow({
         {/* A work-remote project has the same history on both sides, so which one
             creates the repo is a real choice — and only this machine holds the
             provider login, which is why it is the default. */}
-        {isRemoteWork && (
+        {isRemoteWork && !hostPinned && (
           <label>
             {t("pill.publishFrom")} <UntestedTag id="pill.publishFrom" />
             <Dropdown
@@ -1079,8 +1086,10 @@ function MigrateProviderWindow({
     project.git_type === "remote-public" ? "public" : "private",
   );
   // A migration ends in a publish, so it takes the same side choice (the old
-  // origin is always moved aside wherever it actually is).
-  const [publishFrom, setPublishFrom] = useState<PublishFrom>("local");
+  // origin is always moved aside wherever it actually is) — the host alone for a
+  // project pinned to it.
+  const hostPinned = isHostPinned(project);
+  const [publishFrom, setPublishFrom] = useState<PublishFrom>(hostPinned ? "remote" : "local");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
@@ -1124,7 +1133,7 @@ function MigrateProviderWindow({
             ]}
           />
         </label>
-        {isRemoteWork && (
+        {isRemoteWork && !hostPinned && (
           <label>
             {t("pill.publishFrom")} <UntestedTag id="pill.publishFrom#2" />
             <Dropdown
@@ -1274,6 +1283,17 @@ export function ProjectPill({
   // ever scheduled for a project that actually carries a VM spec.
   const [showVmSettings, setShowVmSettings] = useState(false);
   const isVmProject = Boolean(project.vm?.enabled);
+  // No local copy (remote-only or VM): nothing on this disk to show, move, detach
+  // to, repair or open in an IDE — those rows are not offered (F3).
+  const hostPinned = isHostPinned(project);
+  // Remote ⇄ Remote-only (E8/F9): a plain Remote may stop keeping its mirror, a
+  // remote-only one may keep one again. Never a VM (v1), and only while the
+  // primary is connected: the preview asks the host which commits it has, and
+  // a new copy pairs from it.
+  const converts = !!project.remote && !isVmProject && project.remote.vm !== true;
+  const primaryConnected = useRemoteStatusStore((s) => s.byProject[project.id]?.ssh === "connected");
+  const [showStopLocalCopy, setShowStopLocalCopy] = useState(false);
+  const [showKeepLocalCopy, setShowKeepLocalCopy] = useState(false);
   const [vmRunning, setVmRunning] = useState(false);
   const pollVm = useCallback(
     (poll: PollRun) =>
@@ -1422,10 +1442,15 @@ export function ProjectPill({
     try {
       let path: string | undefined = dir;
       if (project.remote) {
-        const status = await invoke<{ path: string; exists: boolean; suggested: string }>(
-          "remote_mirror_status",
-          { projectId: project.id, name: project.name },
-        );
+        const status = await invoke<{
+          path: string;
+          exists: boolean;
+          suggested: string;
+          remoteOnly?: boolean;
+        }>("remote_mirror_status", { projectId: project.id, name: project.name });
+        // The row is hidden on a pinned project, but a stale menu (the posture
+        // read before a conversion landed) must never offer to mint a mirror.
+        if (status.remoteOnly) return;
         path = status.path;
         if (!status.exists) {
           const chosen = await open({
@@ -1759,19 +1784,24 @@ export function ProjectPill({
             >
               {t("pill.showActivity")}
             </button>
-            <button
-              onClick={() => {
-                setContextMenu(null);
-                void revealOnDisk();
-              }}
-              title={t(project.remote ? "pill.showOnDiskRemoteTitle" : "pill.showOnDiskLocalTitle")}
-            >
-              {t("pill.showOnDisk")}
-            </button>
+            {!hostPinned && (
+              <button
+                onClick={() => {
+                  setContextMenu(null);
+                  void revealOnDisk();
+                }}
+                title={t(project.remote ? "pill.showOnDiskRemoteTitle" : "pill.showOnDiskLocalTitle")}
+              >
+                {t("pill.showOnDisk")}
+              </button>
+            )}
             {/* One "Open in <IDE>" row per marker the tree carries; nothing
                 for a project without one. A remote project's markers are read
-                off its local mirror, the folder "Show on disk" reveals. */}
-            <IdeMenuItems projectId={project.id} onClose={() => setContextMenu(null)} />
+                off its local mirror, the folder "Show on disk" reveals — so a
+                project pinned to its host has none (D6). */}
+            {!hostPinned && (
+              <IdeMenuItems projectId={project.id} onClose={() => setContextMenu(null)} />
+            )}
           </div>
 
           {/* Edit metadata */}
@@ -1785,7 +1815,7 @@ export function ProjectPill({
             >
               {t("pill.renameEllipsis")}
             </button>
-            {project.remote && (
+            {project.remote && !hostPinned && (
               <button
                 className="untested"
                 onClick={() => {
@@ -1796,6 +1826,34 @@ export function ProjectPill({
               >
                 {t("pill.moveProjectEllipsis")}
                 <UntestedTag id="projectPill.1" />
+              </button>
+            )}
+            {converts && !hostPinned && (
+              <button
+                className="untested danger"
+                disabled={!primaryConnected}
+                onClick={() => {
+                  setContextMenu(null);
+                  setShowStopLocalCopy(true);
+                }}
+                title={t(primaryConnected ? "pill.stopLocalCopyMenuTitle" : "pill.stopLocalCopyNeedsConnection")}
+              >
+                {t("pill.stopLocalCopyEllipsis")}
+                <UntestedTag id="pill.stopLocalCopy" />
+              </button>
+            )}
+            {converts && hostPinned && (
+              <button
+                className="untested"
+                disabled={!primaryConnected}
+                onClick={() => {
+                  setContextMenu(null);
+                  setShowKeepLocalCopy(true);
+                }}
+                title={t(primaryConnected ? "pill.keepLocalCopyMenuTitle" : "pill.keepLocalCopyNeedsConnection")}
+              >
+                {t("pill.keepLocalCopyEllipsis")}
+                <UntestedTag id="pill.keepLocalCopy" />
               </button>
             )}
             <button
@@ -1817,17 +1875,21 @@ export function ProjectPill({
               {t("blob.categoriesEllipsis")}
               <UntestedTag id="projectPill.2" />
             </button>
-            <button
-              className="untested"
-              onClick={() => {
-                setContextMenu(null);
-                void repairProjectScaffold(project.id);
-              }}
-              title={t("pill.repairScaffoldTitle")}
-            >
-              {t("pill.repairScaffold")}
-              <UntestedTag id="projectPill.3" />
-            </button>
+            {/* The scaffold of a pinned project lives on the host, which this
+                local repair cannot reach (the backend answers no target). */}
+            {!hostPinned && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  void repairProjectScaffold(project.id);
+                }}
+                title={t("pill.repairScaffoldTitle")}
+              >
+                {t("pill.repairScaffold")}
+                <UntestedTag id="projectPill.3" />
+              </button>
+            )}
             {!project.remote && (
               <button
                 onClick={() => {
@@ -2343,7 +2405,7 @@ export function ProjectPill({
           {/* Danger zone — irreversible / destructive actions, fenced off */}
           <div className="context-menu-danger-zone">
             <div className="context-menu-group-label">{t("pill.dangerZone")}</div>
-            {project.remote && (
+            {project.remote && !hostPinned && (
               <button
                 className="danger"
                 onClick={() => {
@@ -2500,6 +2562,29 @@ export function ProjectPill({
         </AsyncConfirmDialog>
       )}
 
+      {/* Remote ⇄ Remote-only. Stopping never deletes the mirror folder (D8):
+          the outcome names where it is kept, and a failed move-out says so. */}
+      {showStopLocalCopy && (
+        <StopLocalCopyDialog
+          project={project}
+          onClose={() => setShowStopLocalCopy(false)}
+          onDone={(outcome) =>
+            void showMessage({
+              title: t("pill.stopLocalCopyDoneTitle", { name: project.name }),
+              body: outcome.moveError
+                ? t("pill.stopLocalCopyMoveFailed", { path: outcome.keptAt, error: outcome.moveError })
+                : outcome.keptAt
+                  ? t("pill.stopLocalCopyDoneBody", { path: outcome.keptAt })
+                  : t("pill.stopLocalCopyNoFolder"),
+              error: !!outcome.moveError,
+            })
+          }
+        />
+      )}
+      {showKeepLocalCopy && (
+        <KeepLocalCopyDialog project={project} onClose={() => setShowKeepLocalCopy(false)} />
+      )}
+
       {/* Unpublish (forget the push target). Non-destructive: the hosted repo
           and local history are both kept. */}
       {showUnpublish && (
@@ -2584,6 +2669,11 @@ export function ProjectPill({
               <> {t("pill.archiveRemoteNotTouchedPre")} <strong>{t("pill.notWord")}</strong> {t("pill.archiveRemoteNotTouchedPost")}</>
             )}
           </p>
+          {hostPinned && (
+            <p className="settings-help">
+              {t("pill.archiveRemoteOnlyLine")} <UntestedTag id="pill.hostPinnedMenu" />
+            </p>
+          )}
         </AsyncConfirmDialog>
       )}
 
@@ -2686,6 +2776,8 @@ export function ProjectPill({
         )}
         {/* Important / Urgent tabs of this project (tab right-click menu). */}
         <PillTabMarks scope={project.id} />
+        {/* A paired phone is in this project (stores/phonePresence). */}
+        <ProjectPhoneMark scope={project.id} />
         {/* VM state glyph (`docs/vm_projects_plan.md`): the standard remote
             lamps already say "connected" — this adds the one thing they can't,
             whether the machine itself is up. Click opens the VM dialog. */}

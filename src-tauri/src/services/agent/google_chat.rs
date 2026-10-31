@@ -3,7 +3,7 @@
 //! folder, created since launch for a fresh tab. Never read the user's home.
 //!
 //! Gemini writes JSON (newer versions JSONL with patches/rewinds) under
-//! `.gemini/tmp/<project>/chats`. Antigravity (1.3.3–1.4.5) writes SQLite
+//! `.gemini/tmp/<project>/chats`. Antigravity (1.3.3–1.4.11) writes SQLite
 //! trajectories: `steps.step_payload` is a CortexStep protobuf, not plain
 //! text. Its embedded descriptor defines user_input (19).user_response (2),
 //! planner_response (20).response (1), and metadata (5).created_at (1). Only
@@ -23,7 +23,7 @@ use crate::services::agent_sqlite::{Limits, open_read};
 use serde_json::Value;
 
 use crate::services::agent_chats::FolderChat;
-use crate::services::agent_transcript::{AgentTranscript, transcript_entry};
+use crate::services::agent_transcript::{AgentTranscript, prompt_cut_off, transcript_entry};
 use crate::services::home_io::{HomeDir, HomeFile};
 use crate::terminal::PtyOptions;
 
@@ -71,8 +71,10 @@ fn empty(version: String, previous: Option<&str>) -> AgentTranscript {
 
 fn finish(mut read: AgentTranscript, limit: usize) -> AgentTranscript {
     if read.entries.len() > limit {
+        let drop = read.entries.len() - limit;
         read.truncated = true;
-        read.entries.drain(..read.entries.len() - limit);
+        read.cut_prompt = prompt_cut_off(&read.entries, drop);
+        read.entries.drain(..drop);
     }
     read
 }

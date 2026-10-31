@@ -1017,7 +1017,9 @@ annotation plus animation (already built, and unique), and then #133–#138.*
      shows nothing; a deck keeps its presenter view with a corner Show chip.
      Lifted only by Show (per window) or Ctrl+Shift+Alt+H; Windows/macOS also
      capture-protect the covered windows and browser windows; desktop calendar
-     reminders wait until the talk ends. Setting: Settings → General.
+     reminders wait until the talk ends. Setting: Settings → General. After a
+     fullscreen PDF closes, the panel also offers Back to fullscreen, which
+     reopens it on the sheet it was left on, curtains still up.
 - [x] 🤖 Automated test — `PrivacyCurtain.test.tsx`, `CalendarAlarmPresentHold.test.ts`, `window_service` `presenting_kind` tests.
 - [ ] 🖐️ Manual test — the click-through in the plan's Verification section.
 - [ ] ✅ Works on Linux (X11)

@@ -1,6 +1,6 @@
 [package]
 name = "tabtivity"
-version = "0.2.47"
+version = "0.2.53"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
@@ -66,6 +66,12 @@ path = "tests/server_secrets.rs"
 # cl.exe or Xcode for whisper.cpp, still check it (`--features
 # desktop,voice-io`). `desktop` must never turn `voice` on, or a build could
 # not drop it; without `voice` the voice commands answer "not built".
+#
+# `voice-vulkan` (Linux, Windows) and `voice-metal` (macOS) put whisper on the
+# GPU (docs/voice_gpu_plan.md). Not in `default`: Vulkan needs `glslc` and the
+# Vulkan headers at build time, about 300 shader compiles and 56 MB of shaders
+# in the binary, and links the Vulkan loader, so the gates and clean builds
+# stay without them. Bundles and the dev build turn the OS's one on.
 [features]
 default = ["desktop", "voice"]
 desktop = [
@@ -83,7 +89,9 @@ desktop = [
 ]
 custom-protocol = ["desktop", "tauri/custom-protocol"]
 voice-io = ["desktop", "dep:cpal", "dep:tts"]
-voice = ["voice-io", "dep:whisper-rs"]
+voice = ["voice-io", "dep:whisper-rs", "dep:whisper-rs-sys"]
+voice-vulkan = ["voice", "whisper-rs-sys/vulkan"]
+voice-metal = ["voice", "whisper-rs-sys/metal"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
@@ -194,10 +202,17 @@ spellbook = "0.4"
 # through `pipewire-alsa`); its `pulseaudio` host drops input after the first
 # callback in 0.18.2, so never enable it.
 cpal = { version = "=0.18.2", optional = true }
-# whisper.cpp 1.8.3, CPU only (no vulkan/metal/cuda/openmp: step 8). Its build
-# script runs bindgen, so libclang is a build dependency; CI sets
-# `GGML_NATIVE=OFF` so the package never ships tuned to the runner's CPU.
+# whisper.cpp 1.8.3, on the CPU unless `voice-vulkan`/`voice-metal` says
+# otherwise (no cuda/openmp). Its build script runs bindgen, so libclang is a
+# build dependency; CI sets `GGML_NATIVE=OFF` so the package never ships tuned
+# to the runner's CPU.
 whisper-rs = { version = "=0.16.0", optional = true }
+# `voice-vulkan`/`voice-metal` turn the backend on here, not through
+# `whisper-rs/vulkan`: that also compiles a helper module of whisper-rs which
+# needs freshly generated bindings, so it fails wherever bindgen falls back to
+# the bundled ones (libclang without its headers). `voice::stt` reads ggml's
+# device names from here too. Pinned with `whisper-rs`, which fixes its version.
+whisper-rs-sys = { version = "=0.15.0", optional = true }
 
 # ── Mail (see docs/mail_client_plan_b.md) ────────────────────────────────────
 # MIME parsing of untrusted network input. Chosen over hand-rolling because it is

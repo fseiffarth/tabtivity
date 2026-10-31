@@ -805,9 +805,53 @@ pub fn list_project_endings_blocking(project_dir: String) -> Result<Vec<String>,
     Ok(endings.into_iter().collect())
 }
 
+/// Every path under a project (quick open, `ContextFilePicker`, the tree's
+/// name search). A remote-only project has no local tree: its files are
+/// listed on the host instead ([`list_project_paths_host`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn list_project_paths(project_dir: String) -> Result<Vec<ProjectPathEntry>, String> {
+pub async fn list_project_paths(
+    ctx: Ctx,
+    project_dir: String,
+    confirmed: Option<bool>,
+) -> Result<Vec<ProjectPathEntry>, String> {
+    if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
+        if target.spec.is_remote_only() {
+            let pool = ctx.get::<RemotePoolState>();
+            let connected = crate::services::remote::is_connected(pool, &target.project_id).await;
+            return list_project_paths_host(target.spec, connected, confirmed).await;
+        }
+    }
     app_core::rt::try_blocking("fs", move || list_project_paths_blocking(project_dir)).await
+}
+
+/// The host half of [`list_project_paths`] (`docs/remote_only_projects_plan.md`
+/// E6a): one bounded `find` over the pooled master, files only (`is_dir:
+/// false` — every caller drops folders), capped at
+/// `host_search::MAX_HOST_PATHS`. Refused while disconnected (never dials) and,
+/// on an HPC-tagged host, until `confirmed` — the search's own order.
+async fn list_project_paths_host(
+    spec: crate::schema::project::RemoteSpec,
+    connected: bool,
+    confirmed: Option<bool>,
+) -> Result<Vec<ProjectPathEntry>, String> {
+    use crate::services::remote::host_search;
+    if !connected {
+        return Err(crate::commands::search::host_disconnected_error());
+    }
+    let tagged = crate::services::hpc_mode::is_hpc_spec(&spec);
+    if let Some(err) = host_search::hpc_refusal(tagged, confirmed, &spec) {
+        return Err(err);
+    }
+    let _dial = (confirmed == Some(true))
+        .then(|| crate::services::ssh_common::user_dial(&spec.user, &spec.host, spec.port));
+    app_core::rt::try_blocking("fs", move || {
+        let out = host_search::run_bounded(&spec, &host_search::find_command(&spec.remote_path)?)?;
+        Ok(host_search::parse_find(&out)
+            .into_iter()
+            .map(|path| ProjectPathEntry { path, is_dir: false })
+            .collect())
+    })
+    .await
 }
 
 pub fn list_project_paths_blocking(project_dir: String) -> Result<Vec<ProjectPathEntry>, String> {
@@ -2025,22 +2069,9 @@ fn collect_project_paths(
 const MAX_SCAN_DEPTH: usize = 64;
 
 fn should_skip_ending_scan_dir(name: &str) -> bool {
-    crate::brand::is_project_dir(name) || matches!(
-        name,
-        ".git"
-            | "node_modules"
-            | "target"
-            | "dist"
-            | "build"
-            | ".next"
-            | ".cache"
-            // Python vendor/artifact dirs — a 50k-file venv would otherwise be
-            // walked on every Ctrl+P/QuickOpen scan.
-            | ".venv"
-            | "venv"
-            | "__pycache__"
-            | ".tox"
-    )
+    // One list with the search and the host walks (`host_search::SKIP_DIRS`);
+    // a 50k-file venv would otherwise be walked on every Ctrl+P/QuickOpen scan.
+    crate::brand::is_project_dir(name) || crate::services::remote::host_search::SKIP_DIRS.contains(&name)
 }
 
 /// Write `content` to `target_c`, a path `canonical_or_new` resolved and

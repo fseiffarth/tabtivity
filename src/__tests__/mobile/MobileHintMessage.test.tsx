@@ -1,24 +1,34 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HintMessage, HintQueue, resetTips } from "../../../mobile-web/src/components/HintMessage";
-import { readFlag, readHintReads, writeFlag, writeHintReads } from "../../../mobile-web/src/prefs";
+import { readFlag, readHintReads, writeFlag, writeHintReads, writeTipShownAt } from "../../../mobile-web/src/prefs";
 
 beforeEach(() => {
   localStorage.clear();
   resetTips();
 });
+/** Moves the phone's clock past the half hour between two tips. */
+function halfHourLater(): void {
+  const now = Date.now() + 30 * 60_000;
+  vi.spyOn(Date, "now").mockReturnValue(now);
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
 
 describe("phone hint messages", () => {
-  it("closes for one visit and returns on the next launch", () => {
+  it("closes for one visit and returns after the half hour", () => {
     const first = render(<HintMessage hint="agentHold" floating vars={{ agent: "Claude" }} />);
     expect(screen.getByRole("status").textContent).toBe("Tapping ＋ opens Claude; hold ＋ to start a different agent.");
     fireEvent.click(screen.getByRole("button", { name: "Close tip" }));
     expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
     first.unmount();
+    render(<HintMessage hint="agentHold" floating />);
+    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
+    cleanup();
+    halfHourLater();
     render(<HintMessage hint="agentHold" floating />);
     expect(screen.getByRole("status")).toBeTruthy();
   });
@@ -29,6 +39,7 @@ describe("phone hint messages", () => {
     expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
     expect(readHintReads()).toEqual({});
     first.unmount();
+    halfHourLater();
     render(<HintMessage hint="agentHold" />);
     expect(screen.getByText(/Tapping ＋ opens/)).toBeTruthy();
   });
@@ -39,6 +50,7 @@ describe("phone hint messages", () => {
     expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
     expect(readHintReads()).toEqual({ agentHold: 1 });
     first.unmount();
+    halfHourLater();
     render(<><HintMessage hint="agentHold" /><HintMessage hint="agentDefault" /></>);
     expect(screen.queryByText(/Tapping ＋ opens/)).toBeNull();
     expect(screen.getByText(/Tap ☆ beside an agent/)).toBeTruthy();
@@ -91,7 +103,39 @@ describe("phone hint messages", () => {
     // The next tip never takes the closed one's place.
     expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
     first.unmount();
+    halfHourLater();
     render(<HintQueue hints={["sendHold", "chatMenu", "chatSwipe"]} />);
     expect(screen.getByText(/Swipe right over the chat/)).toBeTruthy();
+  });
+
+  it("shows one tip per half hour across screens; the open one comes back until closed", () => {
+    const chat = render(<HintQueue hints={["chatMenu"]} />);
+    expect(screen.getByText(/Chat ▾/)).toBeTruthy();
+    // Another screen's tip waits while this one holds the half hour.
+    const todo = render(<HintQueue hints={["todoDone"]} />);
+    expect(screen.getAllByRole("complementary", { name: "Tip" })).toHaveLength(1);
+    todo.unmount();
+    chat.unmount();
+    // Left open, it is back on its screen; closed, it waits like the others.
+    render(<HintQueue hints={["chatMenu"]} />);
+    expect(screen.getByText(/Chat ▾/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    cleanup();
+    render(<><HintQueue hints={["chatMenu"]} /><HintQueue hints={["todoDone"]} /></>);
+    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
+    cleanup();
+    halfHourLater();
+    render(<HintQueue hints={["todoDone"]} />);
+    expect(screen.getAllByRole("complementary", { name: "Tip" })).toHaveLength(1);
+  });
+
+  it("the half hour holds across a reload, and a stored time ahead of the clock does not block", () => {
+    writeTipShownAt(Date.now() - 60_000);
+    render(<HintMessage hint="agentDefault" />);
+    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
+    cleanup();
+    writeTipShownAt(Date.now() + 3_600_000);
+    render(<HintMessage hint="agentDefault" />);
+    expect(screen.getByText(/Tap ☆ beside an agent/)).toBeTruthy();
   });
 });

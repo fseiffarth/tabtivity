@@ -4,6 +4,7 @@ import {
   RailAgentsIcon,
   RailAppsIcon,
   RailAssistantIcon,
+  RailClisIcon,
   RailDivergedIcon,
   RailFilesIcon,
   RailGitIcon,
@@ -30,6 +31,7 @@ export const SIDE_PANEL_VIEWS: ReadonlyArray<SidePanelViewDef> = [
   { view: "git", labelKey: "projectFilesView.tabGit", Icon: RailGitIcon },
   { view: "windows", labelKey: "projectFilesView.tabApps", Icon: RailAppsIcon },
   { view: "agents", labelKey: "projectFilesView.tabAgents", Icon: RailAgentsIcon },
+  { view: "clis", labelKey: "cliOverview.tab", Icon: RailClisIcon },
   { view: "orange", labelKey: "projectFilesView.tabDiverged", Icon: RailDivergedIcon },
   { view: "sessions", labelKey: "projectFilesView.tabSessions", Icon: RailSessionsIcon },
   { view: "jobs", labelKey: "projectFilesView.tabJobs", Icon: RailJobsIcon },
@@ -44,6 +46,9 @@ export interface SidePanelViewGates {
   inBox: boolean;
   projectId: string | null | undefined;
   remote: boolean;
+  /** The remote project keeps a local mirror — false for a host-pinned one
+   *  (`isHostPinned`), which has nothing to diverge from the host. */
+  mirror: boolean;
   slurm: boolean;
   remarks: boolean;
   todo: boolean;
@@ -55,6 +60,7 @@ export function sidePanelViewAvailable(view: FilesPanelView, g: SidePanelViewGat
   const project = !g.inBox && !!g.projectId;
   switch (view) {
     case "orange":
+      return project && g.remote && g.mirror;
     case "sessions":
       return project && g.remote;
     case "jobs":

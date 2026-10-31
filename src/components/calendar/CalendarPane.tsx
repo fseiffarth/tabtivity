@@ -382,6 +382,30 @@ export function CalendarPane({ visible }: Props) {
     [events, updateEvent, updateOccurrence],
   );
 
+  /**
+   * A month-view bar was dragged to another day. Only the day moves: the time of
+   * day and the length stay, and an all-day event stays all-day (`addDays` keeps
+   * a bare date bare).
+   */
+  const onMoveDays = useCallback(
+    async (occ: Occurrence, days: number) => {
+      const event = events.find((e) => e.id === occ.eventId);
+      if (!event || days === 0) return;
+      const start = addDays(occ.start, days);
+      const end = addDays(occ.end, days);
+      try {
+        if (occ.recurring) {
+          await updateOccurrence(occ.eventId, occ.occurrenceStart, { start, end });
+          return;
+        }
+        await updateEvent({ ...event, start, end });
+      } catch (err) {
+        if (!isCalDavConflict(err)) setNotice(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [events, updateEvent, updateOccurrence],
+  );
+
   /** A block's bottom edge was dragged. */
   const onResize = useCallback(
     async (occ: Occurrence, newEnd: string) => {
@@ -775,6 +799,7 @@ export function CalendarPane({ visible }: Props) {
               onSelect={(date) => setAnchor(date)}
               onCreateOn={(date) => openCreate(date)}
               onOpen={openOccurrence}
+              onMoveDays={(occ, days) => void onMoveDays(occ, days)}
               onMenu={setMenu}
               weekStart={weekStart}
             />

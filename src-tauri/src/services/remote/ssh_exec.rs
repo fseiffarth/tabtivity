@@ -675,6 +675,56 @@ pub fn valid_tmux_session_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// The agent a host tmux session runs, as its launch recorded it: enough to
+/// bring the session back as the agent tab it was, rather than as a shell onto
+/// it. The closed tab itself is gone after a restart, so the host's own record
+/// is what is left.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSessionAgent {
+    /// The CLI the session was started on (`claude`).
+    pub cmd: String,
+    /// The tab's launch id: its `sessionId`, and `TAB_UID` in the CLI's environment.
+    pub session_id: String,
+}
+
+/// The one-shot printing what the session's pane was started with — the target
+/// [`tmux_wrap_exec`] handed `new-session`, which outlives every client and
+/// every older build's tab. Empty when the session has ended. `None` for a name
+/// that is not safe bare in a script.
+pub fn tmux_start_command_script(session: &str) -> Option<String> {
+    valid_tmux_session_name(session).then(|| {
+        format!(
+            "{HOST_TMUX_EXACT}tmux display-message -p -t \"$e\"{session}\"$c\" '#{{pane_start_command}}' 2>/dev/null || true"
+        )
+    })
+}
+
+/// The agent in a session's start command, in the shape [`remote_command`] writes
+/// it: the tab's `TAB_UID` export, then the last `exec <cli>` of the launch (the
+/// `-lc` line's own). tmux prints the command with one more layer of quoting,
+/// so quotes are dropped rather than parsed. A shell tab, a foreign session and a
+/// tab without a launch id answer `None`. Only these two values leave here: the
+/// line also holds the tab's other exports.
+pub fn parse_session_agent(start_command: &str) -> Option<HostSessionAgent> {
+    let bare: String = start_command.chars().filter(|c| !matches!(c, '\'' | '"' | '\\')).collect();
+    let marker = format!("{}=", crate::app_env!("TAB_UID"));
+    let (_, after) = bare.split_once(&marker)?;
+    let session_id = after.split([' ', ';']).next()?;
+    if !crate::services::agent_session::is_uuid_shaped(session_id) {
+        return None;
+    }
+    let mut words = bare.split_whitespace();
+    let mut cmd = None;
+    while let Some(word) = words.next() {
+        if word == "exec" {
+            cmd = words.next().map(|next| next.trim_end_matches(';'));
+        }
+    }
+    let cmd = cmd.filter(|cmd| !cmd.is_empty() && !cmd.starts_with('$'))?;
+    Some(HostSessionAgent { cmd: cmd.to_string(), session_id: session_id.to_string() })
+}
+
 /// The tmux **rename-session** one-shot (TODO #85): `tmux rename-session -t <old>
 /// <new>`. Both names are `shell_quote`d (the `old` may be an arbitrary foreign
 /// name); the caller MUST have checked `new` with [`valid_tmux_session_name`].
@@ -1065,6 +1115,12 @@ pub fn master_check_args(control_path: &std::path::Path) -> Result<Vec<String>, 
     ])
 }
 
+/// Tests: control paths [`master_alive`] answers yes for without an `ssh`,
+/// so a sidecar test can take a host create past its connection check. Each
+/// test adds its own tempdir's path, so tests never see each other's.
+#[cfg(test)]
+pub(crate) static TEST_LIVE_MASTERS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 /// Whether a ControlMaster answers on `control_path` within `limit` — the
 /// **strict** reading, for the phone sidecar, which acts on `true` by riding
 /// the master: anything short of the master saying yes (no `ssh`, a spawn
@@ -1072,6 +1128,10 @@ pub fn master_check_args(control_path: &std::path::Path) -> Result<Vec<String>, 
 /// [`control_master_alive`] is the opposite reading, for callers that act on
 /// `false` by deleting.
 pub fn master_alive(control_path: &std::path::Path, limit: std::time::Duration) -> bool {
+    #[cfg(test)]
+    if TEST_LIVE_MASTERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|path| path == control_path) {
+        return true;
+    }
     if cfg!(target_os = "windows") {
         return false;
     }
@@ -1188,9 +1248,14 @@ pub fn remote_git_command(remote_path: &str, git_args: &[String]) -> String {
 /// `ssh_target` inside `ssh_base_args` and here. Returned as `Vec<String>` so it
 /// is unit-testable without connecting.
 pub fn git_ssh_args(spec: &RemoteSpec, git_args: &[String]) -> Result<Vec<String>, String> {
+    git_ssh_args_within(spec, git_args, None)
+}
+
+/// [`git_ssh_args`] with the remote command from [`bounded_remote_git_command`].
+pub fn git_ssh_args_within(spec: &RemoteSpec, git_args: &[String], host_secs: Option<u64>) -> Result<Vec<String>, String> {
     validate_arg("remote path", &spec.remote_path)?;
     let mut args = ssh_base_args(&spec.user, &spec.host, spec.port)?;
-    args.push(remote_git_command(&spec.remote_path, git_args));
+    args.push(bounded_remote_git_command(&spec.remote_path, git_args, host_secs));
     Ok(args)
 }
 
@@ -1200,15 +1265,61 @@ pub fn git_ssh_args(spec: &RemoteSpec, git_args: &[String]) -> Result<Vec<String
 /// that is what lets `commands::git` reuse every existing parser unchanged for
 /// remote projects. The remote `git`'s credentials/SSH keys are the host's own
 /// (the process runs there), so e.g. `push` authenticates with the host login.
+///
+/// Bounded like a local git call: a wedged ControlMaster or a hung host must
+/// not pile blocked workers up behind the git bar's poll — for a remote-only
+/// project every git call takes this path. The ceiling is the git verb's
+/// (`git_bounded::wrapped_output`, read off `git_args` before they are wrapped
+/// into the one ssh command string), and a timeout reaps the ssh child. Killing
+/// that child does not stop the git on the host (no pty, so no hangup reaches
+/// it), so when the host has `timeout` the call runs under it too, a little
+/// past the same ceiling ([`bounded_remote_git_command`]).
+///
+/// A hooks-off call whose verb runs a hook is refused on a host git too old to
+/// turn hooks off (`git_hardened::host_hooks_off_refusal`); the host's git and
+/// `timeout` are probed once per host (`git_hardened::host_git`).
 pub fn run_git_remote(
     spec: &RemoteSpec,
     git_args: &[String],
 ) -> Result<std::process::Output, String> {
-    let args = git_ssh_args(spec, git_args)?;
-    crate::paths::command_no_window("ssh")
-        .args(&args)
-        .output()
+    // A spec ssh would refuse fails here, before anything is probed.
+    git_ssh_args(spec, git_args)?;
+    let host = crate::services::git_hardened::host_git(spec);
+    if let Some(refusal) = crate::services::git_hardened::host_hooks_off_refusal(host.version, git_args) {
+        return Err(refusal);
+    }
+    let args = git_ssh_args_within(spec, git_args, host.timeout.then(|| host_timeout_secs(git_args)))?;
+    let mut cmd = crate::paths::command_no_window("ssh");
+    cmd.args(&args);
+    crate::services::git_bounded::wrapped_output(cmd, git_args, host.timeout)
         .map_err(|e| format!("failed to run git over ssh: {e}"))
+}
+
+/// The host-side ceiling for `git <git_args>`: the verb's own
+/// (`git_bounded::timeout_for_args`) plus a margin, so the local bound — which
+/// starts before ssh even connects — always fires first and reports the
+/// timeout; the host's then only reaps what is left. Pure.
+pub(crate) fn host_timeout_secs(git_args: &[String]) -> u64 {
+    crate::services::git_bounded::timeout_for_args(git_args).as_secs() + HOST_TIMEOUT_MARGIN_SECS
+}
+
+/// See [`host_timeout_secs`].
+const HOST_TIMEOUT_MARGIN_SECS: u64 = 30;
+
+/// [`remote_git_command`], run under the host's `timeout` when `host_secs` is
+/// `Some`: `cd <path> && timeout -k 10 <secs> git <args…>` — plain words, so any
+/// login shell runs it (`timeout` sends TERM to git's process group, then KILL
+/// 10 s on). `None` is exactly [`remote_git_command`]. Pure.
+pub fn bounded_remote_git_command(remote_path: &str, git_args: &[String], host_secs: Option<u64>) -> String {
+    let Some(secs) = host_secs else {
+        return remote_git_command(remote_path, git_args);
+    };
+    let mut s = format!("cd {} && timeout -k 10 {secs} git", shell_quote(remote_path));
+    for a in git_args {
+        s.push(' ');
+        s.push_str(&shell_quote(a));
+    }
+    s
 }
 
 /// Run a single shell command on `spec`'s host over SSH (riding the shared
@@ -1241,11 +1352,31 @@ pub fn remote_shell_command(spec: &RemoteSpec, command: &str) -> Result<std::pro
 /// nothing else). Never interpolate a path, branch name, or any other user-controlled
 /// string into it; `remote_path` is the sole variable here and it is `shell_quote`d.
 pub fn run_remote_script(spec: &RemoteSpec, script: &str) -> Result<std::process::Output, String> {
+    run_remote_shell(spec, &remote_script_line(spec, script)?)
+}
+
+/// [`run_remote_script`], stopped at `timeout` (`git_bounded::run`: the ssh
+/// child's subtree is killed and reaped) — for a script that must not hold its
+/// caller on a stalled ControlMaster. Same duty on `script`.
+pub fn run_remote_script_within(
+    spec: &RemoteSpec,
+    script: &str,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    let mut cmd = remote_shell_command(spec, &remote_script_line(spec, script)?)?;
+    let opts = crate::services::git_bounded::Opts { timeout: Some(timeout), no_precheck: true, ..Default::default() };
+    match crate::services::git_bounded::run(&mut cmd, opts) {
+        Ok(ran) => Ok(ran.output),
+        Err(e) => Err(format!("failed to run a script over ssh: {e}")),
+    }
+}
+
+/// The remote command line for [`run_remote_script`]: `cd <path> && { <script> }`.
+fn remote_script_line(spec: &RemoteSpec, script: &str) -> Result<String, String> {
     validate_arg("remote path", &spec.remote_path)?;
     // The newline before `}` terminates the group's last command, so a script may end in
     // either `fi` or a trailing `;` without a syntax error either way.
-    let cmd = format!("cd {} && {{ {script}\n}}", shell_quote(&spec.remote_path));
-    run_remote_shell(spec, &cmd)
+    Ok(format!("cd {} && {{ {script}\n}}", shell_quote(&spec.remote_path)))
 }
 
 /// Best-effort recursive byte size of a directory on the host, over SSH.
@@ -1331,15 +1462,14 @@ pub fn remote_du_raw(spec: &RemoteSpec, remote_dir: &str) -> Result<String, Stri
 /// agent tabs / git can `cd` into the project root. `mkdir -p <path>` is handed
 /// to the remote `$SHELL -c`, so the path is single-quoted via `shell_quote` and
 /// validated (no leading `-`, no control chars). Returns the trimmed stderr on
-/// failure; callers treat it as best-effort.
+/// failure; callers treat it as best-effort. Bounded ([`bounded_ssh_output`]).
 pub fn remote_mkdir_p(spec: &RemoteSpec) -> Result<(), String> {
     validate_arg("remote path", &spec.remote_path)?;
     let mut args = ssh_base_args(&spec.user, &spec.host, spec.port)?;
     args.push(format!("mkdir -p {}", shell_quote(&spec.remote_path)));
-    let out = crate::paths::command_no_window("ssh")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("failed to run mkdir over ssh: {e}"))?;
+    let mut cmd = crate::paths::command_no_window("ssh");
+    cmd.args(&args);
+    let out = bounded_ssh_output(cmd, "mkdir")?;
     if out.status.success() {
         Ok(())
     } else {
@@ -1363,14 +1493,30 @@ pub fn remote_git_init(spec: &RemoteSpec) -> Result<(), String> {
         "cd {path} && git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {init}",
         init = crate::services::git_init::INIT_SHELL
     ));
-    let out = crate::paths::command_no_window("ssh")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("failed to run git init over ssh: {e}"))?;
+    let mut cmd = crate::paths::command_no_window("ssh");
+    cmd.args(&args);
+    let out = bounded_ssh_output(cmd, "git init")?;
     if out.status.success() {
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// Run a one-shot ssh command for [`remote_mkdir_p`] / [`remote_git_init`],
+/// bounded at `git_bounded::WRITE_TIMEOUT`: a wedged ControlMaster or a hung
+/// host must not hold project creation (or the remote-only host init) forever.
+/// A timeout kills and reaps the ssh child's whole subtree and says what was
+/// stopped (`what`), never a fake empty output. No `hazard` precheck: nothing
+/// local is read.
+fn bounded_ssh_output(mut cmd: std::process::Command, what: &str) -> Result<std::process::Output, String> {
+    use crate::services::git_bounded::{run, Opts, RunError, WRITE_TIMEOUT};
+    match run(&mut cmd, Opts { timeout: Some(WRITE_TIMEOUT), no_precheck: true, ..Opts::default() }) {
+        Ok(ran) => Ok(ran.output),
+        Err(RunError::TimedOut(_)) => Err(format!(
+            "{what} over ssh timed out and was stopped. The connection to the host may be stalled."
+        )),
+        Err(e) => Err(format!("failed to run {what} over ssh: {e}")),
     }
 }
 

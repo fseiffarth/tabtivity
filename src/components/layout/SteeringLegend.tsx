@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { useKeyboardSteeringStore, type SteeringHandoff } from "../../stores/keyboardSteering";
 import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
+import { useExperimental } from "../../lib/experimental";
+import { voiceInputOffered } from "../../lib/voice/desktopVoice";
 import {
   STEERING_GROUPS,
   modifierLabel,
@@ -27,7 +29,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { documentScroller } from "../../lib/shortcuts/documentScroll";
-import { KeyboardIcon } from "../common/icons/Icon";
+import { KeyboardIcon, MicIcon } from "../common/icons/Icon";
 import { HUB_BOTTOM, HUB_R, orbitLayout, type Orbit } from "../../lib/shortcuts/steeringOrbit";
 
 const REGION_LABEL: Record<string, TranslationKey> = {
@@ -97,6 +99,10 @@ const HANDOFF_BACK_KEY = "Esc";
  * prompt box, a surface's search field (`handedTo`) — the mode is off but the
  * legend stays, down to that box's keys and Esc back to steering, folded or
  * not: the way back is the one thing it must not hide.
+ *
+ * Steering takes the Chat's composer and so its Hands-free chip off screen
+ * while the loop goes on listening, so the hub wears a mic on its rim for as
+ * long as hands-free is on — folded and lent too.
  */
 export function SteeringLegend() {
   const t = useT();
@@ -118,6 +124,15 @@ export function SteeringLegend() {
   const tabScope = useTabsStore((s) => s.scope);
   const activeTab = useTabsStore((s) => (s.activeKey ? s.tabs.find((tab) => tab.key === s.activeKey) : undefined));
   const steerKeys = useSettingsStore((s) => s.settings?.steering_keys) as SteeringKeyMap | undefined;
+  const handsFreeFlag = useExperimental("voice_hands_free");
+  const handsFreeChip = useSettingsStore((s) => s.settings?.voice_hands_free_on ?? false);
+  const handsFree = handsFreeFlag && handsFreeChip && voiceInputOffered();
+  const label = t("terminal.reader.voice.handsFree");
+  const mic = handsFree && (
+    <span className="steering-legend-mic" role="img" aria-label={label} title={label}>
+      <MicIcon size={11} />
+    </span>
+  );
 
   const inPane = active && (level === "panes" || level === "tabs");
   const agents = useMemo(
@@ -186,6 +201,7 @@ export function SteeringLegend() {
     const hub = (
       <span className="steering-legend-hub">
         <KeyboardIcon size={16} />
+        {mic}
       </span>
     );
     return createPortal(
@@ -218,6 +234,7 @@ export function SteeringLegend() {
               {keyGlyph(exitKey)}
             </kbd>
           )}
+          {mic}
         </button>
       </div>,
       document.body,
@@ -297,6 +314,7 @@ export function SteeringLegend() {
     >
       <KeyboardIcon size={16} />
       <kbd>{legendKey}</kbd>
+      {mic}
     </button>
   );
   return createPortal(

@@ -33,6 +33,7 @@ import { IS_HOST_WINDOWS } from "../platform";
 import { noteClosedAgentTab } from "../../stores/agents/closedAgentTabs";
 import { MOBILE_ACCESS_KEY } from "../brand";
 import { ROOT_SCOPE } from "../terminal/ptyId";
+import { isHostPinned } from "../projectTabHost";
 
 /**
  * The persistent host tmux session a tab owns, or `null` if the tab is not a
@@ -50,7 +51,7 @@ export function persistentSessionOf(
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
   if (!project?.remote) return null;
   const rawHostId = remoteHostIdOf(
-    effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }),
+    effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
   );
   if (rawHostId === null) return null; // a local-running tab has no host session
   const hostId =
@@ -81,7 +82,7 @@ export function localPersistentSessionOf(scope: string, tab: TabEntry): string |
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
   const localRunning =
     !project?.remote ||
-    effectiveTabLocation(tab, { vmProject: !!project?.vm?.enabled }) === "local";
+    effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }) === "local";
   if (!localRunning) return null;
   if (useSettingsStore.getState().settings?.persist_local_sessions === false) return null;
   return tab.tmuxSession;
@@ -100,7 +101,7 @@ export function mintedLocalSessionOf(scope: string, tab: TabEntry): string | nul
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
   const localRunning =
     !project?.remote ||
-    effectiveTabLocation(tab, { vmProject: !!project?.vm?.enabled }) === "local";
+    effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }) === "local";
   const enabled = useSettingsStore.getState().settings?.persist_local_sessions !== false;
   return shouldPersistLocalTab(
     tab.kind,

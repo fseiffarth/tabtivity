@@ -2,7 +2,7 @@ use super::{
     AgentTabPrompt, AgentTabPrompts, AgentTabSchedules, AgentTabStatus, AgentTabTiming, ClosedAgentTab, DesktopRequest,
     DesktopResponse, git_dot, MobileAlertItem,
     MobileAlertsSnapshot, MobileMarkupAnswer,
-    MobileMailView, MobilePromptInput, MobileScheduleInput, PromptMutation, ScheduleMutation,
+    MobileMailView, MobilePromptInput, MobileScheduleInput, PromptMutation, ScheduleMutation, SyncDirection, SyncOp,
 };
 use crate::schema::AgentScheduleRule;
 use serde_json::json;
@@ -63,6 +63,7 @@ fn catalog_statuses_stay_on_the_internal_control_plane() {
             closed_at: 1_700_000_200_000,
         }],
         git: Some("unpushed".into()),
+        diverged: None,
     };
     let response_json = serde_json::to_value(response).expect("serialize catalog response");
     assert_eq!(response_json["git"], "unpushed");
@@ -129,6 +130,33 @@ fn a_newer_desktop_costs_the_phone_only_the_field_this_build_lacks() {
     assert_eq!(agents.len(), 1, "the agent menu survives the unknown field");
     assert_eq!(statuses[0].status, "working");
     assert_eq!(statuses[0].working_at, Some(1_700_000_000_000));
+}
+
+/// The Diverged list's kinds: only a resolve changes anything, each answer is
+/// stated before the sidecar gives up on it, and a transfer gets real time.
+#[test]
+fn the_sync_requests_are_placed_and_timed() {
+    let id = || "request-1".to_string();
+    let project = || "p".to_string();
+    let resolve = DesktopRequest::SyncResolve { request_id: id(), project_id: project(), op: SyncOp::DeleteHost, paths: vec!["a.txt".into()] };
+    let wire = serde_json::to_value(&resolve).expect("serialize");
+    assert_eq!((wire["type"].as_str(), wire["op"].as_str()), (Some("sync_resolve"), Some("delete_host")));
+    assert!(resolve.is_mutation());
+    let reads = [
+        DesktopRequest::SyncDiverged { request_id: id(), project_id: project() },
+        DesktopRequest::SyncPreview { request_id: id(), project_id: project(), direction: SyncDirection::Push, paths: vec![] },
+        DesktopRequest::SyncDiff { request_id: id(), project_id: project(), path: "a.txt".into() },
+    ];
+    for read in &reads {
+        assert!(!read.is_mutation(), "{read:?}");
+    }
+    for request in reads.iter().chain([&resolve]) {
+        assert!(request.desktop_timeout() < request.response_timeout(), "{request:?}");
+    }
+    assert!(resolve.desktop_timeout() >= std::time::Duration::from_secs(120));
+    // An older desktop's catalog has no count; it decodes as none.
+    let older: DesktopResponse = serde_json::from_value(serde_json::json!({ "status": "catalog", "agents": [] })).expect("decode");
+    assert!(matches!(older, DesktopResponse::Catalog { diverged: None, .. }));
 }
 
 #[test]
@@ -294,6 +322,22 @@ fn a_tabby_model_switch_names_the_tab_pair_and_a_model_name_only() {
     .expect("deserialize rows");
     assert!(matches!(worded, DesktopResponse::AssistantModels { ref rows, current: None, .. }
         if rows[0].label == "Default (recommended)" && rows[0].description.as_deref() == Some("Sonnet 5.5")));
+}
+
+#[test]
+fn location_moves_name_the_tab_pair_and_a_location_word() {
+    let request = DesktopRequest::MoveLocation {
+        request_id: "request-locate".into(),
+        project_id: "raw-project".into(),
+        tmux_session: "raw-tmux".into(),
+        location: "host:w1".into(),
+    };
+    assert_eq!(request.request_id(), "request-locate");
+    assert!(request.is_mutation());
+    assert!(request.desktop_timeout() < request.response_timeout());
+    let json = serde_json::to_value(&request).expect("serialize move");
+    assert_eq!(json["type"], "move_location");
+    assert_eq!(json["location"], "host:w1");
 }
 
 #[test]

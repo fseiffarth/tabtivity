@@ -6,8 +6,9 @@
 //! every fence that tree is read-only and the CLI's own auto-updater is
 //! switched off where the CLI has a switch, so an agent cannot replace the
 //! binary it runs as; updates run outside the fence (Manage CLIs → install
-//! again). A CLI the user installed on the host keeps being detected and keeps
-//! its self-update path in the fence until it is reinstalled through Tabtivity.
+//! again). A CLI the user installed on the host keeps being detected, is just
+//! as read-only in the fence, and is shadowed once reinstalled through
+//! Tabtivity: this tree's launcher dirs come first on PATH.
 //!
 //! Verified per installer only where noted in `commands::agents`; an
 //! installer that ignores these variables lands in the user's home as before.
@@ -147,6 +148,21 @@ pub fn fence_read_only_paths() -> Vec<String> {
     }
 }
 
+/// The argv that updates a CLI in place, by registry `id`, for the CLI whose
+/// installer cannot: Antigravity's `install.sh` and `install.ps1` stop at
+/// "already installed" with exit 0, so running one again changes nothing and
+/// reads as success. `agy update` replaces the binary it runs from, and exits
+/// non-zero with the reason on stderr when it cannot (1.4.5, 2026-10-30).
+const SELF_UPDATE_ARGV: &[(&str, &[&str])] = &[("antigravity", &["update"])];
+
+/// See [`SELF_UPDATE_ARGV`]; `None` means the installer run again is the update.
+pub fn self_update_argv(agent_id: &str) -> Option<&'static [&'static str]> {
+    SELF_UPDATE_ARGV
+        .iter()
+        .find(|(id, _)| *id == agent_id)
+        .map(|(_, argv)| *argv)
+}
+
 /// The auto-update switch of a CLI, by command basename. Only switches that
 /// are documented; a CLI without one simply fails its update on the
 /// read-only tree and carries on.
@@ -206,6 +222,12 @@ pub(crate) fn migrate_legacy_stores_in(state_dir: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_cli_whose_installer_cannot_update_has_a_self_update_argv() {
+        assert_eq!(super::self_update_argv("antigravity"), Some(&["update"][..]));
+        assert_eq!(super::self_update_argv("claude"), None);
+    }
+
     use super::*;
 
     #[test]

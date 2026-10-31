@@ -1,7 +1,7 @@
 {
   "name": "tabtivity",
   "private": true,
-  "version": "0.2.47",
+  "version": "0.2.53",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "engines": {
@@ -57,10 +57,10 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.2",
     "@testing-library/react": "^16.3.3",
-    "@testing-library/user-event": "^14.6.7",
+    "@testing-library/user-event": "^14.6.8",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "@vitejs/plugin-react": "6.1.1",
+    "@vitejs/plugin-react": "6.1.2",
     "autoprefixer": "^10",
     "eslint": "^9.39.5",
     "eslint-plugin-react-hooks": "^5.2.0",
@@ -68,9 +68,9 @@
     "postcss": "^8",
     "react-scan": "^0.5.7",
     "typescript": "^5",
-    "typescript-eslint": "^8.71.1",
+    "typescript-eslint": "^8.71.2",
     "typescript-native": "npm:typescript@7.0.2",
-    "vite": "8.3.3",
+    "vite": "8.3.4",
     "vitest": "5.0.5"
   },
   "overrides": {

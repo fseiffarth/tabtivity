@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { rollHint } from "../../../src/lib/hintChance";
 import { isUntested } from "../../../src/lib/untested";
-import { readFlag, readHintReads, writeFlag, writeHintReads, type MobileFlag } from "../prefs";
+import { readFlag, readHintReads, readTipShownAt, writeFlag, writeHintReads, writeTipShownAt, type MobileFlag } from "../prefs";
 
 /** Every phone tip: one short thing each. A tip split from a longer one keeps
  * that one's old per-tip flag, so a "never again" on it still holds. */
@@ -49,16 +49,40 @@ export type HintKey = keyof typeof HINTS;
  * by every screen it sits on. A tip read this launch is stored as lost. */
 const draws = new Map<HintKey, boolean>();
 
-/** Whether `hint` may show: tips are on, its old per-tip flag is not set, and
- * it won this launch's draw. */
+/** At most one tip card per half hour on the whole phone: every screen carries
+ * its own tips, and one on each visit was a tip every few taps. */
+const TIP_GAP_MS = 30 * 60_000;
+
+/** The tip that took the current half hour and has not been closed: it may come
+ * back when its screen is opened again, while no other tip may. */
+let holder: HintKey | undefined;
+
+/** Whether `hint` may show: tips are on, its old per-tip flag is not set, the
+ * half hour since the last tip is over (or the tip is that one), and it won
+ * this launch's draw. A stored time ahead of the clock counts as over. */
 function tipShows(hint: HintKey): boolean {
   if (readFlag("hintsOff") || readFlag(HINTS[hint].flag)) return false;
+  const since = Date.now() - readTipShownAt();
+  if (hint !== holder && since >= 0 && since < TIP_GAP_MS) return false;
   let drawn = draws.get(hint);
   if (drawn === undefined) {
     drawn = rollHint(readHintReads()[hint] ?? 0);
     draws.set(hint, drawn);
   }
   return drawn;
+}
+
+/** `hint` comes up: it takes the half hour, unless it already holds it. */
+function claimTip(hint: HintKey): void {
+  if (hint === holder) return;
+  holder = hint;
+  writeTipShownAt(Date.now());
+}
+
+/** The tip is closed (×, Skip, Read or Turn off tips): it stops holding the half
+ * hour, so it does not come back before the next one either. */
+function releaseTip(hint: HintKey): void {
+  if (hint === holder) holder = undefined;
 }
 
 /** The Read button: one more read halves the tip's chance of coming back. */
@@ -73,23 +97,31 @@ function readTip(hint: HintKey): void {
 export function resetTips(): void {
   writeFlag("hintsOff", false);
   writeHintReads(undefined);
+  writeTipShownAt(undefined);
   for (const { flag } of Object.values(HINTS)) writeFlag(flag, false);
   draws.clear();
+  holder = undefined;
 }
 
 /** × and Skip close for this visit; Read closes too and halves the tip's chance of
  * coming back; Turn off tips silences every tip on this phone until This
  * device → Tips turns them on again, which the card then says in place of the
- * tip. No timer: the reader gets time to read and dismiss the message. */
+ * tip. No timer: the reader gets time to read and dismiss the message. A tip
+ * that comes up takes the phone's half hour (`claimTip`): no other tip shows
+ * until it is over. */
 export function HintMessage({ hint, floating = false, vars, onClose }: { hint: HintKey; floating?: boolean; vars?: Record<string, string>; onClose?: () => void }) {
   const t = useT();
   const { text } = HINTS[hint];
-  const [view, setView] = useState<"tip" | "off" | "hidden">(() => tipShows(hint) ? "tip" : "hidden");
+  const [view, setView] = useState<"tip" | "off" | "hidden">(() => {
+    if (!tipShows(hint)) return "hidden";
+    claimTip(hint);
+    return "tip";
+  });
   if (view === "hidden") return null;
-  const close = () => { setView("hidden"); onClose?.(); };
+  const close = () => { releaseTip(hint); setView("hidden"); onClose?.(); };
   return <aside className={`hint-message${floating ? " hint-message-floating" : ""}`} aria-label={t("mobile.hints.title")}>
     <div className="hint-message-head">
-      <strong>{t("mobile.hints.title")}{isUntested("mobile.hints") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong>
+      <strong>{t("mobile.hints.title")}{(isUntested("mobile.hints") || isUntested("mobile.hints.pace")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong>
       <button onClick={close} aria-label={t("mobile.hints.close")}>×</button>
     </div>
     {view === "off"

@@ -110,6 +110,7 @@ impl Fixture {
                 auth: Arc::new(Mutex::new(auth)),
                 catalog: Arc::new(Mutex::new(CatalogCache::default())),
                 terminal_registry: TerminalRegistry::default(),
+                sightings: Default::default(),
                 spawner: HeadlessSpawner::default(),
                 readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
                 runner,
@@ -374,6 +375,7 @@ const AUTHENTICATED_GETS: &[&str] = &[
     "/api/v1/tabs/anything/desktop-images",
     "/api/v1/tabs/anything/markup/questions",
     "/api/v1/local-models",
+    "/api/v1/clis",
 ];
 
 /// The desktop bounds the tail before it sends one; this bounds it again at
@@ -818,6 +820,65 @@ async fn a_phone_creates_a_project_by_name_only() {
 /// and flagged; a close ends the tab's session and remembers an agent
 /// tab; a reopen brings it back as a new tab started detached on its
 /// resume args. Nothing raw crosses.
+/// The model sheet's launch defaults: read and saved for the tab's CLI only,
+/// refused as the desktop form refuses them, never by a stranger.
+#[tokio::test]
+async fn launch_defaults_are_the_tabs_cli_and_keep_every_other_setting() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(63)).await.0;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let settings_file = host.state.config.state_dir.join("settings.json");
+    let mut seeded: Value = std::fs::read(&settings_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_else(|| json!({}));
+    seeded["a_later_key"] = json!(7);
+    seeded["agent_launch_defaults"] = json!({ "codex": { "model": "gpt", "effort": "" } });
+    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
+    let uri = format!("/api/v1/tabs/{tab_id}/launch-defaults");
+
+    let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(json(&body)["saved"], json!({ "model": "", "effort": "" }));
+    assert_eq!(json(&body)["cli"], "claude");
+    assert!(json(&body)["models"].is_null(), "{body}");
+    seeded["agent_models"] = json!({ "claude": ["opus", "haiku"], "codex": ["gpt"] });
+    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
+    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
+    assert_eq!(json(&body)["models"], json!(["opus", "haiku"]));
+    assert_eq!(json(&body)["capabilities"]["model"], true);
+    assert!(json(&body)["capabilities"]["efforts"].as_array().expect("efforts").contains(&json!("high")));
+
+    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": " opus ", "effort": "high" })))).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let stored: Value = serde_json::from_slice(&std::fs::read(&settings_file).expect("read")).expect("json");
+    assert_eq!(stored["agent_launch_defaults"]["claude"], json!({ "model": "opus", "effort": "high" }));
+    assert_eq!(stored["agent_launch_defaults"]["codex"]["model"], "gpt");
+    assert_eq!(stored["a_later_key"], 7);
+    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
+    assert_eq!(json(&body)["saved"], json!({ "model": "opus", "effort": "high" }));
+
+    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "", "effort": "ultra" })))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["error"], "invalid_effort");
+    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "--x", "cmd": "codex" })))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json(&body)["error"], "invalid_request");
+    let (status, _, _) = host.send(request_as("PUT", "/api/v1/tabs/nope/launch-defaults", &cookie, Some(json!({})))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _, _) = host.send(request_as("PUT", &uri, &cookie, Some(json!({})))).await;
+    assert_eq!(status, StatusCode::OK);
+    let stored: Value = serde_json::from_slice(&std::fs::read(&settings_file).expect("read")).expect("json");
+    assert!(stored["agent_launch_defaults"].get("claude").is_none(), "{stored}");
+
+    let stranger = Request::builder()
+        .method("PUT")
+        .uri(&uri)
+        .header(header::ORIGIN, ORIGIN)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"model":"opus"}"#))
+        .expect("request");
+    assert_eq!(host.send(stranger).await.0, StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn tab_edits_close_and_reopen_are_the_owners_with_no_window() {
     let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1748,11 +1809,6 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         ("DELETE", format!("/api/v1/tabs/{t}/outbox"), Value::Null, &["not_a_project"]),
         ("GET", format!("/api/v1/tabs/{t}/outbox/a.txt"), Value::Null, &["not_a_project"]),
         ("DELETE", format!("/api/v1/tabs/{t}/outbox/a.txt"), Value::Null, &["not_a_project"]),
-        ("GET", format!("/api/v1/tabs/{t}/inbox"), Value::Null, &["not_a_project"]),
-        ("GET", format!("/api/v1/tabs/{t}/inbox/a.txt"), Value::Null, &["not_a_project"]),
-        ("POST", format!("/api/v1/tabs/{t}/inbox?name=a.txt"), any.clone(), &["not_a_project"]),
-        ("GET", format!("/api/v1/tabs/{t}/desktop-images"), Value::Null, &["not_a_project"]),
-        ("POST", format!("/api/v1/tabs/{t}/desktop-images"), json!({ "image_id": desktop_images::CLIPBOARD_ID }), &["not_a_project"]),
         // Markup.
         ("GET", format!("/api/v1/tabs/{t}/markup/questions"), Value::Null, &["not_a_project"]),
         ("POST", format!("/api/v1/tabs/{t}/markup/answer"), any.clone(), &["not_a_project", "invalid_request"]),
@@ -1777,6 +1833,53 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}/transcript"), &cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// A Tabby chat's composer + works as a project chat's does: the phone's file
+/// lands in the chat's own folder (`drop_box`), the one its CLI can read an
+/// `@` reference from, and comes back for the chat's picture; the scope
+/// itself still has no inbox, and a chat folder swapped for a link is none.
+#[tokio::test]
+async fn a_tabby_chat_takes_the_phones_files_into_its_own_folder() {
+    let host = assistant_host(Arc::new(|_| Box::pin(async { Ok(()) })));
+    let cookie = host.pair_device(&signing_key(74)).await.0;
+    let (project_id, tab_id) = start_assistant_chat(&host, &cookie, "tabby-inbox-0123456789abcdef").await;
+    let state_dir = host.state.config.state_dir.clone();
+    let session: Value = serde_json::from_slice(&std::fs::read(state_dir.join("sessions").join("assistant").join("terminals.json")).expect("session")).expect("json");
+    let uid = session["tabLayout"][0]["sessionId"].as_str().expect("chat uid").to_string();
+    let chat = crate::services::assistant::chat_dir(&state_dir, &uid).unwrap();
+
+    let (status, _, body) = host.send(inbox_request(&tab_id, "shot.jpg", &cookie, b"jpeg bytes".to_vec())).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let reference = json(&body)["attachment"]["reference"].as_str().expect("reference").to_string();
+    assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
+    assert!(!body.contains(&uid) && !body.contains(&*state_dir.to_string_lossy()), "{body}");
+    assert_eq!(std::fs::read(chat.join(&reference)).unwrap(), b"jpeg bytes");
+
+    let leaf = reference.rsplit('/').next().unwrap().to_string();
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/inbox/{leaf}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/inbox?names={leaf}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body)["files"].as_array().map(Vec::len), Some(1), "{body}");
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The scope's own drop box, by project, is still no folder.
+    let (status, _, body) = host
+        .send(request_as("POST", &format!("/api/v1/projects/{project_id}/inbox?name=a.txt"), &cookie, Some(json!({}))))
+        .await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_FOUND, Some("not_a_project")), "{body}");
+
+    #[cfg(unix)]
+    {
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::remove_dir_all(&chat).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), &chat).unwrap();
+        let (status, _, body) = host.send(inbox_request(&tab_id, "shot.jpg", &cookie, b"jpeg".to_vec())).await;
+        assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_FOUND, Some("not_a_project")), "{body}");
+        assert!(std::fs::read_dir(elsewhere.path()).unwrap().next().is_none());
+    }
 }
 
 /// A host with one opted-in remote project (no mirror on disk) whose one
@@ -1846,7 +1949,8 @@ async fn a_host_tab_is_listed_on_host_and_refuses_what_would_act_here() {
     let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
     let tab = &json(&detail)["tabs"][0];
     assert_eq!((tab["on_host"].as_bool(), tab["available"].as_bool()), (Some(true), Some(true)), "{detail}");
-    for raw in ["primary.example", "/srv/aurora", "cm-primary", RAW_PROJECT, "9d0f-session", "alice"] {
+    assert_eq!(tab["host_label"].as_str(), Some("primary.example"), "{detail}");
+    for raw in ["/srv/aurora", "cm-primary", RAW_PROJECT, "9d0f-session", "alice"] {
         assert!(!detail.contains(raw), "{raw} crossed: {detail}");
     }
     let any = json!({});
@@ -4303,9 +4407,142 @@ async fn the_file_search_answers_sealed_rows_and_trails_while_the_drawer_is_on()
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+/// The Diverged list: offered for a remote project with a mirror, read through
+/// the window behind the files switch, acted on only behind `project_sync` too.
+/// What crosses is project-relative text and sealed tokens; a hidden name is
+/// only counted, and no token but this list's names a file to move.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
+    let host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let mirror = state_dir.join("mirrors").join(RAW_PROJECT);
+    std::fs::create_dir_all(&mirror).unwrap();
+    std::fs::write(
+        state_dir.join("projects.json"),
+        serde_json::to_vec(&json!([{
+            "id": RAW_PROJECT,
+            "name": "Aurora",
+            "status": "active",
+            "directory": state_dir.join("remote-projects").join(RAW_PROJECT).to_string_lossy(),
+            "mirror": mirror.to_string_lossy(),
+            concat!(crate::app_slug!(), "_mobile_access"): true,
+            "remote": { "user": "alice", "host": "primary.example", "remote_path": "/srv/aurora" },
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    let switches = |sync: bool, files: bool| {
+        std::fs::write(
+            state_dir.join("settings.json"),
+            json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_sync": sync } }).to_string(),
+        )
+        .unwrap();
+    };
+    let cookie = host.pair_device(&signing_key(73)).await.0;
+    let (_, _, projects) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    let p = json(&projects)["projects"][0]["id"].as_str().expect("project id").to_string();
+    let base = format!("/api/v1/projects/{p}/diverged");
+    let refused = |answer: (StatusCode, HeaderMap, String)| (answer.0, json(&answer.2)["error"].clone());
+
+    switches(true, false);
+    let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+    assert_eq!((json(&detail)["diverged"].as_bool(), json(&detail)["sync_writes"].as_bool()), (Some(false), Some(false)), "{detail}");
+    assert_eq!(refused(host.send(get_as(&base, &cookie)).await), (StatusCode::NOT_FOUND, json!("files_off")));
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    type Resolved = Vec<(SyncOp, Vec<String>)>;
+    let resolved: Arc<Mutex<Resolved>> = Arc::default();
+    let seen = resolved.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let row = |rel: &str, state: &str| crate::services::mobile_control::protocol::DivergedFile {
+                rel: rel.into(),
+                state: state.into(),
+                host_mtime: Some(20),
+                local_mtime: Some(10),
+                host_diverged: true,
+                local_diverged: false,
+                host_checked: true,
+            };
+            let answer = match request {
+                DesktopRequest::SyncDiverged { project_id, .. } => {
+                    assert_eq!(project_id, RAW_PROJECT);
+                    DesktopResponse::Diverged { connected: true, files: vec![row("src/a.txt", "amber"), row(".env", "amber"), row("new.txt", "localnew")] }
+                }
+                DesktopRequest::SyncPreview { direction, paths, .. } => {
+                    assert_eq!((direction, paths.as_slice()), (SyncDirection::Pull, ["src/a.txt".to_string()].as_slice()));
+                    DesktopResponse::SyncPreview { preview: crate::services::mobile_control::protocol::SyncPreviewFacts { files: 1, exact: true, ..Default::default() } }
+                }
+                DesktopRequest::SyncResolve { op, paths, .. } => {
+                    seen.lock().unwrap().push((op, paths));
+                    DesktopResponse::SyncResolved { done: 1, failed: 0, skipped: 0 }
+                }
+                DesktopRequest::SyncDiff { path, .. } => DesktopResponse::SyncDiff { diff: format!("diff of {path}"), cut: false },
+                _ => DesktopResponse::Seen,
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+
+    // The browser switch alone: the list reads, nothing else does.
+    switches(false, true);
+    let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+    assert_eq!((json(&detail)["diverged"].as_bool(), json(&detail)["sync_writes"].as_bool()), (Some(true), Some(false)), "{detail}");
+    let (status, _, body) = host.send(get_as(&base, &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = json(&body);
+    assert_eq!((list["connected"].as_bool(), list["writes"].as_bool()), (Some(true), Some(false)), "{body}");
+    assert_eq!((list["total"].as_u64(), list["hidden"].as_u64()), (Some(2), Some(1)), "{body}");
+    let rows = list["rows"].as_array().expect("rows");
+    assert_eq!(rows[0]["path"], "src/a.txt", "{body}");
+    assert_eq!(rows[1]["state"], "localnew", "{body}");
+    for raw in [RAW_PROJECT, ".env", "/srv/aurora", "alice", mirror.to_str().unwrap()] {
+        assert!(!body.contains(raw), "{raw} crossed: {body}");
+    }
+    let token = rows[0]["id"].as_str().expect("token").to_string();
+    let act = json!({ "op": "pull", "files": [token] });
+    assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await), (StatusCode::FORBIDDEN, json!("sync_off")));
+    let price = json!({ "direction": "pull", "files": [token] });
+    assert_eq!(refused(host.send(request_as("POST", &format!("{base}/preview"), &cookie, Some(price.clone()))).await), (StatusCode::FORBIDDEN, json!("sync_off")));
+    let (status, _, body) = host.send(get_as(&format!("{base}/diff?file={token}"), &cookie)).await;
+    assert_eq!((status, json(&body)["diff"].as_str()), (StatusCode::OK, Some("diff of src/a.txt")), "a compare needs no write switch");
+
+    // Both on.
+    switches(true, true);
+    let (status, _, body) = host.send(request_as("POST", &format!("{base}/preview"), &cookie, Some(price))).await;
+    assert_eq!((status, json(&body)["preview"]["files"].as_u64()), (StatusCode::OK, Some(1)), "{body}");
+    let (status, _, body) = host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await;
+    assert_eq!((status, json(&body)["done"].as_u64()), (StatusCode::OK, Some(1)), "{body}");
+    assert_eq!(resolved.lock().unwrap().as_slice(), [(SyncOp::Pull, vec!["src/a.txt".to_string()])]);
+
+    // Not this list's token, not a shape it knows, not this origin: nothing reaches the window.
+    let browser = files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "src/a.txt").unwrap();
+    let foreign = json!({ "op": "pull", "files": [browser] });
+    assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(foreign))).await), (StatusCode::NOT_FOUND, json!("file_not_found")));
+    for wrong in [json!({ "op": "pull", "files": [] }), json!({ "op": "wipe", "files": [token] }), json!({ "op": "pull", "files": [token], "force": true })] {
+        assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(wrong))).await), (StatusCode::BAD_REQUEST, json!("invalid_request")));
+    }
+    let foreign_origin = Request::builder()
+        .method("POST")
+        .uri(format!("{base}/resolve"))
+        .header(header::ORIGIN, "https://evil.example")
+        .header(header::COOKIE, cookie_pair(&cookie))
+        .body(Body::from(act.to_string()))
+        .expect("request");
+    assert_eq!(refused(host.send(foreign_origin).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+    assert_eq!(resolved.lock().unwrap().len(), 1, "only the good request got through");
+    desktop.abort();
+}
+
 /// The 📁's remote side: offered for a remote project (with no mirror on
-/// disk too) and only behind the files switch, never naming the host;
-/// with no master to ride every remote-side route says `host_offline`,
+/// disk too) and only behind the files switch, named by the host's label
+/// (as the ＋ sheet's machines are) and nothing else of it; with no master to ride every remote-side route says `host_offline`,
 /// never dials; a local project has no remote side; a local token is no
 /// remote-side token.
 #[cfg(unix)]
@@ -4327,7 +4564,8 @@ async fn the_remote_side_of_the_files_rides_the_desktops_master_or_says_host_off
     .unwrap();
     let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
     assert_eq!((json(&detail)["files"].as_bool(), json(&detail)["host_files"].as_bool()), (Some(false), Some(true)), "{detail}");
-    for raw in ["primary.example", "/srv/aurora", "alice"] {
+    assert_eq!(json(&detail)["host_label"].as_str(), Some("primary.example"), "{detail}");
+    for raw in ["/srv/aurora", "alice"] {
         assert!(!detail.contains(raw), "{raw} crossed: {detail}");
     }
     // The refresher's socket is not there: offline, without `ssh -G` or a dial.
@@ -5847,4 +6085,300 @@ fn an_agent_notice_lookup_carries_the_scopes_phone_list() {
     assert_eq!(agent_tab_ref(&host.state, &tmux).expect("tab").devices, None);
     limit_to(&host, "projects.json", &["d1"]);
     assert_eq!(agent_tab_ref(&host.state, &tmux).expect("tab").devices, Some(vec!["d1".to_string()]));
+}
+
+/// The CLI overview: with no window the sidecar answers from the files (the
+/// stored plan, no Claude panel); the window's rows cross without the
+/// account and without a panel line that names a local path.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_cli_overview_crosses_without_account_or_local_paths() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(66)).await.0;
+    let state_dir = host.state.config.state_dir.clone();
+    let store = crate::services::agent_auth::store_path_in(
+        &state_dir,
+        "claude",
+        &crate::services::agent_auth::file(".claude/.credentials.json"),
+    );
+    std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+    std::fs::write(&store, r#"{"claudeAiOauth":{"accessToken":"secret","subscriptionType":"pro"}}"#).unwrap();
+
+    let (status, _, body) = host.send(get_as("/api/v1/clis", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let answer = json(&body);
+    assert_eq!(answer["desktop_available"], false);
+    let claude = answer["clis"].as_array().unwrap().iter().find(|row| row["id"] == "claude").expect("claude row").clone();
+    assert_eq!(claude["plan"]["name"], "pro");
+    assert!(claude.get("usage").is_none());
+    assert!(!body.contains("secret"));
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let desktop = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let request = admin::read_frame::<DesktopRequest>(&mut stream).await.expect("request");
+        assert!(matches!(request, DesktopRequest::CliOverview { refresh: true, .. }), "{request:?}");
+        let response: DesktopResponse = serde_json::from_value(json!({
+            "status": "cli_overview",
+            "clis": [{
+                "id": "claude", "label": "Claude Code", "signedIn": true, "account": "someone@example.org",
+                "plan": { "name": "max", "tier": "default_claude_max_5x" },
+                "usage": { "raw": "Current session: 41% used · resets 6pm\nDebug log: /home/someone/.claude/x.txt", "cached": false },
+            }],
+        }))
+        .expect("response");
+        admin::write_frame(&mut stream, &response).await.expect("answer");
+    });
+    let (status, _, body) = host.send(get_as("/api/v1/clis?refresh=1", &cookie)).await;
+    desktop.await.expect("desktop");
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let answer = json(&body);
+    assert_eq!(answer["desktop_available"], true);
+    let row = &answer["clis"][0];
+    assert!(row.get("account").is_none(), "{row}");
+    assert_eq!(row["usage"]["raw"], "Current session: 41% used · resets 6pm\n…");
+    assert!(!body.contains("someone"));
+}
+
+/// A remote-only project (E7, D15): the detail says `remote_only` with no
+/// folder and agents to create; `launch-options` offers no "this computer"
+/// (`here: false`) and drops every launch that starts here, with a window or
+/// without; and a create that names no machine — or a reopen, which starts
+/// here too — is refused before the window or the owner is asked.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_remote_only_project_starts_nothing_on_this_computer() {
+    let host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let path = state_dir.join("projects.json");
+    let mut records: Vec<Value> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    records[0]["remote"]["remote_only"] = true.into();
+    std::fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+    let cookie = host.pair_device(&signing_key(95)).await.0;
+    let (_, _, listed) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    let p = json(&listed)["projects"][0]["id"].as_str().expect("project id").to_string();
+    let (status, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let detail = json(&detail);
+    assert_eq!(detail["project"]["remote_only"], true, "{detail}");
+    assert_eq!(detail["project"]["host"], "remote");
+    assert_eq!((detail["folder"].as_bool(), detail["create"].as_str()), (Some(false), Some("agents")), "{detail}");
+
+    let (_, _, options) = host.send(get_as(&format!("/api/v1/projects/{p}/launch-options"), &cookie)).await;
+    assert_eq!(json(&options)["here"], false, "no window: {options}");
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let asked: Arc<Mutex<usize>> = Arc::default();
+    let seen = asked.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let answer = match request {
+                DesktopRequest::LaunchOptions { .. } => DesktopResponse::LaunchOptions {
+                    worktrees: Vec::new(),
+                    cloud: Vec::new(),
+                    sign_in: Vec::new(),
+                    local: None,
+                    api_key: Vec::new(),
+                },
+                _ => {
+                    *seen.lock().unwrap() += 1;
+                    DesktopResponse::Error { code: "unknown_agent".into(), message: "not offered".into() }
+                }
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+    let (status, _, options) = host.send(get_as(&format!("/api/v1/projects/{p}/launch-options"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{options}");
+    let options = json(&options);
+    assert_eq!(options["here"], false, "{options}");
+    assert_eq!(options["hosts"].as_array().map(Vec::len), Some(1), "its primary: {options}");
+    for key in ["worktrees", "cloud", "sign_in", "api_key"] {
+        assert_eq!(options[key], json!([]), "{key}: {options}");
+    }
+    assert!(options["local"].is_null(), "{options}");
+
+    let plain = json!({ "project_id": p, "kind": "agent", "agent_id": "claude", "idempotency_key": "remote-only-0123456789abcdef" });
+    let (status, _, body) = host.send(create_request(&p, &cookie, plain)).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("not_attachable")), "{body}");
+    let reopen = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/projects/{p}/tabs/reopen"))
+        .header(header::ORIGIN, ORIGIN)
+        .header(header::COOKIE, cookie_pair(&cookie))
+        .body(Body::empty())
+        .expect("request");
+    let (status, _, body) = host.send(reopen).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("not_attachable")), "{body}");
+    assert_eq!(*asked.lock().unwrap(), 0, "the window was never asked to start a tab");
+    desktop.abort();
+}
+
+/// The one thing a remote-only project takes from the phone (E7, D15): a
+/// create naming one of its listed machines passes `creatable` and reaches
+/// the window as `Create` with that machine's location word. A synced-copy
+/// worker is not listed and cannot be named (nothing feeds it, D4); a worker
+/// on the primary's folder is. A sign-in on its host tab is refused.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_remote_only_project_starts_an_agent_on_a_listed_machine() {
+    let mut host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let path = state_dir.join("projects.json");
+    let mut records: Vec<Value> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    records[0]["remote"]["remote_only"] = true.into();
+    records[0]["compute_hosts"] = json!([
+        { "id": "w1", "user": "alice", "host": "w1.example", "remote_path": "/srv/w" },
+        { "id": "w3", "user": "alice", "host": "w3.example", "remote_path": "/srv/aurora", "shared_fs": true },
+    ]);
+    std::fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+    // The desktop holds the primary's and w3's masters (the seam stands in
+    // for `ssh -O check`); w1's would not matter, it is never listed.
+    let live: host_live::SharedHostLive = Arc::default();
+    for (name, machine) in [("cm-primary", "primary.example"), ("cm-w3", "w3.example"), ("cm-w1", "w1.example")] {
+        let control = state_dir.join(name);
+        std::fs::write(&control, b"").unwrap();
+        crate::services::ssh_exec::TEST_LIVE_MASTERS.lock().unwrap().push(control.clone());
+        let spec = serde_json::from_value(json!({ "user": "alice", "host": machine, "remote_path": "/x" })).unwrap();
+        live.lock().unwrap().insert(&spec, host_live::HostReach { control_path: control, sessions: None });
+    }
+    host.state.catalog = Arc::new(Mutex::new(CatalogCache::with_host_live(live)));
+    let cookie = host.pair_device(&signing_key(96)).await.0;
+    let (p, t) = project_and_tab(&host, &cookie).await;
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let asked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let seen = asked.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let answer = match request {
+                DesktopRequest::LaunchOptions { .. } => DesktopResponse::LaunchOptions {
+                    worktrees: Vec::new(),
+                    cloud: Vec::new(),
+                    sign_in: Vec::new(),
+                    local: None,
+                    api_key: Vec::new(),
+                },
+                DesktopRequest::Create { request, .. } => {
+                    seen.lock().unwrap().push(request.host);
+                    DesktopResponse::Error { code: "unknown_agent".into(), message: "not offered".into() }
+                }
+                _ => DesktopResponse::Seen,
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+    let (status, _, options) = host.send(get_as(&format!("/api/v1/projects/{p}/launch-options"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{options}");
+    let options = json(&options);
+    assert_eq!(options["here"], false, "{options}");
+    let hosts = options["hosts"].as_array().cloned().expect("hosts listed");
+    let rows: Vec<_> = hosts.iter().map(|row| (row["label"].as_str(), row["primary"].as_bool(), row["connected"].as_bool())).collect();
+    assert_eq!(rows, [(Some("primary.example"), Some(true), Some(true)), (Some("w3.example"), Some(false), Some(true))], "{options}");
+
+    for (n, row) in hosts.iter().enumerate() {
+        let body = json!({
+            "project_id": p, "kind": "agent", "agent_id": "claude", "host": row["id"],
+            "idempotency_key": format!("remote-only-host-{n}-0123456789abcdef"),
+        });
+        let (status, _, answer) = host.send(create_request(&p, &cookie, body)).await;
+        assert_ne!(json(&answer)["error"].as_str(), Some("not_attachable"), "{status} {answer}");
+    }
+    assert_eq!(asked.lock().unwrap().as_slice(), [Some("remote".to_string()), Some("host:w3".to_string())], "the window was asked, on each machine");
+
+    let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/tabs/{t}/sign-in"), &cookie, Some(json!({ "idempotency_key": "ro-signin-0123456789abcdef" })))).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("tab_on_host")), "{body}");
+    assert_eq!(asked.lock().unwrap().len(), 2, "the sign-in never reached the window");
+    desktop.abort();
+}
+
+/// The facts row's locality chip on a remote project's agent: `locations`
+/// lists this computer and each machine that holds the code, by opaque id,
+/// with the masters the desktop holds — answered by the sidecar alone — and
+/// a move names one back. The window gets `MoveLocation` with the location
+/// word; the current place, an unknown id and a machine the desktop is not
+/// connected to never reach it.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_agent_moves_between_this_computer_and_the_projects_machines() {
+    let mut host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let path = state_dir.join("projects.json");
+    let mut records: Vec<Value> = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    records[0]["compute_hosts"] = json!([
+        { "id": "w1", "user": "alice", "host": "w1.example", "remote_path": "/srv/w" },
+        { "id": "w2", "user": "alice", "host": "w2.example", "remote_path": "/srv/w", "sync_code": false },
+    ]);
+    std::fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+    // The desktop holds the primary's master only.
+    let live: host_live::SharedHostLive = Arc::default();
+    let control = state_dir.join("cm-locate-primary");
+    std::fs::write(&control, b"").unwrap();
+    crate::services::ssh_exec::TEST_LIVE_MASTERS.lock().unwrap().push(control.clone());
+    let spec = serde_json::from_value(json!({ "user": "alice", "host": "primary.example", "remote_path": "/x" })).unwrap();
+    live.lock().unwrap().insert(&spec, host_live::HostReach { control_path: control, sessions: None });
+    host.state.catalog = Arc::new(Mutex::new(CatalogCache::with_host_live(live)));
+    let cookie = host.pair_device(&signing_key(97)).await.0;
+    let (p, t) = project_and_tab(&host, &cookie).await;
+    let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
+    assert_eq!(json(&detail)["tabs"][0]["location_movable"], true, "{detail}");
+
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{t}/locations"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for raw in ["host:", "\"remote\"", "\"local\"", "/srv/", "alice", "9d0f-session"] {
+        assert!(!body.contains(raw), "{raw} crossed: {body}");
+    }
+    let listed = json(&body);
+    let rows = listed["locations"].as_array().cloned().expect("locations");
+    let shape: Vec<_> = rows.iter().map(|row| (row["here"].as_bool(), row["label"].as_str(), row["connected"].as_bool())).collect();
+    assert_eq!(
+        shape,
+        [(Some(true), Some(""), Some(true)), (Some(false), Some("primary.example"), Some(true)), (Some(false), Some("w1.example"), Some(false))],
+        "a worker without the code is not listed: {body}"
+    );
+    assert_eq!(listed["current"], rows[1]["id"], "it runs on the primary: {body}");
+    assert_eq!(listed["carries"], true, "Claude with a session: {body}");
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = asked.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let answer = match request {
+                DesktopRequest::MoveLocation { location, .. } => {
+                    seen.lock().unwrap().push(location);
+                    DesktopResponse::WorktreeMoved { moved: "carried".into() }
+                }
+                _ => DesktopResponse::Seen,
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+    let mv = |id: &Value| request_as("POST", &format!("/api/v1/tabs/{t}/location"), &cookie, Some(json!({ "location": id })));
+    let (status, _, body) = host.send(mv(&rows[0]["id"])).await;
+    assert_eq!((status, json(&body)["moved"].as_str()), (StatusCode::OK, Some("carried")), "{body}");
+    let (status, _, body) = host.send(mv(&rows[1]["id"])).await;
+    assert_eq!(status, StatusCode::OK, "already there: {body}");
+    let (status, _, body) = host.send(mv(&rows[2]["id"])).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::CONFLICT, Some("host_offline")), "{body}");
+    let (status, _, body) = host.send(mv(&json!("no-such-place"))).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_FOUND, Some("location_not_found")), "{body}");
+    assert_eq!(asked.lock().unwrap().as_slice(), ["local".to_string()], "the window was asked once, for this computer");
+    desktop.abort();
 }

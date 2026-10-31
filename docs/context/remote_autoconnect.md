@@ -119,6 +119,36 @@ answering, and a re-try never re-opens the tunnel's login. The dead-host path no
 longer gives up outright non-headless either: the probe is its eligibility check,
 so a key host reconnects and a password host goes red.
 
+Two gaps stayed after that (2026-10-29). "Unreachable" now also covers a
+connection dropped *before* authentication (reset, closed during the key
+exchange — sshd's `MaxStartups` does that to a burst of connects to one
+cluster — or a network that is down), unless the text names an auth or
+host-key failure (`ssh_unreachable`). And a connect that throws *after* its
+probe passed re-probes (`retryAfterFailedConnect`): unreachable joins the loop,
+a host that lets us in gets three re-tries and then stays red. The Remote
+machines window's **Reconnect all** (`reconnectAllHosts`) is the click for
+whatever is left: every host not connected, no opt-in needed, never a prompt,
+the errors named under the button.
+
+Everything above leans on `SshProbe.unreachable`, and until 2026-10-30 that flag
+was false for the failures it exists for. `ssh_probe` classified the message
+`explain_ssh_error` had already rewritten for a person ("No route to the host…"),
+which holds none of OpenSSH's phrases, so a timeout, a missing route or a failed
+DNS lookup read as "the host said no": no re-try, and a project recovered only
+through a tunnel coming up, which is why reconnecting seemed to need the VPN even
+on the network that doesn't. The classifier reads ssh's raw stderr now
+(`run_ssh_auth_raw`, `probe_verdict`), and the explained text stays for display.
+
+That made the headless VPN step live for those failures, so it has its own limits.
+It runs on the first attempt only, never from a re-try: polkit authenticates each
+`pkexec`, so a timer that dialled the tunnel would raise a system prompt at every
+backoff step. It skips a tunnel already up or connecting, and it asks
+`vpn_can_connect_silently`, since a saved password alone doesn't mean the connect
+can finish without a prompt. A dropped host therefore never brings a tunnel up by
+itself: the dead-host path has no VPN step, and its re-tries don't either. On a
+network that needs the tunnel it stays red until one comes up, from the header, an
+armed launch tunnel or a project activation, and that reconnects it.
+
 Finally, none of this is the only line of defence: the backend refuses a
 background dial to a tagged host inside the ssh-argv builders themselves
 (`docs/context/hpc_careful_mode.md`, "The dial policy"). The frontend gates decide

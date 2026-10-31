@@ -16,6 +16,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 import {
   VOICE_ERROR_KEYS,
   startDesktopDictation,
+  voiceDeviceLabel,
+  voiceDeviceWhy,
   voiceErrorKey,
   voiceLangTag,
   type DesktopDictationHandlers,
@@ -30,6 +32,7 @@ function recorder() {
   const calls: string[] = [];
   const handlers: DesktopDictationHandlers = {
     onPreparing: () => calls.push("preparing"),
+    onDevice: (device) => calls.push(`device ${device.kind}`),
     onStart: () => calls.push("start"),
     onSegment: (open, segment) => calls.push(`segment ${segment} ${open ? "open" : "end"}`),
     onPartial: (text) => calls.push(`partial ${text}`),
@@ -42,7 +45,23 @@ function recorder() {
   return { calls, handlers };
 }
 
-const options = { tabKey: "agent-1", model: "small", lang: "de", mode: "dictate" as const, pauseMs: 1500, headset: false };
+const options = { tabKey: "agent-1", model: "small", lang: "de", mode: "dictate" as const, pauseMs: 1500, headset: false, gpu: true };
+
+describe("where whisper runs, as the user reads it", () => {
+  const t = (key: string, vars?: Record<string, string | number>) => (vars ? `${key} ${vars.name}` : key);
+
+  it("names the card when ggml gave one", () => {
+    expect(voiceDeviceLabel({ kind: "gpu", name: "Radeon" }, t)).toBe("terminal.reader.voice.deviceGpu Radeon");
+    expect(voiceDeviceLabel({ kind: "gpu", name: null }, t)).toBe("terminal.reader.voice.deviceGpuNoName");
+    expect(voiceDeviceWhy({ kind: "gpu", name: "Radeon" }, t)).toBeUndefined();
+  });
+
+  it("says why it is the CPU", () => {
+    const crashed = { kind: "cpu", reason: "crashed" } as const;
+    expect(voiceDeviceLabel(crashed, t)).toBe("terminal.reader.voice.deviceCpu");
+    expect(voiceDeviceWhy(crashed, t)).toBe("terminal.reader.voice.cpu.crashed");
+  });
+});
 
 describe("the desktop dictation session", () => {
   beforeEach(() => {
@@ -55,8 +74,17 @@ describe("the desktop dictation session", () => {
     const { handlers: h } = recorder();
     await startDesktopDictation(options, h);
     expect(invoke).toHaveBeenCalledWith("voice_listen_start", {
-      tabKey: "agent-1", model: "small", lang: "de", mode: "dictate", pauseMs: 1500, headset: false,
+      tabKey: "agent-1", model: "small", lang: "de", mode: "dictate", pauseMs: 1500, headset: false, gpu: true,
     });
+  });
+
+  it("says where the model landed, from the state event that first carries it", async () => {
+    invoke.mockResolvedValue(4);
+    const { calls, handlers: h } = recorder();
+    await startDesktopDictation(options, h);
+    emit("voice:state", { session: 4, state: "preparing" });
+    emit("voice:state", { session: 4, state: "listening", device: { kind: "gpu", name: "Radeon" } });
+    expect(calls).toEqual(["preparing", "device gpu", "resumed", "start"]);
   });
 
   it("keeps its own session's events, including those that came before its id", async () => {

@@ -5,6 +5,7 @@ import { subscribeTauri } from "../../hooks/useTauriListener";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
+import { switchTabLocation } from "../../stores/agents/agentLocationSwitch";
 import {
   ROOT_SCOPE,
   effectiveTabLocation,
@@ -37,9 +38,10 @@ import { undoAgentClear } from "../../stores/agents/agentClearUndo";
 import { reopenClosedAgentTab, resumeArgsOf, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
 import { isTabColor } from "../../lib/theme/tabColors";
 import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
+import type { CliOverviewRow } from "../../../shared/cliOverview";
 import { METRIC, agentLabel, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { dayKey } from "../../lib/usageRollup";
-import { phoneCreateVerdict, phoneListsTab, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
+import { isHostPinned, phoneCreateVerdict, phoneListsTab, phoneProjectFolder, phoneReachesTab, projectHostKind } from "../../lib/projectTabHost";
 import { resolveProjectDirectory, type CalendarEvent, type CalendarTask, type ProjectEntry, type Subtask, type TaskColumn } from "../../types";
 import type { MailFolder, MailHeader } from "../../types/mail";
 import { addSubtask, boardColumns, columnOf, dropAccepted, fallbackColumnId, provisionalRank, toggleTaskDone } from "../../lib/todoBoard";
@@ -86,6 +88,7 @@ import { finishAlert } from "../../lib/alertDone";
 import { useAlertsFeed, type AlertsFeed } from "../files/useAlertsFeed";
 import { agentTurnEdges, type AgentTurnEdge, type MobileAgentState } from "../../lib/mobileAgentTurns";
 import { freshGitDot, gitDotRows, type MobileGitDot, type MobileGitStateRow } from "../../lib/mobileGitDots";
+import { divergedCount, divergedDiff, divergedList, divergedPreview, divergedResolve, type MobileDivergedFile, type MobileSyncOp, type MobileSyncPreview } from "../../lib/mobileDiverged";
 import { mobileSubagentCount } from "../../lib/mobileSubagents";
 import {
   desktopTimeZone,
@@ -309,20 +312,30 @@ type DesktopRequest =
   | { type: "undo_clear"; request_id: string; project_id: string; tmux_session: string }
   | { type: "tab_worktrees"; request_id: string; project_id: string; tmux_session: string }
   | { type: "move_worktree"; request_id: string; project_id: string; tmux_session: string; worktree: string }
+  | { type: "move_location"; request_id: string; project_id: string; tmux_session: string; location: string }
   | { type: "assistant_models"; request_id: string; project_id: string; tmux_session: string }
   | { type: "switch_assistant_model"; request_id: string; project_id: string; tmux_session: string; model: string }
   | { type: "desktop_images"; request_id: string; project_id: string }
-  | { type: "attach_desktop_image"; request_id: string; project_id: string; image_id: string }
+  | { type: "attach_desktop_image"; request_id: string; project_id: string; chat?: string; image_id: string }
   | { type: "markup_questions"; request_id: string; project_id: string; tmux_session: string; path?: string | null }
   | { type: "markup_answer"; request_id: string; project_id: string; tmux_session: string; ask_id: string; answers: MobileMarkupAnswer[]; device_id?: string }
   | { type: "markup_dismiss"; request_id: string; project_id: string; tmux_session: string; ask_id: string }
   | { type: "refresh"; request_id: string; project_id?: string | null; slices: string[] }
   | { type: "local_models"; request_id: string }
-  | { type: "local_model_mutate"; request_id: string; action: LocalModelAction };
+  | { type: "local_model_mutate"; request_id: string; action: LocalModelAction }
+  | { type: "cli_overview"; request_id: string; refresh?: boolean }
+  | { type: "sync_diverged"; request_id: string; project_id: string }
+  | { type: "sync_preview"; request_id: string; project_id: string; direction: "pull" | "push"; paths: string[] }
+  | { type: "sync_resolve"; request_id: string; project_id: string; op: MobileSyncOp; paths: string[] }
+  | { type: "sync_diff"; request_id: string; project_id: string; path: string };
 type DesktopResponse =
-| { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot }
+| { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot; diverged?: number }
   | { status: "activity"; statuses: AgentTabStatus[]; prompts: AgentTabPrompts[] }
   | { status: "git_states"; states: MobileGitStateRow[] }
+  | { status: "diverged"; connected: boolean; files: MobileDivergedFile[] }
+  | { status: "sync_preview"; preview: MobileSyncPreview }
+  | { status: "sync_resolved"; done: number; failed: number; skipped: number }
+  | { status: "sync_diff"; diff: string; cut: boolean }
   | { status: "activated" }
   | { status: "created"; tmux_session: string }
   | { status: "launch_options"; worktrees: MobileWorktree[]; cloud: MobileCloudLaunch[]; sign_in: MobileSignInOption[]; local?: MobileLocalLaunch; api_key?: MobileApiKeyLaunch[] }
@@ -347,6 +360,7 @@ type DesktopResponse =
   | { status: "attached"; attachment: InboxAttachment }
   | { status: "markup_questions"; asks: MobileMarkupAsk[]; ticks: MarkupTick[] }
   | ({ status: "local_models" } & MobileLocalModelList)
+  | { status: "cli_overview"; clis: CliOverviewRow[] }
   | { status: "error"; code: string; message: string };
 
 /** One agent tab closed in the scope, as the phone's "Recently closed" row
@@ -1055,7 +1069,7 @@ function phoneHostLocation(project: ProjectEntry | undefined, host: string): Tab
   if (host === "remote") return "remote";
   const id = host.startsWith("host:") ? host.slice("host:".length) : "";
   const worker = id ? project.compute_hosts?.find((entry) => entry.id === id) : undefined;
-  return worker && workerRunnable(worker) ? `host:${id}` : null;
+  return worker && workerRunnable(worker, isHostPinned(project)) ? `host:${id}` : null;
 }
 
 /** A plain agent on one of a remote project's hosts, as the tab badge's "Run
@@ -1092,7 +1106,9 @@ async function createOnHost(scope: MobileScope, request: CreateRequest, t: Retur
   try {
     created = await useTabsStore.getState().hydrateThenCreateInScope({
       scope: scope.id,
-      cwd: scope.cwd,
+      // A remote-only project has no phone folder (""): its tabs are saved
+      // with the project's directory, as this one is.
+      cwd: scope.cwd || directory,
       localFile: scope.localFile,
       requestHash,
       spec,
@@ -1411,7 +1427,7 @@ function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string |
   // desktop's SSH master) is never wrapped here, drawn or not: its session,
   // if any, runs on the host.
   const project = scope.project;
-  if (project?.remote && effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }) !== "local") return "session_gone";
+  if (project?.remote && effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }) !== "local") return "session_gone";
   const ready = mobileTmuxReadiness(scope.id, tab.key);
   // Not drawn yet (a scope `enterScope` just restored): its first render
   // stamps the switch, which is on, and the spawn is wrapped.
@@ -2777,6 +2793,40 @@ async function moveTabWorktree(
   return { status: "worktree_moved", moved: result };
 }
 
+/** The phone picked a place on the locality chip's sheet: the desktop tab
+ * badge's move (`switchTabLocation`), the conversation along where the CLI
+ * allows. The sidecar resolved the opaque id to `location` and checked that
+ * host's connection; this window checks the word against the project again
+ * (a worker that holds no code, a Local row a remote-only project has none
+ * of). Refused while the agent works or waits on a question, as the ⎇ move
+ * is — the restart would end the turn. */
+async function moveTabLocation(projectId: string, tmuxSession: string, location: string): Promise<DesktopResponse> {
+  const scope = mobileScope(projectId);
+  if (!scope) {
+    return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  }
+  const tab = scheduleTargetTab(scope.id, tmuxSession);
+  if (!tab) return { status: "error", code: "tab_not_found", message: "Tab not found" };
+  const project = scope.project;
+  if (tab.kind !== "agent" || !project?.remote || project.vm?.enabled) {
+    return { status: "error", code: "not_movable", message: "This agent cannot move to another machine" };
+  }
+  const pinned = isHostPinned(project);
+  const worker = project.compute_hosts?.find((host) => `host:${host.id}` === location);
+  const known = location === "remote" || (location === "local" && !pinned) || (worker !== undefined && workerRunnable(worker, pinned));
+  if (!known) return { status: "error", code: "location_not_found", message: "That machine is not there any more" };
+  const to = location as TabLocation;
+  if (effectiveTabLocation(tab, { hostPinned: pinned }) === to) return { status: "worktree_moved", moved: "carried" };
+  if (agentTabState(`${scope.id}:${tab.key}`) !== "idle") {
+    return { status: "error", code: "tab_busy", message: "The agent is at work or waiting for an answer" };
+  }
+  const moved = await switchTabLocation(scope.id, tab, to);
+  if (moved === "failed") {
+    return { status: "error", code: "move_failed", message: "The conversation could not be moved; the agent restarted where it was" };
+  }
+  return { status: "worktree_moved", moved };
+}
+
 /** A Tabby chat the phone's model chip may switch, with the models its CLI can
  * run (`assistantModelRows` — the desktop Tabby's model dropdown lists the same), or
  * the refusal to answer with. Any other tab's `/model` is its CLI's own. */
@@ -2874,18 +2924,21 @@ async function desktopImagesFor(projectId: string): Promise<DesktopResponse> {
   return { status: "desktop_images", images: await invoke<DesktopImage[]>("mobile_desktop_images") };
 }
 
-async function attachDesktopImage(projectId: string, imageId: string): Promise<DesktopResponse> {
+async function attachDesktopImage(projectId: string, imageId: string, chat?: string): Promise<DesktopResponse> {
   const scope = mobileScope(projectId);
   if (!scope) {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
-  // A scope with no folder on this machine (a VM project without a mirror, the
-  // assistant) has no inbox: an empty path would be written relative to the
-  // app's own working directory.
-  if (!scope.cwd) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
+  // A Tabby chat's image lands in the chat's own folder, named by its uid (the
+  // sidecar's `drop_box`). Any other scope with no folder on this machine (a
+  // VM project without a mirror) has no inbox: an empty path would be written
+  // relative to the app's own working directory.
+  const chatUid = scope.id === ASSISTANT_SCOPE ? chat : undefined;
+  if (!scope.cwd && !chatUid) return { status: "error", code: "project_ineligible", message: "Project folder is unavailable" };
   try {
     const attachment = await invoke<InboxAttachment>("mobile_attach_desktop_image", {
       projectDir: scope.cwd,
+      chatUid,
       imageId,
     });
     return { status: "attached", attachment };
@@ -3011,6 +3064,7 @@ async function handleRequest(
       timings: agentTimings(request.project_id),
       closed: closedAgentTabRows(request.project_id),
       git: await projectGitDot(request.project_id),
+      diverged: divergedCount(request.project_id),
     };
     case "activity": return { status: "activity", statuses: allAgentStatuses(), prompts: allAgentPrompts() };
     case "git_states": return { status: "git_states", states: gitDotRows(allMobileScopes().flatMap((scope) => scope.project ?? [])) };
@@ -3047,10 +3101,11 @@ async function handleRequest(
     case "undo_clear": return undoTabClear(request.project_id, request.tmux_session);
     case "tab_worktrees": return tabWorktrees(request.project_id, request.tmux_session);
     case "move_worktree": return moveTabWorktree(request.project_id, request.tmux_session, request.worktree, t);
+    case "move_location": return moveTabLocation(request.project_id, request.tmux_session, request.location);
     case "assistant_models": return tabAssistantModels(request.project_id, request.tmux_session);
     case "switch_assistant_model": return switchTabAssistantModel(request.project_id, request.tmux_session, request.model);
     case "desktop_images": return desktopImagesFor(request.project_id);
-    case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id);
+    case "attach_desktop_image": return attachDesktopImage(request.project_id, request.image_id, request.chat);
     case "markup_questions": return markupQuestionsFor(request.project_id, request.tmux_session, request.path ?? undefined);
     case "markup_answer": return answerMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id, request.answers, request.device_id);
     case "markup_dismiss": return dismissMarkupFromPhone(request.project_id, request.tmux_session, request.ask_id);
@@ -3058,6 +3113,17 @@ async function handleRequest(
     // Both check the host-wide switch first (`lib/mobileLocalModels`).
     case "local_models": return localModelsList();
     case "local_model_mutate": return localModelMutate(request.action);
+    // The phone's Diverged list; the sidecar has checked its switches.
+    case "sync_diverged": return divergedList(request.project_id);
+    case "sync_preview": return divergedPreview(request.project_id, request.direction, request.paths);
+    case "sync_resolve": return divergedResolve(request.project_id, request.op, request.paths);
+    case "sync_diff": return divergedDiff(request.project_id, request.path);
+    // The side panel's CLIs view's reading; the sidecar cuts it for the phone
+    // (no account, no path-naming panel line).
+    case "cli_overview": return {
+      status: "cli_overview",
+      clis: await invoke<CliOverviewRow[]>("agent_overview", { refresh: !!request.refresh }),
+    };
     // A sidecar newer than this window can ask for a kind it does not know.
     // Answered at once and by name: `undefined` failed to deserialize in
     // `mobile_desktop_respond`, and the phone sat out the whole desktop
@@ -3085,13 +3151,15 @@ const mutationQueues = new Map<string, Promise<unknown>>();
  * `MobileMutationList.test.ts` holds the two in step (exported for it). */
 export function mutationDomain(type: DesktopRequest["type"]): string | null {
   switch (type) {
-    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": case "move_worktree": case "switch_assistant_model": return "tabs";
+    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": case "move_worktree": case "move_location": case "switch_assistant_model": return "tabs";
     case "todo_mutate": case "alert_resolve": case "calendar_mutate": return "board";
     case "mail_mark": case "mail_reply": return "mail";
     // A markup answer queues its prompt as a phone hold does.
     case "schedule_mutate": case "prompt_mutate": case "hold_prompt": case "edit_held_prompt": case "markup_answer": case "markup_dismiss": return "schedules";
     // Phone loads, unloads and starts run one at a time, in arrival order.
     case "local_model_mutate": return "local_models";
+    // Long transfers wait on each other, not on anything else.
+    case "sync_resolve": return "sync";
     default: return null;
   }
 }

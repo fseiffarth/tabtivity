@@ -66,6 +66,7 @@ fn platform_install(spec: &AgentSpec) -> (Option<&'static str>, String, &'static
 /// Public view of one agent + whether it is currently installed.
 #[derive(serde::Serialize)]
 pub struct AgentInfo {
+    pub launch_defaults: crate::services::agent_defaults::Capabilities,
     pub id: String,
     pub label: String,
     pub bin: String,
@@ -328,6 +329,12 @@ fn sudo_variant(cmd: &str) -> String {
 /// List every known agent CLI with its current installed status.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_agents() -> Vec<AgentInfo> {
+    app_core::rt::spawn_blocking(list_agents_blocking).await.unwrap_or_default()
+}
+
+fn list_agents_blocking() -> Vec<AgentInfo> {
+    let installed: std::collections::HashSet<&str> =
+        installed_specs().into_iter().map(|(spec, _)| spec.id).collect();
     AGENTS
         .iter()
         .map(|spec| {
@@ -338,6 +345,7 @@ pub async fn list_agents() -> Vec<AgentInfo> {
                 .map(|pkg| format!("npm uninstall -g {pkg}"))
                 .unwrap_or_default();
             AgentInfo {
+                launch_defaults: crate::services::agent_defaults::capabilities(spec.bin),
                 id: spec.id.to_string(),
                 label: spec.label.to_string(),
                 bin: spec.bin.to_string(),
@@ -348,7 +356,7 @@ pub async fn list_agents() -> Vec<AgentInfo> {
                 uninstall_cmd_sudo: sudo_variant(&uninstall_cmd),
                 uninstall_cmd,
                 docs: spec.docs.to_string(),
-                installed: spec_is_installed(spec),
+                installed: installed.contains(spec.id),
                 warmup: warmup_args(spec).is_some(),
             }
         })
@@ -407,6 +415,23 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
     }
 }
 
+/// What brings the installed `spec` up to date: its installer again, or, for a
+/// CLI whose installer cannot (`agent_install::self_update_argv`), its own
+/// update verb on the copy every other command resolves to. That copy is not
+/// always in the install home, so the two stay one binary rather than the
+/// installer adding a second, and a host copy gets it too: it cannot update
+/// itself from inside a fence.
+fn update_command(spec: &AgentSpec) -> Result<std::process::Command, String> {
+    let Some(argv) = crate::services::agent_install::self_update_argv(spec.id) else {
+        return installer_command(spec);
+    };
+    let bin = resolve_spec_path(spec).ok_or_else(|| format!("{} is not installed.", spec.label))?;
+    let mut c = crate::paths::command_no_window(&bin);
+    c.args(argv).stdin(std::process::Stdio::null());
+    into_install_home(&mut c)?;
+    Ok(c)
+}
+
 /// Point an installer at Tabtivity's own install home: create it, hand over
 /// its environment and [`agent_install_path`].
 fn into_install_home(c: &mut std::process::Command) -> Result<(), String> {
@@ -456,12 +481,14 @@ pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
     if spec_is_installed(spec) {
         return Ok(format!("{} is already installed.", spec.label));
     }
-    run_installer(ctx.0.clone(), spec)
+    prefetch_release(&ctx.0, spec).await;
+    run_installer(ctx.0.clone(), spec, installer_command)
 }
 
 /// Update an installed agent CLI: its official installer run again, which
 /// fetches the newest release — into Tabtivity's install home, whose launcher
-/// dirs come ahead of any host copy on PATH (`services::agent_install`). Same
+/// dirs come ahead of any host copy on PATH (`services::agent_install`) — or
+/// its own update verb where the installer cannot ([`update_command`]). Same
 /// `agent-install-progress` stream as [`install_agent`].
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
@@ -469,8 +496,29 @@ pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
     if !spec_is_installed(spec) {
         return Err(format!("{} is not installed.", spec.label));
     }
-    run_installer(ctx.0.clone(), spec)
+    prefetch_release(&ctx.0, spec).await;
+    run_installer(ctx.0.clone(), spec, update_command)
 }
+
+/// Get Codex's package down before its installer runs, whose own download gives
+/// up on a slow line (`services::codex_package`). Only a head start: when it
+/// fails, the installer still has its own download.
+#[cfg(unix)]
+async fn prefetch_release(ctx: &CoreCtx, spec: &'static AgentSpec) {
+    if spec.id != "codex" || server_installs_are_the_helpers(spec.id).is_err() {
+        return;
+    }
+    let emit = |line: &str| {
+        ctx.emit("agent-install-progress", serde_json::json!({ "id": spec.id, "line": line }));
+    };
+    let home = crate::services::agent_install::install_root();
+    if let Err(error) = crate::services::codex_package::prefetch(&home, emit).await {
+        emit(&format!("Couldn't fetch the package ({error}); leaving it to the installer."));
+    }
+}
+
+#[cfg(not(unix))]
+async fn prefetch_release(_ctx: &CoreCtx, _spec: &'static AgentSpec) {}
 
 /// On a server (hosted plan §5.1) the CLI install root belongs to the CLI
 /// account, not to any user's daemon — not even the admin's: installs,
@@ -485,9 +533,13 @@ fn server_installs_are_the_helpers(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Run `spec`'s installer, streaming its output; the body of [`install_agent`]
-/// and [`update_agent`].
-fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, String> {
+/// Run `spec`'s installer (or `command`'s stand-in for it), streaming its
+/// output; the body of [`install_agent`] and [`update_agent`].
+fn run_installer(
+    ctx: CoreCtx,
+    spec: &'static AgentSpec,
+    command: fn(&AgentSpec) -> Result<std::process::Command, String>,
+) -> Result<String, String> {
     use std::io::{BufRead, BufReader};
 
     server_installs_are_the_helpers(spec.id)?;
@@ -504,12 +556,21 @@ fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, Strin
     let mut lines: Vec<String> = Vec::new();
     let mut retried_npm_reify = false;
     let status = loop {
-        let mut child = installer_command(spec)?
+        let mut child = command(spec)?
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("failed to launch installer: {e}"))?;
 
+        // An installer's shell line merges this into stdout; a CLI's own update
+        // verb does not, and says why it failed here.
+        let stderr = child.stderr.take().map(|stderr| {
+            let emit = emit.clone();
+            std::thread::spawn(move || {
+                let lines = BufReader::new(stderr).lines().map_while(Result::ok);
+                lines.inspect(|line| emit(line)).collect::<Vec<String>>()
+            })
+        });
         if let Some(stdout) = child.stdout.take() {
             for line in BufReader::new(stdout).lines() {
                 let line = match line {
@@ -519,6 +580,9 @@ fn run_installer(ctx: CoreCtx, spec: &'static AgentSpec) -> Result<String, Strin
                 emit(&line);
                 lines.push(line);
             }
+        }
+        if let Some(Ok(errors)) = stderr.map(std::thread::JoinHandle::join) {
+            lines.extend(errors);
         }
 
         let status = child
@@ -1573,6 +1637,29 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
     }
 }
 
+/// The CLI overview (`services::cli_overview`): per CLI in use, its plan,
+/// account and usage windows — the side panel's CLIs view and the phone's
+/// CLIs section. Claude's windows are its `agent_usage` panel, read only when
+/// Claude is signed in; `refresh` is that read's (still floored).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_overview(refresh: Option<bool>) -> Vec<crate::services::cli_overview::CliOverviewRow> {
+    let mut rows = app_core::rt::spawn_blocking(|| {
+        let logins = crate::services::agent_auth::status();
+        crate::services::cli_overview::rows_in(&crate::storage::state_dir(), &logins)
+    })
+    .await
+    .unwrap_or_default();
+    if let Some(row) = rows.iter_mut().find(|r| r.id == "claude" && r.signed_in) {
+        let report = agent_usage("claude".to_string(), refresh).await;
+        row.usage = Some(crate::services::cli_overview::CliUsagePanel {
+            raw: report.raw,
+            code: report.code,
+            cached: report.cached,
+        });
+    }
+    rows
+}
+
 /// What version of each *installed* agent CLI is on this machine, against the
 /// releases Tabtivity's flags and parsers were verified with.
 ///
@@ -1583,12 +1670,14 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
 ///
 /// Only installed agents are probed, at most once a day per unchanged
 /// executable (`PROBE_TTL`), all of them concurrently. `refresh` skips the
-/// cache; that is what the panel's own re-check means.
+/// cache; that is what the panel's own re-check means. Each row carries the
+/// CLI's last stored "Check for update", judged against this answer, so a card
+/// shows it again without a request and a release since installed is not offered.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_versions(
     refresh: Option<bool>,
 ) -> Vec<crate::services::agent_versions::VersionReport> {
-    use crate::services::agent_versions as versions;
+    use crate::services::{agent_latest, agent_versions as versions};
 
     let refresh = refresh.unwrap_or(false);
     let store = versions::load();
@@ -1596,10 +1685,8 @@ pub async fn agent_versions(
         std::collections::HashMap::new();
     let mut probes = Vec::new();
 
-    for spec in AGENTS {
-        let Some(path) = resolve_spec_path(spec) else {
-            continue;
-        };
+    let installed = installed_specs();
+    for (spec, path) in installed.iter().cloned() {
         // Installed, but nobody has checked what it answers: say so rather than
         // guessing a flag at a binary that may open a TUI instead.
         if !versions::is_supported(spec.id) {
@@ -1621,10 +1708,6 @@ pub async fn agent_versions(
                 continue;
             }
         }
-        // `AGENTS` is a const slice in static memory, so the borrow outlives
-        // the spawned task — spelled out because that is what makes it
-        // spawnable rather than a lifetime that happens to work.
-        let spec: &'static AgentSpec = spec;
         probes.push(tokio::spawn(async move {
             let result = probe_agent_version(spec, &path).await;
             (spec, path, result)
@@ -1643,28 +1726,18 @@ pub async fn agent_versions(
     }
 
     // Registry order, so the rows line up with the Manage Agents list.
-    AGENTS
-        .iter()
-        .filter_map(|spec| ready.remove(spec.id))
+    let checks = agent_latest::load();
+    installed
+        .into_iter()
+        .filter_map(|(spec, path)| {
+            let mut report = ready.remove(spec.id)?;
+            report.update = checks.get(spec.id).map(|checked| {
+                let current = agent_latest::current_version(spec.id, &path, report.version.clone());
+                agent_latest::UpdateReport::new(spec.id, current, checked)
+            });
+            Some(report)
+        })
         .collect()
-}
-
-/// One installed CLI against its newest published release
-/// (`services::agent_latest`).
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentUpdateReport {
-    agent: String,
-    /// The installed version, when it could be read: the CLI's `--version`
-    /// recipe, else the package metadata beside its executable.
-    current: Option<String>,
-    /// The newest published version.
-    latest: Option<String>,
-    /// Both versions read and `latest` genuinely newer — never `latest` alone.
-    update_available: bool,
-    /// Whether a registry is known for this CLI at all.
-    checkable: bool,
-    error: Option<String>,
 }
 
 /// Ask installed CLIs' registries for their newest release — each Manage CLIs
@@ -1673,10 +1746,11 @@ pub struct AgentUpdateReport {
 /// request per CLI that has a known registry, all at once, each settled on its
 /// own so one registry being down costs only its row. The installed versions
 /// are re-read first, so a CLI that updated itself since the last probe is not
-/// offered the update it already has.
+/// offered the update it already has. Each answer is stored for `agent_versions`
+/// to hand back.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn check_agent_updates(id: Option<String>) -> Vec<AgentUpdateReport> {
-    use crate::services::{agent_latest, agent_versions};
+pub async fn check_agent_updates(id: Option<String>) -> Vec<crate::services::agent_latest::UpdateReport> {
+    use crate::services::agent_latest;
 
     let mut probed: std::collections::HashMap<String, Option<String>> = agent_versions(Some(true))
         .await
@@ -1684,15 +1758,10 @@ pub async fn check_agent_updates(id: Option<String>) -> Vec<AgentUpdateReport> {
         .map(|report| (report.agent, report.version))
         .collect();
     let mut checks = Vec::new();
-    for spec in AGENTS.iter().filter(|spec| id.as_deref().is_none_or(|id| id == spec.id)) {
-        let Some(path) = resolve_spec_path(spec) else {
-            continue;
-        };
+    let installed = installed_specs();
+    for (spec, path) in installed.into_iter().filter(|(spec, _)| id.as_deref().is_none_or(|id| id == spec.id)) {
         let source = agent_latest::source_for(spec.id);
-        let current = probed
-            .remove(spec.id)
-            .flatten()
-            .or_else(|| source.and_then(|source| agent_latest::installed_version_near(&path, source)));
+        let current = agent_latest::current_version(spec.id, &path, probed.remove(spec.id).flatten());
         checks.push(tokio::spawn(async move {
             let latest = match source {
                 Some(source) => Some(agent_latest::fetch_latest(source).await),
@@ -1707,24 +1776,8 @@ pub async fn check_agent_updates(id: Option<String>) -> Vec<AgentUpdateReport> {
         let Ok((agent, current, latest)) = check.await else {
             continue;
         };
-        let (latest, error) = match latest {
-            Some(Ok(version)) => (Some(version), None),
-            Some(Err(error)) => (None, Some(error)),
-            None => (None, None),
-        };
-        let update_available = matches!(
-            (&current, &latest),
-            (Some(current), Some(latest))
-                if agent_versions::version_cmp(latest, current) == std::cmp::Ordering::Greater
-        );
-        reports.push(AgentUpdateReport {
-            agent: agent.to_string(),
-            checkable: agent_latest::source_for(agent).is_some(),
-            current,
-            latest,
-            update_available,
-            error,
-        });
+        let checked = agent_latest::remember(agent, latest);
+        reports.push(agent_latest::UpdateReport::new(agent, current, &checked));
     }
     reports
 }
@@ -2042,6 +2095,29 @@ mod tests {
         assert_eq!(find_spec_by_id_or_bin("agy").map(|s| s.id), Some("antigravity"));
         assert_eq!(find_spec_by_id_or_bin("claude").map(|s| s.id), Some("claude"));
         assert!(find_spec_by_id_or_bin("not-an-agent").is_none());
+    }
+
+    #[test]
+    fn installed_specs_answers_as_the_single_resolver_does() {
+        let installed = installed_specs();
+        for spec in AGENTS {
+            let found = installed.iter().find(|(s, _)| s.id == spec.id).map(|(_, path)| path.clone());
+            assert_eq!(found, resolve_spec_path(spec), "{}", spec.id);
+        }
+    }
+
+    #[test]
+    fn a_path_lookup_finds_a_cli_in_its_install_home() {
+        let home = tempfile::tempdir().unwrap();
+        let spec = find_spec("claude").unwrap();
+        let path = home.path().join(spec.extra_paths[0]);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+        let lookup = crate::paths::PathLookup::current();
+        let homes = [home.path().to_path_buf()];
+        assert_eq!(spec_path_in_homes(spec, &homes, &|p| lookup.exists(p)), Some(path));
+        let other = find_spec("codex").unwrap();
+        assert_eq!(spec_path_in_homes(other, &homes, &|p| lookup.exists(p)), None);
     }
 
     #[test]

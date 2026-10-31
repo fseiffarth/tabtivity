@@ -119,6 +119,34 @@ describe("steering legend fold (H)", () => {
   });
 });
 
+describe("steering legend hands-free mic", () => {
+  const voice = (on: boolean) =>
+    useSettingsStore.setState({ settings: { voice_hands_free: true, voice_hands_free_on: on } as never });
+  const mic = () => document.querySelector(".steering-legend-mic");
+
+  it("wears the mic on the hub while hands-free is on, folded too", () => {
+    voice(true);
+    render(<SteeringLegend />);
+    act(() => steering().enter());
+    expect(document.querySelector(".steering-legend-hub .steering-legend-mic")).not.toBeNull();
+    expect(mic()?.getAttribute("aria-label")).toBe("Hands-free");
+
+    act(() => steering().toggleLegend());
+    expect(document.querySelector(".steering-legend-fab-button .steering-legend-mic")).not.toBeNull();
+  });
+
+  it("shows no mic with the chip off or the experiment off", () => {
+    voice(false);
+    render(<SteeringLegend />);
+    act(() => steering().enter());
+    expect(document.querySelector(".steering-legend-hub")).not.toBeNull();
+    expect(mic()).toBeNull();
+
+    act(() => useSettingsStore.setState({ settings: { voice_hands_free: false, voice_hands_free_on: true } as never }));
+    expect(mic()).toBeNull();
+  });
+});
+
 describe("steering legend groups", () => {
   it("files every row under a known group", () => {
     const ids = new Set(STEERING_GROUPS.map((g) => g.id));

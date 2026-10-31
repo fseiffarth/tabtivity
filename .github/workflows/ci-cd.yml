@@ -32,6 +32,16 @@ env:
   # illegal instruction on a user's older one. whisper-rs-sys hands GGML_* to
   # cmake. OFF builds for AVX2/FMA (docs/desktop_voice_plan.md, step 0).
   GGML_NATIVE: "OFF"
+  # The bundles' speech GPU backend (docs/voice_gpu_plan.md). LunarG's SDK, not
+  # the runner's packages: Ubuntu 24.04's glslc and headers are older than what
+  # whisper.cpp's Vulkan shaders were measured with. Windows has no other source.
+  # The SDK is 1.4.363 plus a final `.0`, spelled at each use: the privacy check reads a
+  # four-part number as an IP address.
+  VULKAN_SDK_RELEASE: "1.4.363"
+  VULKAN_SDK_SHA256_LINUX: "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43"
+  VULKAN_SDK_SHA256_WINDOWS: "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141"
+  # LunarG's runtime components zip of that same release: the installer's Bin has no vulkan-1.dll.
+  VULKAN_RUNTIME_SHA256_WINDOWS: "a25a927aa8b9f0371048f1861cf88ac3b9bc9b1fb332c42d897c8ab32695769a"
 
 # Every job's timeout-minutes is about one and a half to two times its longest
 # green run (2026-10), so a hung test fails the job instead of holding the
@@ -188,7 +198,7 @@ jobs:
             patchelf
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -200,7 +210,7 @@ jobs:
           components: clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -268,7 +278,7 @@ jobs:
             patchelf
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -279,7 +289,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -360,7 +370,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -372,7 +382,7 @@ jobs:
           components: clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -440,7 +450,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -452,7 +462,7 @@ jobs:
           components: clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -516,6 +526,14 @@ jobs:
     # `privacy` gates every package job: a build that leaks must never become a
     # downloadable artifact, let alone a release asset.
     needs: [test-windows, privacy, brand]
+    # A short target dir: MSBuild's file tracker cannot write a log at 260
+    # characters or more, and whisper.cpp's Vulkan shader generator is a nested
+    # cmake project whose try-compile logs reach 267 under the checkout's own
+    # target/ (FTK1011, which cmake reports as a broken C compiler). The whole
+    # dir moves, not cargo's `build-dir` alone: tauri-build reads the target dir
+    # off OUT_DIR.
+    env:
+      CARGO_TARGET_DIR: D:/a/t
 
     steps:
       - name: Checkout
@@ -524,7 +542,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -535,25 +553,43 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: . -> target
+          # Relative to the checkout: this is CARGO_TARGET_DIR.
+          workspaces: . -> ../../t
 
       - name: Install frontend dependencies
         run: npm ci --ignore-scripts
 
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $installer = "$env:RUNNER_TEMP\vulkansdk.exe"
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_RELEASE.0/windows/vulkansdk-windows-X64-$env:VULKAN_SDK_RELEASE.0.exe" -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $env:VULKAN_SDK_SHA256_WINDOWS) { throw "Vulkan SDK checksum mismatch" }
+          $root = "C:\VulkanSDK\$env:VULKAN_SDK_RELEASE.0"
+          $install = Start-Process $installer -ArgumentList "--root `"$root`" --accept-licenses --default-answer --confirm-command install" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Vulkan SDK install failed" }
+          # The loader ships with the app: ggml reaches for it on any use of
+          # whisper, even on the CPU, and a PC without a GPU driver has none.
+          $runtime = "$env:RUNNER_TEMP\vulkanrt.zip"
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_RELEASE.0/windows/VulkanRT-X64-$env:VULKAN_SDK_RELEASE.0-Components.zip" -OutFile $runtime
+          if ((Get-FileHash $runtime -Algorithm SHA256).Hash -ne $env:VULKAN_RUNTIME_SHA256_WINDOWS) { throw "Vulkan runtime checksum mismatch" }
+          Expand-Archive $runtime -DestinationPath "$env:RUNNER_TEMP\vulkanrt"
+          Copy-Item "$env:RUNNER_TEMP\vulkanrt\VulkanRT-X64-$env:VULKAN_SDK_RELEASE.0-Components\x64\vulkan-1.dll" src-tauri\vulkan-1.dll
+          "VULKAN_SDK=$root" >> $env:GITHUB_ENV
+          "$root\Bin" >> $env:GITHUB_PATH
+
       - name: Build release bundles
-        run: npm run tauri:build -- --bundles nsis
+        run: npm run tauri:build -- --bundles nsis --features voice-vulkan --config "$env:GITHUB_WORKSPACE\src-tauri\tauri.vulkan-loader.conf.json"
 
       - name: Upload NSIS installer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tabtivity-${{ github.sha }}-windows-nsis
-          # Tauri 2 on Windows puts bundles in the project-root target/ when
-          # CARGO_TARGET_DIR is overridden by swatinem/rust-cache.
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            target/release/bundle/nsis/*.exe
+          path: ${{ env.CARGO_TARGET_DIR }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
   # Pinned to 24.04, not `ubuntu-latest`: the runner distro is an input to the
   # shipped artifact, so it should move when we say so, not when GitHub reflags
@@ -589,10 +625,20 @@ jobs:
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             librsvg2-dev \
+            libvulkan-dev \
             patchelf
 
+      - name: Install the Vulkan SDK
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/vulkansdk.tar.xz" "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_RELEASE.0/linux/vulkansdk-linux-x86_64-$VULKAN_SDK_RELEASE.0.tar.xz"
+          echo "$VULKAN_SDK_SHA256_LINUX  $RUNNER_TEMP/vulkansdk.tar.xz" | sha256sum -c
+          mkdir -p "$RUNNER_TEMP/vulkan"
+          tar -xJf "$RUNNER_TEMP/vulkansdk.tar.xz" -C "$RUNNER_TEMP/vulkan"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vulkan/$VULKAN_SDK_RELEASE.0/x86_64" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/vulkan/$VULKAN_SDK_RELEASE.0/x86_64/bin" >> "$GITHUB_PATH"
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -603,7 +649,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -616,10 +662,10 @@ jobs:
           # linuxdeploy/appimagetool cannot FUSE-mount themselves. Extracting
           # instead is the supported workaround and is a no-op elsewhere.
           APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: npm run tauri:bundle
+        run: npm run tauri:bundle -- --features voice-vulkan
 
       - name: Upload AppImage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tabtivity-${{ github.sha }}-appimage
           # Project-root target/ is a fallback for when CARGO_TARGET_DIR is
@@ -629,7 +675,7 @@ jobs:
             target/release/bundle/appimage/*.AppImage
 
       - name: Upload DEB
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tabtivity-${{ github.sha }}-deb
           # Project-root target/ is a fallback for when CARGO_TARGET_DIR is
@@ -656,7 +702,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -667,7 +713,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -678,7 +724,7 @@ jobs:
         run: scripts/package-server-deb.sh
 
       - name: Upload server DEB
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tabtivity-${{ github.sha }}-server-deb
           path: target/release/bundle/server/*.deb
@@ -698,7 +744,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -710,7 +756,7 @@ jobs:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
       - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
 
@@ -725,7 +771,7 @@ jobs:
         # and set APPLE_SIGNING_IDENTITY + APPLE_ID + APPLE_PASSWORD +
         # APPLE_TEAM_ID (or APPLE_API_KEY_ID/APPLE_API_ISSUER/APPLE_API_KEY_PATH)
         # from repo secrets here before running the build.
-        run: npm run tauri:build -- --bundles dmg --target universal-apple-darwin
+        run: npm run tauri:build -- --bundles dmg --target universal-apple-darwin --features voice-metal
 
       - name: Rename universal DMG
         run: |
@@ -743,7 +789,7 @@ jobs:
           [ "$dmg" = "$target" ] || mv "$dmg" "$target"
 
       - name: Upload DMG
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tabtivity-${{ github.sha }}-macos-universal-dmg
           path: |

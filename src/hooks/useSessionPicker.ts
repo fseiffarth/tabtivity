@@ -10,6 +10,9 @@ import { useT } from "../lib/i18n";
 import { holdSessionPicker, submitScheduledAgentCommand } from "../lib/agents/scheduledAgentInput";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { effectiveTabLocation, type TabEntry } from "../stores/tabs";
+import { useProjectsStore } from "../stores/projects";
+import { isHostPinned } from "../lib/projectTabHost";
+import { splitPtyId } from "../lib/terminal/ptyId";
 
 /** How often the picker is read while it is open, how long a picker that is
  * never drawn (or an answer that never lands) is waited for, and how long an
@@ -117,7 +120,12 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const [heldPick, setHeldPick] = useState<string | null>(null);
   const answeredOnce = useRef(false);
   const rowsKept = useRef(false);
-  const rememberRows = command === "/model" && !!tab.cmd && effectiveTabLocation(tab) === "local";
+  // The remembered rows are this machine's CLI build's: only for a tab that
+  // runs here. A VM or remote-only project's tab never does, whatever it stored.
+  const scope = splitPtyId(ptyId)?.scope;
+  const hostPinned = useProjectsStore((s) => isHostPinned(s.projects.find((p) => p.id === scope)));
+  const runsHere = effectiveTabLocation(tab, { hostPinned }) === "local";
+  const rememberRows = command === "/model" && !!tab.cmd && runsHere;
   const typeKeysNow = useRef(typeKeys);
   useEffect(() => { typeKeysNow.current = typeKeys; });
   /** OpenCode's list is a scroll box that shows a slice of itself: the walk
@@ -252,7 +260,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     setEffortFor(null);
     setRememberedStep(null);
     setHeldPick(null);
-    if (next === "/model" && tab.cmd && effectiveTabLocation(tab) === "local") {
+    if (next === "/model" && tab.cmd && runsHere) {
       void invoke<ModelRows | null>("remembered_model_rows", { agent: tab.cmd }).then(
         (rows) => setRememberedStep((now) => now ?? modelRowsStep(rows)),
         () => {},

@@ -255,6 +255,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_tab_move_session", Core),
     ("agent_tab_move_host", Core),
     ("agent_usage", Core),
+    ("agent_overview", Core),
     ("agent_versions", Core),
     ("agent_warmup", Core),
     ("check_agent_updates", Core),
@@ -797,6 +798,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("projects_root_dir", Core),
     ("remote_mirror_root_dir", Core),
     ("remote_mirror_status", Core),
+    ("remote_project_init_host", Core),
+    ("remote_unpair_mirror", Core),
+    ("remote_unpair_mirror_preview", Core),
     ("remove_compute_host", Core),
     ("rename_project_dir", Core),
     ("repair_all_project_scaffolds", Core),
@@ -841,6 +845,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("remote_connected_targets", Core),
     ("remote_disconnect", Core),
     ("remote_disconnect_all_hosts", Core),
+    ("remote_tmux_agent", Core),
     ("remote_tmux_kill", Core),
     ("remote_tmux_list", Core),
     ("remote_tmux_rename", Core),
@@ -1011,6 +1016,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("vm_status", Admin),
     // commands/voice.rs — the microphone and speakers are the machine the
     // user sits at; a browser client hides the mic button.
+    ("voice_gpu_retry", Client),
     ("voice_listen_pause", Client),
     ("voice_listen_start", Client),
     ("voice_listen_stop", Client),

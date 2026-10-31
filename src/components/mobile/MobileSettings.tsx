@@ -14,7 +14,7 @@ import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ConnectToServer } from "../server/ConnectToServer";
-import { MobileAccessPicker, HOST_REACH_KEY, phoneReachLabel } from "./MobileAccessPicker";
+import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "./MobileAccessPicker";
 import { projectHostKind } from "../../lib/projectTabHost";
 import type { ProjectEntry } from "../../types";
 import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
@@ -286,7 +286,7 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "project_remarks" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "project_sync" | "project_remarks" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
@@ -307,7 +307,7 @@ export function MobileSettings() {
 
   /** Project files, and the uploads switch that rides on it. Turning files on
    * asks whether the phone may add files too (Cancel keeps it read-only);
-   * turning it off clears uploads and PDF remarks as well, so turning files on
+   * turning it off clears uploads, resolving diverged files and PDF remarks as well, so turning files on
    * again later never reopens a write path unasked. One write either way: `setMailGate`
    * spreads this render's `stored`, so a second write would undo the first. */
   const setProjectFiles = async (on: boolean) => {
@@ -323,6 +323,7 @@ export function MobileSettings() {
           ...(stored ?? { enabled: false }),
           project_files: on || undefined,
           project_uploads: uploads || undefined,
+          project_sync: (on && stored?.project_sync) || undefined,
           project_remarks: (on && stored?.project_remarks) || undefined,
         },
       });
@@ -360,6 +361,7 @@ export function MobileSettings() {
           root_access: stored?.root_access,
           project_files: stored?.project_files,
           project_uploads: stored?.project_uploads,
+          project_sync: stored?.project_sync,
           project_remarks: stored?.project_remarks,
           stay_after_quit: stored?.stay_after_quit,
           browser_client: stored?.browser_client,
@@ -465,6 +467,7 @@ export function MobileSettings() {
           root_access: stored?.root_access,
           project_files: stored?.project_files,
           project_uploads: stored?.project_uploads,
+          project_sync: stored?.project_sync,
           project_remarks: stored?.project_remarks,
           stay_after_quit: stored?.stay_after_quit,
           browser_client: stored?.browser_client,
@@ -507,6 +510,7 @@ export function MobileSettings() {
           root_access: stored?.root_access,
           project_files: stored?.project_files,
           project_uploads: stored?.project_uploads,
+          project_sync: stored?.project_sync,
           project_remarks: stored?.project_remarks,
           stay_after_quit: stored?.stay_after_quit,
           // `browser_client` is left out on purpose: lockdown closes browser
@@ -535,7 +539,7 @@ export function MobileSettings() {
       : <>{project.name} <UntestedTag id="mobile-every-project-type" /></>
   );
   const projectRowTitle = (project: ProjectEntry) => {
-    const host = projectHostKind(project);
+    const host = phoneReachHost(project);
     return host === "local" ? undefined : t(HOST_REACH_KEY[host]);
   };
   // With the search empty only the shared rows are listed — a long project
@@ -737,6 +741,12 @@ export function MobileSettings() {
         onChange={(event) => void setMailGate("project_uploads", event.target.checked)}
       />
       <ToggleRow
+        label={<><Hint help={t("mobile.projectSyncHelp")}>{t("mobile.projectSync")}</Hint> <UntestedTag id="mobile.project.sync" /></>}
+        checked={stored?.project_sync ?? false}
+        disabled={busy || !stored?.project_files}
+        onChange={(event) => void setMailGate("project_sync", event.target.checked)}
+      />
+      <ToggleRow
         label={<><Hint help={t("mobile.projectRemarksHelp")}>{t("mobile.projectRemarks")}</Hint> <UntestedTag id="mobile.files.remarks" /></>}
         checked={stored?.project_remarks ?? false}
         disabled={busy || !stored?.project_files}
@@ -837,7 +847,7 @@ export function MobileSettings() {
             x={phonePicker.x}
             y={phonePicker.y}
             kind={phonePicker.kind}
-            host={phonePicker.kind === "project" ? projectHostKind(target as ProjectEntry) : undefined}
+            host={phonePicker.kind === "project" ? phoneReachHost(target as ProjectEntry) : undefined}
             enabled={target[MOBILE_ACCESS_KEY] ?? false}
             devices={target[MOBILE_DEVICES_KEY]}
             onApply={(enabled, list) => phonePicker.kind === "project"

@@ -344,3 +344,66 @@ describe(`${BRAND.display} Mobile — Antigravity 1.4.5, captured`, () => {
     expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 4 Argon", effort: "high" });
   });
 });
+
+describe(`${BRAND.display} Mobile — Antigravity 1.4.11, captured`, () => {
+  // Same setup, beside 1.4.5. Idle footer, `/model`, gauges, Enter and
+  // `/effort` are unchanged but for the banner's version. Since 1.4.9 the
+  // first-run steps fit the pane, so they keep the footer 1.4.5 ran off it.
+  it("reads the model off the footer a first-run step now keeps", () => {
+    const screen = capturedScreen([
+      "Welcome to Antigravity CLI!",
+      "",
+      "Choose your color scheme:",
+      "",
+      "  > terminal",
+      "    light",
+      "    solarized light",
+      "    colorblind-friendly light",
+      "    dark",
+      "    solarized dark",
+      "    colorblind-friendly dark",
+      "    tokyo night",
+      "  (widen the terminal to see a preview)",
+      "",
+      "    [Next]",
+      "",
+      "  ↑/↓ Navigate · enter Confirm",
+      "                      Gemini 3.1 Pro · low",
+    ]);
+    expect(sessionStatus(screen, LABEL)).toEqual({ model: "Gemini 3.1 Pro", effort: "low" });
+    expect(readAntigravityPicker(screen)).toBeNull();
+  });
+
+  it("takes no key hint for a stop's description at phone width", () => {
+    // 42×24 (1.4.5 too): the dialog leaves the description out, so the row
+    // after the stops' labels is its own key hint.
+    const screen = capturedScreen([
+      "    ▀▀▀▀▀▀▀▀      Gemini 3.1 Pro (Low)",
+      "   ▄▀▀    ▀▀▄     ~/work",
+      "  ▄▀▀      ▀▀▄",
+      "",
+      "──────────────────────────────────────────",
+      ">",
+      "──────────────────────────────────────────",
+      "Switch Model",
+      "",
+      "  Search:",
+      "          ────────────────────",
+      "",
+      "  Gemini 4 Argon",
+      "  Gemini 3.8 Flash",
+      "  Gemini 3.7 Flash",
+      "  Gemini 3.6 Flash",
+      "> Gemini 3.1 Pro   (current)",
+      "",
+      "  Effort  ◂       ◉────────────○       ▸",
+      "                 low         high",
+      "",
+      "Keyboard: ↑/↓ Navigate  ←/→ Effort  enter",
+      "",
+      "                      Gemini 3.1 Pro · low",
+    ]);
+    expect(readAntigravityPicker(screen)!.options).toHaveLength(5);
+    expect(readAntigravityEffort(screen)).toEqual({ current: 0, stops: [{ label: "low" }, { label: "high" }] });
+  });
+});

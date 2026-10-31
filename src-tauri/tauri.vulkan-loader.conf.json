@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "vulkan-1.dll": "vulkan-1.dll"
+    }
+  }
+}

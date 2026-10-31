@@ -24,6 +24,8 @@ pub struct Factory {
     pub model: PathBuf,
     /// Silero, when installed: confirms a finished segment is speech.
     pub vad_model: Option<PathBuf>,
+    /// The `voice_gpu` setting: whether to try the GPU at all (`gpu.rs`).
+    pub gpu: bool,
 }
 
 #[cfg(not(feature = "voice"))]
@@ -61,9 +63,10 @@ impl TranscriberFactory for Factory {
 
 #[cfg(feature = "voice")]
 mod imp {
+    use std::ffi::{c_char, c_void, CStr};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex, Once, OnceLock};
     use std::time::{Duration, Instant};
 
     use app_core::sync::LockExt;
@@ -71,7 +74,9 @@ mod imp {
         FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState, WhisperVadContext,
         WhisperVadContextParams, WhisperVadParams,
     };
+    use whisper_rs_sys as sys;
 
+    use super::super::gpu::{self, CpuReason, VoiceDevice};
     use super::super::session::{SessionConfig, Transcriber, Transcript};
     use super::super::VoiceError;
     use super::Factory;
@@ -81,6 +86,7 @@ mod imp {
 
     struct Cached {
         path: PathBuf,
+        gpu: bool,
         ctx: Arc<WhisperContext>,
         last_used: Instant,
     }
@@ -88,20 +94,45 @@ mod imp {
     static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
     static REAPER: OnceLock<()> = OnceLock::new();
 
-    fn context(path: &Path) -> Result<Arc<WhisperContext>, VoiceError> {
+    /// What whisper logs about its GPU, while a load is on (`None`: it is not).
+    static LOAD_LOG: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+    /// whisper.cpp prints to stderr unless hooked; this keeps the one line
+    /// that says where a load landed and drops the rest. Must not unwind.
+    unsafe extern "C" fn keep_load_log(_level: sys::ggml_log_level, text: *const c_char, _user_data: *mut c_void) {
+        if text.is_null() {
+            return;
+        }
+        // SAFETY: whisper.cpp hands a NUL-terminated string, valid for the call.
+        let line = unsafe { CStr::from_ptr(text) }.to_string_lossy();
+        if line.contains(gpu::LOG_PREFIX) {
+            if let Some(lines) = LOAD_LOG.lock_ok().as_mut() {
+                lines.push(line.into_owned());
+            }
+        }
+    }
+
+    fn hook_log() {
+        static HOOK: Once = Once::new();
+        // SAFETY: `keep_load_log` neither unwinds nor keeps the text.
+        HOOK.call_once(|| unsafe { whisper_rs::set_log_callback(Some(keep_load_log), std::ptr::null_mut()) });
+    }
+
+    fn context(path: &Path, use_gpu: bool) -> Result<Arc<WhisperContext>, VoiceError> {
         let mut cache = CACHE.lock_ok();
-        if let Some(cached) = cache.as_mut().filter(|c| c.path == path) {
+        if let Some(cached) = cache.as_mut().filter(|c| c.path == path && c.gpu == use_gpu) {
             cached.last_used = Instant::now();
             return Ok(cached.ctx.clone());
         }
-        // whisper.cpp prints its loading log to stderr unless hooked.
-        whisper_rs::install_logging_hooks();
         *cache = None;
         let path_str = path.to_str().ok_or(VoiceError::ModelFailed)?;
-        let ctx = WhisperContext::new_with_params(path_str, WhisperContextParameters::default())
-            .map_err(|_| VoiceError::ModelFailed)?;
+        let mut params = WhisperContextParameters::default();
+        // `flash_attn` too: whisper-rs defaults it off, whisper.cpp on, and
+        // the measured GPU speed is with it. The CPU's path stays as it was.
+        params.use_gpu(use_gpu).flash_attn(use_gpu);
+        let ctx = WhisperContext::new_with_params(path_str, params).map_err(|_| VoiceError::ModelFailed)?;
         let ctx = Arc::new(ctx);
-        *cache = Some(Cached { path: path.to_path_buf(), ctx: ctx.clone(), last_used: Instant::now() });
+        *cache = Some(Cached { path: path.to_path_buf(), gpu: use_gpu, ctx: ctx.clone(), last_used: Instant::now() });
         REAPER.get_or_init(|| {
             let _ = std::thread::Builder::new().name("voice-model-reaper".into()).spawn(|| loop {
                 std::thread::sleep(Duration::from_secs(30));
@@ -125,11 +156,74 @@ mod imp {
 
     pub fn release_now() {
         *CACHE.lock_ok() = None;
+        gpu::abandon();
+    }
+
+    /// The model and a state on `use_gpu`, and the GPU backend the load log
+    /// names. A state is made per session, and it is what picks the backend,
+    /// so the log is read around both.
+    fn open(path: &Path, use_gpu: bool) -> Result<(Arc<WhisperContext>, WhisperState, Option<String>), VoiceError> {
+        hook_log();
+        if use_gpu {
+            gpu::arm();
+        }
+        *LOAD_LOG.lock_ok() = Some(Vec::new());
+        let opened = context(path, use_gpu)
+            .and_then(|ctx| ctx.create_state().map(|state| (ctx, state)).map_err(|_| VoiceError::ModelFailed));
+        let log = LOAD_LOG.lock_ok().take().unwrap_or_default();
+        if use_gpu {
+            gpu::disarm();
+        }
+        let (ctx, state) = opened?;
+        Ok((ctx, state, gpu::backend_from_log(&log)))
+    }
+
+    /// The card's name behind ggml's backend name (`Vulkan0`).
+    fn device_name(backend: &str) -> Option<String> {
+        // SAFETY: the registry was built by the load that named `backend` and
+        // is never torn down; a device's strings live as long as it does.
+        unsafe {
+            (0..sys::ggml_backend_dev_count()).find_map(|i| {
+                let dev = sys::ggml_backend_dev_get(i);
+                let name = sys::ggml_backend_dev_name(dev);
+                if name.is_null() || CStr::from_ptr(name).to_bytes() != backend.as_bytes() {
+                    return None;
+                }
+                let description = sys::ggml_backend_dev_description(dev);
+                (!description.is_null()).then(|| CStr::from_ptr(description).to_string_lossy().into_owned())
+            })
+        }
+    }
+
+    /// Loads on the GPU when it may, on the CPU otherwise, and says which it
+    /// got: a GPU that fails only ever costs the speed.
+    fn open_on_device(factory: &Factory) -> Result<(Arc<WhisperContext>, WhisperState, VoiceDevice), VoiceError> {
+        let opened = match gpu::plan(factory.gpu) {
+            Err(reason) => Err(reason),
+            Ok(()) => open(&factory.model, true).map_err(|_| CpuReason::NoGpu),
+        };
+        let (ctx, state, device) = match opened {
+            Ok((ctx, state, Some(backend))) => {
+                let name = device_name(&backend).or(Some(backend));
+                (ctx, state, VoiceDevice::Gpu { name })
+            }
+            Ok((ctx, state, None)) => (ctx, state, VoiceDevice::Cpu { reason: CpuReason::NoGpu }),
+            Err(reason) => {
+                let (ctx, state, _) = open(&factory.model, false)?;
+                (ctx, state, VoiceDevice::Cpu { reason })
+            }
+        };
+        gpu::record(device.clone());
+        Ok((ctx, state, device))
     }
 
     pub struct Whisper {
         ctx: Arc<WhisperContext>,
         state: WhisperState,
+        device: VoiceDevice,
+        /// On the GPU with no run finished yet: the next one is under the
+        /// crash guard (`gpu.rs`), the driver's first real work.
+        unproven: bool,
         /// Built once per session and cloned per run: each setter leaks a
         /// C string, and the language/prompt setters panic on a NUL.
         final_params: FullParams<'static, 'static>,
@@ -172,8 +266,8 @@ mod imp {
 
     impl Whisper {
         pub(super) fn load(factory: &Factory, config: &SessionConfig, cancel: Arc<AtomicBool>) -> Result<Self, VoiceError> {
-            let ctx = context(&factory.model)?;
-            let state = ctx.create_state().map_err(|_| VoiceError::ModelFailed)?;
+            let (ctx, state, device) = open_on_device(factory)?;
+            let unproven = matches!(device, VoiceDevice::Gpu { .. });
             let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 8) as i32;
             let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
             params.set_n_threads(threads);
@@ -204,14 +298,24 @@ mod imp {
                 .as_deref()
                 .and_then(Path::to_str)
                 .and_then(|p| WhisperVadContext::new(p, WhisperVadContextParams::default()).ok());
-            Ok(Self { ctx, state, final_params: params, partial_params, vad, _cancel: cancel })
+            Ok(Self { ctx, state, device, unproven, final_params: params, partial_params, vad, _cancel: cancel })
         }
     }
 
     impl Transcriber for Whisper {
         fn transcribe(&mut self, audio: &[f32], partial: bool) -> Result<Transcript, VoiceError> {
             let params = if partial { self.partial_params.clone() } else { self.final_params.clone() };
-            self.state.full(params, audio).map_err(|_| VoiceError::ModelFailed)?;
+            let guarded = self.unproven;
+            if guarded {
+                gpu::arm();
+            }
+            let outcome = self.state.full(params, audio);
+            if guarded {
+                gpu::disarm();
+                // A run cancelled early proved nothing.
+                self.unproven = outcome.is_err();
+            }
+            outcome.map_err(|_| VoiceError::ModelFailed)?;
             let mut text = String::new();
             let mut no_speech: f32 = 0.0;
             for segment in self.state.as_iter() {
@@ -231,6 +335,10 @@ mod imp {
                 Err(_) => true,
             }
         }
+
+        fn device(&self) -> Option<VoiceDevice> {
+            Some(self.device.clone())
+        }
     }
 
     #[cfg(test)]
@@ -247,6 +355,23 @@ mod imp {
             assert_eq!(whisper_lang("de-DE"), Ok(Some("de")));
             assert_eq!(whisper_lang("en"), Ok(Some("en")));
             assert_eq!(whisper_lang("xx"), Err(VoiceError::BadArgument));
+        }
+
+        /// By hand, with a real model: `VOICE_TEST_MODEL=<ggml file> cargo test
+        /// -p tabtivity --lib --features voice-vulkan -- --ignored --nocapture
+        /// a_real_load_says_where_it_landed`. On a machine with a GPU it names
+        /// the card; in a fenced tab, which has none, `no-gpu`.
+        #[test]
+        #[ignore = "needs a model file"]
+        fn a_real_load_says_where_it_landed() {
+            let model = PathBuf::from(std::env::var("VOICE_TEST_MODEL").expect("VOICE_TEST_MODEL"));
+            let factory = Factory { model, vad_model: None, gpu: true };
+            let (_ctx, mut state, device) = open_on_device(&factory).expect("the model loads");
+            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+            params.set_language(Some("en"));
+            state.full(params, &[0.0; 16_000]).expect("a run on the device");
+            eprintln!("voice device: {device:?}");
+            assert!(!gpu::crashed());
         }
     }
 }

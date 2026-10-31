@@ -612,6 +612,9 @@ html[data-privacy-curtain="keep"] body > *:not(#root):not(.privacy-curtain) {
 .privacy-curtain-show:focus-visible {
   border-color: var(--accent);
 }
+.privacy-curtain-show + .privacy-curtain-show {
+  margin-left: 8px;
+}
 .privacy-curtain.is-corner {
   inset: auto 12px 12px auto;
   gap: 10px;

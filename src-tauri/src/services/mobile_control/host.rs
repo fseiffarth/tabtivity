@@ -34,6 +34,7 @@ use super::{
     chat_changes,
     chat_uncommitted,
     config::{verify_tailscale_serve, HostConfig},
+    diverged,
     discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     git_overview,
@@ -48,10 +49,11 @@ use super::{
     protocol::{
         clean_tab_color, git_dot, CalendarAction, CreateTabKind, CreateTabRequest, DesktopRequest, DesktopResponse,
         LocalModelAction, MailMarkAction, MobileCollectedPrompt, MobileMarkupFile, MobileMarkupTick, MobilePromptInput, MobileSchedule,
-        MobileScheduleInput, PromptMutation, ScheduleMutation,
+        MobileScheduleInput, PromptMutation, ScheduleMutation, SyncDirection, SyncOp,
         TabPlace, TodoAction, MAX_CONTROL_MESSAGE, MAX_INPUT_FRAME, MAX_MAIL_REPLY_BYTES,
         MAX_TAB_LABEL,
     },
+    presence,
     pty_bridge::{self, TerminalRegistry},
     remarks,
     scheduler,
@@ -89,6 +91,9 @@ struct HostState {
     auth: Arc<Mutex<AuthStore>>,
     catalog: Arc<Mutex<CatalogCache>>,
     terminal_registry: TerminalRegistry,
+    /// The project screens phones have read lately, for the desktop's phone
+    /// marks (admin `Presence`).
+    sightings: presence::Sightings,
     /// How a tab is started with no window (headless owner plan, H1b).
     spawner: HeadlessSpawner,
     /// The headless git dots and agent readings, per project, so the phone's
@@ -1161,6 +1166,9 @@ async fn project(
     let Some(project) = catalog_snapshot.project(&project_id) else {
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
+    // The project screen reads this every 5 s while it is on screen: the
+    // desktop marks the scope as being looked into (`presence.rs`).
+    state.sightings.saw(phone.device_id(), &project.raw_id);
     let mut tabs = project
         .tabs
         .iter()
@@ -1177,7 +1185,7 @@ async fn project(
     // and on Windows the nominal path is never a file, so it was never told.
     // A closed desktop refuses the connect at once, on both.
     let request_id = new_request_id();
-    let (desktop_available, agents, statuses, schedules, prompts, timings, closed, git) = match admin::desktop_call(
+    let (desktop_available, agents, statuses, schedules, prompts, timings, closed, git, diverged_count) = match admin::desktop_call(
         &desktop_socket,
         &DesktopRequest::Catalog {
             request_id,
@@ -1194,7 +1202,8 @@ async fn project(
             timings,
             closed,
             git,
-        }) => (true, agents, statuses, schedules, prompts, timings, closed, git),
+            diverged: diverged_count,
+        }) => (true, agents, statuses, schedules, prompts, timings, closed, git, diverged_count),
         // No window: the same rows off the state dir (headless owner plan,
         // H1b); the closed row is what the owner closed (H3).
         response if desktop_down(&response) => {
@@ -1211,9 +1220,9 @@ async fn project(
                 None
             };
             let closed = headless::closed_tabs(state_dir, &project.raw_id);
-            (false, agents, readings.statuses, schedules, readings.prompts, readings.timings, closed, git)
+            (false, agents, readings.statuses, schedules, readings.prompts, readings.timings, closed, git, None)
         }
-        _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None),
+        _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None, None),
     };
     let mut public = project.public.clone();
     if is_git_project(project) {
@@ -1287,6 +1296,8 @@ async fn project(
             tab.subagent_worktrees = subagents;
         }
     }
+    let host_files = has_host_files(project) && files::files_open(&state.config.state_dir);
+    let diverged_offered = has_diverged_list(project) && files::files_open(&state.config.state_dir);
     (
         StatusCode::OK,
         Json(
@@ -1296,8 +1307,17 @@ async fn project(
                 // root console or a project the phone has no folder of.
                 "files": is_git_project(project) && files::files_open(&state.config.state_dir),
                 // Whether the 📁 has a remote side too (`host_files`): the same
-                // switch, and a remote project's primary host. Never which host.
-                "host_files": has_host_files(project) && files::files_open(&state.config.state_dir),
+                // switch, and a remote project's primary host.
+                "host_files": host_files,
+                // What the remote side's switch is called: the primary's label,
+                // as the ＋ sheet's machines are (`machine_label`).
+                "host_label": project.primary_host.as_ref().filter(|_| host_files).map(super::discovery::machine_label),
+                // Whether the drawer offers Diverged (`diverged`), how many
+                // files the window last found there, and whether its actions
+                // answer (`project_sync`).
+                "diverged": diverged_offered,
+                "diverged_count": diverged_count.filter(|_| diverged_offered),
+                "sync_writes": diverged_offered && diverged::sync_open(&state.config.state_dir),
                 // Whether the scope has a folder at all, and what the phone may
                 // create in it (`all`, `agents` or `none`): the phone words the
                 // reason and offers only what these allow, never a project type.
@@ -1433,7 +1453,7 @@ async fn create_tab(
     if (project.public.kind == ScopeKind::Assistant) != request.assistant.is_some() {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
-    if let Err(error) = creatable(project, &request.kind) {
+    if let Err(error) = creatable(project, &request.kind, request.host.is_some()) {
         return error;
     }
     // An agent on one of the project's hosts: the opaque machine id becomes
@@ -1751,7 +1771,7 @@ async fn reopen_tab(
         return api_error(StatusCode::NOT_FOUND, "project_not_found");
     };
     // A reopen starts an agent tab like a create does.
-    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+    if let Err(error) = creatable(project, &CreateTabKind::Agent, false) {
         return error;
     }
     let request_id = new_request_id();
@@ -1929,6 +1949,215 @@ async fn project_git(
     (StatusCode::OK, Json(json!(overview)))
 }
 
+/// Whether a scope has a Diverged list: a remote (not VM) project with a local
+/// mirror. A remote-only project has no second copy to diverge from.
+fn has_diverged_list(project: &super::discovery::ResolvedProject) -> bool {
+    is_git_project(project) && project.host == super::discovery::ProjectHost::Remote
+}
+
+/// The raw id a Diverged request works on. Closed — `files_off` — unless the
+/// browser switch is on, read per request, as the list shows what the library
+/// would; a scope with no mirror is `diverged_unavailable`.
+fn diverged_scope(state: &HostState, phone: &Phone, project_id: &str) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    if !files::files_open(&state.config.state_dir) {
+        return Err(api_error(StatusCode::NOT_FOUND, "files_off"));
+    }
+    let catalog = catalog(state, phone)?;
+    let Some(project) = catalog.project(project_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "project_not_found"));
+    };
+    if !has_diverged_list(project) {
+        return Err(api_error(StatusCode::NOT_FOUND, "diverged_unavailable"));
+    }
+    Ok(project.raw_id.clone())
+}
+
+/// What the window said to a Diverged request that is not its answer.
+fn diverged_desktop_error(response: Result<DesktopResponse, String>) -> (StatusCode, Json<serde_json::Value>) {
+    match response {
+        Ok(DesktopResponse::Error { code, .. }) if code != "desktop_unavailable" => {
+            eprintln!("mobile: the window refused a Diverged request: {code}");
+            api_error(StatusCode::CONFLICT, "sync_failed")
+        }
+        _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+    }
+}
+
+/// The paths a body's `files` name, for a route that acts on them: at least
+/// one, at most a shown list's worth, and every token one of this project's.
+fn diverged_paths(state: &HostState, raw_id: &str, tokens: &[String]) -> Result<Vec<String>, (StatusCode, Json<serde_json::Value>)> {
+    if tokens.is_empty() || tokens.len() > diverged::MAX_ROWS {
+        return Err(api_error(StatusCode::BAD_REQUEST, "invalid_request"));
+    }
+    diverged::open_all(&host_key(state), raw_id, tokens).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "file_not_found"))
+}
+
+/// `GET /api/v1/projects/{project_id}/diverged` — the project's diverged and
+/// new files (`diverged::Listing`) and whether the window reached the host.
+/// Read-only, and only with a window: the host side is its SSH session's.
+async fn diverged_list(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let raw_id = match diverged_scope(&state, &phone, &project_id) {
+        Ok(raw_id) => raw_id,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SyncDiverged { request_id: new_request_id(), project_id: raw_id.clone() },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::Diverged { connected, files }) => match diverged::listing(&host_key(&state), &raw_id, files) {
+            Ok(listing) => {
+                let mut answer = json!(listing);
+                answer["connected"] = json!(connected);
+                answer["writes"] = json!(diverged::sync_open(&state.config.state_dir));
+                (StatusCode::OK, Json(answer))
+            }
+            Err(error) => files_error(error),
+        },
+        other => diverged_desktop_error(other),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DivergedPreviewBody {
+    direction: SyncDirection,
+    files: Vec<String>,
+}
+
+/// `POST /api/v1/projects/{project_id}/diverged/preview` with `{ "direction",
+/// "files": [token…] }` — what the transfer would do, for the phone's
+/// confirmation (`sync_transfer_preview`). Reads only, but it prices an act
+/// only `project_sync` allows, so it is closed with the act.
+async fn diverged_preview(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let raw_id = match diverged_scope(&state, &phone, &project_id) {
+        Ok(raw_id) => raw_id,
+        Err(error) => return error,
+    };
+    if !diverged::sync_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "sync_off");
+    }
+    let Ok(DivergedPreviewBody { direction, files }) = serde_json::from_slice(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let paths = match diverged_paths(&state, &raw_id, &files) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SyncPreview { request_id: new_request_id(), project_id: raw_id, direction, paths },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::SyncPreview { preview }) => (StatusCode::OK, Json(json!({ "preview": preview }))),
+        other => diverged_desktop_error(other),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DivergedResolveBody {
+    op: SyncOp,
+    files: Vec<String>,
+}
+
+/// `POST /api/v1/projects/{project_id}/diverged/resolve` with `{ "op",
+/// "files": [token…] }` — take a side, complete a deletion or forget, file by
+/// file, over the commands the desktop's orange view calls. `403 sync_off`
+/// unless `project_sync` is on. Answers `{ done, failed, skipped }`; a window
+/// that overruns the deadline is `desktop_unavailable`, and it is still
+/// working: the phone says it does not know and reads the list again.
+async fn diverged_resolve(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let raw_id = match diverged_scope(&state, &phone, &project_id) {
+        Ok(raw_id) => raw_id,
+        Err(error) => return error,
+    };
+    if !diverged::sync_open(&state.config.state_dir) {
+        return api_error(StatusCode::FORBIDDEN, "sync_off");
+    }
+    let Ok(DivergedResolveBody { op, files }) = serde_json::from_slice(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let paths = match diverged_paths(&state, &raw_id, &files) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SyncResolve { request_id: new_request_id(), project_id: raw_id, op, paths },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::SyncResolved { done, failed, skipped }) => {
+            (StatusCode::OK, Json(json!({ "done": done, "failed": failed, "skipped": skipped })))
+        }
+        other => diverged_desktop_error(other),
+    }
+}
+
+/// `GET /api/v1/projects/{project_id}/diverged/diff?file=<token>` — the
+/// mirror's copy against the host's as a unified diff (`sync_diff`). The token
+/// names one listed file, so this reads no more than the library would.
+async fn diverged_diff(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let raw_id = match diverged_scope(&state, &phone, &project_id) {
+        Ok(raw_id) => raw_id,
+        Err(error) => return error,
+    };
+    let Some(path) = query.get("file").and_then(|token| diverged::unseal(&host_key(&state), &raw_id, token)) else {
+        return api_error(StatusCode::NOT_FOUND, "file_not_found");
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::SyncDiff { request_id: new_request_id(), project_id: raw_id, path },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::SyncDiff { diff, cut }) => (StatusCode::OK, Json(json!({ "diff": diff, "cut": cut }))),
+        other => diverged_desktop_error(other),
+    }
+}
+
 /// `GET /api/v1/projects/{project_id}/launch-options` — what the ＋ sheet can
 /// start an agent in: the project's linked worktrees (opaque ids, directory
 /// and branch names — never a path) and each agent's cloud launches.
@@ -1982,7 +2211,7 @@ async fn launch_options(
         // agents wait for the window, so none is listed.
         return (
             StatusCode::OK,
-            Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false })),
+            Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
         );
     }
     match response {
@@ -2000,9 +2229,18 @@ async fn launch_options(
             } else {
                 phone_machines(&state, project).await
             };
+            // A project that lives only on its host has no "this computer":
+            // a worktree, a cloud session, a sign-in, a local model and an API
+            // key all start here, so none is listed (`creatable` refuses them).
+            if project.pinned {
+                return (
+                    StatusCode::OK,
+                    Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "api_key": [], "hosts": hosts, "here": false })),
+                );
+            }
             (
                 StatusCode::OK,
-                Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": sign_in, "local": local, "api_key": api_key, "hosts": hosts })),
+                Json(json!({ "worktrees": worktrees, "cloud": cloud, "sign_in": sign_in, "local": local, "api_key": api_key, "hosts": hosts, "here": true })),
             )
         }
         Ok(DesktopResponse::Error { code, .. }) => api_error(
@@ -2998,6 +3236,51 @@ async fn local_models_list(State(state): State<HostState>, headers: HeaderMap) -
     local_models_response(local_models_call(&state, DesktopRequest::LocalModels { request_id }).await, StatusCode::OK)
 }
 
+/// `GET /api/v1/clis[?refresh=1]` — the CLI overview (`services::cli_overview`):
+/// per agent CLI in use its plan and usage windows. The window answers, with
+/// Claude's `/usage` panel; with no window the sidecar answers from the files
+/// alone (plans, Codex's last-turn windows), since reading the panel runs the
+/// CLI (`headless::agent_status` makes the same call). Either way the rows are
+/// cut to what a phone may see (`cli_overview::for_phone`).
+async fn cli_overview(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentStatusQuery>,
+) -> impl IntoResponse {
+    if let Err(error) = authenticate(&headers, &state) {
+        return error;
+    }
+    let refresh = matches!(query.refresh.as_deref(), Some("1" | "true"));
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::CliOverview { request_id: new_request_id(), refresh },
+    )
+    .await;
+    // Anything but the window's rows — no window, or one whose page predates
+    // the request — is answered from the files.
+    let (rows, desktop_available) = match response {
+        Ok(DesktopResponse::CliOverview { clis }) => (clis, true),
+        other => {
+            let state_dir = state.config.state_dir.clone();
+            let rows = tokio::task::spawn_blocking(move || {
+                let logins = crate::services::agent_auth::status_in(&state_dir, &crate::paths::home_dir());
+                crate::services::cli_overview::rows_in(&state_dir, &logins)
+            })
+            .await
+            .unwrap_or_default();
+            (rows, !desktop_down(&other))
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "clis": crate::services::cli_overview::for_phone(rows),
+            "desktop_available": desktop_available,
+        })),
+    )
+}
+
 /// `POST /api/v1/local-models` `{ action: load | unload | start, model? }`.
 /// Guarded like every write; then the switch, then the action — a pull, a
 /// delete or anything else unnamed is `unsupported_action` and never reaches
@@ -3730,7 +4013,7 @@ async fn sign_in_tab(
     if project.public.kind == ScopeKind::Assistant {
         return api_error(StatusCode::BAD_REQUEST, "unsupported_sign_in");
     }
-    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+    if let Err(error) = creatable(project, &CreateTabKind::Agent, false) {
         return error;
     }
     let request = CreateTabRequest {
@@ -3800,7 +4083,7 @@ async fn teleport_tab(
     if tab.public.kind != "agent" || !tab.public.cloud {
         return api_error(StatusCode::BAD_REQUEST, "cloud_tab_required");
     }
-    if let Err(error) = creatable(project, &CreateTabKind::Agent) {
+    if let Err(error) = creatable(project, &CreateTabKind::Agent, false) {
         return error;
     }
     let request = CreateTabRequest {
@@ -4101,6 +4384,29 @@ fn has_folder(project: &super::discovery::ResolvedProject) -> Result<(), (Status
     Ok(())
 }
 
+/// The folder a file the phone adds for this tab lands in and is read back
+/// from: the folder the tab works in, as the desktop's drop and paste pick it
+/// (`commands::terminal::pty_drop_files`). That is the project's for a scope
+/// with a folder, and a chat's own (`assistant::chat_dir`, by its uid) for the
+/// assistant, whose scope has none. A chat folder is the one place its CLI
+/// can read an `@` reference from; a missing one, or a link in its place, is
+/// `not_a_project`, like any scope without a folder.
+fn drop_box(
+    state_dir: &std::path::Path,
+    project: &super::discovery::ResolvedProject,
+    tab: &ResolvedTab,
+) -> Result<PathBuf, (StatusCode, Json<serde_json::Value>)> {
+    if project.public.kind == ScopeKind::Assistant {
+        let chat = tab.session_id.as_deref().and_then(|uid| crate::services::assistant::chat_dir(state_dir, uid).ok());
+        return match chat {
+            Some(dir) if std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) => Ok(dir),
+            _ => Err(api_error(StatusCode::NOT_FOUND, "not_a_project")),
+        };
+    }
+    has_folder(project)?;
+    Ok(project.root.clone())
+}
+
 /// A tab that runs on its remote project's host has nothing on this machine
 /// for a route to act on — its inbox, a sign-in, a desktop switch to it — so
 /// such a route answers `409 tab_on_host` and the phone hides the control
@@ -4125,17 +4431,21 @@ fn is_git_project(project: &super::discovery::ResolvedProject) -> bool {
 /// (`ResolvedProject::create`) against the kind of tab asked for. The tabs of a
 /// remote host, a container or a VM have no local tmux session the phone can
 /// attach to, so a new one there would run where nobody can reach it
-/// (`docs/mobile_every_project_type_plan.md`, phase 1).
+/// (`docs/mobile_every_project_type_plan.md`, phase 1). A project that lives
+/// only on its host (`ResolvedProject::pinned`) takes nothing that starts on
+/// this machine — only a create that names one of its machines (`on_host`).
 fn creatable(
     project: &super::discovery::ResolvedProject,
     kind: &CreateTabKind,
+    on_host: bool,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     use super::discovery::CreateVerdict;
-    let allowed = match project.create {
-        CreateVerdict::All => true,
-        CreateVerdict::Agents => matches!(kind, CreateTabKind::Agent),
-        CreateVerdict::None => false,
-    };
+    let allowed = (on_host || !project.pinned)
+        && match project.create {
+            CreateVerdict::All => true,
+            CreateVerdict::Agents => matches!(kind, CreateTabKind::Agent),
+            CreateVerdict::None => false,
+        };
     if allowed {
         Ok(())
     } else {
@@ -4482,6 +4792,9 @@ async fn phone_transcript(
     transcript.context_card = None;
     transcript.cwd = None;
     transcript.running_cwds.clear();
+    if let Some(prompt) = transcript.cut_prompt.as_mut() {
+        prompt.cwd = None;
+    }
     let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
     let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
     let project = (entry_cwds.iter().any(|cwd| !cwd.is_empty()))
@@ -5016,7 +5329,7 @@ fn worktree_desktop_error(response: Result<DesktopResponse, String>) -> (StatusC
             match code.as_str() {
                 "desktop_unavailable" | "tab_not_ready" => StatusCode::SERVICE_UNAVAILABLE,
                 "tab_not_found" | "worktree_not_found" | "model_not_found" => StatusCode::NOT_FOUND,
-                "not_movable" | "tab_busy" | "move_failed" | "not_assistant_chat" | "switch_failed" => StatusCode::CONFLICT,
+                "not_movable" | "tab_busy" | "move_failed" | "not_assistant_chat" | "switch_failed" | "host_offline" => StatusCode::CONFLICT,
                 _ => StatusCode::BAD_REQUEST,
             },
             &code,
@@ -5104,6 +5417,147 @@ async fn move_tab_worktree(
             project_id,
             tmux_session,
             worktree,
+        },
+    )
+    .await;
+    match response {
+        Ok(DesktopResponse::WorktreeMoved { moved }) => (StatusCode::OK, Json(json!({ "moved": moved }))),
+        other => worktree_desktop_error(other),
+    }
+}
+
+/// The phone's opaque id for running `raw_id`'s tab at the window's location
+/// word `location`: [`machine_id`] for a host, and the same derivation over
+/// `"local"` for this machine.
+fn location_id(host_key: &[u8], raw_id: &str, location: &str) -> String {
+    super::discovery::key_id(host_key, "host", &[raw_id, location])
+}
+
+/// A tab the locality chip may move, with its project: an agent tab the
+/// catalog flagged `location_movable`, else `409 not_movable`.
+fn locatable_tab(
+    snapshot: &super::discovery::Catalog,
+    tab_id: &str,
+) -> Result<(super::discovery::ResolvedProject, ResolvedTab), (StatusCode, Json<serde_json::Value>)> {
+    let Some((project, tab)) = snapshot.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    if tab.public.kind != "agent" {
+        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
+    }
+    if !tab.public.location_movable {
+        return Err(api_error(StatusCode::CONFLICT, "not_movable"));
+    }
+    Ok((project.clone(), tab.clone()))
+}
+
+/// `GET /api/v1/tabs/{id}/locations` — where the facts row's locality chip
+/// can move this agent tab of a remote project, as the desktop tab badge's
+/// menu lists it: this machine (the mirror; none in a remote-only project)
+/// and each host that holds the code, by opaque id, with whether the
+/// desktop holds that host's connection now; the one it runs at, and whether
+/// its CLI takes the conversation along (`agent_host_move`: Claude with a
+/// session). Answered here: the sidecar alone knows the masters.
+async fn tab_locations(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let (project, tab) = match locatable_tab(&snapshot, &tab_id) {
+        Ok(found) => found,
+        Err(error) => return error,
+    };
+    let key = host_key(&state);
+    let mut locations = Vec::new();
+    if !project.pinned {
+        locations.push(json!({ "id": location_id(&key, &project.raw_id, "local"), "label": "", "here": true, "primary": false, "connected": true }));
+    }
+    for mut machine in phone_machines(&state, &project).await {
+        machine["here"] = false.into();
+        locations.push(machine);
+    }
+    let carries = tab.cmd == "claude" && tab.session_id.as_deref().is_some_and(|id| !id.is_empty());
+    (
+        StatusCode::OK,
+        Json(json!({
+            "locations": locations,
+            "current": location_id(&key, &project.raw_id, &tab.location),
+            "carries": carries,
+        })),
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveLocationBody {
+    location: String,
+}
+
+/// `POST /api/v1/tabs/{id}/location` with `{ "location": "<id>" }` — move
+/// the agent tab to a place `locations` listed (`DesktopRequest::MoveLocation`):
+/// the desktop stops its CLI, carries the conversation over where the CLI
+/// allows and respawns the tab there. A host is only asked for while the
+/// desktop holds its master — the window rides it and never dials for a phone.
+/// Answers `{ "moved": "carried" | "fresh" }`; `409 move_failed` left the tab
+/// where it was.
+async fn move_tab_location(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    // The move respawns the agent's CLI.
+    if let Err(error) = ai_off_guard(&state) {
+        return error;
+    }
+    let Ok(MoveLocationBody { location: asked }) = serde_json::from_slice::<MoveLocationBody>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let (project, tab) = match locatable_tab(&snapshot, &tab_id) {
+        Ok(found) => found,
+        Err(error) => return error,
+    };
+    let key = host_key(&state);
+    let location = if !project.pinned && asked == location_id(&key, &project.raw_id, "local") {
+        "local".to_string()
+    } else {
+        let Some(machine) = project
+            .machines
+            .iter()
+            .find(|machine| machine.runnable && machine_id(&key, &project.raw_id, machine) == asked)
+        else {
+            return api_error(StatusCode::NOT_FOUND, "location_not_found");
+        };
+        if !master_up(&state, &machine.spec).await {
+            return api_error(StatusCode::CONFLICT, "host_offline");
+        }
+        machine.location.clone()
+    };
+    if location == tab.location {
+        return (StatusCode::OK, Json(json!({ "moved": "carried" })));
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::MoveLocation {
+            request_id: new_request_id(),
+            project_id: project.raw_id.clone(),
+            tmux_session: tab.tmux_name.clone(),
+            location,
         },
     )
     .await;
@@ -5215,6 +5669,94 @@ async fn remember_model_rows(
         Ok(()) => (StatusCode::OK, Json(json!({ "kept": true }))),
         Err(why) => {
             eprintln!("mobile: keeping a model list failed: {why}");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
+        }
+    }
+}
+
+/// The CLI whose startup defaults a phone's model sheet on `tab_id` edits
+/// (`services::agent_defaults`): an agent tab's — not a local-model tab's (its
+/// model is fixed), a Tabby chat's (its launch is pinned) or a host tab's
+/// (its command names nothing on this machine).
+fn launch_defaults_cli(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let catalog = catalog(state, phone)?;
+    let Some((_, tab)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    if tab.public.kind != "agent" {
+        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
+    }
+    if tab.local_model || tab.place.on_host() || tab.public.assistant_launch.is_some() {
+        return Err(api_error(StatusCode::CONFLICT, "no_launch_defaults"));
+    }
+    Ok(crate::services::agent_defaults::stem(&tab.cmd).to_string())
+}
+
+/// `GET /api/v1/tabs/{id}/launch-defaults` — `{ saved: { model, effort },
+/// capabilities, cli, models }`: the model and effort new sessions of the
+/// tab's CLI start on (Manage CLIs → Default model and effort), what that CLI
+/// can take, its command and the user's own model-name list (`null` when none).
+async fn launch_defaults(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let cli = match launch_defaults_cli(&state, &phone, &tab_id) {
+        Ok(cli) => cli,
+        Err(error) => return error,
+    };
+    let settings = crate::storage::read_json::<crate::schema::Settings>(&state.config.state_dir.join("settings.json"))
+        .unwrap_or_default();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "saved": crate::services::agent_defaults::saved_in(&settings, &cli),
+            "capabilities": crate::services::agent_defaults::capabilities(&cli),
+            "cli": cli,
+            // The user's own list from Settings → Agents, when they set one
+            // for this CLI; the built-in names live in the phone's bundle.
+            "models": settings.agent_models.as_ref().and_then(|all| all.get(&cli.to_lowercase())),
+        })),
+    )
+}
+
+/// `PUT /api/v1/tabs/{id}/launch-defaults` with `{ model, effort }` — keep
+/// them as the tab's CLI's startup defaults (both blank: back to the CLI's
+/// own). This session keeps its model; only new ones start on these. `400`
+/// with `invalid_model` / `invalid_effort` / `effort_needs_model` for what the
+/// desktop form refuses too.
+async fn save_launch_defaults(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    let Ok(saved) = serde_json::from_slice::<crate::services::agent_defaults::Saved>(&body) else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let cli = match launch_defaults_cli(&state, &phone, &tab_id) {
+        Ok(cli) => cli,
+        Err(error) => return error,
+    };
+    if let Err(code) = crate::services::agent_defaults::check(&cli, &saved) {
+        return api_error(StatusCode::BAD_REQUEST, code);
+    }
+    match crate::services::agent_defaults::save_in(&state.config.state_dir.join("settings.json"), &cli, &saved) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "saved": true }))),
+        Err(why) => {
+            eprintln!("mobile: saving launch defaults failed: {why}");
             api_error(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
         }
     }
@@ -5370,6 +5912,10 @@ async fn terminal(
     // Everything but a shell runs an AI: its input obeys the AI switch.
     let ai = tab.public.kind != "shell";
     let tmux = tab.tmux_name.clone();
+    let viewer = pty_bridge::Viewer {
+        device_id: phone.device_id().to_string(),
+        project_id: tab_project.raw_id.clone(),
+    };
     let registry = state.terminal_registry.clone();
     let auth = state.auth.clone();
     let token = cookie_token(&headers).unwrap_or_default().to_string();
@@ -5405,6 +5951,7 @@ async fn terminal(
             let _ = pty_bridge::attach(
                 socket,
                 target,
+                viewer,
                 registry,
                 auth,
                 token,
@@ -5456,11 +6003,12 @@ struct InboxQuery {
 }
 
 /// `POST /api/v1/tabs/{tab_id}/inbox` — the composer's **+ → From this phone**.
-/// The raw body is the file; it lands in the tab's project under
-/// `.tabtivity/inbox/` and the phone gets the project-relative reference back to
-/// put after an `@`. The tab names the project and nothing else: a session
-/// that has ended can still receive a file for the next one. See
-/// `inbox.rs` for why a relative reference may cross the boundary.
+/// The raw body is the file; it lands in the tab's drop box (`drop_box`: its
+/// project, or a Tabby chat's own folder) under `.tabtivity/inbox/` and the
+/// phone gets the relative reference back to put after an `@`. The tab names
+/// the folder and nothing else: a session that has ended can still receive a
+/// file for the next one. See `inbox.rs` for why a relative reference may
+/// cross the boundary.
 async fn inbox_upload(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -5485,10 +6033,10 @@ async fn inbox_upload(
     if let Err(error) = not_on_host(tab) {
         return error;
     }
-    if let Err(error) = has_folder(project) {
-        return error;
-    }
-    let root = project.root.clone();
+    let root = match drop_box(&state.config.state_dir, project, tab) {
+        Ok(root) => root,
+        Err(error) => return error,
+    };
     drop(catalog);
     store_in_project_inbox(root, query.name, body).await
 }
@@ -5588,19 +6136,22 @@ async fn global_inbox_upload(
 }
 
 /// The project an inbox-bound request is for, by its tab — the tab names the
-/// project and nothing else, exactly as `inbox_upload` reads it.
+/// project and nothing else, exactly as `inbox_upload` reads it — and, for a
+/// Tabby chat, the chat's uid, which names its drop box to the window
+/// (`drop_box`; the assistant scope has no folder of its own).
 fn inbox_project(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(String, Option<String>), (StatusCode, Json<serde_json::Value>)> {
     let catalog = catalog(state, phone)?;
     let Some((project, tab)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
     };
     not_on_host(tab)?;
-    has_folder(project)?;
-    Ok(project.raw_id.clone())
+    drop_box(&state.config.state_dir, project, tab)?;
+    let chat = (project.public.kind == ScopeKind::Assistant).then(|| tab.session_id.clone()).flatten();
+    Ok((project.raw_id.clone(), chat))
 }
 
 /// The desktop's refusal of a desktop-image request, as the phone's status.
@@ -5633,8 +6184,8 @@ async fn desktop_images(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let project_id = match inbox_project(&state, &phone, &tab_id) {
-        Ok(raw) => raw,
+    let (project_id, _) = match inbox_project(&state, &phone, &tab_id) {
+        Ok(target) => target,
         Err(error) => return error,
     };
     let request_id = new_request_id();
@@ -5687,8 +6238,8 @@ async fn attach_desktop_image(
     if !desktop_images::valid_id(&request.image_id) {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     }
-    let project_id = match inbox_project(&state, &phone, &tab_id) {
-        Ok(raw) => raw,
+    let (project_id, chat) = match inbox_project(&state, &phone, &tab_id) {
+        Ok(target) => target,
         Err(error) => return error,
     };
     let request_id = new_request_id();
@@ -5698,22 +6249,24 @@ async fn attach_desktop_image(
         &DesktopRequest::AttachDesktopImage {
             request_id,
             project_id,
+            chat,
             image_id: request.image_id.clone(),
         },
     )
     .await;
     if desktop_down(&response) {
-        // No window: the file is copied into the project's inbox here.
+        // No window: the file is copied into the tab's drop box here.
         let Ok(snapshot) = catalog(&state, &phone) else {
             return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
         };
-        let Some((project, _)) = snapshot.tab(&tab_id) else {
+        let Some((project, tab)) = snapshot.tab(&tab_id) else {
             return api_error(StatusCode::NOT_FOUND, "tab_not_found");
         };
-        if let Err(error) = has_folder(project) {
-            return error;
-        }
-        let (state_dir, root, image_id) = (state.config.state_dir.clone(), project.root.clone(), request.image_id);
+        let root = match drop_box(&state.config.state_dir, project, tab) {
+            Ok(root) => root,
+            Err(error) => return error,
+        };
+        let (state_dir, image_id) = (state.config.state_dir.clone(), request.image_id);
         let attached = tokio::task::spawn_blocking(move || headless::attach_desktop_image(&state_dir, &root, &image_id))
             .await
             .unwrap_or_else(|_| Err("write_failed".to_string()));
@@ -5746,6 +6299,21 @@ fn outbox_root(
     };
     has_folder(project)?;
     Ok(project.root.clone())
+}
+
+/// The folder an inbox read is answered from, by its tab: the drop box
+/// `inbox_upload` wrote to (`drop_box`), so a Tabby chat's pictures come back
+/// from its own folder.
+fn inbox_root(
+    state: &HostState,
+    phone: &Phone,
+    tab_id: &str,
+) -> Result<PathBuf, (StatusCode, Json<serde_json::Value>)> {
+    let catalog = catalog(state, phone)?;
+    let Some((project, tab)) = catalog.tab(tab_id) else {
+        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
+    };
+    drop_box(&state.config.state_dir, project, tab)
 }
 
 /// The same root by the project itself, for the project screen's outbox and
@@ -6104,7 +6672,7 @@ async fn inbox_described(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let root = match outbox_root(&state, &phone, &tab_id) {
+    let root = match inbox_root(&state, &phone, &tab_id) {
         Ok(root) => root,
         Err(error) => return error,
     };
@@ -6136,7 +6704,7 @@ async fn inbox_file(
         Ok(phone) => phone,
         Err(error) => return error.into_response(),
     };
-    let root = match outbox_root(&state, &phone, &tab_id) {
+    let root = match inbox_root(&state, &phone, &tab_id) {
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
@@ -7379,6 +7947,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/mail", get(mail_overview))
         // Host-wide, no project or path: list, and load / unload / start.
         // A body is one action and at most one model name.
+        .route("/api/v1/clis", get(cli_overview))
         .route(
             "/api/v1/local-models",
             get(local_models_list).merge(post(local_models_mutate).layer(DefaultBodyLimit::max(1024))),
@@ -7410,6 +7979,10 @@ fn router(state: HostState) -> Router {
             get(launch_options),
         )
         .route("/api/v1/projects/{project_id}/git", get(project_git))
+        .route("/api/v1/projects/{project_id}/diverged", get(diverged_list))
+        .route("/api/v1/projects/{project_id}/diverged/preview", post(diverged_preview))
+        .route("/api/v1/projects/{project_id}/diverged/resolve", post(diverged_resolve))
+        .route("/api/v1/projects/{project_id}/diverged/diff", get(diverged_diff))
         .route(
             "/api/v1/projects/{project_id}/prompts",
             get(prompts).post(prompt_create),
@@ -7434,7 +8007,10 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/undo-clear", post(undo_clear))
         .route("/api/v1/tabs/{tab_id}/worktrees", get(tab_worktrees))
         .route("/api/v1/tabs/{tab_id}/worktree", post(move_tab_worktree))
+        .route("/api/v1/tabs/{tab_id}/locations", get(tab_locations))
+        .route("/api/v1/tabs/{tab_id}/location", post(move_tab_location))
         .route("/api/v1/tabs/{tab_id}/assistant-models", get(assistant_models))
+        .route("/api/v1/tabs/{tab_id}/launch-defaults", get(launch_defaults).put(save_launch_defaults))
         .route("/api/v1/tabs/{tab_id}/model-rows", get(model_rows).post(remember_model_rows))
         .route("/api/v1/tabs/{tab_id}/assistant-model", post(switch_assistant_model))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))
@@ -7743,6 +8319,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
         auth: auth.clone(),
         catalog: Arc::new(Mutex::new(CatalogCache::with_host_live(host_live.clone()))),
         terminal_registry: TerminalRegistry::default(),
+        sightings: presence::Sightings::default(),
         spawner: HeadlessSpawner::default(),
         readings: Arc::new(Mutex::new(headless::ReadingCache::default())),
         runner: Arc::new(scheduler::TmuxRunner::new(&state_dir, None)),
@@ -7789,12 +8366,16 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     let admin_origin = Some(config.origin.clone());
     let port = config.host.port;
     let lookup_state = state.clone();
+    let presence_state = state.clone();
     let admin_context = admin::AdminContext {
         auth,
         port,
         origin: admin_origin,
         shutdown: shutdown_tx.clone(),
         agent_tab: Some(Arc::new(move |tmux: &str| agent_tab_ref(&lookup_state, tmux))),
+        presence: Some(Arc::new(move || {
+            (presence_state.sightings.current(), presence_state.terminal_registry.viewers())
+        })),
         state_dir: Some(state_dir.clone()),
     };
     tokio::spawn(async move {

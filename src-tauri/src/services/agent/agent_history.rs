@@ -175,6 +175,9 @@ pub const DATABASES: &[Database] = &[
             "session_context_epoch",
             "session_input",
             "session_message",
+            "session_part",
+            "blob",
+            "blob_ref",
             "instruction_blob",
             "instruction_entry",
             "instruction_state",
@@ -1006,6 +1009,7 @@ mod tests {
              CREATE TABLE credential (id TEXT, value TEXT);
              CREATE TABLE session_v2 (id TEXT, permission TEXT);
              CREATE TABLE session_message (id TEXT, session_id TEXT, data TEXT);
+             CREATE TABLE session_part (message_id TEXT, data TEXT);
              CREATE TABLE migration (id TEXT);
              CREATE TRIGGER t AFTER UPDATE ON session BEGIN INSERT INTO account VALUES ('x', 'planted'); END;
              INSERT INTO session VALUES ('s1', '/home/a/proj', '{\"allow\":\"*\"}', '{\"cwd\":\"/home/a/proj/src\"}');
@@ -1013,6 +1017,7 @@ mod tests {
              INSERT INTO credential VALUES ('c1', 'secret-v2-token');
              INSERT INTO session_v2 VALUES ('ses_v2', '{\"allow\":\"*\"}');
              INSERT INTO session_message VALUES ('msg_v2', 'ses_v2', '{\"type\":\"user\",\"text\":\"hello\"}');
+             INSERT INTO session_part VALUES ('msg_v2', '{\"type\":\"text\"}');
              INSERT INTO migration VALUES ('m1');",
         )
         .unwrap();
@@ -1042,6 +1047,8 @@ mod tests {
         assert_eq!(permission, None);
         let messages: i64 = conn.query_row("SELECT COUNT(*) FROM session_message", [], |r| r.get(0)).unwrap();
         assert_eq!(messages, 1);
+        let parts: i64 = conn.query_row("SELECT COUNT(*) FROM session_part", [], |r| r.get(0)).unwrap();
+        assert_eq!(parts, 1);
         let perm: Option<String> = conn.query_row("SELECT permission FROM session", [], |r| r.get(0)).unwrap();
         assert_eq!(perm, None);
         drop(conn);

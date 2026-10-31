@@ -97,6 +97,9 @@ pub async fn move_session(
     tmux_session: Option<&str>,
 ) -> Result<Moved, String> {
     let project = crate::services::remote::remote_target_for(project_id).ok_or("not a remote project")?;
+    if let Some(refusal) = local_side_refusal(&project.spec, from, to) {
+        return Err(refusal);
+    }
     if from == to {
         return Ok(Moved::Carried);
     }
@@ -153,12 +156,25 @@ pub async fn move_session(
     Ok(Moved::Carried)
 }
 
+/// Why a move between `from` and `to` (`None`: this machine) is refused for the
+/// project whose primary spec is `spec`, or `None`. A remote-only project (a VM
+/// included) has no mirror for a tab to run in here, so neither end may be this
+/// machine; a move between two of its hosts is kept.
+fn local_side_refusal(spec: &crate::schema::project::RemoteSpec, from: Option<&str>, to: Option<&str>) -> Option<String> {
+    (spec.is_remote_only() && (from.is_none() || to.is_none())).then(|| {
+        crate::services::remote::remote_only_refusal(
+            "this project keeps no local copy, so its agent tabs cannot move to or from this computer.",
+        )
+    })
+}
+
 /// The side `host` names (`None`: this machine), with the slug folder of the
 /// folder the tab runs in there: the mirror here, the host's `remote_path`
 /// there — resolved as Claude sees it (`process.cwd()` is the real path).
 async fn side(pool: &RemotePoolState, project_id: &str, host: Option<&str>, primary_path: &str) -> Result<Side, String> {
     let Some(host) = host else {
-        let mirror = crate::services::remote_sync::mirror_dir(project_id);
+        let mirror = crate::services::remote_sync::mirror_dir_opt(project_id)
+            .ok_or_else(|| crate::services::remote::remote_only_refusal("this project keeps no local copy."))?;
         let real = std::fs::canonicalize(&mirror).unwrap_or(mirror);
         return Ok(Side::Here {
             home: crate::services::agent_home::scope_home(Some(project_id)),
@@ -393,6 +409,38 @@ mod tests {
     use super::*;
 
     const ID: &str = "11111111-2222-3333-4444-555555555555";
+
+    fn spec(extra: serde_json::Value) -> crate::schema::project::RemoteSpec {
+        let mut base = serde_json::json!({ "host": "h.example", "remote_path": "/srv/p" });
+        base.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
+    /// A remote-only project (a VM included) refuses either end being this
+    /// machine, with the sentinel; host ⇄ worker moves, and every move of a
+    /// plain Remote project, are let through.
+    #[test]
+    fn a_remote_only_project_never_moves_a_tab_to_or_from_this_machine() {
+        let sentinel = concat!(crate::app_upper!(), "_REMOTE_ONLY:");
+        let pinned = [
+            spec(serde_json::json!({ "remote_only": true })),
+            spec(serde_json::json!({ "vm": true })),
+            // A VM outranks a stray `remote_only: false` (hand edit, bundle).
+            spec(serde_json::json!({ "vm": true, "remote_only": false })),
+        ];
+        for pinned in pinned {
+            for (from, to) in [(None, Some("primary")), (Some("primary"), None), (Some("w1"), None), (None, None)] {
+                let refusal = local_side_refusal(&pinned, from, to).expect("refused");
+                assert!(refusal.starts_with(sentinel), "{refusal}");
+            }
+            assert_eq!(local_side_refusal(&pinned, Some("primary"), Some("w1")), None);
+            assert_eq!(local_side_refusal(&pinned, Some("w1"), Some("primary")), None);
+        }
+        let plain = spec(serde_json::json!({}));
+        for (from, to) in [(None, Some("primary")), (Some("primary"), None), (Some("primary"), Some("w1"))] {
+            assert_eq!(local_side_refusal(&plain, from, to), None);
+        }
+    }
 
     fn home() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()

@@ -132,7 +132,8 @@ export type FilesPanelView =
   | "jobs"
   | "remarks"
   | "todo"
-  | "assistant";
+  | "assistant"
+  | "clis";
 
 /** `Settings.assistant_settings` (Rust `schema::settings::AssistantSettings`):
  *  the chat assistant's options. Every key optional; an absent block is the
@@ -182,6 +183,11 @@ export interface Settings {
      * only in effect while `project_files` is on too. Read by the sidecar per
      * request. */
     project_uploads?: boolean;
+    /** A paired phone may resolve a remote project's diverged files from its
+     * Diverged list (take a side, upload a new file, complete a deletion).
+     * Unset is off; only in effect while `project_files` is on too. Read by
+     * the sidecar per request. */
+    project_sync?: boolean;
     /** A paired phone's PDF reader may write remarks and highlights into a
      * project PDF (Annotate; appended, never over a file changed since it was
      * read). Unset is off; only in effect while `project_files` is on too. Read
@@ -474,9 +480,10 @@ export interface Settings {
    *  `false` = the agent lists the changes first (**Make these changes**). */
   pdf_markup_direct?: boolean;
   /** Built-in agent registry ids shown without searching in the compact Agents
-   *  group of the + tab menu. Set by the 🧠 menu's “+ tab” chips. Unset keeps
-   *  the familiar Claude/Codex/Gemini quick picks; an empty array is a deliberate
-   *  choice to show agents only after searching. */
+   *  group of the + tab menu. Set by the 🧠 menu's “+ tab” chips; a CLI installed
+   *  while the app runs joins it (`noteInstalledAgents`). Unset keeps the familiar
+   *  Claude/Codex/Gemini quick picks; an empty array is a deliberate choice to
+   *  show agents only after searching. */
   compact_tab_agents?: string[];
   /** Built-in agent registry ids the root console's + menus offer, set by the
    *  🧠 menu's "Root" chips. Opt-in: unset or empty offers none there (root
@@ -498,6 +505,8 @@ export interface Settings {
   agent_preface_commands?: Record<string, string[]>;
   /** Model names per agent command, typed as that CLI's own `/model <name>`. */
   agent_models?: Record<string, string[]>;
+  /** Native startup choices per CLI binary, applied to new agent sessions. */
+  agent_launch_defaults?: Record<string, { model?: string; effort?: string }>;
   /** The agent a prompt-chart draft aimed at "New agent tab" launches (the
    *  bare command, `"claude"`); unset falls back to `default_agent_cmd`. Set
    *  from the chart's own toolbar. Rides in the backend's `extra` catch-all. */
@@ -653,11 +662,21 @@ export interface Settings {
    *  dictate with (unset: `small`), the speech language (`auto` / unset: the
    *  UI language; `detect`: whisper guesses), headset mode (talking over the
    *  voice interrupts it) and the hands-free pause in ms. Renderer-side only;
-   *  the backend round-trips them through its catch-all. */
+   *  the backend round-trips them through its catch-all. `voice_rate` is the
+   *  read-aloud speed (a multiplier, unset: 1); `voice_read_aloud` and
+   *  `voice_hands_free_on` are the Chat chips' state — read answers aloud,
+   *  and the hands-free loop, which needs the experimental flag below too.
+   *  `voice_gpu`: whether speech may use the GPU (unset: yes). */
   voice_model?: string;
   voice_lang?: string;
+  voice_gpu?: boolean;
   voice_headset?: boolean;
   voice_pause_ms?: number;
+  voice_rate?: number;
+  voice_read_aloud?: boolean;
+  voice_hands_free_on?: boolean;
+  /** EXPERIMENTAL: the Chat's hands-free loop (`ReaderVoice`). */
+  voice_hands_free?: boolean;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */
@@ -1073,6 +1092,11 @@ export interface RemoteSpec {
    *  forward. Written by the backend at creation/boot, never user-set. What a
    *  VM-aware surface (the pill glyph, the spawn guard) dispatches on. */
   vm?: boolean;
+  /** Remote-only project (`docs/remote_only_projects_plan.md`): no local
+   *  mirror; files, tabs and git all live on the host. Written by the backend
+   *  at creation (or a conversion), read-only to the renderer. Absent = `vm`
+   *  (a VM is remote-only). Read it through `isHostPinned`, never directly. */
+  remote_only?: boolean;
 }
 
 /** Egress policy for a project VM (`docs/vm_projects_plan.md`): `off` = the
@@ -1466,6 +1490,9 @@ export interface ExportPreview {
   directoryMissing: boolean;
   mirror: string | null;
   mirrorMissing: boolean;
+  /** The project keeps no local copy (remote-only): `mirror` is null and the
+   *  counts are 0 — its files can only be packed from the host. */
+  remoteOnly?: boolean;
   files: number;
   bytes: number;
   gitFiles: number;
@@ -1530,6 +1557,49 @@ export interface BundleInfo {
   /** Name of the project a remote bundle's host+path already belongs to. */
   siteConflict?: string;
   suggestedParent: string;
+  /** The project comes back without a local copy (a remote-only bundle that
+   *  carries no tree): no mirror folder is made, so none is asked for. */
+  remoteOnly?: boolean;
+}
+
+/** `remote_project_init_host`'s answer: what the host setup of a remote-only
+ *  project wrote. `gitType` is the project's git type afterwards — `"none"` when
+ *  the host could not `git init`. */
+export interface HostInitReport {
+  written: string[];
+  kept: string[];
+  git: "initialized" | "failed" | "skipped";
+  committed: boolean;
+  gitType: string;
+}
+
+/** `remote_unpair_mirror_preview`'s answer: what "Stop keeping a local copy"
+ *  would leave behind (`docs/remote_only_projects_plan.md` E8). Every count
+ *  blocks the conversion; `stoppedWorkers` is only named. */
+export interface UnpairPreview {
+  lockstepEnabled: boolean;
+  mirrorIsRepo: boolean;
+  commitsNotOnHost: number;
+  uncommitted: number;
+  unpushedSyncEdits: number;
+  localTabs: number;
+  stoppedWorkers: string[];
+  mirrorPath: string;
+  mirrorExists: boolean;
+  /** Where the folder ends up (empty when there is none). */
+  keptAt: string;
+  /** The folder is moved out of the state dir to `keptAt`. */
+  moves: boolean;
+  fingerprint: string;
+}
+
+/** `remote_unpair_mirror`'s answer. */
+export interface UnpairOutcome {
+  entry: ProjectEntry;
+  keptAt: string;
+  moved: boolean;
+  /** The move out failed; the folder is still at `keptAt`. */
+  moveError?: string | null;
 }
 
 /** `import_project_export`'s answer. */

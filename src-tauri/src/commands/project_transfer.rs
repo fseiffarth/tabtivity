@@ -19,7 +19,8 @@
 //! tabtivity-export.json   the manifest — everything that is NOT files
 //! dir/…                a local project's folder
 //! state/…              a remote project's local state dir (project.json only)
-//! mirror/…             a remote project's local mirror tree
+//! mirror/…             a remote project's tree (its local mirror, or the host's
+//!                      copy; the only source for a remote-only project)
 //! agents/home|local/…  the project's agent conversations (opt-in, format 2)
 //! ```
 //!
@@ -283,6 +284,11 @@ pub struct ExportPreview {
     pub directory_missing: bool,
     pub mirror: Option<String>,
     pub mirror_missing: bool,
+    /// The project keeps no local copy (`RemoteSpec::is_remote_only`): `mirror`
+    /// is `None` and the counts are zero, because its tree can travel only as
+    /// the host's copy ([`MirrorSource::Host`], measured by
+    /// [`preview_host_export`]).
+    pub remote_only: bool,
     /// Counts for the tree that would travel with every toggle ON.
     pub files: u64,
     pub bytes: u64,
@@ -323,6 +329,8 @@ pub struct ExportProjectRequest {
     #[serde(default = "yes")]
     pub include_mirror: bool,
     /// Remote projects only: which copy of the tree `mirror/` is packed from.
+    /// A remote-only project has no local copy, so `Local` with
+    /// `include_mirror` is refused for one (`{UPPER}_REMOTE_ONLY`).
     #[serde(default)]
     pub mirror_source: MirrorSource,
     #[serde(default = "yes")]
@@ -443,6 +451,10 @@ pub struct BundleInfo {
     pub directory: Option<String>,
     pub mirror: Option<String>,
     pub contents: BundleContents,
+    /// What the import will register: a remote project that keeps no local
+    /// copy ([`settle_imported_posture`]) — so the dialog asks for no mirror
+    /// folder. A bundle carrying a tree always lands as a plain Remote.
+    pub remote_only: bool,
     pub tabs: usize,
     pub box_names: Vec<String>,
     pub time_days: usize,
@@ -908,8 +920,11 @@ pub fn preview_project_export_blocking(project_id: String) -> Result<ExportPrevi
     let entry = &crate::services::remote::project_entry(&project_id)?;
 
     let remote = entry_is_remote(entry);
+    let remote_only = crate::services::remote::entry_is_remote_only(entry);
     let directory = entry_directory(entry);
-    let mirror = entry_mirror(entry);
+    // A remote-only project's `extra["mirror"]`, if a stale one is left, is
+    // not a copy it keeps: never measured, never packed.
+    let mirror = if remote_only { None } else { entry_mirror(entry) };
     let blocked = export_blocker(entry);
 
     // The tree whose size matters is the one that actually holds the files: a
@@ -947,6 +962,7 @@ pub fn preview_project_export_blocking(project_id: String) -> Result<ExportPrevi
         mirror_missing: mirror.as_deref().is_some_and(|m| !Path::new(m).is_dir()),
         directory,
         mirror,
+        remote_only,
         files: counts.files,
         bytes: counts.bytes,
         git_files: counts.git_files,
@@ -975,6 +991,38 @@ fn export_blocker(entry: &ProjectEntry) -> Option<String> {
         return Some("vm".to_string());
     }
     None
+}
+
+/// The refusal an export asking for this machine's copy of a remote-only
+/// project's tree gets: there is none, and packing the default mirror path
+/// (or a stale `extra["mirror"]`) would ship whatever happens to sit there.
+/// The host's copy, or no tree, is the way out.
+fn local_tree_refusal(remote_only: bool, req: &ExportProjectRequest) -> Option<String> {
+    (remote_only && req.include_mirror && req.mirror_source == MirrorSource::Local).then(|| {
+        crate::services::remote::remote_only_refusal(
+            "exporting this machine's copy of the tree: there is none; pick the host's copy",
+        )
+    })
+}
+
+/// Settle the posture of an imported remote spec (the bundle's `remote`
+/// value, edited in place) and say whether it registers as remote-only. A
+/// bundle that carries a tree lands it as the mirror, so the project is a
+/// plain Remote: any `remote_only` is removed. One without keeps what the
+/// bundle says — remote-only only ever narrows what runs here. `vm` is always
+/// dropped: VM projects are refused at export, so only a crafted bundle
+/// carries the marker, and it must not unlock the per-VM SSH handling (nor
+/// pin a project) on this machine. Shared by inspect and import, so the
+/// dialog's answer is the one the import acts on.
+fn settle_imported_posture(spec: &mut Value, carries_tree: bool) -> bool {
+    let Some(map) = spec.as_object_mut() else {
+        return false;
+    };
+    map.remove("vm");
+    if carries_tree {
+        map.remove("remote_only");
+    }
+    map.get("remote_only") == Some(&Value::Bool(true))
 }
 
 // ── The host's copy ───────────────────────────────────────────────────────
@@ -1348,6 +1396,10 @@ pub fn export_project_blocking(
                     image. Copy files out of the VM into a plain project first."
             .to_string());
     }
+    let remote_only = crate::services::remote::entry_is_remote_only(&entry);
+    if let Some(refusal) = local_tree_refusal(remote_only, &req) {
+        return Err(refusal);
+    }
 
     let dest = PathBuf::from(&req.dest_path);
     if dest.as_os_str().is_empty() {
@@ -1359,7 +1411,7 @@ pub fn export_project_blocking(
 
     let remote = entry_is_remote(&entry);
     let directory = entry_directory(&entry);
-    let mirror = entry_mirror(&entry);
+    let mirror = if remote_only { None } else { entry_mirror(&entry) };
     let mut notes: Vec<String> = Vec::new();
 
     // Writing the bundle into the very tree being walked would have the walk
@@ -1969,6 +2021,13 @@ pub fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo
     } else {
         projects_root()
     };
+    let remote_only = manifest.remote
+        && manifest
+            .entry
+            .extra
+            .get("remote")
+            .cloned()
+            .is_some_and(|mut spec| settle_imported_posture(&mut spec, manifest.contents.mirror));
 
     Ok(BundleInfo {
         path: bundle_path,
@@ -1993,6 +2052,7 @@ pub fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo
         directory: manifest.directory,
         mirror: manifest.mirror,
         contents: manifest.contents,
+        remote_only,
         tabs,
         box_names: manifest.box_names,
         time_days: manifest.time_days.len(),
@@ -2246,6 +2306,13 @@ pub fn import_project_export_blocking(
 
     let mut notes: Vec<String> = Vec::new();
     let mut files: u64 = 0;
+    let remote_only = manifest.remote
+        && manifest
+            .entry
+            .extra
+            .get("remote")
+            .cloned()
+            .is_some_and(|mut spec| settle_imported_posture(&mut spec, manifest.contents.mirror));
 
     // ── Where it lands ──────────────────────────────────────────────────
     let leaf = {
@@ -2276,8 +2343,11 @@ pub fn import_project_export_blocking(
                 state.display()
             ));
         }
-        let mirror = resolve_remote_mirror(req.mirror_parent.as_deref(), &name, &id, &list);
-        (state, Some(mirror))
+        // A remote-only bundle (no tree) gets no mirror: nothing is created,
+        // and the entry records none.
+        let mirror = (!remote_only)
+            .then(|| resolve_remote_mirror(req.mirror_parent.as_deref(), &name, &id, &list));
+        (state, mirror)
     } else {
         let parent = req
             .target_parent
@@ -2358,6 +2428,13 @@ pub fn import_project_export_blocking(
     let vpn_dropped = drop_imported_openvpn(&mut entry_value);
     if drop_imported_openvpn(&mut project_value) || vpn_dropped {
         notes.push("vpnDropped".to_string());
+    }
+    // The posture decided above, written into both copies of the spec (the
+    // registry's is the trusted one; `project.json` is its display twin).
+    for value in [&mut entry_value, &mut project_value] {
+        if let Some(spec) = value.get_mut("remote").filter(|r| !r.is_null()) {
+            settle_imported_posture(spec, manifest.contents.mirror);
+        }
     }
     // Nor is phone access: a bundle exported with it on (or by a build that
     // still carried it) must not open the project to this machine's phones
@@ -3066,6 +3143,61 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect(),
         }
+    }
+
+    /// A remote-only project has no local copy: asking for this machine's tree
+    /// is refused with the sentinel, the host's copy or no tree is not, and a
+    /// project that keeps a mirror is never refused.
+    #[test]
+    fn only_the_hosts_copy_of_a_remote_only_tree_travels() {
+        let req = |include_mirror: bool, mirror_source: MirrorSource| ExportProjectRequest {
+            project_id: "p".into(),
+            dest_path: "/out.bundle".into(),
+            include_files: true,
+            include_git: true,
+            include_session: true,
+            include_mirror,
+            mirror_source,
+            skip_rebuildable: true,
+            keep_rebuildable: Vec::new(),
+            include_agent_history: false,
+        };
+        let refusal = local_tree_refusal(true, &req(true, MirrorSource::Local)).expect("refused");
+        assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
+        assert_eq!(local_tree_refusal(true, &req(true, MirrorSource::Host)), None);
+        assert_eq!(local_tree_refusal(true, &req(false, MirrorSource::Local)), None);
+        for source in [MirrorSource::Local, MirrorSource::Host] {
+            assert_eq!(local_tree_refusal(false, &req(true, source)), None);
+        }
+    }
+
+    /// The import posture comes from the bundle's tree, not from a spec flag
+    /// alone: with a tree the project is a plain Remote, without one it keeps
+    /// the bundle's `remote_only`; a `vm` marker never survives.
+    #[test]
+    fn an_imported_spec_settles_its_posture_from_the_tree() {
+        let spec = |extra: Value| {
+            let mut v = serde_json::json!({ "host": "h", "remote_path": "/srv/p" });
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let mut pinned = spec(serde_json::json!({ "remote_only": true }));
+        assert!(settle_imported_posture(&mut pinned.clone(), false));
+        assert!(!settle_imported_posture(&mut pinned, true));
+        assert!(pinned.get("remote_only").is_none(), "a tree makes it a plain Remote: {pinned}");
+
+        let mut plain = spec(serde_json::json!({}));
+        assert!(!settle_imported_posture(&mut plain, false));
+        assert!(!settle_imported_posture(&mut spec(serde_json::json!({ "remote_only": false })), false));
+
+        for tree in [false, true] {
+            let mut vm = spec(serde_json::json!({ "vm": true }));
+            assert!(!settle_imported_posture(&mut vm, tree), "a crafted VM marker does not pin");
+            assert!(vm.get("vm").is_none());
+            let spec: RemoteSpec = serde_json::from_value(vm).unwrap();
+            assert!(!spec.is_remote_only());
+        }
+        assert!(!settle_imported_posture(&mut Value::Null, false));
     }
 
     /// A VM project cannot be moved by copying files: its tree is a disk image

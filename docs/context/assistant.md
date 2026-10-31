@@ -161,9 +161,15 @@ unlisted on 2026-10-26 and listed again on 2026-10-27, the user's call).
   never gets the `agent_global` layer, which carries the user's MCP servers,
   skills and hooks.
 - A fixed system prompt (`assistant::SYSTEM_PROMPT`, `{assistant}`-templated):
-  you have no access to the user's computer or files, you can search and read
-  the web, cite your pages, look up Tabtivity itself with the help tools if you
-  have them. Not user-editable.
+  you have no access to the user's computer or files, except a file the user
+  attaches with `@`; you can search and read the web, cite your pages, look up
+  Tabtivity itself with the help tools if you have them. Not user-editable.
+  The `@` exception is load-bearing. Claude Code delivers an `@` file as a
+  `Read` result the model never asked for, whatever `--tools` says, and a model
+  with no Read tool and a prompt saying it sees no file treats that result as
+  forged: probed 2026-10-30 on 2.1.311, Haiku refused 6 of 6 text files and
+  Sonnet 0 of 6 (pictures were read by both). With the exception, 8 of 8 text
+  reads on Haiku, and it still refuses `~/.ssh/config` and a home listing.
 - The home is trusted up front: `.claude.json` gets the folder-trust entry and
   `hasCompletedOnboarding`, Codex's `config.toml` a `[projects."<dir>"]
   trust_level`, so a fresh home shows no dialog (Claude live-checked; Codex's
@@ -302,13 +308,23 @@ same picker (`setAssistantReach`); turning the switch off drops the list.
   it has no process) or creates one on the default ready launch
   (`assistantChat.ts`), then hands over to the Focus chat. The Project screen
   sends a landing on the scope (a restored place, a notification's back) back
-  to Home. The Focus chat is the existing one with files, outbox, inbox
-  upload, Commit, markup and held prompts hidden; its head is `TabbyHead`: the
+  to Home. The Focus chat is the existing one with files, outbox, Commit,
+  markup and held prompts hidden. The composer's **+** stays, minus *Project
+  file*: like a desktop drop or paste (`pty_drop_files`, the tab's own folder),
+  the phone's file or desktop image lands in the chat's folder
+  (`host::drop_box`: `chat_dir` by the chat's uid, refused when missing or a
+  link) and goes in as an `@.tabtivity/inbox/…` reference, which the CLI reads
+  itself, not through a tool. Codex has `view_image` off, so it gets the
+  reference and cannot see the picture. Nothing else reaches that folder: the
+  state dir is masked in every fence and `assistant_chat_mount` binds one
+  chat's, so a chat's files are its own, and `drop_sweep` prunes them at 90
+  days like a project inbox (`discovery::chat_folders`, by the disk, since a
+  replaced chat leaves its folder). Its head is `TabbyHead`: the
   CLI dropdown (catalog rows carry `assistant_launch`, the chat's launch id,
   matched against `launch-options`) and Relaunch, both a create plus a close
-  of every other chat. Every folder-shaped route (git, files,
-  uploads, worktrees, inbox, outbox, markup, uncommitted, schedules, collected
-  prompts, desktop images) answers `404 not_a_project` for the scope.
+  of every other chat. Every other folder-shaped route (git, files,
+  uploads, worktrees, the project inbox, outbox, markup, uncommitted,
+  schedules, collected prompts) answers `404 not_a_project` for the scope.
 - A chat restored with the desktop has no process under lazy spawn, so the
   catalog lists it `available:false` and the terminal route answers
   `410 session_gone`. Opening such a chat from the phone (`TabbyOpen`) posts

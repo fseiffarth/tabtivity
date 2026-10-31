@@ -37,6 +37,7 @@ import {
   retryAutoConnectAfterVpn,
   retryUnreachableNow,
   silentReconnectDeadHost,
+  reconnectAllHosts,
   useProjectsStore,
 } from "../../stores/projects";
 import { useConnectDialogStore } from "../../stores/remote/connectDialog";
@@ -88,7 +89,10 @@ const backend = (opts: {
   loginReadyAfter?: number;
   /** Non-headless: `openvpn_status` answers true from this poll onwards. */
   vpnUpAfter?: number;
+  /** `remote_connect` rejects this many times before it succeeds. */
+  connectFails?: number;
 }) => {
+  let connectFailures = 0;
   const probes = Array.isArray(opts.probe) ? [...opts.probe] : opts.probe ? [opts.probe] : [];
   let sshConnects = 0;
   let vpnStatusChecks = 0;
@@ -103,12 +107,16 @@ const backend = (opts: {
       // unmocked resolve here would answer `undefined`, which reads as neither.
       case "remote_saved_password_state":
         return Promise.resolve({ saved: opts.sshSaved ?? true, keyring: "unlocked" });
-      case "vpn_has_saved_password":
+      case "vpn_can_connect_silently":
         return Promise.resolve(opts.vpnSaved ?? false);
       case "openvpn_connect":
         return opts.vpnFails ? Promise.reject("tunnel failed") : Promise.resolve();
       case "openvpn_status":
         return Promise.resolve(++vpnStatusChecks > (opts.vpnUpAfter ?? Infinity));
+      case "remote_connect":
+        return connectFailures++ < (opts.connectFails ?? 0)
+          ? Promise.reject("kex_exchange_identification: Connection reset by peer")
+          : Promise.resolve();
       case "ssh_connect":
         return sshConnects++ >= (opts.loginReadyAfter ?? 0)
           ? Promise.resolve()
@@ -133,6 +141,7 @@ beforeEach(() => {
   invokeMock.mockImplementation(() => Promise.resolve());
   useConnectDialogStore.setState({ projectId: null });
   useRemoteStatusStore.setState({ byProject: {} });
+  useVpnStatusStore.setState({ byConfig: {}, holders: {} });
   useProjectsStore.setState({ projects: [], activeId: null });
   // Settings must be **loaded** for auto-connect to run at all: the HPC gate
   // (`lib/remote/hpc/hpcHost`'s `mayAutoTouch`) fails closed on an unloaded store, because
@@ -222,6 +231,39 @@ describe("auto-connect opt-in", () => {
     expect(vpnLamp()).toBe("connected");
     expect(sshLamp()).toBe("connected");
   });
+
+  it("does not dial a tunnel that cannot connect without a prompt", async () => {
+    // A saved password is not enough (an `auth-user-pass` config with no username,
+    // say): polkit asks before OpenVPN has read the config, so asking is the prompt.
+    backend({ probe: UNREACHABLE, sshSaved: true, vpnSaved: false });
+    useProjectsStore.setState({
+      projects: [project("remote1", { auto_connect: true, openvpn: { config: "/cfg.ovpn" } })],
+    });
+
+    await useProjectsStore.getState().setActive("remote1");
+    await settle();
+
+    expect(invokeMock).not.toHaveBeenCalledWith("openvpn_connect", expect.anything());
+    expect(sshLamp()).toBe("error");
+  });
+
+  it.each(["connected", "connecting"] as const)(
+    "leaves a tunnel that is already %s alone",
+    async (state) => {
+      backend({ probe: UNREACHABLE, sshSaved: true, vpnSaved: true });
+      useVpnStatusStore.setState({ byConfig: { "/cfg.ovpn": state } });
+      useProjectsStore.setState({
+        projects: [project("remote1", { auto_connect: true, openvpn: { config: "/cfg.ovpn" } })],
+      });
+
+      await useProjectsStore.getState().setActive("remote1");
+      await settle();
+
+      expect(invokeMock).not.toHaveBeenCalledWith("openvpn_connect", expect.anything());
+      expect(useVpnStatusStore.getState().byConfig["/cfg.ovpn"]).toBe(state);
+      expect(sshLamp()).toBe("error");
+    },
+  );
 
   it("does not bring the VPN up when the host merely rejected the credential", async () => {
     // No tunnel fixes a wrong password, and it is not wanted on this network.
@@ -612,6 +654,58 @@ describe("re-trying an unreachable host", () => {
     });
   });
 
+  // The other half of a re-try: it looks for the host and nothing else. Each dial of
+  // the tunnel is a `pkexec`, so a timer must never raise one, and back at the site
+  // that needs no tunnel the host simply answers.
+  it("re-tries without ever touching the tunnel, and connects directly", async () => {
+    backend({
+      probe: [UNREACHABLE, UNREACHABLE, REACHABLE],
+      sshSaved: true,
+      vpnSaved: true,
+      vpnFails: true,
+    });
+    useProjectsStore.setState({
+      projects: [project("remote1", { auto_connect: true, openvpn: { config: "/cfg.ovpn" } })],
+    });
+
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(0);
+    // The first attempt offers the tunnel once; it does not get the host back here.
+    const tunnelDials = () =>
+      invokeMock.mock.calls.filter(([cmd]) => cmd === "openvpn_connect").length;
+    expect(tunnelDials()).toBe(1);
+    expect(sshLamp()).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(sshLamp()).toBe("connected");
+    expect(tunnelDials()).toBe(1);
+  });
+
+  it("re-tries a dead host's reconnect without the tunnel", async () => {
+    backend({ probe: REACHABLE, sshSaved: true, vpnSaved: true });
+    useProjectsStore.setState({
+      projects: [project("remote1", { auto_connect: true, openvpn: { config: "/cfg.ovpn" } })],
+    });
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sshLamp()).toBe("connected");
+
+    // The pool died on a network that is not back yet.
+    backend({
+      probe: [UNREACHABLE, UNREACHABLE, REACHABLE],
+      sshSaved: true,
+      vpnSaved: true,
+      vpnFails: true,
+    });
+    await silentReconnectDeadHost("remote1", "primary");
+    expect(sshLamp()).toBe("error");
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(sshLamp()).toBe("connected");
+    expect(invokeMock).not.toHaveBeenCalledWith("openvpn_connect", expect.anything());
+  });
+
   it("never re-dials a host that answered and rejected the login", async () => {
     backend({ probe: REJECTED, sshSaved: true });
     useProjectsStore.setState({ projects: [project("remote1", { auto_connect: true })] });
@@ -665,6 +759,35 @@ describe("re-trying an unreachable host", () => {
     expect(sshLamp()).toBe("connected");
   });
 
+  it("re-tries a connect that failed after its probe had passed", async () => {
+    backend({ probe: REACHABLE, sshSaved: true, connectFails: 1 });
+    useProjectsStore.setState({
+      projects: [project("remote1", { auto_connect: true })],
+      activeId: "remote1",
+    });
+    useRemoteStatusStore.getState().setSsh("remote1", "connected");
+
+    await silentReconnectDeadHost("remote1", "primary");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sshLamp()).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sshLamp()).toBe("connected");
+  });
+
+  it("gives up re-trying a connect that keeps failing on a host that lets us in", async () => {
+    backend({ probe: REACHABLE, sshSaved: true, connectFails: Infinity });
+    useProjectsStore.setState({ projects: [project("remote1", { auto_connect: true })] });
+
+    await useProjectsStore.getState().setActive("remote1");
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    const connects = invokeMock.mock.calls.filter(([cmd]) => cmd === "remote_connect").length;
+    // The first try and three re-tries, then red for good.
+    expect(connects).toBe(4);
+    expect(sshLamp()).toBe("error");
+  });
+
   it("reconnects a dropped key-auth host with headless connections off", async () => {
     useSettingsStore.setState({
       settings: { connections_headless: false } as unknown as Settings,
@@ -703,5 +826,35 @@ describe("re-trying an unreachable host", () => {
     // ssh in a login tab could only fail too; the re-try opens it once the host answers.
     expect(useTabsStore.getState().tabsByScope.root ?? []).toHaveLength(0);
     expect(sshLamp()).toBe("error");
+  });
+});
+
+describe("Reconnect all", () => {
+  it("re-dials every host that is down, with no opt-in, and names what still fails", async () => {
+    backend({ probe: REACHABLE, sshSaved: true, connectFails: 1 });
+    useProjectsStore.setState({
+      projects: [
+        {
+          ...project("remote1", {}),
+          compute_hosts: [{ id: "w1", host: "w1.example", remote_path: "/srv/work" }],
+        } as unknown as ProjectEntry,
+      ],
+    });
+    useRemoteStatusStore.getState().setSsh("remote1", "error");
+
+    const failures = await reconnectAllHosts("remote1");
+
+    // The primary goes first and takes the one failure; the worker then connects.
+    expect(failures).toEqual([
+      { hostId: "primary", error: "kex_exchange_identification: Connection reset by peer" },
+    ]);
+    expect(sshLamp()).toBe("error");
+    expect(useRemoteStatusStore.getState().byHost.remote1?.w1?.ssh).toBe("connected");
+    expect(invokeMock).toHaveBeenCalledWith("remote_connect", {
+      projectId: "remote1",
+      hostId: "w1",
+      password: null,
+      background: false,
+    });
   });
 });

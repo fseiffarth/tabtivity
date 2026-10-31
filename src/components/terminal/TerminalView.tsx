@@ -9,6 +9,7 @@ import { resolveTheme, useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
+import { reportFrontendIssue } from "../../crashReporter";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
 import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
@@ -30,6 +31,7 @@ import { TERMINAL_MIN_CONTRAST, terminalPalette } from "../../lib/terminal/termi
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
 import { unfencedPlatformRefusal } from "../../lib/agents/agentFence";
+import { remoteOnlyRefusal } from "../../lib/projectTabHost";
 import { isAiOffRefusal, useAiOff, whenAiOn } from "../../lib/aiSwitch";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
@@ -107,6 +109,14 @@ interface PtyScrollback {
   endOffset: number;
   /** The program ended (a wake's read: it ended while the pane slept). */
   exited?: boolean;
+}
+
+/** A failed spawn's line in the pane: for a project that lives only on its
+ *  host, the translated refusal (`remoteOnlyRefusal`, never the backend's raw
+ *  text), else the error as it came, in red. */
+function spawnErrorNote(err: unknown): string {
+  const hostOnly = remoteOnlyRefusal(err);
+  return hostOnly ? `\r\n\x1b[33m[${hostOnly}]\x1b[0m\r\n` : `\r\n\x1b[31m[spawn error: ${err}]\x1b[0m\r\n`;
 }
 
 /** Keep only bytes newer than an atomic backend scrollback snapshot. */
@@ -240,6 +250,12 @@ const PTY_RESIZE_DEBOUNCE_MS = 80;
  *  flag already performs). The delay keeps ordinary tab flipping from paying
  *  the re-load. A pane on the DOM renderer has no addon to release. */
 export const RENDERER_RELEASE_MS = 60_000;
+
+/** How many lost WebGL contexts a pane recovers from. WebKit keeps 16 live and
+ *  evicts the oldest, even the pane in view (measured on 2.52.6: 24 panes, 8
+ *  lost), so a loss is usually not a broken GPU. The cap is for the driver that
+ *  really does reset on every load. Turning the flag off clears the count. */
+export const WEBGL_LOSS_RETRIES = 3;
 
 // Agent-terminal zoom. Agent TUIs (Claude, Codex, …) render dense layouts, so
 // zoomable agent panes let the user scale the font with Ctrl+wheel / Ctrl +/-/0.
@@ -699,9 +715,12 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // itself: a construction/load failure falls back to the DOM renderer in
     // the same call, and a context lost at runtime (driver reset, or the
     // browser evicting the oldest of too many live contexts — every open pane
-    // holds one) disposes the addon, which leaves the DOM renderer. A renderer
-    // must never take the terminal down. term.dispose() in the cleanup
-    // disposes the addon if one is loaded, so no teardown is kept here.
+    // holds one) disposes the addon, which leaves the DOM renderer until the
+    // pane is next on screen (WEBGL_LOSS_RETRIES). Either way the reason goes
+    // to crash.log: a frozen build has no devtools, and the two renderers look
+    // alike. A renderer must never take the terminal down. term.dispose() in
+    // the cleanup disposes the addon if one is loaded, so no teardown is kept
+    // here.
     let webglAddon: WebglAddon | null = null;
     const dropWebgl = () => {
       if (!webglAddon) return;
@@ -719,19 +738,37 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // what was just released; `restoreRenderer` picks the current flag on show.
     let rendererReleased = false;
     let releaseTimer: ReturnType<typeof setTimeout> | null = null;
+    let webglLosses = 0;
+    // A hidden pane takes the hibernation path back: `restoreRenderer` picks
+    // the current flag on show, and spends no context until then.
+    const onWebglLost = () => {
+      if (!webglAddon) return;
+      dropWebgl();
+      webglLosses += 1;
+      const retry = webglLosses <= WEBGL_LOSS_RETRIES;
+      reportFrontendIssue(
+        "terminal-webgl",
+        `context lost, ${webglLosses} in this pane${retry ? "" : "; staying on the DOM renderer"}`,
+      );
+      if (!retry) return;
+      if (visibleRef.current) applyRenderer(webglWantedRef.current);
+      else rendererReleased = true;
+    };
     const applyRenderer = (wantWebgl: boolean) => {
       if (cancelled || !openedRef.current || rendererReleased || !term) return;
       if (wantWebgl) {
         if (webglAddon) return;
         try {
           webglAddon = new WebglAddon();
-          webglAddon.onContextLoss(dropWebgl);
+          webglAddon.onContextLoss(onWebglLost);
           term.loadAddon(webglAddon);
-        } catch {
+        } catch (e) {
           dropWebgl();
+          reportFrontendIssue("terminal-webgl", `renderer failed to load: ${String(e)}`);
         }
       } else {
         dropWebgl();
+        webglLosses = 0;
       }
     };
     applyRendererRef.current = applyRenderer;
@@ -1729,7 +1766,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             } catch (retryErr) {
               if (cancelled) return;
               if (!isAiOffRefusal(retryErr)) {
-                writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
+                writeTerm(spawnErrorNote(retryErr));
                 return;
               }
               await new Promise((resolve) => setTimeout(resolve, pause));
@@ -1768,13 +1805,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             spawnState = "spawned";
             ownsPty = true;
           } catch (retryErr) {
-            if (!cancelled) writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
+            if (!cancelled) writeTerm(spawnErrorNote(retryErr));
           }
           return;
         }
         const refusal = hpcGuardRefusal(e);
         if (!refusal) {
-          writeTerm(`\r\n\x1b[31m[spawn error: ${e}]\x1b[0m\r\n`);
+          writeTerm(spawnErrorNote(e));
           return;
         }
         const ok = await useHpcGuardStore.getState().request(refusal.kind, refusal.target);
@@ -1801,7 +1838,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           spawnState = "spawned";
           ownsPty = true;
         } catch (retryErr) {
-          if (!cancelled) writeTerm(`\r\n\x1b[31m[spawn error: ${retryErr}]\x1b[0m\r\n`);
+          if (!cancelled) writeTerm(spawnErrorNote(retryErr));
         }
       }
     };

@@ -184,6 +184,13 @@ pub async fn start(
     start_now(ctx, pool, manifest, state, project_id).await;
 }
 
+/// Whether a remote project keeps a local mirror for auto-sync to reconcile:
+/// not a remote-only one ([`crate::schema::project::RemoteSpec::is_remote_only`],
+/// VM projects included), which is never mirrored.
+fn has_mirror_to_sync(spec: &crate::schema::project::RemoteSpec) -> bool {
+    !spec.is_remote_only()
+}
+
 /// Whether a restart deferred behind a stopping task (that had seen `seen` stops)
 /// is still wanted: not when the project was stopped again since — that stop is
 /// the newer intent, and the pool it saw may only be about to close.
@@ -202,6 +209,11 @@ async fn start_now(
     let Some(target) = remote_target_for(project_id) else {
         return;
     };
+    // …that keeps a local copy: a remote-only project has no mirror to sync
+    // (and the `create_dir_all` below must not mint one)…
+    if !has_mirror_to_sync(&target.spec) {
+        return;
+    }
     // …and a host the user tagged HPC gets no *background* sync at all. Every
     // pass walks the host tree over SFTP, and on a cluster that tree is normally
     // on the parallel filesystem, where a recursive walk is a metadata storm
@@ -458,6 +470,9 @@ async fn run_loop(
                 // disconnect. Breaking ends the task; `stop()` then finds it
                 // already finished, which is the same state as a cancel.
                 if hpc_now(&target) { break; }
+                // Converted to remote-only since the loop started: nothing
+                // left to sync (`stop` then finds the task finished).
+                if crate::services::remote::is_remote_only_now(&project_id) { break; }
                 if paused.load(Ordering::SeqCst) > 0 { continue; }
                 // Cheap once attached; this is what picks up a `sync_set_auto` that
                 // marked the first path after the task was already running.
@@ -558,6 +573,12 @@ async fn reconcile_pass(
         }
     };
     if paused.load(Ordering::SeqCst) > 0 || stopping.load(Ordering::SeqCst) {
+        return;
+    }
+    // The project stopped keeping a local copy while this pass waited for the
+    // lock (`commands::remote_unpair` writes the flag under it): the
+    // `target` this loop started with is stale, and its mirror may be moving.
+    if crate::services::remote::is_remote_only_now(project_id) {
         return;
     }
     // Bail if the connection is cold or the ssh child died (keepalive evicted it) —
@@ -851,6 +872,30 @@ mod tests {
             exited,
         };
         (task, release, lease)
+    }
+
+    /// Auto-sync starts only for a project that keeps a local copy: a
+    /// remote-only or VM project has no mirror to watch or reconcile.
+    #[test]
+    fn auto_sync_skips_a_remote_only_project() {
+        let spec = |vm: Option<bool>, remote_only: Option<bool>| crate::schema::project::RemoteSpec {
+            user: None,
+            host: "host.example".into(),
+            port: None,
+            remote_path: "/srv/p".into(),
+            openvpn: None,
+            auto_connect: None,
+            key_auth: None,
+            persist_sessions: None,
+            vm,
+            remote_only,
+            label: None,
+            extra: Default::default(),
+        };
+        assert!(has_mirror_to_sync(&spec(None, None)));
+        assert!(has_mirror_to_sync(&spec(None, Some(false))));
+        assert!(!has_mirror_to_sync(&spec(None, Some(true))));
+        assert!(!has_mirror_to_sync(&spec(Some(true), None)));
     }
 
     /// A pause lifts when its guard drops — an early return included — and

@@ -2,8 +2,8 @@
  * Which tabs the phone can attach to, and what it may create, per project type
  * (`lib/projectTabHost`). The reachability rule is the sidecar's
  * `discovery::runs_on_this_machine`; the remote and VM rows come from the table
- * both sides read (`tabLocality.fixture.json`), so a drift in either fails one
- * of the two tests.
+ * both sides read (`tabLocality.fixture.json`, its `pinned` rows a VM's), so a
+ * drift in either fails one of the two tests.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error node:fs has no type declarations in this project (no @types/node)
@@ -19,6 +19,8 @@ import {
   projectHostKind,
   tabRunsInContainer,
 } from "../../lib/projectTabHost";
+import { HOST_REACH_KEY, phoneReachHost } from "../../components/mobile/MobileAccessPicker";
+import { translateNow } from "../../lib/i18n";
 import table from "./tabLocality.fixture.json";
 import hostTable from "./projectHostReach.fixture.json";
 
@@ -33,6 +35,7 @@ const base: ProjectEntry = {
 const remote = { host: "h.invalid", user: "u", remote_path: "/srv/p" } as ProjectEntry["remote"];
 const remoteProject: ProjectEntry = { ...base, remote };
 const vmProject: ProjectEntry = { ...base, remote, vm: { enabled: true } as ProjectEntry["vm"] };
+const remoteOnlyProject: ProjectEntry = { ...base, remote: { ...remote, remote_only: true } as ProjectEntry["remote"] };
 const containerProject: ProjectEntry = { ...base, sandbox: { enabled: true } };
 const agentsContainer: ProjectEntry = { ...base, sandbox: { enabled: true, scope: "agents" } };
 
@@ -47,12 +50,21 @@ beforeEach(() => {
 
 describe("the shared locality table, over a project of each host", () => {
   for (const row of table) {
-    const name = `${row.kind} ${row.location ?? "(no location)"}${row.vm ? " in a VM project" : ""}`;
+    const name = `${row.kind} ${row.location ?? "(no location)"}${row.pinned ? " in a VM project" : ""}`;
     it(`${name} is ${row.local ? "reachable" : "not reachable"}`, () => {
-      const project = row.vm ? vmProject : remoteProject;
+      const project = row.pinned ? vmProject : remoteProject;
       expect(phoneReachesTab(project, tab(row.kind, row.location), "p1")).toBe(row.local);
     });
   }
+
+  // A remote-only project has nothing on this machine, not even a
+  // `local_agent` (D11): it lists every tab and reaches none here.
+  it("a remote-only project lists every row and reaches none", () => {
+    for (const row of table) {
+      expect(phoneReachesTab(remoteOnlyProject, tab(row.kind, row.location), "p1"), JSON.stringify(row)).toBe(false);
+      expect(phoneListsTab(remoteOnlyProject, tab(row.kind, row.location), "p1"), JSON.stringify(row)).toBe(true);
+    }
+  });
 });
 
 /** The whole table (project type x tab kind x location), read by the sidecar's
@@ -137,6 +149,8 @@ describe("project hosts", () => {
     expect(phoneCreateVerdict(containerProject)).toBe("none");
     expect(phoneCreateVerdict(agentsContainer)).toBe("none");
     expect(phoneCreateVerdict(vmProject)).toBe("none");
+    // On its machines alone: with no host named the bridge has no folder to start in.
+    expect(phoneCreateVerdict(remoteOnlyProject)).toBe("agents");
   });
 
   it("uses the folder the sidecar uses", () => {
@@ -148,6 +162,17 @@ describe("project hosts", () => {
     // A VM has no folder on the host unless the user opted into a mirror.
     expect(phoneProjectFolder(vmProject)).toBe("");
     expect(phoneProjectFolder({ ...vmProject, mirror: "/work/vm-mirror" })).toBe("/work/vm-mirror");
+    // A remote-only project has no local copy, whatever a stale mirror key says.
+    expect(phoneProjectFolder(remoteOnlyProject)).toBe("");
+    expect(phoneProjectFolder({ ...remoteOnlyProject, mirror: "/work/old-mirror" })).toBe("");
+  });
+
+  it("words a remote-only project's phone reach apart from a mirrored one's and a VM's", () => {
+    expect(phoneReachHost(remoteOnlyProject)).toBe("remote_only");
+    expect(phoneReachHost(remoteProject)).toBe("remote");
+    expect(phoneReachHost(vmProject)).toBe("vm");
+    expect(phoneReachHost(base)).toBe("local");
+    expect(translateNow(HOST_REACH_KEY.remote_only)).toMatch(/^Remote-only project: nothing of it is on this computer/);
   });
 });
 
@@ -165,6 +190,6 @@ describe("the Mobile switch's tmux wrap stays off a tab that runs elsewhere", ()
   it("is the expression PaneSlot actually evaluates", () => {
     const src = readFileSync("src/components/layout/PaneSlot.tsx", "utf8") as string;
     expect(src).toContain('const localRunning = !paneRemoteProj || location === "local";');
-    expect(src).toContain("const location = effectiveTabLocation(tab, { vmProject });");
+    expect(src).toContain("const location = effectiveTabLocation(tab, { hostPinned });");
   });
 });

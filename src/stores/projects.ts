@@ -19,6 +19,7 @@ import {
   type SandboxSpec,
   type SandboxToggleOutcome,
   type SshProbe,
+  type UnpairOutcome,
 } from "../types";
 import {
   effectiveTabLocation,
@@ -45,7 +46,14 @@ import { useSettingsStore, whenSettingsLoaded } from "./settings";
 import { mayAutoTouch, targetOfSpec } from "../lib/remote/hpc/hpcHost";
 import { machineArmsHost, syncConnectedMachinesInto } from "../lib/remote/machineSync";
 import { PRIMARY_HOST, useRemoteStatusStore } from "./remote/remoteStatus";
-import { markVpnConnected, markVpnConnecting, markVpnError, releaseVpn } from "./remote/vpn/vpnStatus";
+import {
+  markVpnConnected,
+  markVpnConnecting,
+  markVpnError,
+  releaseVpn,
+  useVpnStatusStore,
+} from "./remote/vpn/vpnStatus";
+import { canConnectVpnSilently, connectVpnSilently } from "../lib/remote/vpn/vpnConnect";
 import { useConnectDialogStore } from "./remote/connectDialog";
 // Static on purpose (§6 of docs/performance_plan.md): both stores sit in the
 // startup chunk anyway, so an `await import()` here split nothing and only drew
@@ -61,6 +69,7 @@ import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
 import { translate, useI18nStore, translateNow } from "../lib/i18n";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../lib/brand";
+import { isHostPinned } from "../lib/projectTabHost";
 
 function connectionsHeadless(): boolean {
   return useSettingsStore.getState().settings?.connections_headless ?? true;
@@ -312,14 +321,18 @@ function abandonAutoConnect(projectId: string, hostId?: string): void {
  *     the keychain itself). The tunnel is left alone — on the network that doesn't
  *     need it, it is never brought up.
  *  3. *Unreachable* (not "credential rejected" — see the backend's `ssh_unreachable`;
- *     no tunnel fixes a wrong password) and the project has an `.ovpn` whose
- *     passphrase is saved → bring the tunnel up from the keychain and re-probe.
+ *     no tunnel fixes a wrong password), the project has an `.ovpn` that can connect
+ *     with no prompt, and that tunnel is not already up or coming up → bring it up
+ *     from the keychain and re-probe.
  *  4. Anything else → red lamp. No prompt; only a host nothing answered is re-tried.
  *
  * Fire-and-forget: it never blocks a switch. Local tabs restore and work on the
  * mirror regardless, and remote panes stay held until the pool is actually up.
  * An unreachable host is re-tried (`scheduleUnreachableRetry`); `retry` marks such a
- * re-try, which never re-opens the tunnel's login tab the first attempt already offered.
+ * re-try, which only looks for the host. It never touches the tunnel: polkit
+ * authenticates each `pkexec`, so a timer that dialled one would raise a system
+ * prompt every backoff step, and the host may be back without one (the site that
+ * needs no tunnel). The first attempt already offered it.
  */
 async function autoConnectPrimary(
   projectId: string,
@@ -443,22 +456,19 @@ async function autoConnectPrimary(
     let probe = await invoke<SshProbe>("ssh_probe", sshArgs);
 
     const config = remote.openvpn?.config;
-    if (!probe.ok && probe.unreachable && config && stillActive()) {
-      const vpnSaved = await invoke<boolean>("vpn_has_saved_password", { config }).catch(
-        () => false,
-      );
-      if (vpnSaved) {
+    if (!probe.ok && probe.unreachable && config && !retry && stillActive()) {
+      const username = remote.openvpn?.username;
+      // A live or in-flight tunnel is not ours to dial again: a second `pkexec` for
+      // nothing, and re-marking it would read as a tunnel coming up.
+      const tunnel = useVpnStatusStore.getState().byConfig[config];
+      const live =
+        tunnel === "connected" ||
+        tunnel === "connecting" ||
+        (await invoke<boolean>("openvpn_status", { config }).catch(() => false));
+      if (!live && (await canConnectVpnSilently(config, username))) {
         markVpnConnecting(projectId, config);
         try {
-          await invoke("openvpn_connect", {
-            config,
-            username: remote.openvpn?.username ?? null,
-            password: null,
-            keyPassphrase: null,
-            // No checkbox behind an auto-connect: authenticate from the keychain,
-            // and leave it exactly as we found it.
-            remember: null,
-          });
+          await connectVpnSilently(config, username);
           markVpnConnected(projectId, config);
           // The only disclosure on this path: auto-connect never prompts, so this
           // toast (and the header indicator it lights) is the whole of what the user
@@ -485,8 +495,10 @@ async function autoConnectPrimary(
     status().setSsh(projectId, "connected");
   } catch (error) {
     console.warn("auto-connect failed", error);
-    if (stillActive()) status().setSsh(projectId, "error");
-    else abandon();
+    if (stillActive()) {
+      status().setSsh(projectId, "error");
+      void retryAfterFailedConnect(projectId, undefined, targetArgs(remote));
+    } else abandon();
   } finally {
     autoConnecting.delete(projectId);
   }
@@ -583,8 +595,10 @@ async function autoConnectWorker(projectId: string, host: ComputeHost): Promise<
     status().setSsh(projectId, "connected", hostId);
   } catch (error) {
     console.warn("worker auto-connect failed", error);
-    if (stillActive()) status().setSsh(projectId, "error", hostId);
-    else abandon();
+    if (stillActive()) {
+      status().setSsh(projectId, "error", hostId);
+      void retryAfterFailedConnect(projectId, hostId, targetArgs(host));
+    } else abandon();
   } finally {
     autoConnecting.delete(claim);
   }
@@ -701,6 +715,11 @@ export async function silentReconnectDeadHost(projectId: string, hostId: string)
   } catch (error) {
     console.warn("silent reconnect of dead host failed", error);
     status().setSsh(projectId, "error", hostId);
+    void retryAfterFailedConnect(projectId, hostId, {
+      user: target.user,
+      host: target.host,
+      port: target.port,
+    });
   } finally {
     autoConnecting.delete(claim);
   }
@@ -798,6 +817,37 @@ function clearUnreachableRetry(projectId: string, hostId?: string): void {
   unreachableRetries.delete(key);
 }
 
+/** The SSH coordinates of a host spec, as `ssh_probe` wants them. */
+const targetArgs = (spec: { user?: string; host: string; port?: number }): SshArgs => ({
+  user: spec.user ?? null,
+  host: spec.host,
+  port: spec.port ?? null,
+});
+
+/**
+ * A connect that threw after its probe had passed: the network dropped in between
+ * (a wake, a Wi-Fi hop), or the pool's own dial hit what the probe slipped past.
+ * That used to end at a red lamp for good, since only a *probe* failure joined the
+ * re-try loop. Probe once more and let its verdict decide: unreachable joins the
+ * loop; answering and authenticating again joins it for a few attempts only (a
+ * connect that keeps failing on a host that lets us in is not the network, and a
+ * login every five minutes forever would be its own problem); a host that now says
+ * no stays red, as before.
+ */
+async function retryAfterFailedConnect(
+  projectId: string,
+  hostId: string | undefined,
+  sshArgs: SshArgs,
+): Promise<void> {
+  const probe = await invoke<SshProbe>("ssh_probe", sshArgs).catch(() => null);
+  if (!probe) return;
+  const key = hostClaim(projectId, hostId);
+  const attempts = unreachableRetries.get(key)?.attempt ?? -1;
+  if (probe.unreachable || (probe.ok && attempts < 2)) scheduleUnreachableRetry(projectId, hostId);
+  // Given up: the next outage backs off from the start again.
+  else unreachableRetries.delete(key);
+}
+
 function runUnreachableRetry(projectId: string, hostId?: string): void {
   const key = hostClaim(projectId, hostId);
   const entry = unreachableRetries.get(key);
@@ -874,7 +924,7 @@ export function projectTmuxTargets(
   for (const tab of tabs) {
     if (!isPtyTabKind(tab.kind)) continue;
     let hostId = remoteHostIdOf(
-      effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }),
+      effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
     );
     if (
       hostId &&
@@ -911,6 +961,64 @@ export function projectTmuxTargets(
  *  tabs stay open (their sessions just go dead) until the user reconnects. */
 export function disconnectRemote(projectId: string): void {
   dropRemotePool(projectId);
+}
+
+/**
+ * The Remote machines window's "Reconnect all": a click, so none of the unattended
+ * gates apply (no opt-in, an HPC-tagged host is allowed — `background: false`), but
+ * it never prompts either. Every host not already connected or connecting is
+ * re-dialled with what is already there — a saved password, key/agent auth, or a
+ * live login master — the primary first (it owns the files and its tunnel may be
+ * the route the workers need), then the workers together. Whatever still fails
+ * stays red, and its reason is returned so the window can name it; that host's own
+ * Connect… is the way to type a password.
+ */
+export async function reconnectAllHosts(
+  projectId: string,
+): Promise<{ hostId: string; error: string }[]> {
+  const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
+  if (!project) return [];
+  const status = () => useRemoteStatusStore.getState();
+  const headless = connectionsHeadless();
+  const lampOf = (hostId: string) =>
+    (hostId === PRIMARY_HOST
+      ? status().byProject[projectId]?.ssh
+      : status().byHost[projectId]?.[hostId]?.ssh) ?? "off";
+  const reconnect = async (hostId: string): Promise<{ hostId: string; error: string } | null> => {
+    const lamp = lampOf(hostId);
+    const claim = hostClaim(projectId, hostId);
+    if (lamp === "connected" || lamp === "connecting" || autoConnecting.has(claim)) return null;
+    const worker = hostId === PRIMARY_HOST ? undefined : hostId;
+    autoConnecting.add(claim);
+    status().setSsh(projectId, "connecting", worker);
+    try {
+      await invoke("remote_connect", {
+        projectId,
+        hostId: worker ?? null,
+        password: null,
+        background: false,
+        // Non-headless, a credential-less connect rides the login's master and is
+        // no evidence of key auth (`autoConnectInteractive`).
+        ...(headless ? {} : { viaLogin: true }),
+      });
+      clearUnreachableRetry(projectId, worker);
+      status().setSsh(projectId, "connected", worker);
+      return null;
+    } catch (error) {
+      status().setSsh(projectId, "error", worker);
+      return { hostId, error: String(error) };
+    } finally {
+      autoConnecting.delete(claim);
+    }
+  };
+  const failures: { hostId: string; error: string }[] = [];
+  if (project.remote) {
+    const primary = await reconnect(PRIMARY_HOST);
+    if (primary) failures.push(primary);
+  }
+  const workers = await Promise.all((project.compute_hosts ?? []).map((h) => reconnect(h.id)));
+  for (const w of workers) if (w) failures.push(w);
+  return failures;
 }
 
 /**
@@ -1093,6 +1201,14 @@ interface ProjectsStore {
   /** Detach a remote (SSH) project back to a plain local project: its mirror
    * becomes the project directory in place. The host's files are never touched. */
   detachProjectFromRemote: (id: string) => Promise<void>;
+  /** Remote → Remote-only (`remote_unpair_mirror`): stop keeping the local mirror.
+   * `expect` is the fingerprint of the preview the user confirmed. The folder is
+   * kept (moved out of the state dir when it lived there); the outcome says where. */
+  stopKeepingLocalCopy: (id: string, expect: string) => Promise<UnpairOutcome>;
+  /** Remote-only → Remote (`set_remote_mirror_dir` with `keepLocalCopy`): record
+   * `path` as the project's local copy. The tabs are pinned to the host first, so
+   * an agent saved with no location keeps running there. Returns the stored path. */
+  keepLocalCopy: (id: string, path: string) => Promise<string>;
   /** Forget a published project's push target without deleting the hosted repo
    * or local history: removes `origin`, resets git_type → "local". */
   unpublishProject: (id: string) => Promise<void>;
@@ -1650,7 +1766,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
             key: tab.key,
             label: tab.label,
             kind: tab.kind,
-            location: effectiveTabLocation(tab, { vmProject: !!project.vm?.enabled }),
+            location: effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
           })),
           localTargets.length,
           remoteSessions,
@@ -2017,6 +2133,24 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     // the project entry clears it, so a detached project would keep showing a connection
     // to a host it no longer has.
     useRemoteStatusStore.getState().clear(id);
+  },
+
+  stopKeepingLocalCopy: async (id, expect) => {
+    const outcome = await invoke<UnpairOutcome>("remote_unpair_mirror", { projectId: id, expect });
+    patchProject(id, () => outcome.entry);
+    return outcome;
+  },
+
+  keepLocalCopy: async (id, path) => {
+    useTabsStore.getState().pinScopeTabsToHost(id);
+    const stored = await invoke<string>("set_remote_mirror_dir", { projectId: id, path, keepLocalCopy: true });
+    patchProject(id, (project) => {
+      if (!project.remote) return { ...project, mirror: stored };
+      const remote = { ...project.remote };
+      delete remote.remote_only;
+      return { ...project, remote, mirror: stored };
+    });
+    return stored;
   },
 
   unpublishProject: async (id) => {

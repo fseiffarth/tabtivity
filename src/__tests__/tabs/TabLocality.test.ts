@@ -84,6 +84,31 @@ describe("localTabCwd", () => {
   it("is inert on a local project (always the tab's own cwd)", () => {
     expect(localTabCwd({ kind: "agent" }, opts({ isRemoteProject: false }))).toBe("/ignored");
   });
+
+  it("never points a host-pinned project's tab at a mirror", () => {
+    expect(localTabCwd({ kind: "agent" }, opts({ hostPinned: true }))).toBe("/ignored");
+    expect(localTabCwd({ kind: "agent", location: "local" }, opts({ hostPinned: true, mirror: "/m" }))).toBe("/ignored");
+  });
+});
+
+describe("the host pin (VM or remote-only project)", () => {
+  it("overrides a stored local location and the agents-default-local rule", () => {
+    expect(effectiveTabLocation({ kind: "agent" }, { hostPinned: true })).toBe("remote");
+    expect(effectiveTabLocation({ kind: "agent", location: "local" }, { hostPinned: true })).toBe("remote");
+    expect(effectiveTabLocation({ kind: "shell", location: "local" }, { hostPinned: true })).toBe("remote");
+  });
+
+  it("keeps a tab on the worker it was put on", () => {
+    expect(effectiveTabLocation({ kind: "agent", location: "host:w1" }, { hostPinned: true })).toBe("host:w1");
+    expect(effectiveTabLocation({ kind: "shell", location: "remote" }, { hostPinned: true })).toBe("remote");
+  });
+
+  it("leaves local_agent local: unreachable on a pinned scope, the backend refuses it", () => {
+    expect(effectiveTabLocation({ kind: "local_agent" }, { hostPinned: true })).toBe("local");
+    const remoteOnly = { remote: { remote_path: "/srv/p1", remote_only: true } };
+    expect(hostTabId({ kind: "local_agent" }, remoteOnly)).toBeNull();
+    expect(hostTabId({ kind: "agent", location: "local" }, remoteOnly)).toBe("primary");
+  });
 });
 
 describe("setTabLocation", () => {
@@ -175,6 +200,12 @@ describe("hostTabCwd", () => {
 
   it("pins a VM project's tabs to the VM host", () => {
     expect(hostTabCwd({ kind: "agent", location: "local" }, { ...project, vm: { enabled: true } })).toBe("/srv/primary/p1");
+  });
+
+  it("pins a remote-only project's tabs to its host, a worker's to the worker", () => {
+    const remoteOnly = { ...project, remote: { ...project.remote, remote_only: true } };
+    expect(hostTabCwd({ kind: "agent" }, remoteOnly)).toBe("/srv/primary/p1");
+    expect(hostTabCwd({ kind: "agent", location: "host:h1" }, remoteOnly)).toBe("/scratch/p1");
   });
 });
 

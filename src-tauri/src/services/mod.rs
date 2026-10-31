@@ -3,13 +3,15 @@
 // friends still resolve; `remote` and `root_mcp` are their own group's root file.
 pub mod agent;
 pub use agent::{
-    agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_exec,
+    agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_defaults, agent_exec,
     agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
     agent_install, agent_latest, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,
-    assistant_model_probe, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
+    assistant_model_probe, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
     model_rows, opencode_models, opencode_session, opencode_store, transcript_watch,
 };
+#[cfg(unix)]
+pub use agent::codex_package;
 pub mod api;
 pub use api::{api_meter, api_prices, api_proxy, api_proxy_port, api_usage};
 pub mod calendar;
@@ -116,7 +118,7 @@ pub mod box_store;
 pub mod fs_confine;
 pub mod prompt_blame;
 pub mod remote;
-pub use remote::{agent_host_move, remote_credentials, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
+pub use remote::{agent_host_move, remote_credentials, remote_scaffold, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
 pub use app_core::services::remote_agents;
 pub mod restore_service;
 pub mod root_mcp;

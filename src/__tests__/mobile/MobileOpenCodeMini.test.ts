@@ -5,6 +5,7 @@ import { currentMode, modeChoices, modeFixed } from "../../../mobile-web/src/ter
 import { agentWorking } from "../../../mobile-web/src/terminal/agentBusy";
 import {
   joinOpenCodeWraps,
+  openCodeComposer,
   openCodeDialogCloseKeys,
   mergeOpenCodePage,
   openCodeMiniRow,
@@ -26,6 +27,9 @@ import { BRAND } from "../../lib/brand";
  * the phone's own emulator at 60 and 100 columns, after `readableScreen` (so
  * trailing padding is gone and runs of blanks are one).
  */
+
+/** What clears the picker's search field: backspaces, never ctrl+u. */
+const CLEAR = "\u007f".repeat(200);
 
 let seq = 0;
 const line = (text: string): ReadableLine => ({
@@ -188,6 +192,14 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
   it("is not found without its footer, or for a tab no label names OpenCode", () => {
     expect(sessionStatus(lines("", " Build · Muse Spark 1.3 Free", " The tests pass."), "OpenCode")).toBeNull();
     expect(sessionStatus(fullFrame(" ~/projects/app    ctrl+p commands"), "Claude")).toBeNull();
+  });
+
+  it("keeps the variant when the box prints what the model's limits leave", () => {
+    const composer = { mode: "build", model: "Sonnet 5 OpenCode", variant: "high" };
+    expect(openCodeComposer({ text: "Build · Sonnet 5 OpenCode · high $1.20 left" })).toEqual(composer);
+    expect(openCodeComposer({ text: "Build · Sonnet 5 OpenCode · high <$0.01 left" })).toEqual(composer);
+    expect(openCodeComposer({ text: "Build · Sonnet 5 OpenCode · high Limit reached" })).toEqual(composer);
+    expect(openCodeComposer({ text: "Build · Sonnet 5 OpenCode $12 left" })).toEqual({ mode: "build", model: "Sonnet 5 OpenCode" });
   });
 });
 
@@ -447,8 +459,8 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     // One name can stand under two providers; typed alone, Enter took the
     // first. A heading typed into the field picked its group's first model.
     const read = readOpenCodePicker(picker);
-    expect(read?.options[0].keys).toEqual(["\u0015", "Big Pickle OpenCode Zen", "\r"]);
-    expect(modelPickKeys(read!, read!.options[0], "OpenCode")).toEqual(["\u0015", "Big Pickle OpenCode Zen", "\r"]);
+    expect(read?.options[0].keys).toEqual([CLEAR, "Big Pickle OpenCode Zen", "\r"]);
+    expect(modelPickKeys(read!, read!.options[0], "OpenCode")).toEqual([CLEAR, "Big Pickle OpenCode Zen", "\r"]);
   });
 
   it("tells a heading at a frame's top from the highlighted row, which is bold too", () => {
@@ -622,11 +634,17 @@ describe(`${BRAND.display} Mobile OpenCode model picker`, () => {
     expect(readOpenCodePicker(lines("The tests pass.", "", " BUILD"))).toBeNull();
   });
 
+  it("never presses ctrl+u, OpenCode 2.2's Usage screen in the model dialog", () => {
+    // The label and Enter would land on that screen, and the model stay as it was.
+    expect(openCodePickKeys("Muse Spark 1.3 Free").join("")).not.toContain("\u0015");
+    expect(readOpenCodePicker(picker)?.options[0].keys?.join("")).not.toContain("\u0015");
+  });
+
   it("answers by typing into the picker's search field", () => {
-    expect(openCodePickKeys("Muse Spark 1.3 Free")).toEqual(["", "Muse Spark 1.3 Free", "\r"]);
+    expect(openCodePickKeys("Muse Spark 1.3 Free")).toEqual([CLEAR, "Muse Spark 1.3 Free", "\r"]);
     // A label the pane truncated is typed without its ellipsis: the picker
     // filters on a prefix, and the `…` itself matches nothing.
-    expect(openCodePickKeys("Ling 3.0 Flash Fin…")).toEqual(["", "Ling 3.0 Flash Fin", "\r"]);
+    expect(openCodePickKeys("Ling 3.0 Flash Fin…")).toEqual([CLEAR, "Ling 3.0 Flash Fin", "\r"]);
   });
 });
 

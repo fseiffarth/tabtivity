@@ -159,6 +159,10 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   project_not_found: "mobile.failure.projectNotShared",
   section_hidden: "mobile.failure.sectionHidden",
   project_ineligible: "mobile.failure.projectNotShared",
+  // The Diverged list (`host.rs`).
+  sync_failed: "mobile.failure.syncFailed",
+  sync_off: "mobile.failure.syncOff",
+  diverged_unavailable: "mobile.failure.divergedUnavailable",
   tab_not_found: "mobile.failure.tabNotFound",
   // An agent tab started before Mobile access the desktop will not restart
   // for the phone (`MobileBridgeHost`'s `wrapAgentTabForPhone`).

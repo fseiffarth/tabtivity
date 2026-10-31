@@ -45,6 +45,40 @@ function withoutEdgeBlanks(lines: readonly ReadableLine[]): ReadableLine[] {
   return lines.slice(first, end);
 }
 
+/** How many lines a review page's heading (`Review your answers`) may take
+ * between its tab row and its answers. */
+const REVIEW_HEADING_LINES = 2;
+
+/**
+ * The tab row over Claude Code's Submit page, read upwards from `context`:
+ *
+ *     ←  ☒ Scope  ☒ Release tag  ✔ Submit  →
+ *
+ *     Review your answers
+ *
+ *      ● Which scope?
+ *        → Fix only
+ *
+ *     Ready to submit your answers?
+ *
+ *     ❯ 1. Submit answers
+ *
+ * The answers are the block the dialog's context ends at, so the row two
+ * blocks up was never read, and the card lost its steps — the one way back to
+ * an answer before sending it. Only a row with a Submit step counts.
+ */
+function reviewTabRow(tail: readonly ReadableLine[], context: number): number | null {
+  let heading = 0;
+  for (let index = context - 1; index >= 0; index -= 1) {
+    const text = tail[index].text;
+    if (!text.trim()) continue;
+    if (readQuestionTabs(text)) return questionTabsSubmit(text) ? index : null;
+    heading += 1;
+    if (heading > REVIEW_HEADING_LINES) return null;
+  }
+  return null;
+}
+
 /**
  * Splits `tail` (the lines `question` was read from) into what a reader shows
  * around its list. Between the question and the screen above it Claude Code
@@ -72,6 +106,18 @@ export function questionParts(tail: readonly ReadableLine[], question: SelectPro
     tabs = readQuestionTabs(row.text);
     if (tabs) context = withoutEdgeBlanks(context.slice(0, -1));
   }
+  // The review page's answers are a list, `● question` over `→ answer`: kept
+  // as drawn, like any other dialog's screen.
+  let review = false;
+  if (!tabs) {
+    const above = reviewTabRow(tail, question.context);
+    if (above !== null) {
+      row = tail[above];
+      tabs = readQuestionTabs(row.text);
+      context = withoutEdgeBlanks(tail.slice(above + 1, question.question));
+      review = true;
+    }
+  }
   if (!tabs) {
     // Codex asks several questions one page at a time, under a heading that
     // counts them; it has no Submit step — Enter on the last one sends all.
@@ -88,7 +134,7 @@ export function questionParts(tail: readonly ReadableLine[], question: SelectPro
   }
   return {
     ask: joinProseWraps(dedentLines(ask)),
-    context: tabs ? joinProseWraps(context) : context,
+    context: tabs && !review ? joinProseWraps(context) : context,
     tabs: tabs ?? [],
     tabFocus: tabs && row ? questionTabFocus(row.spans, tabs) : null,
     tabSubmit: !!tabs && !!row && questionTabsSubmit(row.text),

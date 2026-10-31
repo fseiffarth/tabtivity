@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The app's names (scripts/lib/brand.sh): $APP_DISPLAY, $APP_SLUG, $APP_BIN_NAME, …
 . "$ROOT/scripts/lib/brand.sh"
+# Speech on the GPU where this machine can build it (voice_gpu_feature).
+. "$ROOT/scripts/lib/voice_gpu.sh"
+VOICE_GPU="$(voice_gpu_feature)"
 APP_DIR="$APP_SHARE_DIR"
 DESKTOP_DIR="$HOME/.local/share/applications"
 BINARY_DEST="$APP_DIR/$APP_BIN_NAME"
@@ -16,7 +19,7 @@ cd "$ROOT"
 
 # Try AppImage bundle first; fall back to raw binary if linuxdeploy fails (e.g. no FUSE).
 APPIMAGE_SRC=""
-if APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri:bundle 2>&1; then
+if APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri:bundle -- ${VOICE_GPU:+--features "$VOICE_GPU"} 2>&1; then
   APPIMAGE_SRC="$(find "$ROOT/target/release/bundle/appimage" -maxdepth 1 -name '*.AppImage' -print -quit 2>/dev/null || true)"
 fi
 
@@ -33,7 +36,7 @@ else
     # app compiles in dev mode, embeds no frontend, and opens devUrl — i.e. an
     # installed Tabtivity showing "Could not connect to localhost" (2026-09-02).
     export PATH="$HOME/.cargo/bin:$PATH"
-    cargo build --release --features custom-protocol \
+    cargo build --release --features "custom-protocol${VOICE_GPU:+,$VOICE_GPU}" \
       --manifest-path "$ROOT/src-tauri/Cargo.toml"
   fi
   "$ROOT/scripts/assert-embedded-frontend.sh" "$RAW_BIN"

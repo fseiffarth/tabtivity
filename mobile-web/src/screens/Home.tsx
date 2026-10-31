@@ -11,6 +11,8 @@ import { BUNDLE_VERSION } from "../buildInfo";
 import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
+import { ReadAloudSheet, readAloudSummary } from "../components/ReadAloudSheet";
+import { readBrief, readingRate } from "../speechOutput";
 import { ThemeRow, ThemeSheet } from "../components/ThemePicker";
 import { TipsRow, TipsSheet, tipsOff } from "../components/TipsPicker";
 import { LanguageRow, LanguageSheet } from "../components/LanguagePicker";
@@ -18,6 +20,7 @@ import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
 import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
+import { CliOverviewSection } from "./CliOverviewSheet";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
@@ -91,6 +94,9 @@ export function Home({ open, openTab, tabby, todo, mail }: {
    * fix it mid-answer has already been read to in the wrong voice. */
   const [speechLang, setSpeechLang] = useState<SpeechLang>(() => readSpeechLang());
   const [speechLangSheet, setSpeechLangSheet] = useState(false);
+  /** How read-aloud reads: whole or brief, and its rate (`speechOutput.ts`). */
+  const [reading, setReading] = useState(() => ({ brief: readBrief(), rate: readingRate() }));
+  const [readingSheet, setReadingSheet] = useState(false);
   const [languageSheet, setLanguageSheet] = useState(false);
   /** What a Mark up Submit tells the agent — worded here and nowhere else. */
   const [markupInstruction, setMarkupInstruction] = useState(() => customMarkupPrompts());
@@ -111,7 +117,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   /** The Projects heading's ＋: a new project, made by name in the desktop's
    * projects folder (`NewProjectSheet`). */
   const [newProject, setNewProject] = useState(false);
-  const rowSheetOpen = languageSheet || themeSheet || tipsSheet || speechLangSheet || pushSheet || markupInstructionSheet || markupOpenSheet;
+  const rowSheetOpen = languageSheet || themeSheet || tipsSheet || speechLangSheet || readingSheet || pushSheet || markupInstructionSheet || markupOpenSheet;
   const [push, setPush] = useState<HostPushState | null>(null);
   useEffect(() => {
     if (pushSupport() !== "supported") return;
@@ -313,12 +319,14 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       </p>}
     </>}
     {/* What goes to the desktop rather than coming from it: a file for its
-        inbox and the local models it runs. They stay on the page, not in a
-        sheet — closing one would drop the upload rows still in flight. */}
+        inbox and the local models it runs — plus its agent CLIs' plans and
+        limits. They stay on the page, not in a sheet — closing one would drop
+        the upload rows still in flight. */}
     <h2 className="home-section-head">{t("mobile.home.desktopHead")}</h2>
     <div className="home-desktop">
       <SendToDesktop />
       <LocalModelsSection />
+      <CliOverviewSection />
     </div>
     {/* What this phone does, as against what the desktop is doing, behind
         the header's gear. A row's own sheet replaces it while open, and
@@ -333,6 +341,10 @@ export function Home({ open, openTab, tabby, todo, mail }: {
           <TipsRow off={tipsAreOff} open={() => setTipsSheet(true)} expanded={tipsSheet} />
           <li><button aria-haspopup="dialog" aria-expanded={speechLangSheet} onClick={() => setSpeechLangSheet(true)}>
             <span><strong>{t("mobile.speech.language")}{isUntested("mobile.speech.language") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{speechLangSummary(speechLang, t)}</small></span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          </button></li>
+          <li><button aria-haspopup="dialog" aria-expanded={readingSheet} onClick={() => setReadingSheet(true)}>
+            <span><strong>{t("mobile.speech.reading")}{isUntested("mobile.speech.reading") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{readAloudSummary(reading.brief, reading.rate, t)}</small></span>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
           </button></li>
           <li><button aria-haspopup="dialog" aria-expanded={pushSheet} onClick={() => setPushSheet(true)}>
@@ -367,6 +379,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}
     {tipsSheet && <TipsSheet off={tipsAreOff} onChange={setTipsAreOff} onClose={() => setTipsSheet(false)} />}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
+    {readingSheet && <ReadAloudSheet onChange={(brief, rate) => setReading({ brief, rate })} onClose={() => setReadingSheet(false)} />}
     {pushSheet && <NotificationsSheet onChange={setPush} onClose={() => setPushSheet(false)} />}
     {markupInstructionSheet && <MarkupInstructionSheet onChange={setMarkupInstruction} onClose={() => setMarkupInstructionSheet(false)} />}
     {markupOpenSheet && <MarkupOpenSheet chosen={markupOpen} onChoose={setMarkupOpen} onClose={() => setMarkupOpenSheet(false)} />}

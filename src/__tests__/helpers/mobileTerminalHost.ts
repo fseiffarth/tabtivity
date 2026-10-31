@@ -3,7 +3,7 @@
  * terminal socket the tests drive (a `FakeWebSocket`), and a handful of HTTP
  * requests it makes on its own — the composer's status chip, the Focus view's
  * transcript, the Commit chip's uncommitted count, the outbox, PDF-markup
- * questions, the model sheet's remembered rows, and the fire-and-forget
+ * questions, the model sheet's remembered rows and launch defaults, and the fire-and-forget
  * reports of a sent prompt and of a model list read. Tests about the socket answer those as an unreachable
  * desktop would, with the network error a browser gives, so the screen takes
  * its offline path; any other request still fails the test as unmocked.
@@ -13,7 +13,7 @@ import { act } from "@testing-library/react";
 import { vi } from "vitest";
 import { unmockedFetch } from "./testGuards";
 
-const SIDE_READS = /^\/api\/v1\/tabs\/[^/?]+\/(status|transcript|uncommitted|outbox|markup\/questions|model-rows)(\?|$)/;
+const SIDE_READS = /^\/api\/v1\/tabs\/[^/?]+\/(status|transcript|uncommitted|outbox|markup\/questions|model-rows|launch-defaults)(\?|$)/;
 const PROMPT_REPORT = /^\/api\/v1\/tabs\/[^/?]+\/(prompt|model-rows)$/;
 
 function urlOf(input: RequestInfo | URL): string {

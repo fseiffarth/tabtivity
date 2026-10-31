@@ -145,17 +145,30 @@ pub async fn mobile_desktop_images() -> Vec<DesktopImage> {
     images
 }
 
-/// Copy one listed image into `project_dir`'s inbox. The `Err` is a wire code
-/// the phone maps to a sentence — never a path or an OS message.
+/// Copy one listed image into `project_dir`'s inbox, or into a Tabby chat's
+/// own folder when `chat_uid` names one (the assistant scope has no folder;
+/// `host::drop_box` is the same rule). The `Err` is a wire code the phone maps
+/// to a sentence — never a path or an OS message.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_attach_desktop_image(
     project_dir: String,
+    chat_uid: Option<String>,
     image_id: String,
 ) -> Result<MobileInboxAttachment, String> {
     if !desktop_images::valid_id(&image_id) {
         return Err("image_not_found".into());
     }
-    let root = PathBuf::from(project_dir);
+    let root = match chat_uid {
+        Some(uid) => {
+            let dir = crate::services::assistant::chat_dir(&crate::storage::state_dir(), &uid)
+                .map_err(|_| "project_ineligible".to_string())?;
+            if !std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
+                return Err("project_unavailable".into());
+            }
+            dir
+        }
+        None => PathBuf::from(project_dir),
+    };
     app_core::rt::spawn_blocking(move || {
         let (name, bytes) = if image_id == desktop_images::CLIPBOARD_ID {
             ("clipboard.png".to_string(), clipboard_png()?)

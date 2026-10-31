@@ -22,10 +22,12 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { GIT_DOT_TICK_MS, gitDotProbedAt, gitDotsDue, remoteGitDotStep, useGitDirtyStore } from "../../stores/gitDirty";
 import { useRemoteStatusStore, type ConnState } from "../../stores/remote/remoteStatus";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
+import { usePhonePresencePoll } from "../../stores/phonePresence";
 import { projectStations, useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useT } from "../../lib/i18n";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
@@ -208,6 +210,8 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     [gitDotTargets],
   );
   const quiesce = useQuiesce();
+  // Feeds the phone marks on the pills and tabs.
+  usePhonePresencePoll();
   // Fast mode withdraws the dots entirely: this is a `git status` per local
   // project every 12–36 s, for projects the user is not currently in, and the dot
   // it feeds is the definition of an aid — the project's own file view says the
@@ -544,7 +548,9 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
    */
   const addAndAudit = async (project: ProjectEntry) => {
     await addProject(project);
-    if (project.remote) useBigFoldersStore.getState().openOnce(project.id);
+    // The big-folder ask is about what to sync into the mirror: a project pinned
+    // to its host (remote-only or VM) has none.
+    if (project.remote && !isHostPinned(project)) useBigFoldersStore.getState().openOnce(project.id);
   };
 
   return (

@@ -78,6 +78,7 @@ export type ShortcutAction =
   | "terminalPaste"
   | "terminalKeySelect"
   | "readerDictate"
+  | "readerStopSpeaking"
   | "editorFind"
   | "editorReplace"
   | "editorAutocomplete"
@@ -434,6 +435,17 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     context: "terminal",
     default: { key: "d", ctrl: true, shift: true },
     untested: "terminal.reader.voice.dictate",
+  },
+  // The Chat's stop key (step 4): the voice reading an answer stops (never
+  // the agent's turn), and a hands-free send window is cancelled.
+  // Ctrl+Shift+Q: no terminal or editor default, and Q for quiet.
+  {
+    action: "readerStopSpeaking",
+    labelKey: "shortcut.readerStopSpeaking",
+    group: "terminal",
+    context: "terminal",
+    default: { key: "q", ctrl: true, shift: true },
+    untested: "terminal.reader.voice.readAloud",
   },
   // The text editor's own keys (`FileViewerPane`), answered only while it has
   // focus. Redo also answers Ctrl+Shift+Z while at its default

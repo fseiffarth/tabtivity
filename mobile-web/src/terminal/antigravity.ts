@@ -1,6 +1,6 @@
 /**
  * Google Antigravity's own screens (`agy` 1.2.7, drawn the same through
- * 1.4.5), for a tab whose label names it: the model and reasoning effort its
+ * 1.4.11), for a tab whose label names it: the model and reasoning effort its
  * footer prints, and the `Switch Model` dialog `/model` opens.
  *
  * Neither is the shape the other readers know. This is what the CLI draws,
@@ -204,6 +204,9 @@ const EFFORT_ROW = /^\s{0,4}Effort\b/u;
 /** Its stops — `●` behind the handle, `◉` the handle, `○` ahead of it. */
 const EFFORT_STOPS = /[●◉○]/gu;
 const HANDLE = "◉";
+/** The dialog's key hint, the next row where a pane too narrow for the stop's
+ * description leaves that out. */
+const KEY_HINT = /^Keyboard:/u;
 
 function nextNonBlank(lines: readonly AntigravityLineLike[], from: number): number {
   const index = skipBlank(lines, from + 1);
@@ -234,7 +237,7 @@ export function readAntigravityEffort(lines: readonly AntigravityLineLike[]): An
     if (stops.length !== marks.length) return null;
     const noted = nextNonBlank(lines, labelled);
     const note = noted < 0 ? "" : lines[noted].text.trim();
-    const about = note && !WINDOW_RANGE.test(note) && /\p{L}/u.test(note) ? note : undefined;
+    const about = note && !WINDOW_RANGE.test(note) && !KEY_HINT.test(note) && /\p{L}/u.test(note) ? note : undefined;
     return {
       stops: stops.map((label, at) => ({ label, ...(at === current && about ? { description: about } : {}) })),
       current,

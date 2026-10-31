@@ -170,8 +170,8 @@ export function TabCard({ tab, draft, statusShown, drag, canReorder, schedulesOf
               how many subagents are at work — a tap lists them. */}
           <span className="tab-card-meta">
             {/* Runs on the remote project's host, which the phone reaches
-                through the desktop's SSH connection. */}
-            {tab.on_host && <small className="agent-mode-mark" title={t("mobile.project.onHostTitle")}>{t("mobile.project.onHost")}</small>}
+                through the desktop's SSH connection: the chip names it. */}
+            {tab.on_host && <small className="agent-mode-mark host" title={t("mobile.project.onHostTitle")}>{tab.host_label || t("mobile.project.onHost")}</small>}
             {tab.on_host && isUntested("mobile.project.onHost") && <span className="untested">{t("mobile.newTab.untested")}</span>}
             {agent && <TurnDuration tab={tab} />}
             <AgentModeMarks tab={tab} />

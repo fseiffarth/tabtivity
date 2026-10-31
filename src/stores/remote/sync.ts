@@ -273,11 +273,13 @@ interface SyncStore {
    *  than per file. Backs the orange view's "…for all" buttons. Resolves to the
    *  files over the cap a "host" batch left on the host (gap 35), for the view
    *  to name (empty for "local"), and the files that failed with the first
-   *  reason — a failed file is skipped, never the whole batch. */
+   *  reason — a failed file is skipped, never the whole batch. `force: false`
+   *  pushes without overwriting a host copy that moved: such a file fails. */
   resolveAll: (
     projectId: string,
     relPaths: string[],
     side: "host" | "local",
+    force?: boolean,
   ) => Promise<SyncResolveOutcome>;
   /** Toggle the selected flag for paths without transferring (deselect = stop). */
   markSelected: (
@@ -446,80 +448,6 @@ export function amberPaths(
 }
 
 /**
- * Splits diverged files by which side holds the newer copy, for the orange
- * view's "take the newer one for all". The backend's per-side direction wins
- * (only the host moved from its recorded base → host; only the mirror → local),
- * so clock skew cannot flip it; a file both sides changed falls back to the
- * mtime comparison. A file with a side missing (a deletion), one with equal
- * mtimes, and one not in the map are left out — nothing says which copy is newer.
- */
-export function splitByNewerSide(
-  byPath: Record<string, SyncEntryStatus> | undefined,
-  relPaths: string[],
-): { host: string[]; local: string[] } {
-  const host: string[] = [];
-  const local: string[] = [];
-  for (const rel of relPaths) {
-    const e = byPath?.[rel];
-    if (!e || e.hostMtime == null || e.localMtime == null) continue;
-    if (e.hostDiverged !== e.localDiverged) {
-      (e.hostDiverged ? host : local).push(rel);
-    } else if (e.hostMtime !== e.localMtime) {
-      (e.hostMtime > e.localMtime ? host : local).push(rel);
-    }
-  }
-  return { host, local };
-}
-
-/**
- * Diverged files minus the ones BOTH sides changed since their recorded base
- * (the backend's per-side flags, both copies present) — the orange view's
- * "exclude changed on both" tick, so a bulk take-a-side never silently drops
- * one side's edits of a true conflict; those are resolved per row.
- */
-export function withoutChangedOnBoth(
-  byPath: Record<string, SyncEntryStatus> | undefined,
-  relPaths: string[],
-): string[] {
-  return relPaths.filter((rel) => {
-    const e = byPath?.[rel];
-    return !(e && e.hostMtime != null && e.localMtime != null && e.hostDiverged && e.localDiverged);
-  });
-}
-
-/**
- * Which side a 🗑 in the orange view would delete: the surviving copy of a file
- * deleted on exactly one side, or null when no deletion applies. Deleting the
- * mirror copy is only offered when the host was actually consulted and
- * positively reported the file gone (`hostChecked`) — a cold pool reports every
- * host mtime as null without asking. The backend re-verifies either premise
- * against live state before deleting anything.
- */
-export function deleteSideOf(e: SyncEntryStatus | undefined): "host" | "local" | null {
-  if (!e) return null;
-  const noHostFile = e.hostMtime == null;
-  const noLocalFile = e.localMtime == null;
-  if (noLocalFile && !noHostFile) return "host";
-  if (noHostFile && !noLocalFile && e.hostChecked) return "local";
-  return null;
-}
-
-/** Splits diverged files by the side a 🗑 would delete (`deleteSideOf`), for the
- *  orange view's "delete for all"; files no deletion applies to are left out. */
-export function splitByDeleteSide(
-  byPath: Record<string, SyncEntryStatus> | undefined,
-  relPaths: string[],
-): { host: string[]; local: string[] } {
-  const host: string[] = [];
-  const local: string[] = [];
-  for (const rel of relPaths) {
-    const side = deleteSideOf(byPath?.[rel]);
-    if (side) (side === "host" ? host : local).push(rel);
-  }
-  return { host, local };
-}
-
-/**
  * All NEW local-only paths (state `localnew`) — files the mirror holds that
  * were never synced, so the host has no copy. Deliberately a separate list
  * from `amberPaths`: an amber row has content on BOTH sides (merge / pick a
@@ -642,7 +570,7 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
 
   scanHostNew: (projectId, confirmed) => invoke<HostNewScan>("sync_scan_host_new", { projectId, confirmed }),
 
-  resolveAll: async (projectId, relPaths, side) => {
+  resolveAll: async (projectId, relPaths, side, force = true) => {
     // Iterate per path (each side has its own single-file command) but refresh
     // the cached status only once at the end — refreshing per file would re-stat
     // the whole selection N times. A single failed file is logged and skipped so
@@ -661,10 +589,11 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
         if (side === "host") {
           await invoke<unknown>("sync_pull", { projectId, relPath: rel });
         } else {
-          const why = pushFailure(
-            await invoke<SyncPushResult>("sync_push", { projectId, relPath: rel, force: true }),
-          );
+          const result = await invoke<SyncPushResult>("sync_push", { projectId, relPath: rel, force });
+          const why = pushFailure(result);
           if (why) fail(rel, why);
+          // Unforced, a host copy that moved blocks the file: nothing went.
+          else if (result?.conflicts?.length) fail(rel, "changed on the host");
         }
       } catch (e) {
         fail(rel, e);

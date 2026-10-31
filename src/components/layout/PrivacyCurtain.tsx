@@ -13,6 +13,13 @@ import {
   type CurtainMode,
   type PresentingState,
 } from "../../lib/window/privacyCurtain";
+import {
+  pdfPresentLabel,
+  readLastPresent,
+  readPresentScreen,
+  takePresentResume,
+  writeLastPresent,
+} from "../../lib/viewers/pdfPresent";
 import { useSettingsStore } from "../../stores/settings";
 import { usePresentationStore } from "../../stores/viewers/presentation";
 import { UntestedTag } from "../common/UntestedTag";
@@ -26,11 +33,15 @@ import { UntestedTag } from "../common/UntestedTag";
  * window already covers it opaquely and stays the speaker's view; it is lifted
  * above every other layer and the curtain is a corner chip. Both modes are CSS
  * on `<html data-privacy-curtain>` (`shell.css`).
+ *
+ * Once a PDF's present window has closed, `cover` also offers the way back to
+ * it: on the sheet it was left on, on its remembered screen, curtain still up.
  */
 export function PrivacyCurtain() {
   const t = useT();
   const up = usePrivacyCurtainStore((s) => s.up);
   const lift = usePrivacyCurtainStore((s) => s.lift);
+  const pdfClosed = usePrivacyCurtainStore((s) => !s.presenting && s.presented === "pdf");
   const mode: CurtainMode = usePresentationStore((s) => s.presenting) > 0 ? "keep" : "cover";
   const curtainRef = useRef<HTMLDivElement>(null);
   const showRef = useRef<HTMLButtonElement>(null);
@@ -113,6 +124,23 @@ export function PrivacyCurtain() {
       {t("privacyCurtain.show")}
     </button>
   );
+  const last = pdfClosed ? readLastPresent() : null;
+  const backToFullscreen = () => {
+    if (!last) return;
+    const label = pdfPresentLabel(last.path);
+    writeLastPresent({ ...last, resume: true });
+    // Gone until the new window's own `presenting-changed`, so a second click
+    // cannot leave a resume behind for a later Present to trip over.
+    usePrivacyCurtainStore.setState({ presented: null });
+    invoke("open_presenter_window", {
+      label,
+      fullscreen: true,
+      monitor: readPresentScreen(),
+    }).catch(() => {
+      takePresentResume(label);
+      usePrivacyCurtainStore.setState({ presented: "pdf" });
+    });
+  };
   return createPortal(
     mode === "keep" ? (
       <div className="privacy-curtain is-corner" ref={curtainRef} role="status">
@@ -133,6 +161,12 @@ export function PrivacyCurtain() {
           </h2>
           <p>{t("privacyCurtain.body")}</p>
           {show}
+          {last && (
+            <button type="button" className="privacy-curtain-show" onClick={backToFullscreen}>
+              {t("privacyCurtain.backToFullscreen")}{" "}
+              <UntestedTag id="privacyCurtain.backToFullscreen" />
+            </button>
+          )}
         </div>
       </div>
     ),

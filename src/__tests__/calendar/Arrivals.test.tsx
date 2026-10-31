@@ -123,6 +123,7 @@ describe("the views mark an arrived row", () => {
         onSelect={vi.fn()}
         onCreateOn={vi.fn()}
         onOpen={vi.fn()}
+        onMoveDays={vi.fn()}
         onMenu={vi.fn()}
         weekStart={1}
       />,

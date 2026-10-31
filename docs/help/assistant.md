@@ -6,8 +6,9 @@ related: [agent-clis, local-models, mobile, claude-code, codex, troubleshooting]
 ---
 
 Tabby is a chat assistant that can search and read the web and look things up
-in Tabtivity's own help, and cannot see anything on your computer: no files, no
-projects, no mail or calendar, no MCP servers of yours. Use it for questions
+in Tabtivity's own help, and cannot reach anything on your computer: no folders,
+no projects, no mail or calendar, no MCP servers of yours. The one thing it sees
+is a file you attach to a message. Use it for questions
 that need no project ("what does this error mean", "find me the paper on X",
 "how do I sync a remote project?"). It is experimental and on by default.
 
@@ -71,6 +72,11 @@ Without either, a local chat can still read pages you name but cannot search.
 - It cannot read your files, projects, folders, mail, calendar, to-do list,
   terminals or other agents' conversations. Each chat starts in its own empty
   folder with a home that holds only the CLI logins.
+- A file you attach to a message is the exception: drop or paste it into the
+  chat on the desktop, or use the composer's **+** on the phone. A copy goes
+  into that chat's own folder, where no project and no other chat can see it,
+  and is deleted after 90 days. Claude reads it; Codex has no way to open a
+  file, so it can only tell you it could not see it.
 - It cannot use your MCP servers, skills or the settings you gave other agents.
 - It can read Tabtivity's help (the `tabtivity-help` tools, see ask-tabtivity):
   the same read-only user docs every agent tab gets, built into Tabtivity and
@@ -102,7 +108,8 @@ restarted, or a new one on the default CLI. In the chat, tap the CLI name at the
 top to pick another CLI (dimmed when not signed in on the desktop), the model
 name under it to switch the chat's model, or the ↻ button to relaunch a fresh
 session. The phone's chat has no
-files, outbox, upload or Commit buttons. Tabby works from the phone with the
+project files, outbox, Upload here or Commit buttons; the composer's **+** attaches
+a picture or file to your message. Tabby works from the phone with the
 desktop window closed as long as Tabtivity is running. Turning the phone switch
 off removes the button. There is no phone chat on Windows (it needs tmux).
 

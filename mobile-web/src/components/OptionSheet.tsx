@@ -24,11 +24,13 @@ export interface SheetOption {
  * choices to offer; Home's voice-language row opens the same sheet, so it sits
  * here rather than being drawn twice.
  */
-export function OptionSheet({ title, note, children, options, waiting, busy, onPick, onClose }: {
+export function OptionSheet({ title, note, children, footer, options, waiting, busy, onPick, onClose }: {
   title: string;
   note?: { text: string; error?: boolean };
   /** What the choice is about, shown under the note and above the rows. */
   children?: ReactNode;
+  /** Shown under the rows. */
+  footer?: ReactNode;
   options: SheetOption[];
   /** Shown while the list is still empty. */
   waiting: string;
@@ -61,6 +63,7 @@ export function OptionSheet({ title, note, children, options, waiting, busy, onP
             </button>
             </li>
           </Fragment>)}</ul>}
+      {footer}
     </section>
   </div>;
 }

@@ -2,6 +2,7 @@ import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
 import { storageKey } from "../../src/lib/brand";
 import type { ModelRows } from "./terminal/modelRows";
+import type { CliOverviewRow } from "../../shared/cliOverview";
 
 /** What a row of the phone's list is. `assistant` is the chat assistant: chats only, no folder behind it. */
 export type ScopeKind = "project" | "box" | "root" | "assistant";
@@ -18,7 +19,7 @@ export type ProjectHost = "local" | "remote" | "container" | "vm";
  * agents alone (a remote project's shell would run on the remote host), or
  * nothing. Absent from an older desktop is `all`. */
 export type CreateVerdict = "all" | "agents" | "none";
-export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; host?: ProjectHost; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
+export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; host?: ProjectHost; /** A `remote` project that keeps no copy on the desktop: its tabs run and its files live on its machines alone. Absent otherwise. */ remote_only?: boolean; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
 export type AgentStatus = "working" | "question" | "interrupted" | "done";
 /** The desktop's own one-line summary of a tab's scheduled prompts: what the
  * Agents view prints under an agent tab, so the project overview says the same
@@ -40,7 +41,7 @@ export interface TabSchedules { total: number; enabled: number; next?: string; u
  * formats in its own zone; a record that carried none arrives without one, and
  * so does the one line a transcript-less agent leaves on its own screen. */
 export interface TabPrompt { text: string; at?: string }
-export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** A vendor cloud session (`src/lib/agents/cloudSessions.ts`): Focus shows its screen and the session's link, never a wait for a local session. */ cloud?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string; /** The facts row's ⎇ chip can move this agent to another worktree of its project (`getTabWorktrees`, `moveTabWorktree`), as the desktop Reader's can. */ worktree_movable?: boolean; /** The tab runs on its remote project's host (or a worker), reached over the desktop's SSH connection: `available` only while that connection is up; files, Mark up, sign-in and (with no window) schedules cannot reach it. Absent on an older host. */ on_host?: boolean; /** An `on_host` tab whose host the desktop holds no connection to: it reads "connect on the desktop". Without it, an unavailable `on_host` tab is a session that ended on the host. */ host_down?: boolean }
+export interface TabRow { id: string; label: string; kind: "shell" | "agent"; agent_label?: string; agent_status?: AgentStatus; agent_model?: string; /** The session is in plan mode / running a `/goal`, as the desktop's PLAN and GOAL tab pills read its status line; absent while off or unknown. */ agent_plan?: boolean; agent_goal?: boolean; /** How many subagents the session has at work right now, as the desktop reads its transcript; absent at zero. */ agent_subagents?: number; working_at?: number; done_at?: number; /** Desktop wall clock (ms) of when the current or last turn began; with `working_at`/`done_at` it says how long the tab has been, or was, at work. */ turn_started_at?: number; schedules?: TabSchedules; prompts?: TabPrompt[]; available: boolean; viewer_busy: boolean; last_activity?: number; /** The tab's colour as a palette id (see `tabColors.ts`); absent when it has none. */ color?: string; /** A sign-in tab (`src/lib/agents/signInLaunch.ts`): it opens on its sign-in sheet. */ sign_in?: boolean; /** A vendor cloud session (`src/lib/agents/cloudSessions.ts`): Focus shows its screen and the session's link, never a wait for a local session. */ cloud?: boolean; /** The tab drives a local Ollama model: its model is shown, never picked from the driver's list. */ local_model?: boolean; /** The linked worktree an agent tab's agent works in now — its folder's leaf name and branch; absent in the project folder's own checkout. */ worktree?: TabWorktree; /** The other linked worktrees its subagents at work run in, with how many of them each. */ subagent_worktrees?: SubagentWorktree[]; /** A chat of the assistant scope: the opaque id of the launch it runs — one of `launch-options`' `assistant.launches` ids. */ assistant_launch?: string; /** The facts row's ⎇ chip can move this agent to another worktree of its project (`getTabWorktrees`, `moveTabWorktree`), as the desktop Reader's can. */ worktree_movable?: boolean; /** The facts row's locality chip can move this agent of a remote project between the desktop's copy and the project's machines (`getTabLocations`, `moveTabLocation`), as the desktop tab's ⌂/☁ badge can. */ location_movable?: boolean; /** The tab runs on its remote project's host (or a worker), reached over the desktop's SSH connection: `available` only while that connection is up; files, Mark up, sign-in and (with no window) schedules cannot reach it. Absent on an older host. */ on_host?: boolean; /** The machine an `on_host` tab runs on: its display name, else its host name. Absent on an older host, which leaves the chip's generic word. */ host_label?: string; /** An `on_host` tab whose host the desktop holds no connection to: it reads "connect on the desktop". Without it, an unavailable `on_host` tab is a session that ended on the host. */ host_down?: boolean }
 export interface TabWorktree { label: string; branch?: string }
 export interface SubagentWorktree extends TabWorktree { count: number }
 /** `default`: the desktop's default agent (`default_agent_cmd`), the one
@@ -77,7 +78,7 @@ export interface ApiKeyLaunchRow { agent_id: string; budget_reached?: boolean }
  * `connected`: the desktop holds a connection to it now — the only way the
  * agent can start there, since the phone never dials a host itself. */
 export interface HostMachineRow { id: string; label: string; primary: boolean; connected: boolean }
-export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions; api_key?: ApiKeyLaunchRow[]; hosts?: HostMachineRow[] }
+export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow[]; sign_in: SignInRow[]; local?: LocalLaunchRow; assistant?: AssistantLaunchOptions; api_key?: ApiKeyLaunchRow[]; hosts?: HostMachineRow[]; /** False for a project with nothing on the desktop (remote-only): an agent starts on one of `hosts` or not at all. Absent (an older desktop) is true. */ here?: boolean }
 
 /** `GET /api/v1/projects/{id}/launch-options` — asked when the ＋ sheet opens.
  * A desktop that predates the route answers 404; that reads as "project folder
@@ -85,7 +86,7 @@ export interface LaunchOptions { worktrees: WorktreeRow[]; cloud: CloudLaunchRow
 export async function getLaunchOptions(projectId: string, signal?: AbortSignal): Promise<LaunchOptions> {
   try {
     const body = await api<Partial<LaunchOptions>>(`/api/v1/projects/${encodeURIComponent(projectId)}/launch-options`, { signal });
-    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}), ...(Array.isArray(body.api_key) && body.api_key.length ? { api_key: body.api_key } : {}), ...(Array.isArray(body.hosts) && body.hosts.length ? { hosts: body.hosts } : {}) };
+    return { worktrees: body.worktrees ?? [], cloud: body.cloud ?? [], sign_in: body.sign_in ?? [], ...(body.local?.agents?.length ? { local: body.local } : {}), ...(body.assistant && Array.isArray(body.assistant.launches) ? { assistant: body.assistant } : {}), ...(Array.isArray(body.api_key) && body.api_key.length ? { api_key: body.api_key } : {}), ...(Array.isArray(body.hosts) && body.hosts.length ? { hosts: body.hosts } : {}), ...(body.here === false ? { here: false } : {}) };
   } catch (reason) {
     if (reason instanceof ApiError && reason.status === 404) return { worktrees: [], cloud: [], sign_in: [] };
     throw reason;
@@ -123,6 +124,55 @@ export async function getGitOverview(projectId: string, signal?: AbortSignal): P
     throw reason;
   }
 }
+/** One file of the Diverged list. `id` names it to the routes below; `path`
+ * is display text. */
+export interface DivergedRow {
+  id: string;
+  path: string;
+  /** `amber`: both sides have a say. `localnew`: only the local copy exists. */
+  state: "amber" | "localnew";
+  host_mtime?: number;
+  local_mtime?: number;
+  host_diverged: boolean;
+  local_diverged: boolean;
+  host_checked: boolean;
+}
+/** `total`: what this phone may see, `rows` or not. `hidden`: files named as
+ * the library hides them, only counted. `connected`: the desktop reached the
+ * host. `writes`: the actions answer. */
+export interface DivergedList { rows: DivergedRow[]; total: number; hidden: number; connected: boolean; writes: boolean }
+export type SyncDirection = "pull" | "push";
+export type SyncOp = SyncDirection | "delete_host" | "delete_local" | "forget";
+/** What a transfer would do. `destructive`: the files that would lose changes,
+ * a capped list of `destructive_total`. `exact` false: the receiving side could
+ * not be inspected, so what it would lose is unknown, not nothing. */
+export interface SyncPreview { files: number; bytes: number; overwrites: number; destructive: string[]; destructive_total: number; conflicts: number; tracked: number; exact: boolean }
+export interface SyncOutcome { done: number; failed: number; skipped: number }
+
+/** A list reads every tracked file's state on the host through the desktop. */
+const DIVERGED_READ_TIMEOUT = 20_000;
+/** Past the sidecar's own deadline for each (`DesktopRequest::response_timeout`). */
+const SYNC_PREVIEW_TIMEOUT = 35_000;
+const SYNC_RESOLVE_TIMEOUT = 130_000;
+
+/** `GET /api/v1/projects/{id}/diverged` — the desktop must be open. */
+export function getDiverged(projectId: string, signal?: AbortSignal): Promise<DivergedList> {
+  return api<DivergedList>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged`, { signal }, DIVERGED_READ_TIMEOUT);
+}
+/** `POST …/diverged/preview` — what moving these files would do. */
+export async function previewDiverged(projectId: string, direction: SyncDirection, files: string[]): Promise<SyncPreview> {
+  const { preview } = await api<{ preview: SyncPreview }>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/preview`, { method: "POST", body: JSON.stringify({ direction, files }) }, SYNC_PREVIEW_TIMEOUT);
+  return preview;
+}
+/** `POST …/diverged/resolve` — never sent twice: a timeout is an unknown outcome. */
+export function resolveDiverged(projectId: string, op: SyncOp, files: string[]): Promise<SyncOutcome> {
+  return api<SyncOutcome>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/resolve`, { method: "POST", body: JSON.stringify({ op, files }) }, SYNC_RESOLVE_TIMEOUT);
+}
+/** `GET …/diverged/diff?file=` — the local copy against the host's. */
+export function getDivergedDiff(projectId: string, file: string): Promise<{ diff: string; cut: boolean }> {
+  return api<{ diff: string; cut: boolean }>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/diff?file=${encodeURIComponent(file)}`, undefined, SYNC_PREVIEW_TIMEOUT);
+}
+
 /** One agent tab in the cross-project activity list: an ordinary tab row plus
  * the project it lives in, because that list is flat and a tab label on its own
  * does not say where the session is. */
@@ -164,9 +214,21 @@ export interface ClosedTabRow { id: string; label: string; agent: string; closed
 export interface ProjectDetail {
   project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
   /** Whether the file browser also has a remote side: a remote project's tree
-   * on its host, read over the desktop's connection (`?on=host`). The host is
-   * never named. Absent (an older desktop) is none. */
+   * on its host, read over the desktop's connection (`?on=host`). Absent (an
+   * older desktop) is none. */
   host_files?: boolean;
+  /** Whether the drawer offers Diverged (`DivergedSheet`): a remote project
+   * with a local copy, the file switch on. Absent (an older desktop) is none. */
+  diverged?: boolean;
+  /** How many files the desktop last found diverged or new; absent or null
+   * where it has no status for the project. */
+  diverged_count?: number | null;
+  /** Whether the list's actions answer (`project_sync`). */
+  sync_writes?: boolean;
+  /** What the remote side's switch is called: the host's display name, else
+   * its host name — the label the ＋ sheet's machines carry. Absent (an older
+   * desktop): the switch says "Remote computer". */
+  host_label?: string;
   /** Whether the host has a folder to give the phone for this project (a remote
    * project before its first sync, a VM without a mirror: no). Without one the
    * project screen hides the files, Git and send-a-file entries and says why.
@@ -710,6 +772,30 @@ export function moveTabWorktree(tabId: string, worktree: string): Promise<{ move
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/worktree`, { method: "POST", body: JSON.stringify({ worktree }) }, WORKTREE_MOVE_TIMEOUT);
 }
 
+/** One place the locality chip can move an agent tab to: the desktop's own
+ * copy (`here`, no label of its own) or one of the project's machines. */
+export interface TabLocationRow extends HostMachineRow { here: boolean }
+export interface TabLocations { locations: TabLocationRow[]; current?: string; carries: boolean }
+
+/** `GET /api/v1/tabs/{id}/locations` — asked when the locality chip's sheet opens. */
+export async function getTabLocations(tabId: string): Promise<TabLocations> {
+  const body = await api<Partial<TabLocations>>(`/api/v1/tabs/${encodeURIComponent(tabId)}/locations`);
+  return { locations: body.locations ?? [], ...(body.current ? { current: body.current } : {}), carries: body.carries === true };
+}
+
+/** Past the sidecar's 35 s wait on the desktop: the move stops the CLI and
+ * copies the conversation over ssh before the respawn. */
+const LOCATION_MOVE_TIMEOUT = 40_000;
+
+/** `POST /api/v1/tabs/{id}/location` — move the agent tab to that place, as
+ * the desktop tab's ⌂/☁ badge does: the desktop stops its CLI, takes the
+ * conversation along where the CLI allows and restarts it there. `409
+ * move_failed` means it restarted where it was; `409 host_offline` that the
+ * desktop holds no connection to that machine. */
+export function moveTabLocation(tabId: string, location: string): Promise<{ moved: "carried" | "fresh" }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/location`, { method: "POST", body: JSON.stringify({ location }) }, LOCATION_MOVE_TIMEOUT);
+}
+
 /** One model of a Tabby chat's sheet: `id` is what a switch sends, the words
  * are Claude's own picker's where the desktop read them. */
 export interface AssistantModelRow { id: string; label: string; description?: string }
@@ -755,6 +841,29 @@ export function getModelRows(tabId: string): Promise<ModelRows> {
  * tab's live model picker for its CLI build. */
 export function rememberModelRows(tabId: string, rows: ModelRows): Promise<{ kept: boolean }> {
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`, { method: "POST", body: JSON.stringify(rows) });
+}
+
+/** One CLI's startup defaults and what it can take (`services::agent_defaults`). */
+export interface LaunchDefaults {
+  saved: { model: string; effort: string };
+  capabilities: { model: boolean; efforts: string[]; effort_requires_model: boolean };
+  /** The tab's CLI command and the user's own model names for it (Settings →
+   * Agents); absent from a host build older than the dropdown. */
+  cli?: string;
+  models?: string[] | null;
+}
+
+/** `GET /api/v1/tabs/{id}/launch-defaults` — the model and effort new sessions
+ * of the tab's CLI start on (Manage CLIs → Default model and effort). `409
+ * no_launch_defaults` for a local-model, Tabby or host tab. */
+export function getLaunchDefaults(tabId: string): Promise<LaunchDefaults> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/launch-defaults`);
+}
+
+/** `PUT /api/v1/tabs/{id}/launch-defaults` — keep them for the tab's CLI;
+ * both blank hands the choice back to the CLI. This session keeps its own. */
+export function saveLaunchDefaults(tabId: string, saved: LaunchDefaults["saved"]): Promise<{ saved: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/launch-defaults`, { method: "PUT", body: JSON.stringify(saved) });
 }
 
 /** `POST /api/v1/tabs/{id}/assistant-model` — switch the chat to that model:
@@ -924,7 +1033,8 @@ export interface AskedQuestion {
  * `role` its kind, and `subagent` the handle that reads its own conversation
  * (`getTranscript`) — absent until its CLI has recorded where that lives. */
 export interface TranscriptEntry {
-  kind: "prompt" | "answer" | "agent";
+  /** `interrupted`: the user cut the turn off; `text` is the CLI's own words. */
+  kind: "prompt" | "answer" | "agent" | "interrupted";
   text: string;
   at?: string;
   cut?: boolean;
@@ -984,6 +1094,9 @@ export interface SessionTranscript {
   /** How many subagents only those earlier turns hold — the Subagents
    * index counts them with the ones it lists. */
   agentsEarlier?: number;
+  /** The prompt the oldest entry answers, when the entry limit left it out:
+   * the Reader pins it over a turn that opens on its answers. */
+  cutPrompt?: TranscriptEntry;
   /** How many of the session's subagents are at work right now, the ones
    * the answer leaves out included; absent at zero and on a CLI whose record
    * does not say (only Claude's does). */
@@ -1796,6 +1909,14 @@ async function localModelsBody(write: Promise<unknown>): Promise<LocalModelList>
   const list = normalizeLocalModels(await write);
   if (!list) throw new ApiError(200, "malformed_response");
   return list;
+}
+
+/** `GET /api/v1/clis` — the CLI overview: per agent CLI in use its plan and
+ * usage windows, without the account. `desktop_available: false` means no
+ * window answered, so Claude's panel (which runs the CLI) is missing.
+ * `refresh` asks the window to read that panel again. */
+export async function getCliOverview(refresh = false, signal?: AbortSignal): Promise<{ clis: CliOverviewRow[]; desktop_available: boolean }> {
+  return api(`/api/v1/clis${refresh ? "?refresh=1" : ""}`, { signal }, STATUS_TIMEOUT);
 }
 
 /** `GET /api/v1/local-models` — the Ollama models installed on the desktop.

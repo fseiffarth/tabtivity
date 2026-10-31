@@ -448,6 +448,16 @@ remote ones no local branch tracks — capped, with `+N more`. Worktrees cross a
 the same opaque ids the ＋ sheet's "Agents start in" row uses; no path, lock
 reason or full sha is sent. Boxes and the root console have no Git entry.
 
+**Diverged (phone).** A remote project with a local copy has **± Diverged** in
+the project drawer, with a count: the files whose local and host copies disagree
+and the new files only the local copy holds. Tap a file to compare the two
+copies. With **Phone may resolve diverged files** on in the desktop's Mobile
+settings (off by default, and it needs Project files) you can use the host's or
+the local copy, use the newer one, upload new files and complete a deletion,
+per file or for all. Each asks first, as on the desktop. The desktop must be
+open, and connected to the host for the actions; the three-way merge and the
+scan for files only the host holds stay on the desktop.
+
 **Upload here (phone → a project folder).** The phone's project-files drawer
 (**Settings → Mobile → Project files on the phone**, read-only) gains one write
 behind a second host-wide switch, **Phone may add files to projects**
@@ -1342,6 +1352,18 @@ and the host-aware variants, never inferred from path conventions.
   Byte-sync is opt-in per path from an explicit manifest and does **not** read
   `.gitignore`, so a pull is previewed and confirmed before it drags a big host
   tree down.
+- **Remote-only.** A remote project created with *Keep a local copy* off has no
+  mirror at all: `RemoteSpec.remote_only` (written by the backend from the
+  create request's top-level `remoteOnly`, never taken from the renderer's
+  spec) and `RemoteSpec::is_remote_only()`, which a VM project always is, with
+  `isHostPinned` as the frontend twin. `remote::local_copy_in` /
+  `remote_sync::mirror_dir_opt` answer `None` for it, connect mints no mirror,
+  and every engine that needs a local tree refuses with the
+  `{UPPER}_REMOTE_ONLY:` sentinel (spawn, byte-sync, lockstep, worker fan-out,
+  local run host, mirror relocation, local-tree export); the cockpit words it
+  through one mapper (`remoteOnlyRefusal`). Tabs, git, search, TeX builds and
+  the phone's tabs all run on the host; the file panel and viewers read over
+  SFTP with no Local side. Rationale: `docs/context/remote_projects.md`.
 - **Losses survive a relaunch.** Local-loss warnings are file-backed, not events:
   destructive background git or sync moves record through `services::local_loss`.
 - **Credentials.** Passwords are never persisted by default; the opt-in save
@@ -1575,7 +1597,9 @@ remote git at all.
 - `compact_tab_agents` lists the built-in agent ids shown before a search in the
   `+` menu's compact Agents group. Unset means the familiar Claude/Codex/Gemini
   quick picks; an **empty list** is a deliberate choice to show agents only after
-  searching, and is not the same as unset.
+  searching, and is not the same as unset. A CLI that turns up installed while
+  the app runs joins the list (`noteInstalledAgents`); one seen installed since
+  launch keeps the chip the user left it with, through Reinstall too.
 - `mobile_indicator` controls the Mobile host-status control in the header;
   unset means visible whenever the Mobile host is enabled.
 - `keyboard_shortcuts` holds per-action chord overrides (Settings → Shortcuts).

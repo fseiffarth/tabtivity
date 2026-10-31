@@ -8,6 +8,7 @@
  * asks `presenting_state`. The curtain goes up when presenting STARTS and stays
  * up when it ends: Esc on the PDF often comes while the call is still sharing,
  * so only the user's own Show click (or the shortcut) lifts it, per window.
+ * After a PDF it also offers Back to fullscreen (`lib/viewers/pdfPresent`).
  *
  * Raising and lifting also set the window's OS capture protection
  * (`privacy_curtain_set`: black in any capture on Windows/macOS, nothing on
@@ -38,6 +39,8 @@ interface PrivacyCurtainStore {
   auto: boolean;
   /** This window's curtain is up. */
   up: boolean;
+  /** What the talk behind this curtain showed, kept after it ends. */
+  presented: PresentingKind | null;
   raise: () => void;
   lift: () => void;
   /** Fold in a backend state: raises the curtain when presenting starts. */
@@ -52,6 +55,7 @@ export const usePrivacyCurtainStore = create<PrivacyCurtainStore>((set, get) => 
   presenting: false,
   auto: true,
   up: false,
+  presented: null,
   raise: () => {
     if (get().up) return;
     set({ up: true });
@@ -59,12 +63,16 @@ export const usePrivacyCurtainStore = create<PrivacyCurtainStore>((set, get) => 
   },
   lift: () => {
     if (!get().up) return;
-    set({ up: false });
+    set({ up: false, presented: null });
     setProtected(false);
   },
   applyPresenting: (next) => {
     const started = next.presenting && !get().presenting;
-    set({ presenting: next.presenting, auto: next.curtain });
+    set({
+      presenting: next.presenting,
+      auto: next.curtain,
+      presented: (next.curtain && next.kind) || get().presented,
+    });
     if (started && next.curtain) get().raise();
   },
 }));

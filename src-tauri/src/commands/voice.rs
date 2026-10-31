@@ -36,9 +36,16 @@ pub async fn voice_listen_start(
     pause_ms: u32,
     headset: bool,
     prompt: Option<String>,
+    gpu: bool,
 ) -> Result<u64, String> {
-    let req = ListenRequest { tab_key, model, lang, mode, pause_ms, headset, prompt };
+    let req = ListenRequest { tab_key, model, lang, mode, pause_ms, headset, prompt, gpu };
     app_core::rt::try_blocking("voice", move || voice::listen_start(&ctx.0, req).map_err(String::from)).await
+}
+
+/// Forget that a GPU attempt crashed the app: the next listen tries it again.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn voice_gpu_retry() -> Result<(), String> {
+    app_core::rt::blocking("voice", voice::gpu_retry).await
 }
 
 /// Pause (`true`) or resume the session, keeping the mic its owner's.

@@ -112,4 +112,8 @@ describe("voice text shared by the phone and the desktop", () => {
     expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
     expect(speechChunks("", 20)).toEqual([]);
   });
+
+  it("does not end a sentence at a dot inside a word or a number", () => {
+    expect(speechChunks("Open chime.ts first. Then v0.2.47 is out.", 22)).toEqual(["Open chime.ts first.", "Then v0.2.47 is out."]);
+  });
 });

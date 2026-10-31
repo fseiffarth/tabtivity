@@ -1132,7 +1132,9 @@ fn push_local(
         cmd.env(crate::app_env!("GIT_TOKEN"), tok);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
     }
-    cmd.output().map_err(|e| e.to_string())
+    // Bounded (#2349), like every other local git call: a FIFO planted in the
+    // repo (or the mirror) must not hang the push button.
+    crate::services::git_bounded::output(cmd)
 }
 
 fn git_push_blocking(project_dir: String, project_id: Option<String>) -> Result<String, String> {
@@ -1152,11 +1154,14 @@ fn git_push_blocking(project_dir: String, project_id: Option<String>) -> Result<
                 let out = push_local(&mirror, token.as_deref(), Some(&target.project_id))?;
                 (out, before)
             }
-            // No mirror-side origin: the repo was published (or wired by hand) on
-            // the host, so the push runs there and authenticates with the host's
-            // own git credentials/SSH keys. The local effective token does not
-            // apply (it would be the wrong machine's secret) and is not forwarded.
-            None => (crate::services::ssh_exec::run_git_remote(&target.spec, &PUSH_ARGS.map(str::to_string))?, None),
+            // No mirror-side origin (or no mirror: a remote-only project): the
+            // repo was published (or wired by hand) on the host, so the push runs
+            // there and authenticates with the host's own git credentials/SSH
+            // keys. The local effective token does not apply (it would be the
+            // wrong machine's secret) and is not forwarded. Hardened like every
+            // host git call, the host's pre-push hook left live (it runs on the
+            // host, as the login); the call used to skip `hardened_git_args`.
+            None => (run_git_hooked(Some(&target), &project_dir, &PUSH_ARGS)?, None),
         }
     } else {
         // Local project: effective per-project → global token (if any).
@@ -2027,6 +2032,19 @@ impl WorktreeSite {
             _ => WorktreeSite::Host,
         }
     }
+
+    /// The side a remote project's worktree command runs on. A remote-only
+    /// project (`RemoteSpec::is_remote_only`, a VM included) has no local
+    /// mirror, so the local side is refused rather than resolved to an empty
+    /// (or stale) default mirror folder.
+    pub(crate) fn resolve(s: Option<&str>, remote_only: bool) -> Result<Self, String> {
+        match Self::parse(s) {
+            WorktreeSite::Local if remote_only => Err(crate::services::remote::remote_only_refusal(
+                "this project has no local copy, so its worktrees live on the host only",
+            )),
+            site => Ok(site),
+        }
+    }
 }
 
 /// Frontend capability check: older running binaries ignore unknown command
@@ -2056,7 +2074,7 @@ pub(crate) fn selected_git_context(
     if selection.site != "host" && selection.site != "mirror" {
         return Err("Unknown worktree side".into());
     }
-    let mut ctx = worktree_ctx(&project_dir, Some(&selection.site), None);
+    let mut ctx = worktree_ctx(&project_dir, Some(&selection.site), None)?;
     if !selection.path.is_empty() {
         let out = run_worktree_git(&ctx, &["worktree", "list", "--porcelain"])?;
         if !out.status.success() {
@@ -2128,29 +2146,30 @@ pub(crate) fn worktree_ctx(
     project_dir: &str,
     site: Option<&str>,
     host_id: Option<&str>,
-) -> WorktreeCtx {
+) -> Result<WorktreeCtx, String> {
     let primary = remote_target_for_dir(project_dir);
     let Some(primary) = primary else {
         // A local project has one side; `site` is meaningless and ignored.
-        return WorktreeCtx {
+        return Ok(WorktreeCtx {
             target: None,
             cwd: project_dir.to_string(),
             root: project_dir.to_string(),
             posix: false,
-        };
+        });
     };
-    if WorktreeSite::parse(site) == WorktreeSite::Local {
+    if WorktreeSite::resolve(site, primary.spec.is_remote_only())? == WorktreeSite::Local {
         // The remote project's local mirror — a real local git repo, and the
         // only repo whose worktrees could never be managed at all before.
-        let mirror = crate::services::remote_sync::mirror_dir(&primary.project_id)
+        let mirror = crate::services::remote_sync::mirror_dir_opt(&primary.project_id)
+            .ok_or_else(|| crate::services::remote::remote_only_refusal("this project has no local copy"))?
             .to_string_lossy()
             .to_string();
-        return WorktreeCtx {
+        return Ok(WorktreeCtx {
             target: None,
             cwd: mirror.clone(),
             root: mirror,
             posix: false,
-        };
+        });
     }
     let target = match host_id {
         Some(h) if h != crate::services::remote::PRIMARY_HOST => {
@@ -2160,12 +2179,12 @@ pub(crate) fn worktree_ctx(
         _ => primary,
     };
     let root = target.spec.remote_path.clone();
-    WorktreeCtx {
+    Ok(WorktreeCtx {
         target: Some(target),
         cwd: project_dir.to_string(),
         root,
         posix: true,
-    }
+    })
 }
 
 /// Split a path into its components for both separators, so a lexical
@@ -2279,7 +2298,7 @@ pub(crate) fn git_worktree_list_blocking(
     site: Option<String>,
     host_id: Option<String>,
 ) -> Result<Vec<Worktree>, String> {
-    let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
+    let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref())?;
     // `.git` exists as a DIRECTORY for a main repo and as a FILE in a linked
     // worktree, so this guard tests existence, never `is_dir` (I6).
     if local_non_repo(ctx.target.as_ref(), &ctx.cwd) {
@@ -2351,7 +2370,7 @@ fn git_worktree_add_blocking(
     if !new_branch && !start.is_empty() {
         return Err("A start point only applies when creating a new branch".to_string());
     }
-    let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
+    let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref())?;
     let abs = resolve_worktree_path(&ctx, &path)?;
 
     // The worktrees root lives inside the project tree so a container mount and
@@ -2422,7 +2441,13 @@ fn exclude_app_dir(ctx: &WorktreeCtx) {
             }
         }
         Some(t) => {
-            let _ = crate::services::ssh_exec::run_remote_script(&t.spec, &remote_exclude_script());
+            // Bounded: the bounded `worktree add` has already returned, and a
+            // stalled master must not hold the worker here instead.
+            let _ = crate::services::ssh_exec::run_remote_script_within(
+                &t.spec,
+                &remote_exclude_script(),
+                crate::services::git_bounded::READ_TIMEOUT,
+            );
         }
     }
 }
@@ -2473,7 +2498,7 @@ fn git_worktree_remove_blocking(
     if !valid_positional_path(&path) {
         return Err(format!("'{path}' is not a valid worktree path"));
     }
-    let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
+    let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref())?;
     // D4: git happily deletes the tree you are standing in. Every open terminal
     // tab, the file watcher and the container bind mount are rooted there.
     if same_dir(&ctx, &path, &ctx.root) {
@@ -2507,7 +2532,7 @@ pub async fn git_worktree_lock(
     host_id: Option<String>,
 ) -> Result<(), String> {
     app_core::rt::try_blocking("git", move || {
-        let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
+        let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref())?;
         if !valid_positional_path(&path) {
             return Err(format!("'{path}' is not a valid worktree path"));
         }
@@ -2542,7 +2567,7 @@ pub async fn git_worktree_unlock(
     host_id: Option<String>,
 ) -> Result<(), String> {
     app_core::rt::try_blocking("git", move || {
-        let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
+        let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref())?;
         if !valid_positional_path(&path) {
             return Err(format!("'{path}' is not a valid worktree path"));
         }
@@ -2564,7 +2589,7 @@ pub async fn git_worktree_prune(
     host_id: Option<String>,
 ) -> Result<(), String> {
     app_core::rt::try_blocking("git", move || {
-        let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref());
+        let ctx = worktree_ctx(&project_dir, site.as_deref(), host_id.as_deref())?;
         let out = run_worktree_git(&ctx, &["worktree", "prune"])?;
         if !out.status.success() {
             return Err(git_err(&out));

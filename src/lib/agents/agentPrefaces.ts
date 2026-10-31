@@ -9,7 +9,7 @@
  *    one would make the command swallow it. `scheduledAgentInput` submits each
  *    entry on its own, in order, then the message.
  * 2. **Tabtivity chooses nothing.** The model pick is typed as the agent's OWN
- *    `/model <name>`; no flag is injected at launch and no permission/plan mode
+ *    `/model <name>`; this composer injects no launch flag and no permission/plan mode
  *    is offered here. That is the line AGENTS.md draws around agent authority —
  *    the composer types what the user picked into the agent's own CLI, which is
  *    exactly what they could have typed by hand.

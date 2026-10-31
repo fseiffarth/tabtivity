@@ -8,6 +8,8 @@
 //! Provider parity:
 //! - GitHub uses `gh repo create … --source=. --remote=origin --push`, which
 //!   creates the repo, wires `origin`, and pushes the existing history in one go.
+//!   On a work-remote host it runs without `--push` and the push follows as its
+//!   own hardened, bounded host git call, as GitLab's does.
 //! - GitLab's `glab repo create` has no `--source/--push`: it creates the
 //!   project and adds the `origin` remote, so we follow it with an explicit
 //!   `git push -u origin HEAD` to upload the existing commits.
@@ -26,7 +28,8 @@
 //! `gh`/`glab` login. Publishing from the mirror is refused unless lockstep is
 //! on and reports the two sides in step — otherwise the mirror's history is not
 //! the host's, and publishing would ship the wrong commits
-//! ([`ensure_mirror_in_step`]).
+//! ([`ensure_mirror_in_step`]). A remote-only project (no mirror, a VM
+//! included) publishes from its host, and a local choice is refused.
 //!
 //! Every *follow-up* operation (visibility, unpublish, and `git_push` over in
 //! `commands::git`) then routes to wherever `origin` actually got wired
@@ -172,11 +175,21 @@ pub(crate) enum PublishSite {
     Host,
 }
 
-/// Parse the dialog's "Publish from" choice. Defaults to the local mirror: the
-/// hosting account is this machine's, so that is the side that can actually
-/// authenticate. `"remote"` opts into the host's own `gh`/`glab` login.
-fn parse_publish_from(s: Option<&str>) -> Result<PublishSite, String> {
-    match s.unwrap_or("local").trim().to_ascii_lowercase().as_str() {
+/// Parse the dialog's "Publish from" choice for a remote project. Defaults to
+/// the local mirror: the hosting account is this machine's, so that is the
+/// side that can actually authenticate. `"remote"` opts into the host's own
+/// `gh`/`glab` login.
+///
+/// A remote-only project (`RemoteSpec::is_remote_only`, a VM included) has no
+/// mirror: it defaults to the host, and an explicit local choice is refused
+/// with the `_REMOTE_ONLY` sentinel rather than silently moved to the host.
+fn parse_publish_from(s: Option<&str>, remote_only: bool) -> Result<PublishSite, String> {
+    let choice = s.map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default();
+    match choice.as_str() {
+        "" if remote_only => Ok(PublishSite::Host),
+        "local" | "mirror" if remote_only => Err(crate::services::remote::remote_only_refusal(
+            "this project has no local copy to publish from; publish from the host",
+        )),
         "" | "local" | "mirror" => Ok(PublishSite::Local(PathBuf::new())),
         "remote" | "host" => Ok(PublishSite::Host),
         other => Err(format!(
@@ -186,8 +199,19 @@ fn parse_publish_from(s: Option<&str>) -> Result<PublishSite, String> {
 }
 
 /// A remote project's lockstep mirror, when it actually holds a git repo.
+/// Never for a remote-only project (`mirror_dir_opt`), even when an old
+/// default mirror with a `.git` is still on disk: its origin is not the
+/// project's, and a push or publish there would ship that stale history.
 fn mirror_repo(project_id: &str) -> Option<PathBuf> {
-    let dir = crate::services::remote_sync::mirror_dir(project_id);
+    let entry = crate::services::remote::project_entry(project_id).ok()?;
+    mirror_repo_in(&entry, &crate::storage::state_dir())
+}
+
+/// [`mirror_repo`] for a registry `entry` under `state_dir`: `mirror_dir_opt`'s
+/// answer (`remote::local_copy_in`), kept only when it holds a `.git`. Pure
+/// apart from that one existence check.
+fn mirror_repo_in(entry: &crate::schema::projects::ProjectEntry, state_dir: &Path) -> Option<PathBuf> {
+    let dir = crate::services::remote::local_copy_in(entry, state_dir)?;
     dir.join(".git").exists().then_some(dir)
 }
 
@@ -315,7 +339,8 @@ fn publish_site(
     if project.remote.is_none() {
         return Ok(PublishSite::Local(local_dir(project)?));
     }
-    match parse_publish_from(publish_from)? {
+    let remote_only = project.remote.as_ref().is_some_and(|r| r.is_remote_only());
+    match parse_publish_from(publish_from, remote_only)? {
         PublishSite::Host => Ok(PublishSite::Host),
         PublishSite::Local(_) => {
             let mirror = mirror_repo(project_id).ok_or_else(|| {
@@ -426,14 +451,18 @@ fn publish_project_blocking(
             let base = ssh_base_args(&remote.user, &remote.host, remote.port)?;
             validate_arg("remote_path", &remote.remote_path)?;
             let script =
-                remote_publish_script(provider, &remote.remote_path, &repo_name, visibility);
+                remote_create_script(provider, &remote.remote_path, &repo_name, visibility);
             // `command_no_window` avoids a console-window flash on Windows.
-            run_remote_provider_command(
+            let mut out = run_remote_provider_command(
                 crate::paths::command_no_window("ssh")
                     .args(&base)
                     .arg(script),
                 provider,
-            )?
+                crate::services::git_bounded::LONG_TIMEOUT,
+            )?;
+            out.push('\n');
+            out.push_str(&host_publish_push(&project_id, remote)?);
+            out
         }
     };
 
@@ -534,16 +563,8 @@ fn unpublish_project_blocking(project_id: String) -> Result<(), String> {
                 .remote
                 .as_ref()
                 .ok_or_else(|| "Project is not a work-remote project".to_string())?;
-            let base = ssh_base_args(&remote.user, &remote.host, remote.port)?;
-            validate_arg("remote_path", &remote.remote_path)?;
-            let path = shell_quote(&remote.remote_path);
             // A missing origin is fine — the goal state is simply "no origin".
-            let script = format!("cd {path} && git remote remove origin 2>/dev/null || true");
-            run_command(
-                crate::paths::command_no_window("ssh")
-                    .args(&base)
-                    .arg(script),
-            )?;
+            host_git_best_effort(&project_id, remote, &["remote", "remove", "origin"])?;
         }
     }
 
@@ -625,6 +646,7 @@ fn set_project_visibility_blocking(
                     .args(&base)
                     .arg(script),
                 provider,
+                crate::services::git_bounded::WRITE_TIMEOUT,
             )?
         }
     };
@@ -698,7 +720,7 @@ fn switch_project_provider_blocking(
     // old hosted repo is intentionally left intact (reachable as origin-old).
     // This targets the side that *has* the origin, which need not be the side the
     // new publish will use.
-    rename_origin_aside(origin_site(&project, &project_id)?, &project)?;
+    rename_origin_aside(origin_site(&project, &project_id)?, &project, &project_id)?;
 
     // Delegate the create+wire+push+persist to the normal publish path, now
     // targeting the new provider. This must call the sync `_blocking` body, not
@@ -725,7 +747,7 @@ fn local_set_visibility(
     if let Some(tok) = token {
         cmd.env(provider.token_env(), tok);
     }
-    run_provider_command(&mut cmd, provider)
+    run_provider_command(&mut cmd, provider, crate::services::git_bounded::WRITE_TIMEOUT)
 }
 
 /// Build the remote-host shell script that flips visibility over ssh. `visibility`
@@ -742,7 +764,7 @@ fn remote_visibility_script(provider: Provider, remote_path: &str, visibility: &
 /// actually holds the origin. Used by `switch_project_provider` so a fresh
 /// publish can wire a new `origin` without clobbering the reference to the old
 /// repo.
-fn rename_origin_aside(site: PublishSite, project: &Project) -> Result<(), String> {
+fn rename_origin_aside(site: PublishSite, project: &Project, project_id: &str) -> Result<(), String> {
     match site {
         PublishSite::Local(dir) => {
             use crate::services::git_bounded::BoundedOutput;
@@ -756,18 +778,8 @@ fn rename_origin_aside(site: PublishSite, project: &Project) -> Result<(), Strin
                 .remote
                 .as_ref()
                 .ok_or_else(|| "Project is not a work-remote project".to_string())?;
-            let base = ssh_base_args(&remote.user, &remote.host, remote.port)?;
-            validate_arg("remote_path", &remote.remote_path)?;
-            let path = shell_quote(&remote.remote_path);
-            let script = format!(
-                "cd {path} && git remote remove origin-old 2>/dev/null; \
-                 git remote rename origin origin-old 2>/dev/null || true"
-            );
-            run_command(
-                crate::paths::command_no_window("ssh")
-                    .args(&base)
-                    .arg(script),
-            )?;
+            host_git_best_effort(project_id, remote, &["remote", "remove", "origin-old"])?;
+            host_git_best_effort(project_id, remote, &["remote", "rename", "origin", "origin-old"])?;
         }
     }
     Ok(())
@@ -815,7 +827,7 @@ fn local_publish(
             if let Some(tok) = token {
                 cmd.env(provider.token_env(), tok);
             }
-            run_provider_command(&mut cmd, provider)
+            run_provider_command(&mut cmd, provider, crate::services::git_bounded::LONG_TIMEOUT)
         }
         // `glab repo create` creates the project and adds `origin`, but does not
         // push existing history — so do that as a second, token-authenticated step.
@@ -832,7 +844,7 @@ fn local_publish(
             if let Some(tok) = token {
                 create.env(provider.token_env(), tok);
             }
-            let mut out = run_provider_command(&mut create, provider)?;
+            let mut out = run_provider_command(&mut create, provider, crate::services::git_bounded::LONG_TIMEOUT)?;
 
             let mut args: Vec<String> = Vec::new();
             if token.is_some() {
@@ -852,14 +864,17 @@ fn local_publish(
                 push.env("GIT_TERMINAL_PROMPT", "0");
             }
             out.push('\n');
-            out.push_str(&run_command(&mut push)?);
+            out.push_str(&command_result(crate::services::git_bounded::output(push)?)?);
             Ok(out)
         }
     }
 }
 
-/// Build the remote-host shell script that performs the publish over ssh.
-fn remote_publish_script(
+/// Build the remote-host shell script that creates the hosted repo and wires
+/// `origin` over ssh — the push follows separately ([`host_publish_push`]).
+/// `gh repo create` gets no `--push`: its own `git push` would run the host's
+/// git bare, outside the hardening and the bound every host git call has.
+fn remote_create_script(
     provider: Provider,
     remote_path: &str,
     repo_name: &str,
@@ -869,16 +884,44 @@ fn remote_publish_script(
     let name = shell_quote(repo_name);
     match provider {
         Provider::GitHub => format!(
-            "cd {path} && gh repo create {name} --{visibility} --source=. --remote=origin --push"
+            "cd {path} && gh repo create {name} --{visibility} --source=. --remote=origin"
         ),
-        // Mirror the local two-step flow on the remote; the remote host's git
-        // credentials/ssh auth carry the push.
         Provider::GitLab => format!(
-            "cd {path} && glab repo create {name} --{visibility} --remoteName origin \
-             && git push -u origin HEAD"
+            "cd {path} && glab repo create {name} --{visibility} --remoteName origin"
         ),
     }
 }
+
+/// The host publish's push of the existing history, `git push -u origin HEAD`,
+/// through `run_git_hooked`'s remote arm: hardened and bounded at the push
+/// ceiling like the git bar's host push, with the host's pre-push hook live (as
+/// `gh --push` ran it). The host's own git credentials carry it.
+fn host_publish_push(project_id: &str, remote: &crate::schema::project::RemoteSpec) -> Result<String, String> {
+    let target = crate::services::remote::RemoteTarget { spec: remote.clone(), project_id: project_id.to_string() };
+    let out = crate::commands::git::run_git_hooked(Some(&target), &remote.remote_path, &["push", "-u", "origin", "HEAD"])?;
+    command_result(out).map_err(|e| ssh_transport_error(&e).unwrap_or(e))
+}
+
+/// Run a best-effort `git <args>` in the host repo (`git remote remove …`):
+/// hardened, hooks off, bounded (`run_git`'s remote arm). git's own failure (no
+/// such remote) is the wanted end state and ignored; only not reaching the host
+/// (ssh's exit 255) is an error.
+fn host_git_best_effort(
+    project_id: &str,
+    remote: &crate::schema::project::RemoteSpec,
+    args: &[&str],
+) -> Result<(), String> {
+    let target = crate::services::remote::RemoteTarget { spec: remote.clone(), project_id: project_id.to_string() };
+    let out = crate::commands::git::run_git(Some(&target), &remote.remote_path, args)?;
+    if out.status.code() == Some(SSH_FAILED) {
+        let raw = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(ssh_transport_error(&raw).unwrap_or(raw));
+    }
+    Ok(())
+}
+
+/// `ssh`'s exit status for its own failure (not the remote command's).
+const SSH_FAILED: i32 = 255;
 
 /// Find a project entry by id, returning its index and the full (owned) list so
 /// the caller can mutate + persist it.
@@ -891,12 +934,9 @@ fn find_entry(project_id: &str) -> Result<(usize, ProjectsList), String> {
     Ok((idx, list))
 }
 
-/// Run a command, returning trimmed stdout on success or a useful error
-/// (stderr, else stdout, else a generic message) on failure.
-fn run_command(cmd: &mut Command) -> Result<String, String> {
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run command: {e}"))?;
+/// A finished command's trimmed stdout on success, or a useful error (stderr,
+/// else stdout, else a generic message) on failure.
+fn command_result(output: std::process::Output) -> Result<String, String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if !stderr.is_empty() {
@@ -921,9 +961,16 @@ fn run_command(cmd: &mut Command) -> Result<String, String> {
 /// place that failure surfaces for it: the CLI runs inside a shell script over
 /// ssh, so "not installed" there is just stderr text (`… command not found`),
 /// never a local `io::Error`.
-fn run_provider_command(cmd: &mut Command, provider: Provider) -> Result<String, String> {
-    match cmd.output() {
-        Ok(output) => {
+///
+/// Bounded at `timeout` (`git_bounded::run`: the subtree is killed and reaped):
+/// a stalled ssh master or a hung API call must not hold the worker and the
+/// dialog forever.
+fn run_provider_command(cmd: &mut Command, provider: Provider, timeout: std::time::Duration) -> Result<String, String> {
+    use crate::services::git_bounded::{run, Opts, RunError};
+    match run(cmd, Opts { timeout: Some(timeout), ..Opts::default() }) {
+        Ok(ran) if ran.cut => Err(format!("{} printed more than this app reads; it was stopped", provider.cli())),
+        Ok(ran) => {
+            let output = ran.output;
             if output.status.success() {
                 return Ok(String::from_utf8_lossy(&output.stdout).to_string());
             }
@@ -938,7 +985,13 @@ fn run_provider_command(cmd: &mut Command, provider: Provider) -> Result<String,
             };
             Err(friendly_publish_error(provider, &raw))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(not_installed_error(provider)),
+        Err(RunError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(not_installed_error(provider)),
+        Err(RunError::TimedOut(_)) => Err(format!(
+            "{} did not finish within {} min and was stopped here. Check the hosting provider before retrying: \
+             the repository may already exist.",
+            provider.cli(),
+            timeout.as_secs() / 60
+        )),
         Err(e) => Err(format!("failed to run command: {e}")),
     }
 }
@@ -949,8 +1002,8 @@ fn run_provider_command(cmd: &mut Command, provider: Provider) -> Result<String,
 /// creates one, so a project that isn't currently connected fails at ssh auth
 /// before `gh`/`glab` ever runs — and OpenSSH's wording ("Permission denied
 /// (publickey,password)") reads like a *GitHub* rejection if passed through as-is.
-fn run_remote_provider_command(cmd: &mut Command, provider: Provider) -> Result<String, String> {
-    run_provider_command(cmd, provider).map_err(|e| match ssh_transport_error(&e) {
+fn run_remote_provider_command(cmd: &mut Command, provider: Provider, timeout: std::time::Duration) -> Result<String, String> {
+    run_provider_command(cmd, provider, timeout).map_err(|e| match ssh_transport_error(&e) {
         Some(msg) => msg,
         None => e,
     })
@@ -1046,20 +1099,55 @@ mod tests {
         assert!(Provider::parse("bitbucket").is_err());
     }
 
+    /// The host scripts only create and wire `origin`: no bare host `git` and no
+    /// `gh --push` (whose own `git push` would run outside the hardening); the
+    /// push follows through `run_git_hooked` ([`host_publish_push`]).
     #[test]
-    fn github_remote_script_is_single_command_push() {
-        let s = remote_publish_script(Provider::GitHub, "/srv/proj", "my-proj", "public");
-        assert_eq!(
-            s,
-            "cd '/srv/proj' && gh repo create 'my-proj' --public --source=. --remote=origin --push"
-        );
+    fn the_host_create_scripts_run_no_git_of_their_own() {
+        let s = remote_create_script(Provider::GitHub, "/srv/proj", "my-proj", "public");
+        assert_eq!(s, "cd '/srv/proj' && gh repo create 'my-proj' --public --source=. --remote=origin");
+        let s = remote_create_script(Provider::GitLab, "/srv/proj", "my-proj", "private");
+        assert_eq!(s, "cd '/srv/proj' && glab repo create 'my-proj' --private --remoteName origin");
     }
 
+    /// An old default mirror with a `.git` left on disk is never a remote-only
+    /// project's (a VM's) publish or push site: its origin is not the project's.
+    /// The same folder is a plain Remote project's mirror.
     #[test]
-    fn gitlab_remote_script_creates_then_pushes() {
-        let s = remote_publish_script(Provider::GitLab, "/srv/proj", "my-proj", "private");
-        assert!(s.contains("glab repo create 'my-proj' --private --remoteName origin"));
-        assert!(s.contains("&& git push -u origin HEAD"));
+    fn a_stale_default_mirror_is_not_a_remote_only_projects_repo() {
+        let state = tempfile::tempdir().unwrap();
+        let mirror = crate::services::remote_sync::default_mirror_dir_in(state.path(), "p1");
+        std::fs::create_dir_all(mirror.join(".git")).unwrap();
+        let entry = |extra: serde_json::Value| -> crate::schema::projects::ProjectEntry {
+            let mut remote = serde_json::json!({ "host": "h.example", "remote_path": "/srv/p" });
+            remote.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(serde_json::json!({ "id": "p1", "name": "p", "status": "active", "position": 0, "local_file": "/state/p1.json", "remote": remote }))
+                .unwrap()
+        };
+        for posture in [serde_json::json!({ "remote_only": true }), serde_json::json!({ "vm": true })] {
+            assert_eq!(mirror_repo_in(&entry(posture), state.path()), None);
+        }
+        assert_eq!(mirror_repo_in(&entry(serde_json::json!({})), state.path()), Some(mirror.clone()));
+        std::fs::remove_dir_all(mirror.join(".git")).unwrap();
+        assert_eq!(mirror_repo_in(&entry(serde_json::json!({})), state.path()), None, "no repo, no site");
+    }
+
+    /// A provider CLI is stopped at its ceiling instead of holding the worker,
+    /// and says so; a missing CLI still reads as not installed.
+    #[cfg(unix)]
+    #[test]
+    fn a_provider_command_is_bounded() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let started = std::time::Instant::now();
+        let err = run_provider_command(&mut cmd, Provider::GitHub, std::time::Duration::from_millis(300))
+            .expect_err("stopped");
+        assert!(err.starts_with("gh did not finish"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
+        let mut missing = Command::new("definitely-not-a-provider-cli-xyz");
+        let err = run_provider_command(&mut missing, Provider::GitHub, std::time::Duration::from_secs(5))
+            .expect_err("missing");
+        assert_eq!(err, not_installed_error(Provider::GitHub));
     }
 
     #[test]
@@ -1125,24 +1213,57 @@ mod tests {
     fn publish_from_defaults_to_the_local_mirror() {
         // Absent and empty both mean "this machine" — the hosting login is local.
         assert!(matches!(
-            parse_publish_from(None),
+            parse_publish_from(None, false),
             Ok(PublishSite::Local(_))
         ));
         assert!(matches!(
-            parse_publish_from(Some("")),
+            parse_publish_from(Some(""), false),
             Ok(PublishSite::Local(_))
         ));
         assert!(matches!(
-            parse_publish_from(Some("mirror")),
+            parse_publish_from(Some("mirror"), false),
             Ok(PublishSite::Local(_))
         ));
     }
 
     #[test]
     fn publish_from_remote_opts_into_the_host() {
-        assert_eq!(parse_publish_from(Some("remote")), Ok(PublishSite::Host));
-        assert_eq!(parse_publish_from(Some("Host")), Ok(PublishSite::Host));
-        assert!(parse_publish_from(Some("elsewhere")).is_err());
+        assert_eq!(parse_publish_from(Some("remote"), false), Ok(PublishSite::Host));
+        assert_eq!(parse_publish_from(Some("Host"), false), Ok(PublishSite::Host));
+        assert!(parse_publish_from(Some("elsewhere"), false).is_err());
+    }
+
+    #[test]
+    fn a_remote_only_project_publishes_from_the_host() {
+        // No mirror: absent/empty default to the host, and asking for the
+        // local side is refused with the sentinel, never quietly moved.
+        assert_eq!(parse_publish_from(None, true), Ok(PublishSite::Host));
+        assert_eq!(parse_publish_from(Some(" "), true), Ok(PublishSite::Host));
+        assert_eq!(parse_publish_from(Some("remote"), true), Ok(PublishSite::Host));
+        let sentinel = format!("{}_REMOTE_ONLY: ", crate::brand::UPPER);
+        for local in ["local", "mirror", "Local"] {
+            let err = parse_publish_from(Some(local), true).expect_err(local);
+            assert!(err.starts_with(&sentinel), "{err}");
+        }
+        assert!(parse_publish_from(Some("elsewhere"), true).is_err());
+    }
+
+    /// The site question is settled from the trusted entry's posture: a
+    /// remote-only project (a VM included) publishes on its host by default,
+    /// and never reaches the mirror lookup.
+    #[test]
+    fn a_remote_only_publish_site_is_the_host() {
+        for key in ["remote_only", "vm"] {
+            let spec: crate::schema::project::RemoteSpec =
+                serde_json::from_value(serde_json::json!({ "host": "h", "remote_path": "/srv/p", key: true }))
+                    .expect("spec");
+            assert!(spec.is_remote_only(), "{key}");
+            let project = Project { remote: Some(spec), ..Default::default() };
+            assert_eq!(publish_site(&project, "no-such-project", None), Ok(PublishSite::Host), "{key}");
+            assert!(publish_site(&project, "no-such-project", Some("mirror"))
+                .expect_err("local refused")
+                .contains("_REMOTE_ONLY"));
+        }
     }
 
     #[test]

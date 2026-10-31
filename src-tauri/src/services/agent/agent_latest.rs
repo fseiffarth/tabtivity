@@ -4,7 +4,8 @@
 //! [`crate::services::agent_versions`] answers what is *installed* and never
 //! reaches the network; this module answers what is *out there*, and only when
 //! the user clicks. One GET per checked CLI, to the registry its vendor
-//! publishes to: npm, PyPI, or a GitHub release. No token, no account, no
+//! publishes to: npm, PyPI, a GitHub release, or the vendor's own release
+//! manifest. No token, no account, no
 //! machine detail — the request names the app (GitHub refuses one without a
 //! User-Agent) and nothing else.
 //!
@@ -17,11 +18,17 @@
 //! The installed side is read where `agent_versions` has no recipe for it from
 //! the package metadata next to the executable — npm's `package.json`, a Python
 //! `*.dist-info` — so nothing is spawned.
+//!
+//! What a click found stays in `<state_dir>/agent_latest.json` ([`Store`]), so
+//! the card still says it after the panel closes or the app restarts. Reading
+//! that back never reaches the network.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::services::agent_versions::parse_version;
+use crate::clock::now_secs;
+use crate::services::agent_versions::{parse_version, version_cmp};
 
 /// Where one CLI's releases are published.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +39,9 @@ pub enum Source {
     PyPi(&'static str),
     /// A GitHub repository's latest release (`owner/repo`).
     GitHub(&'static str),
+    /// A vendor's own release host (`<base>/manifests/<platform>.json`), the
+    /// file its native installer reads.
+    Manifest(&'static str),
 }
 
 /// Per registry `id`. Each row was checked against the registry on 2026-10-02:
@@ -62,6 +72,12 @@ pub const SOURCES: &[(&str, Source)] = &[
     ("crush", Source::Npm("@charmland/crush")),
     ("amp", Source::Npm("@ampcode/cli")),
     ("kimi", Source::PyPi("kimi-cli")),
+    // On no public registry: this is the host and manifest `install.sh` and
+    // `install.ps1` read, and every platform's named 1.4.11 on 2026-10-30.
+    (
+        "antigravity",
+        Source::Manifest("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app"),
+    ),
 ];
 
 pub fn source_for(agent_id: &str) -> Option<Source> {
@@ -78,6 +94,18 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 /// a few KB; PyPI's project JSON lists every release and runs to a few hundred.
 const MAX_BODY: usize = 4 * 1024 * 1024;
 
+/// A manifest's platform name: `linux_amd64`, `darwin_arm64`, `windows_amd64`.
+/// A musl Linux has its own build, but the same release number as this one.
+fn manifest_platform(os: &str, arch: &str) -> String {
+    let os = if os == "macos" { "darwin" } else { os };
+    let arch = match arch {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("{os}_{arch}")
+}
+
 fn url_for(source: Source) -> String {
     match source {
         // A scoped name's slash is escaped, which the registry answers the same
@@ -85,6 +113,10 @@ fn url_for(source: Source) -> String {
         Source::Npm(pkg) => format!("https://registry.npmjs.org/{}/latest", pkg.replace('/', "%2f")),
         Source::PyPi(project) => format!("https://pypi.org/pypi/{project}/json"),
         Source::GitHub(repo) => format!("https://api.github.com/repos/{repo}/releases/latest"),
+        Source::Manifest(base) => {
+            let platform = manifest_platform(std::env::consts::OS, std::env::consts::ARCH);
+            format!("{base}/manifests/{platform}.json")
+        }
     }
 }
 
@@ -92,7 +124,7 @@ fn url_for(source: Source) -> String {
 pub fn parse_latest(source: Source, body: &str) -> Option<String> {
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
     let raw = match source {
-        Source::Npm(_) => json["version"].as_str()?,
+        Source::Npm(_) | Source::Manifest(_) => json["version"].as_str()?,
         Source::PyPi(_) => json["info"]["version"].as_str()?,
         // `v1.53.0`, or a monorepo's `cli/v2.2.1`: the part after the last slash.
         Source::GitHub(_) => json["tag_name"].as_str()?.rsplit('/').next()?,
@@ -191,7 +223,8 @@ const PACKAGE_DEPTH: usize = 5;
 
 /// The installed version of `source`'s package, read from the metadata beside
 /// the resolved executable `exe` (symlinks followed). `None` for a GitHub
-/// release, which installs no metadata, or when nothing matching is found.
+/// release or a manifest, which install no metadata, or when nothing matching
+/// is found.
 pub fn installed_version_near(exe: &Path, source: Source) -> Option<String> {
     let real = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
     let mut starts = vec![real.clone()];
@@ -201,7 +234,7 @@ pub fn installed_version_near(exe: &Path, source: Source) -> Option<String> {
     starts.iter().find_map(|start| match source {
         Source::Npm(pkg) => npm_version_near(start, pkg),
         Source::PyPi(project) => dist_info_version_near(start, project),
-        Source::GitHub(_) => None,
+        Source::GitHub(_) | Source::Manifest(_) => None,
     })
 }
 
@@ -262,6 +295,105 @@ fn dist_info_version_near(start: &Path, project: &str) -> Option<String> {
     })
 }
 
+/// The version a card compares a release against: the CLI's `--version` answer,
+/// else the package metadata beside `exe`.
+pub fn current_version(agent_id: &str, exe: &Path, probed: Option<String>) -> Option<String> {
+    probed.or_else(|| source_for(agent_id).and_then(|source| installed_version_near(exe, source)))
+}
+
+/// One CLI's last "Check for update". The installed side is left out on purpose:
+/// it moves on its own, so [`UpdateReport::new`] compares at every read.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Checked {
+    /// The newest release a check has seen. A failed check keeps it: an update
+    /// is still out there when the registry is down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<String>,
+    /// Why the last check failed, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Unix seconds of the last check.
+    #[serde(default)]
+    pub checked_at: u64,
+}
+
+/// `<state_dir>/agent_latest.json`, keyed by registry `id`. Deleting it costs
+/// one click per card.
+pub type Store = HashMap<String, Checked>;
+
+pub fn store_path() -> PathBuf {
+    crate::storage::state_dir().join("agent_latest.json")
+}
+
+/// A missing or unreadable file is an empty store, as for `agent_versions`.
+pub fn load_in(path: &Path) -> Store {
+    crate::storage::read_json(path).unwrap_or_default()
+}
+
+pub fn load() -> Store {
+    load_in(&store_path())
+}
+
+fn checked_from(previous: Option<&Checked>, found: &Option<Result<String, String>>) -> Checked {
+    let (latest, error) = match found {
+        Some(Ok(version)) => (Some(version.clone()), None),
+        Some(Err(error)) => (previous.and_then(|checked| checked.latest.clone()), Some(error.clone())),
+        None => (None, None),
+    };
+    Checked { latest, error, checked_at: now_secs() }
+}
+
+/// Record one check (`None`: this CLI has no registry) and hand back what was
+/// stored. A failed write costs one more click, so the answer is still returned.
+pub fn remember_in(path: &Path, agent_id: &str, found: Option<Result<String, String>>) -> Checked {
+    crate::storage::patch_json(path, Store::new(), |store| {
+        let entry = checked_from(store.get(agent_id), &found);
+        store.insert(agent_id.to_string(), entry.clone());
+        Ok(entry)
+    })
+    .unwrap_or_else(|_| checked_from(None, &found))
+}
+
+pub fn remember(agent_id: &str, found: Option<Result<String, String>>) -> Checked {
+    remember_in(&store_path(), agent_id, found)
+}
+
+/// One installed CLI against its newest published release.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateReport {
+    pub agent: String,
+    /// The installed version, when it could be read ([`current_version`]).
+    pub current: Option<String>,
+    /// The newest published version.
+    pub latest: Option<String>,
+    /// Both versions read and `latest` genuinely newer — never `latest` alone.
+    pub update_available: bool,
+    /// Whether a registry is known for this CLI at all.
+    pub checkable: bool,
+    pub error: Option<String>,
+    /// Unix seconds of the check behind this answer.
+    pub checked_at: u64,
+}
+
+impl UpdateReport {
+    pub fn new(agent: &str, current: Option<String>, checked: &Checked) -> Self {
+        let update_available = matches!(
+            (&current, &checked.latest),
+            (Some(current), Some(latest)) if version_cmp(latest, current) == std::cmp::Ordering::Greater
+        );
+        Self {
+            agent: agent.to_string(),
+            checkable: source_for(agent).is_some(),
+            current,
+            latest: checked.latest.clone(),
+            update_available,
+            error: checked.error.clone(),
+            checked_at: checked.checked_at,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +416,14 @@ mod tests {
         assert_eq!(
             parse_latest(Source::GitHub("o/r"), r#"{"tag_name":"cli/v2.2.1"}"#).as_deref(),
             Some("2.2.1")
+        );
+        assert_eq!(
+            parse_latest(
+                Source::Manifest("https://x"),
+                r#"{"version":"1.4.11","url":"https://x/agy.tar.gz","sha512":"00"}"#
+            )
+            .as_deref(),
+            Some("1.4.11")
         );
         assert_eq!(parse_latest(Source::Npm("x"), r#"{"error":"Not found"}"#), None);
         assert_eq!(parse_latest(Source::Npm("x"), "<html>"), None);
@@ -373,5 +513,85 @@ mod tests {
         let exe = tmp.path().join("goose");
         std::fs::write(&exe, "").unwrap();
         assert_eq!(installed_version_near(&exe, Source::GitHub("o/r")), None);
+        assert_eq!(installed_version_near(&exe, Source::Manifest("https://x")), None);
+    }
+
+    #[test]
+    fn a_check_survives_in_the_store_until_the_next_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent_latest.json");
+        assert!(load_in(&path).is_empty());
+
+        let checked = remember_in(&path, "codex", Some(Ok("0.170.0".to_string())));
+        assert_eq!(checked.latest.as_deref(), Some("0.170.0"));
+        assert!(checked.checked_at > 0);
+        assert_eq!(load_in(&path).get("codex"), Some(&checked));
+
+        remember_in(&path, "kimi", Some(Ok("1.2.0".to_string())));
+        assert_eq!(load_in(&path).len(), 2, "one CLI's check leaves the others'");
+    }
+
+    #[test]
+    fn a_failed_check_keeps_the_known_release_until_one_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent_latest.json");
+        remember_in(&path, "codex", Some(Ok("0.170.0".to_string())));
+
+        let failed = remember_in(&path, "codex", Some(Err("registry down".to_string())));
+        assert_eq!(failed.latest.as_deref(), Some("0.170.0"));
+        assert_eq!(failed.error.as_deref(), Some("registry down"));
+
+        let again = remember_in(&path, "codex", Some(Ok("0.171.0".to_string())));
+        assert_eq!(again.latest.as_deref(), Some("0.171.0"));
+        assert_eq!(again.error, None);
+    }
+
+    #[test]
+    fn a_stored_release_is_judged_against_what_is_installed_now() {
+        let checked = Checked { latest: Some("0.170.0".to_string()), error: None, checked_at: 7 };
+
+        let behind = UpdateReport::new("codex", Some("0.169.0".to_string()), &checked);
+        assert!(behind.update_available);
+        assert!(behind.checkable);
+        assert_eq!(behind.checked_at, 7);
+
+        // The CLI updated itself after the check: not offered what it already has.
+        let caught_up = UpdateReport::new("codex", Some("0.170.0".to_string()), &checked);
+        assert!(!caught_up.update_available);
+        let past = UpdateReport::new("codex", Some("0.171.0".to_string()), &checked);
+        assert!(!past.update_available);
+
+        assert!(!UpdateReport::new("codex", None, &checked).update_available);
+    }
+
+    #[test]
+    fn a_cli_with_no_registry_is_remembered_as_uncheckable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent_latest.json");
+        let checked = remember_in(&path, "no-such-cli", None);
+        let report = UpdateReport::new("no-such-cli", Some("1.0.0".to_string()), &checked);
+        assert_eq!((report.latest, report.checkable), (None, false));
+        assert!(load_in(&path).contains_key("no-such-cli"));
+    }
+
+    #[test]
+    fn an_unreadable_store_loses_nothing_but_the_stored_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent_latest.json");
+        std::fs::write(&path, "not json").unwrap();
+        assert!(load_in(&path).is_empty());
+        let checked = remember_in(&path, "codex", Some(Ok("0.170.0".to_string())));
+        assert_eq!(checked.latest.as_deref(), Some("0.170.0"));
+    }
+
+    #[test]
+    fn the_installed_version_prefers_the_probe_over_package_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("codex");
+        assert_eq!(
+            current_version("codex", &exe, Some("0.170.0".to_string())).as_deref(),
+            Some("0.170.0")
+        );
+        assert_eq!(current_version("codex", &exe, None), None);
     }
 }

@@ -935,6 +935,27 @@ button.steering-legend-hub:hover::before {
   right: auto;
   left: -5px;
 }
+/* The Chat's hands-free is on: a mic on the rim the unfold key leaves free.
+   The folded badge has its exit key there, so the mic moves up. */
+.steering-legend-mic {
+  position: absolute;
+  left: -5px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+}
+.steering-legend-fab-button .steering-legend-mic {
+  left: auto;
+  bottom: auto;
+  right: -5px;
+  top: -4px;
+}
 
 /* Keyboard select's legend (TerminalView, Ctrl+Shift+X): the steering legend,
    pinned to the bottom of its own pane instead of the window. */
@@ -2622,6 +2643,9 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-command span {
   font-family: var(--font-mono);
 }
+.terminal-reader-command.interrupted {
+  color: var(--status-interrupted);
+}
 .terminal-reader-day {
   justify-content: center;
 }
@@ -3347,6 +3371,20 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader.card-composer .terminal-reader-composer { border-top: none; padding: 8px 18px 18px; }
 .terminal-reader.card-composer .terminal-reader-input textarea { padding: 12px 72px 42px 14px; min-height: 108px; }
 .terminal-reader.card-composer .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
+/* The chips sit over the box's bottom padding; a long draft scrolls its lines
+   through that padding, so a strip in the box's own colour hides them there
+   (before the textarea in the DOM, so Send and the mic stay above it). */
+.terminal-reader.card-composer .terminal-reader-input::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  right: 14px;
+  bottom: 1px;
+  height: 42px;
+  background: var(--bg-input);
+  border-bottom-left-radius: 14px;
+  pointer-events: none;
+}
 .terminal-reader.card-composer .terminal-reader-send { right: 10px; bottom: 10px; }
 .terminal-reader.card-composer .terminal-reader-mic { right: 42px; bottom: 12px; }
 .terminal-reader-error {
@@ -3585,6 +3623,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   cursor: var(--cur-pointer, pointer);
 }
 .terminal-reader-picker-close:hover { color: var(--text-primary); }
+/* Manage CLIs' launch defaults, folded under the model and effort lists. */
+.terminal-reader-defaults {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+.agents-stack.compact { gap: 10px; }
 /* Codex /status, anchored to the same facts row as the other chat controls. */
 .terminal-reader-status {
   width: min(620px, calc(100% - 28px));
@@ -3869,6 +3913,7 @@ button.terminal-reader-option:hover:not(:disabled) {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+.terminal-reader-limit-warning { color: var(--warning, #f0a35e); }
 .terminal-reader-shell {
   align-self: stretch;
   display: flex;
