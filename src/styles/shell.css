@@ -50,21 +50,6 @@ select:focus {
   outline: none;
 }
 
-/* ── Standard focus ring ─────────────────────────────────────────────────
-   One keyboard-focus affordance for every interactive element: a soft accent
-   ring, offset so it never collides with the element's own border. More
-   specific per-component :focus-visible rules below still win where they set
-   their own treatment. The xterm helper textarea is excluded — it holds focus
-   whenever a terminal is active and must stay invisible. */
-button:focus-visible,
-select:focus-visible,
-input:focus-visible,
-[tabindex]:focus-visible,
-textarea:focus-visible:not(.xterm-helper-textarea) {
-  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  outline-offset: 1px;
-}
-
 select option {
   background: var(--bg-panel);
   color: var(--text-primary);
@@ -229,14 +214,6 @@ select option {
 .vpn-indicator-close:active,
 .vpn-prompt-close:active,
 .dialog-close-btn:active { transform: scale(0.92); }
-.wm-btn:focus-visible,
-.vpn-indicator-close:focus-visible,
-.vpn-prompt-close:focus-visible,
-.dialog-close-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .wm-minimize:hover {
   background: color-mix(in srgb, var(--wm-minimize) 20%, transparent);
   border-color: color-mix(in srgb, var(--wm-minimize) 45%, transparent);

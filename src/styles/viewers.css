@@ -2455,7 +2455,7 @@ select.file-viewer-run-args-input {
   font-weight: 600;
 }
 .file-viewer-gutter-line.is-breakable:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: -1px;
 }
 
@@ -5111,7 +5111,7 @@ select.file-viewer-run-args-input {
 }
 .file-viewer-pdf-sel-swatch:hover,
 .file-viewer-pdf-sel-swatch:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 .file-viewer-pdf-sel-copy.active {

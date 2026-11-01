@@ -60,7 +60,7 @@
 .project-pill .pill-main:focus-visible,
 .tab:focus-visible,
 .tab-new-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -1715,7 +1715,7 @@
 }
 
 .pill-status-bar:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -3841,7 +3841,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-card.is-selected::after { opacity: 1; }
 .agent-prompt-card.is-selected { border-color: var(--accent); }
 /* A card reached with Tab: `.pill-status-bar`'s focus ring. */
-.agent-prompt-card:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.agent-prompt-card:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 2px; }
 .agent-prompt-card.is-dimmed { opacity: .28; }
 .agent-prompt-card.is-dragging { opacity: .35; }
 .agent-prompt-card.is-chained { border-style: dashed; }

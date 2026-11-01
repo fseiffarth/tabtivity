@@ -586,7 +586,7 @@
 .project-search-entry:focus-visible {
   border-color: var(--accent);
   background: var(--control-bg);
-  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--focus-ring) 55%, transparent);
   outline-offset: -2px;
 }
 
@@ -1403,7 +1403,7 @@
 }
 .skills-input:focus-visible,
 .skills-source-select:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: -1px;
 }
 .skills-btn {
@@ -1966,7 +1966,7 @@
   cursor: var(--cur-default, default);
 }
 .ollama-ghost-btn:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
 }
 .ollama-model-autostart {
   display: flex;
@@ -2096,7 +2096,7 @@
   font-weight: 600;
 }
 .ollama-seg button:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: -2px;
 }
 .ollama-reg-error {
@@ -3200,7 +3200,7 @@
 }
 .agents-input:focus-visible {
   border-color: var(--accent);
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 0;
 }
 .agents-limit {

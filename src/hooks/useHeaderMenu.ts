@@ -1,6 +1,7 @@
 import { isVisibleControl } from "./useModalFocus";
 import { useEffect, useLayoutEffect, useRef, type FocusEvent, type KeyboardEvent } from "react";
 import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../stores/headerHoverMenu";
+import { useEscapeToClose } from "../lib/useEscapeToClose";
 
 /** Shared hover grace and keyboard navigation for header action menus. */
 export function useHeaderMenu(id: string) {
@@ -15,6 +16,8 @@ export function useHeaderMenu(id: string) {
     useHeaderHoverMenuStore.getState().open(id);
   };
   const close = () => useHeaderHoverMenuStore.getState().close(id);
+  // A menu the pointer opened never took focus, so `onKeyDown` would not hear it.
+  useEscapeToClose(open, close);
   const scheduleClose = (e?: { clientY: number }) => {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => {
