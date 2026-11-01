@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { useModalFocus } from "../../hooks/useModalFocus";
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -2851,7 +2852,7 @@ export function FileTree({
         );
       })()}
       </div>
-      {loading && <div className="file-tree-loading">{t("common.loading")}</div>}
+      {loading && <SkeletonRows count={6} className="file-tree-skeleton" />}
       {error && <ErrorNote className="file-tree-error" error={error} />}
       {/* What the last transfer did — the success half, which nothing reported
           before. Same chrome as the whole-project row's result line. */}

@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { useHeaderMenu } from "../../hooks/useHeaderMenu";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -98,6 +99,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   const scope = useTabsStore((s) => s.scope);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPanel, setSettingsPanel] = useState<SettingsPanelKind>("main");
+  const projectsLoaded = useProjectsStore((s) => s.loaded);
   const [settingsAnchor, setSettingsAnchor] = useState<string | undefined>(undefined);
   const [settingsReveal, setSettingsReveal] = useState<{ path: string[]; open?: boolean } | undefined>(undefined);
   // "clone" is the import dialog opened straight onto its GitHub/GitLab source —
@@ -679,6 +681,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             // window; pills/boxes are nested so their press is left untouched.
             onMouseDown={startWindowDrag}
           >
+            {!projectsLoaded && <SkeletonRows count={3} className="project-pills-skeleton" />}
             {visibleProjects.map((project) => {
               const isCurrentBoxMember = currentBoxMemberIds.has(project.id);
               // The swatches a member pill wears: one per box it is in, in the

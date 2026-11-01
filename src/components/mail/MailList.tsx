@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { memo, useEffect, useRef, useState } from "react";
 import {
   formatAddress,
@@ -483,7 +484,7 @@ function MailListImpl({
         {/* The delete column has nothing to sort; the cell keeps the grid. */}
         <span className="mail-sort-spacer" aria-hidden="true" />
       </div>
-      {loading && headers.length === 0 && <div className="mail-empty">{t("mail.loading")}</div>}
+      {loading && headers.length === 0 && <SkeletonRows count={8} className="mail-skeleton" />}
       {!loading && headers.length === 0 && (
         // An empty *filter* is not an empty folder, and must not read as one.
         <div className="mail-empty">{t(filtered ? "mail.noMatches" : "mail.noMessages")}</div>

@@ -4036,3 +4036,15 @@ html:not(.show-untested-tags) .untested-tag {
 .phone-here-mark.is-away {
   opacity: 0.45;
 }
+
+/* The strip while the project list loads: three pill-sized blocks in a row. */
+.project-pills-skeleton {
+  flex-direction: row;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--space-2);
+}
+
+.project-pills-skeleton > .skeleton-row {
+  width: 84px;
+}

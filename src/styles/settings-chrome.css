@@ -3345,6 +3345,21 @@ label.settings-toggle-card-row {
   border: 1px solid var(--danger);
 }
 
+/* The fourth button: no fill and no border, for a link-weight action beside
+   real ones. `.settings-btn` is the default, `.btn-primary`/`.btn-danger` the CTAs. */
+.btn-quiet {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+  transition: color var(--transition);
+}
+
+.btn-quiet:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);

@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { targetLabel } from "../../lib/remote/machineLabel";
 import { create } from "zustand";
@@ -289,6 +290,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const machines = useGlobalMachinesStore((s) => s.machines);
+  const machinesLoaded = useGlobalMachinesStore((s) => s.loaded);
   const status = useGlobalMachinesStore((s) => s.status);
   // The other half of a row's truth: the last probe answer, kept apart from
   // `status` on purpose (see `RowState`). Absent = never probed.
@@ -1936,7 +1938,8 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             </div>
           )}
 
-          {machines.length === 0 && (
+          {machines.length === 0 && !machinesLoaded && <SkeletonRows count={3} />}
+          {machines.length === 0 && machinesLoaded && (
             <div className="vpn-indicator-row">
               <div className="vpn-indicator-empty">{t("machines.empty")}</div>
             </div>

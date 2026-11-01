@@ -1282,6 +1282,17 @@ export function SettingsDialog({
               }
             />
 
+            <p className="settings-help">
+              {t("settings.desktopPass")}{" "}
+              <UntestedTag id="desktop.type.scale" />
+              <UntestedTag id="desktop.icons.set" />
+              <UntestedTag id="desktop.header.tiers" />
+              <UntestedTag id="desktop.surfaces.corners" />
+              <UntestedTag id="desktop.surfaces.motion" />
+              <UntestedTag id="desktop.skeletons" />
+              <UntestedTag id="desktop.focusRing" />
+            </p>
+
             <SettingRow
               label={<>{t("settings.themeVars")} <UntestedTag id="settings.themeVars" /></>}
               help={t("settings.themeVars.help")}
