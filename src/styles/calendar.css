@@ -388,7 +388,7 @@
 
 .cal-mini-weekday {
   text-align: center;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   padding: 2px 0;
 }
@@ -398,7 +398,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   background: none;
   border: 1px solid transparent;
   border-radius: var(--radius);
@@ -595,7 +595,7 @@
 .cal-month-weekday {
   padding: 5px 0;
   text-align: center;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 650;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -666,7 +666,7 @@
   position: absolute;
   bottom: 2px;
   left: 5px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
 }
@@ -684,7 +684,7 @@
   align-items: center;
   gap: 4px;
   padding: 0 5px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   line-height: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -775,7 +775,7 @@
   width: 52px;
   flex: 0 0 auto;
   padding: var(--space-1);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   text-align: right;
   align-self: flex-end;
@@ -808,7 +808,7 @@
 }
 
 .cal-allday-dow {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   text-transform: uppercase;
 }
@@ -827,7 +827,7 @@
 .cal-allday-chip {
   margin-bottom: 2px;
   padding: 2px 5px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   background: color-mix(in srgb, var(--accent) 70%, transparent);
   color: var(--accent-contrast);
   border-radius: var(--radius);
@@ -859,7 +859,7 @@
 
 .cal-timegrid-hour-label {
   padding-right: 6px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   text-align: right;
   /* Nudge the label up so it sits ON its hour line, not below it. */
@@ -922,7 +922,7 @@
   position: absolute;
   overflow: hidden;
   padding: 2px 5px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   line-height: 1.25;
   border-radius: var(--radius);
   border-left: 3px solid currentColor;
@@ -1036,7 +1036,7 @@
 
 .cal-agenda-today-tag {
   padding: 1px 6px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 650;
   background: var(--accent);
   color: var(--accent-contrast);
@@ -1058,7 +1058,7 @@
 }
 
 .cal-agenda-swatch {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   flex: 0 0 auto;
 }
 
@@ -1169,7 +1169,7 @@
 }
 
 .cal-task-swatch {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   flex: 0 0 auto;
 }
 
@@ -1188,7 +1188,7 @@
 }
 
 .cal-task-prio {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 650;
   padding: 1px 5px;
   border-radius: var(--radius);
@@ -1243,7 +1243,7 @@
 
 .cal-task-prio-select {
   height: 22px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   background: var(--control-bg);
   color: var(--text-primary);
   border: 1px solid var(--control-border);
@@ -1278,7 +1278,7 @@
 }
 
 .cal-field-label {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 650;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -1453,7 +1453,7 @@
 }
 
 .cal-alarm-snooze-label {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1549,7 +1549,7 @@
 
 .date-pop-weekday {
   text-align: center;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   text-transform: uppercase;
 }

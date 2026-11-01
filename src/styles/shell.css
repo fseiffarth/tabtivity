@@ -335,7 +335,7 @@ select option {
 }
 
 .app-version-label {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-primary);
   line-height: 1;
 }
@@ -356,7 +356,7 @@ select option {
 .terminal-output-rate {
   margin-right: auto;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
   line-height: 1;
@@ -368,7 +368,7 @@ select option {
    number the user wants to see turning amber before the window reloads. */
 .renderer-rss {
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
   line-height: 1;
@@ -391,7 +391,7 @@ select option {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   line-height: 1;
   white-space: nowrap;
   flex-shrink: 0;
@@ -407,7 +407,7 @@ select option {
 
 .app-resource-symbol {
   min-width: 24px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 700;
   letter-spacing: 0;
 }

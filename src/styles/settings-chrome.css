@@ -615,7 +615,7 @@ button.settings-btn.danger:hover:not(:disabled),
   padding: 3px 10px 5px;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary, var(--text-muted));
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-style: italic;
 }
 
@@ -657,7 +657,7 @@ button.settings-btn.danger:hover:not(:disabled),
   padding: 3px 2px 1px;
   text-align: center;
   color: var(--text-secondary, var(--text-muted));
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
 }
 
 /* A viewer-wide notice bar (unsaved edits vs. a changed file, a failed save). */
@@ -1437,7 +1437,7 @@ label.settings-toggle-card-row {
 }
 
 .archived-project-tag {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-secondary);
@@ -2074,7 +2074,7 @@ label.settings-toggle-card-row {
 }
 
 .remote-machine-tag {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-color);
@@ -2678,7 +2678,7 @@ label.settings-toggle-card-row {
   padding: 0 5px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   line-height: 15px;
   color: var(--text-secondary);
 }
@@ -2845,7 +2845,7 @@ label.settings-toggle-card-row {
 }
 .remote-usage-users-head span {
   color: var(--text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.02em;
   padding: 0 6px;
@@ -2876,7 +2876,7 @@ label.settings-toggle-card-row {
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -3587,7 +3587,7 @@ label.settings-toggle-card-row {
   top: 4px;
   right: 4px;
   z-index: 1;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   padding: 1px 7px;
   height: 18px;
   /* Opaque, not transparent like its `.agent-prompts-copy` sibling: this chip
@@ -3872,7 +3872,7 @@ label.settings-toggle-card-row {
 
 .theme-palette-title {
   flex: 0 0 auto;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -3929,7 +3929,7 @@ label.settings-toggle-card-row {
 
 .theme-preset-empty {
   padding: var(--space-2) 10px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -3962,7 +3962,7 @@ label.settings-toggle-card-row {
 }
 
 .theme-preset-meta {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -4011,7 +4011,7 @@ label.settings-toggle-card-row {
    mid-clause answers nothing, and a row growing to two lines costs less than
    the question it leaves open. */
 .theme-var-example {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   line-height: 1.35;
   color: var(--text-muted);
 }
