@@ -72,8 +72,8 @@
 .settings-btn.sm,
 button.settings-btn.sm,
 .ollama-action-btn {
-  font-size: 11px;
-  padding: 3px 8px;
+  font-size: var(--text-sm);
+  padding: 3px var(--space-2);
   line-height: 1.4;
 }
 
@@ -158,7 +158,7 @@ button.settings-btn.danger:hover:not(:disabled),
   width: min(1020px, calc(100vw - 48px));
   height: min(90vh, calc(100vh - 48px));
   max-height: min(90vh, calc(100vh - 48px));
-  padding: 14px 16px;
+  padding: 14px var(--space-4);
   gap: 10px;
   overflow: hidden;
 }
@@ -171,7 +171,7 @@ button.settings-btn.danger:hover:not(:disabled),
 }
 .print-preview-title {
   flex: 1;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 650;
   color: var(--accent);
 }
@@ -181,7 +181,7 @@ button.settings-btn.danger:hover:not(:disabled),
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 .print-preview-progress[data-phase="done"] {
@@ -272,7 +272,7 @@ button.settings-btn.danger:hover:not(:disabled),
   gap: 6px 14px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-subtle);
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 .print-opt {
@@ -298,7 +298,7 @@ button.settings-btn.danger:hover:not(:disabled),
   background: var(--control-bg);
   color: var(--text-primary);
   padding: 3px 6px;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .print-opt-range {
   width: 96px;
@@ -327,7 +327,7 @@ button.settings-btn.danger:hover:not(:disabled),
   gap: 12px;
 }
 .print-strip-hint {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 .print-strip-reset {
@@ -337,7 +337,7 @@ button.settings-btn.danger:hover:not(:disabled),
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
   padding: 3px 10px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .print-strip-reset:disabled {
   opacity: 0.45;
@@ -410,8 +410,8 @@ button.settings-btn.danger:hover:not(:disabled),
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #777;
-  font-size: 16px;
+  color: var(--text-muted);
+  font-size: var(--text-xl);
 }
 .page-strip-card.is-excluded {
   opacity: 0.35;
@@ -433,7 +433,7 @@ button.settings-btn.danger:hover:not(:disabled),
   padding: 0 3px;
   background: var(--accent);
   color: var(--bg-panel);
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-align: center;
 }
@@ -445,8 +445,8 @@ button.settings-btn.danger:hover:not(:disabled),
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   cursor: var(--cur-pointer, pointer);
-  padding: 0 4px;
-  font-size: 11px;
+  padding: 0 var(--space-1);
+  font-size: var(--text-sm);
   line-height: 16px;
   opacity: 0;
 }
@@ -504,7 +504,7 @@ button.settings-btn.danger:hover:not(:disabled),
   min-height: 0;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-panel);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .file-viewer-pdf-outline-head {
   display: flex;
@@ -516,13 +516,13 @@ button.settings-btn.danger:hover:not(:disabled),
   color: var(--text-secondary, var(--text-primary));
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .file-viewer-pdf-outline-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 .file-viewer-pdf-outline-empty {
   padding: 10px;
@@ -546,7 +546,7 @@ button.settings-btn.danger:hover:not(:disabled),
   background: transparent;
   color: var(--text-secondary, var(--text-muted));
   cursor: var(--cur-pointer, pointer);
-  font-size: 10px;
+  font-size: var(--text-xs);
   line-height: 1.2;
 }
 /* A leaf row's per-level sign, standing in the caret column: a dot for the top
@@ -555,7 +555,7 @@ button.settings-btn.danger:hover:not(:disabled),
   cursor: var(--cur-default, default);
   color: var(--text-secondary, var(--text-muted));
   text-align: center;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .file-viewer-pdf-outline-title {
   flex: 1;
@@ -593,7 +593,7 @@ button.settings-btn.danger:hover:not(:disabled),
   letter-spacing: -0.01em;
 }
 .file-viewer-pdf-outline-title.depth-1 {
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--accent-secondary, var(--accent, var(--text-primary)));
 }
@@ -603,7 +603,7 @@ button.settings-btn.danger:hover:not(:disabled),
   color: var(--text-primary);
 }
 .file-viewer-pdf-outline-title.depth-3 {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 400;
   color: var(--text-secondary, var(--text-muted));
 }
@@ -615,7 +615,7 @@ button.settings-btn.danger:hover:not(:disabled),
   padding: 3px 10px 5px;
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary, var(--text-muted));
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-style: italic;
 }
 
@@ -632,11 +632,11 @@ button.settings-btn.danger:hover:not(:disabled),
 .file-viewer-pdf-outline-preview {
   position: fixed;
   z-index: 60;
-  padding: 4px;
+  padding: var(--space-1);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-2);
   pointer-events: none;
 }
 .file-viewer-pdf-outline-preview img {
@@ -648,16 +648,16 @@ button.settings-btn.danger:hover:not(:disabled),
   background: #fff;
 }
 .file-viewer-pdf-outline-preview-loading {
-  padding: 24px 8px;
+  padding: var(--space-6) var(--space-2);
   text-align: center;
   color: var(--text-secondary, var(--text-muted));
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .file-viewer-pdf-outline-preview-cap {
   padding: 3px 2px 1px;
   text-align: center;
   color: var(--text-secondary, var(--text-muted));
-  font-size: 10px;
+  font-size: var(--text-xs);
 }
 
 /* A viewer-wide notice bar (unsaved edits vs. a changed file, a failed save). */
@@ -669,7 +669,7 @@ button.settings-btn.danger:hover:not(:disabled),
   border-bottom: 1px solid var(--border-subtle);
   background: var(--control-bg);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .file-viewer-banner.is-error {
   color: var(--danger);
@@ -686,8 +686,8 @@ button.settings-btn.danger:hover:not(:disabled),
   background: var(--bg-panel);
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
-  padding: 2px 8px;
-  font-size: 11px;
+  padding: 2px var(--space-2);
+  font-size: var(--text-sm);
 }
 .file-viewer-zoom-btn.is-dirty {
   color: var(--accent);
@@ -751,7 +751,7 @@ label.settings-toggle-card-row {
   flex: 1;
   min-width: 0;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 
@@ -762,7 +762,7 @@ label.settings-toggle-card-row {
 .settings-toggle-card-row + .settings-toggle-card-row,
 .root-review-row + .root-review-row {
   border-top: 1px solid var(--border-subtle);
-  padding-top: 8px;
+  padding-top: var(--space-2);
 }
 
 /* ── The control column ────────────────────────────────────────────────── */
@@ -851,7 +851,7 @@ label.settings-toggle-card-row {
   background: var(--control-bg);
   color: var(--text-primary);
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -946,7 +946,7 @@ label.settings-toggle-card-row {
   flex-direction: column;
   gap: 5px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 /* ── Cards ─────────────────────────────────────────────────────────────── */
@@ -959,7 +959,7 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border-radius: var(--radius);
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
@@ -1028,7 +1028,7 @@ label.settings-toggle-card-row {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 12px 0 2px;
+  padding: var(--space-3) 0 2px;
   border: none;
   background: none;
   color: var(--text-secondary);
@@ -1053,7 +1053,7 @@ label.settings-toggle-card-row {
 .settings-advanced-chevron {
   display: inline-block;
   width: 12px;
-  font-size: 15px;
+  font-size: var(--text-lg);
   line-height: 1;
   text-align: center;
   transition: transform 120ms ease;
@@ -1068,7 +1068,7 @@ label.settings-toggle-card-row {
   flex-direction: column;
   gap: 12px;
   margin: 10px 0 0 5px;
-  padding-left: 12px;
+  padding-left: var(--space-3);
   border-left: 2px solid color-mix(in srgb, var(--accent-secondary) 45%, transparent);
 }
 
@@ -1101,7 +1101,7 @@ label.settings-toggle-card-row {
   flex-direction: column;
   gap: 3px;
   text-align: left;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border-radius: var(--radius);
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
@@ -1119,7 +1119,7 @@ label.settings-toggle-card-row {
 .settings-nav-item-title,
 .lesson-item-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .settings-nav-item-blurb,
@@ -1133,7 +1133,7 @@ label.settings-toggle-card-row {
    scroll it introduces the section it follows. */
 .settings-help {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.35;
 }
 
@@ -1156,12 +1156,12 @@ label.settings-toggle-card-row {
    without making the normal settings card visually read as a warning. */
 .mobile-settings-guide {
   margin: 4px 0;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 4%, var(--control-bg));
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.4;
 }
 
@@ -1171,7 +1171,7 @@ label.settings-toggle-card-row {
   justify-content: space-between;
   gap: 14px;
   margin: 6px 0;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border-subtle));
   border-radius: var(--radius-sm);
   background: linear-gradient(110deg, color-mix(in srgb, var(--accent) 11%, var(--control-bg)), var(--control-bg));
@@ -1179,14 +1179,14 @@ label.settings-toggle-card-row {
 
 .mobile-phone-install strong {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .mobile-phone-install p {
   max-width: 530px;
   margin: 3px 0 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.4;
 }
 
@@ -1213,8 +1213,8 @@ label.settings-toggle-card-row {
 .mobile-security-health.danger { border-left-color: var(--danger); }
 .mobile-security-health.off { border-left-color: var(--text-muted); }
 
-.mobile-security-health strong { color: var(--text-primary); font-size: 12px; }
-.mobile-security-health p { margin: 2px 0 0; color: var(--text-secondary); font-size: 11px; }
+.mobile-security-health strong { color: var(--text-primary); font-size: var(--text-md); }
+.mobile-security-health p { margin: 2px 0 0; color: var(--text-secondary); font-size: var(--text-sm); }
 .mobile-security-health button { flex: 0 0 auto; }
 .mobile-security-health-actions {
   display: flex;
@@ -1279,7 +1279,7 @@ label.settings-toggle-card-row {
   width: fit-content;
   max-width: 100%;
   margin: 5px 0;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   overflow-wrap: anywhere;
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
@@ -1293,7 +1293,7 @@ label.settings-toggle-card-row {
 }
 
 .mobile-settings-guide-actions button {
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
@@ -1315,12 +1315,12 @@ label.settings-toggle-card-row {
    Used by the git-hosting token permission guide. */
 .settings-guide {
   margin: 2px 0 4px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 4%, var(--control-bg));
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.4;
 }
 
@@ -1348,7 +1348,7 @@ label.settings-toggle-card-row {
 
 .git-scopes-group strong {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .git-scopes-group ul {
@@ -1386,7 +1386,7 @@ label.settings-toggle-card-row {
   gap: 8px;
   max-height: 280px;
   overflow-y: auto;
-  padding-right: 4px;
+  padding-right: var(--space-1);
 }
 /* With the search shown, a fixed height: each keystroke changed the match
    count, and everything under the list (and the dialog) moved with it. */
@@ -1415,7 +1415,7 @@ label.settings-toggle-card-row {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
 }
 
 .archived-project-row + .archived-project-row {
@@ -1437,17 +1437,17 @@ label.settings-toggle-card-row {
 }
 
 .archived-project-tag {
-  font-size: 10px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-secondary);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--space-1);
 }
 
 .archived-project-date {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
@@ -1516,13 +1516,13 @@ label.settings-toggle-card-row {
 .help-row dt {
   color: var(--text-primary);
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .help-row dd {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.4;
 }
 
@@ -1563,9 +1563,9 @@ label.settings-toggle-card-row {
   background: var(--control-bg);
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
   text-align: center;
 }
 
@@ -1582,12 +1582,12 @@ label.settings-toggle-card-row {
 
 .settings-empty {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .settings-error {
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--text-md);
   word-break: break-word;
 }
 
@@ -1618,7 +1618,7 @@ label.settings-toggle-card-row {
 }
 
 .settings-list.boxed > * {
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
 }
 
 .settings-list.boxed > * + * {
@@ -1659,7 +1659,7 @@ label.settings-toggle-card-row {
 .filetype-settings-row:last-child {
   grid-template-columns: 70px minmax(120px, 1fr) auto;
   border-top: 1px solid var(--border-subtle);
-  padding-top: 8px;
+  padding-top: var(--space-2);
 }
 
 .remote-host-settings-row {
@@ -1688,7 +1688,7 @@ label.settings-toggle-card-row {
    .settings-title-row h2. (Previously a fancy_dark-only gradient-clipped title
    that diverged from every other dialog.) */
 .project-dialog h2 {
-  font-size: 16px;
+  font-size: var(--text-xl);
   font-weight: 650;
   color: var(--accent);
   padding-bottom: 10px;
@@ -1708,7 +1708,7 @@ label.settings-toggle-card-row {
   flex-direction: column;
   gap: 5px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 /* Container settings (#38): the read-only-rootfs switch sits beside its label
@@ -1726,7 +1726,7 @@ label.settings-toggle-card-row {
 .project-dialog .container-scope-fieldset {
   border: 1px solid var(--border-subtle, var(--border-color));
   border-radius: var(--radius);
-  padding: 8px 12px 10px;
+  padding: var(--space-2) var(--space-3) 10px;
   margin: 0 0 4px;
   display: flex;
   flex-direction: column;
@@ -1734,7 +1734,7 @@ label.settings-toggle-card-row {
 }
 
 .project-dialog .container-scope-fieldset legend {
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   font-size: 0.85em;
   opacity: 0.75;
 }
@@ -1779,7 +1779,7 @@ label.settings-toggle-card-row {
      base `select` rule (shell.css) paints as background-image. */
   background-color: var(--control-bg);
   color: var(--text-primary);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
 }
 
 /* Keep the caret's lane clear on a native select (the base rule's padding). */
@@ -1802,7 +1802,7 @@ label.settings-toggle-card-row {
 .project-dialog textarea,
 .menu-form textarea {
   min-height: 72px;
-  padding: 8px;
+  padding: var(--space-2);
   resize: vertical;
 }
 
@@ -1925,7 +1925,7 @@ label.settings-toggle-card-row {
 .vpn-prompt-actions button {
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
-  padding: 7px 12px;
+  padding: 7px var(--space-3);
   background: var(--control-bg);
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
@@ -1950,7 +1950,7 @@ label.settings-toggle-card-row {
    set apart only by the rule above it. */
 .terminal-signin-toggle {
   margin-top: 8px;
-  padding-top: 8px;
+  padding-top: var(--space-2);
   border-top: 1px solid var(--border-color);
 }
 
@@ -1967,7 +1967,7 @@ label.settings-toggle-card-row {
    should behave on this host from now on. */
 .careful-host-toggle {
   margin-top: 8px;
-  padding-top: 8px;
+  padding-top: var(--space-2);
   border-top: 1px solid var(--border-color);
 }
 
@@ -1976,7 +1976,7 @@ label.settings-toggle-card-row {
    choose between at the same spot. */
 .vpn-prompt-actions button.vpn-prompt-terminal-btn {
   margin-right: auto;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 
@@ -2044,7 +2044,7 @@ label.settings-toggle-card-row {
 .project-dialog-path {
   min-height: 16px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   word-break: break-all;
 }
 
@@ -2055,7 +2055,7 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-panel);
@@ -2074,7 +2074,7 @@ label.settings-toggle-card-row {
 }
 
 .remote-machine-tag {
-  font-size: 10px;
+  font-size: var(--text-xs);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-color);
@@ -2085,7 +2085,7 @@ label.settings-toggle-card-row {
 .remote-machine-target {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2094,7 +2094,7 @@ label.settings-toggle-card-row {
 
 .remote-machine-status {
   min-height: 16px;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 
@@ -2115,7 +2115,7 @@ label.settings-toggle-card-row {
   padding: 6px 10px;
   background: var(--control-bg);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -2149,7 +2149,7 @@ label.settings-toggle-card-row {
 
 .remote-machine-toggle > span:first-child {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 /* Wraps the worker cards so the group keeps the dialog's own card-to-card
@@ -2174,7 +2174,7 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-panel);
@@ -2183,7 +2183,7 @@ label.settings-toggle-card-row {
 .remote-machine-add-title {
   font-weight: 650;
   color: var(--accent-secondary, var(--accent));
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .remote-machine-add-label {
@@ -2198,12 +2198,12 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-bottom: 8px;
+  padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border-color);
 }
 
 .remote-machine-global-title {
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -2221,13 +2221,13 @@ label.settings-toggle-card-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
 }
 
 .remote-machine-global-row .remote-machine-name {
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -2235,10 +2235,10 @@ label.settings-toggle-card-row {
 .remote-machine-global-row button {
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   background: var(--control-bg);
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--text-sm);
   white-space: nowrap;
   cursor: var(--cur-pointer, pointer);
 }
@@ -2252,7 +2252,7 @@ label.settings-toggle-card-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-primary);
 }
 
@@ -2286,7 +2286,7 @@ label.settings-toggle-card-row {
   flex: none;
   width: 52px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -2301,7 +2301,7 @@ label.settings-toggle-card-row {
   background: var(--bg-panel);
   color: var(--text-primary);
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--text-md);
   word-break: break-all;
 }
 
@@ -2319,7 +2319,7 @@ label.settings-toggle-card-row {
 .remote-change-folder-btn {
   flex: none;
   padding: 2px 10px;
-  font-size: 12px;
+  font-size: var(--text-md);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-panel);
@@ -2339,7 +2339,7 @@ label.settings-toggle-card-row {
 
 .project-dialog-error {
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--text-md);
   word-break: break-word;
 }
 
@@ -2378,7 +2378,7 @@ label.settings-toggle-card-row {
 }
 
 .local-loss-lede {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
   line-height: 1.5;
   margin: 0;
@@ -2396,7 +2396,7 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   background: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--warning);
@@ -2411,7 +2411,7 @@ label.settings-toggle-card-row {
 }
 
 .local-loss-badge {
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 650;
 }
 
@@ -2424,13 +2424,13 @@ label.settings-toggle-card-row {
 }
 
 .local-loss-when {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   white-space: nowrap;
 }
 
 .local-loss-op {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 
@@ -2442,7 +2442,7 @@ label.settings-toggle-card-row {
   padding: 0;
   list-style: none;
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-primary);
   max-height: 160px;
   overflow-y: auto;
@@ -2455,7 +2455,7 @@ label.settings-toggle-card-row {
 }
 
 .local-loss-recovery {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   line-height: 1.5;
   word-break: break-word;
@@ -2479,7 +2479,7 @@ label.settings-toggle-card-row {
 }
 
 .remote-usage-lede {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
   line-height: 1.5;
   margin: 0;
@@ -2492,7 +2492,7 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   background: var(--bg-panel);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -2504,10 +2504,10 @@ label.settings-toggle-card-row {
 }
 
 .remote-usage-host-title {
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 650;
   color: var(--text-primary);
-  padding-bottom: 8px;
+  padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -2517,7 +2517,7 @@ label.settings-toggle-card-row {
   gap: 4px;
   margin: 0;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-primary);
 }
 
@@ -2546,7 +2546,7 @@ label.settings-toggle-card-row {
 }
 .hpc-guard-title {
   margin: 0 0 10px;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 650;
   color: var(--text-primary);
 }
@@ -2555,11 +2555,11 @@ label.settings-toggle-card-row {
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 .hpc-guard-target code {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-primary);
 }
 .hpc-guard-badge {
@@ -2574,13 +2574,13 @@ label.settings-toggle-card-row {
 }
 .hpc-guard-body {
   margin: 0 0 10px;
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.6;
   color: var(--text-primary);
 }
 .hpc-guard-note {
   margin: 0 0 14px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--text-secondary);
 }
@@ -2595,13 +2595,13 @@ label.settings-toggle-card-row {
 }
 .stop-project-title {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 650;
   color: var(--text-primary);
 }
 .stop-project-lede {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.6;
   color: var(--text-primary);
 }
@@ -2620,13 +2620,13 @@ label.settings-toggle-card-row {
 .stop-project-num {
   min-width: 22px;
   text-align: right;
-  font-size: 17px;
+  font-size: var(--text-xl);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--danger);
 }
 .stop-project-what {
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.45;
   color: var(--text-secondary);
 }
@@ -2639,7 +2639,7 @@ label.settings-toggle-card-row {
   max-height: 168px;
   overflow-y: auto;
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   list-style: none;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
@@ -2650,7 +2650,7 @@ label.settings-toggle-card-row {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 20px;
   color: var(--text-primary);
 }
@@ -2683,13 +2683,13 @@ label.settings-toggle-card-row {
   color: var(--text-secondary);
 }
 .stop-project-more {
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 20px;
   color: var(--text-muted);
 }
 .stop-project-keep {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--text-secondary);
 }
@@ -2698,11 +2698,11 @@ label.settings-toggle-card-row {
    processes. Informational, so it is toned down against the reasons list above
    it — it explains the reading, it is not one of the warnings. */
 .remote-usage-careful {
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--text-secondary);
 }
@@ -2722,12 +2722,12 @@ label.settings-toggle-card-row {
 }
 
 .remote-usage-stat-label {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
 .remote-usage-stat-value {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-primary);
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
 }
@@ -2770,7 +2770,7 @@ label.settings-toggle-card-row {
 }
 
 .remote-usage-section-title {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 650;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -2780,7 +2780,7 @@ label.settings-toggle-card-row {
 .remote-usage-empty {
   color: var(--text-muted);
   font-style: italic;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .remote-usage-procs {
@@ -2798,7 +2798,7 @@ label.settings-toggle-card-row {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
   color: var(--text-primary);
   padding: 3px 6px;
@@ -2837,7 +2837,7 @@ label.settings-toggle-card-row {
   list-style: none;
   max-height: 140px;
   overflow-y: auto;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
 }
 .remote-usage-users li {
@@ -2845,7 +2845,7 @@ label.settings-toggle-card-row {
 }
 .remote-usage-users-head span {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.02em;
   padding: 0 6px;
@@ -2872,7 +2872,7 @@ label.settings-toggle-card-row {
    where the login name differs from the local one, the name alone doesn't). */
 .remote-usage-user-you {
   margin-left: 6px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--accent);
@@ -2901,14 +2901,14 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px;
+  padding: var(--space-3);
   background: var(--bg-main);
   border: 1px solid var(--border-subtle);
 }
 
 .scaffold-popover-title {
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 650;
 }
 
@@ -2916,7 +2916,7 @@ label.settings-toggle-card-row {
   margin: 0;
   padding-left: 18px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .scaffold-steps li + li {
@@ -2957,7 +2957,7 @@ label.settings-toggle-card-row {
 }
 
 .scaffold-fill-all-row span {
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 650;
 }
 
@@ -2972,7 +2972,7 @@ label.settings-toggle-card-row {
   grid-template-columns: minmax(0, 1fr) minmax(160px, 210px);
   gap: 10px;
   align-items: center;
-  padding: 7px 8px;
+  padding: 7px var(--space-2);
   border: 1px solid var(--border-subtle);
   background: var(--control-bg);
 }
@@ -2992,7 +2992,7 @@ label.settings-toggle-card-row {
 .scaffold-file small,
 .scaffold-empty {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .scaffold-row select:disabled {
@@ -3002,7 +3002,7 @@ label.settings-toggle-card-row {
 
 .scaffold-row-status {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   text-align: right;
 }
 
@@ -3020,7 +3020,7 @@ label.settings-toggle-card-row {
 .ssh-optional-hint {
   color: var(--text-muted);
   font-weight: 400;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 /* ── Mode-toggle card + sliding switch (remote-project / OpenVPN toggles) ──── */
@@ -3061,13 +3061,13 @@ label.settings-toggle-card-row {
   align-items: center;
   gap: 8px;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
 }
 
 .toggle-card-desc {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 400;
   line-height: 1.4;
 }
@@ -3174,7 +3174,7 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 2px 0 2px 12px;
+  padding: 2px 0 2px var(--space-3);
   border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
@@ -3191,8 +3191,8 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 10px;
-  font-size: 12px;
+  padding: var(--space-2) 10px;
+  font-size: var(--text-md);
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   border: 1px solid var(--danger);
@@ -3212,7 +3212,7 @@ label.settings-toggle-card-row {
   align-items: baseline;
   gap: 8px;
   padding: 2px 0;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .vpn-config-current-name {
   flex: 1 1 auto;
@@ -3295,7 +3295,7 @@ label.settings-toggle-card-row {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  padding: 9px 12px;
+  padding: 9px var(--space-3);
   font-weight: 600;
   /* --bg-main (not --accent-contrast) matches .btn-primary and the dialog
      action buttons — legible dark-on-accent instead of low-contrast white. */
@@ -3336,7 +3336,7 @@ label.settings-toggle-card-row {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 9px 12px;
+  padding: 9px var(--space-3);
   border-radius: var(--radius);
   font-weight: 600;
   color: var(--bg-main);
@@ -3525,7 +3525,7 @@ label.settings-toggle-card-row {
 
 .credential-paste-btn {
   flex: 0 0 auto;
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   font-size: 0.8em;
   border-radius: var(--radius-sm);
 }
@@ -3541,7 +3541,7 @@ label.settings-toggle-card-row {
 .credential-paste-bar-tab {
   order: -1;
   flex: none;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   background: var(--bg-panel);
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-color);
@@ -3555,7 +3555,7 @@ label.settings-toggle-card-row {
   justify-content: space-between;
   gap: 10px;
   margin-top: 6px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -3587,7 +3587,7 @@ label.settings-toggle-card-row {
   top: 4px;
   right: 4px;
   z-index: 1;
-  font-size: 10px;
+  font-size: var(--text-xs);
   padding: 1px 7px;
   height: 18px;
   /* Opaque, not transparent like its `.agent-prompts-copy` sibling: this chip
@@ -3608,11 +3608,11 @@ label.settings-toggle-card-row {
 .connection-log {
   height: 150px;
   overflow-y: auto;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
   font-family: "JetBrains Mono", "Fira Code", Consolas, Menlo, monospace;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 
@@ -3666,7 +3666,7 @@ label.settings-toggle-card-row {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .remote-browser-header button {
@@ -3695,10 +3695,10 @@ label.settings-toggle-card-row {
   min-width: 0;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   background: var(--control-bg);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .remote-newfolder button {
@@ -3738,8 +3738,8 @@ label.settings-toggle-card-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
-  font-size: 13px;
+  padding: 5px var(--space-2);
+  font-size: var(--text-base);
 }
 
 .remote-entry + .remote-entry {
@@ -3774,7 +3774,7 @@ label.settings-toggle-card-row {
 
 .remote-chosen {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   word-break: break-all;
 }
 
@@ -3867,7 +3867,7 @@ label.settings-toggle-card-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 0 10px 8px 10px;
+  padding: 0 10px var(--space-2) 10px;
 }
 
 .theme-palette-title {
@@ -3914,7 +3914,7 @@ label.settings-toggle-card-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -3928,7 +3928,7 @@ label.settings-toggle-card-row {
 }
 
 .theme-preset-empty {
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
@@ -4109,11 +4109,11 @@ label.settings-toggle-card-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 0 0 2px 12px;
+  padding: 0 0 2px var(--space-3);
 }
 
 .mobile-device-access-label {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   margin-top: 4px;
 }
