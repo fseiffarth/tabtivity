@@ -178,21 +178,18 @@
      already reserved, transparent, on the base rule). Activation recolors that
      top border to accent/bluish (same color as the add-project button): a
      straight, un-rounded line across the top of the current project's pill.
-     The current pill is ALSO the only one with a side 3D shadow — a soft edge
-     on each side (vertical offset 0) so it reads as a raised chip lifted off
-     the flat, shadowless neighbours. */
+     One signal per state: the line and the wash, nothing else lifts it. */
   color: var(--text-primary);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   font-weight: 600;
   border-top-color: var(--accent);
-  box-shadow: 3px 0 4.5px -2px rgba(0, 0, 0, 0.4), -3px 0 4.5px -2px rgba(0, 0, 0, 0.4);
 }
 
 /* Category-tinted top bar: the project's primary category color replaces the
    default status stripe so projects sharing a category read as a group. The
    active pill keeps the accent stripe (its current-scope signal wins). */
 .project-pill.has-category:not(.active):not(.timer-paused) {
-  box-shadow: inset 0 -4px 0 var(--cat-color), 0 3px 6px -2px rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 -4px 0 var(--cat-color);
 }
 /* Small per-category swatches inside the pill (one dot per category). */
 .pill-category-dots {
@@ -481,7 +478,6 @@
 .box-chip.active {
   color: var(--text-primary);
   border-top-color: var(--accent);
-  box-shadow: 3px 0 4.5px -2px rgba(0, 0, 0, 0.4), -3px 0 4.5px -2px rgba(0, 0, 0, 0.4);
 }
 
 /* Only the selected box's pill wears a strip here — the picker chip itself
@@ -1349,7 +1345,7 @@
   /* Tabs melt into the tab-bar behind them — transparent, no side/top border,
      no card shadow — exactly as project pills melt into the header bar. Only
      the tab text, and (for the current tab) its straight bottom accent line
-     plus side 3D shadow, tell a tab from the bar. The 3px BOTTOM border is
+     tell a tab from the bar. The 3px BOTTOM border is
      reserved transparent here and recoloured on .active; border-radius:0 keeps
      that line a straight, un-rounded rule corner-to-corner. */
   box-sizing: border-box;
@@ -1391,8 +1387,7 @@
      --tab-accent, falling back to the theme accent): a straight line across
      the bottom edge, mirroring the active project pill's top line. A wash of
      that colour rising from the line fills the tab, so the current one reads
-     at a glance among many; and it is the only tab with a side 3D shadow, a
-     raised chip lifted off the flat, shadowless neighbours. */
+     at a glance among many. One signal per state: line and wash, no lift. */
   color: var(--text-primary);
   font-weight: 600;
   border-bottom-color: var(--tab-accent, var(--subwindow-tab-active));
@@ -1401,7 +1396,6 @@
     color-mix(in srgb, var(--tab-accent, var(--subwindow-tab-active)) 24%, transparent),
     color-mix(in srgb, var(--tab-accent, var(--subwindow-tab-active)) 8%, transparent)
   );
-  box-shadow: 2px 0 3px -2px rgba(0, 0, 0, 0.4), -2px 0 3px -2px rgba(0, 0, 0, 0.4);
 }
 
 .tab-label {

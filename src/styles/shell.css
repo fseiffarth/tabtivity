@@ -380,21 +380,41 @@ select option {
 }
 
 .app-resource-display {
+  /* One meter in the bar; the three rows live on its hover card. */
+  position: relative;
+  width: 40px;
   height: 40px;
-  min-width: 82px;
-  padding: 0 6px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   display: inline-flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  font-size: var(--text-sm);
-  line-height: 1;
-  white-space: nowrap;
-  flex-shrink: 0;
+}
+
+.app-resource-meter.medium {
+  color: var(--warning);
+}
+
+.app-resource-meter.high {
+  color: var(--danger);
+}
+
+/* The hover card's surface and text are `.project-pill-popup`'s; this only
+   takes it out of fixed positioning so it hangs from the meter, right-anchored
+   like every other menu in the cluster (`.header-status-menu-anchor`). */
+.project-pill-popup.app-resource-card {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 168px;
+  transform: none;
+}
+
+.app-resource-display:hover > .app-resource-card,
+.app-resource-display:focus-within > .app-resource-card {
+  display: flex;
 }
 
 .app-resource-row {

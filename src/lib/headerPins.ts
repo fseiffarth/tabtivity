@@ -196,3 +196,17 @@ export function setHeaderPin(
 ): HeaderPins {
   return isHeaderPinned(pins, id, defaults) === pinned ? { ...pins } : toggleHeaderPin(pins, id, defaults);
 }
+
+/**
+ * How far the top bar folds itself at a width, in px of `.app-header`: tier 1
+ * folds the apps' badges, tier 2 the clock too, tier 3 collapses the status
+ * cluster. Automatic and never stored; the user's pins stay what they are.
+ * Read off the window's real width by a ResizeObserver (`HeaderBar`), because
+ * the window is what resizes and a media query answers for the screen's zoom.
+ */
+export function headerWidthTier(width: number): 0 | 1 | 2 | 3 {
+  if (width >= 1280) return 0;
+  if (width >= 1100) return 1;
+  if (width >= 900) return 2;
+  return 3;
+}

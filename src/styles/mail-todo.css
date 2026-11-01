@@ -140,6 +140,19 @@ svg.alerts-toggle-icon {
    the components, not here: mail counts unread inbox messages and falls as they
    are read, the calendar counts the events left today and falls to zero by
    itself. Neither is dismissed by hand. */
+/* The top bar's width tiers (`headerWidthTier`, set on `.app-header` by a
+   ResizeObserver, never a media query: the window is what resizes). Tier 1
+   folds the apps' badges, tier 2 the clock too, tier 3 the status cluster. */
+.app-header:is([data-width-tier="1"], [data-width-tier="2"], [data-width-tier="3"]) :is(
+  .mail-indicator-badge, .calendar-indicator-badge, .todo-indicator-badge, .inbox-indicator-badge
+) {
+  display: none;
+}
+
+.app-header:is([data-width-tier="2"], [data-width-tier="3"]) .clock-menu {
+  display: none;
+}
+
 .mail-indicator-badge,
 .calendar-indicator-badge,
 .todo-indicator-badge,

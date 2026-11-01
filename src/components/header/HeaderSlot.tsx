@@ -102,7 +102,10 @@ function overFoldToggle(id: HeaderItemId, x: number): Target | null {
  * badge state, so unfolding is instant and the summary lamp stays honest.
  * Every slot renders in a fixed DOM order whether folded or not.
  */
-export function HeaderSlot({ id, children }: { id: HeaderItemId; children: ReactNode }) {
+export function HeaderSlot({ id, children, narrow = false }: { id: HeaderItemId; children: ReactNode
+  /** The bar's last width tier: folds a cluster member even when pinned. */
+  narrow?: boolean;
+}) {
   const t = useT();
   const pins = useSettingsStore((s) => s.settings?.header_pins);
   const pinDefaults = useHeaderPinDefaults();
@@ -188,7 +191,7 @@ export function HeaderSlot({ id, children }: { id: HeaderItemId; children: React
         data-header-slot={id}
         data-pinned={pinned}
         data-readout={isHeaderReadout(id) || undefined}
-        data-folded={!pinned && !expanded && !foldPeek}
+        data-folded={narrow || (!pinned && !expanded && !foldPeek)}
         data-dragging={dragging || undefined}
         data-drop={dropHere ? "before" : dropEnd ? "after" : undefined}
         onPointerDown={onPointerDown}

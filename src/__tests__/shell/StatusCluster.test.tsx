@@ -84,6 +84,23 @@ describe("StatusCluster", () => {
     expect(toggle.querySelector("[aria-label]")).toBeTruthy();
   });
 
+  it("collapses in the bar's narrowest tier without touching the saved choice", async () => {
+    const updateSettings = vi.fn();
+    useSettingsStore.setState({
+      settings: { header_status_expanded: true, machines_enabled: true, header_pins: { vpn: false } } as never,
+      updateSettings,
+    } as never);
+    const { rerender } = render(<StatusCluster />);
+    await screen.findByTestId("machines");
+    expect(folded("vpn")).toBe("false");
+    rerender(<StatusCluster narrow />);
+    expect(folded("vpn")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(updateSettings).not.toHaveBeenCalled();
+    rerender(<StatusCluster />);
+    expect(folded("vpn")).toBe("false");
+  });
+
   it("keeps VPN and Machines in the bar by default while the rest folds", async () => {
     render(<StatusCluster />);
     await screen.findByTestId("machines");
