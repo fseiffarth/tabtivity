@@ -33,6 +33,7 @@ import {
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
+import { openCodePermissionShown } from "./openCodeQuestion";
 import { isActionRow, isChatRow, isStrayListRow, isUnnumberedRow } from "./selectPrompt";
 import { readAgentList } from "./subagentInput";
 
@@ -501,6 +502,7 @@ export function sessionStatus(
   if (mini) return mini.status;
   const antigravity = antigravityFrame(lines, agentLabel);
   if (antigravity) return antigravity.status;
+  if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return null;
   const bottom = agentListStart(lines);
   let inputIndex = -1;
   for (let index = bottom - 1; index >= 0 && index >= bottom - SEARCH_WINDOW; index -= 1) {
@@ -585,6 +587,7 @@ export function inputFrameStart(
   // Antigravity's picker is drawn under the box: the frame is both, and the
   // sheet is already showing its rows. Without one the ordinary scan below
   // finds the box on its own.
+  if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return lines.length;
   const antigravity = antigravityFrame(lines, agentLabel);
   let start = antigravity?.start ?? -1;
   const bottom = agentListStart(lines);

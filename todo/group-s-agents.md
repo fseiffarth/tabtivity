@@ -24,6 +24,19 @@
   - [ ] ❌ Doesn't work on Windows
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ OpenCode permission and `mini` questions from the Chat (`agents.opencode.v2`): in a full and a
+  `--mini` OpenCode tab with `"permission": {"shell": "ask"}`, ask for a command: the tab's lamp turns to
+  decision and the Chat shows the command with Allow once / Always allow / Reject; each answers from the
+  Chat and from the phone (`mini`: Always allow then asks Confirm / Cancel). Run from the checklist §1.5
+  against OpenCode 2.2.5 with a stub model, never in a tab.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 
 - [ ] Live-check Codex resume after a deliberate backend restart (2026-09-15):
   tabs started together in one folder must retain distinct conversations.
