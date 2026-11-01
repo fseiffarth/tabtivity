@@ -60,7 +60,7 @@ body {
   width: 100%;
   background: #101624;
   color: #9fb0d0;
-  font-size: 13px;
+  font-size: var(--text-base);
   letter-spacing: 0.02em;
 }
 
@@ -125,7 +125,7 @@ body {
 }
 
 .startup-splash-name {
-  font-size: 17px;
+  font-size: var(--text-xl);
   font-weight: 650;
   letter-spacing: 0.3em;
   padding-left: 0.3em;
@@ -135,7 +135,7 @@ body {
 .startup-splash-message {
   min-height: 18px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   letter-spacing: 0.03em;
   animation: startup-splash-arrive 600ms 140ms var(--ease-out) both;
 }
@@ -214,7 +214,7 @@ body {
   justify-content: center;
   background: var(--bg-panel);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
   letter-spacing: 0.02em;
   pointer-events: none;
 }
@@ -230,7 +230,7 @@ body {
   align-items: center;
   gap: 2px;
   min-height: 30px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-color);
 }
