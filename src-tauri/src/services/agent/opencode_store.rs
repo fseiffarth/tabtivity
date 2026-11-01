@@ -858,7 +858,13 @@ mod tests {
                 {"type":"tool","name":"edit","time":{"completed":71},"state":{"status":"completed","input":{"filePath":"lib.rs","oldString":"a","newString":"b"},"metadata":{"diff":"Index: lib.rs\n--- lib.rs\n+++ lib.rs\n@@ -1 +1 @@\n-a\n+b\n"}}},
                 {"type":"tool","name":"write","time":{"completed":72},"state":{"status":"completed","input":{"filePath":"new.rs","content":"fn x() {}\n"},"metadata":{"exists":false}}},
             ],"time":{"completed":73}})),
-            (7, 80, "idle", json!({"outcome":"succeeded"})),
+            // What 2.2.4 stores for a `write`: `path`, no `metadata.files`.
+            (7, 75, "assistant", json!({"content":[
+                {"type":"tool","name":"write","time":{"completed":76},"state":{"status":"completed","input":{"path":"created.txt","content":"one\ntwo\n"},"content":[{"type":"text","text":"Created file successfully: created.txt"}],"metadata":{"truncated":false}}},
+                {"type":"tool","name":"write","time":{"completed":77},"state":{"status":"completed","input":{"path":"again.txt","content":"three\n"},"content":[{"type":"text","text":"Wrote file successfully: again.txt"}],"metadata":{"truncated":false}}},
+                {"type":"tool","name":"write","time":{"completed":78},"state":{"status":"error","input":{"path":"refused.txt","content":"x"},"error":{"type":"permission.rejected","message":"no"}}},
+            ],"time":{"completed":79}})),
+            (8, 80, "idle", json!({"outcome":"succeeded"})),
         ] {
             conn.execute("INSERT INTO session_message VALUES (?1, 'ses_v2', ?2, ?3, ?4, ?4, ?5)",
                 rusqlite::params![format!("msg_{seq}"), kind, seq, at, data.to_string()]).unwrap();
@@ -873,7 +879,9 @@ mod tests {
         let changes = session_changes(&db, "v2", None, Some("ses_v2"), None, None, 100).unwrap();
         let mut changed: Vec<_> = changes.changes.iter().map(|c| (c.path.as_str(), c.kind.as_str())).collect();
         changed.sort();
-        assert_eq!(changed, [("file.rs", "edit"), ("lib.rs", "edit"), ("new.rs", "add")]);
+        assert_eq!(changed, [("again.txt", "write"), ("created.txt", "add"), ("file.rs", "edit"), ("lib.rs", "edit"), ("new.rs", "add")]);
+        let created = changes.changes.iter().find(|c| c.path == "created.txt").unwrap();
+        assert_eq!((created.added, created.diff.as_str()), (2, "@@ -0,0 +1,2 @@\n+one\n+two\n"));
         let legacy = session_transcript(&db, "legacy", None, Some("ses_legacy"), None, None, 100).unwrap();
         assert_eq!(kinds(&legacy), [("prompt", "old question")]);
         // Opening the read-only adapter creates no persistent views or tables.
