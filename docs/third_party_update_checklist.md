@@ -25,7 +25,10 @@ How to use it:
    drift, and Manage Agents shows the same verdict per row. Re-verifying a
    surface means bumping **both** its row and the prose note here, in one
    commit; a version only Tabtivity can read and a version only a human can read
-   drift apart exactly like the two install tables did.
+   drift apart exactly like the two install tables did. Bump `FRONTEND_VERIFIED`
+   in `src/stores/agents/agentVersionNotice.ts` as well: it is what lets a
+   hot-reloaded window drop its old backend's card, and a test holds it to
+   `VERIFIED`.
 3. A breakage found this way is a normal fix: patch the one place named under
    **Where**, add a test alongside the existing ones, update the version note.
 
@@ -401,6 +404,31 @@ Claude's `/fast` — different thing.
   change, though it looks like one: a running tool drew `● Bash(cmd)` or a
   description over `⎿  $ cmd` from run to run on both, and the running row's
   `●` blinks, so captures must not be compared on either.
+  Re-checked against 2.1.316 (2026-10-31, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.314 run of the same dump: keys
+  identical on all 19 payloads of a `--session-id` run, a `plan` run, their
+  `--resume`s and `/usage`, `session_id` equal to the `--session-id` passed, the
+  hook's `sed` extractions matching `jq` on all 23 payloads counting the TUI
+  run's, the resume start's four cost fields included; transcript record types
+  identical, counts apart from how a turn split into `assistant` records, which
+  went one way in one run and the other way in the next; `-p --resume` of a
+  `plan` session still reports the default; `/usage` three meters,
+  `resolveResetAt` placing every reset; `--help` byte-identical;
+  notification-type, mode-label and cold-resume dialog strings and the bundle's
+  27 model ids unchanged, the one extra raw `permission_prompt` being telemetry
+  fields such as `waits_behind_permission_prompt`). 2.1.315 has no changelog
+  entry. Driven in a private tmux pane with `--name`, the Bash prompt held past
+  6 s: the frame reads as 2.1.314's, the lamp lights, `readReaderLive` gives the
+  title and four options at 120, 60 and 42 columns with the name rule off the
+  dialog, and `Notification` / `permission_prompt` fired on both. 2.1.316's
+  Bash-tool shell fixes, its `-p` output on an auto-mode stop and the plan
+  restore after `/clear` touch nothing read here (the restore is the plan text,
+  not the mode `agent_session` re-applies). Its first-Enter send of a prompt
+  holding invisible characters was not reproduced: by its notes a plain prompt
+  now goes cleaned and a command still waits for review, which would hold a
+  `/command` sent from the Chat or phone with such a character in it. Fast mode on Opus 4.8 is deprecated and ends 2026-11-30, returning an
+  error rather than falling back; `api_prices` keeps pricing past usage and
+  needs nothing. The binary grew from 298 to 328 MB.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
@@ -985,7 +1013,7 @@ test, then the real `install.sh` with the same `HOME`: it must not print
 `Downloading Codex CLI`. Verified 2026-10-30 against 0.166.0.
 
 Version probes (`agent_versions::VERSION_ARGV`) exist for Antigravity
-(`agy --version` → `1.4.11`, the same bare shape as 1.2.9) and Muse (`muse --version` →
+(`agy --version` → `1.4.12`, the same bare shape as 1.2.9) and Muse (`muse --version` →
 `Muse Code 1.3.0 (1.3.0-R3057.1)`) as well. Muse's launcher script starts a
 background self-update on any invocation once its interval has passed, so its
 probe sets `MUSE_NO_AUTO_UPDATE=1` (`VERSION_ENV`); a launcher that renames
@@ -1166,37 +1194,119 @@ read directly by Changes. Conversation exports keep V2 tables, blank session
 permissions and continue dropping credential/account tables. Integration is
 not live verified; the Reader carries `agents.opencode.v2`.
 
-**OpenCode 2.2 (2026-10-30): source only, never run.** The `v2.1.3`, `v2.2.0`
-and `v2.2.4` tags were compared as files; no 2.2 binary was started, so the
-`agent_versions::VERIFIED` row stays on 2.1.3 until one is. What moved:
+**OpenCode 2.2.4 (2026-10-30): run, not in the app.** The binary in the install
+home, with 2.1.2 beside it as the baseline, each in a scratch `HOME` with
+`OPENCODE_DISABLE_AUTOUPDATE=1`, driven in a private tmux against a stub
+OpenAI-compatible model and MCP server on loopback (no account, no real model).
+The real parsers read the captures at 50, 60, 100, 120 and 200 columns through
+`@xterm/headless`, the real store readers read its database, and the keys they
+produce went back in. Not covered: a Console sign-in, a real provider, a fenced
+tab, the Tabtivity window, or a phone. Tags `v2.1.3`, `v2.2.0` and `v2.2.4` were
+compared as files for what a run cannot show. What moved:
 
 - `model.dialog.usage` is ctrl+u in the full TUI's model dialog since 2.2.0
   (not in 2.1.4), active only when `limits.info()` is set, that is, signed in
   to OpenCode Console. Pressing it replaces the picker with the Usage screen, so
   `openCodePickKeys` clears the search with backspaces (`MAX_QUERY`), which do
   nothing on an empty field. ctrl+a and Home are taken there too. Mini's own
-  panel still clears on ctrl+u and takes backspace the same way.
+  panel still clears on ctrl+u and takes backspace the same way. The pick was
+  sent into both UIs and took; the Usage screen itself was not seen, for want of
+  a Console login. A model with variants then opens `Select variant`.
 - The composer prints `$1.20 left` / `Limit reached` after the variant, one
-  space over, once the model's limits run low (`COMPOSER_LIMIT`).
+  space over, once the model's limits run low (`COMPOSER_LIMIT`). Not seen live.
 - `session_part` (2.2.1+): 2.2.4 still writes `content` inline and only updates
-  part rows that already exist; its projector says a newer release may move
-  parts there and leave `content: []`. `v2_messages` already reads them, and
-  the transcript fingerprint counts them. Nothing in 2.2.4 writes the first part
-  row, so that read is checked against a fixture only.
+  part rows that already exist; a real store held none after every tool below.
+  Its projector says a newer release may move parts there and leave
+  `content: []`. `v2_messages` already reads them, and the transcript fingerprint
+  counts them; that read is checked against a fixture only.
 - New tables: `session_part`, `blob`, `blob_ref` are in the export's `keep`;
   `job` and `schedule` are not, and `session_pending` is gone.
+- The `tools` map (Tabby's pin) became rules (`config/normalize.ts`), the last
+  match winning; `bash` and `task` are normalized to `shell` and `subagent`, and
+  `execute`, new, falls to the `*` deny. A tool is hidden only when its last rule
+  has resource `*` (`whollyDisabled`), and a built-in browser plugin appends
+  `skill browser deny` after everything the config can write, so **`skill` stays
+  in the model's tool list**. Each call is still refused (`Permission denied:
+  skill`, forced through the stub) and no skill is listed. `agent.build.permission`
+  and `agent.build.tools` do not change that. 2.1.2 offered the same config no
+  tools at all, the lane's included; 2.2.4 offers the lane's two. `opencode run`
+  can start a turn before MCP has connected, so check the lane in `mini`, which
+  is the launch Tabby uses. `opencode debug agents --standalone` prints the
+  effective rules.
+
+Already true of 2.1.2, found only by running it; 2.2.4 draws them the same:
+
+- A completed `write` stores `input.path` and no `metadata.files`; the diff is
+  on its running state alone. `edit` keeps `metadata.files`. Changes reads
+  `write` from the input, `add` when its result says `Created file`, else
+  `write`. The earlier fixture's `filePath` shape stays for migrated V1 sessions.
+- **The permission request** is chips on one row, no pointer and no numbers:
+  `Allow once   Always allow   Reject`, with `⇆ select  enter confirm`
+  right of them or under them. The chosen chip has the accent background, ←/→
+  move it (Tab moves it in `mini` only). In the full TUI Reject and Always allow
+  answer at once for a top-level session. `mini` asks `Confirm   Cancel` under
+  `△ Always allow`, then a reason under `△ Reject permission`, which Enter leaves
+  out, and draws a scrollbar down the body. Below 56 columns its hints are
+  `pgup/pgdn scroll`. Nothing read this: the tab's decision lamp stayed dark,
+  the full TUI's Chat called it stray, and `mini`'s said nothing, its prompt echo
+  taken for an input box (`inputFrameStart`). `readOpenCodePermission` and
+  `OPENCODE_PERMISSION_ROW` hang on those two rows and on the `△` title.
+- **`mini`'s question form** is `◆ Questions` (`1/2` on a step, `Review` on the
+  last page) over numbered rows, each with its description beside it in the
+  footer's muted colour; `↑↓ select   enter choose   tab next   esc dismiss`,
+  under 56 columns `enter choose esc dismiss pgup/pgdn scroll`. The chosen row
+  has a background. A digit answers and moves on; `enter submit   esc dismiss`
+  sends the Review page.
 
 Unchanged: `--standalone`/`--server` became global flags, `mini`, `run` and
-`auth` still take them; `service.json` `disabled`; `OPENCODE_DISABLE_AUTOUPDATE`,
+`auth` still take them; `--session <id>` (it creates an unknown id), `--continue`,
+`--prompt`, `mini --model provider/model#variant`, the full TUI's refusal of
+`--model`; `service.json` `disabled`; `OPENCODE_DISABLE_AUTOUPDATE`,
 `OPENCODE_CONFIG_CONTENT`, `OPENCODE_MODELS_URL`; `plugins` and `file://`
-directories, `session.hook("prompt")`; `instructions`; `providers.<id>.models.<id>.disabled`;
-`session_v2`/`session_message` columns the Reader selects (`time_busy` added,
-`allowance` gone); the message and tool shapes; `opencode.ai/v2/install`
-(`@opencode/cli-<target>`, `~/.opencode/bin`). `packages/tui/src/mini` differs
-only in `stream-v2.transport.ts`; the palette's `Switch model`, the dialog's
-`Select model` title and the keys apart from the two new ones are the same;
-`form.tsx` and `permission.tsx` change only their cursor style. `new-designs`
-stays off by default.
+directories, `session.hook("prompt")` (recorded for every turn, never for a
+subagent's session); `instructions` (reached the model's system prompt);
+`providers.<id>.models.<id>.disabled` (hid the model from `opencode models`), a
+`providers` block outranking the legacy one for its provider; `session_v2`/
+`session_message` columns the Reader selects (`time_busy` added, `allowance`
+gone); the message and tool shapes, tools named `shell` and `subagent` with
+children by `parent_id`; `opencode.ai/v2/install`
+(`@opencode/cli-<target>`, `~/.opencode/bin`). The palette's `Switch model`, the
+dialog's `Select model` title and the question form read as before; `new-designs`
+stays off by default. `opencode run "text"` stores the prompt with literal quotes
+(2.1.2 too), which only a warm-up's session shows.
+
+**OpenCode 2.2.5 (2026-10-31): run, not in the app.** The 2.2.4 setup, 2.2.4 from
+`npm pack @opencode/cli-linux-x64@<v>` beside it, plus the real session plugin
+from `plugin_body` and Tabby's real `tools` map. A stub calls whichever tool a
+prompt names, which is how a call no model would make gets forced. Not covered,
+as for 2.2.4: a Console sign-in, a real provider, a fenced tab, the Tabtivity
+window, a phone. Help text, `debug paths`, the 45-object schema and every string
+the parsers lean on are identical; of the TUI only `dialog-integration.tsx`
+moved, and nothing here reads the `connect` menu it trims of MCP servers.
+
+- **A call to `bash` now runs as `shell`** (`tool-input-repair.ts`, only when no
+  tool has that name). Under Tabby's pin it is refused as `No tool named
+  "shell"`, as `shell` is itself, nothing runs, and the model is offered the same
+  four tools as on 2.2.4, `skill` among them. Without the pin it obeys a `shell`
+  rule: `ask` raises the usual chips, read at 50, 60, 100, 120 and 200 columns,
+  and `deny` refuses it. The store keeps the name the model used, so a tool part
+  named `bash` holds `shell`'s metadata and a second text item, `There is no
+  "bash" tool, so this ran as "shell"…`. The Reader and Changes treat it as any
+  other turn.
+- A missed `edit` appends the closest lines, or says the change is already there,
+  only where the rules allow reading that file; a missed `read` names the missing
+  folder. Both are the error's `message` on a part in `status: error`, which
+  Changes skips: `w.txt`'s two real changes read the same on both versions.
+- `compaction.buffer` also takes `"20%"`; nothing here writes it. MCP stdio
+  framing changed, which Tabby's lane and help server do not use: both are
+  remote. No stdio MCP server was run.
+
+Run again on 2.2.5, reading as on 2.2.4 wherever both exist: the session plugin
+(the tab's id recorded, a subagent's session not), `--session <id>`, `--continue`
+and their `mini` forms with no picker, `run` exiting 0, the question form at
+120, 60 and 50 columns, the palette and `Select model`, `readReaderLive` and the
+lamp over all 45 captures, `session_transcript` (17 entries) and `session_changes`
+off the store. `mini`'s palette reads as stray on both, not a change.
 
 Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
 run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
@@ -1292,7 +1402,23 @@ row (`KEY_HINT`). Not seen live: 1.4.11's `Select billing model:` step after a
 Google Cloud sign-in (strings only: `Pay As You Go`, `Use %s through your
 Gemini subscription.`), which needs an account. Mid-turn, on both, the footer
 says `esc to cancel` and the row over the box `⣽  Generating...`; `agentBusy`
-reads neither, so the phone's busy state stays off for this CLI. That run signs in with no
+reads neither, so the phone's busy state stays off for this CLI.
+1.4.12 on 2026-10-31, the same setup beside the 1.4.11 the updater left as
+`agy.<ns>.old`, both copied to read-only directories: first-run screens, idle
+footer, `/model`, both gauges, Enter, `/effort`, three streamed turns and the
+mid-turn frames byte-identical at 80×24 but the version, and the first-run,
+`/model` and gauge frames at 42×24 too; sign-in menu and Google Cloud submenu
+identical at both sizes. Link pages differ only in `state` and `code_challenge`,
+with the same scopes and page notes (`1–20 of 23` here, `of 33` at 42×24). The
+phone's route over them: `readSignIn` takes the link whole at 80×24, refuses it
+cut at 42×24, and `readSignInPage` with `readPagedSignIn` rebuilds all 654
+characters. `--help`, `agy models`, `--version` and `agy update`'s exit 1 from a
+read-only directory unchanged; `--continue`, the second `--continue`'s notice,
+`--conversation <id>`, `--model` and `--effort` work as before. The notes the
+binary embeds stop at 1.4.11 and no changelog is published, so these runs are
+all that is known of 1.4.12. `implicit/<id>.pb` appeared in one run's home only:
+it is opaque, its id is not the conversation's, and a home from 2026-10-23 has
+one too, so it is not new, and `agent_history` does not export it. That run signs in with no
 account: a private `HOME`, `"modelProvider": "gemini"` in
 `~/.gemini/antigravity-cli/settings.json`, a dummy `GEMINI_API_KEY` and
 `GOOGLE_GEMINI_BASE_URL` at a dead local port — the UI draws fully, turns
@@ -1341,7 +1467,9 @@ beside 1.4.5: schemas identical, and the shipped `transcript` read three turns
 off the store, one answer streamed in 121 chunks, and `antigravity_chats`
 listed the conversation for the Resume menu with its first and last prompts,
 as an example binary (a `src-tauri/examples` file calling
-`app_lib::services::google_chat`).
+`app_lib::services::google_chat`). 1.4.12 (2026-10-31) the same, beside 1.4.11:
+schemas and row counts identical, six entries off three turns, the conversation
+listed.
 
 Vibe and Copilot are full-screen (alternate-screen) TUIs, as plain `opencode`
 is; the phone's Focus view cannot read them — a release that changes that is an

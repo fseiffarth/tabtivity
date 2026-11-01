@@ -130,6 +130,11 @@ way around the pinned tool set: the help tools read no file and run nothing.
 Pinned against Claude Code 2.1.300, Codex 0.162.1, OpenCode 1.19.1 and
 Ollama 0.40.3 (A0). All four are offered and listed (cloud Claude was
 unlisted on 2026-10-26 and listed again on 2026-10-27, the user's call).
+OpenCode (local) was re-checked on 2.2.5 (2026-10-31): the lane's tools are
+offered and every built-in is off, but `skill` stays listed and refuses each
+call, with no config that hides it. 2.2.5 runs a call to a missing `bash` as
+`shell`; the pin turns `shell` off, so that is refused as well, forced through
+a stub model (`docs/third_party_update_checklist.md`).
 
 | Profile | What `launch_line` sets | Web |
 |---|---|---|
