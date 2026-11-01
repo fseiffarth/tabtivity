@@ -27,7 +27,7 @@
 }
 
 .network-heading {
-  font-size: 18px;
+  font-size: var(--text-xl);
   font-weight: 700;
   /* Pane section header → accent, like the canonical dialog/menu titles. */
   color: var(--accent);
@@ -36,7 +36,7 @@
 .network-subheading {
   margin-top: 3px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 
@@ -74,7 +74,7 @@
   gap: 7px;
   margin-left: auto;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .network-interface-select select,
@@ -83,7 +83,7 @@
   min-width: 0;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   color: var(--text-primary);
   background: var(--bg-panel);
 }
@@ -107,7 +107,7 @@
 .network-metric span,
 .network-metric small {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .network-metric strong {
@@ -137,7 +137,7 @@
   border-radius: var(--radius);
   background: var(--bg-panel);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .network-usage-totals .network-usage-label {
@@ -155,7 +155,7 @@
 
 .network-graph-wrap {
   position: relative;
-  padding: 12px 12px 8px;
+  padding: var(--space-3) var(--space-3) var(--space-2);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-panel);
@@ -192,14 +192,14 @@
   top: 8px;
   right: 12px;
   color: var(--text-muted, var(--text-secondary));
-  font-size: 10px;
+  font-size: var(--text-xs);
 }
 
 .network-graph-legend {
   display: flex;
   gap: 14px;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 .network-history-label {
@@ -223,20 +223,20 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 11px 12px;
+  padding: 11px var(--space-3);
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .network-connections-head h3 {
   display: inline;
   margin: 0 8px 0 0;
-  font-size: 14px;
+  font-size: var(--text-lg);
 }
 
 .network-connections-head span,
 .network-table-note {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 .network-connection-filters {
@@ -258,7 +258,7 @@
 .network-table-wrap table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -293,7 +293,7 @@
 
 .network-table-note,
 .network-link-note {
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
 }
 
 .network-link-note,
@@ -302,11 +302,11 @@
   border-radius: var(--radius);
   color: var(--text-secondary);
   background: var(--bg-panel);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 .network-warning {
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   color: var(--warning);
 }
 
@@ -321,7 +321,7 @@
 }
 
 .network-status-title {
-  font-size: 17px;
+  font-size: var(--text-xl);
   font-weight: 700;
 }
 
@@ -332,7 +332,7 @@
 
 @media (max-width: 700px) {
   .network-pane {
-    padding: 12px;
+    padding: var(--space-3);
   }
 
   .network-interface-select {
@@ -360,7 +360,7 @@
   flex-direction: column;
   background: var(--bg-panel);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   overflow: hidden;
 }
 
@@ -372,18 +372,18 @@
 
 .du-error {
   color: var(--danger);
-  padding: 8px 0;
+  padding: var(--space-2) 0;
 }
 
 /* ── Home screen ─────────────────────────────────────────────────────────── */
 
 .du-home {
-  padding: 28px 32px;
+  padding: 28px var(--space-8);
   overflow: auto;
 }
 
 .du-home-title {
-  font-size: 15px;
+  font-size: var(--text-lg);
   font-weight: 600;
   margin: 0 0 16px;
 }
@@ -400,7 +400,7 @@
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
-  padding: 14px 16px;
+  padding: 14px var(--space-4);
   text-align: left;
   background: var(--control-bg);
   border: 1px solid var(--control-border);
@@ -426,7 +426,7 @@
 .du-target-path,
 .du-target-caption {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -461,7 +461,7 @@
 
 .du-scanning-path {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   max-width: 70%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -486,7 +486,7 @@
   border-radius: var(--radius);
   color: var(--text-primary);
   padding: 3px 9px;
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -512,7 +512,7 @@
   border: none;
   color: var(--accent);
   padding: 2px 3px;
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
   white-space: nowrap;
 }
@@ -673,18 +673,18 @@
 
 .du-centre-name {
   fill: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 
 .du-centre-size {
   fill: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 .du-cell-label {
   fill: #0b0b0b; /* the slice fills are mid-to-light HSL in every theme */
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
