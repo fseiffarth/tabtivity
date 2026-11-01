@@ -23,7 +23,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -39,7 +39,7 @@
   min-width: 26px;
   height: 26px;
   cursor: var(--cur-pointer, pointer);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
 }
 .browser-icon-btn:hover:not(:disabled) {
@@ -55,12 +55,12 @@
   align-items: center;
   flex-shrink: 0;
   gap: 6px;
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
   border-radius: var(--radius);
   border: 1px solid var(--border-color);
   background: var(--bg-input);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
   white-space: nowrap;
 }
@@ -150,7 +150,7 @@
 .browser-address-punycode,
 .browser-address-hint {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--text-sm);
   padding: 1px 6px;
   border-radius: var(--radius);
   border: 1px solid var(--border-subtle);
@@ -177,9 +177,9 @@
   border: 0;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
   border-radius: var(--radius);
 }
 .browser-security-chip.tone-secure {
@@ -198,7 +198,7 @@
   border: 1px solid currentColor;
   border-radius: var(--radius);
   padding: 0 5px;
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--warning);
 }
 
@@ -207,8 +207,8 @@
   color: var(--text-primary);
   min-width: 260px;
   max-width: 380px;
-  padding: 8px 10px;
-  font-size: 12px;
+  padding: var(--space-2) 10px;
+  font-size: var(--text-md);
 }
 .browser-security-row {
   display: flex;
@@ -228,7 +228,7 @@
 .browser-security-note {
   margin-top: 6px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 /* A flat 2px bar: width/opacity only, no blur. */
@@ -257,7 +257,7 @@
   align-items: center;
   gap: 10px;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--text-md);
   border-bottom: 1px solid var(--border-subtle);
 }
 .browser-error-strip {
@@ -289,7 +289,7 @@
 }
 
 .browser-empty {
-  padding: 24px;
+  padding: var(--space-6);
   color: var(--text-muted);
   text-align: center;
 }
@@ -305,7 +305,7 @@
   align-items: baseline;
   gap: 8px;
   padding: 5px 10px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   border-bottom: 1px solid var(--border-subtle);
 }
 .browser-reader-mode {
@@ -325,14 +325,14 @@
 
 .browser-unsafe-card {
   margin: 18px;
-  padding: 14px 16px;
+  padding: 14px var(--space-4);
   border: 1px solid var(--danger);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 .browser-start {
-  padding: 32px 24px;
+  padding: var(--space-8) var(--space-6);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -341,7 +341,7 @@
 .browser-start-title {
   font-weight: 650;
   color: var(--accent);
-  font-size: 14px;
+  font-size: var(--text-lg);
 }
 .browser-start-hint {
   margin: 0;
@@ -355,7 +355,7 @@
 }
 
 .browser-blocked {
-  padding: 26px 24px;
+  padding: 26px var(--space-6);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -364,7 +364,7 @@
 .browser-blocked-title {
   font-weight: 650;
   color: var(--danger);
-  font-size: 14px;
+  font-size: var(--text-lg);
 }
 /* The gate's THIRD outcome — reachable, but worth telling you about first (a
    loopback or private address). Toned as a question, not as a refusal: it is not
@@ -378,7 +378,7 @@
 }
 .browser-blocked-label {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 /* The FULL address, monospace, wrapping. Never ellipsis-truncated: a shortened
    URL is how `https://example.com.evil.tld/…` reads as `https://example.com…`. */
@@ -386,7 +386,7 @@
   font: 12px/1.7 var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
   word-break: break-all;
   max-width: 100%;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
   background: var(--bg-input);
@@ -412,7 +412,7 @@
   gap: 8px;
   padding: 5px 10px;
   border-top: 1px solid var(--border-subtle);
-  font-size: 12px;
+  font-size: var(--text-md);
   flex-wrap: wrap;
 }
 .browser-live-title {
@@ -437,7 +437,7 @@
 }
 .browser-download-label {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   margin-top: 6px;
 }
 .browser-download-name {
@@ -445,11 +445,11 @@
   word-break: break-all;
 }
 .browser-download-value {
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .browser-download-note {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 /* ── Print manager ───────────────────────────────────────────────────────────
@@ -463,7 +463,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-bottom: 1px solid var(--border-subtle);
 }
 .print-title {
@@ -481,7 +481,7 @@
 }
 .print-default-note {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   /* The default printer's name can be long; it must not push Refresh off the
      bar, so it truncates and keeps its full value in the title attribute. */
   max-width: 40%;
@@ -494,12 +494,12 @@
 .print-btn {
   flex-shrink: 0;
   white-space: nowrap;
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
   border-radius: var(--radius);
   border: 1px solid var(--border-color);
   background: var(--bg-input);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 .print-btn:hover:not(:disabled) {
@@ -515,13 +515,13 @@
 }
 .print-btn.small {
   padding: 2px 7px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.3;
 }
 
 .print-strip {
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--text-md);
   border-bottom: 1px solid var(--border-subtle);
   word-break: break-word;
 }
@@ -544,8 +544,8 @@
 
 .print-empty {
   color: var(--text-muted);
-  font-size: 12px;
-  padding: 12px 2px;
+  font-size: var(--text-md);
+  padding: var(--space-3) 2px;
 }
 
 .print-card {
@@ -564,7 +564,7 @@
   font-weight: 650;
 }
 .print-badge {
-  font-size: 10px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 1px 6px;
@@ -573,20 +573,20 @@
   color: var(--accent);
 }
 .print-state {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-muted);
 }
 .print-state.warn {
   color: var(--warning);
 }
 .print-state-message {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-style: italic;
 }
 .print-card-detail {
   margin-top: 3px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 .print-card-actions {
@@ -618,7 +618,7 @@
 
 .print-queue-empty {
   margin-top: 8px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -626,18 +626,18 @@
   width: 100%;
   margin-top: 8px;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .print-jobs th {
   text-align: left;
   font-weight: 600;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   padding: 3px 6px 3px 0;
   border-bottom: 1px solid var(--border-subtle);
 }
 .print-jobs td {
-  padding: 4px 6px 4px 0;
+  padding: var(--space-1) 6px var(--space-1) 0;
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle;
 }
@@ -693,7 +693,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border-bottom: 1px solid var(--border-color);
   border-top: 2px solid var(--accent);
 }
@@ -712,7 +712,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary, var(--text-primary));
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
 }
@@ -758,7 +758,7 @@
 }
 
 .tex-structure-title {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -768,7 +768,7 @@
 .tex-structure-body {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 4px 0 8px;
+  padding: var(--space-1) 0 var(--space-2);
 }
 
 .tex-structure-section {
@@ -776,13 +776,13 @@
 }
 
 .tex-structure-heading {
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--text-secondary, var(--text-primary));
   opacity: 0.75;
-  padding: 6px 8px 2px;
+  padding: 6px var(--space-2) 2px;
 }
 
 /* One line of the tree: the file's button plus its build badges. The paint
@@ -823,7 +823,7 @@
   justify-content: center;
   border: none;
   border-radius: var(--radius-full);
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--bg-main);
@@ -847,11 +847,11 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   text-align: left;
   cursor: var(--cur-pointer, pointer);
 }
@@ -879,8 +879,8 @@
 }
 
 .tex-structure-empty {
-  padding: 10px 8px;
-  font-size: 11px;
+  padding: 10px var(--space-2);
+  font-size: var(--text-sm);
   color: var(--text-secondary, var(--text-primary));
   opacity: 0.7;
 }
