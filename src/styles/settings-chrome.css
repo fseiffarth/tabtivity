@@ -225,11 +225,6 @@ button.settings-btn.danger:hover:not(:disabled),
     opacity: 0.45;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .print-progress-steps > i.next {
-    animation: none;
-  }
-}
 .print-preview-actions {
   display: flex;
   align-items: center;
@@ -1070,10 +1065,6 @@ label.settings-toggle-card-row {
   margin: 10px 0 0 5px;
   padding-left: var(--space-3);
   border-left: 2px solid color-mix(in srgb, var(--accent-secondary) 45%, transparent);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-advanced-chevron { transition: none; }
 }
 
 /* A row of buttons under a section (Add folder, Take the tour, …). */
@@ -3463,13 +3454,6 @@ label.settings-toggle-card-row {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .context-menu button::after,
-  .tab-new-menu-item::after,
-  .dropdown .dropdown-menu button::after,
-  .project-switcher-add-menu button::after,
-  .project-dialog-actions button::after {
-    transition: none;
-  }
   .context-menu button:active:not(:disabled),
   .tab-new-menu-item:active:not(:disabled),
   .dropdown .dropdown-menu button:active:not(:disabled),

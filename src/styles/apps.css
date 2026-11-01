@@ -803,7 +803,6 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: var(--bg-elevated);
   /* These dialogs portal into <body>, which carries no color, so without this
      bare text nodes inherit black — the same note `.stats-dialog`
      (stats-deck.css) and `.file-delete-dialog` (file-tree.css) already carry. */
@@ -813,25 +812,76 @@
      as its edge, and it is the elevation shadow that actually separates a modal
      from the app behind it. The accent top rail — matching the header's tint, so
      every dialog reads as the same themed chrome, with no per-dialog exceptions
-     — is the only edge left that carries meaning. */
+     — is the only edge left that carries meaning. Fill, rail and the cut
+     corners are the floating recipe's (below); the border holds the rail's room. */
   border: 0;
-  border-top: 3px solid var(--accent);
+  border-top: 3px solid transparent;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
 }
 
+/* ── The floating recipe ─────────────────────────────────────────────────
+   Every surface that floats over the window — menus, dialogs, hover cards,
+   toasts — is one paint: --bg-elevated, an accent top rail, an accent wash, and
+   two cut corners (10px, top-left and bottom-right, the Reader's and the
+   phone's). The window chrome stays square.
+
+   The cut is PAINTED, not a `clip-path`. A clip takes the elevation shadow with
+   it, and it would cut off whatever hangs outside a surface (a submenu). A
+   135deg gradient hits both corners on a box of any shape, its hard stops 7px
+   in along the diagonal are the 10px legs, and the half-pixel ramp is the
+   antialiasing. The rail starts after the cut.
+
+   To add a member: this list, the wash below, the two glass lists in themes.css
+   and the blur exemption in projects-tabs.css; strip its own background, border
+   and radius, keep `border-top: 2px solid transparent` for the rail's room, and
+   make sure it forms a stacking context (fixed, or absolute WITH a z-index), or
+   the `z-index: -1` wash paints behind its own background. */
+.project-dialog,
+.settings-dialog,
+.stats-dialog,
+.file-delete-dialog,
+.context-menu,
+.tab-new-menu,
+.project-switcher-add-menu,
+.box-chip-menu,
+.project-search-popover,
+.file-run-args,
+.file-viewer-run-args,
+.git-change-tree,
+.presentation-settings,
+.cal-alarm-popup,
+.project-pill-popup,
+.project-switch-toast,
+.hint-bubble {
+  --surface-fill: var(--bg-elevated);
+  --surface-rail: 2px;
+  background:
+    linear-gradient(var(--accent), var(--accent)) 10px 0 / 100% var(--surface-rail) no-repeat border-box,
+    linear-gradient(
+      135deg,
+      transparent 6.8px,
+      var(--surface-fill) 7.3px,
+      var(--surface-fill) calc(100% - 7.3px),
+      transparent calc(100% - 6.8px)
+    ) border-box;
+}
+
+.project-dialog,
+.settings-dialog,
+.stats-dialog,
+.file-delete-dialog {
+  --surface-rail: 3px;
+}
+
 /* Accent wash as a `::before` overlay, NOT folded into `background` — the glass
-   themes replace `background` with a translucent `--glass-elevated`, and only an
-   overlay tints whatever shows through the glass without making it opaque. The
+   themes replace the fill with `--glass-elevated`, and only an overlay tints
+   whatever shows through without making it opaque. It takes the same cut. The
    wash spanning the full scroll is handled by the frame, not by this rule: a
    scrolling dialog uses `.dialog-framed` (its surface is overflow:hidden and
-   never scrolls, so this inset:0 overlay covers the whole fixed frame while the
-   inner `.dialog-scroll` scrolls beneath it). A non-framed dialog is short
-   enough never to scroll, so the overlay covers it too.
-
-   The popover menus (projects-tabs.css's `.context-menu` family) carry the very
-   same overlay for the same reason, so they are declared here with it rather
-   than as a second identical copy. */
+   never scrolls, so this overlay covers the whole fixed frame while the inner
+   `.dialog-scroll` scrolls beneath it). A non-framed dialog is short enough
+   never to scroll, so the overlay covers it too. */
 .project-dialog::before,
 .settings-dialog::before,
 .stats-dialog::before,
@@ -845,15 +895,81 @@
 .file-viewer-run-args::before,
 .git-change-tree::before,
 .presentation-settings::before,
-.cal-alarm-popup::before {
+.cal-alarm-popup::before,
+.project-pill-popup::before,
+.project-switch-toast::before,
+.hint-bubble::before {
   content: "";
   position: absolute;
-  inset: 0;
-  background: var(--accent);
+  inset: calc(-1 * var(--surface-rail)) 0 0;
+  background: linear-gradient(
+    135deg,
+    transparent 6.8px,
+    var(--accent) 7.3px,
+    var(--accent) calc(100% - 7.3px),
+    transparent calc(100% - 6.8px)
+  );
   opacity: 0.32;
   pointer-events: none;
   z-index: -1;
   border-radius: inherit;
+}
+
+/* Enter: opacity and a 4px rise; exit: opacity only (`ContextMenuPortal` holds a
+   dismissed menu for --motion-exit under `.is-leaving`). A dialog takes 160ms
+   and its backdrop only fades; a hover card sets its own transform inline, so
+   it fades too. No fill: a transform left behind would re-anchor anything
+   `position: fixed` inside. base.css zeroes the durations under reduced motion. */
+@keyframes surface-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes surface-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes surface-leave {
+  to {
+    opacity: 0;
+  }
+}
+
+.context-menu,
+.tab-new-menu,
+.project-switcher-add-menu,
+.box-chip-menu,
+.project-search-popover,
+.file-run-args,
+.file-viewer-run-args,
+.git-change-tree,
+.presentation-settings,
+.cal-alarm-popup {
+  animation: surface-enter var(--motion-enter) var(--ease-out);
+}
+
+.project-dialog,
+.settings-dialog,
+.stats-dialog,
+.file-delete-dialog {
+  animation: surface-enter calc(var(--motion-enter) * 4 / 3) var(--ease-out);
+}
+
+.modal-backdrop {
+  animation: surface-fade calc(var(--motion-enter) * 4 / 3) var(--ease-out);
+}
+
+.project-pill-popup {
+  animation: surface-fade var(--motion-enter) var(--ease-out);
+}
+
+.is-leaving {
+  animation: surface-leave var(--motion-exit) linear forwards;
+  pointer-events: none;
 }
 
 /* These accent-washed menu/dialog surfaces used to need their own scrollbar

@@ -1154,14 +1154,6 @@
   animation: cal-arrive 450ms ease-out;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .cal-block.arrived,
-  .cal-month-bar.arrived,
-  .cal-agenda-row.arrived,
-  .cal-task-row.arrived {
-    animation: none;
-  }
-}
 
 .cal-task-check {
   flex: 0 0 auto;

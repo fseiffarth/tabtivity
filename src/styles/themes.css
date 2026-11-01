@@ -808,7 +808,7 @@
 [data-theme="light_lavender"] .stats-dialog,
 [data-theme="fancy_dark"] .file-delete-dialog,
 [data-theme="light_lavender"] .file-delete-dialog {
-  background: var(--glass-elevated);
+  --surface-fill: var(--glass-elevated);
   /* Glass fill only — no lit frame. The near-white hairline these surfaces used
      to wear read as a stray outline rather than a lit edge, so the glass themes
      now keep the shared --border-color edge and the accent top rail from the
@@ -819,6 +819,12 @@
 /* Menus take the glass fill; like the dialogs above they carry no frame of
    their own — only the elevation shadow and the accent rail from the shared
    surface rule. */
+[data-theme="fancy_dark"] .project-pill-popup,
+[data-theme="light_lavender"] .project-pill-popup,
+[data-theme="fancy_dark"] .project-switch-toast,
+[data-theme="light_lavender"] .project-switch-toast,
+[data-theme="fancy_dark"] .hint-bubble,
+[data-theme="light_lavender"] .hint-bubble,
 [data-theme="fancy_dark"] .context-menu,
 [data-theme="light_lavender"] .context-menu,
 [data-theme="fancy_dark"] .tab-new-menu,
@@ -839,9 +845,8 @@
 [data-theme="light_lavender"] .presentation-settings,
 [data-theme="fancy_dark"] .cal-alarm-popup,
 [data-theme="light_lavender"] .cal-alarm-popup {
-  background: var(--glass-elevated);
-  border-top-color: var(--accent);
-  box-shadow: var(--shadow-3);
+  --surface-fill: var(--glass-elevated);
+  box-shadow: var(--shadow-2);
 }
 
 /* No ambient color wash behind the chrome (there were two faint radial

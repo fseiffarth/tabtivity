@@ -171,15 +171,52 @@ body {
   to { transform: translateX(215%); }
 }
 
+/* The one reduced-motion block. Zeroing the tokens settles everything that reads
+   them, and the universal rule every literal transition. The doubled `:root`
+   outranks the theme blocks that declare these tokens later in the cascade, and
+   this file sits early, so the named loops below need their `!important`. A
+   hair of duration rather than none: a few surfaces wait for `transitionend`.
+   An animation whose stand-in is more than "stop" (a static tint, a finished
+   bar) keeps its own rule beside it. */
 @media (prefers-reduced-motion: reduce) {
+  :root:root {
+    --transition: 0ms;
+    --transition-slow: 0ms;
+    --motion-enter: 0ms;
+    --motion-exit: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+
   .startup-splash,
   .startup-splash-mark,
   .startup-splash-name,
   .startup-splash-message,
   .startup-splash-orbit,
-  .startup-splash-progress span {
-    animation: none;
-    transition-duration: 0ms;
+  .startup-splash-progress span,
+  .tab-new-btn.empty-hint,
+  .tab.install-pending::before,
+  .print-progress-steps > i.next,
+  .cal-block.arrived,
+  .cal-month-bar.arrived,
+  .cal-agenda-row.arrived,
+  .cal-task-row.arrived,
+  .hint-bubble,
+  .hint-bubble--banner,
+  .hint-bubble::after,
+  .hint-target,
+  .tour-target,
+  .tour-spotlight,
+  .tour-bubble,
+  .tour-reward,
+  .tour-hint,
+  .tour-hint-btn.nudge {
+    animation: none !important;
   }
 }
 

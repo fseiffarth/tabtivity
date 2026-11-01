@@ -245,6 +245,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
+  animation: surface-fade var(--motion-enter) var(--ease-out);
 }
 
 .app-tooltip > .untested-tag {
@@ -1765,11 +1766,11 @@
   transform: translate(-50%, -50%);
   z-index: 500;
   padding: 10px 20px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-color);
+  border: 0;
+  border-top: 2px solid transparent;
   border-radius: var(--radius);
-  box-shadow: var(--shadow-3);
-  font-size: 0.85rem;
+  box-shadow: var(--shadow-2);
+  font-size: var(--text-md);
   color: var(--text-secondary);
   font-family: monospace;
   pointer-events: none;

@@ -274,12 +274,6 @@
     grid-template-columns: 1fr;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .settings-card.intro-goal-card {
-    transition: none;
-  }
-}
-
 /* Contextual hint coachmark/banner. z-index 90: above the header (80) so it can
    point at chrome, but below true modals (.modal-backdrop, 100) so a dialog is
    never pierced by a stray hint. Portaled to body (see HintBubble). */
@@ -288,19 +282,18 @@
   z-index: var(--z-hint);
   padding: 10px var(--space-3);
   border-radius: var(--radius);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-3);
+  border: 0;
+  border-top: 2px solid transparent;
+  box-shadow: var(--shadow-2);
   color: var(--text-primary);
   font-size: var(--text-md);
-  /* Fade in on appearance, then keep a slow accent breathing on the border so a
-     freshly-surfaced hint draws the eye without nagging. Opacity-only entry so it
+  /* Fade in on appearance, then keep a slow accent breathing so a freshly
+     surfaced hint draws the eye without nagging. Opacity-only entry so it
      never fights the inline/class positioning transforms (translateY/translateX).
      Shares the pulse vocabulary of tab-new-hint-pulse / side-panel-drop-pulse.
-     The breathing glow is the static shadow of ::after, whose opacity pulses in
-     step — never an animated blurred box-shadow (WebKitGTK software path). */
-  animation: hint-bubble-in 0.24s ease-out,
-    hint-bubble-breathe 2.4s ease-in-out 0.24s infinite;
+     The breathing glow is the static shadow of ::after, whose opacity pulses —
+     never an animated blurred box-shadow (WebKitGTK software path). */
+  animation: hint-bubble-in 0.24s ease-out;
 }
 
 .hint-bubble::after {
@@ -331,16 +324,6 @@
   }
   to {
     opacity: 1;
-  }
-}
-
-@keyframes hint-bubble-breathe {
-  0%,
-  100% {
-    border-color: var(--border-color);
-  }
-  50% {
-    border-color: var(--accent);
   }
 }
 
@@ -376,7 +359,6 @@
      the scale pulse starts when it ends (matched delay), so they never overlap on
      the transform property. */
   animation: hint-banner-in 0.24s ease-out,
-    hint-bubble-breathe 2.4s ease-in-out 0.24s infinite,
     hint-banner-pulse 1.8s ease-in-out 0.24s infinite;
 }
 
@@ -401,15 +383,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .hint-bubble,
-  .hint-bubble--banner,
-  .hint-bubble::after,
-  .hint-target,
-  .tour-target {
-    animation: none;
-  }
-}
 
 .hint-bubble-close {
   position: absolute;
@@ -975,15 +948,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tour-spotlight,
-  .tour-bubble,
-  .tour-reward,
-  .tour-hint,
-  .tour-hint-btn.nudge {
-    animation: none;
-  }
-}
 
 /* Lesson picker (LessonsMenu): a vertical list of task walkthroughs. */
 .lessons-list {

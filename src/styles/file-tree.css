@@ -1580,9 +1580,8 @@
   flex-direction: column;
   gap: 12px;
   padding: 18px;
-  background: var(--bg-elevated);
   border: 0;
-  border-top: 3px solid var(--accent);
+  border-top: 3px solid transparent;
   border-radius: var(--radius-lg);
   /* Portaled into <body>, which sets no text color (defaults to black); set it
      here so bare descendants (h2 title, the diff <pre>, tables) stay readable in

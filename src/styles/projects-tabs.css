@@ -996,8 +996,8 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--control-border);
+  border: 0;
+  border-top: 2px solid transparent;
   border-radius: var(--radius-sm);
   padding: 6px 10px;
   white-space: nowrap;
@@ -1624,11 +1624,6 @@
   0%, 100% { opacity: 0.25; }
   50% { opacity: 1; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .tab.install-pending::before {
-    animation: none;
-  }
-}
 
 /* ── Project pill status bars ────────────────────────────────────────────
    A strip of little bars along the pill's bottom edge — ONE PER NON-IDLE TAB of
@@ -1806,6 +1801,30 @@
 :root[data-blurred] .tab.landing,
 :root[data-blurred] .tab.landing::before,
 :root[data-blurred] .tab-drop-placeholder {
+  animation-play-state: running !important;
+}
+
+/* The same reasoning for the floating surfaces' entrance (apps.css): each opens
+   from `opacity: 0`, and a hover card or menu can open in a window without
+   focus. Paused at 0% it would stay invisible; it is one short shot, not a loop. */
+:root[data-blurred] .modal-backdrop,
+:root[data-blurred] .project-dialog,
+:root[data-blurred] .settings-dialog,
+:root[data-blurred] .stats-dialog,
+:root[data-blurred] .file-delete-dialog,
+:root[data-blurred] .context-menu,
+:root[data-blurred] .tab-new-menu,
+:root[data-blurred] .project-switcher-add-menu,
+:root[data-blurred] .box-chip-menu,
+:root[data-blurred] .project-search-popover,
+:root[data-blurred] .file-run-args,
+:root[data-blurred] .file-viewer-run-args,
+:root[data-blurred] .git-change-tree,
+:root[data-blurred] .presentation-settings,
+:root[data-blurred] .cal-alarm-popup,
+:root[data-blurred] .project-pill-popup,
+:root[data-blurred] .project-switch-toast,
+:root[data-blurred] .app-tooltip {
   animation-play-state: running !important;
 }
 
@@ -2415,12 +2434,6 @@ button.tab-todo-link {
   50% { opacity: 1; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tab-new-btn.empty-hint {
-    animation: none;
-  }
-}
-
 /* One popover/menu surface for the whole app: context menus, the generic
    dropdown (via .context-menu), the tab "+" menu, the project-switcher add
    menu, and the one-off popovers (box chip list, project search results, the
@@ -2442,16 +2455,17 @@ button.tab-todo-link {
 .git-change-tree,
 .presentation-settings,
 .cal-alarm-popup {
-  background: var(--bg-elevated);
   /* No boxed outline: a 1px frame around a tinted popover reads as a stray
      hairline ring drawn around the accent wash below, not as an edge. The
      elevation shadow is what separates the menu from what it floats over; the
      accent top rail — matching the header bar and the dialog chrome above — is
-     the only edge that carries meaning. */
+     the only edge that carries meaning. Fill, rail and the cut corners are
+     painted by the floating recipe in apps.css; the border only holds the
+     rail's room. */
   border: 0;
-  border-top: 2px solid var(--accent);
+  border-top: 2px solid transparent;
   border-radius: var(--radius);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--shadow-2);
 }
 
 /* The accent wash these three carry (same as .app-header::before, layered as an
