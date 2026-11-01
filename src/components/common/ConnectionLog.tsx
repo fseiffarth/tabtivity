@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
+import { CheckIcon } from "./icons/Icon";
 
 /**
  * One log line plus a stable, monotonically-increasing id minted at the push
@@ -57,7 +58,7 @@ export function ConnectionLog({ lines, busy }: { lines: LogLine[]; busy: boolean
           title={t(copied ? "connLog.copied" : "connLog.copy")}
           aria-label={t(copied ? "connLog.copied" : "connLog.copy")}
         >
-          {copied ? "✓" : "⧉"}
+          {copied ? <CheckIcon /> : "⧉"}
         </button>
       )}
       <div className="connection-log" role="log" aria-label={t("connLog.ariaLabel")}>

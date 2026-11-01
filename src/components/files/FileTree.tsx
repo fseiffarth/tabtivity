@@ -60,7 +60,7 @@ import { RenameDialog, containingFolderLabel } from "./RenameDialog";
 import { useDialogs } from "../common/PromptDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { FileIcon } from "../common/icons/FileIcon";
-import { ArrowDownIcon, ArrowUpIcon, CloseIcon, PlayIcon, SearchIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { storageKey } from "../../lib/brand";
@@ -2458,7 +2458,7 @@ export function FileTree({
           title={t("fileTree.folderInSync", { name: label })}
           aria-label={t("fileTree.folderInSync", { name: label })}
         >
-          ✓
+          <CheckIcon />
         </span>
       );
     }

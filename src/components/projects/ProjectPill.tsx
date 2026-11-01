@@ -59,7 +59,7 @@ import { useBoxesStore } from "../../stores/boxes";
 import { boxColor } from "../../lib/theme/boxColor";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
-import { BoxSwatch, CheckboxIcon, CloseIcon, PauseIcon, SquareIcon, UnlockIcon } from "../common/icons/Icon";
+import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PauseIcon, SquareIcon, UnlockIcon } from "../common/icons/Icon";
 import {
   agentFenceInstallCommand,
   agentFenceMarkLevel,
@@ -2104,7 +2104,7 @@ export function ProjectPill({
                   }}
                   title={t("pill.containerRunTitle")}
                 >
-                  {project.sandbox?.enabled ? "✓ " : ""}{t("pill.runInContainer")}
+                  {project.sandbox?.enabled ? <><CheckIcon />{" "}</> : ""}{t("pill.runInContainer")}
                 </button>
                 <button
                   onClick={() => {
@@ -2125,7 +2125,7 @@ export function ProjectPill({
                 }}
                 title={t("pill.pythonInterpMenuTitle")}
               >
-                {project.python_interpreter ? "✓ " : ""}{t("pill.pythonInterpreterEllipsis")}
+                {project.python_interpreter ? <><CheckIcon />{" "}</> : ""}{t("pill.pythonInterpreterEllipsis")}
               </button>
             )}
             {/* Per-project override of the global "Claude remote control" setting
@@ -2270,7 +2270,7 @@ export function ProjectPill({
                         : "pill.autoConnectTitleNotEligible"
                 )}
               >
-                {project.remote.auto_connect && autoConnectEligible ? "✓ " : ""}
+                {project.remote.auto_connect && autoConnectEligible ? <><CheckIcon />{" "}</> : ""}
                 {t("pill.autoConnectOnLaunch")}
                 {/* Named, not just greyed: a tagged host is never dialled by Tabtivity
                     itself, and the remedy (untag the machine) is nothing like the
@@ -2295,7 +2295,7 @@ export function ProjectPill({
                 }}
                 title={t("pill.persistSessionsMenuTitle")}
               >
-                {project.remote.persist_sessions !== false ? "✓ " : ""}{t("pill.persistentSessionsTmux")}
+                {project.remote.persist_sessions !== false ? <><CheckIcon />{" "}</> : ""}{t("pill.persistentSessionsTmux")}
               </button>
             )}
             {/* Multi-host remote (docs/multi_host_remote_plan.md): manage the extra

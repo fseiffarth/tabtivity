@@ -13,6 +13,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { TerminalReaderChats } from "./TerminalReaderChats";
 import { chatsOffered } from "../../lib/agents/agentChats";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
+import { CheckIcon } from "../common/icons/Icon";
 
 /** Prompt history under a terminal; readable agents use the same controls
  * as a top toolbar with resource/action slots and Chat / Diffs / Terminal tabs.
@@ -225,7 +226,7 @@ export function TerminalPromptStrip({
               aria-label={t("terminal.promptStrip.copy")}
               title={t(copied ? "terminal.promptStrip.copied" : "terminal.promptStrip.copy")}
             >
-              {copied ? "✓" : "⧉"}
+              {copied ? <CheckIcon /> : "⧉"}
             </button>
           </>
         )}

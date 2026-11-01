@@ -34,7 +34,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { viewerErrorText } from "../../lib/viewers/limitError";
 import { useFileScope } from "../../lib/files/fileAccess";
-import { CloseIcon } from "../common/icons/Icon";
+import { CheckIcon, CloseIcon } from "../common/icons/Icon";
 
 /** Backend `read_spreadsheet` result (Dev G). Mirrors the Rust `SheetData`. */
 interface SheetData {
@@ -1454,7 +1454,7 @@ function ColumnsMenu({
             style={{ borderBottom: "1px solid var(--border-color)" }}
           >
             <span aria-hidden="true" style={{ display: "inline-block", width: 16, opacity: 0.9 }}>
-              {hidden.size > 0 ? "✓" : "–"}
+              {hidden.size > 0 ? <CheckIcon /> : "–"}
             </span>
             {hidden.size > 0 ? t("columnsMenu.selectAll") : t("columnsMenu.deselectAll")}
           </button>
@@ -1477,7 +1477,7 @@ function ColumnsMenu({
                     opacity: isHidden ? 0.45 : 0.9,
                   }}
                 >
-                  {isHidden ? "–" : "✓"}
+                  {isHidden ? "–" : <CheckIcon />}
                 </span>
                 <span
                   style={{

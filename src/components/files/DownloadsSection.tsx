@@ -8,7 +8,7 @@ import { bindDragRelease } from "../../lib/window/dragPlatform";
 import { fmtModified, fmtSize, type FileEntry } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { FileIcon } from "../common/icons/FileIcon";
-import { CloseIcon, InboxIcon } from "../common/icons/Icon";
+import { CheckIcon, CloseIcon, InboxIcon } from "../common/icons/Icon";
 import { useResizableSection } from "./useResizableSection";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
@@ -340,7 +340,7 @@ export function DownloadsSection({
                 </span>
                 {landed ? (
                   <span className="downloads-copied" title={t("downloads.copiedTo", { rel: landed })}>
-                    ✓
+                    <CheckIcon />
                   </span>
                 ) : (
                   !isRemote && (

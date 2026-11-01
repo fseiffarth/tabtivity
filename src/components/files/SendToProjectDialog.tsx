@@ -7,7 +7,7 @@ import { resolveProjectDirectory, resolveLocalMirror, type ProjectEntry } from "
 import { type FileEntry } from "../../lib/viewers/fileUtils";
 import { loadLastSendTarget, saveLastSendTarget } from "../../lib/projects/sendToProject";
 import { useT } from "../../lib/i18n";
-import { ArrowLeftIcon, ArrowUpIcon, CloseIcon, FolderIcon, GlobeIcon } from "../common/icons/Icon";
+import { ArrowLeftIcon, ArrowUpIcon, CheckIcon, CloseIcon, FolderIcon, GlobeIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { dirname } from "../../lib/paths";
 
@@ -260,7 +260,7 @@ export function SendToProjectDialog({ source, fromProjectId, onClose }: Props) {
           {phase === "done" && selected && (
             <>
               <div className="send-to-project-done">
-                <p className="send-to-project-done-title">✓ {t("sendToProject.successTitle")}</p>
+                <p className="send-to-project-done-title"><CheckIcon /> {t("sendToProject.successTitle")}</p>
                 <p className="settings-help">
                   {t("sendToProject.successBody", {
                     name: source.name,

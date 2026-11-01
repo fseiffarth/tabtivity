@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { LESSONS } from "../../../lib/lessons";
 import { useTourStore } from "../../../stores/tour";
+import { CheckIcon } from "../../common/icons/Icon";
 
 /**
  * The intro's small building blocks. They wear existing classes only — the
@@ -29,7 +30,7 @@ export function IntroStep({
 }) {
   return (
     <li className={`how-to-start-step${done ? " intro-step-done" : ""}`}>
-      <span className="how-to-start-num" aria-hidden="true">{done ? "✓" : num}</span>
+      <span className="how-to-start-num" aria-hidden="true">{done ? <CheckIcon /> : num}</span>
       <div className="intro-step-body">
         <div className="how-to-start-step-title">{title}</div>
         {children}

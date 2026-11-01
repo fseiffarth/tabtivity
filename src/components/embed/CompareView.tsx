@@ -20,7 +20,7 @@ import {
   type ChangeBlock,
   type Decision,
 } from "../../lib/viewers/linediff";
-import { ArrowLeftIcon, ArrowRightIcon, UndoIcon } from "../common/icons/Icon";
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, UndoIcon } from "../common/icons/Icon";
 
 /** Mirrors the Rust `GitCommit` (serde default snake→camel via serde? no — the
  *  struct is plain, so fields arrive as declared: hash/short/subject/… ). */
@@ -619,7 +619,7 @@ export function CompareView({
                           if (enabled) toggle(b);
                         }}
                       >
-                        {dec === "accept" ? "✓" : <UndoIcon />} {i + 1}
+                        {dec === "accept" ? <CheckIcon /> : <UndoIcon />} {i + 1}
                       </span>
                     );
                   })}

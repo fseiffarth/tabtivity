@@ -13,7 +13,7 @@ import { joinConference } from "../../lib/linkTarget";
 import { awayDelta, type DueDelta } from "../../lib/todoBoard";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { BellIcon } from "../common/BellIcon";
-import { CalendarIcon, CheckboxIcon, MailIcon, VideoIcon, type IconProps } from "../common/icons/Icon";
+import { CalendarIcon, CheckboxIcon, CheckIcon, MailIcon, type IconProps, VideoIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 
 /**
@@ -246,7 +246,7 @@ export function AlertsMenu({ feed, onNavigate }: AlertsMenuProps) {
           title={finishLabel(item.kind)}
           aria-label={finishLabel(item.kind)}
         >
-          {finishingId === item.id ? "…" : "✓"}
+          {finishingId === item.id ? "…" : <CheckIcon />}
         </button>
         <button
           type="button"

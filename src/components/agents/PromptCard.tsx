@@ -10,7 +10,7 @@ import type { PromptLink, SentAgentPrompt } from "../../stores/agents/agentPromp
 import { Dropdown } from "../common/Dropdown";
 import { MarkdownPromptField } from "../common/MarkdownPromptField";
 import { UntestedTag } from "../common/UntestedTag";
-import { CloseIcon } from "../common/icons/Icon";
+import { CheckIcon, CloseIcon } from "../common/icons/Icon";
 
 /** Inside a card, keys aimed at these belong to them, not to the card. */
 export const CARD_OWN_KEYS = "input, textarea, select, button, [contenteditable]";
@@ -324,7 +324,7 @@ export function PromptCard({
                     setTimeout(() => setCopied(false), 1200);
                   }}
                 >
-                  {copied ? "✓ " : "⧉ "}{t("promptChart.session", { id: card.history.session_id })}
+                  {copied ? <><CheckIcon />{" "}</> : "⧉ "}{t("promptChart.session", { id: card.history.session_id })}
                 </button>
               )}
               {(card.history?.files?.length ?? 0) > 0 && (

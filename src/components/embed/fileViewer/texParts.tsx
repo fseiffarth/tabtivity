@@ -20,6 +20,7 @@ import { type TexRefCreation } from "../../../lib/viewers/tex/tex";
 import { useT } from "../../../lib/i18n";
 import { type EditorApi } from "./editableFile";
 import { useViewerPref } from "./editorPrefs";
+import { CheckIcon } from "../../common/icons/Icon";
 
 /** The hover preview's on/off (#tex-hover-preview): the PROJECT's, not the
  *  tab's — one click holds for every TeX pane of the project, across a project
@@ -357,7 +358,7 @@ export function TexCopyButton({
         setCopied(true);
       }}
     >
-      {copied ? "✓" : "⧉"}
+      {copied ? <CheckIcon /> : "⧉"}
     </button>
   );
 }

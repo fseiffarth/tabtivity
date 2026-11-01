@@ -127,6 +127,7 @@ import type { FilesPanelView } from "../../types";
 import { noteTerminalOutputChars } from "../../dev/terminalOutputRate";
 import { BRAND } from "../../lib/brand";
 import { PdfLoadWarningHost } from "./PdfLoadWarningHost";
+import { CheckIcon } from "../common/icons/Icon";
 
 // Dev-only perf panel (src/dev/). The ternary is statically resolved at build
 // time (`import.meta.env.DEV` → false), so in a shipped bundle the lazy() —
@@ -1490,7 +1491,7 @@ export function AppShell() {
                 void updateSettings({ side_panel_auto_hide: !autoHide });
               }}
             >
-              {autoHide ? "✓ " : ""}
+              {autoHide ? <><CheckIcon />{" "}</> : ""}
               {t("appShell.railAutoHide")}
               <UntestedTag id="sidePanel.ideToggle" />
             </button>
