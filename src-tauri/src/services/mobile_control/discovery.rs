@@ -2035,8 +2035,8 @@ fn resolve_scope(
     // project-tree-read: ok — this is the state-dir terminal-session snapshot.
     for tab in session.tab_layout {
         // A local-model tab (`local_agent`) comes back like an agent tab: Mistral's
-        // resumes its session, the other drivers relaunch the line they were
-        // started with — and while the tmux session lives, both reattach.
+        // and OpenCode's resume their session, the other drivers relaunch the line
+        // they were started with — and while the tmux session lives, all reattach.
         let local_agent = tab.kind == "local_agent";
         let agent = tab.kind == "agent" || local_agent;
         // The assistant scope lists chats and nothing else: a tab with no

@@ -11,6 +11,7 @@ import {
   effectiveTabLocation,
   isResumableAgentTab,
   refreshWorkspaceScope,
+  resumeArgsOf,
   useTabsStore,
   type TabEntry,
   type TabLocation,
@@ -35,7 +36,7 @@ import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { undoAgentClear } from "../../stores/agents/agentClearUndo";
-import { reopenClosedAgentTab, resumeArgsOf, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
+import { reopenClosedAgentTab, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
 import { isTabColor } from "../../lib/theme/tabColors";
 import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
 import type { CliOverviewRow } from "../../../shared/cliOverview";

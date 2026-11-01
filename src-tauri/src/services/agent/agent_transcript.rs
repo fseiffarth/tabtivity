@@ -986,11 +986,13 @@ fn fresh_codex_session(project_id: Option<&str>, launch_id: &str) -> Option<Agen
 /// the remote host, so it has none here to read.
 /// A local-model OpenCode tab's conversation (`ollama launch opencode`): what
 /// [`agent_session_transcript`] answers for `opencode`, read from the scope's
-/// local-model home, where such a tab's OpenCode keeps its sessions.
+/// local-model home, where such a tab's OpenCode keeps its sessions. `launch_id`
+/// names its recorded session; a tab from before it had one is read by folder.
 pub fn local_opencode_transcript(
     project_id: Option<&str>,
     tab_dir: Option<&str>,
     since: Option<i64>,
+    launch_id: Option<&str>,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
@@ -999,7 +1001,8 @@ pub fn local_opencode_transcript(
         return AgentTranscript::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
-    opencode_transcript(&db, project_id, tab_dir, since, None, subagent, version, limit.clamp(1, MAX_LIMIT))
+    let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
+    opencode_transcript(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
 }
 
 #[allow(clippy::too_many_arguments)]

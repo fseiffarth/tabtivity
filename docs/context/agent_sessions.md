@@ -146,8 +146,15 @@ top-level session gets `--session <id>`; one noted at an earlier launch
 (host-only `live_sessions/<uid>.opencode`) without a record never took a
 prompt and starts fresh; a tab from before the plugin keeps `--continue`. The
 Reader reads the same record (`opencode_store`), else the folder's newest
-since the last fresh launch. Remote and local-model OpenCode tabs are as
-before.
+since the last fresh launch. Remote OpenCode tabs are as before.
+
+A local-model OpenCode tab (`local_agent`, 2.x `mini`) resumes the same way
+against its local-model home's store and record: it mints the key in every
+scope, keeps its launch line (`localLaunch`) and restores on that line plus
+the resume flag (`tabKinds.resumeArgsOf`), because `--model ollama/<m>` picks
+both the provider and `mini`. A tab saved before it had a key mints one at
+restore and goes through `--continue` once. Assistant chats stay out of
+`resolve`: `assistant::launch_line` decides theirs.
 
 OpenCode 2 uses the same plugin file with a default `{id, server, setup}`
 entrypoint: recent V1 calls `server`, V2 registers a prompt hook in `setup`

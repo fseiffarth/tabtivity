@@ -217,6 +217,7 @@ pub fn local_opencode_changes(
     project_id: Option<&str>,
     tab_dir: Option<&str>,
     since: Option<i64>,
+    launch_id: Option<&str>,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
@@ -225,7 +226,8 @@ pub fn local_opencode_changes(
         return AgentChanges::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
-    opencode_changes(&db, project_id, tab_dir, since, None, subagent, version, limit)
+    let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
+    opencode_changes(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit)
 }
 
 /// Every file a tab's conversation changed, by the path its CLI named — the
@@ -246,7 +248,7 @@ pub fn changed_paths(
 ) -> Option<Vec<String>> {
     if cmd == "opencode" {
         let read = if local_model {
-            local_opencode_changes(project_id, tab_dir, since, None, None, MAX_LIMIT)
+            local_opencode_changes(project_id, tab_dir, since, launch_id, None, None, MAX_LIMIT)
         } else {
             agent_session_changes(cmd, project_id, tab_dir, since, launch_id.unwrap_or(""), None, None, MAX_LIMIT)
         };

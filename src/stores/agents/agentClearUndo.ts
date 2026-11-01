@@ -6,11 +6,11 @@ import type { ClearMark } from "../../../mobile-web/src/terminal/clearedSession"
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { useActivityStore } from "../activity";
 import { useProjectsStore } from "../projects";
-import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import { isHostPinned } from "../../lib/projectTabHost";
 import {
   effectiveTabLocation,
   isResumableAgentTab,
+  resumeArgsOf,
   useTabsStore,
   type TabEntry,
 } from "../tabs";
@@ -149,9 +149,7 @@ export function runsLocally(scope: string, tab: TabEntry): boolean {
  * Resume menu's resume of a Codex chat, `lib/agents/agentChats`). */
 export async function relaunch(scope: string, tab: TabEntry): Promise<UndoClearResult> {
   if (!runsLocally(scope, tab)) return "remote_tab";
-  const args = tab.cmd in RESUMABLE_AGENTS && tab.sessionId
-    ? RESUMABLE_AGENTS[tab.cmd](tab.sessionId)
-    : (tab.resumeArgs ?? []);
+  const args = resumeArgsOf(tab);
   // The tab's own minted session, if tmux wraps it at all (a Mobile-access
   // project or box); ending one that is not there is a no-op. Never a session
   // the tab only attached to.

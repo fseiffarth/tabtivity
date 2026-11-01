@@ -103,7 +103,7 @@ pub fn for_tab(
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     // What the desktop's `agent_tab_changes` reads for the same tab.
     let read = if tab.local_model && tab.cmd == "opencode" {
-        agent_changes::local_opencode_changes(Some(project_id), Some(&tab.cwd), tab.since, subagent, version, limit)
+        agent_changes::local_opencode_changes(Some(project_id), Some(&tab.cwd), tab.since, tab.session_id.as_deref(), subagent, version, limit)
     } else {
         let session = tab.session_id.as_deref().filter(|id| !id.is_empty());
         let Some(session) = session.or((tab.cmd == "opencode").then_some("")) else {

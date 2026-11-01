@@ -1,9 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ProjectEntry } from "../../types";
 import { useProjectsStore } from "../projects";
-import { useTabsStore, type TabEntry, type TabLocation } from "../tabs";
+import { resumeArgsOf, useTabsStore, type TabEntry, type TabLocation } from "../tabs";
 import { hostTabId } from "../tabs/tabLocation";
-import { resumeArgsOf } from "./closedAgentTabs";
 import { stopAgentTab } from "./agentWorktreeSwitch";
 
 /**

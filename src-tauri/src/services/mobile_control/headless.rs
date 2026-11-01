@@ -324,6 +324,7 @@ pub fn transcript(
             Some(project_id),
             Some(&tab.cwd),
             tab.since,
+            tab.session_id.as_deref(),
             subagent,
             version,
             limit.unwrap_or(DEFAULT_LIMIT),

@@ -134,6 +134,7 @@ export {
   isRestorableTab,
   isResumableAgentTab,
   isSavedWhileLive,
+  resumeArgsOf,
 } from "./tabs/tabKinds";
 export { effectiveTabLocation, localTabCwd, remoteHostIdOf } from "./tabs/tabLocation";
 export { pruneSavedTree } from "./tabs/savedLayout";
