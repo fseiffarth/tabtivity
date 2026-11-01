@@ -41,6 +41,15 @@ const PATH_SYNTAX = [
     message: 'Use basename()/dirname() from src/lib/paths.ts, not lastIndexOf("/").',
   },
 ]
+// Each OS draws these from its own symbol or emoji font: another weight,
+// baseline and, for two of them, colour. Chrome reads Icon.tsx instead; text
+// stays only inside content (docs/context/desktop_ui_system.md, ChromeGlyphs.test.ts).
+const GLYPH_SYNTAX = [
+  {
+    selector: "JSXText[value=/^\\s*([✕✖×✓✔‹›●○✎✉⟳↻▶⠿⎇⚙☑⋯◷▭▦]|🗓|🧠)\\s*$/u]",
+    message: 'Draw a chrome mark from common/icons/Icon.tsx, not a text glyph.',
+  },
+]
 const GUARD_SYNTAX = [...LISTEN_SYNTAX, ...PATH_SYNTAX]
 
 export default tseslint.config(
@@ -159,6 +168,20 @@ export default tseslint.config(
           ],
         },
       ],
+      'no-restricted-syntax': ['error', ...GUARD_SYNTAX, ...GLYPH_SYNTAX],
+    },
+  },
+  {
+    // Glyphs that stay text: the name of a choice (the approval strip's ✓, the
+    // pen bar's ⋯) or inside content a test reads (a branch fact, a Reader row).
+    files: [
+      'src/components/embed/pdf/PdfMarkupBar.tsx',
+      'src/components/files/GitHistory.tsx',
+      'src/components/layout/RootReviewStrip.tsx',
+      'src/components/terminal/TerminalReaderFacts.tsx',
+      'src/components/terminal/TerminalReaderView.tsx',
+    ],
+    rules: {
       'no-restricted-syntax': ['error', ...GUARD_SYNTAX],
     },
   },
