@@ -10,6 +10,7 @@ import { classifyUnavailable, describeUnavailable, type UnavailableReason } from
 import { readChoice, writeChoice } from "../prefs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { ListSkeleton } from "../components/ListSkeleton";
 import { ageLabel } from "../terminal/fileLabels";
 import { useVisiblePoll } from "../visiblePoll";
 
@@ -120,7 +121,7 @@ export function Activity({ open, onConnection }: {
       <span>{describeUnavailable(offline).hint}</span>
       <span>{tabs.length ? t("mobile.home.showingLast") : t("mobile.activity.neverCached")}</span>
     </p>}
-    {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.activity.loading")}</p>}
+    {!loaded && !offline && <ListSkeleton label={t("mobile.activity.loading")} />}
     {loaded && !desktop && <p className="notice">{t("mobile.activity.desktopUnavailable")}</p>}
     {loaded && aiOff && <p className="notice" role="status">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</p>}
     {loaded && desktop && tabs.length === 0 && <p className="projects-empty">{t("mobile.activity.empty")}</p>}

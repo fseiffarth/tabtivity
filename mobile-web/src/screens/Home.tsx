@@ -9,6 +9,7 @@ import { placeBeside } from "../tabReorder";
 import { Activity } from "./Activity";
 import { BUNDLE_VERSION } from "../buildInfo";
 import { isUntested } from "../../../src/lib/untested";
+import { ListSkeleton } from "../components/ListSkeleton";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
 import { ReadAloudSheet, readAloudSummary } from "../components/ReadAloudSheet";
@@ -283,7 +284,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       {/* Its own head only under Needs you (CSS): with nothing above it, the
           page title already says what this list is. */}
       {view === "active" && listed.length > 0 && <h2 className="home-section-head home-projects-head">{t("mobile.home.projectsTitle")}</h2>}
-      {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.home.loading")}</p>}
+      {!loaded && !offline && <ListSkeleton label={t("mobile.home.loading")} />}
       {loaded && rows.length === 0 && <div className="home-empty">
         <span className="home-empty-glyph" aria-hidden="true">{view === "search" ? <SearchIcon size="1em" /> : <DiamondIcon size="1em" />}</span>
         {view !== "search" && <strong>{t("mobile.home.emptyActiveTitle")}</strong>}

@@ -3,6 +3,7 @@ import { ApiError } from "../api";
 import { oidcProvider, pair, startOidc, type OidcOutcome } from "../auth";
 import { classifyUnavailable, describeUnavailable, localFailureText } from "../connection";
 import { BrandHead } from "../components/BrandHead";
+import { BUNDLE_VERSION } from "../buildInfo";
 import { MIN_NEW_PIN, configureLocalUnlock, platformBiometricAvailable, validPin } from "../localLock";
 import { appleTouchDevice } from "../platform";
 import { useT } from "../../../src/lib/i18n";
@@ -151,5 +152,7 @@ export function Pair({ setupLock, onDone }: { setupLock: boolean; onDone: () => 
     <button className="primary" disabled={stage !== "idle" || (!paired && (!pairingCodeComplete(code) || !name.trim())) || (setupLock && (!validPin(pin) || pin.length < MIN_NEW_PIN || pin !== confirm))} onClick={() => void submit()}>
       {stage === "pairing" ? t("mobile.pair.pairing") : stage === "securing" ? t("mobile.pair.securing") : paired ? t("mobile.pair.finish") : setupLock ? t("mobile.pair.connectSecure") : t("mobile.pair.connect")}
     </button>
+    {/* Which build is asking, as the lock screen says it: out of the way. */}
+    <footer className="brand-foot">{t("mobile.title")} {BUNDLE_VERSION}{isUntested("mobile.design.pair") && <small className="untested"> {t("mobile.newTab.untested")}</small>}</footer>
   </main>;
 }

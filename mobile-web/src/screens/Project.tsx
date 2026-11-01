@@ -35,6 +35,7 @@ import { layerKey, loadLayer } from "../markup/store";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { GripHint } from "./Home";
 import { isUntested } from "../../../src/lib/untested";
+import { ListSkeleton } from "../components/ListSkeleton";
 import { describeFailure } from "../connection";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import type { SubagentStep } from "../terminal/subagents";
@@ -742,6 +743,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       {hostNote && <button onClick={() => dropHostNote(noteHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
     </p>}
     {error && <p className="error">{error}</p>}
+    {!detail && !error && <ListSkeleton label={t("mobile.project.loading")} rows={2} />}
     {/* The chrome's glyphs, drawn from the desktop's icon set. */}
     {detail && isUntested("mobile.design.icons") && <p className="project-hint"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
     <HintQueue hints={tips} vars={{ agentHold: { agent: quickLabel ?? "" } }} />
