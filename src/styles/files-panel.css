@@ -171,7 +171,7 @@
   top: 0;
   left: 0;
   right: 0;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   text-align: center;
   font-size: var(--text-sm);
   font-weight: 600;
@@ -189,7 +189,7 @@
   top: 0;
   left: 0;
   right: 0;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   text-align: center;
   font-size: var(--text-sm);
   font-weight: 600;
@@ -207,7 +207,7 @@
   top: 6px;
   right: 8px;
   max-width: 60%;
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   border-radius: var(--radius);
   background: var(--danger);
   opacity: 0.92;
@@ -278,9 +278,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius);
-  background: var(--bg-elevated, rgba(127, 127, 127, 0.08));
+  background: var(--bg-elevated);
 }
 .custom-agent-row-label {
   font-weight: 600;
@@ -314,7 +314,7 @@
   cursor: var(--cur-pointer, pointer);
   font-size: 0.78em;
   line-height: 1;
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   border-radius: var(--radius-sm);
 }
 .custom-agent-install:hover {
@@ -340,7 +340,7 @@
 }
 .custom-agent-remove:hover:not(:disabled) {
   color: var(--danger);
-  background: rgba(229, 83, 75, 0.12);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 .custom-agent-form {
   display: flex;
@@ -362,9 +362,9 @@
   opacity: 0.8;
 }
 .custom-agent-field input {
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border-radius: var(--radius);
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
+  border: 1px solid var(--border-color);
   background: var(--bg-main);
   color: var(--text-primary);
   font-size: 1em;
@@ -404,7 +404,7 @@
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
 }
 /* Fixed, not max-height: the search filters it, and a shrinking list moved the
    centered dialog with every keystroke. */
@@ -425,7 +425,7 @@
   background: transparent;
   border: none;
   color: var(--text-primary);
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   cursor: var(--cur-pointer, pointer);
   font-size: var(--text-md);
 }
@@ -443,7 +443,7 @@
   color: var(--accent-contrast);
 }
 .set-default-app-row.selected .set-default-app-exec {
-  color: rgba(255, 255, 255, 0.8);
+  color: color-mix(in srgb, var(--accent-contrast) 80%, transparent);
 }
 .set-default-app-icon {
   flex-shrink: 0;
@@ -488,7 +488,7 @@
 .set-default-app-actions button {
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
-  padding: 5px 12px;
+  padding: 5px var(--space-3);
   background: var(--control-bg);
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
@@ -539,7 +539,7 @@
   flex-shrink: 0;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
   background: var(--control-bg);
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
@@ -584,7 +584,7 @@
   background: transparent;
   border: none;
   color: var(--text-primary);
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   cursor: var(--cur-pointer, pointer);
   font-size: var(--text-md);
 }
@@ -622,7 +622,7 @@
   min-width: 0;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   background: var(--control-bg);
   color: var(--text-primary);
   font-size: var(--text-md);
@@ -639,7 +639,7 @@
   flex-shrink: 0;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
   background: var(--control-bg);
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
@@ -662,7 +662,7 @@
 .folder-picker-actions button {
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
-  padding: 5px 12px;
+  padding: 5px var(--space-3);
   background: var(--control-bg);
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
@@ -710,7 +710,7 @@
   text-transform: lowercase;
 }
 .send-to-project-done {
-  padding: 14px 4px 6px;
+  padding: 14px var(--space-1) 6px;
 }
 .send-to-project-done-title {
   margin: 0 0 4px;
@@ -726,7 +726,7 @@
      line (common at the default/narrow widths). */
   flex-wrap: wrap;
   row-gap: 6px;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   /* The shared secondary-chrome surface (themes.css), the same one a subwindow's
      tab bar wears: the panel's header block has to read apart from the panel
      body under it (--bg-panel) and from the window's top bar above it. The
@@ -827,7 +827,7 @@
      box (hover/active fill) then starts at 6px, between the header text and the
      file rows' 4px hover fill. Right side keeps the full 12px — nothing there
      has to line up with anything. */
-  padding: 4px 12px 4px 6px;
+  padding: var(--space-1) var(--space-3) var(--space-1) 6px;
   /* Second row of the same header block — shares `.side-panel-header`'s fill. */
   background-color: var(--bg-subheader);
   border-bottom: 1px solid var(--border-subtle);
@@ -896,8 +896,8 @@
 .side-panel-actions .toolbar-btn--sm {
   height: 18px;
   min-width: 18px;
-  padding: 0 4px;
-  font-size: 10px;
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -935,7 +935,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 12px;
+  padding: var(--space-1) var(--space-3);
   border: none;
   background: transparent;
   color: var(--text-secondary, var(--text-muted));
@@ -956,7 +956,7 @@
 .hidden-sw-list {
   display: flex;
   flex-direction: column;
-  padding: 0 6px 4px;
+  padding: 0 6px var(--space-1);
   gap: 2px;
   max-height: 30vh;
   overflow-y: auto;
@@ -1144,7 +1144,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   background: var(--bg-panel);
   border-top: 1px solid var(--border-color);
 }
@@ -1226,11 +1226,11 @@
 /* Action-specific accents, matched to the inline status dots. Set on the
    group wrapper too so the caret toggle inherits the same colour. */
 .git-action-btn--add,
-.git-action--add { --git-btn-accent: #f85149; }
+.git-action--add { --git-btn-accent: var(--danger); }
 .git-action-btn--commit,
-.git-action--commit { --git-btn-accent: #e3b341; }
+.git-action--commit { --git-btn-accent: var(--warning); }
 .git-action-btn--push,
-.git-action--push { --git-btn-accent: #3fb950; }
+.git-action--push { --git-btn-accent: var(--success); }
 .git-action-btn--pull { --git-btn-accent: var(--info); }
 .git-action-btn--release { --git-btn-accent: var(--accent); }
 
@@ -1331,7 +1331,7 @@
   overflow: hidden;
   color: var(--text-primary);
   font-size: var(--text-sm);
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 /* Once it lists rows, a fixed box: folding a folder changed the max-content
    width and the height, and anchored bottom-right that moved every row —
@@ -1342,7 +1342,7 @@
 }
 
 .git-change-empty {
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   color: var(--text-muted);
 }
 
@@ -1386,8 +1386,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.git-change-add { color: #3fb950; }
-.git-change-del { color: #f85149; }
+.git-change-add { color: var(--success); }
+.git-change-del { color: var(--danger); }
 .git-change-zero,
 .git-change-stat--bin { color: var(--text-muted); }
 
@@ -1402,7 +1402,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -1425,7 +1425,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -1437,7 +1437,7 @@
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   border-radius: var(--radius-lg);
-  padding: 1px 8px;
+  padding: 1px var(--space-2);
   font-size: var(--text-xs);
   cursor: var(--cur-pointer, pointer);
   font-family: inherit;
@@ -1489,7 +1489,7 @@
 .git-pull-list {
   list-style: none;
   margin: 0;
-  padding: 0 6px 4px;
+  padding: 0 6px var(--space-1);
   max-height: 120px;
   overflow-y: auto;
   font-size: var(--text-xs);
@@ -1559,7 +1559,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
 }
 
 .git-worktree-title {
@@ -1586,7 +1586,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
@@ -1732,7 +1732,7 @@
 
 .git-worktree-note {
   flex-basis: 100%;
-  padding: 0 6px 4px;
+  padding: 0 6px var(--space-1);
   font-size: var(--text-xs);
   line-height: 1.35;
   color: var(--text-muted);
@@ -1742,11 +1742,11 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
 }
 
 .git-commit-search-status {
-  padding: 0 6px 4px;
+  padding: 0 6px var(--space-1);
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
@@ -1847,7 +1847,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   width: min(560px, 92vw);
   display: flex;
   flex-direction: column;
@@ -1871,7 +1871,7 @@
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   resize: vertical;
   box-sizing: border-box;
 }
@@ -1887,7 +1887,7 @@
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   border-radius: var(--radius);
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
   font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
   font-family: inherit;
@@ -1924,15 +1924,15 @@
   left: 0;
   right: 0;
   z-index: 10000;
-  padding: 6px 16px;
+  padding: 6px var(--space-4);
   text-align: center;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-primary);
   background: var(--bg-elevated, var(--bg-secondary));
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-color);
 }
 .server-link-banner[data-state="down"] {
-  background: color-mix(in srgb, var(--danger, #c0392b) 18%, var(--bg-secondary));
+  background: color-mix(in srgb, var(--danger) 18%, var(--bg-secondary));
 }
 /* A picked file row in the server-side picker. */
 .server-file-picker .folder-picker-item.is-selected {
