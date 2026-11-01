@@ -282,11 +282,12 @@ Where the code differs from the plan above, and why:
   `PromptDialogs`, `.modal-backdrop` hosts and tooltips unmount at once.
 - **`ErrorNote` is not a toast** (it renders in its host's flow), so the
   toasts in the recipe are `HintBubble` and `.project-switch-toast`.
-- **Reduced motion:** 13 local rules fold into `base.css`. The rest (9) stay,
-  since each does more than stop (a static tint, a finished bar, a fade).
-- **Focus rules:** only 7 of the 61 restated the ring and went. The others
-  place it inside or draw their own; those that ring in the accent now read
-  `--focus-ring`.
+- **Reduced motion:** the 22 `@media` blocks became 14, one of them the global
+  block. The 13 left do more than stop (a static tint, a finished bar, a fade).
+- **Focus rules:** 68 became 58. Only the ones that restated the ring went;
+  the others place it inside or draw their own, and any accent ring among them
+  now reads `--focus-ring`. Tabs stay out of the Tab order, as before: moving
+  between them is steering mode's job.
 - **`VpnIndicator` and `MachinesIndicator`** already showed icon + lamp, so
   that part of step C was done before the pass.
 - **The palette's Ctrl+K** yields to a focused field or terminal (kill-line,
