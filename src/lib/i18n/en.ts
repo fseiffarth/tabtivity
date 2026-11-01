@@ -1502,6 +1502,7 @@ export const enSource = {
   "theme.var.accent-secondary": "Section titles and second-rank highlights",
   "theme.var.accent-soft": "The tint behind a selected file row or an accent chip",
   "theme.var.accent-contrast": "Text drawn on top of an accent fill",
+  "theme.var.focus-ring": "The keyboard focus ring around buttons, fields and links",
   "theme.var.control-bg": "Text fields, dropdowns and plain buttons",
   "theme.var.control-hover-bg": "A field or button under the pointer",
   "theme.var.control-border": "The edge around a field or a button",

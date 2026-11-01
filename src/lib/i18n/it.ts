@@ -1501,6 +1501,7 @@ export const dict: Dict = {
   "theme.var.accent-secondary": "Titoli di sezione ed evidenziazioni di secondo piano",
   "theme.var.accent-soft": "La tinta dietro una riga di file selezionata o un chip d’accento",
   "theme.var.accent-contrast": "Il testo posato su un riempimento d’accento",
+  "theme.var.focus-ring": "L’anello di focus da tastiera attorno a pulsanti, campi e link",
   "theme.var.control-bg": "Campi di testo, elenchi a discesa e pulsanti semplici",
   "theme.var.control-hover-bg": "Un campo o un pulsante sotto il puntatore",
   "theme.var.control-border": "Il bordo attorno a un campo o a un pulsante",

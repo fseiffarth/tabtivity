@@ -24,7 +24,7 @@
      --border-color / --border-subtle       → separators, outlines
      --text-primary / --text-secondary / --text-muted → text tiers
      --accent                               → the theme's hue (buttons, active
-       pill, links, scrollbar thumb, focus rings). -hover/-active and the
+       pill, links, scrollbar thumb). -hover/-active, --focus-ring and the
        pill-active/hover washes DERIVE from it automatically (see the base
        block); override them only when the derivation direction is wrong
        (the achromatic pair) or the theme wants a different hue there.
@@ -37,6 +37,11 @@
    Tip: a minimal theme is surfaces + borders + text tiers + ONE --accent +
    controls — hover/active/pill washes and the status softs derive themselves.
    `soft_dark` below is the smallest real example.
+
+   Not per theme, one set on :root for all of them: the type scale
+   (--text-xs…xl), spacing (--space-*), radii, motion and the z-index contract.
+   A style rule reads these tokens rather than a literal, so a theme's colours
+   reach it and the Theme Customizer can move it.
    ───────────────────────────────────────────────────────────────────── */
 
 /* ── Theme: fancy_dark (default) ─────────────────────────────────────── */
@@ -670,24 +675,38 @@
   --warning-soft: color-mix(in srgb, var(--warning) 18%, transparent);
   --danger-soft: color-mix(in srgb, var(--danger) 18%, transparent);
   --text-tertiary: var(--text-muted);
-  /* Type scale. The app's five sanctioned UI sizes — new rules read a token,
+  /* Type scale. The app's six sanctioned UI sizes — every rule reads a token,
      never a bare px, so density can be retuned from here (and a future UI-
-     scale setting has one place to act). --text-xs is the floor: nothing
-     user-readable renders below 10px. The base 13px matches .app-shell. */
+     scale setting has one place to act). Body 13 (--text-base, set on
+     .app-shell), secondary 12 (tab labels, chips, table cells), meta 11
+     (section heads, timestamps), badges 10; --text-xl is dialog and page
+     titles. --text-xs is the floor: nothing user-readable renders below 10px.
+     docs/context/desktop_ui_system.md has the whole system. */
   --text-xs: 10px;
   --text-sm: 11px;
   --text-md: 12px;
   --text-base: 13px;
   --text-lg: 15px;
-  /* Spacing scale (4px grid) for new rules — the existing corpus migrates
-     opportunistically. Odd one-off gaps (3px, 5px, 7px) are drift, not design. */
+  --text-xl: 18px;
+  /* Spacing scale (4px grid). Odd one-off gaps (3px, 5px, 7px) are drift, not
+     design. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
   /* Entrance easing for menus/dialogs/reveals — the splash's arrival curve,
      promoted to a token. Pair with --transition/--transition-slow durations. */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* The floating surfaces' enter and exit durations (popovers, hover cards,
+     toasts; a dialog takes 4/3 of --motion-enter). base.css zeroes both,
+     --transition and --transition-slow under prefers-reduced-motion. */
+  --motion-enter: 120ms;
+  --motion-exit: 80ms;
+  /* The keyboard focus ring (base.css). The accent, so the ink themes inherit
+     their ink; adjustable on its own in the Theme Customizer. */
+  --focus-ring: var(--accent);
   /* Layering contract, in one place instead of scattered comments. The app's
      layers, bottom to top: hint bubbles (90) < modal backdrop (100) <
      elevated dialogs (110) < context menus/popovers (1000, catcher just
