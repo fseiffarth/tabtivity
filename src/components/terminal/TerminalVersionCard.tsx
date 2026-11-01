@@ -5,6 +5,7 @@ import { loginIdForCmd } from "../../lib/agents/signInLaunch";
 import { useAgentVersionNoticeStore } from "../../stores/agents/agentVersionNotice";
 import { UntestedTag } from "../common/UntestedTag";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The card an agent pane shows when the host's CLI is newer than the release
@@ -36,7 +37,7 @@ export function TerminalVersionCard({ host, cmd }: { host: HTMLElement; cmd: str
         title={t("terminal.versionDrift.close")}
         onClick={() => hide(agent)}
       >
-        ×
+        <CloseIcon />
       </button>
       <div className="hint-bubble-title">
         {t("terminal.versionDrift.title", { label: notice.label })}{" "}

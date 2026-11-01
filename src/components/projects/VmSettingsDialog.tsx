@@ -10,6 +10,7 @@ import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
 import { usePoll } from "../../lib/usePoll";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The pill's "VM settings…" dialog (`docs/vm_projects_plan.md`): the VM's
@@ -134,7 +135,7 @@ export function VmSettingsDialog({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.vmSettingsTitle", { name: project.name })} <UntestedTag id="pill.vmSettingsTitle" /></h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
 
         <p className="settings-help">

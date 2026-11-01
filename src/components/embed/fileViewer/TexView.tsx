@@ -75,7 +75,7 @@ import { useChordHint, useShortcutOverrides } from "../../../lib/shortcuts/short
 import { renderTexPreview, cachedTexPreview } from "../../../lib/viewers/tex/texPreview";
 import { registerTexCompile, unregisterTexCompile } from "../../../stores/viewers/texCenter";
 import { useT } from "../../../lib/i18n";
-import { ArrowUpRightIcon, GearIcon, WarningIcon } from "../../common/icons/Icon";
+import { ArrowUpRightIcon, CloseIcon, GearIcon, WarningIcon } from "../../common/icons/Icon";
 import { ErrorNote } from "../../common/ErrorNote";
 import { useViewerState } from "./viewerState";
 import { openLinkedFile } from "./openLinked";
@@ -1427,7 +1427,7 @@ export function TexView({
             onClick={() => setWordCount(null)}
             aria-label={t("common.close")}
           >
-            ✕
+            <CloseIcon />
           </button>
         </div>
       )}

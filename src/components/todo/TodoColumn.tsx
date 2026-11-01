@@ -4,6 +4,7 @@ import type { CalendarTask, TaskColumn } from "../../types";
 import { useT } from "../../lib/i18n";
 import { useTodoStore } from "../../stores/todo";
 import { TodoCard } from "./TodoCard";
+import { CloseIcon } from "../common/icons/Icon";
 
 interface Props {
   column: TaskColumn;
@@ -252,7 +253,7 @@ export function TodoColumn({
             title={t("todoBoard.deleteColumn")}
             aria-label={t("todoBoard.deleteColumn")}
           >
-            ×
+            <CloseIcon />
           </button>
         </span>
       </header>

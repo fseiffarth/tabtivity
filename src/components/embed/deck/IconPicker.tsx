@@ -18,6 +18,7 @@ import {
   searchIcons,
 } from "../../../lib/viewers/deck/icons";
 import { useT } from "../../../lib/i18n";
+import { CloseIcon } from "../../common/icons/Icon";
 
 export interface IconPickerProps {
   onPick: (icon: IconDef) => void;
@@ -50,7 +51,7 @@ export function IconPicker({ onPick, onClose }: IconPickerProps) {
         <div className="settings-title-row">
           <h3>{t("deckIconPicker.title")}</h3>
           <button className="dialog-close-btn" onClick={onClose} aria-label={t("common.close")}>
-            ×
+            <CloseIcon />
           </button>
         </div>
 

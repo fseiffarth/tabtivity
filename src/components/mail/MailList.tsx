@@ -13,7 +13,7 @@ import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { useUse24h } from "../../lib/timeFormat";
 import { UntestedTag } from "../common/UntestedTag";
 import type { MailHeader, MailPriority, MailSort } from "../../types/mail";
-import { PaperclipIcon } from "../common/icons/Icon";
+import { CloseIcon, PaperclipIcon } from "../common/icons/Icon";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 
 /** One frozen instance, so a list without marks does not re-render on a new
@@ -439,7 +439,7 @@ function MailListImpl({
             aria-label={t("mail.clearFilters")}
             onClick={onClearFilters}
           >
-            ✕
+            <CloseIcon />
           </button>
         )}
       </div>
@@ -662,7 +662,7 @@ function MailListImpl({
                       onDelete([h]);
                     }}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 );
               })()}

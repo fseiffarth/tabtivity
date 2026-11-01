@@ -25,6 +25,7 @@ import {
   type CatalogDictionary,
   type InstalledDictionary,
 } from "../../lib/spellDictionaries";
+import { CloseIcon } from "../common/icons/Icon";
 
 interface SpellDictionaries {
   installed: InstalledDictionary[];
@@ -128,7 +129,7 @@ export function SpellDictionaryPicker() {
                   aria-label={t("projectSettings.spellRemove")}
                   onClick={() => void remove()}
                 >
-                  ×
+                  <CloseIcon />
                 </button>
               )}
             </span>

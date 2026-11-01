@@ -60,7 +60,7 @@ import { RenameDialog, containingFolderLabel } from "./RenameDialog";
 import { useDialogs } from "../common/PromptDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { FileIcon } from "../common/icons/FileIcon";
-import { ArrowDownIcon, ArrowUpIcon, PlayIcon, SearchIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, CloseIcon, PlayIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { storageKey } from "../../lib/brand";
@@ -256,7 +256,7 @@ function GitMarker({ status }: { status: string | undefined }) {
   if (status === "ignored") {
     return (
       <span style={{ ...slot, color: STATUS_COLOR[status] }} title={t(STATUS_TITLE_KEY[status])}>
-        ✕
+        <CloseIcon />
       </span>
     );
   }
@@ -411,7 +411,7 @@ const FileRow = React.memo(function FileRow({
               title={t("fileTree.excludedFromByteSync")}
               aria-label={t("fileTree.excludedFromByteSync")}
             >
-              ✕
+              <CloseIcon />
             </span>
           ) : (
             <>
@@ -2408,7 +2408,7 @@ export function FileTree({
           title={t("fileTree.excludedFromByteSync")}
           aria-label={t("fileTree.excludedFromByteSync")}
         >
-          ✕
+          <CloseIcon />
         </span>
       );
     }
@@ -2621,7 +2621,7 @@ export function FileTree({
                     aria-label={t("fileTree.clearSearch")}
                     onClick={() => setSearch("")}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 )}
               </>
@@ -2867,7 +2867,7 @@ export function FileTree({
             title={t("common.close")}
             aria-label={t("common.close")}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       )}

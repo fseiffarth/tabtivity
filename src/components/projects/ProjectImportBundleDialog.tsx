@@ -16,6 +16,7 @@ import type {
 import { ErrorNote } from "../common/ErrorNote";
 import { exportExtensions } from "../../lib/brandMigration";
 import { useBoxesStore } from "../../stores/boxes";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * "Import project file…" — register a `.tabtivityproj` bundle written by
@@ -119,8 +120,8 @@ export function ProjectImportBundleDialog({
           <h2>
             {t("transfer.importTitle")} <UntestedTag id="transfer.import" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
 

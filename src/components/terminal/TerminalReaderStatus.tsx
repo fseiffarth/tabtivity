@@ -12,6 +12,7 @@ import type { LimitMeters } from "../../../shared/usageReport";
 import type { TabEntry } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
 import type { UntestedId } from "../../lib/untested";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** Rows read for the `/status` card: a screenful or two above the input box. */
 const STATUS_ROWS = 120;
@@ -118,7 +119,7 @@ export function TerminalReaderStatus({ tab, ptyId, agentLabel, visible, canRefre
       <strong>{t("terminal.reader.status.title", { agent: agentLabel })}</strong>
       {tab.cmd === "claude" ? <UntestedTag id="terminal.reader.claudeStatus" /> : <UntestedTag id="terminal.reader.codexStatus" />}
       <button type="button" className="terminal-reader-fact-model" onClick={onRefresh} disabled={!canRefresh || refreshing || !tab.scheduleTargetId}>{t("terminal.reader.status.refresh")}</button>
-      <button type="button" className="terminal-reader-picker-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
+      <button type="button" className="terminal-reader-picker-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon /></button>
     </div>
     <div className="terminal-reader-status-model">
       <span className="terminal-reader-status-label">{t("terminal.reader.model")}</span>

@@ -8,7 +8,7 @@ import { bindDragRelease } from "../../lib/window/dragPlatform";
 import { fmtModified, fmtSize, type FileEntry } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { FileIcon } from "../common/icons/FileIcon";
-import { InboxIcon } from "../common/icons/Icon";
+import { CloseIcon, InboxIcon } from "../common/icons/Icon";
 import { useResizableSection } from "./useResizableSection";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
@@ -298,7 +298,7 @@ export function DownloadsSection({
           onClick={onClose}
           title={t("downloads.hide")}
         >
-          ×
+          <CloseIcon />
         </button>
       </div>
 

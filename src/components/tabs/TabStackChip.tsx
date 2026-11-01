@@ -7,6 +7,7 @@ import { TabStatusMark, statusMarkSlots } from "./TabLocalityBadges";
 import { UntestedTag } from "../common/UntestedTag";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** How long the list stays up after the pointer leaves the chip or the list —
  *  long enough to cross the gap between them, short enough to feel like hover. */
@@ -217,7 +218,7 @@ function StackMenu({
                 onCloseTab(tab.key);
               }}
             >
-              ×
+              <CloseIcon />
             </span>
           </button>
         );

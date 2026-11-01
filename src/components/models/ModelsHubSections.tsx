@@ -20,6 +20,7 @@ import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { DEFAULT_COMPACT_AGENT_IDS } from "../../lib/tabs/newTabItems";
 import { useAutoloadNotice, type HubAgentInfo, type ModelsHub } from "./useModelsHub";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The Models & agents sections, rendered by both surfaces: the header's hover
@@ -868,7 +869,7 @@ export function LocalModelsSection({
             aria-label={t("localModel.autostartDismiss")}
             onClick={restoreDismiss}
           >
-            ✕
+            <CloseIcon />
           </button>
           <div className="local-model-autostart-text">
             <span className="local-model-autostart-sentence">{restoreSentence}</span>
@@ -920,7 +921,7 @@ export function LocalModelsSection({
             aria-label={t("localModel.autostartDismiss")}
             onClick={autoDismiss}
           >
-            ✕
+            <CloseIcon />
           </button>
           <div className="local-model-autostart-text">
             <span className="local-model-autostart-sentence">{autoNoteTitle}</span>

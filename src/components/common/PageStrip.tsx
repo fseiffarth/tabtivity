@@ -53,6 +53,7 @@ import {
   type WindowFrame,
 } from "../../lib/window/coords";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "./icons/Icon";
 
 /** Below this many px of pointer travel a press is a click, not a drag. */
 const DRAG_THRESHOLD_PX = 5;
@@ -522,7 +523,7 @@ export function PageStrip({
                 onPointerDown={(e) => e.stopPropagation()} // not a drag
                 onClick={() => act(deletePages(pages, targetIds(ref.id)))}
               >
-                ✕
+                <CloseIcon />
               </button>
             </div>
             </Fragment>

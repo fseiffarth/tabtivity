@@ -105,7 +105,7 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
-import { ArrowDownIcon, ArrowUpIcon, ArrowsHorizontalIcon, CheckIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -1937,7 +1937,7 @@ export function ProjectFilesView({
               title={t("projectFilesView.dismissExpiryTitle")}
               onClick={() => setExpiryDismissed(`${projectWs.id}:${projectWs.remaining_days}`)}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         </div>
@@ -2086,7 +2086,7 @@ export function ProjectFilesView({
                 title={t("common.close")}
                 aria-label={t("common.close")}
               >
-                ×
+                <CloseIcon />
               </button>
             </div>
           )}
@@ -2666,7 +2666,7 @@ export function ProjectFilesView({
                               aria-label={t("projectFilesView.killSessionAria", { name: s.name })}
                               onClick={() => void killSession(hostId, s.name)}
                             >
-                              ×
+                              <CloseIcon />
                             </button>
                           </div>
                         </div>
@@ -2846,7 +2846,7 @@ export function ProjectFilesView({
                     aria-label={t("projectFilesView.cancelJobAria", { id: j.id })}
                     onClick={() => void cancelJob(j.id, j.name)}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               </div>
@@ -2942,7 +2942,7 @@ export function ProjectFilesView({
                     onClick={() => closeApp(w.id)}
                     title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
                 {rowStaysVisible(workspaceCaps, w.window_id) === "wayland" && (

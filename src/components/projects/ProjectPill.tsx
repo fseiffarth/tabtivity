@@ -59,7 +59,7 @@ import { useBoxesStore } from "../../stores/boxes";
 import { boxColor } from "../../lib/theme/boxColor";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
-import { BoxSwatch, CheckboxIcon, PauseIcon, SquareIcon, UnlockIcon } from "../common/icons/Icon";
+import { BoxSwatch, CheckboxIcon, CloseIcon, PauseIcon, SquareIcon, UnlockIcon } from "../common/icons/Icon";
 import {
   agentFenceInstallCommand,
   agentFenceMarkLevel,
@@ -142,7 +142,7 @@ function ActivityWindow({
       >
         <div className="activity-window-header">
           <span className="activity-window-title">{t("pill.activityTitle", { name: project.name })}</span>
-          <button className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="activity-window-body">
           {loading ? (
@@ -193,7 +193,7 @@ function EditDescriptionWindow({
       >
         <div className="settings-title-row">
           <h2>{t("pill.descTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <textarea
           value={value}
@@ -316,7 +316,7 @@ function RenameWindow({
       >
         <div className="settings-title-row">
           <h2>{t("pill.renameTitle")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <input
           type="text"
@@ -483,7 +483,7 @@ function PublishWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.publishTitle", { name: project.name, provider: providerName(provider) })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="project-dialog-path">
           {t("pill.currentPrefix")} {gitTypeLabel(project.git_type, project.git_provider, t)}
@@ -678,7 +678,7 @@ function GitHostingWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.gitHostingTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="project-dialog-path">{t("pill.gitHostingDesc")}</div>
 
@@ -815,7 +815,7 @@ function ContainerSettingsWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.containerSettingsTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <p className="settings-help">{t("pill.containerAppliedNote")}</p>
         {/* First, because it decides what the rest of the knobs even apply to.
@@ -1036,7 +1036,7 @@ function VisibilityWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.changeVisibilityTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="project-dialog-path">
           {t("pill.currentPrefix")} {providerName(project.git_provider)} · {t(current === "public" ? "pill.visPublic" : "pill.visPrivate")}
@@ -1114,7 +1114,7 @@ function MigrateProviderWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.moveToProviderTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="project-dialog-path">
           {t("pill.currentPrefix")} {gitTypeLabel(project.git_type, project.git_provider, t)}
@@ -2813,7 +2813,7 @@ export function ProjectPill({
             title={closeTitle ?? t("pill.closeProject")}
             onClick={(e) => { e.stopPropagation(); onClose(); }}
           >
-            ×
+            <CloseIcon />
           </button>
         )}
         <PillStatusBars scope={project.id} />

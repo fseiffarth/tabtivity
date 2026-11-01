@@ -7,6 +7,7 @@ import { runInstallInTab } from "../../lib/installCommand";
 import { useT } from "../../lib/i18n";
 import type { CustomAgent } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 interface Props {
   onClose: () => void;
@@ -131,7 +132,7 @@ export function CustomAgentDialog({ onClose }: Props) {
       >
         <div className="settings-title-row">
           <h2>{t("customAgentDialog.title")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
         <p className="settings-help">
@@ -179,7 +180,7 @@ export function CustomAgentDialog({ onClose }: Props) {
                     disabled={busy}
                     onClick={() => remove(a.id)}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               );

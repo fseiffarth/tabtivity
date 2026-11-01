@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Toggle } from "../common/Toggle";
 import { useSettingsStore } from "../../stores/settings";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * First-run ask for the two machine-wide remote surfaces that live in the
@@ -41,7 +42,7 @@ export function RemoteFeaturesPrompt({ onClose }: { onClose: () => void }) {
       >
         <div className="settings-title-row">
           <h2>{t("remoteFeatures.title")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={finish}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={finish}><CloseIcon /></button>
         </div>
         <p className="settings-help">{t("remoteFeatures.help")}</p>
 

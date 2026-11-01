@@ -27,6 +27,7 @@ import {
 import { useSettingsStore } from "../../stores/settings";
 import type { PrintJob, PrintSnapshot, PrinterInfo } from "../../types/printing";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The print manager tab: the machine's printers, what is queued on each, and the
@@ -244,7 +245,7 @@ export function PrintManagerPane({ visible = true }: PrintManagerPaneProps) {
                         title={t("printing.networkForget")}
                         onClick={() => forgetNetwork(key)}
                       >
-                        ✕
+                        <CloseIcon />
                       </button>
                     </td>
                   </tr>
@@ -412,7 +413,7 @@ function JobTable({ jobs, busy, onAct }: { jobs: PrintJob[]; busy: boolean; onAc
                 title={t("printing.cancelJob")}
                 onClick={() => void onAct(() => printJobCancel(job.printer, job.id))}
               >
-                ✕
+                <CloseIcon />
               </button>
             </td>
           </tr>

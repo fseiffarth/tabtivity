@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { sanitizeName } from "../../lib/projects/scaffold";
 import { useT } from "../../lib/i18n";
 import { isPathWithin } from "../../lib/paths";
-import { ArrowUpIcon, FolderIcon } from "./icons/Icon";
+import { ArrowUpIcon, CloseIcon, FolderIcon } from "./icons/Icon";
 
 /** One subdirectory row, mirroring the Rust `DirEntry` (commands::fs). */
 interface DirEntry {
@@ -150,7 +150,7 @@ export function FolderPickerDialog({ initialPath, boundPath, title, confirmLabel
       >
         <div className="settings-title-row">
           <h2>{title}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
 
         <div className="folder-picker-nav">

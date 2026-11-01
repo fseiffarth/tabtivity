@@ -23,6 +23,7 @@ import type {
 } from "../../types/skills";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
+import { CloseIcon } from "../common/icons/Icon";
 
 export interface SkillsLibraryViewProps {
   /** Absolute path to the project skills may install into, or `null` where
@@ -519,7 +520,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                 title={t("skillsLibrary.closePreview")}
                 onClick={() => setSelectedEntry(null)}
               >
-                ×
+                <CloseIcon />
               </button>
             </div>
             <div className="skills-preview-scroll">

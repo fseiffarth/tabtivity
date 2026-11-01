@@ -71,7 +71,7 @@ import { renderPage } from "./deckBase";
 import { InterstitialView, PresentedSlide } from "./DeckSlideView";
 import { useT } from "../../../lib/i18n";
 import { useUse24h } from "../../../lib/timeFormat";
-import { PauseIcon, PlayIcon, TimerIcon } from "../../common/icons/Icon";
+import { CloseIcon, PauseIcon, PlayIcon, TimerIcon } from "../../common/icons/Icon";
 import { ErrorNote } from "../../common/ErrorNote";
 
 export interface DeckPresenterProps {
@@ -807,7 +807,7 @@ export function DeckPresenter({
           ⧉
         </button>
         <button onClick={closeAll} title={t("deckPresenter.exitTitle")} aria-label={t("deckPresenter.exitAria")}>
-          ✕
+          <CloseIcon />
         </button>
       </div>
     </div>,

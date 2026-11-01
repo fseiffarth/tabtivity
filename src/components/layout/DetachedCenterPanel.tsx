@@ -125,6 +125,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
+import { CloseIcon } from "../common/icons/Icon";
 
 
 interface Props {
@@ -1564,7 +1565,7 @@ export function DetachedCenterPanel({
                     }}
                     title={t("detachedTabs.closeTab")}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               </Fragment>

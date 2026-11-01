@@ -6,6 +6,7 @@ import { useT } from "../../lib/i18n";
 import { QUEUED_CONFIRM_DELAY_MS } from "../../lib/queuedConfirm";
 import type { UntestedId } from "../../lib/untested";
 import { ErrorNote } from "./ErrorNote";
+import { CloseIcon } from "./icons/Icon";
 
 /**
  * The three shapes every in-app question takes — ask for a name, ask yes/no,
@@ -341,7 +342,7 @@ export function AsyncConfirmDialog({
     <DialogShell frame="project-dialog" onDismiss={dismiss}>
       <div className="settings-title-row">
         <h2>{title}</h2>
-        <button type="button" className="dialog-close-btn" onClick={dismiss}>×</button>
+        <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={dismiss}><CloseIcon /></button>
       </div>
       {typeof children === "function" ? children(confirm) : children}
       {error && <ErrorNote className="project-dialog-error" error={error} />}

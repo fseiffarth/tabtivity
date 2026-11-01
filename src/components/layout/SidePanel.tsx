@@ -29,7 +29,7 @@ import {
 // Single source of truth for the displayed version: package.json is kept in
 // lockstep with the Tauri manifests on each version bump.
 import { version as APP_VERSION } from "../../../package.json";
-import { PencilIcon, UndoIcon } from "../common/icons/Icon";
+import { CloseIcon, PencilIcon, UndoIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 
@@ -424,7 +424,7 @@ export function SidePanel({
                     title={t("sidePanel.closeSubwindow")}
                     onClick={() => closeHiddenGroup(h.id)}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               );

@@ -7,7 +7,7 @@ import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
 import { AGENT_TAB_ACTIONS } from "../../lib/shortcuts/shortcuts";
 import { useChordHint } from "../../lib/shortcuts/shortcutHint";
-import { ArrowUpRightIcon, SparkleIcon } from "../common/icons/Icon";
+import { ArrowUpRightIcon, CloseIcon, SparkleIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { AttachedAgentPane } from "./AttachedAgentPane";
 import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
@@ -204,7 +204,7 @@ export function OverlayAgentColumn({
           aria-label={t("overlayAgent.hide")}
           onClick={hide}
         >
-          ×
+          <CloseIcon />
         </button>
       </div>
       {hint && <div className="overlay-agent-hint">{hint}</div>}

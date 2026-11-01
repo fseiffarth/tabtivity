@@ -20,6 +20,7 @@ import type {
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * "Export project…" — write one project into a single `.tabtivityproj` file that
@@ -219,8 +220,8 @@ export function ProjectExportDialog({
             {t("transfer.exportTitle", { name: project.name })}{" "}
             <UntestedTag id="transfer.export" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
 

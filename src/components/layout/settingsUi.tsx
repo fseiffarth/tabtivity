@@ -2,6 +2,7 @@ import { Dropdown } from "../common/Dropdown";
 import { useId, useState, type ChangeEventHandler, type ReactNode } from "react";
 import { Toggle } from "../common/Toggle";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The settings design system, in components.
@@ -48,7 +49,7 @@ export function SettingsHeader({
       <h2>{title}</h2>
       {onClose && (
         <button type="button" className="dialog-close-btn" aria-label={t("common.close")} onClick={onClose}>
-          ×
+          <CloseIcon />
         </button>
       )}
     </div>

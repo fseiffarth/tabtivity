@@ -103,6 +103,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
@@ -439,7 +440,7 @@ const TabItem = memo(function TabItem({
             : t("tabBar.closeTabTitle")
         }
       >
-        ×
+        <CloseIcon />
       </button>
     </div>
   );
@@ -1812,7 +1813,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); closeGroup(groupId); }}
           >
-            ×
+            <CloseIcon />
           </button>
         )}
       </div>
@@ -2217,7 +2218,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("common.close")}
             <MenuShortcut chord="closeTab" />
           </button>
@@ -2229,7 +2230,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeOthers")}
           </button>
           <button
@@ -2240,7 +2241,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeToLeft")}
           </button>
           <button
@@ -2251,7 +2252,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeToRight")}
           </button>
           {closedAgentTabs.length > 0 && (
@@ -2300,7 +2301,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               tabs.filter((tb) => tb.stack === name).forEach((tb) => closeTabWithConfirm(tb.key));
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabStack.closeAll")}
           </button>
         </ContextMenuPortal>

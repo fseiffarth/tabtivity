@@ -33,6 +33,7 @@ import { MachinesOverlayFrame } from "./MachinesOverlay";
 import { MachinesGlyph } from "./HeaderGlyphs";
 import { BRAND } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
+import { CloseIcon } from "../common/icons/Icon";
 
 const MENU_ID = "machines";
 
@@ -2111,7 +2112,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     setRemoveArm(m.id);
                   }}
                 >
-                  ✕
+                  <CloseIcon />
                 </button>
               </div>
             );
@@ -2673,7 +2674,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
               title={t("common.close")}
               onClick={() => closeMenu(MENU_ID)}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
           <div className="menu-scroll-region">

@@ -14,6 +14,7 @@ import type { KeyringState } from "../../lib/keyring";
 import { useT } from "../../lib/i18n";
 import type { MailAccount, MailAgentScope, MailKeyringState, MailSecurity } from "../../types/mail";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** The account dialog's agent-access states, in the order they are shown. */
 const AGENT_SCOPES = ["off", "marked", "all"] as const;
@@ -250,8 +251,8 @@ export function MailAccountDialog({
           <h2>
             {account ? t("mail.accountDialogEdit") : t("mail.accountDialogNew")} <UntestedTag id="mail.accountDialogNew" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         <div className="dialog-scroll">

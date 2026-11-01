@@ -9,6 +9,7 @@ import { boardColumns, fallbackColumnId, taskFromRemark } from "../../lib/todoBo
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
+import { CloseIcon } from "../common/icons/Icon";
 
 const EMPTY_REMARKS: ProjectRemark[] = [];
 
@@ -94,7 +95,7 @@ export function RemarksPane({ projectId, projectDir, visible }: {
               danger: true,
             });
             if (ok) await useProjectRemarksStore.getState().remove(projectId, projectDir, remark);
-          })()}>×</button>
+          })()}><CloseIcon /></button>
           <button onClick={() => void makeCard(remark)}>{t("projectRemarks.makeCard")}</button>
         </div>;
       })}

@@ -9,6 +9,7 @@ import { OverlayApprovals } from "../layout/OverlayApprovals";
 import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
 import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
 import { storageKey } from "../../lib/brand";
+import { CloseIcon } from "../common/icons/Icon";
 
 // The pane is the same lazily split chunk a calendar tab loads (`TabPane`); the
 // overlay's chrome stays in the startup chunk because its hooks run closed too.
@@ -116,7 +117,7 @@ export function CalendarOverlayHost() {
               aria-label={t("common.close")}
               onClick={() => useCalendarStore.getState().closeOverlay()}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         </div>

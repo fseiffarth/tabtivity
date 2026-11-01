@@ -27,7 +27,7 @@ import { useListReorder } from "../../hooks/useListReorder";
 import { resolveRemarkAbsPath } from "../../lib/projects/projectRemarks";
 import { jumpToSource } from "../embed/fileViewer/sourceJump";
 import { basename } from "../../lib/paths";
-import { ClockIcon, MailIcon, PinIcon } from "../common/icons/Icon";
+import { ClockIcon, CloseIcon, MailIcon, PinIcon } from "../common/icons/Icon";
 import { useArrived } from "../../stores/calendar/arrivals";
 
 interface Props {
@@ -416,7 +416,7 @@ export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: P
                   title={t("todoCard.removeStep")}
                   aria-label={t("todoCard.removeStep")}
                 >
-                  ×
+                  <CloseIcon />
                 </button>
               </li>
             ))}

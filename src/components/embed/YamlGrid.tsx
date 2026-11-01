@@ -24,6 +24,7 @@ import {
 } from "../../lib/viewers/yaml";
 import { cellKind, isContainer } from "../../lib/viewers/yamlGrid";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The YAML/JSON **card grid** (#yaml-grid) — the third view on the file, beside the
@@ -561,7 +562,7 @@ function LevelCard({
               ctx.onChange(deleteNode(ctx.text, node));
             }}
           >
-            ×
+            <CloseIcon />
           </button>
         )}
       </div>
@@ -656,7 +657,7 @@ function FieldRow({
           aria-label={t("yamlGrid.deleteLabel", { title: label })}
           onClick={() => ctx.onChange(deleteNode(ctx.text, entry))}
         >
-          ×
+          <CloseIcon />
         </button>
       )}
     </div>

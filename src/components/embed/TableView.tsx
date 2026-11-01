@@ -34,6 +34,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { viewerErrorText } from "../../lib/viewers/limitError";
 import { useFileScope } from "../../lib/files/fileAccess";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** Backend `read_spreadsheet` result (Dev G). Mirrors the Rust `SheetData`. */
 interface SheetData {
@@ -1288,7 +1289,7 @@ export function TableView({
                             color: "var(--text-primary)",
                           }}
                         >
-                          ×
+                          <CloseIcon />
                         </button>
                       </span>
                     ) : (

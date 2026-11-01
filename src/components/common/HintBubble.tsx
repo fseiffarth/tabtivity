@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
 import { BUBBLE_W, placeBubble } from "../../lib/shortcuts/hintAnchor";
 import { UntestedTag } from "./UntestedTag";
+import { CloseIcon } from "./icons/Icon";
 
 /**
  * A small floating coachmark anchored above/below a UI element, or a centered
@@ -66,7 +67,7 @@ export function HintBubble({
         aria-label={t("hint.dismissAria")}
         onClick={onDismiss}
       >
-        ×
+        <CloseIcon />
       </button>
       <div className="hint-bubble-title">{title}{tag}</div>
       <div className="hint-bubble-body">{body}</div>

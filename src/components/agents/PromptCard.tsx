@@ -10,6 +10,7 @@ import type { PromptLink, SentAgentPrompt } from "../../stores/agents/agentPromp
 import { Dropdown } from "../common/Dropdown";
 import { MarkdownPromptField } from "../common/MarkdownPromptField";
 import { UntestedTag } from "../common/UntestedTag";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** Inside a card, keys aimed at these belong to them, not to the card. */
 export const CARD_OWN_KEYS = "input, textarea, select, button, [contenteditable]";
@@ -247,7 +248,7 @@ export function PromptCard({
             aria-label={t("promptChart.deleteDraft")}
             title={t("promptChart.deleteDraft")}
             onClick={(event) => { event.stopPropagation(); void onDelete(); }}
-          >×</button>
+          ><CloseIcon /></button>
         )}
         <span className={`agent-prompt-lamp is-${card.history?.result ?? card.state}`} aria-hidden="true" />
       </div>

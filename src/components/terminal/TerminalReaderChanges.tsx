@@ -14,7 +14,7 @@ import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { openFileEntry } from "../../lib/files/openFileEntry";
 import { openTabInScope } from "../../lib/tabs/tabScopeContext";
 import { UntestedTag } from "../common/UntestedTag";
-import { ArrowUpRightIcon } from "../common/icons/Icon";
+import { ArrowUpRightIcon, CloseIcon } from "../common/icons/Icon";
 import { Dropdown } from "../common/Dropdown";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
@@ -356,7 +356,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
           options={[{ value: "split", label: t("terminal.changes.split") }, { value: "unified", label: t("terminal.changes.unified") }]}
           onChange={(value) => setSplit(value === "split")} />
         <button type="button" className="terminal-changes-close" onClick={onClose} title={t("terminal.changes.close")} aria-label={t("terminal.changes.close")}>
-          ✕
+          <CloseIcon />
         </button>
       </header>
       {subagent ? (
@@ -383,7 +383,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
                 onClick={() => setPicked(filter === file.path ? null : file.path)}
               >
                 <span className="terminal-changes-path"><strong>{shown}</strong></span>
-                {file.count > 1 && <small>×{file.count}</small>}
+                {file.count > 1 && <small><CloseIcon />{file.count}</small>}
                 <Counts added={file.added} removed={file.removed} />
               </button>
             );

@@ -18,6 +18,7 @@ import {
   type MobileHostRuntimeStatus,
 } from "../../stores/mobileHostStatus";
 import { usePoll } from "../../lib/usePoll";
+import { CloseIcon } from "../common/icons/Icon";
 
 const MENU_ID = "mobile";
 /** How often the open menu re-reads the device list: a phone signing in or
@@ -326,7 +327,7 @@ export function MobileIndicator() {
                 title={t("common.close")}
                 onClick={() => closeMenu(MENU_ID)}
               >
-                ×
+                <CloseIcon />
               </button>
             </div>
             <div className="mobile-indicator-body">

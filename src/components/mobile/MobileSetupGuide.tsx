@@ -6,6 +6,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useT, translateNow } from "../../lib/i18n";
 import { MOBILE_HOST_KEY } from "../../lib/brand";
 import { useDialogs } from "../common/PromptDialogs";
+import { CloseIcon } from "../common/icons/Icon";
 
 const DEFAULT_PORT = 8742;
 
@@ -77,7 +78,7 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
               className="dialog-close-btn"
               aria-label={t("common.close")}
               onClick={onClose}
-            >×</button>
+            ><CloseIcon /></button>
           </div>
           <div className="dialog-scroll">
             <p className="settings-help">{t("mobile.setupIntro")}</p>

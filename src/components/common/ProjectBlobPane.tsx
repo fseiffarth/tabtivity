@@ -20,7 +20,7 @@ import {
 } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { FileIcon } from "./icons/FileIcon";
-import { HexagonIcon } from "./icons/Icon";
+import { CloseIcon, HexagonIcon } from "./icons/Icon";
 import { basename, dirname } from "../../lib/paths";
 
 /**
@@ -741,7 +741,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
       {focus && (
         <div className="blob-breadcrumb" onPointerDown={(e) => e.stopPropagation()}>
           <button className="blob-crumb blob-crumb-exit" title={t("blob.backToProjects")} onClick={exitToCloud}>
-            ✕
+            <CloseIcon />
           </button>
           <button className="blob-crumb" onClick={() => jumpTo("")}>
             {focus.project.name}

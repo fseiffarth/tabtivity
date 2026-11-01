@@ -13,7 +13,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
-import { LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
+import { CloseIcon, LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename } from "../../lib/paths";
@@ -1563,7 +1563,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                       aria-label={t("gitHistory.removeWorktreeTitle", { path: wt.path })}
                       title={t("gitHistory.removeWorktreeTitle", { path: wt.path })}
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   )}
                 </span>
@@ -1837,7 +1837,7 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="commit-window" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("gitHistory.commitTitle", { short: commit.short })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="commit-window-meta">
           <span>{commit.author}</span>

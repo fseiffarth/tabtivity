@@ -25,6 +25,7 @@ import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/head
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import { ErrorNote } from "../common/ErrorNote";
 import { VpnGlyph } from "./HeaderGlyphs";
+import { CloseIcon } from "../common/icons/Icon";
 
 const MENU_ID = "vpn";
 
@@ -642,7 +643,7 @@ export function VpnIndicator() {
               title={t("common.close")}
               onClick={() => setOpen(false)}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
           <div className="menu-scroll-region">

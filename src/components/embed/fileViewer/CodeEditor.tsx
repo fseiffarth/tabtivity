@@ -92,6 +92,7 @@ import {
 import { nextAcMode, acModeLabel } from "./editorPrefs";
 import { onCtrlWheelFont, useZoomModifierWheel } from "./fontZoom";
 import { type BlameLine, isUncommitted, blameRelDate, authorAbbrev } from "./codeTools";
+import { CloseIcon } from "../../common/icons/Icon";
 
 // The ghost-suggestion key legend's Alt chords, rendered once through
 // `chordLabel` so they read ⌥ on macOS and Alt elsewhere; the handler itself is
@@ -2831,7 +2832,7 @@ export function CodeEditor({
                 aria-label={t("fileViewer.removeFromContext", { file: f.rel })}
                 onClick={() => removeContextFile(f.path)}
               >
-                ×
+                <CloseIcon />
               </button>
             </span>
           ))}
@@ -2936,7 +2937,7 @@ export function CodeEditor({
               title={t("pdfViewer.closeFindTitle")}
               aria-label={t("pdfViewer.closeFindLabel")}
             >
-              ✕
+              <CloseIcon />
             </button>
           </div>
           {replaceOpen && (

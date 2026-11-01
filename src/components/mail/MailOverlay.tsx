@@ -14,7 +14,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { useDialogs } from "../common/PromptDialogs";
 import { MailGlyph } from "../header/HeaderGlyphs";
-import { BookIcon } from "../common/icons/Icon";
+import { BookIcon, CloseIcon } from "../common/icons/Icon";
 import { OverlayApprovals } from "../layout/OverlayApprovals";
 import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
 import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
@@ -283,7 +283,7 @@ function MailOverlay({ open }: { open: boolean }) {
                       void closeTab(tab);
                     }}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               );
@@ -313,7 +313,7 @@ function MailOverlay({ open }: { open: boolean }) {
               aria-label={t("common.close")}
               onClick={() => useMailStore.getState().closeOverlay()}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         </div>

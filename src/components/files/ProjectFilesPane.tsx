@@ -25,7 +25,7 @@ import type { SortKey } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { UntestedTag } from "../common/UntestedTag";
-import { FolderIcon, GearIcon, HexagonIcon } from "../common/icons/Icon";
+import { CloseIcon, FolderIcon, GearIcon, HexagonIcon } from "../common/icons/Icon";
 
 /**
  * THE project file view — the tree, the remote sync row and the Downloads
@@ -911,7 +911,7 @@ export function ProjectFilesPane({
             title={t("common.close")}
             aria-label={t("common.close")}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       )}

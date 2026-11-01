@@ -57,6 +57,7 @@ import type {
 import { stripFormatControls } from "../../lib/textSafety";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 export interface MailFiltersDialogProps {
   accounts: MailAccount[];
@@ -166,8 +167,8 @@ export function MailFiltersDialog({ accounts, onClose }: MailFiltersDialogProps)
           <h2>
             {t("mail.filters.title")} <UntestedTag id="mail.filters.title" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
 
@@ -250,7 +251,7 @@ export function MailFiltersDialog({ accounts, onClose }: MailFiltersDialogProps)
                         deleteRule(i);
                       }}
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   </span>
                 </div>
@@ -288,7 +289,7 @@ export function MailFiltersDialog({ accounts, onClose }: MailFiltersDialogProps)
                           title={t("common.remove")}
                           onClick={() => edit({ terms: removeTerm(rule.terms, term) })}
                         >
-                          ×
+                          <CloseIcon />
                         </button>
                       </span>
                     ))}

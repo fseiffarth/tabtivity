@@ -15,6 +15,7 @@ import {
   type ShortcutMap,
 } from "../../lib/shortcuts/shortcuts";
 import type { SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The keyboard-shortcut cheat sheet (part 2 of the keyboard-only steering
@@ -84,7 +85,7 @@ export function ShortcutHelpOverlay() {
             aria-label={t("common.close")}
             onClick={close}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
         <div className="dialog-scroll" ref={scrollRef} tabIndex={-1}>

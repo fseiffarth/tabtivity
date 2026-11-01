@@ -90,7 +90,7 @@ import { MobileSettings } from "../mobile/MobileSettings";
 import { ServerSettings } from "../server/ServerSettings";
 import { UpdatesPanel } from "./UpdatesPanel";
 import { DEFAULT_PDF_MARKUP_APPLY, DEFAULT_PDF_MARKUP_APPLY_INSTRUCTION, DEFAULT_PDF_MARKUP_ASK, DEFAULT_PDF_MARKUP_INSTRUCTION, MAX_PDF_MARKUP_PROMPT, PDF_MARKUP_ASK_STOPS, pdfMarkupAsk, pdfMarkupInstruction } from "../../lib/viewers/pdfMarkup";
-import { BugIcon, PlayIcon, WarningIcon } from "../common/icons/Icon";
+import { BugIcon, CloseIcon, PlayIcon, WarningIcon } from "../common/icons/Icon";
 import {
   SETTINGS_ANCHORS,
   SettingRow,
@@ -523,7 +523,7 @@ function ShortcutsSettings({ onBack, onClose }: SubPanelProps) {
             title={t("shortcuts.unbind")}
             aria-label={t("shortcuts.unbind")}
           >
-            ×
+            <CloseIcon />
           </button>
           <button
             type="button"
@@ -577,7 +577,7 @@ function ShortcutsSettings({ onBack, onClose }: SubPanelProps) {
                     title={t("shortcuts.unbind")}
                     aria-label={t("shortcuts.unbind")}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 )}
               </span>

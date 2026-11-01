@@ -34,6 +34,7 @@ import type { ComputeHost, GlobalMachine, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** Distinct PTY id per login terminal opened here — the id is the handle
  *  `pty_kill` and the output stream use, so it must never be reused. */
@@ -692,7 +693,7 @@ export function RemoteMachinesWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog dialog-framed remote-machines-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("remoteMachines.title", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
 
         <div className="dialog-scroll">

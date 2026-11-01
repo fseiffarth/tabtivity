@@ -5,7 +5,7 @@ import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
 import { openLinkedFile } from "../embed/fileViewer/openLinked";
-import { WarningIcon } from "../common/icons/Icon";
+import { CloseIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename, dirname, resolvePath } from "../../lib/paths";
@@ -123,7 +123,7 @@ export function GitPullPanel({
           ⟳
         </button>
         <button className="toolbar-btn" onClick={onClose} title={t("common.close")}>
-          ✕
+          <CloseIcon />
         </button>
       </div>
       {fetchError && <div className="git-worktree-note git-pull-warn">{t("gitPull.fetchFailed", { error: fetchError })}</div>}

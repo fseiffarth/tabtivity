@@ -44,7 +44,7 @@ import type {
   MailLink,
   MailPreviewBlob,
 } from "../../types/mail";
-import { UndoIcon } from "../common/icons/Icon";
+import { CloseIcon, UndoIcon } from "../common/icons/Icon";
 
 /**
  * The message pane: headers, the sandboxed body, the links panel, the remote
@@ -562,8 +562,8 @@ function LinkConfirmDialog({
       >
         <div className="settings-title-row">
           <h2>{t("mail.linkConfirmTitle")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         <div className="dialog-scroll">
@@ -794,8 +794,8 @@ function AttachmentSaveDialog({
         <div className="settings-title-row">
           <h2>{t("mail.attachmentSaveTitle")}</h2>
           <UntestedTag id="mailMessageView.3" />
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         <div className="dialog-scroll">

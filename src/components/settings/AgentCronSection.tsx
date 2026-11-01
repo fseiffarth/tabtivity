@@ -22,6 +22,7 @@ import { formatTime } from "../../lib/calendar/calendarTime";
 import { useUse24h } from "../../lib/timeFormat";
 import type { AgentInfo } from "./agentTypes";
 import { AgentsFold } from "./agentsUi";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * A list of local times ("HH:MM"), edited as chips plus an hour/minute picker.
@@ -82,7 +83,7 @@ function TimeListEditor({
                 disabled={disabled}
                 onClick={() => onChange(removeTime(times, time))}
               >
-                ×
+                <CloseIcon />
               </button>
             </span>
           ))
