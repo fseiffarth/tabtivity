@@ -16,6 +16,7 @@ import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { BrainGlyph } from "../header/HeaderGlyphs";
 import { LOCAL_MODEL_MENU_ID, useAutoloadNotice, useModelsHub } from "../models/useModelsHub";
 import { AgentChips, LocalModelsSection, MachineMeters, MODEL_ROLES } from "../models/ModelsHubSections";
+import { DotIcon } from "../common/icons/Icon";
 
 const MENU_ID = LOCAL_MODEL_MENU_ID;
 
@@ -395,13 +396,13 @@ export function LocalModelMenu() {
               here, Manage local models + Check for updates below. */}
           <button className="tab-new-menu-item" onClick={openAgents}>
             <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-              ●
+              <DotIcon />
             </span>
             {t("localModel.manageAgents")} <UntestedTag id="localModel.manageAgents" />
           </button>
           <button className="tab-new-menu-item" onClick={openSkills}>
             <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-              ●
+              <DotIcon />
             </span>
             {t("localModel.skillsLibrary")} <UntestedTag id="localModel.skillsLibrary" />
           </button>

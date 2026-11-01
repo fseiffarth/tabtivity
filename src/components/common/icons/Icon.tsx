@@ -946,3 +946,21 @@ export function ShieldIcon(p: IconProps) {
     </Frame>
   );
 }
+
+/** ● — a lit status dot; its colour is the row's `currentColor`. */
+export function DotIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="5" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ○ — the {@link DotIcon}'s unlit twin. */
+export function RingIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="4.4" />
+    </Frame>
+  );
+}

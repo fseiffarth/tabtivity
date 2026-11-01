@@ -12,7 +12,7 @@ import {
 import { useExperimental } from "../../lib/experimental";
 import { selectUrgentMail, taskFromMail } from "../../lib/todoBoard";
 import { useT } from "../../lib/i18n";
-import { MailIcon, RefreshIcon } from "../common/icons/Icon";
+import { DotIcon, MailIcon, RefreshIcon } from "../common/icons/Icon";
 
 interface Props {
   tasks: CalendarTask[];
@@ -130,7 +130,7 @@ export function TodoMailRail({ tasks, defaultCalendarId, intakeColumnId }: Props
                 }
                 aria-hidden
               >
-                ●
+                <DotIcon />
               </span>
               <span className="todo-mail-text">
                 <span className="todo-mail-from">

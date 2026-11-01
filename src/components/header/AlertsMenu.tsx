@@ -13,7 +13,7 @@ import { joinConference } from "../../lib/linkTarget";
 import { awayDelta, type DueDelta } from "../../lib/todoBoard";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { BellIcon } from "../common/BellIcon";
-import { CalendarIcon, CheckboxIcon, CheckIcon, MailIcon, RefreshIcon, type IconProps, VideoIcon } from "../common/icons/Icon";
+import { CalendarIcon, CheckboxIcon, CheckIcon, DotIcon, MailIcon, RefreshIcon, type IconProps, VideoIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 
 /**
@@ -261,7 +261,7 @@ export function AlertsMenu({ feed, onNavigate }: AlertsMenuProps) {
             title={severityLabel(item.severity)}
             aria-hidden
           >
-            ●
+            <DotIcon />
           </span>
           <span className="alerts-kind" title={kindLabel(item.kind)}>
             <KindIcon kind={item.kind} />

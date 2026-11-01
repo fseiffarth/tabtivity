@@ -2049,7 +2049,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                 entries: [{
                   key: "close-all",
                   label: t("newTabMenu.itemCloseAllTabs"),
-                  dot: "×",
+                  dot: <CloseIcon />,
                   color: "var(--danger)",
                   disabled: !hasAnyTabs,
                   shortcut: "closeAllTabs",

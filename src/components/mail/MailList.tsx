@@ -13,7 +13,7 @@ import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { useUse24h } from "../../lib/timeFormat";
 import { UntestedTag } from "../common/UntestedTag";
 import type { MailHeader, MailPriority, MailSort } from "../../types/mail";
-import { CloseIcon, PaperclipIcon } from "../common/icons/Icon";
+import { CloseIcon, DotIcon, PaperclipIcon, RingIcon } from "../common/icons/Icon";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 
 /** One frozen instance, so a list without marks does not re-render on a new
@@ -597,7 +597,7 @@ function MailListImpl({
                   onToggleSeen(h);
                 }}
               >
-                {h.seen ? "○" : "●"}
+                {h.seen ? <RingIcon /> : <DotIcon />}
               </button>
               {/* The clip is a **column**, not a glyph in front of the subject:
                   it sits under its own header, in the same place on every row,

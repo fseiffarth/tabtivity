@@ -14,7 +14,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { useDialogs } from "../common/PromptDialogs";
 import { MailGlyph } from "../header/HeaderGlyphs";
-import { BookIcon, CloseIcon, PencilIcon } from "../common/icons/Icon";
+import { BookIcon, CloseIcon, DotIcon, PencilIcon } from "../common/icons/Icon";
 import { OverlayApprovals } from "../layout/OverlayApprovals";
 import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
 import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
@@ -268,7 +268,7 @@ function MailOverlay({ open }: { open: boolean }) {
                   <span className="tab-label">{label}</span>
                   {tab.kind === "compose" && tab.dirty && (
                     <span className="mail-tab-dirty" title={t("mail.tabUnsent")} aria-label={t("mail.tabUnsent")}>
-                      ●
+                      <DotIcon />
                     </span>
                   )}
                   <button

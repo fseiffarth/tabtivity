@@ -3,7 +3,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
-import { CheckboxIcon, CheckIcon, SquareIcon } from "../common/icons/Icon";
+import { CheckboxIcon, CheckIcon, DotIcon, SquareIcon } from "../common/icons/Icon";
 import { isHostPinned, projectHostKind, type ProjectHostKind } from "../../lib/projectTabHost";
 import type { ProjectEntry } from "../../types";
 import { phoneReach, usePairedPhones, type PairedPhone, type PhoneReach } from "./usePairedPhones";
@@ -188,7 +188,7 @@ export function MobileAccessPicker({
                   {phone.name}
                   {phone.online && (
                     <span className="tab-new-menu-dot tab-new-menu-dot--accent" title={t("mobile.phones.online")}>
-                      {" "}●
+                      {" "}<DotIcon />
                     </span>
                   )}
                   <span className="tab-menu-hint">{t("mobile.phones.paired", { date: pairedOn(phone) })}</span>

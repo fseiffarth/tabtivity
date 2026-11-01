@@ -1,3 +1,4 @@
+import { DotIcon } from "../common/icons/Icon";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { UntestedTag } from "../common/UntestedTag";
 import { MenuShortcut } from "../common/MenuShortcut";
@@ -11,7 +12,7 @@ export interface AddMenuEntry {
   /** React key — unique within the entry's group. */
   key: string;
   label: string;
-  /** Dot glyph in front of the label (defaults to "●"). A shared line icon
+  /** Dot glyph in front of the label (defaults to a drawn dot). A shared line icon
    *  where the glyph would be an emoji-capable symbol (☁ ⚠): a font fallback
    *  hands those to the colour-emoji font, which ignores `color`. */
   dot?: ReactNode;
@@ -96,7 +97,7 @@ function flyoutRow(e: AddMenuEntry) {
       onClick={e.onPick}
     >
       <span className="tab-new-menu-dot" style={{ color: e.color }}>
-        {e.dot ?? "●"}
+        {e.dot ?? <DotIcon />}
       </span>
       {e.label}
       {e.caution && (
@@ -426,7 +427,7 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
               }}
             >
               <span className="tab-new-menu-dot" style={{ color: e.color }}>
-                {e.dot ?? "●"}
+                {e.dot ?? <DotIcon />}
               </span>
               {e.label}
               {e.caution && (

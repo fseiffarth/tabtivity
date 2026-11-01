@@ -20,7 +20,7 @@ import {
 } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { FileIcon } from "./icons/FileIcon";
-import { CloseIcon, GridIcon, HexagonIcon } from "./icons/Icon";
+import { CloseIcon, DotIcon, GridIcon, HexagonIcon, RingIcon } from "./icons/Icon";
 import { basename, dirname } from "../../lib/paths";
 
 /**
@@ -840,7 +840,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
             const base = `translate3d(${pos.x.toFixed(1)}px, ${pos.y.toFixed(1)}px, ${pos.z.toFixed(1)}px)`;
 
             let cls = "blob-node";
-            let icon: React.ReactNode = "●";
+            let icon: React.ReactNode = <DotIcon />;
             let label = "";
             let sub: number | null = null;
             let isActive = false;
@@ -850,7 +850,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
             if (node.kind === "project") {
               const status = node.project.status;
               cls += ` blob-node-project blob-status-${status}`;
-              icon = status === "inactive" ? "○" : "●";
+              icon = status === "inactive" ? <RingIcon /> : <DotIcon />;
               label = node.project.name;
               isActive = node.project.id === activeId;
               categories = projectCategories(node.project);

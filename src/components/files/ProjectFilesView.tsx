@@ -105,7 +105,7 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
-import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -2642,7 +2642,7 @@ export function ProjectFilesView({
                             onClick={() => void openSession(hostId, s.name)}
                           >
                             <span className="orange-file-dot" aria-hidden="true">
-                              {s.attached ? "●" : "○"}
+                              {s.attached ? <DotIcon /> : <RingIcon />}
                             </span>
                             {s.working && (
                               <span className="tmux-work-dot" aria-hidden="true" title={t("projectFilesView.workingTitle")} />
@@ -2764,7 +2764,7 @@ export function ProjectFilesView({
                 return (
                   <div key={`${ws.filesystem ?? ""}/${ws.id}`} className="orange-file-row" title={ws.path}>
                     <span className="orange-file-name" style={{ cursor: "var(--cur-default, default)" }}>
-                      <span className="orange-file-dot" aria-hidden="true">{here ? "●" : "○"}</span>
+                      <span className="orange-file-dot" aria-hidden="true">{here ? <DotIcon /> : <RingIcon />}</span>
                       {ws.id}
                       <span className={`tmux-session-meta hpc-ws-remaining tone-${expiryTone(ws)}`}>
                         {[
@@ -2820,7 +2820,7 @@ export function ProjectFilesView({
                   onClick={() => void watchJob(j.id, j.name)}
                 >
                   <span className="orange-file-dot" aria-hidden="true">
-                    {j.state === "RUNNING" ? "●" : "○"}
+                    {j.state === "RUNNING" ? <DotIcon /> : <RingIcon />}
                   </span>
                   {j.name || j.id}
                   <span className="tmux-session-meta">

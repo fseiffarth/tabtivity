@@ -6,6 +6,7 @@ import { calendarColor } from "../../stores/calendar/calendar";
 import { useI18nStore, useT } from "../../lib/i18n";
 import type { CalendarMenuTarget } from "./CalendarContextMenu";
 import { useArrivedMarks } from "../../stores/calendar/arrivals";
+import { DotIcon } from "../common/icons/Icon";
 
 interface Props {
   occurrences: Occurrence[];
@@ -86,7 +87,7 @@ export function AgendaView({ occurrences, calendars, use24h, onOpen, onMenu, emp
                   onMenu({ x: e.clientX, y: e.clientY, occ, slot: { date } });
                 }}
               >
-                <span className="cal-agenda-swatch" style={{ color }}>●</span>
+                <span className="cal-agenda-swatch" style={{ color }}><DotIcon /></span>
                 <span className="cal-agenda-time">
                   {occ.allDay
                     ? t("calendar.allDay")

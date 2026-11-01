@@ -22,6 +22,7 @@ import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { describeTabCost, tabCost } from "../../lib/tabCost";
 import { UntestedTag } from "../common/UntestedTag";
+import { DotIcon } from "../common/icons/Icon";
 
 /** Friendly, human-readable name for a tab kind, shown as the card's muted
  *  sub-line. Falls back to the raw kind for anything unmapped. */
@@ -338,7 +339,7 @@ export function TabHoverCard({
     >
       <span className="tab-popup-header">
         <span className="tab-popup-dot" style={{ color: TAB_ACCENT[tab.kind] }}>
-          ●
+          <DotIcon />
         </span>
         <span className="tab-popup-label">{tab.label}</span>
       </span>

@@ -16,7 +16,7 @@ import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
 import { UntestedTag } from "../common/UntestedTag";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useT } from "../../lib/i18n";
-import { ChevronLeftIcon, CloudIcon, HomeIcon, PlayMark } from "../common/icons/Icon";
+import { ChevronLeftIcon, CloudIcon, DotIcon, HomeIcon, PlayMark } from "../common/icons/Icon";
 import { useAgentModelsStore, agentTabLabel, tabModeMarks } from "../../stores/agents/agentModels";
 import { screenModeMarks } from "../../lib/agents/agentModel";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
@@ -241,7 +241,7 @@ export function LocalityMenu({
       onClick={() => !opts?.disabled && choose(loc)}
     >
       <span className="tab-new-menu-dot tab-new-menu-dot--accent">
-        {cur === loc ? "●" : glyph}
+        {cur === loc ? <DotIcon /> : glyph}
       </span>
       {text}
       {opts?.note && <span className="tab-menu-hint">{opts.note}</span>}
@@ -269,7 +269,7 @@ export function LocalityMenu({
               onClick={() => onChangeView("machines")}
             >
               <span className="tab-new-menu-dot tab-new-menu-dot--accent">
-                {onRemoteNow ? "●" : <CloudIcon />}
+                {onRemoteNow ? <DotIcon /> : <CloudIcon />}
               </span>
               {t("tabLocality.remoteEllipsis")}
               <span className="tab-menu-hint">{t("tabLocality.chooseMachineHint")}</span>
