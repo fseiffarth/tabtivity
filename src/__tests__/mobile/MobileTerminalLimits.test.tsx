@@ -38,6 +38,7 @@ class FakeWebSocket {
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { BRAND } from "../../lib/brand";
+import { openFacts } from "../helpers/mobileTerminalHost";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
 const NOW = 1_788_609_600; // 2026-09-04 12:00:00 UTC
@@ -83,6 +84,7 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     await settle();
 
     expect(fetchMock.mock.calls.some(([url]) => url === "/api/v1/tabs/tab-7/status")).toBe(true);
+    openFacts();
     const limits = [...container.querySelectorAll(".session-facts .fact-limit")];
     expect(limits[0].textContent).toMatch(/^5h 29% · in \d+h \d+m$/u);
     expect(limits[1].textContent).toMatch(/^week 6% · in \d+d \d+[hm]$/u);
@@ -96,6 +98,7 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     const first = render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
 
+    openFacts();
     fireEvent.click(first.container.querySelector(".session-facts .fact-limit")!);
     const bars = [...first.container.querySelectorAll<HTMLElement>(".session-facts .fact-limit-bar > span")];
     expect(bars.map((bar) => bar.style.width)).toEqual(["29%", "6%"]);
@@ -104,6 +107,7 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
 
     const again = render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
+    openFacts();
     expect(again.container.querySelectorAll(".session-facts .fact-limit-bar")).toHaveLength(2);
     fireEvent.click(again.container.querySelectorAll(".session-facts .fact-limit")[1]);
     expect(again.container.querySelector(".session-facts .fact-limit-bar")).toBeNull();
@@ -115,6 +119,7 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     const { container } = render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
 
+    openFacts();
     expect(container.querySelector(".session-facts .fact-limit")).toBeNull();
   });
 
@@ -146,6 +151,7 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     const { container } = render(<Terminal tab={{ ...TAB, label: "Codex" }} back={() => {}} />);
     await settle();
 
+    openFacts();
     const facts = container.querySelector(".session-facts");
     expect(facts?.querySelector(".fact-context")?.textContent).toBe("68% context");
     expect([...container.querySelectorAll(".session-facts .fact-limit")].map((node) => node.textContent))

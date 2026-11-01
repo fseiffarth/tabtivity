@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { CloseIcon } from "../glyphs";
 import { useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { getAgentStatus, type AgentStatusReport, type TabRow } from "../api";
@@ -45,7 +46,7 @@ function duration(seconds: number): string {
  * (model, mode, context) — free, and about *this* tab, where the quota panel is
  * about the whole account.
  */
-export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
+export function StatusSheet({ tab, live, onLimits, onClose, signIn, facts }: {
   tab: TabRow;
   live: SessionStatus | null;
   /** Hands a fresh panel's 5h/week windows to the facts row, so a Refresh
@@ -56,6 +57,11 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
    * slash command typed into the session (`signIn.ts`) — when it can; the
    * sheet then offers Sign in. */
   signIn?: { hint: string; start: () => void } | null;
+  /** The Focus screen's facts — model, mode, worktree, location, context,
+   * limits — as the sheet's first rows. Its header caption sums them up and
+   * opens this sheet. The live model, mode and context then stay out of the
+   * state line below, which would only repeat them. */
+  facts?: ReactNode;
 }) {
   useBackLayer(onClose);
   const t = useT();
@@ -91,20 +97,22 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
     <section className="option-sheet status-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.status.of", { name: tab.label })} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
-        <h2>{t("terminal.reader.status.button")} {isUntested("mobile.sheet.status") && <small>{t("mobile.newTab.untested")}</small>}</h2>
+        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button>
+        <h2>{t("terminal.reader.status.button")} {(isUntested("mobile.sheet.status") || isUntested("mobile.design.sheets")) && <small>{t("mobile.newTab.untested")}</small>}</h2>
         <div className="terminal-view-switch" aria-label={t("mobile.status.view")}>
           <button className={view === "formatted" ? "selected" : ""} aria-pressed={view === "formatted"} onClick={() => setView("formatted")}>{t("mobile.status.formatted")}</button>
           <button className={view === "terminal" ? "selected" : ""} aria-pressed={view === "terminal"} onClick={() => setView("terminal")}>{t("mobile.focus.terminal")}</button>
         </div>
       </header>
 
+      {facts && <div className="session-facts">{facts}</div>}
+
       {report && <p className={`status-headline ${report.state}`}>
         <strong>{t(STATE_TEXT[report.state])}{report.state === "interrupted" && isUntested("mobile.tabs.statusMotion") && <> · {t("mobile.focus.untested")}</>}</strong>
         {report.agent && <span>{report.agent}</span>}
-        {live?.model && <span>{live.model}</span>}
-        {live?.mode && <span>{live.mode}</span>}
-        {live?.context && <span>{t("mobile.status.contextLeft", { context: live.context })}</span>}
+        {!facts && live?.model && <span>{live.model}</span>}
+        {!facts && live?.mode && <span>{live.mode}</span>}
+        {!facts && live?.context && <span>{t("mobile.status.contextLeft", { context: live.context })}</span>}
       </p>}
 
       {error && <p className="sheet-note error" role="alert">{error}</p>}

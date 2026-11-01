@@ -7,7 +7,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
+import { keysSent, stubTerminalSideChannels, openFacts } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -157,6 +157,7 @@ describe(`${BRAND.display} Mobile — the model sheet before the session draws i
     render(<Terminal tab={claudeTab} back={() => {}} />);
     await act(async () => {});
 
+    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];
@@ -179,6 +180,7 @@ describe(`${BRAND.display} Mobile — the model sheet before the session draws i
   it("keeps the live list once it has settled, when it differs from the remembered one", async () => {
     render(<Terminal tab={claudeTab} back={() => {}} />);
     await act(async () => {});
+    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     await settle(400);
     await paint(PICKER);

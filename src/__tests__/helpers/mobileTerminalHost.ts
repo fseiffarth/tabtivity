@@ -9,7 +9,7 @@
  * its offline path; any other request still fails the test as unmocked.
  * A test that cares about one of those routes stubs `fetch` itself.
  */
-import { act } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { vi } from "vitest";
 import { unmockedFetch } from "./testGuards";
 
@@ -51,4 +51,11 @@ export async function keysSent(sent: () => string[], count: number, ms: number):
   for (let waited = 0; sent().length < count && waited < 5000; waited += 50) await wait(50);
   await wait(200);
   return sent();
+}
+
+/** The Focus facts — model, mode, worktree, location, context, limits — are
+ * the Status sheet's first rows: open it from the header caption (named
+ * "Status") before reaching for one. Opening it again is harmless. */
+export function openFacts(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Status" }));
 }

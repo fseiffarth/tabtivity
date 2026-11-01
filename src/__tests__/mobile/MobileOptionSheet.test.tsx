@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
+import { stubTerminalSideChannels, openFacts } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -106,6 +106,7 @@ describe(`${BRAND.display} Mobile composer sheets`, () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});
 
+    openFacts();
     fireEvent.click(screen.getByTitle("Choose the model (/model)"));
     await settle(400);
     expect(FakeWebSocket.keys.join("")).toContain("/model");
@@ -141,6 +142,7 @@ describe(`${BRAND.display} Mobile composer sheets`, () => {
   it("closes the picker in the session when the sheet is dismissed", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});
+    openFacts();
     fireEvent.click(screen.getByTitle("Choose the model (/model)"));
     await settle(400);
     await paint(PICKER);
@@ -157,6 +159,7 @@ describe(`${BRAND.display} Mobile composer sheets`, () => {
     await act(async () => {});
     await paint("> \n⏵⏵ accept edits on (shift+tab to cycle)");
 
+    openFacts();
     fireEvent.click(screen.getByTitle("Choose the permission mode"));
     const modes = screen.getAllByRole("button").filter((button) => button.querySelector("strong"));
     expect(modes.map((row) => row.querySelector("strong")?.textContent))
@@ -182,6 +185,7 @@ describe(`${BRAND.display} Mobile composer sheets`, () => {
     await act(async () => {});
     await paint("> \n? for shortcuts");
 
+    openFacts();
     fireEvent.click(screen.getByTitle("Choose the permission mode"));
     const modes = screen.getAllByRole("button").filter((button) => button.querySelector("strong"));
     expect(modes.map((row) => row.querySelector("strong")?.textContent))
@@ -206,6 +210,7 @@ describe(`${BRAND.display} Mobile composer sheets`, () => {
     await act(async () => {});
     await paint("› \n? for shortcuts");
 
+    openFacts();
     fireEvent.click(screen.getByTitle("Choose the permission mode"));
     const modes = screen.getAllByRole("button").filter((button) => button.querySelector("strong"));
     expect(modes.map((row) => row.querySelector("strong")?.textContent))
@@ -230,6 +235,7 @@ describe(`${BRAND.display} Mobile composer sheets`, () => {
     await paint("> \n? for shortcuts");
 
     FakeWebSocket.keys = [];
+    openFacts();
     fireEvent.click(screen.getByTitle("Switch mode (Shift+Tab)"));
     expect(FakeWebSocket.keys).toEqual([`${ESC}[Z`]);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -242,6 +248,7 @@ describe(`${BRAND.display} Mobile composer sheets`, () => {
     await act(async () => {});
     await paint("Shift+Tab to accept edits\n> \n~/proj  25% used");
 
+    openFacts();
     fireEvent.click(screen.getByTitle("Choose the permission mode"));
     const modes = screen.getAllByRole("button").filter((button) => button.querySelector("strong"));
     expect(modes.map((row) => row.querySelector("strong")?.textContent))

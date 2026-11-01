@@ -34,6 +34,7 @@ class FakeWebSocket {
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { BRAND } from "../../lib/brand";
+import { openFacts } from "../helpers/mobileTerminalHost";
 
 const TAB = {
   id: "tab-7", label: "Claude · topic", kind: "agent" as const, available: true, viewer_busy: false,
@@ -80,6 +81,7 @@ describe(`${BRAND.display} Mobile facts row moves the agent to another worktree,
     const { container } = render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
 
+    openFacts();
     expect(container.querySelector(".session-facts .fact-worktree")?.textContent).toBe("worktree topic");
     const chip = screen.getByTitle(/Move this agent to another worktree/u);
     fireEvent.click(chip);
@@ -105,6 +107,7 @@ describe(`${BRAND.display} Mobile facts row moves the agent to another worktree,
     vi.stubGlobal("fetch", worktreeFetch(() => jsonResponse(409, { error: "move_failed" })));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
+    openFacts();
     fireEvent.click(screen.getByTitle(/Move this agent to another worktree/u));
     await settle();
     fireEvent.click(screen.getAllByRole("button", { name: /project folder/u })[0]);
@@ -120,6 +123,7 @@ describe(`${BRAND.display} Mobile facts row moves the agent to another worktree,
     render(<Terminal tab={{ ...TAB, worktree_movable: undefined }} back={() => {}} />);
     await settle();
 
+    openFacts();
     expect(screen.queryByTitle(/Move this agent to another worktree/u)).toBeNull();
   });
 
@@ -128,6 +132,7 @@ describe(`${BRAND.display} Mobile facts row moves the agent to another worktree,
     render(<Terminal tab={{ ...TAB, agent_status: "working" as const }} back={() => {}} />);
     await settle();
 
+    openFacts();
     expect((screen.getByTitle(/Move this agent to another worktree/u) as HTMLButtonElement).disabled).toBe(true);
   });
 });

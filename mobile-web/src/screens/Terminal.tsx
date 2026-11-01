@@ -1,4 +1,5 @@
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
+import { BranchIcon, ChevronLeftIcon, CloseIcon, PencilIcon, UndoIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { HintQueue, type HintKey } from "../components/HintMessage";
@@ -2297,7 +2298,56 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} />
         </div>}
   </>;
-  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back}>‹</button>{bare && projectOfTab
+  /** The header caption under an agent tab's name: what the Status sheet's
+   * rows say, in one line — the CLI (when the tab is named otherwise), the
+   * model, the mode (plan mode lit), the branch and the context left. */
+  const captionMode = status?.mode ?? activeMode;
+  const captionPlan = captionMode === "plan";
+  const captionParts = [
+    ...(agentLabel !== tab.label ? [agentLabel] : []),
+    ...(modelChip !== t("terminal.reader.model") ? [modelChip] : []),
+    ...(captionMode && !captionPlan ? [captionMode] : []),
+  ];
+  const shownBranch = statusBranch ?? linkedBranch ?? cwdBranch;
+  const captionTail = [
+    ...(shownBranch ? [`⎇ ${shownBranch}`] : []),
+    ...(contextLeft ? [t("terminal.reader.contextLeft", { percent: contextLeft })] : []),
+  ];
+  /** A row in the Status sheet that opens a sheet of its own puts the Status
+   * sheet away first: one sheet at a time. */
+  const fromStatus = (open: () => void) => () => {
+    setStatusSheet(false);
+    open();
+  };
+  /** The facts row, now the Status sheet's head: the model, mode, worktree
+   * and location as tappable rows, the context and the two usage limits. No
+   * facts in a Tabby chat — its head's model dropdown says enough. */
+  const facts = !bare && tab.kind === "agent" ? <>
+    {/* A local-model tab keeps the model it was launched on: the
+        driver's list would only offer to move it off. */}
+    {tab.local_model
+      ? <span className="fact-model">{modelChip}</span>
+      : <button className="fact-action" disabled={!connected} onClick={fromStatus(selectModel)} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
+    <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={fromStatus(openModeSheet)} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
+    {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+    {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+    {tab.worktree && <span className="fact-worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: tab.worktree.label })}</span>}
+    {/* As on the desktop Reader: the branch moves the agent to another
+        worktree of the project, where the move applies. */}
+    {tab.worktree_movable
+      ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={fromStatus(openWorktreeSheet)} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {shownBranch ?? t("terminal.reader.worktreeButton")}</span></button>
+      : status?.branch && <span className="fact-branch"><BranchIcon size="1em" /> {status.branch}</span>}
+    {tab.worktree_movable && isUntested("mobile.facts.worktreeSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+    {/* As the desktop tab's ⌂/☁ badge: where a remote project's agent runs. */}
+    {tab.location_movable && <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={fromStatus(openLocationSheet)} aria-haspopup="dialog" aria-expanded={locationSheet} title={t("mobile.location.hint")}><span className="fact-action-label">{tab.on_host && tab.host_label ? t("mobile.location.remoteNamed", { name: tab.host_label }) : t(tab.on_host ? "mobile.location.remote" : "mobile.location.here")}</span></button>}
+    {tab.location_movable && isUntested("mobile.facts.locationSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+    {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
+    {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
+    {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
+    {(shownLimits.session || shownLimits.week) && isUntested("mobile.facts.limitBars") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+    {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+  </> : null;
+  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
         ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} model={{
           label: assistantModels?.models.find((model) => model.id === assistantModels.current)?.label ?? modelChip,
@@ -2305,7 +2355,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           disabled: !connected || tab.agent_status === "working" || tab.agent_status === "question",
           expanded: assistantSheet,
         }} />
-        : <div className="terminal-title"><h1>{tab.label}</h1><small>{t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession")}</small></div>}
+        // An agent tab's caption sums up its Status sheet — lamp, CLI, model,
+        // mode, branch, context — and is the way into it; the rows themselves
+        // (model, mode, worktree, location, limits) live in the sheet.
+        : tab.kind === "agent"
+          ? <div className="terminal-title"><h1>{tab.label}</h1><button className="focus-caption" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} aria-label={t("terminal.reader.status.button")} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="focus-caption-text">{captionParts.join(" · ")}{captionPlan && <b className="focus-caption-plan">{captionParts.length > 0 ? " · " : ""}{t("mobile.composer.plan")}</b>}{captionTail.length > 0 && `${captionParts.length > 0 || captionPlan ? " · " : ""}${captionTail.join(" · ")}`}{captionParts.length === 0 && !captionPlan && captionTail.length === 0 && t("mobile.focus.agentSession")}</span>{(isUntested("mobile.focus.caption") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}</button></div>
+          : <div className="terminal-title"><h1>{tab.label}</h1><small>{[t("mobile.focus.shellSession"), ...(tab.worktree ? [t("terminal.reader.worktree", { name: tab.worktree.label })] : [])].join(" · ")}</small></div>}
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
           desktop's "Project files on the phone" switch is on. */}
@@ -2321,7 +2376,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {/* One pill named after the view on screen; its list switches views and,
           on an agent tab's Chat, says where the chat reads from. */}
       <div className="terminal-view-switch"><button
-        className="selected"
+        className="view-pill"
         aria-haspopup="menu"
         aria-expanded={focusMenu}
         title={t("mobile.focus.outputView")}
@@ -2562,7 +2617,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </div>}
       {clearRefused && liveBusy && <div className="voice-feedback" role="status">{t("mobile.composer.clearBusy")}{isUntested("mobile.composer.clearBusy") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}
       {lastSent && !sessionFocus && <div className="last-sent"><span>{t("mobile.composer.lastSent")}</span><p>{lastSent}</p></div>}
-      {uploads.map((upload) => upload.failure && <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{t(upload.failure)}</span><button onClick={() => dismissUpload(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}>✕</button></div>)}
+      {uploads.map((upload) => upload.failure && <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{t(upload.failure)}</span><button onClick={() => dismissUpload(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}><CloseIcon size="1em" /></button></div>)}
       {/* What goes with the next message, as pictures beside the draft —
           never as `@` text in it (`withAttachments` adds the references on
           Send). */}
@@ -2583,7 +2638,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {signIn && !signInSheet && signIn.url !== hiddenSignIn && <div className="sign-in-notice" role="status">
         <span>{t("mobile.signIn.banner", { agent: agentLabel })}</span>
         <button className="primary" onClick={() => setSignInSheet(true)} aria-haspopup="dialog">{t("mobile.signIn.open")}</button>
-        <button className="sign-in-hide" onClick={() => setHiddenSignIn(signIn.url)} aria-label={t("mobile.signIn.hide")} title={t("mobile.signIn.hide")}>✕</button>
+        <button className="sign-in-hide" onClick={() => setHiddenSignIn(signIn.url)} aria-label={t("mobile.signIn.hide")} title={t("mobile.signIn.hide")}><CloseIcon size="1em" /></button>
       </div>}
       {hiddenLink && !signIn && !signInSheet && hiddenSignIn !== HIDDEN_LINK && <div className="sign-in-notice" role="status">
         <span>
@@ -2591,7 +2646,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {isUntested("mobile.signIn.hiddenLink") && <> · <em>{t("mobile.focus.untested")}</em></>}
         </span>
         <button className="primary" onClick={askForLink} disabled={!connected || linkAsking}>{linkAsking ? t("mobile.signIn.gettingLink") : t("mobile.signIn.getLink")}</button>
-        <button className="sign-in-hide" onClick={() => setHiddenSignIn(HIDDEN_LINK)} aria-label={t("mobile.signIn.hide")} title={t("mobile.signIn.hide")}>✕</button>
+        <button className="sign-in-hide" onClick={() => setHiddenSignIn(HIDDEN_LINK)} aria-label={t("mobile.signIn.hide")} title={t("mobile.signIn.hide")}><CloseIcon size="1em" /></button>
       </div>}
       {signedOut && signInWay && !signInSheet && !signedOutHidden && <div className="sign-in-notice" role="status">
         <span>
@@ -2599,7 +2654,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {isUntested("mobile.signIn.tab") && <> · <em>{t("mobile.focus.untested")}</em></>}
         </span>
         <button className="primary" onClick={signInWay.start} disabled={openingSignIn}>{openingSignIn ? t("mobile.signIn.opening") : t("mobile.signIn.open")}</button>
-        <button className="sign-in-hide" onClick={() => setSignedOutHidden(true)} aria-label={t("mobile.signIn.hide")} title={t("mobile.signIn.hide")}>✕</button>
+        <button className="sign-in-hide" onClick={() => setSignedOutHidden(true)} aria-label={t("mobile.signIn.hide")} title={t("mobile.signIn.hide")}><CloseIcon size="1em" /></button>
       </div>}
       {view === "focus" && markupAsk && <div className="sign-in-notice markup-ask-notice" role="status">
         <span>
@@ -2618,39 +2673,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         </span>
         <button className="primary" onClick={() => setMarkupAway(null)}>{t("mobile.markup.awayBack")}</button>
       </div>}
-      {signInError && !signInSheet && <div className="inbox-upload error" role="alert"><strong>{t("mobile.signIn.open")}</strong><span>{signInError}</span><button onClick={() => setSignInError("")} aria-label={t("mobile.signIn.hide")}>✕</button></div>}
-      {/* No facts row in a Tabby chat: its head's model dropdown says enough
-          (the desktop's Tabby view draws none either). */}
-      {!bare && (tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">
-        {/* An agent tab's model, mode and status lead the row as tappable facts:
-            the composer keeps the whole bar for the draft and its buttons. */}
-        {tab.kind === "agent" && <>
-          <button className="fact-action" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="fact-action-label">{t("terminal.reader.status.button")}</span></button>
-          {/* A local-model tab keeps the model it was launched on: the
-              driver's list would only offer to move it off. */}
-          {tab.local_model
-            ? <span className="fact-model">{modelChip}</span>
-            : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
-          <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
-          {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-          {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-        </>}
-        {tab.worktree && <span className="fact-worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: tab.worktree.label })}</span>}
-        {/* As on the desktop Reader: the branch moves the agent to another
-            worktree of the project, where the move applies. */}
-        {tab.worktree_movable
-          ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openWorktreeSheet} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {statusBranch ?? linkedBranch ?? cwdBranch ?? t("terminal.reader.worktreeButton")}</span></button>
-          : status?.branch && <span className="fact-branch">⎇ {status.branch}</span>}
-        {tab.worktree_movable && isUntested("mobile.facts.worktreeSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-        {/* As the desktop tab's ⌂/☁ badge: where a remote project's agent runs. */}
-        {tab.location_movable && <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openLocationSheet} aria-haspopup="dialog" aria-expanded={locationSheet} title={t("mobile.location.hint")}><span className="fact-action-label">{tab.on_host && tab.host_label ? t("mobile.location.remoteNamed", { name: tab.host_label }) : t(tab.on_host ? "mobile.location.remote" : "mobile.location.here")}</span></button>}
-        {tab.location_movable && isUntested("mobile.facts.locationSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-        {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
-        {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
-        {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
-        {(shownLimits.session || shownLimits.week) && isUntested("mobile.facts.limitBars") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-        {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-      </div>}
+      {signInError && !signInSheet && <div className="inbox-upload error" role="alert"><strong>{t("mobile.signIn.open")}</strong><span>{signInError}</span><button onClick={() => setSignInError("")} aria-label={t("mobile.signIn.hide")}><CloseIcon size="1em" /></button></div>}
       {/* The chat's tips, each its own card, one at a time right over the
           composer (the cards' ⋯ and ＋ have theirs on the tab list). A Tabby
           chat has no files, markup, Commit or status line. */}
@@ -2665,7 +2688,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               <strong>{suggestion.line}</strong>
               {suggestion.used ? <small>{t("mobile.slash.recent")}{suggestion.description ? ` · ${suggestion.description}` : ""}</small> : suggestion.description && <small>{suggestion.description}</small>}
             </button>
-            {suggestion.used && <button className="slash-forget" onPointerDown={(event) => event.preventDefault()} onClick={() => forgetSlash(suggestion.line)} aria-label={t("mobile.slash.forget", { command: suggestion.line })} title={t("mobile.slash.forget", { command: suggestion.line })}>✕</button>}
+            {suggestion.used && <button className="slash-forget" onPointerDown={(event) => event.preventDefault()} onClick={() => forgetSlash(suggestion.line)} aria-label={t("mobile.slash.forget", { command: suggestion.line })} title={t("mobile.slash.forget", { command: suggestion.line })}><CloseIcon size="1em" /></button>}
           </div>)}
         </div>}
         {draft && draft === suggestionRef.current.filled && <div className="slash-menu prompt-suggestion" role="group" aria-label={t("terminal.reader.suggestion")}>
@@ -2692,25 +2715,28 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             <input ref={galleryInput} type="file" accept="image/*,video/*" multiple hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-gallery-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden aria-hidden="true" tabIndex={-1} data-testid="inbox-camera-input" onChange={(event) => { attachFromPhone(event.target.files); event.target.value = ""; }} />
             <button className={`composer-add${addSheet ? " open" : ""}`} disabled={!connected} onClick={() => setAddSheet(true)} aria-label={t("mobile.add.title")} aria-haspopup="dialog" aria-expanded={addSheet} title={t("mobile.add.hint")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg></button>
-            {/* Folds the key row below in and out; it starts folded. */}
-            <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
-            {/* Plan / Goal / Clear sit centred between the keys button and Send, evenly spaced. */}
-            <div className="composer-chips">
+            {/* Plan | Goal, one segment: lead the draft with `/plan` or `/goal`. */}
+            <div className="composer-segment" role="group" aria-label={t("mobile.composer.prefixGroup")}>
             {prefixCommands.map((command) => {
               const plan = command === "/plan";
               return <button key={command} className={`composer-prefix${activePrefix === command ? " active" : ""}`} disabled={!connected} aria-pressed={activePrefix === command} onPointerDown={(event) => event.preventDefault()} onClick={() => togglePrefix(command)} title={t(plan ? "mobile.composer.planHint" : "mobile.composer.goalHint")}>{t(plan ? "mobile.composer.plan" : "mobile.composer.goal")}</button>;
             })}
+            </div>
             {/* Clear sends /clear at once, draft or not; the draft stays. Right
-                after one it reads Undo, until the new chat gets a prompt. */}
+                after one it reads Undo, until the new chat gets a prompt. An
+                icon each, the word kept for a screen reader's own text. */}
             {undoing
-              ? <button className="composer-prefix composer-undoing" disabled aria-busy="true" onPointerDown={(event) => event.preventDefault()} aria-label={t("mobile.composer.undoing")} title={t("mobile.composer.undoing")}><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span>{t("mobile.composer.undoing")}</button>
+              ? <button className="composer-tool composer-undoing" disabled aria-busy="true" onPointerDown={(event) => event.preventDefault()} aria-label={t("mobile.composer.undoing")} title={t("mobile.composer.undoing")}><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span><span className="visually-hidden">{t("mobile.composer.undoing")}</span></button>
               : undoable
-              ? <button className="composer-prefix" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={undoClearConversation} aria-label={t("mobile.composer.undoClearHint")} title={t("mobile.composer.undoClearHint")}>{t("mobile.composer.undoClear")}</button>
-              : <button className="composer-prefix" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={clearConversation} aria-label={t("mobile.composer.clearChat")} title={t("mobile.composer.clearChat")}>{t("mobile.composer.clearChip")}</button>}
+              ? <button className="composer-tool" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={undoClearConversation} aria-label={t("mobile.composer.undoClearHint")} title={t("mobile.composer.undoClearHint")}><UndoIcon /><span className="visually-hidden">{t("mobile.composer.undoClear")}</span></button>
+              : <button className="composer-tool" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={clearConversation} aria-label={t("mobile.composer.clearChat")} title={t("mobile.composer.clearChat")}><PencilIcon /><span className="visually-hidden">{t("mobile.composer.clearChip")}</span></button>}
             {((undoable && isUntested("mobile.composer.undoClear")) || (undoing && isUntested("mobile.composer.undoing"))) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
             {/* Commit opens its sheet: one commit, or split into several. */}
-{!bare &&             <button className="composer-prefix composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => { setCommitSheet(true); setCommitRefresh((count) => count + 1); }} aria-label={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg>{uncommittedCount > 0 && <span className="composer-commit-count" aria-hidden="true">{uncommittedCount > 99 ? "99+" : uncommittedCount}</span>}</button>}
-            </div>
+            {!bare && <button className="composer-tool composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => { setCommitSheet(true); setCommitRefresh((count) => count + 1); }} aria-label={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg>{uncommittedCount > 0 && <span className="composer-commit-count" aria-hidden="true">{uncommittedCount > 99 ? "99+" : uncommittedCount}</span>}</button>}
+            {isUntested("mobile.composer.bar") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+            <span className="composer-spacer" />
+            {/* Folds the key row below in and out, right of the spacer; it starts folded. */}
+            <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
           </>}
           {tab.kind !== "agent" && <>
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
@@ -2851,7 +2877,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       onPick={chooseLocation}
       onClose={() => { if (!locationMoving) setLocationSheet(false); }}
     />}
-    {statusSheet && <StatusSheet tab={tab} live={status} onLimits={rememberLimits} onClose={() => setStatusSheet(false)} signIn={signInWay} />}
+    {statusSheet && <StatusSheet tab={tab} live={status} onLimits={rememberLimits} onClose={() => setStatusSheet(false)} signIn={signInWay} facts={facts} />}
     {signInSheet && <SignInSheet
       tabId={tab.id}
       agent={agentLabel}

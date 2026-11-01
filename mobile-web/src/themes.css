@@ -102,11 +102,13 @@
 /* Plain Dark, Plain Light, Light Lavender and System (follow OS) draw the chat
    bubbles as octagons, as the desktop Reader does in the same themes: 45° cut
    corners, the tail corner left square so it still says whose the bubble is.
+   Only the prompt and a plan up for approval are bubbles: an agent's answer
+   is flat text (style.css), so the octagon is theirs alone.
    A clip-path would cut a border off the diagonals, so the bubble paints the
    rim and a 1px-inset `::before` the fill, cut 0.59px less (1px perpendicular
    inset of a 45° edge, minus the 1px shift) so the rim stays 1px on the
    diagonals too. A picture post keeps its rounded rim: it is a photo frame. */
-:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer) {
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer.plan) {
   --oct-tl: 10px;
   --oct-tr: 10px;
   --oct-br: 10px;
@@ -122,8 +124,8 @@
   background: linear-gradient(var(--turn-rim), var(--turn-rim)), var(--turn-fill);
 }
 /* Declared on both so each resolves its own `--cut-*`. */
-:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer),
-:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer)::before {
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer.plan),
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer.plan)::before {
   clip-path: polygon(
     var(--cut-tl) 0,
     calc(100% - var(--cut-tr)) 0,
@@ -135,7 +137,7 @@
     0 var(--cut-tl)
   );
 }
-:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer)::before {
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) :is(.readable-turn.user, .readable-turn.agent.answer.plan)::before {
   content: "";
   position: absolute;
   inset: 1px;
@@ -151,10 +153,8 @@
   --turn-fill: #2b2650;
   --turn-rim: #4a3f8a;
 }
-:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.agent.answer {
+:is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.agent.answer.plan {
   --oct-bl: 0px;
-  --turn-fill: #1d2030;
-  --turn-rim: #2a2e42;
 }
 :is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.user.command-args,
 :is([data-theme="dark"], [data-theme="light"], [data-theme="light_lavender"], [data-theme-pick="system"]) .readable-turn.agent.answer.plan {
