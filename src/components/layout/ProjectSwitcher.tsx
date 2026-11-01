@@ -99,6 +99,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPanel, setSettingsPanel] = useState<SettingsPanelKind>("main");
   const [settingsAnchor, setSettingsAnchor] = useState<string | undefined>(undefined);
+  const [settingsReveal, setSettingsReveal] = useState<{ path: string[]; open?: boolean } | undefined>(undefined);
   // "clone" is the import dialog opened straight onto its GitHub/GitLab source —
   // the same dialog, so the source can still be switched back inside it.
   const [dialog, setDialog] = useState<"new" | "import" | "clone" | "bundle" | null>(null);
@@ -130,11 +131,12 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
       // guide's "Open Mobile settings").
       const detail = (e as CustomEvent).detail as
         | SettingsPanelKind
-        | { panel?: SettingsPanelKind; anchor?: string }
+        | { panel?: SettingsPanelKind; anchor?: string; reveal?: { path: string[]; open?: boolean } }
         | undefined;
       const named = typeof detail === "string" ? { panel: detail } : detail;
       setSettingsPanel(named?.panel ?? "main");
       setSettingsAnchor(named?.anchor);
+      setSettingsReveal(named?.reveal);
       setShowSettings(true);
     };
     // Steering's Escape out of the settings region closes the dialog again.
@@ -562,6 +564,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             onClose={() => setShowSettings(false)}
             initialPanel={settingsPanel}
             initialAnchor={settingsAnchor}
+            initialReveal={settingsReveal}
           />
         </Suspense>,
         document.body,

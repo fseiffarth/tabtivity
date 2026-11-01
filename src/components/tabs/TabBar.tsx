@@ -103,7 +103,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
-import { ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
@@ -2047,6 +2047,17 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               {
                 label: t("newTabMenu.groupProject"),
                 entries: [{
+                  key: "search-everything",
+                  label: t("palette.menuRow"),
+                  dot: <SearchIcon />,
+                  color: "var(--text-secondary)",
+                  disabled: false,
+                  shortcut: "commandPalette",
+                  onPick: () => {
+                    window.dispatchEvent(new Event("app:open-palette"));
+                    setMenuPos(null);
+                  },
+                }, {
                   key: "close-all",
                   label: t("newTabMenu.itemCloseAllTabs"),
                   dot: <CloseIcon />,

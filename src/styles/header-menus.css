@@ -2916,3 +2916,109 @@ html[data-header-drag] * {
 .voice-indicator {
   color: var(--danger);
 }
+
+/* ── Command palette ──────────────────────────────────────────────────
+   A framed dialog hung from the upper third, so a shrinking result list does
+   not move the box you are typing in. Its surface, rail and cut corners are the
+   floating recipe's (apps.css); only the fixed input and footer are its own. */
+.modal-backdrop.command-palette-backdrop {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.project-dialog.command-palette {
+  width: min(620px, calc(100vw - 32px));
+  max-height: 60vh;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.command-palette-input {
+  flex: none;
+  width: 100%;
+  padding: var(--space-3) var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  outline: none;
+}
+
+.command-palette-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+
+.command-palette-group {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.command-palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: 2px var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.command-palette-row.selected {
+  background: var(--control-hover-bg);
+}
+
+.command-palette-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.command-palette-detail {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.command-palette-hl {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.command-palette-empty {
+  padding: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+
+.command-palette-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.command-palette kbd {
+  font-family: inherit;
+  font-size: var(--text-sm);
+}

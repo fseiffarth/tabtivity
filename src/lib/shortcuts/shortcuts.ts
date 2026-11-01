@@ -58,6 +58,7 @@ export type ShortcutAction =
   | "cycleBox"
   | "cycleBoxBack"
   | "shortcutHelp"
+  | "commandPalette"
   | "rootConsole"
   | "projectShell"
   | "newShellTab"
@@ -279,6 +280,16 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     group: "steering",
     default: { key: "F1" },
     untested: "shortcut.shortcutHelp",
+  },
+  // The command palette listens for its own chord (`layout/CommandPalette`), in
+  // the popouts too, and yields to a focused field or terminal: Ctrl+K is the
+  // shell's kill-line and the prompt field's make-link.
+  {
+    action: "commandPalette",
+    labelKey: "shortcut.commandPalette",
+    group: "navigation",
+    default: { key: "k", ctrl: true },
+    untested: "desktop.palette",
   },
   // The root console (`layout/RootOverlay`): the cross-project management
   // overlay that replaced switching to the root scope. Handled in the same

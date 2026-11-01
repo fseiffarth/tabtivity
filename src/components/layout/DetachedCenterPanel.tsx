@@ -1,3 +1,4 @@
+import { CommandPalette } from "./CommandPalette";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -2110,6 +2111,7 @@ export function DetachedCenterPanel({
           />
         );
       })()}
+      <CommandPalette local={{ tabs, scope, activate: onActivate }} />
       <DragGhost />
     </div>
     </FileDropContext.Provider>
