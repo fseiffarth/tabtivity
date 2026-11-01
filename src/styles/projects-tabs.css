@@ -43,7 +43,7 @@
   border-radius: 0;
   border: none;
   border-top: 3px solid transparent;
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 500;
   color: var(--text-secondary);
   background-color: transparent;
@@ -222,7 +222,7 @@
   gap: 5px;
   padding: 3px 9px;
   border-radius: var(--radius-full);
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
   color: var(--text-secondary);
   background: var(--control-bg);
@@ -248,7 +248,7 @@
 .category-chip-x {
   margin-left: 1px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
 }
 .category-add-row {
@@ -264,7 +264,7 @@
   display: flex;
   align-items: center;
   gap: inherit;
-  padding: 0 8px 0 12px;
+  padding: 0 var(--space-2) 0 var(--space-3);
   height: 100%;
   background: none;
   border: none;
@@ -285,7 +285,7 @@
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
   border-radius: var(--radius-sm);
@@ -315,7 +315,7 @@
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
   border-radius: var(--radius-sm);
@@ -357,7 +357,7 @@
   color: var(--danger);
 }
 .pill-tab-marks-count {
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0;
   color: var(--text-muted);
@@ -400,7 +400,7 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -461,7 +461,7 @@
 
 /* "+N": the boxes past MAX_BOX_PILLS, which only the chip's list reaches. */
 .box-chip-overflow {
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
   line-height: 1;
   color: var(--text-secondary);
@@ -526,7 +526,7 @@
 .box-scope-pill {
   /* The project pill's own inset (`.pill-main`: 12px lead, 8px trail), so a
      box pill and a project pill sit on the same rhythm. */
-  padding: 0 8px 0 12px;
+  padding: 0 var(--space-2) 0 var(--space-3);
 }
 
 .box-scope-pill .box-chip-main {
@@ -580,7 +580,7 @@
   display: flex;
   flex-direction: column;
   min-width: 170px;
-  padding: 4px;
+  padding: var(--space-1);
   color: var(--text-primary);
 }
 
@@ -588,12 +588,12 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   border: none;
   background: transparent;
   color: var(--text-primary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
   text-align: left;
   cursor: var(--cur-pointer, pointer);
 }
@@ -634,8 +634,8 @@
 }
 
 .box-chip-menu-label {
-  padding: 3px 8px 1px;
-  font-size: 10px;
+  padding: 3px var(--space-2) 1px;
+  font-size: var(--text-xs);
   color: var(--text-secondary);
 }
 
@@ -647,7 +647,7 @@
 }
 
 .box-chip-menu-count {
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--text-secondary);
 }
 
@@ -683,12 +683,12 @@
 .project-box-rename-input {
   width: 90px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
   background: var(--control-bg);
   color: var(--text-primary);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
 }
 
 /* The box swatches on a MEMBER pill (overlay model: member pills always
@@ -776,7 +776,7 @@
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
-  padding: 4px;
+  padding: var(--space-1);
   margin-top: -6px;
   display: flex;
   flex-direction: column;
@@ -790,9 +790,9 @@
   align-items: center;
   gap: 8px;
   min-height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--text-base);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -818,14 +818,14 @@
 
 .box-editor .box-editor-empty {
   opacity: 0.7;
-  padding: 6px 4px;
+  padding: 6px var(--space-1);
 }
 
 .box-editor .box-editor-trust-note {
-  font-size: 12px;
+  font-size: var(--text-md);
   opacity: 0.85;
   border-left: 2px solid var(--accent);
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
 }
 
 .box-editor .box-editor-dissolve {
@@ -886,7 +886,7 @@
   color: var(--text-primary);
   border: none;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
   cursor: var(--cur-pointer, pointer);
   white-space: nowrap;
@@ -909,7 +909,7 @@
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1;
   opacity: 0.5;
   cursor: var(--cur-grab, grab);
@@ -980,7 +980,7 @@
 /* Indent the file list under its header so nested entries don't line up with
    the section rails. */
 .file-root-body {
-  padding-left: 4px;
+  padding-left: var(--space-1);
 }
 
 /* Box rows in the search popover: distinct from project rows. */
@@ -1011,7 +1011,7 @@
 }
 
 .pill-popup-path {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-style: italic;
   color: var(--text-secondary);
   max-width: 300px;
@@ -1046,7 +1046,7 @@
 
 .pill-popup-description {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.35;
   max-width: 320px;
   white-space: normal;
@@ -1082,7 +1082,7 @@
 }
 
 .pill-popup-status {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
@@ -1096,39 +1096,39 @@
 
 /* Pending git state, in the pill folder icon's colours (apps.css). */
 .pill-popup-git {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
 .pill-popup-git.git-dirty {
-  color: #f85149;
+  color: var(--danger);
 }
 
 .pill-popup-git.git-staged {
-  color: #d29922;
+  color: var(--warning);
 }
 
 .pill-popup-git.git-unpushed {
-  color: #3fb950;
+  color: var(--success);
 }
 
 .pill-popup-git.git-broken {
-  color: #8b949e;
+  color: var(--text-muted);
 }
 
 .pill-popup-git.git-unknown {
-  color: #8b949e;
+  color: var(--text-muted);
 }
 
 .pill-popup-time {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   display: flex;
   align-items: center;
 }
 
 .pill-popup-cpu {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
@@ -1149,7 +1149,7 @@
 
 .tab-popup-label {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
   max-width: 320px;
   overflow: hidden;
@@ -1158,7 +1158,7 @@
 }
 
 .tab-popup-kind {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   opacity: 0.8;
 }
@@ -1166,7 +1166,7 @@
 /* Muted meta rows (activity / restart) — like .pill-popup-path but plain LTR
    text, so it never gets the path row's RTL ellipsis treatment. */
 .tab-popup-meta {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1179,7 +1179,7 @@
   flex: 1 1 auto;
   min-width: 0;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1270,7 +1270,7 @@
   height: 26px;
   padding: 0 1px;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1;
   user-select: none;
   opacity: 0.6;
@@ -1325,7 +1325,7 @@
   background: transparent;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 16px;
+  font-size: var(--text-xl);
   line-height: 1;
   z-index: 12;
   transition: background-color var(--transition), color var(--transition);
@@ -1339,10 +1339,10 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   height: 30px;
   cursor: var(--cur-pointer, pointer);
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-muted);
   white-space: nowrap;
   flex-shrink: 0;
@@ -1431,7 +1431,7 @@
   min-width: 0;
   font: inherit;
   color: inherit;
-  background: var(--bg-main, rgba(0, 0, 0, 0.25));
+  background: var(--bg-main);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   padding: 0 2px;
@@ -1451,7 +1451,7 @@
   max-width: 14em;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 1px 8px;
+  padding: 1px var(--space-2);
   border-radius: 999px;
   background: color-mix(in srgb, var(--tab-accent, var(--accent)) 24%, transparent);
   color: var(--text-primary);
@@ -1465,10 +1465,10 @@
 .tab-stack-count {
   flex-shrink: 0;
   min-width: 16px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--text-xs);
   line-height: 14px;
   text-align: center;
   color: var(--text-muted);
@@ -1571,12 +1571,12 @@
 .tab-status-mark {
   flex-shrink: 0;
   color: var(--tab-status-color);
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 700;
   line-height: 1;
 }
 .tab-status-mark.working {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 /* A mark for a COMMAND rather than an agent turn, in the shell colour the ring
    uses for the same thing (`--status-shell-working`). It is the tab's only mark
@@ -1685,7 +1685,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
   line-height: 1;
   color: var(--bg-main);
@@ -1848,7 +1848,7 @@
   background: transparent;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1;
   flex-shrink: 0;
   opacity: 0;
@@ -1878,7 +1878,7 @@
   border-radius: var(--radius-sm);
   border: none;
   background: transparent;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
   flex-shrink: 0;
   transition: background-color var(--transition), color var(--transition);
@@ -1894,7 +1894,7 @@
   border-radius: var(--radius-sm);
   background: var(--danger);
   color: var(--bg);
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -1903,7 +1903,7 @@
    and colours — and its to-do card link. */
 .tab-mark-glyph {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.06em;
@@ -1918,7 +1918,7 @@
   background: none;
   border: none;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
 }
 button.tab-todo-link {
@@ -1946,12 +1946,12 @@ button.tab-todo-link {
 .tab-mode-mark {
   display: inline-flex;
   align-items: center;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   height: 14px;
   border-radius: var(--radius-sm);
   border: 1px solid currentColor;
   background: color-mix(in srgb, currentColor 14%, transparent);
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -1964,14 +1964,14 @@ button.tab-todo-link {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   height: 14px;
   border-radius: var(--radius-sm);
   border: 1px solid currentColor;
   background: color-mix(in srgb, currentColor 14%, transparent);
   color: var(--status-interrupted);
   font: inherit;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -2011,7 +2011,7 @@ button.tab-todo-link {
   border: none;
   background: transparent;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
   flex-shrink: 0;
   cursor: var(--cur-pointer, pointer);
@@ -2043,7 +2043,7 @@ button.tab-todo-link {
   background: var(--bg-panel);
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 15px;
+  font-size: var(--text-lg);
 }
 .subwindow-close:hover {
   background: var(--pill-hover-bg);
@@ -2069,7 +2069,7 @@ button.tab-todo-link {
   background: var(--bg-panel);
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 17px;
+  font-size: var(--text-xl);
   line-height: 1;
 }
 /* When both render, the close button owns the far-right slot; hide sits snug to
@@ -2100,7 +2100,7 @@ button.tab-todo-link {
   background: var(--bg-panel);
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1;
 }
 .subwindow-files-toggle + .subwindow-hide {
@@ -2157,7 +2157,7 @@ button.tab-todo-link {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   background: var(--bg-panel);
 }
 
@@ -2172,7 +2172,7 @@ button.tab-todo-link {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  padding: 0 2px 0 8px;
+  padding: 0 2px 0 var(--space-2);
   background: var(--bg-panel);
 }
 /* Without the actions cluster the controls keep the right edge themselves. */
@@ -2193,7 +2193,7 @@ button.tab-todo-link {
   background: transparent;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 15px;
+  font-size: var(--text-lg);
   line-height: 1;
   border-radius: var(--radius-sm, 4px);
 }
@@ -2211,12 +2211,12 @@ button.tab-todo-link {
 }
 .detached-close-title {
   margin: 0 0 10px;
-  font-size: 15px;
+  font-size: var(--text-lg);
   color: var(--text-primary);
 }
 .detached-close-body {
   margin: 0 0 18px;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--text-muted);
 }
@@ -2262,9 +2262,9 @@ button.tab-todo-link {
 
 .tab-drop-placeholder-label {
   display: block;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   line-height: 30px;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--accent);
   white-space: nowrap;
   overflow: hidden;
@@ -2385,7 +2385,7 @@ button.tab-todo-link {
   background: transparent;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 18px;
+  font-size: var(--text-xl);
   line-height: 1;
   display: flex;
   align-items: center;
@@ -2469,7 +2469,7 @@ button.tab-todo-link {
   top: calc(100% + 4px);
   left: 0;
   z-index: 100;
-  padding: 4px;
+  padding: var(--space-1);
   min-width: 132px;
   display: flex;
   flex-direction: column;
@@ -2530,7 +2530,7 @@ button.tab-todo-link {
    padding its parent gives it, rather than sitting 8px off-centre for a thumb
    that was never drawn. */
 .menu-scroll-region[data-app-scrollbar] {
-  padding-right: 8px;
+  padding-right: var(--space-2);
 }
 /* Keep the pinned title from shrinking when the menu hits its max-height — only
    the scroll region below it should give. Direct-child + first, so a group
@@ -2540,7 +2540,7 @@ button.tab-todo-link {
    from reading as a band of its own above the rows. */
 .tab-new-menu > .tab-new-menu-group-label:first-child {
   flex-shrink: 0;
-  padding-top: 4px;
+  padding-top: var(--space-1);
   padding-bottom: 1px;
 }
 
@@ -2548,12 +2548,12 @@ button.tab-todo-link {
    entries immediately. Enter picks the highlighted first match. */
 .tab-new-menu-search {
   margin: 2px 2px 4px;
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   background: var(--control-bg);
   border: 1px solid var(--border-color);
   border-radius: calc(var(--radius) / 2);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   outline: none;
 }
 
@@ -2583,7 +2583,7 @@ button.tab-todo-link {
   background: var(--control-bg);
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
-  font-size: 12px;
+  font-size: var(--text-md);
   text-align: left;
   transition: background-color var(--transition);
 }
@@ -2616,7 +2616,7 @@ button.tab-todo-link {
 .tab-new-menu-split-caret {
   flex: 0 0 auto;
   justify-content: center;
-  padding: 7px 8px;
+  padding: 7px var(--space-2);
   color: var(--text-muted);
 }
 .tab-new-menu-split-caret:hover,
@@ -2639,8 +2639,8 @@ button.tab-todo-link {
    disabling it — the sentence is the title/aria-label. */
 .tab-new-menu-caution {
   margin-left: auto;
-  padding-left: 12px;
-  font-size: 11px;
+  padding-left: var(--space-3);
+  font-size: var(--text-sm);
   line-height: 1;
   color: var(--warning);
   flex-shrink: 0;
@@ -2651,8 +2651,8 @@ button.tab-todo-link {
    Remote drill-in, "sync off" on a worker that can't run scripts. */
 .tab-menu-hint {
   margin-left: auto;
-  padding-left: 12px;
-  font-size: 10px;
+  padding-left: var(--space-3);
+  font-size: var(--text-xs);
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -2665,7 +2665,7 @@ button.tab-todo-link {
 .menu-shortcut {
   margin-left: auto;
   padding-left: 18px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 400;
   color: var(--text-muted);
   -webkit-text-fill-color: var(--text-muted);
@@ -2680,7 +2680,7 @@ button:has(> .menu-shortcut) {
 /* The "‹ Run on machine" header row of the machine sub-picker: reads as a title,
    not a target, and hosts the untested tag. */
 .tab-new-menu-item.tab-menu-back { color: var(--text-secondary); }
-.tab-new-menu-item.tab-menu-back .tab-new-menu-dot { font-size: 12px; }
+.tab-new-menu-item.tab-menu-back .tab-new-menu-dot { font-size: var(--text-md); }
 
 .tab-new-menu-group-label {
   padding: 6px 10px 2px;
@@ -2717,7 +2717,7 @@ button:has(> .menu-shortcut) {
   border-radius: 50%;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
   /* The ring below is drawn with box-shadow; keep the transition off the shadow
@@ -2783,8 +2783,8 @@ button:has(> .menu-shortcut) {
 }
 
 .tab-new-menu-hint {
-  padding: 4px 10px;
-  font-size: 11px;
+  padding: var(--space-1) 10px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-style: italic;
 }
@@ -2809,11 +2809,11 @@ button:has(> .menu-shortcut) {
      inside its field instead of pushing the popover off-screen. */
   width: min(420px, calc(100vw - 16px));
   box-sizing: border-box;
-  padding: 8px;
+  padding: var(--space-2);
   color: var(--text-primary);
 }
 .file-run-args-label {
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2824,9 +2824,9 @@ button:has(> .menu-shortcut) {
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 /* The interpreter picker: a long venv path must not stretch the popover. */
 select.file-run-args-input {
@@ -2857,8 +2857,8 @@ select.file-run-args-input {
   color: var(--text-muted);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 3px 8px;
-  font-size: 11px;
+  padding: 3px var(--space-2);
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
 }
 .file-run-args-btn:hover {
@@ -2871,7 +2871,7 @@ select.file-run-args-input {
   position: fixed;
   z-index: var(--z-menu);
   min-width: 150px;
-  padding: 4px;
+  padding: var(--space-1);
 }
 
 /* ContextMenuPortal's two layers: the full-viewport dismiss catcher and the
@@ -2971,7 +2971,7 @@ select.file-run-args-input {
   background: var(--control-bg);
   color: var(--text-primary);
   text-align: left;
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -3008,8 +3008,8 @@ select.file-run-args-input {
 }
 
 .context-menu-group-label {
-  padding: 4px 9px 2px;
-  font-size: 10px;
+  padding: var(--space-1) 9px 2px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3027,7 +3027,7 @@ select.file-run-args-input {
   max-width: 240px;
   text-transform: none;
   letter-spacing: normal;
-  font-size: 11px;
+  font-size: var(--text-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3039,8 +3039,8 @@ select.file-run-args-input {
    it is a sentence. */
 .context-menu-note {
   max-width: 240px;
-  padding: 4px 9px 2px;
-  font-size: 10px;
+  padding: var(--space-1) 9px 2px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   color: var(--text-muted, var(--text-secondary));
   white-space: normal;
@@ -3050,7 +3050,7 @@ select.file-run-args-input {
 /* Danger zone: destructive actions fenced off in a red-tinted box. */
 .context-menu-danger-zone {
   margin-top: 8px;
-  padding: 4px;
+  padding: var(--space-1);
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 8%, transparent);
@@ -3111,12 +3111,12 @@ html:not(.show-untested-tags) .untested-tag {
   align-items: center;
   gap: 6px;
   min-height: 24px;
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -3179,7 +3179,7 @@ html:not(.show-untested-tags) .untested-tag {
   border-radius: var(--radius-sm);
   background: var(--control-bg);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .dropdown .dropdown-menu button:hover {
@@ -3237,12 +3237,12 @@ html:not(.show-untested-tags) .untested-tag {
 }
 
 .agent-schedule-notice {
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-panel);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .agent-schedule-notice p { margin: 6px 0 0; }
@@ -3259,7 +3259,7 @@ html:not(.show-untested-tags) .untested-tag {
   flex-direction: column;
   gap: 8px;
   align-items: stretch;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
@@ -3288,7 +3288,7 @@ html:not(.show-untested-tags) .untested-tag {
   flex-wrap: wrap;
   gap: 4px 16px;
   align-items: baseline;
-  padding: 7px 12px;
+  padding: 7px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
@@ -3299,11 +3299,11 @@ html:not(.show-untested-tags) .untested-tag {
   gap: 6px;
   align-items: baseline;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .agent-schedule-summary-counts strong {
-  font-size: 15px;
+  font-size: var(--text-lg);
   line-height: 1;
   color: var(--accent);
 }
@@ -3316,10 +3316,10 @@ html:not(.show-untested-tags) .untested-tag {
   min-width: 0;
 }
 
-.agent-schedule-summary-when { font-size: 13px; font-weight: 600; }
+.agent-schedule-summary-when { font-size: var(--text-base); font-weight: 600; }
 .agent-schedule-summary-when.muted { color: var(--text-muted); font-weight: 400; }
 .agent-schedule-summary-next small { color: var(--text-muted); }
-.agent-schedule-summary-zone { color: var(--text-muted); font-size: 11px; }
+.agent-schedule-summary-zone { color: var(--text-muted); font-size: var(--text-sm); }
 
 .agent-schedule-row-head {
   display: flex;
@@ -3332,10 +3332,10 @@ html:not(.show-untested-tags) .untested-tag {
    three states plus neutral: armed/delivered read as fine, due draws the eye,
    missed warns, failed is the error color. */
 .agent-schedule-pill {
-  padding: 1px 8px;
+  padding: 1px var(--space-2);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-full);
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -3384,7 +3384,7 @@ html:not(.show-untested-tags) .untested-tag {
 .git-push-proposals { display: flex; flex-direction: column; gap: 6px; width: 100%; margin: 4px 0; }
 .git-push-proposal {
   display: flex; flex-direction: column; gap: 4px;
-  padding: 6px 8px; border: 1px dashed var(--accent); border-radius: var(--radius-sm, 6px);
+  padding: 6px var(--space-2); border: 1px dashed var(--accent); border-radius: var(--radius-sm, 6px);
   font-size: var(--text-xs); color: var(--text-primary);
 }
 .git-push-proposal[data-status="pushed"] { border-style: solid; border-color: color-mix(in srgb, var(--success, var(--accent)) 60%, transparent); }
@@ -3394,9 +3394,9 @@ html:not(.show-untested-tags) .untested-tag {
 .git-push-proposal-sha, .git-push-proposal-url { font-family: var(--font-mono); overflow-wrap: anywhere; color: var(--text-secondary); }
 .git-push-proposal-confirm { color: var(--warning, var(--accent)); }
 .git-push-proposal-note, .git-push-proposal-message { margin: 0; overflow-wrap: anywhere; }
-.git-push-proposal-commits { margin: 0; padding-left: 16px; }
+.git-push-proposal-commits { margin: 0; padding-left: var(--space-4); }
 .git-push-proposal-commits code { font-size: var(--text-xs); }
-.git-push-proposal-output { max-height: 200px; overflow: auto; margin: 0; padding: 4px 6px; font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-elevated, transparent); }
+.git-push-proposal-output { max-height: 200px; overflow: auto; margin: 0; padding: var(--space-1) 6px; font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-elevated, transparent); }
 .git-push-proposal-actions { display: flex; gap: 6px; }
 .git-push-mcp-level { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
 .git-push-mcp-protected { font-size: var(--text-xs); min-width: 14em; }
@@ -3448,7 +3448,7 @@ html:not(.show-untested-tags) .untested-tag {
   border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
   border-radius: var(--radius);
   color: var(--warning);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 /* The row's own last line, not a column beside it: at this width a button
@@ -3460,7 +3460,7 @@ html:not(.show-untested-tags) .untested-tag {
   align-items: center;
   justify-content: flex-end;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .agent-schedule-row-actions > label {
@@ -3484,7 +3484,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-schedule-form > label > span:first-child,
 .agent-schedule-form > .agent-schedule-field > span:first-child {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 
@@ -3526,12 +3526,12 @@ html:not(.show-untested-tags) .untested-tag {
   align-items: center;
   gap: 6px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .tab-schedule-indicator {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
 }
 
@@ -3544,7 +3544,7 @@ html:not(.show-untested-tags) .untested-tag {
     max-height: none;
     overflow-y: visible;
     padding-left: 0;
-    padding-top: 12px;
+    padding-top: var(--space-3);
     border-left: none;
     border-top: 1px solid var(--border-subtle);
   }
@@ -3553,14 +3553,14 @@ html:not(.show-untested-tags) .untested-tag {
 /* ── Agents view (Files / Git / Apps / Agents row) ──────────────────────── */
 .agent-prompts-view { display: flex; flex-direction: column; gap: 12px; }
 .agent-prompts-section { display: flex; flex-direction: column; gap: 8px; }
-.agent-prompts-section h3 { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.agent-prompts-section h3 { margin: 0; font-size: var(--text-md); color: var(--text-secondary); }
 .agent-prompts-section .settings-help { margin: 0; }
 .agent-prompts-tab {
   display: flex;
   gap: 10px;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
@@ -3597,7 +3597,7 @@ html:not(.show-untested-tags) .untested-tag {
    the same line: a one-tab list has nothing to sort and no control for it. */
 .agent-prompts-tabs-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .agent-prompts-tabs-head .settings-section-title { margin: 0; }
-.agent-prompts-sort { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+.agent-prompts-sort { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-muted); }
 
 /* The model tag: the model the session itself is showing, in the same pill the
    state uses so the two read as one row of facts about the tab. */
@@ -3605,7 +3605,7 @@ html:not(.show-untested-tags) .untested-tag {
   padding: 1px 7px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-full);
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-secondary);
@@ -3627,7 +3627,7 @@ html:not(.show-untested-tags) .untested-tag {
 }
 .agent-prompts-tab-name:hover { color: var(--accent); text-decoration: underline; }
 .agent-prompts-tab-head small,
-.agent-prompts-tab-when { color: var(--text-muted); font-size: 11px; }
+.agent-prompts-tab-when { color: var(--text-muted); font-size: var(--text-sm); }
 .agent-prompts-tab-head .danger-text { color: var(--danger); }
 /* The last prompt the tab was given, from its transcript — one line, cut with
    an ellipsis; the whole of it is in the title and in the tab itself. */
@@ -3641,12 +3641,12 @@ html:not(.show-untested-tags) .untested-tag {
 }
 
 .agent-prompts-notice {
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   background: var(--accent-soft);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 /* The section headers use the settings design system's own header
@@ -3661,15 +3661,15 @@ html:not(.show-untested-tags) .untested-tag {
 /* CLI overview (side panel → CLIs): the Agents view's cards, one per CLI. */
 .cli-overview-head { display: flex; align-items: baseline; gap: 8px; }
 .cli-overview-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.cli-overview-plan { padding: 1px 7px; border: 1px solid var(--border-color); border-radius: 999px; font-size: 11px; color: var(--text-secondary); }
-.cli-overview-facts { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.cli-overview-plan { padding: 1px 7px; border: 1px solid var(--border-color); border-radius: 999px; font-size: var(--text-sm); color: var(--text-secondary); }
+.cli-overview-facts { color: var(--text-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .cli-overview-meter { display: flex; flex-direction: column; gap: 3px; }
-.cli-overview-meter > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.cli-overview-meter > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: var(--text-md); }
 .cli-overview-meter > div:first-child span:last-child { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-.cli-overview-meter small { color: var(--text-muted); font-size: 11px; }
+.cli-overview-meter small { color: var(--text-muted); font-size: var(--text-sm); }
 .cli-overview-bar { height: 6px; overflow: hidden; background: var(--bg-hover); border-radius: 3px; }
 .cli-overview-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
-.cli-overview-bar.high > span { background: var(--warning, #f0a35e); }
+.cli-overview-bar.high > span { background: var(--warning); }
 
 /* Prompt chart: one horizontal time axis, drafts on a strip above it. The
    card treatment follows `.todo-card` (solid surface plus a static shadow
@@ -3677,7 +3677,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-chart-section { min-height: 0; }
 /* The chart's own tab (`agents/PromptChartTab`): the section fills the pane and
    scrolls as one, with the side panel's 6px gutter widened to a tab's. */
-.prompt-chart-tab { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
+.prompt-chart-tab { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: var(--space-2) var(--space-3); }
 .prompt-chart-tab .settings-section-title { margin-top: 0; padding-top: 0; border-top: none; display: flex; align-items: center; gap: 8px; }
 .agent-prompt-chart-toolbar,
 .agent-prompt-chart-facets,
@@ -3693,11 +3693,11 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-chart-timeline-bar { display: flex; flex-direction: column; gap: 5px; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); }
 .agent-prompt-chart-timeline-bar > header .agent-composer-chip { margin-left: auto; }
 .agent-prompt-drafts-strip > .agent-prompt-chart-filter { padding: 6px 3px 0; }
-.agent-prompt-chart-range { font-size: 11px; margin-left: 4px; }
-.agent-prompt-link-kind > span { color: var(--text-muted); font-size: 10px; }
+.agent-prompt-chart-range { font-size: var(--text-sm); margin-left: 4px; }
+.agent-prompt-link-kind > span { color: var(--text-muted); font-size: var(--text-xs); }
 /* The toolbar's "New agent tab" picks: two compact dropdowns beside their label. */
 .agent-prompt-new-tab .dropdown { min-width: 92px; }
-.agent-prompt-new { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); }
+.agent-prompt-new { display: grid; gap: 6px; padding: var(--space-2); border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); }
 .agent-prompt-new textarea,
 .agent-prompt-new input { width: 100%; box-sizing: border-box; }
 .agent-prompt-chart { position: relative; display: flex; flex-direction: column; gap: 8px; min-height: 360px; }
@@ -3712,14 +3712,14 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-chart-timeline-bar > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 3px 6px; border-bottom: 1px solid var(--border-color); }
 .agent-prompt-drafts-strip > header span,
 .agent-prompt-chart-timeline-bar > header span,
-.agent-prompt-drafts-strip > header small { color: var(--text-muted); font-size: 10px; }
+.agent-prompt-drafts-strip > header small { color: var(--text-muted); font-size: var(--text-xs); }
 .agent-prompt-drafts-strip > header small { margin-left: auto; }
-.agent-prompt-drafts-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding-top: 8px; min-height: 40px; }
+.agent-prompt-drafts-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding-top: var(--space-2); min-height: 40px; }
 .agent-prompt-drafts-row > .agent-prompt-card { width: 168px; }
 /* Editing needs the Markdown toolbar's width, not a strip card's. */
 .agent-prompt-drafts-row > .agent-prompt-card.is-editing { width: min(460px, 100%); }
-.agent-prompt-draft-layout-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 3px 4px; }
-.agent-prompt-draft-layout-bar small, .agent-prompt-completion-hint { color: var(--text-muted); font-size: 10px; }
+.agent-prompt-draft-layout-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: var(--space-2) 3px var(--space-1); }
+.agent-prompt-draft-layout-bar small, .agent-prompt-completion-hint { color: var(--text-muted); font-size: var(--text-xs); }
 .agent-prompt-completion-hint { display: block; padding: 0 3px 6px; }
 .agent-prompt-draft-viewport { overflow: auto; max-height: 55vh; min-height: 220px; }
 .agent-prompt-draft-canvas { position: relative; min-width: 100%; background-image: radial-gradient(var(--border-color) 1px, transparent 1px); background-size: 16px 16px; }
@@ -3735,7 +3735,7 @@ html:not(.show-untested-tags) .untested-tag {
    460px inside the body (TIMELINE_EDIT_WIDTH). */
 .agent-prompt-timeline-item.is-edit-flip > .agent-prompt-card.is-editing { margin-left: var(--edit-shift, 0px); }
 /* The composer a double click on an empty spot opens, where it was opened. */
-.agent-prompt-draft-composer { display: flex; flex-direction: column; gap: 6px; width: min(460px, 100%); padding: 8px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--bg-panel); color: var(--text-primary); }
+.agent-prompt-draft-composer { display: flex; flex-direction: column; gap: 6px; width: min(460px, 100%); padding: var(--space-2); border: 1px solid var(--accent); border-radius: var(--radius); background: var(--bg-panel); color: var(--text-primary); }
 .agent-prompt-draft-position.agent-prompt-draft-composer { width: 460px; z-index: 5; }
 
 /* The axis and the lanes. `overflow: clip`, not `hidden`: a hidden box is a
@@ -3745,7 +3745,7 @@ html:not(.show-untested-tags) .untested-tag {
 /* Sticky, and above every card layer: scrolling the tab keeps the clock and
    the NOW label in view over the lanes. */
 .agent-prompt-timeline-axis { position: sticky; top: 0; z-index: 7; height: 18px; border-bottom: 1px solid var(--border-color); background: var(--bg-panel); overflow: clip; }
-.agent-prompt-timeline-tick { position: absolute; top: 2px; padding-left: 3px; border-left: 1px solid var(--border-color); color: var(--text-muted); font-size: 9px; line-height: 14px; white-space: nowrap; }
+.agent-prompt-timeline-tick { position: absolute; top: 2px; padding-left: 3px; border-left: 1px solid var(--border-color); color: var(--text-muted); font-size: var(--text-xs); line-height: 14px; white-space: nowrap; }
 .agent-prompt-timeline-tick.is-major { color: var(--text-secondary); border-left-color: var(--text-muted); }
 /* The body is sized for its lanes and its queue; whatever outgrows that (an
    expanded card) scrolls within it rather than being clipped away. */
@@ -3777,37 +3777,37 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-timeline-now::before { content: ""; position: absolute; top: -1px; left: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
 .agent-prompt-timeline-now-band { position: absolute; top: 0; bottom: 0; z-index: 2; border-radius: var(--radius-sm); }
 .agent-prompt-timeline-now-band.is-drop-over { background: color-mix(in srgb, var(--danger) 18%, transparent); outline: 1px dashed var(--danger); }
-.agent-prompt-timeline-now-label { position: absolute; top: 2px; z-index: 1; transform: translateX(-50%); padding: 0 3px; background: var(--bg-panel); color: var(--danger); font-size: 9px; line-height: 14px; text-transform: uppercase; }
+.agent-prompt-timeline-now-label { position: absolute; top: 2px; z-index: 1; transform: translateX(-50%); padding: 0 3px; background: var(--bg-panel); color: var(--danger); font-size: var(--text-xs); line-height: 14px; text-transform: uppercase; }
 .agent-prompt-timeline-now-label.is-outside { opacity: .5; }
 /* An agent's own rate-limit rollover: a dashed line under the cards (it marks
    time, like the grid) and a coloured label in the axis carrying the tooltip.
    Session (5 h) and weekly windows differ by colour. */
 .agent-prompt-timeline-reset { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--reset-color); opacity: .8; pointer-events: none; }
-.agent-prompt-timeline-reset-label { position: absolute; top: 2px; padding: 0 3px; border-left: 1px dashed var(--reset-color); background: var(--bg-panel); color: var(--reset-color); font-size: 9px; line-height: 14px; white-space: nowrap; }
+.agent-prompt-timeline-reset-label { position: absolute; top: 2px; padding: 0 3px; border-left: 1px dashed var(--reset-color); background: var(--bg-panel); color: var(--reset-color); font-size: var(--text-xs); line-height: 14px; white-space: nowrap; }
 .agent-prompt-timeline-reset.is-session,
 .agent-prompt-timeline-reset-label.is-session { --reset-color: var(--warning); }
 .agent-prompt-timeline-reset.is-week,
 .agent-prompt-timeline-reset-label.is-week { --reset-color: var(--accent); }
 .agent-prompt-timeline-queue { position: absolute; top: 8px; z-index: 4; display: flex; flex-direction: column; gap: 5px; }
-.agent-prompt-timeline-queue > small { color: var(--warning); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
+.agent-prompt-timeline-queue > small { color: var(--warning); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; }
 /* Month view: one column per day, the cards as lamps; the whole day is the
    way into it. */
-.agent-prompt-timeline-day { position: absolute; top: 4px; bottom: 4px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 3px; padding: 4px 2px; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
+.agent-prompt-timeline-day { position: absolute; top: 4px; bottom: 4px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 3px; padding: var(--space-1) 2px; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
 .agent-prompt-timeline-day:hover { background: var(--pill-hover-bg); }
 .agent-prompt-timeline-day.is-empty { opacity: .6; }
-.agent-prompt-timeline-day > small { width: 100%; color: var(--text-muted); font-size: 9px; text-align: left; }
+.agent-prompt-timeline-day > small { width: 100%; color: var(--text-muted); font-size: var(--text-xs); text-align: left; }
 /* The drag decorations, all drawn from the hook's state. */
 .agent-prompt-timeline-indicator { position: absolute; top: 0; bottom: 0; z-index: 5; border-left: 2px dashed var(--accent); pointer-events: none; }
-.agent-prompt-timeline-badge { position: absolute; top: 4px; left: 4px; z-index: 6; padding: 1px 6px; border-radius: var(--radius-full); background: var(--accent); color: var(--bg-panel); font-size: 10px; font-weight: 600; white-space: nowrap; pointer-events: none; }
+.agent-prompt-timeline-badge { position: absolute; top: 4px; left: 4px; z-index: 6; padding: 1px 6px; border-radius: var(--radius-full); background: var(--accent); color: var(--bg-panel); font-size: var(--text-xs); font-weight: 600; white-space: nowrap; pointer-events: none; }
 .agent-prompt-timeline-badge.is-blocked { background: var(--danger); text-decoration: line-through; }
-.agent-prompt-timeline-ghost { position: fixed; top: 0; left: 0; z-index: 40; display: flex; flex-direction: column; gap: 4px; padding: 7px 8px 7px 10px; border: 1px solid var(--accent); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--control-bg); color: var(--text-primary); opacity: .92; pointer-events: none; }
+.agent-prompt-timeline-ghost { position: fixed; top: 0; left: 0; z-index: 40; display: flex; flex-direction: column; gap: 4px; padding: 7px var(--space-2) 7px 10px; border: 1px solid var(--accent); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--control-bg); color: var(--text-primary); opacity: .92; pointer-events: none; }
 .agent-prompt-timeline-ghost::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: 0 6px 18px rgb(0 0 0 / .28); pointer-events: none; }
 .agent-prompt-timeline-ghost > .agent-prompt-timeline-badge { position: static; align-self: flex-start; }
 /* The selection: a rubber band over the lanes, and a ring on each selected card. */
 .agent-prompt-timeline-marquee { position: fixed; z-index: 40; border: 1px dashed var(--accent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 12%, transparent); pointer-events: none; }
 .agent-prompt-card.is-multi-selected { outline: 2px solid var(--accent); outline-offset: 1px; }
-.agent-prompt-chart-selection { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; }
-.agent-prompt-chart-select-hint { color: var(--text-muted); font-size: 10px; }
+.agent-prompt-chart-selection { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--text-sm); }
+.agent-prompt-chart-select-hint { color: var(--text-muted); font-size: var(--text-xs); }
 /* The chart's error line and its Dismiss: `.mail-error-strip`'s row layout. */
 .agent-prompt-chart-error { display: flex; align-items: center; gap: 10px; }
 .agent-prompt-chart-error > span { flex: 1; word-break: break-word; }
@@ -3819,7 +3819,7 @@ html:not(.show-untested-tags) .untested-tag {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  padding: 9px 8px 10px 10px;
+  padding: 9px var(--space-2) 10px 10px;
   border: 1px solid var(--border-color);
   border-left: 3px solid var(--prompt-strand, var(--accent));
   border-radius: var(--radius);
@@ -3863,7 +3863,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-session-list > li { display: flex; flex-direction: column; gap: 3px; padding-top: 5px; border-top: 1px solid var(--border-color); }
 .agent-prompt-session-list > li:first-child { padding-top: 0; border-top: none; }
 .agent-prompt-session-list > li.is-dimmed { opacity: .4; }
-.agent-prompt-session-row-head { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 9px; }
+.agent-prompt-session-row-head { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--text-xs); }
 .agent-prompt-session-row-head .agent-prompt-lamp { margin-top: 0; }
 .agent-prompt-card.is-occurrence { opacity: .7; border-style: dotted; cursor: var(--cur-default, default); }
 .agent-prompt-card.is-link-target { outline: 1px dashed var(--accent); outline-offset: 2px; }
@@ -3876,7 +3876,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-card-port.is-out:hover { background: var(--accent); }
 .agent-prompt-card-head { display: grid; grid-template-columns: minmax(0, 1fr) 7px; align-items: start; gap: 5px; }
 .agent-prompt-card-head.has-delete { grid-template-columns: minmax(0, 1fr) auto 7px; }
-.agent-prompt-card-delete { width: 14px; height: 14px; margin: 0; padding: 0; border: none; border-radius: 3px; background: transparent; color: var(--text-muted); font-size: 12px; line-height: 14px; opacity: .55; }
+.agent-prompt-card-delete { width: 14px; height: 14px; margin: 0; padding: 0; border: none; border-radius: 3px; background: transparent; color: var(--text-muted); font-size: var(--text-md); line-height: 14px; opacity: .55; }
 .agent-prompt-card:hover .agent-prompt-card-delete { opacity: 1; }
 .agent-prompt-card-delete:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
 .agent-prompt-lamp { width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--text-muted); }
@@ -3885,26 +3885,26 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-lamp.is-missed { background: var(--danger); }
 .agent-prompt-lamp.is-scheduled { background: var(--accent); }
 .agent-prompt-lamp.is-queued { background: var(--warning); }
-.agent-prompt-card-message { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; font-weight: 600; }
-.agent-prompt-card-agent { display: flex; align-items: center; min-height: 16px; color: var(--text-muted); font-size: 10px; }
+.agent-prompt-card-message { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); font-weight: 600; }
+.agent-prompt-card-agent { display: flex; align-items: center; min-height: 16px; color: var(--text-muted); font-size: var(--text-xs); }
 .agent-prompt-card-agent .dropdown { min-width: 0; max-width: 100%; }
-.agent-prompt-card-agent .dropdown-trigger { padding: 0 4px; height: 16px; font-size: 10px; }
+.agent-prompt-card-agent .dropdown-trigger { padding: 0 var(--space-1); height: 16px; font-size: var(--text-xs); }
 .agent-prompt-card-tags { display: flex; flex-wrap: wrap; gap: 3px; }
-.agent-prompt-tag { padding: 0 4px; border-radius: var(--radius-full); background: var(--accent-soft); color: var(--accent); font-size: 8px; }
+.agent-prompt-tag { padding: 0 var(--space-1); border-radius: var(--radius-full); background: var(--accent-soft); color: var(--accent); font-size: 8px; }
 .agent-prompt-tag.is-auto,
 .agent-prompts-tag.is-auto { border: 1px solid currentColor; background: transparent; }
-.agent-prompt-card-fact { color: var(--text-muted); font-size: 9px; }
+.agent-prompt-card-fact { color: var(--text-muted); font-size: var(--text-xs); }
 .agent-prompt-card-expanded { display: flex; flex-direction: column; gap: 6px; padding-top: 5px; border-top: 1px solid var(--border-color); cursor: var(--cur-default, default); }
 .agent-prompt-card-expanded textarea,
 .agent-prompt-card-expanded input,
 .agent-prompt-card-expanded select { width: 100%; box-sizing: border-box; }
-.agent-prompt-card-full { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.agent-prompt-card-full { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); }
 .agent-prompt-card-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .agent-prompt-session,
-.agent-prompt-link-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 10px; overflow-wrap: anywhere; }
+.agent-prompt-link-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; color: var(--text-secondary); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .agent-prompt-link-row > span { flex: 1 1 120px; min-width: 0; }
 .agent-prompt-link-row em { color: var(--accent); font-style: normal; }
-.agent-prompt-files { margin: 0; padding-left: 16px; color: var(--text-muted); font-size: 9px; }
+.agent-prompt-files { margin: 0; padding-left: var(--space-4); color: var(--text-muted); font-size: var(--text-xs); }
 .agent-prompt-links { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .agent-prompt-links path { fill: none; stroke: var(--text-muted); stroke-width: 1; opacity: .45; }
 .agent-prompt-links path.is-selected { stroke: var(--accent); stroke-width: 2; opacity: 1; }
@@ -3916,9 +3916,9 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-link-handle circle { fill: var(--bg-panel); stroke: var(--text-muted); stroke-width: 1; }
 .agent-prompt-link-handle:hover circle,
 .agent-prompt-link-handle.has-commands circle { stroke: var(--accent); stroke-width: 1.5; }
-.agent-prompt-link-handle text { fill: var(--accent); font-size: 9px; paint-order: stroke; stroke: var(--bg-panel); stroke-width: 3px; }
+.agent-prompt-link-handle text { fill: var(--accent); font-size: var(--text-xs); paint-order: stroke; stroke: var(--bg-panel); stroke-width: 3px; }
 .agent-prompt-link-editor { display: flex; flex-direction: column; gap: 4px; max-width: 280px; color: var(--text-primary); }
-.agent-prompt-link-editor-ends { margin: 0; padding: 0 9px; font-size: 11px; overflow-wrap: anywhere; }
+.agent-prompt-link-editor-ends { margin: 0; padding: 0 9px; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .agent-prompt-link-editor-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 9px; }
 
 .agent-prompts-tab { flex-direction: row; }
@@ -3933,12 +3933,12 @@ html:not(.show-untested-tags) .untested-tag {
   box-sizing: border-box;
   resize: vertical;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .agent-composer-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.agent-composer-chips-label { font-size: 10px; color: var(--text-muted); margin-right: 2px; }
+.agent-composer-chips-label { font-size: var(--text-xs); color: var(--text-muted); margin-right: 2px; }
 .agent-composer-chip {
-  font-size: 10px;
+  font-size: var(--text-xs);
   padding: 1px 7px;
   height: 18px;
   background: transparent;
@@ -3949,10 +3949,10 @@ html:not(.show-untested-tags) .untested-tag {
 }
 .agent-composer-chip:hover { background-color: var(--pill-hover-bg); }
 .agent-composer-chip.active { color: var(--accent); border-color: var(--accent); }
-.agent-composer-model { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.agent-composer-model { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
 .agent-composer-model > span { color: var(--text-muted); }
 .agent-composer-model .dropdown { flex: 1; min-width: 0; }
-.agent-composer-preview { color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
+.agent-composer-preview { color: var(--text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 
 /* Tags: the same chip the composer's prefix commands wear, so a row reads as
    one vocabulary — text, then what it is for. The count on a library chip is
@@ -3969,12 +3969,12 @@ html:not(.show-untested-tags) .untested-tag {
   min-width: 0;
   font: inherit;
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: inherit;
-  background: var(--bg-main, rgba(0, 0, 0, 0.25));
+  background: var(--bg-main);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   margin: 0;
   outline: none;
 }
@@ -4000,7 +4000,7 @@ html:not(.show-untested-tags) .untested-tag {
   box-sizing: border-box;
   resize: vertical;
   font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.45;
   tab-size: 2;
 }
@@ -4009,13 +4009,13 @@ html:not(.show-untested-tags) .untested-tag {
 .md-prompt .md-prompt-preview {
   max-height: 320px;
   overflow: auto;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-main, transparent);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
-.md-prompt .md-prompt-preview.file-tree-empty { padding: 8px; }
+.md-prompt .md-prompt-preview.file-tree-empty { padding: var(--space-2); }
 
 /* Phone mark (components/mobile/PhoneHereMark): a paired phone is in this
    project or holds this tab. Faded while its screen is away. */
