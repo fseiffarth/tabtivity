@@ -30,6 +30,7 @@ import { FileIcon } from "../common/icons/FileIcon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 type ProjectJson = Record<string, unknown>;
 
@@ -422,8 +423,8 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
   return (
     <section className={`file-browser ${active ? "active" : ""}`} tabIndex={0} onKeyDown={handleKeyDown}>
       <div className="file-browser-toolbar">
-        <button onClick={goBack} disabled={history.length === 0} title={t("common.back")}>‹</button>
-        <button onClick={goForward} disabled={future.length === 0} title={t("fileBrowser.forward")}>›</button>
+        <button onClick={goBack} disabled={history.length === 0} title={t("common.back")}><ChevronLeftIcon /></button>
+        <button onClick={goForward} disabled={future.length === 0} title={t("fileBrowser.forward")}><ChevronRightIcon /></button>
         <button onClick={() => load(parentRel(relPath))} disabled={!relPath} title={t("fileBrowser.up")}>↑</button>
         <button onClick={() => load(relPath, { replace: true })} title={t("common.refresh")}>↻</button>
         <form className="file-browser-path" onSubmit={submitPath}>

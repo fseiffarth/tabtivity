@@ -71,7 +71,7 @@ import { renderPage } from "./deckBase";
 import { InterstitialView, PresentedSlide } from "./DeckSlideView";
 import { useT } from "../../../lib/i18n";
 import { useUse24h } from "../../../lib/timeFormat";
-import { CloseIcon, PauseIcon, PlayIcon, TimerIcon } from "../../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, PauseIcon, PlayIcon, TimerIcon } from "../../common/icons/Icon";
 import { ErrorNote } from "../../common/ErrorNote";
 
 export interface DeckPresenterProps {
@@ -776,13 +776,13 @@ export function DeckPresenter({
 
       <div className="deck-presenter-bar">
         <button onClick={prev} title={t("deckPresenter.previousTitle")} aria-label={t("deckPresenter.previousAria")}>
-          ‹
+          <ChevronLeftIcon />
         </button>
         <span className="deck-presenter-pos">
           {talkPos} / {talkSlides.length}
         </span>
         <button onClick={next} title={t("deckPresenter.nextTitle")} aria-label={t("deckPresenter.nextAria")}>
-          ›
+          <ChevronRightIcon />
         </button>
         <button
           className={notesOpen ? "active" : ""}

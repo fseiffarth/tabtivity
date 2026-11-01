@@ -2,7 +2,7 @@ import { Dropdown } from "../common/Dropdown";
 import { useId, useState, type ChangeEventHandler, type ReactNode } from "react";
 import { Toggle } from "../common/Toggle";
 import { useT } from "../../lib/i18n";
-import { CloseIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
 
 /**
  * The settings design system, in components.
@@ -43,7 +43,7 @@ export function SettingsHeader({
     <div className="settings-title-row">
       {onBack && (
         <button type="button" className="settings-btn sm" onClick={onBack}>
-          ‹ {t("common.back")}
+          <ChevronLeftIcon /> {t("common.back")}
         </button>
       )}
       <h2>{title}</h2>
@@ -116,7 +116,7 @@ export function SettingsAdvanced({
         onClick={() => setOpen((o) => !o)}
       >
         <span className="settings-advanced-chevron" aria-hidden="true">
-          ›
+          <ChevronRightIcon />
         </span>
         {title ?? t("settings.advancedOptions")}
       </button>

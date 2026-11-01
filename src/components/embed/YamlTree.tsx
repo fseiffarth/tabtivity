@@ -36,7 +36,7 @@ import {
   type YamlValueType,
 } from "../../lib/viewers/yaml";
 import { useT } from "../../lib/i18n";
-import { CloseIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
 
 /**
  * The YAML/JSON tree editor (#yaml) — the structured half of the viewer, the way
@@ -1173,7 +1173,7 @@ function InlineListCell({
           tabIndex={-1}
           aria-label={t("yamlTree.scrollLeftLabel", { label })}
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       )}
       <span className="yaml-list-field">
@@ -1221,7 +1221,7 @@ function InlineListCell({
           tabIndex={-1}
           aria-label={t("yamlTree.scrollRightLabel", { label })}
         >
-          ›
+          <ChevronRightIcon />
         </button>
       )}
     </span>

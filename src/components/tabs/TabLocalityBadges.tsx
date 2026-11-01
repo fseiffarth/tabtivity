@@ -16,7 +16,7 @@ import { useRunHostPrefStore } from "../../stores/remote/runHostPref";
 import { UntestedTag } from "../common/UntestedTag";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { useT } from "../../lib/i18n";
-import { CloudIcon, HomeIcon, PlayMark } from "../common/icons/Icon";
+import { ChevronLeftIcon, CloudIcon, HomeIcon, PlayMark } from "../common/icons/Icon";
 import { useAgentModelsStore, agentTabLabel, tabModeMarks } from "../../stores/agents/agentModels";
 import { screenModeMarks } from "../../lib/agents/agentModel";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
@@ -287,7 +287,7 @@ export function LocalityMenu({
                 className="tab-new-menu-item tab-menu-back"
                 onClick={() => onChangeView("root")}
               >
-                <span className="tab-new-menu-dot">‹</span>
+                <span className="tab-new-menu-dot"><ChevronLeftIcon /></span>
                 {t("tabLocality.runOnMachine")}
                 <UntestedTag id="tabLocalityBadges.1" />
               </button>

@@ -9,7 +9,7 @@ import { boardColumns, fallbackColumnId, taskFromRemark } from "../../lib/todoBo
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
-import { CloseIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
 
 const EMPTY_REMARKS: ProjectRemark[] = [];
 
@@ -64,9 +64,9 @@ export function RemarksPane({ projectId, projectDir, visible }: {
   return <div className="project-remarks-pane">
     {dialogs}
     <div className="project-remarks-walk">
-      <button title={t("projectRemarks.previous")} onClick={() => walk(-1)}>‹</button>
+      <button title={t("projectRemarks.previous")} onClick={() => walk(-1)}><ChevronLeftIcon /></button>
       <span>{remarks.length ? `${cursor + 1}/${remarks.length}` : "0/0"}</span>
-      <button title={t("projectRemarks.next")} onClick={() => walk(1)}>›</button>
+      <button title={t("projectRemarks.next")} onClick={() => walk(1)}><ChevronRightIcon /></button>
       <UntestedTag id="remarksPane.1" />
     </div>
     {entry?.loading ? <p>{t("common.loading")}</p> : entry?.error ? <p className="error-text">{entry.error}</p> : remarks.length === 0 ? (

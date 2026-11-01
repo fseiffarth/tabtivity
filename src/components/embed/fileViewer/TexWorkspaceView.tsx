@@ -38,6 +38,7 @@ import { TextView } from "./TextView";
 import { type TexCompileOpts, texCompileOptsFrom, texCompileViewerState } from "./texParts";
 import { TexView } from "./TexView";
 import { ImageView } from "./ImageView";
+import { ChevronLeftIcon } from "../../common/icons/Icon";
 
 /** True when `path` is the main document or any enumerated child/graphic of the
  *  workspace structure — i.e. a target a sidebar/link switch should center rather
@@ -550,7 +551,7 @@ export function TexWorkspaceView({
               aria-label={t("texWorkspace.hideStructure")}
               onClick={hideSidebar}
             >
-              ‹
+              <ChevronLeftIcon />
             </button>
           </div>
         </div>

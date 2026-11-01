@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { observeStripResize } from "../../lib/observeStripResize";
 import { closedTabSlotHeld, useClosedTabSlot } from "../../lib/tabs/closedTabSlot";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 /**
  * The horizontally-scrolling tab strip + flanking chevrons — the SAME overflow
@@ -145,7 +146,7 @@ export function ScrollingTabStrip({
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(-1)}
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       )}
       <div
@@ -165,7 +166,7 @@ export function ScrollingTabStrip({
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(1)}
         >
-          ›
+          <ChevronRightIcon />
         </button>
       )}
     </>

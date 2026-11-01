@@ -24,7 +24,7 @@ import {
 } from "../../lib/viewers/yaml";
 import { cellKind, isContainer } from "../../lib/viewers/yamlGrid";
 import { useT } from "../../lib/i18n";
-import { CloseIcon } from "../common/icons/Icon";
+import { ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
 
 /**
  * The YAML/JSON **card grid** (#yaml-grid) — the third view on the file, beside the
@@ -144,7 +144,7 @@ export function YamlGrid({
           {crumbs.map((node, i) => (
             <span key={node.id} className="yaml-crumb-wrap">
               <span className="yaml-crumb-sep" aria-hidden="true">
-                ›
+                <ChevronRightIcon />
               </span>
               <button
                 className={`yaml-crumb${i === crumbs.length - 1 ? " on" : ""}`}

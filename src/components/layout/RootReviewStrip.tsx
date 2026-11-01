@@ -7,7 +7,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useMailStore } from "../../stores/mail";
 import { inspectIcs } from "../../lib/calendar/icsSafety";
 import { IcsReportBody } from "../calendar/IcsImportReviewDialog";
-import { UndoIcon } from "../common/icons/Icon";
+import { ChevronRightIcon, UndoIcon } from "../common/icons/Icon";
 import type { MailDraft } from "../../types/mail";
 
 /** Strip bidi overrides, zero-width controls and default-ignorable text. Keep
@@ -169,7 +169,7 @@ export function RootReviewStrip({ advisory = false, domain }: { advisory?: boole
       {decided.length > 0 && <div className="root-review-group decided">
         <button type="button" className="root-review-group-label root-review-group-toggle"
           aria-expanded={showDecided} onClick={() => setShowDecided((o) => !o)}>
-          <span className="root-review-group-chevron" aria-hidden="true">›</span>
+          <span className="root-review-group-chevron" aria-hidden="true"><ChevronRightIcon /></span>
           {t("rootReview.decided", { count: decided.length })}
         </button>
         {showDecided && <div className="settings-list root-review-cards">

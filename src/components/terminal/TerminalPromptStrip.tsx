@@ -13,7 +13,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { TerminalReaderChats } from "./TerminalReaderChats";
 import { chatsOffered } from "../../lib/agents/agentChats";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
-import { CheckIcon } from "../common/icons/Icon";
+import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 /** Prompt history under a terminal; readable agents use the same controls
  * as a top toolbar with resource/action slots and Chat / Diffs / Terminal tabs.
@@ -203,7 +203,7 @@ export function TerminalPromptStrip({
                 aria-label={t("terminal.promptStrip.older")}
                 title={t("terminal.promptStrip.older")}
               >
-                ‹
+                <ChevronLeftIcon />
               </button>
               <span className="prompt-strip-count">{t("terminal.promptStrip.count", { n: index + 1, total: trail.length })}</span>
               <button
@@ -215,7 +215,7 @@ export function TerminalPromptStrip({
                 aria-label={t("terminal.promptStrip.newer")}
                 title={t("terminal.promptStrip.newer")}
               >
-                ›
+                <ChevronRightIcon />
               </button>
             </span>
             <button

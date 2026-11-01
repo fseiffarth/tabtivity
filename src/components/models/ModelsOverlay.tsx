@@ -17,7 +17,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import type { InstalledSkill } from "../../types/skills";
 import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
-import { ArrowLeftIcon, ArrowRightIcon, CloseIcon, InboxIcon, SparkleIcon, TerminalIcon } from "../common/icons/Icon";
+import { ArrowLeftIcon, ArrowRightIcon, ChevronRightIcon, CloseIcon, InboxIcon, SparkleIcon, TerminalIcon } from "../common/icons/Icon";
 import { BrainGlyph, ModelsGlyph } from "../header/HeaderGlyphs";
 import { AgentsPanel } from "../settings/AgentsPanel";
 import { OllamaPanel } from "../settings/OllamaPanel";
@@ -206,7 +206,7 @@ function ModelsOverlay() {
             {view !== "home" && (
               <>
                 <span className="models-overlay-trail-sep" aria-hidden="true">
-                  ›
+                  <ChevronRightIcon />
                 </span>
                 <span
                   className="models-overlay-trail-current"

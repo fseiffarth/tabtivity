@@ -28,6 +28,7 @@ import {
   type HeaderStatusReport,
 } from "../../stores/headerStatus";
 import { useT } from "../../lib/i18n";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 // Code-split (perf plan §6): the Machines menu renders nothing while switched
 // off (Settings' "Remote features"; on by default), so its module graph loads
@@ -251,7 +252,7 @@ export function StatusCluster() {
           {/* Points the way the cluster moves: ‹ opens it leftwards into the bar,
               › folds it back towards the window controls beside it. */}
           <span className="status-cluster-chevron" aria-hidden>
-            {collapsed ? "‹" : "›"}
+            {collapsed ? <ChevronLeftIcon /> : <ChevronRightIcon />}
           </span>
         </button>
       )}

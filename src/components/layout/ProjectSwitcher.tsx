@@ -32,6 +32,7 @@ import { boxColor } from "../../lib/theme/boxColor";
 import { useT } from "../../lib/i18n";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
 import { observeStripResize } from "../../lib/observeStripResize";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 // Re-exported for tests and any external callers that imported these scaffold
 // helpers from ProjectSwitcher before the dialog was extracted (the public
@@ -666,7 +667,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
               scrollPills(-1);
             }}
           >
-            ‹
+            <ChevronLeftIcon />
           </button>
           <div
             className="project-pills-scroll"
@@ -734,7 +735,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
               scrollPills(1);
             }}
           >
-            ›
+            <ChevronRightIcon />
           </button>
         </div>
         <div className="project-switcher-separator" />

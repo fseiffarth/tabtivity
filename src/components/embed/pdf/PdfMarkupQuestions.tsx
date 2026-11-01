@@ -20,7 +20,7 @@
  * chip scrolls the page to its pin.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CheckboxIcon, CheckIcon, SquareIcon } from "../../common/icons/Icon";
+import { CheckboxIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, SquareIcon } from "../../common/icons/Icon";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useT } from "../../../lib/i18n";
 import {
@@ -134,7 +134,7 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
               aria-label={t("pdfMarkup.questions.previous")}
               onClick={() => setShown(qi - 1)}
             >
-              ‹
+              <ChevronLeftIcon />
             </button>
             <span aria-live="polite">{t("pdfMarkup.questions.position", { index: qi + 1, count })}</span>
             <button
@@ -145,7 +145,7 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
               aria-label={t("pdfMarkup.questions.next")}
               onClick={() => setShown(qi + 1)}
             >
-              ›
+              <ChevronRightIcon />
             </button>
           </div>
         )}

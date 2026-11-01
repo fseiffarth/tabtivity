@@ -103,7 +103,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
-import { CloseIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
@@ -1644,7 +1644,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(-1)}
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       )}
       <div className="tab-strip" ref={stripRef} onWheel={onStripWheel}>
@@ -1740,7 +1740,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(1)}
         >
-          ›
+          <ChevronRightIcon />
         </button>
       )}
       {/* The + lives OUTSIDE the scrolling strip, beside the grip, the chevrons
