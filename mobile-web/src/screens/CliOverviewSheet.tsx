@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { ApiError, getCliOverview } from "../api";
 import { overviewMeters, planLabel, type CliOverviewRow } from "../../../shared/cliOverview";
 import { resetText } from "../terminal/limitResets";
@@ -83,7 +84,7 @@ function CliOverviewSheet({ overview, failure, busy, onRefresh, onClose }: {
     <section className="option-sheet cli-overview-sheet" role="dialog" aria-modal="true" aria-label={t("cliOverview.title")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.gitSheet.done")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.gitSheet.done")}><CloseIcon size="1em" /></button>
         <h2>{t("cliOverview.title")}{isUntested("mobile.clis") && <small>{t("mobile.newTab.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>

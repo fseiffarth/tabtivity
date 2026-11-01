@@ -146,7 +146,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     await settle();
     const dialog = screen.getByRole("dialog", { name: "notes.svg" });
     expect(dialog.querySelector("pre")?.textContent).toContain("<svg onload=");
-    expect(dialog.querySelector("svg")).toBeNull();
+    expect(dialog.querySelector("svg:not(.app-icon)")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.click(screen.getByRole("button", { name: "Open paper.pdf" }));
     // A PDF is drawn inside the app, never handed to the phone's viewer.

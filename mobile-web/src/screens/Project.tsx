@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
+import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, UndoIcon, WindowIcon } from "../glyphs";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
@@ -684,7 +685,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         order is the desktop's own tab order — the one a drag writes into. Plain
         text while there is only one tab to order. */}
     <header className="project-header">
-      <button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}>‹</button>
+      <button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>
       <div className="terminal-title">{tabs.length > 1
         ? <><h1><button
           className="project-title"
@@ -741,6 +742,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       {hostNote && <button onClick={() => dropHostNote(noteHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
     </p>}
     {error && <p className="error">{error}</p>}
+    {/* The chrome's glyphs, drawn from the desktop's icon set. */}
+    {detail && isUntested("mobile.design.icons") && <p className="project-hint"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
     <HintQueue hints={tips} vars={{ agentHold: { agent: quickLabel ?? "" } }} />
     {projectInbox.view}
     {/* An inactive project is activated before anything else here is worth
@@ -749,7 +752,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {/* No tabs: say so once and point at the ＋ below, rather than drawing a
         second button that does the same. */}
     {detail && tabs.length === 0 && shownFileTabs.length === 0 && <div className="project-empty">
-      <span className="project-empty-glyph" aria-hidden="true">▭</span>
+      <span className="project-empty-glyph" aria-hidden="true"><WindowIcon size="1em" /></span>
       <strong>{t("mobile.project.emptyTitle")}</strong>
       <p>{t(!fabOffered ? "mobile.project.emptyHintNone" : !creates ? "mobile.project.emptyHintFiles" : createVerdict === "agents" ? "mobile.project.emptyHintAgents" : "mobile.project.emptyHint")}</p>
     </div>}
@@ -802,7 +805,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           and its card comes back. */}
       {closedRows.length > 0 && <section className="project-closed" aria-label={t("mobile.project.recentlyClosed")}>
         <button className="project-foot-row" aria-expanded={closedOpen} onClick={() => setClosedOpen((open) => !open)}>
-          <span aria-hidden="true" className="project-foot-icon">↺</span>
+          <span aria-hidden="true" className="project-foot-icon"><UndoIcon size="1em" /></span>
           <span>{t("mobile.project.recentlyClosedCount", { count: closedRows.length })}{isUntested("mobile.project.reopenClosed") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
           <svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button>
@@ -818,7 +821,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           ? <><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span> {t("mobile.project.reopening", { label: row.label })}{isUntested("mobile.project.reopening") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
           : <>{row.label}</>}</button>)}
       </section>}
-      <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}>◷ {t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>
+      <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}><span aria-hidden="true" className="project-foot-icon"><ClockIcon size="1em" /></span>{t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>
     </div>
     {/* Opening a session is what this screen is for, so it rides above the
         list where the thumb already is, rather than in the header's corner
@@ -835,7 +838,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       aria-busy={creating}
       aria-label={t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send")}
       title={quickTarget ? t("mobile.project.fabQuick", { agent: quickLabel ?? "" }) : t(creates ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
-    ><span aria-hidden="true" className="fab-plus">＋</span>{(isUntested("mobile.project.fab") || (quickTarget && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
+    ><span aria-hidden="true" className="fab-plus"><PlusIcon size="1em" /></span>{(isUntested("mobile.project.fab") || (quickTarget && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {moreTab && <OptionSheet
       title={moreTab.label}
       waiting=""
@@ -894,11 +897,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         {gitOffered && <button
           role="menuitem"
           onClick={() => { setDrawerOpen(false); setGitOpen(true); }}
-        ><span aria-hidden="true" className="project-menu-icon">⎇</span><span><strong>{t("mobile.gitSheet.menu")}</strong>{isUntested("mobile.project.gitOverview") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span></button>}
+        ><span aria-hidden="true" className="project-menu-icon"><BranchIcon size="1em" /></span><span><strong>{t("mobile.gitSheet.menu")}</strong>{isUntested("mobile.project.gitOverview") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span></button>}
         {divergedOffered && <button
           role="menuitem"
           onClick={() => { setDrawerOpen(false); setDivergedOpen(true); }}
-        ><span aria-hidden="true" className="project-menu-icon">±</span><span><strong>{t("mobile.diverged.menu")}</strong>{isUntested("mobile.project.diverged") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>{!!detail?.diverged_count && <small className="project-menu-count">{detail.diverged_count}</small>}</button>}
+        ><span aria-hidden="true" className="project-menu-icon"><DiffIcon size="1em" /></span><span><strong>{t("mobile.diverged.menu")}</strong>{isUntested("mobile.project.diverged") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>{!!detail?.diverged_count && <small className="project-menu-count">{detail.diverged_count}</small>}</button>}
         {isUntested("mobile.project.drawerMenu") && <p className="project-menu-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </div> : undefined} />}
     {/* A card's file: a picture opens in Mark up — its card is a markup under

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { describeFailure } from "../connection";
 import {
@@ -94,7 +95,7 @@ export function NotificationsSheet({ onClose, onChange }: { onClose: () => void;
     <section className="option-sheet notifications-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.push.title")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.push.close")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.push.close")}><CloseIcon size="1em" /></button>
         <h2>{t("mobile.push.title")}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>

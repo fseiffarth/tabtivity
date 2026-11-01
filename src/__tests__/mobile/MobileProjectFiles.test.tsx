@@ -334,7 +334,7 @@ describe("Mobile project — read-only file browser", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Search the project's files" }), { target: { value: "main" } });
     fireEvent.click(await screen.findByRole("button", { name: "More for main.rs" }));
     const menu = screen.getByRole("dialog", { name: "main.rs" });
-    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== "✕"))
+    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== ""))
       .toEqual(["Open", "Favorite", "Show in folder"]);
     fireEvent.click(within(menu).getByRole("button", { name: "Show in folder" }));
     await screen.findByRole("button", { name: "Open the folder deep" });
@@ -513,7 +513,7 @@ describe("Mobile project — read-only file browser", () => {
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const sheet = await openDrawer();
     const menu = within(sheet).getByRole("menu", { name: "Project menu" });
-    expect(within(menu).getAllByRole("menuitem").map((row) => row.textContent)).toEqual([expect.stringMatching(/^⎇Git/)]);
+    expect(within(menu).getAllByRole("menuitem").map((row) => row.textContent)).toEqual([expect.stringMatching(/^Git/)]);
     expect(within(sheet).getByRole("button", { name: "Open the project's files" })).toBeTruthy();
     // A row puts the drawer away for the sheet it opens.
     fireEvent.click(within(menu).getByRole("menuitem", { name: /^Git/ }));
@@ -845,7 +845,7 @@ describe("Mobile project — favorites, recent files, folder colours, thumbnails
     await within(library).findByRole("button", { name: "Open notes.md" });
     fireEvent.click(within(strip(library)!).getByRole("button", { name: "More for main.rs" }));
     const menu = screen.getByRole("dialog", { name: "main.rs" });
-    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== "✕"))
+    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== ""))
       .toEqual(["Open", "Unfavorite", "Show in folder"]);
     fireEvent.click(within(menu).getByRole("button", { name: "Show in folder" }));
     await within(library).findByRole("button", { name: "Open the folder deep" });

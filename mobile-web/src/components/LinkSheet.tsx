@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { chatLinkUrl } from "../terminal/answerMarkdown";
@@ -37,7 +38,7 @@ function LinkSheet({ url, onClose }: { url: string; onClose: () => void }) {
     <section className="option-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.focus.messageMenuClose")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.focus.messageMenuClose")}><CloseIcon size="1em" /></button>
         <h2>{title} {isUntested("mobile.link.title") && <small>{t("mobile.focus.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>

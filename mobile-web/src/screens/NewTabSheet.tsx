@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type HostMachineRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
@@ -145,7 +146,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet new-tab-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label={t("mobile.newTab.close")}>✕</button><h2>{title}{isUntested("mobile.project.newTab") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("mobile.newTab.close")}><CloseIcon size="1em" /></button><h2>{title}{isUntested("mobile.project.newTab") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       {signingIn ? <SignInList agents={agents} rows={options.sign_in} busy={busy} onPick={(agent, way) => onPick("agent", agent, undefined, { sign_in: way })} onBack={() => setSigningIn(false)} />
       : asking ? <div className="mobile-schedule-form">
         <h3>{t("mobile.newTab.cloudTaskTitle", { agent: asking.agent.label })}{isUntested("mobile.newTab.cloud") && <span className="untested">{t("mobile.newTab.untested")}</span>}</h3>

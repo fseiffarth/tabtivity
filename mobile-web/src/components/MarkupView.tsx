@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ApiError, holdPrompt, listProjectFiles, markupUndoConflict, MAX_INBOX_FILE, previewMarkupUndo, runMarkupUndo, saveRemarks, sentName, settleMarkupUndo, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type MarkupUndoChanges, type OutboxFile, type TabRow, type ViewerScope } from "../api";
@@ -2253,7 +2254,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}${cardShown ? " has-questions" : ""}`} role="dialog" aria-modal="true"
     aria-label={marking ? t("mobile.markup.title", { name: sentName(file) }) : sentName(file)}>
     <div className="outbox-viewer-head">
-      {(reading || !marking) && <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")} disabled={sending !== null}>✕</button>}
+      {(reading || !marking) && <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")} disabled={sending !== null}><CloseIcon size="1em" /></button>}
       <div className="outbox-viewer-title">
         <h2>{sentName(file)}</h2>
         <small>

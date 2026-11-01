@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, TrashIcon } from "../../../src/components/common/icons/Icon";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
@@ -259,7 +260,7 @@ export function DivergedSheet({ projectId, label, onClose, onChanged }: { projec
     <div className="sheet-backdrop" role="presentation" onClick={onClose}><section className="option-sheet git-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.diverged.title", { label })} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.gitSheet.close")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.gitSheet.close")}><CloseIcon size="1em" /></button>
         <h2>{t("mobile.diverged.title", { label })} {isUntested("mobile.project.diverged") && <small>{t("mobile.newTab.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>

@@ -189,7 +189,7 @@ describe("Mobile activity list — rows", () => {
     expect((screen.getByText("Gone").closest("button") as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByText("Free").closest("button")!);
     expect(open).toHaveBeenCalledWith("p1", rows[2]);
-    expect(screen.getByText("Free").closest("button")!.querySelector(".agent-status")!.textContent).toBe("?question");
+    expect(screen.getByText("Free").closest("button")!.querySelector(".agent-status")!.textContent).toBe("question");
   });
 });
 

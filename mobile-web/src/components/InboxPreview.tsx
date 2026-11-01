@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { CloseIcon } from "../glyphs";
 
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
@@ -145,6 +146,6 @@ export function ComposerThumb({ name, picture, kind, sending, onRemove, removeLa
       ? <img src={picture} alt={name} decoding="async" onError={() => setBroken(true)} />
       : <span className="composer-thumb-file"><b aria-hidden="true">{kind ? fileBadge(kind) : "↓"}</b><small>{name}</small></span>}
     {sending && <span className="composer-thumb-progress" aria-hidden="true" />}
-    {onRemove && <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={onRemove} aria-label={removeLabel} title={removeLabel}>✕</button>}
+    {onRemove && <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={onRemove} aria-label={removeLabel} title={removeLabel}><CloseIcon size="1em" /></button>}
   </div>;
 }

@@ -3,7 +3,7 @@ import type { IconProps } from "../../../src/components/common/icons/Icon";
 import { lastPrompt } from "../agentPrompts";
 import { getActivity, holdPrompt, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts } from "../api";
 import { describeFailure } from "../connection";
-import { SECTION_ICON } from "../glyphs";
+import { CheckIcon, PlayMark, SECTION_ICON } from "../glyphs";
 import { ageLabel } from "../terminal/fileLabels";
 import { useVisiblePoll } from "../visiblePoll";
 import { isUnseenDone, type SeenDone } from "../seenDone";
@@ -187,7 +187,7 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
               onClick={() => void resume(tab, resumeKey)}
               title={t("tabBar.continueTitle")}
               aria-label={t("tabBar.continueTitle")}
-            ><span aria-hidden="true">▶</span>{continuing === resumeKey ? "…" : t("tabBar.continue")}</button>
+            ><span aria-hidden="true"><PlayMark /></span>{continuing === resumeKey ? "…" : t("tabBar.continue")}</button>
           </div>
           : row,
       };
@@ -226,7 +226,7 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
             onClick={() => void finish(item.alert_id as string)}
             title={t(DONE_LABEL[item.kind])}
             aria-label={t(DONE_LABEL[item.kind])}
-          >{finishing === item.alert_id ? "…" : "✓"}</button>}
+          >{finishing === item.alert_id ? "…" : <CheckIcon size="1em" />}</button>}
         </div>,
       };
     }),
@@ -239,7 +239,7 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
     <div className="home-group">
       {shown.map((row) => <div className="home-group-row" key={row.key}>{row.node}</div>)}
       {rows.length > shown.length && <button className="home-group-more" onClick={() => setExpanded(true)}>{t("mobile.home.needsShowAll", { count: rows.length })}</button>}
-      {working > 0 && <button className="home-group-more" onClick={showAgents}><span aria-hidden="true" className="home-group-more-glyph">▶</span>{t("mobile.home.needsWorking", { count: working })}</button>}
+      {working > 0 && <button className="home-group-more" onClick={showAgents}><span aria-hidden="true" className="home-group-more-glyph"><PlayMark /></span>{t("mobile.home.needsWorking", { count: working })}</button>}
     </div>
   </section>;
 }

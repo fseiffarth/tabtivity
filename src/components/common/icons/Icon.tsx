@@ -735,3 +735,117 @@ export function AssistantIcon(props: IconProps) {
     </Frame>
   );
 }
+
+/* The chrome glyphs the phone app drew as text (‹ ✕ ⋯ ◷ ⎇ ± ⠿ ◇ ? ■): a
+ * phone takes those from whatever symbol font it has, so their weight and
+ * baseline differ per device. Drawn here they follow the family above. */
+
+/** ✕ — close, dismiss, forget. */
+export function CloseIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </Frame>
+  );
+}
+
+/** ⋯ — more: a row's own menu. */
+export function MoreIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="12" r="1.7" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ＋ — new. */
+export function PlusIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 5v14M5 12h14" />
+    </Frame>
+  );
+}
+
+/** ‹ — back, one level up. */
+export function ChevronLeftIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M15 18l-6-6 6-6" />
+    </Frame>
+  );
+}
+
+/** › — a row that opens something. */
+export function ChevronRightIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="m9 6 6 6-6 6" />
+    </Frame>
+  );
+}
+
+/** ⎇ — a git branch or worktree. */
+export function BranchIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="6" cy="6" r="2" />
+      <circle cx="6" cy="18" r="2" />
+      <circle cx="18" cy="8" r="2" />
+      <path d="M6 8v8M18 10c0 3-3 4-6 4.5S6 15 6 16" />
+    </Frame>
+  );
+}
+
+/** ± — diverged: added and removed. */
+export function DiffIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 4v8M8 8h8M8 18h8" />
+    </Frame>
+  );
+}
+
+/** ⠿ — a drag handle. */
+export function GripIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="9" cy="6" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="6" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="18" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="18" r="1.6" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ◇ — a project, the phone's section glyph in an empty list. */
+export function DiamondIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 3l9 9-9 9-9-9z" />
+    </Frame>
+  );
+}
+
+/** ? — an agent waiting on a decision. */
+export function QuestionIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M9.5 9a2.5 2.5 0 1 1 4 2c-1 .7-1.5 1.3-1.5 2.5" />
+      <circle cx="12" cy="17" r="1.1" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ■ — a turn the user cut off. */
+export function StopIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}

@@ -33,6 +33,7 @@ import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
 import { AssistantIcon } from "../../../src/components/common/icons/Icon";
+import { DiamondIcon, GripIcon, PlusIcon, SearchIcon } from "../glyphs";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
 import { useVisiblePoll } from "../visiblePoll";
@@ -41,7 +42,7 @@ import { useVisiblePoll } from "../visiblePoll";
  * sentence stays one translatable string. The project screen's hint too. */
 export function GripHint({ text }: { text: string }) {
   const [before, after = ""] = text.split("{grip}");
-  return <>{before}<span aria-hidden="true">⠿</span>{after}</>;
+  return <>{before}<GripIcon size="1em" />{after}</>;
 }
 
 /** A project row's agent tabs by state — working, waiting on a decision,
@@ -259,7 +260,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
         aria-expanded={newProject}
         aria-label={t("mobile.newProject.title")}
         title={t("mobile.newProject.title")}
-      ><span aria-hidden="true">＋</span></button>}
+      ><PlusIcon size="1em" /></button>}
     </div>
     {/* One segmented track. The Agents segment carries how many tabs are
         asking something; its name stays the view's. */}
@@ -284,7 +285,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       {view === "active" && listed.length > 0 && <h2 className="home-section-head home-projects-head">{t("mobile.home.projectsTitle")}</h2>}
       {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.home.loading")}</p>}
       {loaded && rows.length === 0 && <div className="home-empty">
-        <span className="home-empty-glyph" aria-hidden="true">{view === "search" ? "⌕" : "◇"}</span>
+        <span className="home-empty-glyph" aria-hidden="true">{view === "search" ? <SearchIcon size="1em" /> : <DiamondIcon size="1em" />}</span>
         {view !== "search" && <strong>{t("mobile.home.emptyActiveTitle")}</strong>}
         <p>{view === "search"
           ? query.trim() ? t("mobile.home.noMatch") : t("mobile.home.typeToSearch")
@@ -310,7 +311,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
             aria-label={t("mobile.home.move", { label: project.label })}
             title={t("mobile.home.moveHint")}
             {...drag.gripProps(project.id)}
-          ><span aria-hidden="true">⠿</span></button>}
+          ><GripIcon size="1em" /></button>}
         </div>
       </div>)}</section>}
       {canReorder && !hintGone && <p className="home-hint">

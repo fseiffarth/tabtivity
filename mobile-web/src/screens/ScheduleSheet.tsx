@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import {
   ApiError,
   createSchedule,
@@ -170,7 +171,7 @@ export function ScheduleSheet({ tabId, label, onClose, initialMessage }: { tabId
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={label ? t("mobile.schedule.forTab", { tab: label }) : t("agentPrompts.scheduledHeading")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button><h2>{t("agentPrompts.scheduledHeading")} {isUntested("mobile.sheet.schedules") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button><h2>{t("agentPrompts.scheduledHeading")} {isUntested("mobile.sheet.schedules") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       {label && <p className="sheet-note">{t("mobile.schedule.tab", { tab: label })}</p>}
       {timeZone && <p className="sheet-note">{t("mobile.schedule.timeZone", { zone: timeZone })}</p>}
       <p className="sheet-note">{t("mobile.schedule.note")}</p>
