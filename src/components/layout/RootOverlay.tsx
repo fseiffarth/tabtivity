@@ -66,7 +66,7 @@ import { useRootReviewStore } from "../../stores/rootReview";
 import { useMailStore } from "../../stores/mail";
 import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
 import { usePoll } from "../../lib/usePoll";
-import { CloseIcon } from "../common/icons/Icon";
+import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 /** What the backend's `root-mcp-changed` event carries (`services::root_mcp::Change`). */
 type RootMcpChange = (
@@ -1071,7 +1071,7 @@ function GroupStrip({
         className="tab-new-menu"
       >
         <button className="tab-new-menu-item" onClick={() => void renameTab(menuTab.key)}>
-          <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+          <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
           {t("common.rename")}
           <UntestedTag id="rootConsole.tabMenu" />
         </button>

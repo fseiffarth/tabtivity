@@ -18,7 +18,7 @@ import { AgentScheduleDialog } from "./AgentScheduleDialog";
 import { AgentScheduleProposal } from "./AgentScheduleProposal";
 import { GitPushProposals } from "./GitPushMcp";
 import { isPromptTargetTab } from "./promptTarget";
-import { ArrowUpRightIcon } from "../common/icons/Icon";
+import { ArrowUpRightIcon, PencilIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { storageKey } from "../../lib/brand";
 
@@ -268,7 +268,7 @@ export function AgentSchedulesView({ scope, active }: Props) {
         >
           <div className="agent-prompts-tab-main">
             <div className="agent-prompts-tab-head">
-              {renaming === tab.key ? <input className="agent-prompts-rename" defaultValue={tab.label} autoFocus aria-label={t("tabBar.renameAriaLabel")} ref={(node) => node?.select()} onKeyDown={(event) => { if (event.key === "Enter") commitRename(tab.key, event.currentTarget.value); if (event.key === "Escape") setRenaming(null); }} onBlur={(event) => commitRename(tab.key, event.target.value)} /> : <><button className="agent-prompts-tab-name" type="button" title={t("agentPrompts.jumpTitle", { tab: tab.label })} onClick={() => jumpToTab(scope, tab.key)}><strong>{tab.label}</strong></button><button className="agent-composer-chip agent-prompts-rename-btn" type="button" title={t("common.rename")} aria-label={t("tabBar.renameAriaLabel")} onClick={() => setRenaming(tab.key)}>✎</button></>}
+              {renaming === tab.key ? <input className="agent-prompts-rename" defaultValue={tab.label} autoFocus aria-label={t("tabBar.renameAriaLabel")} ref={(node) => node?.select()} onKeyDown={(event) => { if (event.key === "Enter") commitRename(tab.key, event.currentTarget.value); if (event.key === "Escape") setRenaming(null); }} onBlur={(event) => commitRename(tab.key, event.target.value)} /> : <><button className="agent-prompts-tab-name" type="button" title={t("agentPrompts.jumpTitle", { tab: tab.label })} onClick={() => jumpToTab(scope, tab.key)}><strong>{tab.label}</strong></button><button className="agent-composer-chip agent-prompts-rename-btn" type="button" title={t("common.rename")} aria-label={t("tabBar.renameAriaLabel")} onClick={() => setRenaming(tab.key)}><PencilIcon /></button></>}
               <small>{tab.cmd}</small>
               {model && <small className="agent-prompts-model" data-testid="agent-model" title={t("agentPrompts.modelTagTitle")}>{model}</small>}
               {!isResumableAgentTab(tab) && <small className="danger-text">{t("agentPrompts.nonResumable")}</small>}

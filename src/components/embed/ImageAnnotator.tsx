@@ -361,7 +361,7 @@ export function ImageAnnotator({
     <div className="image-annotator" role="dialog" aria-label={t("imageAnnotator.dialogLabel", { fileName })}>
       <div className="image-annotator__toolbar">
         <span className="image-annotator__title" title={path}>
-          ✎ {fileName}
+          <PencilIcon /> {fileName}
         </span>
 
         <div className="image-annotator__group" role="group" aria-label={t("imageAnnotator.toolsGroup")}>

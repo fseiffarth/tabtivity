@@ -125,7 +125,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
-import { CloseIcon } from "../common/icons/Icon";
+import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 
 interface Props {
@@ -1945,7 +1945,7 @@ export function DetachedCenterPanel({
               if (next) onRename?.(tab.key, next);
             });
           }}>
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
             {t("common.rename")}
           </button>
           {onSetColor && (
@@ -2055,7 +2055,7 @@ export function DetachedCenterPanel({
                 });
               }}
             >
-              <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
               {t("tabStack.rename")}
             </button>
             <button

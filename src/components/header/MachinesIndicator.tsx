@@ -33,7 +33,7 @@ import { MachinesOverlayFrame } from "./MachinesOverlay";
 import { MachinesGlyph } from "./HeaderGlyphs";
 import { BRAND } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
-import { CloseIcon } from "../common/icons/Icon";
+import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 const MENU_ID = "machines";
 
@@ -2100,7 +2100,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     startEdit(m);
                   }}
                 >
-                  ✎
+                  <PencilIcon />
                 </button>
                 <button
                   type="button"

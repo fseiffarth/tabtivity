@@ -28,6 +28,7 @@ import { useViewerState } from "./viewerState";
 import { ViewerHeader } from "./ViewerHeader";
 import { PrintButton } from "./toolbar";
 import { useNonPassiveWheel } from "./fontZoom";
+import { PencilIcon } from "../../common/icons/Icon";
 
 /** Pure zoom-to-cursor math for the image viewer (#52): given the current and
  *  next scale, the current top-left offset, and the viewport-local anchor the
@@ -565,7 +566,7 @@ export function ImageView({
                 )}
                 aria-pressed={marking}
               >
-                ✎ {t("pdfMarkup.toggle")}
+                <PencilIcon /> {t("pdfMarkup.toggle")}
               </button>
               <UntestedTag id="desktop.markup.picture" />
             </>

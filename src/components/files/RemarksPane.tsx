@@ -9,7 +9,7 @@ import { boardColumns, fallbackColumnId, taskFromRemark } from "../../lib/todoBo
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
-import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 const EMPTY_REMARKS: ProjectRemark[] = [];
 
@@ -86,7 +86,7 @@ export function RemarksPane({ projectId, projectDir, visible }: {
             label: t("projectRemarks.edit"),
             initial: remark.text,
             confirmLabel: t("common.save"),
-          }, (next) => useProjectRemarksStore.getState().edit(projectId, projectDir, remark, next))}>✎</button>
+          }, (next) => useProjectRemarksStore.getState().edit(projectId, projectDir, remark, next))}><PencilIcon /></button>
           <button title={t("projectRemarks.delete")} onClick={() => void (async () => {
             const ok = await confirmAction({
               title: t("projectRemarks.delete"),

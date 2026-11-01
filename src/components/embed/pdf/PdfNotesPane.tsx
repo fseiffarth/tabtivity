@@ -33,7 +33,7 @@ import { formatPdfDate } from "./pdfDoc";
 import { HIGHLIGHT_DEFAULT_COLOR } from "./notes";
 import { swatchCss } from "./PdfSelectionBar";
 import { isHighlight, type PlacedNote } from "../../../lib/viewers/pdfNotes";
-import { CloseIcon } from "../../common/icons/Icon";
+import { CloseIcon, PencilIcon } from "../../common/icons/Icon";
 
 export function PdfNotesPane({
   placed,
@@ -172,7 +172,7 @@ export function PdfNotesPane({
                     title={t(hl ? "pdfNotes.editHighlight" : "pdfNotes.edit")}
                     aria-label={t(hl ? "pdfNotes.editHighlight" : "pdfNotes.edit")}
                   >
-                    ✎
+                    <PencilIcon />
                   </button>
                   <button
                     className="file-viewer-zoom-btn file-viewer-pdf-note-del"

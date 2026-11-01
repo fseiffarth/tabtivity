@@ -184,7 +184,7 @@ import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidd
 import { isTabInPopout, useTabsStore } from "../../../stores/tabs";
 import { splitSubPaneKey } from "../../../stores/tabs/viewerState";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
-import { ArrowUpRightIcon, CloseIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
+import { ArrowUpRightIcon, CloseIcon, CommentIcon, PencilIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 
 /** A recompile rewrites the PDF in place, so a reload can catch the file
@@ -4849,7 +4849,7 @@ function PdfCanvas({
               )}
               aria-pressed={marking}
             >
-              ✎ {t("pdfMarkup.toggle")}
+              <PencilIcon /> {t("pdfMarkup.toggle")}
             </button>
             <UntestedTag id="desktop.markup" />
           </>

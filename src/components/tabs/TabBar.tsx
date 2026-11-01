@@ -103,7 +103,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
-import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
@@ -2127,7 +2127,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               else setEditingKey(key);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
             {t("common.rename")}
           </button>
           {/* The picker keeps the menu OPEN after a pick: the tab recolours behind
@@ -2283,7 +2283,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             className="tab-new-menu-item"
             onClick={() => void renameStack(stackMenu.name)}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
             {t("tabStack.rename")}
           </button>
           <button
