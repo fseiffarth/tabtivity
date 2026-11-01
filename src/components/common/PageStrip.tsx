@@ -53,7 +53,7 @@ import {
   type WindowFrame,
 } from "../../lib/window/coords";
 import { useT } from "../../lib/i18n";
-import { CloseIcon } from "./icons/Icon";
+import { CloseIcon, RefreshIcon } from "./icons/Icon";
 
 /** Below this many px of pointer travel a press is a click, not a drag. */
 const DRAG_THRESHOLD_PX = 5;
@@ -513,7 +513,7 @@ export function PageStrip({
                 onPointerDown={(e) => e.stopPropagation()} // not a drag
                 onClick={() => act(rotatePages(pages, targetIds(ref.id)))}
               >
-                ⟳
+                <RefreshIcon />
               </button>
               <button
                 className="page-strip-del"

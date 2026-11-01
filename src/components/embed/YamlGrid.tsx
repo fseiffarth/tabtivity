@@ -24,7 +24,7 @@ import {
 } from "../../lib/viewers/yaml";
 import { cellKind, isContainer } from "../../lib/viewers/yamlGrid";
 import { useT } from "../../lib/i18n";
-import { ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
+import { ChevronRightIcon, CloseIcon, GripIcon } from "../common/icons/Icon";
 
 /**
  * The YAML/JSON **card grid** (#yaml-grid) — the third view on the file, beside the
@@ -482,7 +482,7 @@ function CardGrip({ drag, title }: { drag: CardDrag | null; title: string }) {
       aria-label={t("yamlGrid.reorderLabel", { title })}
       {...drag.grip}
     >
-      ⠿
+      <GripIcon />
     </button>
   );
 }

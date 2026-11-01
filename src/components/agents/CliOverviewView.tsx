@@ -7,6 +7,7 @@ import { useI18nStore, useT, dateLocale } from "../../lib/i18n";
 import { usePoll } from "../../lib/usePoll";
 import { useTabsStore } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
+import { RefreshIcon } from "../common/icons/Icon";
 
 /** The phone's pacing for a usage panel: often enough to watch a window fill,
  *  rare enough that the CLI is not spawned for nothing (its read is cached
@@ -91,7 +92,7 @@ export function CliOverviewView({ active }: { active: boolean }) {
           onClick={() => void load(true)}
           title={t("common.refresh")}
           aria-label={t("common.refresh")}
-        >↻</button>
+        ><RefreshIcon /></button>
       </div>
       {failed && <p className="settings-help">{t("cliOverview.failed")}</p>}
       {rows && shown.length === 0 && <p className="settings-help">{t("cliOverview.empty")}</p>}

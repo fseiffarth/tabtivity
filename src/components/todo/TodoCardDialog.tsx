@@ -15,7 +15,7 @@ import { useT } from "../../lib/i18n";
 import { TimeField } from "../common/TimeField";
 import { useDialogs } from "../common/PromptDialogs";
 import { useListReorder } from "../../hooks/useListReorder";
-import { CloseIcon } from "../common/icons/Icon";
+import { CloseIcon, GripIcon } from "../common/icons/Icon";
 
 interface Props {
   task: CalendarTask;
@@ -503,7 +503,7 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
                       aria-label={t("todoCard.stepGripAria", { title: step.title })}
                       {...reorder.gripProps(step.id)}
                     >
-                      ⠿
+                      <GripIcon />
                     </button>
                     <input
                       type="checkbox"

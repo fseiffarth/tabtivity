@@ -27,7 +27,7 @@ import { useListReorder } from "../../hooks/useListReorder";
 import { resolveRemarkAbsPath } from "../../lib/projects/projectRemarks";
 import { jumpToSource } from "../embed/fileViewer/sourceJump";
 import { basename } from "../../lib/paths";
-import { ClockIcon, CloseIcon, MailIcon, PencilIcon, PinIcon } from "../common/icons/Icon";
+import { ClockIcon, CloseIcon, GripIcon, MailIcon, PencilIcon, PinIcon, WindowIcon } from "../common/icons/Icon";
 import { useArrived } from "../../stores/calendar/arrivals";
 
 interface Props {
@@ -394,7 +394,7 @@ export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: P
                   aria-label={t("todoCard.stepGripAria", { title: step.title })}
                   {...reorder.gripProps(step.id)}
                 >
-                  ⠿
+                  <GripIcon />
                 </button>
                 <input
                   type="checkbox"
@@ -511,7 +511,7 @@ export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: P
                 jumpToTab(linkedTab.scope, linkedTab.key);
               }}
             >
-              ▭ {linkedTab.label}
+              <WindowIcon /> {linkedTab.label}
             </button>
           )}
         </div>

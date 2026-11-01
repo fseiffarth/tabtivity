@@ -125,7 +125,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
-import { CloseIcon, PencilIcon } from "../common/icons/Icon";
+import { ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
 
 
 interface Props {
@@ -1383,7 +1383,7 @@ export function DetachedCenterPanel({
             title={t("detachedTabs.dragToMove")}
             aria-hidden="true"
           >
-            ⠿
+            <GripIcon />
           </div>
           {/* The tabs live in their own horizontally-scrolling strip; chevrons
               flank it and appear only on overflow — the same behaviour as the
@@ -1524,7 +1524,7 @@ export function DetachedCenterPanel({
                         title={next
                           ? t("agentSchedule.indicatorNext", { count: enabled.length, value: next.toLocaleString() })
                           : t("agentSchedule.indicator", { count: enabled.length })}
-                      >◷</span>
+                      ><ClockIcon /></span>
                     ) : null;
                   })()}
                   {/* Local/remote badges — parity with the main-window TabBar,
@@ -1828,7 +1828,7 @@ export function DetachedCenterPanel({
           title={t("detachedTabs.dragToMove")}
           aria-hidden="true"
         >
-          ⠿
+          <GripIcon />
         </span>
         {/* #237: dock the whole window back into the main layout. The gesture
             that used to do this (drag the popout onto the main window) went with
@@ -2012,7 +2012,7 @@ export function DetachedCenterPanel({
                       setTabMenu(null);
                     }}
                   >
-                    <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+                    <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
                     {t("tabStack.remove")}
                   </button>
                 )}
@@ -2023,7 +2023,7 @@ export function DetachedCenterPanel({
             const tab = byKey.get(tabMenu.key);
             return tab && (tab.kind === "agent" || tab.kind === "local_agent") ? (
               <button className="tab-new-menu-item" onClick={() => { setScheduleDialogKey(tab.key); setTabMenu(null); }}>
-                <span className="tab-new-menu-dot tab-new-menu-dot--accent">◷</span>
+                <span className="tab-new-menu-dot tab-new-menu-dot--accent"><ClockIcon /></span>
                 {t("agentSchedule.menu")} <UntestedTag id="agentSchedule.menu" />
               </button>
             ) : null;
@@ -2065,7 +2065,7 @@ export function DetachedCenterPanel({
                 for (const key of members) onSetStack(key, undefined);
               }}
             >
-              <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
               {t("tabStack.ungroup")}
             </button>
           </ContextMenuPortal>

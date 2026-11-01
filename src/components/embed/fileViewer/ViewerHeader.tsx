@@ -7,7 +7,7 @@ import { basename, dirname, resolvePath } from "../../../lib/paths";
 import { resolveProjectDirectory, resolveLocalMirror } from "../../../types";
 import { useSyncStore } from "../../../stores/remote/sync";
 import { useT } from "../../../lib/i18n";
-import { ArrowUpRightIcon } from "../../common/icons/Icon";
+import { ArrowUpRightIcon, RefreshIcon } from "../../common/icons/Icon";
 import { openLinkedFile } from "./openLinked";
 import { isHostPinned } from "../../../lib/projectTabHost";
 
@@ -95,7 +95,7 @@ function AutoSyncHeaderToggle({ path, projectId }: { path: string; projectId: st
       disabled={!connected}
       onClick={() => void setAuto(projectId, [rel], !auto, false)}
     >
-      ⟳
+      <RefreshIcon />
     </button>
   );
 }

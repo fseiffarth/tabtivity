@@ -60,7 +60,7 @@ import { RenameDialog, containingFolderLabel } from "./RenameDialog";
 import { useDialogs } from "../common/PromptDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { FileIcon } from "../common/icons/FileIcon";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, SearchIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, RefreshIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { storageKey } from "../../lib/brand";
@@ -493,7 +493,7 @@ const FileRow = React.memo(function FileRow({
                   title={t("fileTree.autoSyncing")}
                   aria-label={t("fileTree.autoSyncing")}
                 >
-                  ⟳
+                  <RefreshIcon />
                 </span>
               )}
             </>
@@ -2525,7 +2525,7 @@ export function FileTree({
             {folderSyncSlot}
             {syncProgress && (
               <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
-                ⟳ {syncProgress.done}/{syncProgress.total}
+                <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
               </span>
             )}
             <button
@@ -2535,7 +2535,7 @@ export function FileTree({
               title={t("fileTree.refreshSftpTitle")}
               aria-label={t("common.refresh")}
             >
-              ↻
+              <RefreshIcon />
             </button>
           </div>
         </div>
@@ -2556,7 +2556,7 @@ export function FileTree({
                 runs. Without it the local side showed nothing at all. */}
             {syncProgress && (
               <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
-                ⟳ {syncProgress.done}/{syncProgress.total}
+                <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
               </span>
             )}
           </div>
@@ -2640,7 +2640,7 @@ export function FileTree({
                 title={t("fileTree.refreshTitle")}
                 aria-label={t("common.refresh")}
               >
-                ↻
+                <RefreshIcon />
               </button>
             )}
           </div>

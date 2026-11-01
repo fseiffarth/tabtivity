@@ -20,7 +20,7 @@ import {
 } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { FileIcon } from "./icons/FileIcon";
-import { CloseIcon, HexagonIcon } from "./icons/Icon";
+import { CloseIcon, GridIcon, HexagonIcon } from "./icons/Icon";
 import { basename, dirname } from "../../lib/paths";
 
 /**
@@ -859,7 +859,7 @@ export function ProjectBlobPane({ visible = true }: { visible?: boolean } = {}) 
               if (catColor) cls += " blob-node-categorized";
             } else if (node.kind === "box") {
               cls += " blob-node-box blob-status-box";
-              icon = "▦";
+              icon = <GridIcon />;
               label = node.box.name;
               sub = node.box.member_ids.length;
             } else if (node.kind === "center") {

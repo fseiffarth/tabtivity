@@ -25,7 +25,7 @@ import type { SortKey } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { UntestedTag } from "../common/UntestedTag";
-import { CloseIcon, FolderIcon, GearIcon, HexagonIcon } from "../common/icons/Icon";
+import { CloseIcon, FolderIcon, GearIcon, GripIcon, HexagonIcon, RefreshIcon } from "../common/icons/Icon";
 
 /**
  * THE project file view — the tree, the remote sync row and the Downloads
@@ -388,7 +388,7 @@ function BoxRootSection({
               reorder.onGripNudge(e.key === "ArrowUp" ? -1 : 1);
             }}
           >
-            ⠿
+            <GripIcon />
           </button>
         )}
         <button
@@ -873,7 +873,7 @@ export function ProjectFilesPane({
               style={{ marginLeft: "auto" }}
               title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}
             >
-              ⟳ {syncProgress.done}/{syncProgress.total}
+              <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
             </span>
           )}
           <button

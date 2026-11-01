@@ -13,7 +13,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
-import { CloseIcon, LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
+import { BranchIcon, CloseIcon, LockIcon, RefreshIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename } from "../../lib/paths";
@@ -1178,7 +1178,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
           {fetching ? t("gitPull.fetchingShort") : t("gitPull.fetch")}
         </button>
         <button className="toolbar-btn git-history-refresh" onClick={load} title={t("common.refresh")} disabled={loading || actionsBusy || !connected}>
-          ⟳
+          <RefreshIcon />
         </button>
       </div>
 
@@ -1532,7 +1532,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                     aria-label={t("gitHistory.selectWorktree", { name: basename(wt.path) })}
                   >
                     <span className="git-worktree-name">{basename(wt.path)}</span>
-                    <span className="git-worktree-branch">⎇ {label}</span>
+                    <span className="git-worktree-branch"><BranchIcon /> {label}</span>
                     {wt.is_main && <span className="git-worktree-main">{t("gitHistory.mainWorktree")}</span>}
                   </button>
                   {!wt.is_main && (

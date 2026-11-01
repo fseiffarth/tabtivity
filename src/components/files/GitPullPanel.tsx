@@ -5,7 +5,7 @@ import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
 import { openLinkedFile } from "../embed/fileViewer/openLinked";
-import { CloseIcon, WarningIcon } from "../common/icons/Icon";
+import { CloseIcon, RefreshIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename, dirname, resolvePath } from "../../lib/paths";
@@ -120,7 +120,7 @@ export function GitPullPanel({
         <UntestedTag id="gitPull.1" />
         <span className="git-worktree-spacer" />
         <button className="toolbar-btn" onClick={() => void load()} disabled={busy} title={t("gitPull.refetchTitle")}>
-          ⟳
+          <RefreshIcon />
         </button>
         <button className="toolbar-btn" onClick={onClose} title={t("common.close")}>
           <CloseIcon />
@@ -260,7 +260,7 @@ export function GitMergeBar({
         <UntestedTag id="gitMerge.1" />
         <span className="git-worktree-spacer" />
         <button className="toolbar-btn" onClick={onChanged} disabled={busy} title={t("common.refresh")}>
-          ⟳
+          <RefreshIcon />
         </button>
       </div>
       {open > 0 && (

@@ -55,6 +55,7 @@ import { AgentFenceCard } from "./AgentFenceCard";
 import { AgentCronSection } from "./AgentCronSection";
 import { AgentComposerCard } from "./AgentComposerCard";
 import { AgentDefaults } from "./AgentDefaults";
+import { RefreshIcon } from "../common/icons/Icon";
 
 const NO_CUSTOM_AGENTS: CustomAgent[] = [];
 
@@ -418,7 +419,7 @@ export function AgentsPanel({
             onClick={() => loadVersions(true)}
           >
             <span className={checkingVersions ? "agents-spin" : undefined} aria-hidden="true">
-              ↻
+              <RefreshIcon />
             </span>
           </button>
         )}

@@ -105,7 +105,7 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
-import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -1841,7 +1841,7 @@ export function ProjectFilesView({
             title={t("fileTree.refreshTitle")}
             aria-label={t("common.refresh")}
           >
-            ↻
+            <RefreshIcon />
           </button>
         )}
         {importDrop.canImport && (

@@ -103,7 +103,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
-import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, PencilIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
@@ -385,7 +385,7 @@ const TabItem = memo(function TabItem({
             ? t("agentSchedule.indicatorNext", { count: schedule.count, value: schedule.next.toLocaleString() })
             : t("agentSchedule.indicator", { count: schedule.count })}
         >
-          ◷
+          <ClockIcon />
         </span>
       )}
       {/* A paired phone holds this tab open (stores/phonePresence). */}
@@ -1622,7 +1622,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         title={t("tabBar.dragGripTitle")}
         aria-hidden="true"
       >
-        ⠿
+        <GripIcon />
       </div>
       <button
         className="tab-scroll-btn tab-popout-btn"
@@ -2181,7 +2181,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                       setTabMenu(null);
                     }}
                   >
-                    <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+                    <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
                     {t("tabStack.remove")}
                   </button>
                 )}
@@ -2206,7 +2206,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                 setTabMenu(null);
               }}
             >
-              <span className="tab-new-menu-dot tab-new-menu-dot--accent">◷</span>
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><ClockIcon /></span>
               {t("agentSchedule.menu")}
               <UntestedTag id="tabBar.2" />
             </button>
@@ -2290,7 +2290,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             className="tab-new-menu-item"
             onClick={() => ungroupStack(stackMenu.name)}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
             {t("tabStack.ungroup")}
           </button>
           <button

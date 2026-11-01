@@ -31,7 +31,7 @@ import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename, dirname } from "../../lib/paths";
 import { openErrorText } from "../../lib/openExternal";
-import { ChevronLeftIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, GridIcon } from "../common/icons/Icon";
 
 interface Props {
   /** Owning project, or `null` in the root scope. */
@@ -396,7 +396,7 @@ export function DiskUsagePane({ projectId, projectCwd, tabKey, visible }: Props)
             onClick={() => setChart("treemap")}
             title={t("diskUsage.treemapTitle")}
           >
-            ▦
+            <GridIcon />
           </button>
         </span>
       </div>

@@ -33,7 +33,7 @@ import { MachinesOverlayFrame } from "./MachinesOverlay";
 import { MachinesGlyph } from "./HeaderGlyphs";
 import { BRAND } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
-import { CloseIcon, PencilIcon } from "../common/icons/Icon";
+import { CloseIcon, GripIcon, MoreIcon, PencilIcon, RefreshIcon } from "../common/icons/Icon";
 
 const MENU_ID = "machines";
 
@@ -1906,7 +1906,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                   title={t("machines.retryAllTitle")}
                   onClick={() => void runRetryAll()}
                 >
-                  {retryAllBusy ? "⋯" : "↻"}
+                  {retryAllBusy ? <MoreIcon /> : <RefreshIcon />}
                 </button>
               )}
               {machines.length > 0 && connectedCount > 0 && (
@@ -2045,7 +2045,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                   }}
                   disabled={st === "connecting"}
                 >
-                  {st === "connected" || state === "error" ? "↻" : "▷"}
+                  {st === "connected" || state === "error" ? <RefreshIcon /> : "▷"}
                 </button>
                 {/* Ask this one host whether it answers, because the user
                     asked. It is the only reachability a tagged machine has
@@ -2062,7 +2062,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     void runCheck(m);
                   }}
                 >
-                  {checking.has(m.id) ? "⋯" : "◎"}
+                  {checking.has(m.id) ? <MoreIcon /> : "◎"}
                 </button>
                 {st === "connected" && (
                   <button
@@ -2152,7 +2152,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                       nudgeMachine(m.id, back ? -1 : 1);
                     }}
                   >
-                    ⠿
+                    <GripIcon />
                   </button>
                   {/* The Models overlay tile's icon box. */}
                   {isOverlay && (

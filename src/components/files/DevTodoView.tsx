@@ -5,6 +5,7 @@ import { renderMarkdown, taskSourceLines, toggleTaskCheckbox } from "../../lib/v
 import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
+import { RefreshIcon } from "../common/icons/Icon";
 
 /**
  * The dev build's Todo view: the checkout's `todo/*.md` groups, each folding
@@ -187,7 +188,7 @@ export function DevTodoView({ active }: { active: boolean }) {
           title={t("common.refresh")}
           aria-label={t("common.refresh")}
         >
-          ↻
+          <RefreshIcon />
         </button>
       </div>
       {error && <ErrorNote className="project-dialog-error" error={error} />}

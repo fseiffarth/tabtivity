@@ -36,7 +36,7 @@ import {
   type YamlValueType,
 } from "../../lib/viewers/yaml";
 import { useT } from "../../lib/i18n";
-import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, GripIcon } from "../common/icons/Icon";
 
 /**
  * The YAML/JSON tree editor (#yaml) — the structured half of the viewer, the way
@@ -652,7 +652,7 @@ function YamlRow({
               }}
               onPointerCancel={onDragAbort}
             >
-              ⠿
+              <GripIcon />
             </button>
           ) : (
             <span className="yaml-slot yaml-slot-grip" aria-hidden="true" />
