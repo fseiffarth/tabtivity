@@ -1,4 +1,4 @@
-import { agentInputWrites, bracketsAgentMessage } from "../../../shared/agentComposer";
+import { agentInputWrites, agentQueueWrites, bracketsAgentMessage } from "../../../shared/agentComposer";
 import { writePtyInput } from "../terminal/terminalInput";
 
 const ENCODER = new TextEncoder();
@@ -131,8 +131,9 @@ export async function submitScheduledAgentMessage(
   const takesInput = options.whileBusy ? (input?.started ?? input?.ready) : input?.ready;
   if (!input || !takesInput?.()) throw new Error("agent terminal is not ready");
   const bracketed = bracketsAgentMessage(input.agent, input.bracketedPaste());
-  const messageWrites = agentInputWrites(message, bracketed);
-  if (messageWrites.length === 0) throw new Error("scheduled prompt is empty");
+  const typed = agentInputWrites(message, bracketed);
+  if (typed.length === 0) throw new Error("scheduled prompt is empty");
+  const messageWrites = options.whileBusy ? agentQueueWrites(typed, input.agent, message) : typed;
   const prefaceWrites = (options.preface ?? [])
     .map((command) => agentInputWrites(command, bracketed))
     .filter((writes) => writes.length > 0);
