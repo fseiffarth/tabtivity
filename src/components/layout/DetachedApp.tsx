@@ -66,6 +66,7 @@ import { startFocusTracking, useQuiesce } from "../../stores/power";
 import { startStrayFullscreenGuard } from "../../lib/window/strayFullscreen";
 import { startBoundsStream } from "../../lib/window/boundsStream";
 import { applyFastModeAttribute, useFastMode } from "../../lib/agents/fastMode";
+import { useSoftwarePaintAttribute } from "../../lib/window/softwarePaint";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
@@ -186,6 +187,7 @@ export function DetachedApp({ param }: Props) {
   // window's (see the focus tracker above for the same reason).
   const fastMode = useFastMode();
   useEffect(() => applyFastModeAttribute(fastMode), [fastMode]);
+  useSoftwarePaintAttribute();
 
   // Clear a stray OS fullscreen, exactly as `restore_main_window` does for the
   // main window and for its reason: a `_NET_WM_STATE_FULLSCREEN` window loses

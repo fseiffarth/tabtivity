@@ -28,6 +28,7 @@ import {
   startFocusTracking,
 } from "../../stores/power";
 import { applyFastModeAttribute, useFastMode } from "../../lib/agents/fastMode";
+import { useSoftwarePaintAttribute } from "../../lib/window/softwarePaint";
 import { useOllamaAutoloadOnLaunch } from "../../stores/agents/ollamaAutoload";
 import { useRendererWatchdog } from "../../lib/window/rendererWatchdog";
 import { livePanelToggleLabel } from "../../lib/shortcuts/shortcutHint";
@@ -1027,6 +1028,10 @@ export function AppShell() {
   // battery reading, so it is its own attribute rather than a third writer of
   // `data-energy-saver`.
   useEffect(() => applyFastModeAttribute(fastMode), [fastMode]);
+
+  // The paint path (`[data-software-paint]`): on the CPU, surfaces land in one
+  // paint and hints hold still.
+  useSoftwarePaintAttribute();
 
   useEffect(() => {
     if (projectsLoaded) {

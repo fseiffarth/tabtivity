@@ -63,6 +63,17 @@ opens from `opacity: 0`, so it is exempt from the blurred-window animation pause
 rule whose stand-in is only "stop" goes in its list. A rule whose stand-in is
 more than that (a static tint, a finished bar) stays beside its animation.
 
+The motion above is for a GPU. On the CPU paint path, Linux's default,
+`lib/window/softwarePaint` sets `data-software-paint` on each window root:
+`base.css` zeroes the same two tokens, and `onboarding.css` stops the hint and
+tour loops on their peak tint and drops their entries. Measured 2026-11-02 on
+WebKitGTK 2.52.6 at 1920x1200, in an offscreen view without the app's DOM (the
+real stylesheets, so a floor rather than the app's cost): a menu open took 49 ms
+of renderer time with the fade and 15 without, a dialog with its backdrop 182 ms
+and 29, at 7.5 frames in 220 ms against 13.5, and a hint's loops held 16–18% of a
+core against 0% for as long as the hint stayed up. A new loop or entry that is not
+tied to work in progress gets a rule under this attribute.
+
 ## Glyphs
 
 Chrome marks come from `common/icons/Icon.tsx`: a text glyph is drawn from

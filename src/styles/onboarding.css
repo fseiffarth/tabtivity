@@ -997,6 +997,53 @@
   }
 }
 
+/* Hints stay up until dismissed, so a loop here repaints at 60 Hz for as long as
+   one is ignored: renderer 0% of a core at rest, 16–18% with a hint up, on a page
+   far lighter than the app (measured 2026-11-02). On the CPU paint path
+   (`lib/window/softwarePaint`) and in a quiesced window each loop rests on its
+   peak, which still marks the target. The energy-saver attribute also covers a
+   blurred window, where a loop would otherwise freeze mid-pulse. */
+:root[data-software-paint] .hint-bubble::after,
+:root[data-energy-saver="on"] .hint-bubble::after {
+  animation: none;
+  opacity: 1;
+}
+
+:root[data-software-paint] .hint-target,
+:root[data-energy-saver="on"] .hint-target {
+  animation: none;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+:root[data-software-paint] .tour-target,
+:root[data-energy-saver="on"] .tour-target {
+  animation: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+:root[data-software-paint] .tour-hint-btn.nudge,
+:root[data-energy-saver="on"] .tour-hint-btn.nudge {
+  animation: none;
+}
+
+/* Only the pulse goes: the entry keeps running, so a banner neither replays it
+   when the window regains focus nor sits paused at `opacity: 0` while blurred. */
+:root[data-energy-saver="on"] .hint-bubble--banner {
+  animation: hint-banner-in 0.24s ease-out;
+}
+
+/* One-shots, on the CPU path only and after the rule above so they win over it:
+   each lands in one paint, as a hover card does. The spotlight's entry would
+   otherwise animate a 9999px shadow, which is the whole window every frame. */
+:root[data-software-paint] .hint-bubble,
+:root[data-software-paint] .tour-spotlight,
+:root[data-software-paint] .tour-bubble,
+:root[data-software-paint] .tour-reward,
+:root[data-software-paint] .tour-hint {
+  animation: none;
+}
+
 
 /* Lesson picker (LessonsMenu): a vertical list of task walkthroughs. */
 .lessons-list {

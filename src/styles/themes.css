@@ -695,7 +695,8 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   /* The floating surfaces' enter and exit durations (popovers, hover cards,
      toasts; a dialog takes 4/3 of --motion-enter). base.css zeroes both,
-     --transition and --transition-slow under prefers-reduced-motion. */
+     --transition and --transition-slow under prefers-reduced-motion, and these
+     two on the CPU paint path (`[data-software-paint]`). */
   --motion-enter: 120ms;
   --motion-exit: 80ms;
   /* The keyboard focus ring (base.css). The accent, so the ink themes inherit

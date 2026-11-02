@@ -1786,7 +1786,8 @@
    reduced-motion and Energy Saver collapses that used to exist here have
    nothing left to switch off. Both settings still govern the rest of the app;
    this is simply one fewer thing they have to. */
-:root[data-energy-saver="on"] .tab-new-btn.empty-hint {
+:root[data-energy-saver="on"] .tab-new-btn.empty-hint,
+:root[data-software-paint] .tab-new-btn.empty-hint {
   animation: none;
 }
 
@@ -1848,7 +1849,8 @@
 :root[data-blurred] .git-change-tree,
 :root[data-blurred] .presentation-settings,
 :root[data-blurred] .cal-alarm-popup,
-:root[data-blurred] .project-switch-toast {
+:root[data-blurred] .project-switch-toast,
+:root[data-blurred] .hint-bubble {
   animation-play-state: running !important;
 }
 

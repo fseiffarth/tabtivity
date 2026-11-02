@@ -909,7 +909,8 @@
    comes up because the pointer crossed something, over whatever the pane is
    painting, so it lands in one paint rather than fading a blurred shadow frame
    by frame. No fill: a transform left behind would re-anchor anything
-   `position: fixed` inside. base.css zeroes the durations under reduced motion. */
+   `position: fixed` inside. base.css zeroes the durations under reduced motion
+   and on the CPU paint path. */
 @keyframes surface-enter {
   from {
     opacity: 0;

@@ -52,6 +52,12 @@ describe("the floating recipe", () => {
     }
   });
 
+  // Paused at its first frame by the blurred-window rule, an entry from
+  // `opacity: 0` would leave the surface invisible until focus returns.
+  it.each(["project-switch-toast", "hint-bubble"])("%s keeps its entry running in a blurred window", (member) => {
+    expect(css).toMatch(new RegExp(`:root\\[data-blurred\\] \\.${member}\\s*[,{]`));
+  });
+
   it("never clips with a clip-path, which would take the shadow", () => {
     for (const member of MEMBERS) {
       expect(css).not.toMatch(new RegExp(`\\.${member}\\s*\\{[^}]*clip-path`));

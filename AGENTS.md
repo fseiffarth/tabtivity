@@ -214,7 +214,9 @@ Frontend:
   session can freeze the window.
 - Gate work in hidden panes (`PaneVisibleContext`) and catch up on show.
 - Never animate a blurred `box-shadow` (WebKitGTK software path); use a static
-  shadow pseudo-element and animate opacity.
+  shadow pseudo-element and animate opacity. Opacity is not free there either: a
+  new loop or entry not tied to work in progress stops under
+  `[data-software-paint]` (`docs/context/desktop_ui_system.md`).
 - Viewer features go in the shared `ProjectFilesView`, not one host.
 - YAML/table viewers edit surgically: comments, quoting, line endings survive.
 - Never render a missing sensor reading as zero; omit it.
