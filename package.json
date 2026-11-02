@@ -45,7 +45,7 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "fflate": "^0.8.3",
-    "katex": "^0.19.0",
+    "katex": "^0.19.1",
     "mermaid": "^11.16.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.4.299",
@@ -68,9 +68,9 @@
     "postcss": "^8",
     "react-scan": "^0.5.7",
     "typescript": "^5",
-    "typescript-eslint": "^8.71.2",
+    "typescript-eslint": "^8.72.0",
     "typescript-native": "npm:typescript@7.0.2",
-    "vite": "8.3.4",
+    "vite": "8.3.5",
     "vitest": "5.0.5"
   },
   "overrides": {
