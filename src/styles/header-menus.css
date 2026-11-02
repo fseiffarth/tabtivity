@@ -245,7 +245,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
-  animation: surface-fade var(--motion-enter) var(--ease-out);
 }
 
 .app-tooltip > .untested-tag {

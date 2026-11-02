@@ -905,8 +905,10 @@
 
 /* Enter: opacity and a 4px rise; exit: opacity only (`ContextMenuPortal` holds a
    dismissed menu for --motion-exit under `.is-leaving`). A dialog takes 160ms
-   and its backdrop only fades; a hover card sets its own transform inline, so
-   it fades too. No fill: a transform left behind would re-anchor anything
+   and its backdrop only fades. A hover card or tooltip has no enter motion: it
+   comes up because the pointer crossed something, over whatever the pane is
+   painting, so it lands in one paint rather than fading a blurred shadow frame
+   by frame. No fill: a transform left behind would re-anchor anything
    `position: fixed` inside. base.css zeroes the durations under reduced motion. */
 @keyframes surface-enter {
   from {
@@ -949,10 +951,6 @@
 
 .modal-backdrop {
   animation: surface-fade calc(var(--motion-enter) * 4 / 3) var(--ease-out);
-}
-
-.project-pill-popup {
-  animation: surface-fade var(--motion-enter) var(--ease-out);
 }
 
 .is-leaving {

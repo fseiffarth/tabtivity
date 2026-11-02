@@ -1848,9 +1848,7 @@
 :root[data-blurred] .git-change-tree,
 :root[data-blurred] .presentation-settings,
 :root[data-blurred] .cal-alarm-popup,
-:root[data-blurred] .project-pill-popup,
-:root[data-blurred] .project-switch-toast,
-:root[data-blurred] .app-tooltip {
+:root[data-blurred] .project-switch-toast {
   animation-play-state: running !important;
 }
 

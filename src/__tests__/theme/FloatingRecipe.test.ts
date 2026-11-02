@@ -58,6 +58,11 @@ describe("the floating recipe", () => {
     }
   });
 
+  // A hover surface comes up as the pointer crosses the bar, over a busy pane:
+  // a fade repaints its blurred shadow frame by frame.
+  it.each(["project-pill-popup", "app-tooltip"])("%s lands in one paint", (surface) => {
+    expect(css).not.toMatch(new RegExp(`\\.${surface}\\s*\\{[^}]*\\banimation:`));
+  });
 
   it("zeroes the motion tokens once, past the theme blocks", () => {
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*:root:root\s*\{[^}]*--motion-exit: 0ms/);

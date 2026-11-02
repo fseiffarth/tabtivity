@@ -81,6 +81,15 @@ interface AgentTabFeatures {
   apiKeys: ("anthropic" | "gemini" | "openai")[];
 }
 
+/** The last answer per tab in this window: a card the pointer comes back to, or
+ *  crosses onto from the next tab, paints whole at once instead of blanking. */
+const knownFeatures = new Map<string, AgentTabFeatures | null>();
+
+/** Test seam. */
+export function _clearKnownFeaturesForTest(): void {
+  knownFeatures.clear();
+}
+
 /** Names past this many collapse into "+N more". */
 const MAX_SHOWN_NAMES = 6;
 
@@ -182,7 +191,7 @@ export function TabHoverCard({
   const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   // null until measured — kept hidden for that first frame so the clamp doesn't
-  // flash the card at the un-clamped position.
+  // flash the card at the un-clamped position (`settled` below holds it too).
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
   const ptyId = `${scope}:${tab.key}`;
@@ -205,17 +214,25 @@ export function TabHoverCard({
 
   // What the agent was handed — sandbox, MCP servers, skills, API key — asked
   // once per hover; a tab this window's backend did not spawn answers null and
-  // gets no rows.
-  const [features, setFeatures] = useState<AgentTabFeatures | null>(null);
+  // gets no rows. Those rows are a good part of the card and the answer reads
+  // and parses the home's config, so a first hover stays hidden until it is in:
+  // painted first, the card visibly jumps when they land. The answer is held
+  // with its tab's id, or one tab's rows would show on the next tab's card.
+  const [answer, setAnswer] = useState<{ id: string; features: AgentTabFeatures | null } | null>(null);
+  const held = answer?.id === ptyId ? answer : null;
+  const features = held ? held.features : (knownFeatures.get(ptyId) ?? null);
+  const settled = !isAgent || held !== null || knownFeatures.has(ptyId);
   useEffect(() => {
     if (!isAgent) return;
     let live = true;
+    const settle = (f: AgentTabFeatures | null) => {
+      knownFeatures.set(ptyId, f);
+      if (live) setAnswer({ id: ptyId, features: f });
+    };
     invoke<AgentTabFeatures | null>("agent_tab_features", { id: ptyId })
-      .then((f) => {
-        // Nothing known, or an answer not shaped like one: no rows.
-        if (live && f && !Array.isArray(f)) setFeatures(f);
-      })
-      .catch(() => {});
+      // Nothing known, or an answer not shaped like one: no rows.
+      .then((f) => settle(f && !Array.isArray(f) ? f : null))
+      .catch(() => settle(null));
     return () => {
       live = false;
     };
@@ -334,7 +351,7 @@ export function TabHoverCard({
         // Own the position via left/top (with JS clamping); drop the shared
         // class's centring transform so the measured box maps 1:1 to the window.
         transform: "none",
-        visibility: pos ? "visible" : "hidden",
+        visibility: pos && settled ? "visible" : "hidden",
       }}
     >
       <span className="tab-popup-header">
