@@ -294,6 +294,7 @@ export const dict: Dict = {
   "mobile.project.noNextRun": "sin próxima ejecución",
   "mobile.project.nextRunTitle": "Próxima ejecución {when} (hora del ordenador)",
   "mobile.project.lastPrompts": "Últimos prompts",
+  "mobile.project.draftMark": "Sin enviar",
   "mobile.project.noPromptsRead": "Todavía no se ha leído nada de la transcripción de esta sesión.",
   "mobile.project.openCodeHistory": "El historial propio de OpenCode todavía no se lee — aquí aparecen los prompts enviados desde {app}.",
   "mobile.project.closeNeedsDesktop": "Abre {app} en el escritorio para cerrar una pestaña.",

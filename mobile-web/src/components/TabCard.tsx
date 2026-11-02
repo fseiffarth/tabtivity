@@ -41,8 +41,9 @@ export function scheduleLine(schedules: TabSchedules | undefined, t: Translate):
  * The prompts still to come lead the list: the soonest scheduled ones, each
  * behind a ◷ and the desktop time it fires, so the list reads from what is
  * next down to what was asked last. A message typed on this phone and not
- * sent yet comes next, drawn like the newest prompt but with no time — it has
- * not gone anywhere.
+ * sent yet comes next, drawn like the newest prompt but marked "Not sent"
+ * where the time would be, and in italics — it has not gone anywhere, and must
+ * not read as something the agent was told.
  */
 export function PromptLines({ tab, draft }: { tab: TabRow; draft?: string }) {
   const t = useT();
@@ -58,6 +59,7 @@ export function PromptLines({ tab, draft }: { tab: TabRow; draft?: string }) {
       </p>;
     })}
     {draft && <p className="tab-card-prompt latest draft">
+      <span className="tab-card-prompt-when">{t("mobile.project.draftMark")}</span>
       <span className="tab-card-prompt-text">{draft}{isUntested("mobile.project.draftLine") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
     </p>}
     {lines.length === 0

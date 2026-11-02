@@ -340,6 +340,7 @@ export const enSource = {
   "mobile.project.noNextRun": "no next run",
   "mobile.project.nextRunTitle": "Next run {when} (desktop time)",
   "mobile.project.lastPrompts": "Last prompts",
+  "mobile.project.draftMark": "Not sent",
   "mobile.project.noPromptsRead": "Nothing read from this session's transcript yet.",
   "mobile.project.openCodeHistory": "OpenCode's own history is not read yet — prompts sent from {app} show here.",
   "mobile.project.closeNeedsDesktop": "Open desktop {app} to close a tab.",

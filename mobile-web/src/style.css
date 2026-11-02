@@ -185,9 +185,16 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .tab-card-prompt.latest .tab-card-prompt-when { color:#afa5f4; font-size:.7rem; font-weight:700; }
 .tab-card-prompt-text { min-width:0; overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:1; overflow-wrap:anywhere; }
 .tab-card-prompt.latest .tab-card-prompt-text { -webkit-line-clamp:3; }
+/* Typed and not sent: the colour of a file card's unsent marks, in the slot a
+   sent prompt's time takes; the italics keep the text itself from reading as
+   something the agent was told. */
+.tab-card-prompt.draft .tab-card-prompt-when { color:#f28b82; }
+.tab-card-prompt.draft .tab-card-prompt-text { font-style:italic; }
 /* The same reading on the flat Agents list, where a row is one tap tall: two
    lines, then ellipsis. */
 .activity-prompt { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; color:#b6bacb; overflow-wrap:anywhere; }
+.activity-prompt.draft { font-style:italic; }
+.activity-draft-mark { margin-inline-end:6px; color:#f28b82; font-size:.9em; font-style:normal; font-weight:700; }
 .agent-status { display:inline-flex; align-items:center; gap:5px; padding:4px 8px; border:1px solid currentColor; border-radius:0; font-weight:700; text-transform:capitalize; }
 .agent-status.working { color:#6fe29c; background:#173827; }
 .agent-status.question { color:#ffd36b; background:#493b1d; }
