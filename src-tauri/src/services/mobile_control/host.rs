@@ -44,6 +44,7 @@ use super::{
     inbox,
     local_models,
     markup,
+    named_files,
     outbox,
     limits,
     protocol::{
@@ -1306,6 +1307,9 @@ async fn project(
                 // switch, and a project with a folder rather than a box, the
                 // root console or a project the phone has no folder of.
                 "files": is_git_project(project) && files::files_open(&state.config.state_dir),
+                // Whether the 📁 is missing only because of that switch, which
+                // the project screen then names.
+                "files_off": !files::files_open(&state.config.state_dir),
                 // Whether the 📁 has a remote side too (`host_files`): the same
                 // switch, and a remote project's primary host.
                 "host_files": host_files,
@@ -4715,13 +4719,15 @@ async fn tab_uncommitted(
 }
 
 /// `?version=` is the fingerprint the phone last saw, `?subagent=` the handle
-/// of the subagent whose changes are read, `?limit=` how many of the newest.
+/// of the subagent whose changes are read, `?limit=` how many of the newest,
+/// `?files=1` which files they touched, without their diff text.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ChangesQuery {
     version: Option<String>,
     limit: Option<usize>,
     subagent: Option<String>,
+    files: Option<String>,
 }
 
 /// `GET /api/v1/tabs/{tab_id}/changes` — the diffs the agent tab's
@@ -4766,15 +4772,84 @@ async fn tab_changes(
     }
     let raw_id = project.raw_id.clone();
     let roots = if project.roots.is_empty() { vec![project.root.clone()] } else { project.roots.clone() };
+    // Only where the library opens a file (`files_scope`), never a box's.
+    let library = is_git_project(project).then(|| project.root.clone());
+    let key = state.auth.lock_ok().host_key().to_vec();
     let tab = tab.clone();
     let Ok(answer) = tokio::task::spawn_blocking(move || {
-        chat_changes::for_tab(&raw_id, &roots, &tab, query.subagent.as_deref(), query.version.as_deref(), query.limit)
+        let mut answer = chat_changes::for_tab(&raw_id, &roots, &tab, query.subagent.as_deref(), query.version.as_deref(), query.limit);
+        if let Some(root) = library {
+            chat_changes::attach_files(&mut answer, &root, |relative| file_row(&root, relative, &key, &raw_id));
+        }
+        if query.files.is_some() {
+            answer.drop_diffs();
+        }
+        answer
     })
     .await
     else {
         return api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed");
     };
     (StatusCode::OK, Json(json!(answer)))
+}
+
+/// `?paths=` is the words to look up, one per line.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct NamedFilesQuery {
+    paths: Option<String>,
+}
+
+/// `GET /api/v1/tabs/{tab_id}/named-files?paths=` — the project files among
+/// the paths an agent tab's chat names, sealed as the library rows them, for
+/// the pictures and PDFs under its answers and its Files list
+/// (`named_files`). Behind the "Project files on the phone" switch; a path
+/// that names nothing is left out. A remote project's paths are its host's,
+/// which nothing here looks up: it answers none, as the desktop's links do.
+async fn tab_named_files(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<NamedFilesQuery>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !files::files_open(&state.config.state_dir) {
+        return api_error(StatusCode::NOT_FOUND, "files_off");
+    }
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some((project, tab)) = snapshot.tab(&tab_id) else {
+        return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+    };
+    if !is_git_project(project) {
+        return api_error(StatusCode::NOT_FOUND, "not_a_project");
+    }
+    if tab.public.kind != "agent" {
+        return api_error(StatusCode::BAD_REQUEST, "agent_tab_required");
+    }
+    if let Err(error) = not_on_host(tab) {
+        return error;
+    }
+    if crate::services::remote::remote_target_for(&project.raw_id).is_some() {
+        return (StatusCode::OK, Json(json!({ "files": [] })));
+    }
+    let raw_id = project.raw_id.clone();
+    let root = project.root.clone();
+    let cwd = tab.cwd.clone();
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let paths = named_files::asked_paths(query.paths.as_deref().unwrap_or_default());
+    let Ok(found) = tokio::task::spawn_blocking(move || {
+        named_files::resolve(&root, &cwd, paths, |relative| file_row(&root, relative, &key, &raw_id))
+    })
+    .await
+    else {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed");
+    };
+    (StatusCode::OK, Json(json!({ "files": found })))
 }
 
 /// A transcript as the phone may see it: the folders the agent and its
@@ -8028,6 +8103,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/transcript", get(agent_transcript))
         .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
         .route("/api/v1/tabs/{tab_id}/changes", get(tab_changes))
+        .route("/api/v1/tabs/{tab_id}/named-files", get(tab_named_files))
         .route("/api/v1/tabs/{tab_id}/terminal", get(terminal))
         // The phone's drop box takes a whole photo; every other body stays at
         // the control-message limit below (the inner layer wins).

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { PATH_LINK_ATTR } from "../../../src/lib/terminal/pathCandidates";
 import { chatLinkUrl } from "../terminal/answerMarkdown";
 import { HOLD_MS } from "./MessageMenu";
 import { useBackLayer } from "../backStack";
@@ -77,12 +78,20 @@ export interface LinkHandlers {
  * beside them. A tap on a link (`data-href`, set only for an address
  * `chatLinkUrl` accepts) opens `LinkSheet`; nothing opens without it. A press
  * held long enough to be a hold is the phone selecting the link's words, not
- * a tap.
+ * a tap. A path link (`linkPathsInHtml`) goes to `openPath` instead: it opens
+ * a file of the project in the app, so it needs no confirmation.
  */
-export function useChatLinks(): { links: LinkHandlers; sheet: React.ReactNode } {
+export function useChatLinks(openPath?: (path: string) => void): { links: LinkHandlers; sheet: React.ReactNode } {
   const [url, setUrl] = useState<string | null>(null);
   const downAt = useRef(0);
+  const opener = useRef(openPath);
+  opener.current = openPath;
   const ask = useCallback((target: EventTarget): boolean => {
+    const path = target instanceof Element ? target.closest(`[${PATH_LINK_ATTR}]`)?.getAttribute(PATH_LINK_ATTR) : null;
+    if (path && opener.current) {
+      opener.current(path);
+      return true;
+    }
     const link = target instanceof Element ? target.closest<HTMLElement>(".md-link[data-href]") : null;
     const href = chatLinkUrl(link?.dataset.href);
     if (!href) return false;

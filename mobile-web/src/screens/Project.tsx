@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
-import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, UndoIcon, WindowIcon } from "../glyphs";
+import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon, UndoIcon, WindowIcon } from "../glyphs";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
@@ -187,6 +187,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * read-only file browser while the desktop's "Project files on the phone"
    * switch is on (`detail.files`). */
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /** The drawer was opened by the header's 🔍: straight to the library's search. */
+  const [filesSearch, setFilesSearch] = useState(false);
   /** The PDFs this phone opened from the drawer and the files it marked up
    * (`filesPlace.ts`), a card each after the tabs, and the one open now. */
   const [fileTabs, setFileTabs] = useState<FileTab[]>(() => readFileTabs(id));
@@ -233,6 +235,12 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * read over the desktop's connection (`detail.host_files`). This
    * computer's file cards stay `filesOffered`'s. */
   const hostFilesOffered = !!detail?.host_files && !assistantScope;
+  /** Only the desktop's "Project files on the phone" switch keeps a project's
+   * files away (off, the default). The 🔍 and ☰ stay and the drawer says so,
+   * rather than the way in vanishing with no word. A VM's stay in the VM
+   * whatever the switch says, and a folderless local project has none. */
+  const filesSwitchedOff = !!detail?.files_off && !assistantScope && (detail.project.kind ?? "project") === "project"
+    && (!folderless || detail.project.host === "remote");
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project" && !folderless;
   const divergedOffered = !!detail?.diverged && !assistantScope;
   /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
@@ -251,7 +259,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const fabOffered = !detail || creates || !folderless;
   /** Whether the drawer has anything to hold, once the host has answered:
    * no ☰ and no swipe else. */
-  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || hostFilesOffered || gitOffered || divergedOffered);
+  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || hostFilesOffered || filesSwitchedOff || gitOffered || divergedOffered);
   /** What a right→left swipe over a card (`data-swipe-close`) does, read at
    * the swipe: the listener below outlives the render that installed it, and
    * would otherwise close against that render's list. Set further down, once
@@ -700,7 +708,15 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       <div className="project-header-tools">
         {/* What this project has besides its tabs — the agent's files (the
             🖼 the Focus screen carries), Git and the file browser — lives in
-            the drawer a right→left swipe also pulls in. */}
+            the drawer a right→left swipe also pulls in. The 🔍 goes straight
+            to the search box inside it. */}
+        {(filesOffered || hostFilesOffered || filesSwitchedOff) && <button
+          className="drawer-open"
+          onClick={() => { setFilesSearch(filesOffered || hostFilesOffered); setDrawerOpen(true); }}
+          aria-haspopup="dialog"
+          aria-label={t("mobile.files.search")}
+          title={t("mobile.files.search")}
+        ><SearchIcon size="1em" /></button>}
         {drawerOffered && <button
           className="drawer-open"
           onClick={() => setDrawerOpen(true)}
@@ -738,7 +754,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {detail && (hostNote || folderless) && <p className="notice project-host-note">
       <span>{[
         hostNote,
-        folderless ? (remoteOnly ? (hostFilesOffered ? "mobile.project.noFolderRemoteOnlyHost" : "mobile.project.noFolderRemoteOnly") : hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[projectHost]) : undefined,
+        folderless ? (filesSwitchedOff ? "mobile.project.filesOff" : remoteOnly ? (hostFilesOffered ? "mobile.project.noFolderRemoteOnlyHost" : "mobile.project.noFolderRemoteOnly") : hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[projectHost]) : undefined,
       ].flatMap((key) => key ? [t(key)] : []).join(" ")} {(remoteOnly ? isUntested("mobile.project.remoteOnly") : isUntested("mobile-every-project-type")) && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
       {hostNote && <button onClick={() => dropHostNote(noteHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
     </p>}
@@ -889,8 +905,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {/* The viewer covers the phone; the gallery stays open behind it, so
         closing the file comes back to the list it was opened from. */}
     {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onDeleteAll={removeAllFiles} onClose={() => setGalleryOpen(false)} />}
-    {drawerOpen && detail && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setDrawerOpen(false)}
-      browse={filesOffered || hostFilesOffered} here={filesOffered} host={hostFilesOffered} hostLabel={detail.host_label} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered || divergedOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
+    {drawerOpen && detail && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => { setDrawerOpen(false); setFilesSearch(false); }}
+      browse={filesOffered || hostFilesOffered} search={filesSearch} filesOff={filesSwitchedOff} here={filesOffered} host={hostFilesOffered} hostLabel={detail.host_label} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered || divergedOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
         {outbox.length > 0 && <button
           role="menuitem"
           aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })}

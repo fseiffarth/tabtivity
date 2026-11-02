@@ -343,7 +343,7 @@ describe("Mobile project — read-only file browser", () => {
 
     // Nothing named so: one line says it.
     fireEvent.change(screen.getByRole("searchbox", { name: "Search the project's files" }), { target: { value: "zzz" } });
-    await screen.findByText("No file or folder has that in its name.");
+    await screen.findByText(/^No file or folder has that in its name\. Search skips what git ignores/);
   });
 
   it("walks folders by token, back by ‹, and opens files by token", async () => {

@@ -9,8 +9,10 @@
 //! relative to its checkout, a linked worktree (or a box member's folder) as
 //! its leaf name and branch, and a change to a file in no checkout of the
 //! scope — the agent's own home, a scratch folder — is left out, only
-//! counted (`outside`).
+//! counted (`outside`). A file the 📁 library would list also crosses as its
+//! sealed row (`attach_files`), so the view can open it.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -18,6 +20,7 @@ use serde::Serialize;
 use super::chat_uncommitted::{checkouts_of, relative_to};
 use super::discovery::ResolvedTab;
 use super::git_overview::{self, TabWorktree};
+use super::protocol::MobileMarkupFile;
 use crate::services::agent_changes::{self, AgentChanges};
 
 /// Changes asked for when the phone names no `limit`, and at most.
@@ -55,6 +58,14 @@ impl ChatChanges {
     fn unavailable(reason: &str) -> Self {
         Self { available: false, reason: Some(reason.to_string()), ..Default::default() }
     }
+
+    /// The changes without their diff text, for the Files list: it names the
+    /// files and shows no diff, so a poll need not carry one.
+    pub fn drop_diffs(&mut self) {
+        for change in &mut self.changes {
+            change.diff.clear();
+        }
+    }
 }
 
 /// One file one call changed: `agent_changes::FileChange` with its path made
@@ -81,6 +92,13 @@ pub struct PhoneChange {
     /// outside every checkout.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub moved_to: Option<String>,
+    /// The file as the library rows it now, to open it by; absent for a file
+    /// the library would not list (deleted since, in a worktree, a box's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<MobileMarkupFile>,
+    /// Where the file stands on this host, past a rename. Never crosses.
+    #[serde(skip)]
+    pub absolute: String,
 }
 
 /// The answer for `tab` of the scope `project_id`, whose folders are `roots`
@@ -145,6 +163,7 @@ pub fn for_phone(checkouts: &[(String, Option<TabWorktree>)], read: AgentChanges
             break;
         }
         let moved_to = change.moved_to.as_deref().and_then(place).map(|(path, _)| path);
+        let absolute = change.moved_to.unwrap_or(change.path);
         changes.push(PhoneChange {
             path,
             worktree,
@@ -155,16 +174,106 @@ pub fn for_phone(checkouts: &[(String, Option<TabWorktree>)], read: AgentChanges
             at: change.at,
             cut: change.cut,
             moved_to,
+            file: None,
+            absolute,
         });
     }
     changes.reverse();
     ChatChanges { available: true, reason: None, version: read.version, unchanged: false, changes, truncated, outside }
 }
 
+/// Gives the changes of the project folder's own checkout the rows `row`
+/// answers for a path relative to `root`, which may lie below the checkout (a
+/// project in a repo's subfolder). A worktree's or a box member's file has
+/// none: the library lists only the project folder. Asked once per path, since
+/// a chat edits the same few files many times; an `unchanged` answer holds no
+/// changes, so a poll that finds nothing new asks nothing.
+pub fn attach_files(answer: &mut ChatChanges, root: &Path, mut row: impl FnMut(&str) -> Option<MobileMarkupFile>) {
+    let mut rows: HashMap<String, Option<MobileMarkupFile>> = HashMap::new();
+    for change in answer.changes.iter_mut().filter(|change| change.worktree.is_none()) {
+        let Some(relative) = relative_to(root, Path::new(&change.absolute)) else { continue };
+        change.file = rows.entry(relative).or_insert_with_key(|relative| row(relative)).clone();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::services::agent_changes::FileChange;
+
+    fn row(name: &str) -> MobileMarkupFile {
+        MobileMarkupFile {
+            token: format!("sealed-{name}"),
+            name: name.to_string(),
+            kind: "text/plain".into(),
+            size: 1,
+            modified: 1,
+            folder: None,
+            place: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_change_is_rowed_once_per_path_past_its_rename_and_never_in_a_worktree() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("proj");
+        let topic = root.join(crate::brand::WORKTREES_DIR).join("topic");
+        std::fs::create_dir_all(root.join("src")).expect("src");
+        std::fs::create_dir_all(&topic).expect("topic");
+        let checkouts = vec![
+            (root.to_string_lossy().into_owned(), None),
+            (topic.to_string_lossy().into_owned(), Some(TabWorktree { label: "topic".into(), branch: None })),
+        ];
+        let mut renamed = change(&root.join("src").join("old.rs"), "@@ -1 +1 @@\n-a\n+b\n");
+        renamed.moved_to = Some(root.join("src").join("new.rs").to_string_lossy().into_owned());
+        let mut answer = for_phone(
+            &checkouts,
+            read(vec![
+                change(&root.join("a.md"), "@@ -1 +1 @@\n-a\n+b\n"),
+                change(&root.join("a.md"), "@@ -1 +1 @@\n-b\n+c\n"),
+                renamed,
+                change(&root.join("gone.md"), "@@ -1 +1 @@\n-a\n+b\n"),
+                change(&topic.join("b.md"), "@@ -1 +1 @@\n-x\n+y\n"),
+            ]),
+        );
+        let mut asked = Vec::new();
+        attach_files(&mut answer, &root, |relative| {
+            asked.push(relative.to_string());
+            (relative != "gone.md").then(|| row(relative))
+        });
+        assert_eq!(asked, ["a.md", "src/new.rs", "gone.md"], "each path once, no worktree's");
+        let tokens: Vec<Option<&str>> = answer.changes.iter().map(|c| c.file.as_ref().map(|file| file.token.as_str())).collect();
+        assert_eq!(
+            tokens,
+            vec![Some("sealed-a.md"), Some("sealed-a.md"), Some("sealed-src/new.rs"), None, None]
+        );
+        let text = serde_json::to_string(&answer).expect("json");
+        assert!(!text.contains(&*tmp.path().to_string_lossy()), "no host path crosses: {text}");
+    }
+
+    #[test]
+    fn a_project_in_a_subfolder_of_its_repo_rows_paths_from_its_own_folder() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let repo = tmp.path().join("repo");
+        let project = repo.join("paper");
+        std::fs::create_dir_all(&project).expect("project");
+        let checkouts = vec![(repo.to_string_lossy().into_owned(), None)];
+        let mut answer = for_phone(
+            &checkouts,
+            read(vec![
+                change(&project.join("main.tex"), "@@ -1 +1 @@\n-a\n+b\n"),
+                change(&repo.join("elsewhere.md"), "@@ -1 +1 @@\n-a\n+b\n"),
+            ]),
+        );
+        assert_eq!(answer.changes[0].path, "paper/main.tex", "the diff still reads from the checkout");
+        let mut asked = Vec::new();
+        attach_files(&mut answer, &project, |relative| {
+            asked.push(relative.to_string());
+            Some(row(relative))
+        });
+        assert_eq!(asked, ["main.tex"], "a file above the project folder is none of the library's");
+        assert!(answer.changes[1].file.is_none());
+    }
 
     fn change(path: &Path, diff: &str) -> FileChange {
         FileChange {

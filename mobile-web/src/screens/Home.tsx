@@ -35,6 +35,7 @@ import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
 import { AssistantIcon } from "../../../src/components/common/icons/Icon";
 import { DiamondIcon, GripIcon, PlusIcon, SearchIcon } from "../glyphs";
+import { FavoritesPage } from "../components/FavoritesPage";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
 import { useVisiblePoll } from "../visiblePoll";
@@ -73,12 +74,14 @@ function projectTile(project: ProjectRow): string {
   return firstGrapheme(project.label).toUpperCase();
 }
 
-/** The three modes of the Projects section. `agents` is not a filter over the
+/** The four modes of the Projects section. `agents` is not a filter over the
  * project list but a different list entirely — every project's agent tabs that
  * are working, waiting or done, flat — so it is the one mode worth remembering
- * across the re-mounts a tab switch and a terminal visit cause. */
-type HomeView = "active" | "agents" | "search";
-const HOME_VIEWS: [HomeView, TranslationKey][] = [["active", "mobile.home.viewActive"], ["agents", "mobile.home.viewAgents"], ["search", "mobile.home.viewSearch"]];
+ * across the re-mounts a tab switch and a terminal visit cause. `favorites` is
+ * no project list either: the files and folders starred across all projects
+ * (`FavoritesPage`). */
+type HomeView = "active" | "agents" | "favorites" | "search";
+const HOME_VIEWS: [HomeView, TranslationKey][] = [["active", "mobile.home.viewActive"], ["agents", "mobile.home.viewAgents"], ["favorites", "mobile.home.viewFavorites"], ["search", "mobile.home.viewSearch"]];
 
 export function Home({ open, openTab, tabby, todo, mail }: {
   open: (id: string) => void;
@@ -158,7 +161,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   useEffect(() => {
     // The agents mode reads its own list; leaving this poll running behind it
     // would be a catalog load per tick for a list nothing is showing.
-    if (view === "agents") return;
+    if (view === "agents" || view === "favorites") return;
     // Without an abort, typing "ab" then "abc" on mobile data could land the
     // older response last and leave the wrong result set on screen.
     const controller = new AbortController();
@@ -253,8 +256,8 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       </button>
     </header>
     <div className="projects-row">
-      <h1>{view === "agents" ? t("mobile.home.agentsTitle") : t("mobile.home.projectsTitle")}</h1>
-      {view !== "agents" && <button
+      <h1>{view === "agents" ? t("mobile.home.agentsTitle") : view === "favorites" ? t("mobile.home.viewFavorites") : t("mobile.home.projectsTitle")}</h1>
+      {view !== "agents" && view !== "favorites" && <button
         className="primary new-tab"
         onClick={() => setNewProject(true)}
         aria-haspopup="dialog"
@@ -272,7 +275,8 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       onClick={() => choose(id)}
     >{t(label)}{id === "agents" && asking > 0 && <span className="home-switch-badge" aria-hidden="true">{asking}</span>}</button>)}</nav>
     {view === "agents" && <Activity open={openAgentTab} onConnection={setOffline} />}
-    {view !== "agents" && <>
+    {view === "favorites" && <FavoritesPage />}
+    {view !== "agents" && view !== "favorites" && <>
       {view === "search" && <input className="search" placeholder={t("mobile.home.searchPlaceholder")} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
       {offline && <p className="error connection-error">
         <strong>{describeUnavailable(offline).title}</strong>

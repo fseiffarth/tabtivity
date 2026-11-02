@@ -217,6 +217,10 @@ export interface ProjectDetail {
    * on its host, read over the desktop's connection (`?on=host`). Absent (an
    * older desktop) is none. */
   host_files?: boolean;
+  /** The desktop's "Project files on the phone" switch is off, the one thing
+   * keeping the 📁 away from a project that has one. An older desktop sends
+   * no field. */
+  files_off?: boolean;
   /** Whether the drawer offers Diverged (`DivergedSheet`): a remote project
    * with a local copy, the file switch on. Absent (an older desktop) is none. */
   diverged?: boolean;
@@ -480,6 +484,11 @@ const REQUEST_TIMEOUT = 10_000;
  * `DesktopRequest::response_timeout` (`protocol.rs`). Change one side and the
  * other must follow; `MobileApiDeadlines.test.ts` pins the relation. */
 
+/** A search of a project's tree on its remote host: the sidecar walks it for
+ * up to 10 s over the desktop's connection (`host_files::SEARCH_DEADLINE`),
+ * then answers what it found, which a 10 s deadline here would throw away and
+ * call a failure. */
+export const HOST_SEARCH_TIMEOUT = 20_000;
 /** A tab the desktop opens — a create, a reopen, a sign-in tab: 2 s connect +
  * 10 s for the desktop's answer (`response_timeout` default), then up to 5 s
  * of the sidecar polling its catalog for the new row (`created_through_desktop`
@@ -1207,6 +1216,9 @@ export interface ChatChange {
   at?: string;
   cut?: boolean;
   moved_to?: string;
+  /** The file as the library rows it now, to open it by; absent for one the
+   * library would not list: deleted since, in a worktree, a box's. */
+  file?: PhoneMarkupFile;
 }
 /** The Diffs view's feed. `outside` counts changes to files in no checkout
  * of the project (left out). `available: false` with `reason` — `files_off`
@@ -1225,11 +1237,16 @@ export interface ChatChanges {
  * conversation) recorded; `version` as `getTranscript`'s. The route sits
  * behind the "Project files on the phone" switch: refused as `files_off`, it
  * answers unavailable with that reason; a host older than the route (a
- * bodiless 404) as `unsupported`. */
-export async function getChanges(tabId: string, version?: string, subagent?: string, signal?: AbortSignal): Promise<ChatChanges> {
+ * bodiless 404) as `unsupported`. `filesOnly` asks for that many of the newest
+ * changes with their diff text left out, for a list of the files alone. */
+export async function getChanges(tabId: string, version?: string, subagent?: string, signal?: AbortSignal, filesOnly?: number): Promise<ChatChanges> {
   const query = new URLSearchParams();
   if (version) query.set("version", version);
   if (subagent) query.set("subagent", subagent);
+  if (filesOnly) {
+    query.set("files", "1");
+    query.set("limit", String(filesOnly));
+  }
   const suffix = query.size > 0 ? `?${query}` : "";
   try {
     const body = await api<Partial<ChatChanges>>(`/api/v1/tabs/${encodeURIComponent(tabId)}/changes${suffix}`, { signal });
@@ -1240,6 +1257,16 @@ export async function getChanges(tabId: string, version?: string, subagent?: str
     }
     throw reason;
   }
+}
+
+/** `GET /api/v1/tabs/{id}/named-files` — the project files among `paths` (the
+ * path-shaped words of the chat's answers), as the library rows them, each
+ * with the words that named it; a path that names none is left out. Refused
+ * while "Project files on the phone" is off. */
+export async function describeNamedFiles(tabId: string, paths: readonly string[], signal?: AbortSignal): Promise<{ path: string; file: PhoneMarkupFile }[]> {
+  const query = new URLSearchParams({ paths: paths.join("\n") });
+  const { files } = await api<{ files?: { path: string; file: PhoneMarkupFile }[] }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/named-files?${query}`, { signal });
+  return Array.isArray(files) ? files : [];
 }
 
 /** A file the phone dropped into the tab's project inbox. `reference` is
@@ -1519,7 +1546,7 @@ export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean 
  * listing. */
 export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileSearch> {
   const on = sideQuery(side);
-  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}${on ? `&${on}` : ""}`, { signal });
+  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}${on ? `&${on}` : ""}`, { signal }, on ? HOST_SEARCH_TIMEOUT : undefined);
 }
 
 /** `POST /api/v1/projects/{id}/files/upload?name=…[&dir=<token>]` — the

@@ -17,10 +17,10 @@ import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupBack, type MarkupNewTab, type MarkupTarget } from "../components/OutboxViewer";
 import { dialogLine, type AgentSignal } from "../markup/submitState";
 import { useMarkupAsks } from "../markup/questions";
-import { SentFilesIndex } from "../components/SentFilesIndex";
+import { SentFilesIndex, type SentFile } from "../components/SentFilesIndex";
 import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
-import { ComposerThumb, InboxAlbum } from "../components/InboxPreview";
+import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
 import { Fragment, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
@@ -95,6 +95,9 @@ import { CommitFiles } from "./CommitFiles";
 import { agentWork } from "../terminal/agentBusy";
 import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
 import { answerHtml, promptHtml } from "../terminal/answerMarkdown";
+import { useTapOutside } from "../tapOutside";
+import { fileKey, useViewableNamed } from "../terminal/chatFiles";
+import { linkPathsInHtml } from "../../../src/lib/terminal/pathCandidates";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
@@ -111,6 +114,7 @@ import { hasSignInTab, readCloudLink, readCloudSession, readHiddenSignIn, readPa
 import { type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
 import { ChatChanges } from "../components/ChatChanges";
+import { AnswerAlbum, type AnswerFiles } from "../components/AnswerFiles";
 import { readSlashCommands, slashCli } from "../slashCommands";
 import {
   onDeviceSpeechAsked,
@@ -259,9 +263,10 @@ function CommandDivider({ command, label, press }: {
 /** One answer of the stored session as formatted text (`answerHtml`: the
  * formatting only — nothing in it loads, and a link opens only through the
  * confirmation `links` puts up). Memoized on the text, so a poll that brings
- * a new turn does not re-render every answer above it. */
-const AnswerText = memo(function AnswerText({ text, links }: { text: string; links: LinkHandlers }) {
-  const html = useMemo(() => answerHtml(text), [text]);
+ * a new turn does not re-render every answer above it. `paths`: the files of
+ * the project among its words (`useNamedFiles`), which become links to them. */
+const AnswerText = memo(function AnswerText({ text, links, paths }: { text: string; links: LinkHandlers; paths?: ReadonlyMap<string, unknown> }) {
+  const html = useMemo(() => (paths ? linkPathsInHtml(answerHtml(text), paths) : answerHtml(text)), [text, paths]);
   return <div className="transcript-md" {...links} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
@@ -352,7 +357,7 @@ function SubagentCard({ turn, label, untested, time, busy = false, onOpen }: {
  * holds (`queued`), so the agent at work can be drawn between the two; both
  * halves key and date their bubbles from the whole of `entries`.
  * `queuedActions` goes under every queued prompt's bubble. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox }: {
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
@@ -377,11 +382,18 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   /** The files a prompt sent into the project inbox, shown in its bubble as
    * pictures in place of their `@` references (`InboxAlbum`). */
   inbox?: ChatInbox;
+  /** The project files the answers name: their pictures and PDFs follow
+   * each answer (`AnswerAlbum`), a path in its words opens the file. */
+  answerFiles?: AnswerFiles;
 }) {
   // One bubble per record, keyed by its time (`transcriptTurns`).
   const turns = useMemo(() => transcriptTurns(entries), [entries]);
   const { tap, menu } = useMessageMenu();
-  const { links, sheet: linkSheet } = useChatLinks();
+  const openPath = useCallback((path: string) => {
+    const file = answerFiles?.links.get(path);
+    if (file) answerFiles?.open(file);
+  }, [answerFiles]);
+  const { links, sheet: linkSheet } = useChatLinks(openPath);
   const t = useT();
   // A messenger's day chip over the first message of each day (`dayOpeners`).
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
@@ -426,10 +438,11 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
         </div>
       : <div className={turn.plan ? "readable-turn agent answer plan" : "readable-turn agent answer"} role={turn.plan ? "group" : undefined} aria-label={turn.plan ? planLabel : undefined} {...tap(turn.key, () => turn.text)}>
           {turn.plan && <small className="transcript-plan-head">{planLabel}{planUntested && <em> · {planUntested}</em>}</small>}
-          <AnswerText text={turn.text} links={links} />
+          <AnswerText text={turn.text} links={links} paths={answerFiles?.links} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
           {time}
         </div>}
+    {turn.kind === "answer" && !turn.queued && !turn.questions && answerFiles && <AnswerAlbum text={turn.text} files={answerFiles} />}
     {turn.queued && turn.kind === "prompt" && queuedActions}
     {renderPost && posts?.get(turn.index)?.map((post) => <Fragment key={post.key}>{renderPost(post)}</Fragment>)}
   </Fragment>;
@@ -1141,6 +1154,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** Whether the chat's file list is open. The strip holds one open list at
    * a time: the subagents' or the files'. */
   const [sentListOpen, setSentListOpen] = useState(false);
+  /** The strip over the chat: a tap anywhere else shuts its open list. */
+  const chatIndex = useRef<HTMLDivElement>(null);
+  useTapOutside(chatIndex, subagentListOpen || sentListOpen, () => {
+    setSubagentListOpen(false);
+    setSentListOpen(false);
+  });
   const openStep = subagentPath[subagentPath.length - 1];
   /** The last read of a subagent's conversation, and whose it is — a read
    * that belongs to another subagent is never drawn under this one's bar. */
@@ -1293,9 +1312,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   });
   const {
     cliReady, sessionWaiting, sinceClear, storedEntries, sessionEntries, sessionAgents,
-    earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles,
+    earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles, namedFiles, changedMore,
   } = useSessionEntries({
-    tab, cloudTab, liveScreen, uploads, outbox, transcript, pending, clearedAt, undoing, setUndoing,
+    tab, project, cloudTab, liveScreen, uploads, outbox, transcript, pending, clearedAt, undoing, setUndoing,
     sessionFocus,
   });
   const {
@@ -1313,7 +1332,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (!sessionFocus || !atBottom) return;
     const stream = readableHost.current;
     if (stream && typeof stream.scrollTo === "function") stream.scrollTo({ top: stream.scrollHeight });
-  }, [sessionFocus, transcript, pending, chatPosts, atBottom, subToken, subTranscript]);
+  }, [sessionFocus, transcript, pending, chatPosts, namedFiles, atBottom, subToken, subTranscript]);
   useOutboxPoll({ tab, bare, setOutbox, setGallery, setOutboxOpen, setInboxOpen });
   useLimitsPoll({ tab, setLimitsNow, rememberLimits });
   const {
@@ -1990,11 +2009,31 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     () => (project && askedInFiles ? refreshProjectFile(project, askedFolder) : undefined),
     [project, askedFolder, askedInFiles],
   );
-  const openAskedRow = (row: PhoneMarkupFile) => setAskedFile({
+  const openAskedRow = useCallback((row: PhoneMarkupFile) => setAskedFile({
     file: { name: row.name, kind: row.kind, size: row.size, modified: row.modified, ref: row.token },
     place: row.place,
     folder: row.folder,
-  });
+  }), []);
+  /** A project file the chat changed or named opens as the 📁 library does. */
+  const openProjectFile = useCallback((file: OutboxFile) => {
+    if (file.file_row) openAskedRow(file.file_row);
+  }, [openAskedRow]);
+  /** A row of the chat's file list, in the viewer of its side. */
+  const openChatFile = useCallback((row: SentFile) => {
+    if (row.from === "changed" || row.from === "named") openProjectFile(row.file);
+    else openSentFile(row);
+  }, [openProjectFile, openSentFile]);
+  const answerLinks = useViewableNamed(namedFiles, viewableFile);
+  /** What this tab sent is its own post in the chat; an answer naming the
+   * project file it was copied from does not draw it again. */
+  const sentKeys = useMemo(
+    () => new Set(outbox.flatMap((file) => (file.from_tab && file.file_row ? [fileKey(file.file_row)] : []))),
+    [outbox],
+  );
+  const answerFiles = useMemo<AnswerFiles | undefined>(
+    () => (project ? { project, named: namedFiles, links: answerLinks, sent: sentKeys, open: openProjectFile, settle: chatInbox.onSettle } : undefined),
+    [project, namedFiles, answerLinks, sentKeys, openProjectFile, chatInbox.onSettle],
+  );
   /** A shell tab has no chat to send marks to: Mark up's Submit opens a new
    * tab of the desktop's default agent; its Open tab shows that tab in place
    * of this one. */
@@ -2411,7 +2450,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       <div ref={host} className={`terminal${view === "focus" ? " focus-source" : ""}`} />
       <div ref={wideHint} className="terminal-wide-hint" aria-hidden="true" />
       {diffsShown && <ChatChanges tabId={tab.id} subagent={view === "focus" ? openStep?.token : undefined}
-        subagentTitle={openStep?.task || openStep?.role} visible onClose={() => setDiffsOpen(false)} />}
+        subagentTitle={openStep?.task || openStep?.role} visible onOpenFile={project ? openAskedRow : undefined} onClose={() => setDiffsOpen(false)} />}
       {/* The stored session does not depend on the screen, so a full-screen
           agent (OpenCode's TUI) still reads as a chat in Focus. */}
       {view === "focus" && altScreen && !sessionFocus && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span><button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}
@@ -2424,7 +2463,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           }}>
           {/* The sticky strip over the chat: the session's subagents and the
               files it carried, each a chip that opens its list. */}
-          {sessionFocus && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0) && <div className="chat-index">
+          {sessionFocus && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0) && <div ref={chatIndex} className="chat-index">
             {(sessionAgents.length > 0 || agentsEarlier) &&
             <nav className={`subagent-index${subagentListOpen ? " open" : ""}`} aria-label={t("mobile.subagent.indexRegion")}>
               <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => { setSentListOpen(false); setSubagentListOpen((open) => !open); }}>
@@ -2452,7 +2491,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}
-            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} files={chatFiles} open={sentListOpen} onToggle={() => { setSubagentListOpen(false); setSentListOpen((open) => !open); }} onOpen={openSentFile} />}
+            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={sentListOpen} onToggle={() => { setSubagentListOpen(false); setSentListOpen((open) => !open); }} onOpen={openChatFile} />}
           </div>}
           {sessionFocus && openStep
             ? subagentView
@@ -2482,7 +2521,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} />
+                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew

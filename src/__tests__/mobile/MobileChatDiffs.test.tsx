@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
@@ -75,7 +75,8 @@ const CHANGES = {
   truncated: false,
   outside: 1,
   changes: [
-    { path: "src/a.rs", kind: "edit", diff: "@@ -9,2 +9,2 @@\n keep\n-old line\n+new line\n", added: 1, removed: 1, at: "2026-10-25T09:00:00Z" },
+    { path: "src/a.rs", kind: "edit", diff: "@@ -9,2 +9,2 @@\n keep\n-old line\n+new line\n", added: 1, removed: 1, at: "2026-10-25T09:00:00Z",
+      file: { token: "sealed-a", name: "a.rs", kind: "text/plain", size: 12, modified: 1, folder: "sealed-src", place: "src" } },
     { path: "b.md", worktree: { label: "topic", branch: "topic" }, kind: "add", diff: "@@ -0,0 +1,1 @@\n+# B\n", added: 1, removed: 0, at: "2026-10-25T09:01:00Z" },
   ],
 };
@@ -119,7 +120,7 @@ describe(`${BRAND.display} Mobile — the chat's Diffs view`, () => {
     fireEvent.click(rows[1]);
 
     const view = await screen.findByTestId("chat-changes");
-    await within(view).findByText("b.md");
+    await waitFor(() => expect(view.querySelector(".chat-change")).not.toBeNull());
     expect(fetch).toHaveBeenCalledWith("/api/v1/tabs/tab/changes", expect.anything());
     expect(pill().textContent).toBe("Diffs");
     const cards = [...view.querySelectorAll<HTMLElement>(".chat-change")];
@@ -134,11 +135,30 @@ describe(`${BRAND.display} Mobile — the chat's Diffs view`, () => {
     expect(lines[3].querySelector("span")?.textContent).toBe("10");
     expect(view.textContent).toContain("1 changes to files outside the project are not shown.");
     // A file filter narrows the list.
-    fireEvent.change(within(view).getByRole("combobox", { name: "Changed files" }), { target: { value: "src/a.rs" } });
+    const fileRows = within(within(view).getByRole("list", { name: "Changed files" })).getAllByRole("listitem");
+    expect(fileRows.map((row) => row.querySelector(".chat-change-path strong")?.textContent)).toEqual(["b.md", "src/a.rs"]);
+    fireEvent.click(within(fileRows[1]).getByRole("button", { pressed: false }));
     expect(view.querySelectorAll(".chat-change").length).toBe(1);
+    fireEvent.click(within(fileRows[1]).getByRole("button", { pressed: true }));
+    expect(view.querySelectorAll(".chat-change").length).toBe(2);
+    // Only a file the library would list opens: not the worktree's.
+    expect(within(fileRows[0]).queryByRole("button", { name: /^Open/ })).toBeNull();
+    expect(within(fileRows[1]).getByRole("button", { name: "Open a.rs" })).toBeTruthy();
 
     pick(/^Chat/);
     expect(screen.queryByTestId("chat-changes")).toBeNull();
+  });
+
+  it("groups a file's changes in one row and opens the file in the viewer", async () => {
+    hostAnswering({ ...CHANGES, changes: [CHANGES.changes[0], { ...CHANGES.changes[0], at: "2026-10-25T09:05:00Z", added: 2 }] });
+    await openAgent();
+    pick(/^Diffs/);
+    const view = await screen.findByTestId("chat-changes");
+    const row = within(await within(view).findByRole("list", { name: "Changed files" })).getByRole("listitem");
+    expect(row.textContent).toContain("2 changes");
+    expect(row.textContent).toContain("+3");
+    fireEvent.click(within(row).getByRole("button", { name: "Open a.rs" }));
+    expect(document.querySelector(".markup-host")).not.toBeNull();
   });
 
   it("names the desktop switch while project files are off on the phone", async () => {

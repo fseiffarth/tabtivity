@@ -23,6 +23,7 @@ import { openSubagent, stepSibling, type SubagentStep } from "../../terminal/sub
 import { withPending, type PendingPrompt } from "../../terminal/pendingPrompts";
 import { outboxPosts } from "../../terminal/outboxPosts";
 import { inboxLeaves, useInboxFiles } from "../../terminal/inboxRefs";
+import { useChangedFiles, useNamedFiles } from "../../terminal/chatFiles";
 import { afterClear, type ClearMark } from "../../terminal/clearedSession";
 import { startVisiblePoll, type VisiblePoll } from "../../visiblePoll";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../../shared/usageReport";
@@ -172,10 +173,12 @@ export function useSessionTranscript({
 /** The session chat's entries, with the prompts sent from here held in place,
  * and the files sent either way. */
 export function useSessionEntries({
-  tab, cloudTab, liveScreen, uploads, outbox, transcript, pending, clearedAt, undoing, setUndoing,
+  tab, project, cloudTab, liveScreen, uploads, outbox, transcript, pending, clearedAt, undoing, setUndoing,
   sessionFocus,
 }: {
   tab: TabRow;
+  /** The tab's project, where its files can be opened; none without one. */
+  project: string | undefined;
   cloudTab: boolean;
   liveScreen: ReadableLine[];
   uploads: InboxUpload[];
@@ -235,9 +238,21 @@ export function useSessionEntries({
     ...uploads.flatMap((upload) => upload.reference === undefined || upload.failure ? [] : [leafOfReference(upload.reference)]),
   ])], [promptLeaves, uploads]);
   const inboxFiles = useInboxFiles(tab.id, inboxNamed);
-  /** Both directions' files, for the list beside the subagent index. */
-  const chatFiles = useMemo(() => sentFiles(outbox, promptLeaves, inboxFiles), [outbox, promptLeaves, inboxFiles]);
-  return { cliReady, sessionWaiting, sinceClear, storedEntries, sessionEntries, sessionAgents, earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles };
+  /** What the chat touched in the project: the files its answers name and
+   * the ones it changed. Only where the 📁 library can open them. */
+  const filesInReach = sessionFocus && tab.kind === "agent" && !!project;
+  const answerTexts = useMemo(
+    () => sessionEntries.filter((entry) => entry.kind === "answer" && !entry.queued && !entry.questions?.length).map((entry) => entry.text),
+    [sessionEntries],
+  );
+  const namedFiles = useNamedFiles(tab.id, answerTexts, filesInReach);
+  const changed = useChangedFiles(tab.id, filesInReach);
+  /** Every file of the conversation, for the list beside the subagent index. */
+  const chatFiles = useMemo(
+    () => sentFiles(outbox, promptLeaves, inboxFiles, changed.files, namedFiles),
+    [outbox, promptLeaves, inboxFiles, changed.files, namedFiles],
+  );
+  return { cliReady, sessionWaiting, sinceClear, storedEntries, sessionEntries, sessionAgents, earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles, namedFiles, changedMore: changed.more };
 }
 
 /** The subagent conversation open in the Reader: its read, and the walk into,

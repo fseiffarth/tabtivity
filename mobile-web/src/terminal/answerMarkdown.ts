@@ -1,3 +1,4 @@
+import { findPathCandidates } from "../../../src/lib/terminal/pathCandidates";
 import { renderMarkdown } from "../../../src/lib/viewers/markdown";
 
 /**
@@ -19,8 +20,9 @@ import { renderMarkdown } from "../../../src/lib/viewers/markdown";
  * whether or not that is still true: an answer is written by an agent that
  * may have read anything, and this lands in `innerHTML`. Only the tags the
  * renderer emits survive, only its own classes, a `style` only as a table
- * cell's alignment, and a `data-href` only on a link and only as a web address
- * `chatLinkUrl` accepts — so a renderer change that let the answer's text
+ * cell's alignment, a `data-href` only on a link and only as a web address
+ * `chatLinkUrl` accepts, and a `data-path` only on a link and only as one file
+ * path (`filePathOf`) — so a renderer change that let the answer's text
  * reach the markup could still not open, load, run or restyle anything.
  */
 export function answerHtml(text: string): string {
@@ -127,6 +129,14 @@ function allowlisted(html: string): string {
   return out.innerHTML;
 }
 
+/** A link target that reads as one file path, as the chat's path links would
+ * pick it out of plain text: it is only ever looked up, inside the tab's
+ * folders, and is a link only once that finds a file (`linkPathsInHtml`). */
+function filePathOf(target: string | null): string | null {
+  const found = target ? findPathCandidates(target.trim()) : [];
+  return found.length === 1 ? found[0].path : null;
+}
+
 /** `inLink`: `from` sits inside a link. The renderer formats a link's label
  * as text of its own, so a label that reads as an address comes out as a link
  * inside the link; only the outer one is where the answer points, and the
@@ -158,6 +168,8 @@ function copyChildren(from: Node, to: Node, inLink = false): void {
       copy.setAttribute("role", "link");
       copy.setAttribute("tabindex", "0");
     }
+    const path = link && !inLink && !href ? filePathOf(element.getAttribute("data-href")) : null;
+    if (path) copy.setAttribute("data-path", path);
     copyChildren(element, copy, inLink || link);
     to.appendChild(copy);
   });

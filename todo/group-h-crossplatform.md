@@ -3904,6 +3904,90 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cn — Find files on the phone: Open from Diffs, 🔍, Favorites page** (2026-11-02;
+  ✅ code-complete, `MobileChatDiffs`, `MobileFavoritesPage`, `MobileHostTabs`,
+  `MobileForgetFiles` tests and `chat_changes` Rust tests passing; ⚠️ never seen on
+  a phone). Needs a dev build: the backend half (`file` on a change, `files_off`)
+  and the PWA are both in the binary. An unpaired phone now also forgets the
+  library's favorites, recents, colours, file cards and folder trail.
+  - [ ] 🖐️ Chat → view pill → Diffs: a row per file over the changes, with its
+    count and +/−. Tapping a row narrows the changes, tapping again shows all. Open
+    shows the file, with Mark up. A deleted file and a worktree's have no Open.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Project screen → 🔍: the library opens with the keyboard up and recent
+    files showing; Back returns to the project. The box stays put while the list
+    scrolls. A search that finds nothing says git-ignored files are skipped.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Desktop switch "Project files on the phone" off: ☰ and 🔍 stay on a
+    project and the drawer names the switch. A remote project with no local copy
+    names it too, rather than saying files appear once synced.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Home → Favorites: the four segments fit one line on a narrow phone, in
+    every language. Favorites from several projects are grouped, a coloured folder
+    wears its colour, a file opens and Back returns to the page, a folder opens in
+    the library, ⋯ offers Show in folder and Unfavorite, and a moved file dims and
+    offers Remove.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31co — Files a phone chat names and changes** (2026-11-02; ✅ code-complete,
+  `MobileChatNamedFiles.test.tsx` and `named_files` tests; ⚠️ never seen live).
+  Like the desktop Chat: an answer naming a picture or PDF of the project is
+  followed by a message showing it, its path (or a Markdown link to it) opens
+  the file, and Files (N) also lists what the agent changed and named. Needs
+  Project files on the phone. The phone's bundle and the sidecar route ship
+  together: rebuild first.
+  - [ ] 🖐️ iPad and phone, Focus chat of a local agent tab: ask the agent to name
+    a PDF and a picture of the project. Each follows the answer as its own
+    message, the answer's bubble unchanged; a tap opens it in the app, Mark up
+    included. The path in the answer's words opens it too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Files (N) in the strip over the chat: Changed by the agent and Named in
+    the chat list the right files, each once; a tap opens the file; a deleted
+    file brings the note that Diffs holds more.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [~] **31cm — Send now and Cancel and edit on Codex and OpenCode mini** (2026-11-02;
   ✅ code-complete, `MobileQueuePull.test.ts` and the walks run against the real
   Codex 0.166.0 and OpenCode 2.2.5 on a stub model; ⚠️ never seen in the app).

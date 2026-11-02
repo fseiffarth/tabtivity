@@ -100,9 +100,13 @@ export function useOutboxViewers({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [outboxOpen, askedFile, filesOpen]);
   /** A picture, a text or a PDF opens full-screen here; in an agent tab the
-   * viewer also carries **Mark up**. */
+   * viewer also carries **Mark up**. The file may be the one tucked away behind
+   * the chat (`markupAway`), which setting it again would not bring back. */
+  const openOutbox = useCallback((file: OutboxFile) => {
+    setOutboxOpen(file);
+    setMarkupAway(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const openOutbox = useCallback((file: OutboxFile) => setOutboxOpen(file), []);
+  }, []);
   /** A lone picture takes its own shape once loaded; a chat following its
    * bottom follows the taller bubble (the resize observer watches the view's
    * box, not what grows inside it). */
@@ -116,8 +120,11 @@ export function useOutboxViewers({
   const chatInbox = useMemo<ChatInbox>(() => ({ tabId: tab.id, files: inboxFiles, onOpen: setInboxOpen, onSettle: settlePost }), [tab.id, inboxFiles, settlePost]);
   const inboxScope = useMemo(() => ({ inbox: tab.id }), [tab.id]);
   /** A row of the chat's file list, opened in the viewer of its side. */
+  const openSentFile = useCallback(({ file, from }: SentFile) => {
+    if (from === "agent") openOutbox(file);
+    else setInboxOpen(file);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const openSentFile = useCallback(({ file, from }: SentFile) => (from === "agent" ? setOutboxOpen : setInboxOpen)(file), []);
+  }, []);
   /** Removes one of the files the agent sent, from the tile's own confirm — the
    * same removal the project screen's shelf does, through this tab's scope. The
    * row goes now rather than at the next poll, and the sheet closes with the

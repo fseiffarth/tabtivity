@@ -26,6 +26,7 @@ pub mod inbox;
 pub mod local_models;
 pub mod markup;
 pub mod markup_pdf;
+pub mod named_files;
 pub mod outbox;
 pub mod phone_origin;
 pub mod presence;
