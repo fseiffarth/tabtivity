@@ -23,6 +23,8 @@ import {
 import { isAntigravityTab, readAntigravityEffort, readAntigravityPicker, type AntigravityEffort } from "../../../mobile-web/src/terminal/antigravity";
 import { isOpenCodeTab, openCodePickKeys, readOpenCodePicker, readOpenCodePickerPage, type OpenCodePickerPage } from "../../../mobile-web/src/terminal/openCodeMini";
 import { readPromptSuggestion } from "../../../mobile-web/src/terminal/promptSuggestion";
+import { queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
+import { agentFamily } from "../../../shared/agentComposer";
 import { inputFrameStart, sessionStatus, type SessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 
 /**
@@ -72,10 +74,13 @@ export interface ReaderLive {
   /** Claude Code's prompt suggestion, dimmed in its empty input box ("" when
    * none): on the screen only, no stored record carries it. */
   suggestion: string;
+  /** OpenCode mini's footer counts prompts waiting: the one sign of a queue
+   * its screen gives, so its queue buttons follow this. */
+  openCodeQueued: boolean;
 }
 
 export const NO_LIVE: ReaderLive = {
-  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false, screen: [], suggestion: "",
+  question: null, ask: [], context: [], tabs: [], tabFocus: null, tabSubmit: false, tabKeys: "arrows", signature: "", working: null, status: null, stray: false, screen: [], suggestion: "", openCodeQueued: false,
 };
 
 /** Rows of a stray screen the chat shows: a first-run screen fits, a long
@@ -137,6 +142,7 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
       stray: false,
       screen: [],
       suggestion: "",
+      openCodeQueued: false,
     };
   }
   const working = agentWork(lines);
@@ -145,6 +151,7 @@ export function readReaderLive(buffer: ReadableBufferLike, agentLabel: string, c
   const stray = !working && noFrame && lines.some((line) => line.text.trim() !== "");
   return {
     ...NO_LIVE, working, status, stray, screen: stray ? strayScreen(lines.map((line) => line.text)) : [],
+    openCodeQueued: agentFamily(agentLabel) === "opencode" && queuedHintShown(lines.map((line) => line.text), "opencode"),
     // Only an idle box holds one; a busy row means a turn is running.
     suggestion: working ? "" : readPromptSuggestion(lines, agentLabel),
   };
@@ -178,6 +185,7 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
     && a.stray === b.stray
     && a.screen.join("\n") === b.screen.join("\n")
     && a.suggestion === b.suggestion
+    && a.openCodeQueued === b.openCodeQueued
     && sameStatus(a.status, b.status);
 }
 

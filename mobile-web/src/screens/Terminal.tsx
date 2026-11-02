@@ -135,14 +135,11 @@ import { useLiveQuestion } from "./terminal/useLiveQuestion";
 import { useVoiceInput } from "./terminal/useVoiceInput";
 import { useHandsFree } from "./terminal/useHandsFree";
 import { type SendGuard } from "../../../shared/handsFree";
+import { queueFamily, queuedHintShown } from "../terminal/queuePull";
 import {
   type VoiceNote, TRANSCRIPT_STEP, UNDO_RELOADS, LINK_WAIT_MS, type InboxUpload, leafOfReference,
   liftedDraft, uploadInFlight, withAttachments, type ChatInbox,
 } from "./terminal/terminalShared";
-
-/** CLIs whose queue the desktop reads for Send now. Mirrors `queue_hint` in
- * `src-tauri/src/services/mobile_control/pty_bridge.rs`. */
-const SEND_NOW_FAMILIES: ReadonlySet<string> = new Set(["claude"]);
 
 /** `hiddenSignIn`'s value once the reader hid the hidden-link notice. */
 const HIDDEN_LINK = "\u0000hidden-link";
@@ -876,11 +873,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const slashCliKey = slashCli(tab.agent_label ?? tab.label);
   /** The tab's CLI (`agentFamily`). */
   const agentKey = agentFamily(tab.agent_label ?? tab.label);
-  /** Send now is offered where the desktop can tell the CLI's queue apart —
-   * Claude's queue hint (`queue_hint` in `pty_bridge.rs`); Codex and Copilot
-   * take a mid-turn prompt in at once, and OpenCode marks its queue nowhere
-   * on screen. */
-  const sendNowOffered = sendNowReady && SEND_NOW_FAMILIES.has(agentKey);
+  /** The tab's CLI where its queue can be read off the screen. */
+  const queueCli = queueFamily(agentKey);
+  /** Send now is offered where the desktop can tell the CLI's queue apart
+   * (`queue_hint` in `pty_bridge.rs`). */
+  const sendNowOffered = sendNowReady && queueCli !== null;
+  /** OpenCode's full TUI shows no queue, only its mini footer counts one:
+   * the queued bubbles' moves follow that count there. */
+  const queueReadable = useMemo(
+    () => queueCli !== null && (queueCli !== "opencode" || queuedHintShown(screenRows.current(), "opencode")),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queueCli, liveScreen],
+  );
   const hiddenLink = useMemo(
     () => (tab.kind === "agent" && !screenSignIn ? readHiddenSignIn(liveScreen, slashCliKey) : null),
     [tab.kind, screenSignIn, liveScreen, slashCliKey],
@@ -1325,7 +1329,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const {
     type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft,
     submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow,
-    pullQueued, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation,
+    pullQueued, stopTurn, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation,
   } = useComposerSend({
     tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
     dictateButton, connectedRef, voiceRequest, voiceProgress, sendGuard, voiceOpen, sendTimers, commandSentAt,
@@ -2228,7 +2232,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const subagentWorking = openSubagentRunning(subagentPath, sessionEntries, sessionBusy);
   /** The working row's Stop, as the desktop Chat's: Esc stops the agent's
    * current turn. */
-  const stopButton = <button type="button" className="transcript-working-stop" disabled={!connected} onClick={() => type("\u001b")} title={t("terminal.reader.stopHint")}>
+  const stopButton = <button type="button" className="transcript-working-stop" disabled={!connected} onClick={stopTurn} title={t("terminal.reader.stopHint")}>
     {t("terminal.reader.stop")}{isUntested("mobile.focus.stop") && <em> · {t("mobile.focus.untested")}</em>}
   </button>;
   const subagentModel = workingModelName(subTranscript?.model);
@@ -2563,14 +2567,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                   <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} />
                   {/* A prompt sent while the agent worked waits below its work
                       until the desktop types it in: not taken yet. */}
-                  {/* Both act on Claude's whole queue, so every queued bubble
+                  {/* Both act on the CLI's whole queue, so every queued bubble
                       carries the same pair. */}
                   {queuedShown && <TranscriptTurns entries={sessionEntries} part="queued" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} onResend={resendPrompt} onEdit={startEdit} inbox={chatInbox}
-                    queuedActions={agentAtWork && !editing && agentKey === "claude" && <div className="transcript-queued-actions">
+                    queuedActions={agentAtWork && !editing && queueReadable && <div className="transcript-queued-actions">
                       {sendNowOffered && <button type="button" disabled={!connected || sendNowWaiting} onClick={sendQueuedNow}>{t("terminal.reader.sendNow")}</button>}
                       {sendNowWaiting && <em role="status">{t("mobile.chat.sendNowWaiting")}</em>}
                       <button type="button" disabled={!connected || queuePulling} onClick={pullQueued}>{t("terminal.reader.cancelEdit")}</button>
                       {isUntested("mobile.chat.queuedActions") && <em>{t("mobile.focus.untested")}</em>}
+                      {queueCli !== "claude" && isUntested("mobile.chat.queuedActionsOther") && <em>{t("mobile.focus.untested")}</em>}
                     </div>} />}
                 </div>)
             : painted.length === 0 && visibleChunks.length === 0 && earlier.open.length === 0

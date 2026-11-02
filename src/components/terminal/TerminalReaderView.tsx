@@ -12,7 +12,7 @@ import {
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
-import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
+import { NO_LIVE, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
 import { isAiOffRefusal } from "../../lib/aiSwitch";
 import { forgetSentPrompts, onSentPrompt, useSentPrompts, type SentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
@@ -60,7 +60,7 @@ import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
-import { pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
+import { pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
@@ -76,7 +76,7 @@ import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
-import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
+import { recordedRun, recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
 import type { AskedQuestion, RunningShell, TranscriptEntry } from "../../../mobile-web/src/api";
 import type { UntestedId } from "../../lib/untested";
@@ -859,18 +859,19 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   };
 
   /** The queued prompts come back into the composer, after what it holds,
-   * out of Claude's queue — so they are never sent as they were — and their
+   * out of the CLI's queue — so they are never sent as they were — and their
    * bubbles go. */
   const pullQueued = () => {
-    if (pulling.current || queued.length === 0 || subagent || sending) return;
+    const family = queueFamily(cli);
+    if (!family || pulling.current || queued.length === 0 || subagent || sending) return;
     pulling.current = true;
     const taken = [...queued];
-    void pullQueuedPrompts({ rows: paneRows, key: paneKey }, taken.map((item) => item.text)).then((result) => {
+    void pullQueuedPrompts({ rows: paneRows, key: paneKey }, taken.map((item) => item.text), undefined, family).then((result) => {
       if (!result.ok) {
         setSendError(t("terminal.reader.pullFailed"));
         return;
       }
-      if (result.pulled > 0) onPulled(taken.slice(taken.length - result.pulled).map((item) => item.id));
+      if (result.pulled > 0) onPulled(takenPrompts(taken, result).map((item) => item.id));
       const current = draftRef.current;
       const next = current ? `${current}\n${result.text}` : result.text;
       historyAt.current = null;
@@ -881,12 +882,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     }).finally(() => { pulling.current = false; });
   };
   pullRef.current = pullQueued;
-  /** ↑ in the empty box while Claude says messages wait in its queue. */
+  /** ↑ in the empty box while the CLI says messages wait in its queue. */
   const pullKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
     if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
     if (draft || historyAt.current !== null || queued.length === 0 || subagent || sending) return false;
     if (pulling.current) return true;
-    if (!queuedHintShown(paneRows())) return false;
+    const family = queueFamily(cli);
+    if (!family || !queuedHintShown(paneRows(), family)) return false;
     pullQueued();
     return true;
   };
@@ -1177,7 +1179,26 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * the terminal would get — it stops the turn, closes the CLI's own menus —
    * typed into the session, the chat staying shown (the prompt strip's switch
    * is the way back to the terminal). */
-  const pressEscape = useCallback(() => { void typeIntoPane(["\u001b"]).catch(() => {}); }, [typeIntoPane]);
+  /** The pane as `queuePull` drives it. */
+  const paneDriver = useCallback((): QueuePullDriver => ({
+    rows: () => {
+      const term = terminalFor(ptyId);
+      return term ? bufferRows(term.buffer.active) : [];
+    },
+    key: (key) => typeIntoPane([key]).then(() => true, () => false),
+  }), [ptyId, typeIntoPane]);
+  const tabFamily = queueFamily(agentFamily(tab?.cmd ?? ""));
+  /** Esc, the working row's Stop. With a queue on screen it is Send now where
+   * a lone Esc would not send it: Codex would drop it into a box the chat
+   * does not show, OpenCode asks for a second press. */
+  const pressEscape = useCallback(() => {
+    const driver = paneDriver();
+    if (tabFamily && tabFamily !== "claude" && queuedHintShown(driver.rows(), tabFamily)) {
+      void sendQueuedNow(driver, tabFamily);
+      return;
+    }
+    void typeIntoPane(["\u001b"]).catch(() => {});
+  }, [paneDriver, tabFamily, typeIntoPane]);
   /** The reasoning effort last seen: Claude Code prints it only on its busy
    * row, so the facts row also takes the one its transcript records (every
    * answer, and a `/effort`'s confirmation) and the one just picked there —
@@ -1290,7 +1311,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setAnsweredBy("step");
     void typePaneKeys(ptyId, keys).catch(answerFailed);
   };
-  const stop = () => void typePaneKeys(ptyId, [STOP_KEY]).catch(() => {});
+  const stop = pressEscape;
   const shownLive = picking ? NO_LIVE : live;
   /** The terminal has shown something the chat cannot draw for `STRAY_MS`:
    * the chat says so and offers the way to it. Not while a picker the facts
@@ -1649,12 +1670,17 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     chips: voiceChips,
   };
   const sessionAgents = useMemo(() => entries.filter((entry) => entry.kind === "agent"), [entries]);
-  /** What ↑ in the composer can take back out of Claude's queue: the prompts
+  /** The CLI whose queue the moves on it can read, the turn running: Claude,
+   * Codex, and OpenCode while its mini footer counts one. */
+  const queueCli = live.working && (tabFamily !== "opencode" || live.openCodeQueued) ? tabFamily : null;
+  /** What ↑ in the composer can take back out of the CLI's queue: the prompts
    * still sending while its turn runs. */
-  const queuedPrompts = useMemo(
-    () => (live.working && isClaudeCommand(tab?.cmd) ? pending : []),
-    [live.working, tab?.cmd, pending],
-  );
+  const queuedPrompts = useMemo(() => (queueCli ? pending : []), [queueCli, pending]);
+  /** A queued bubble's Send now. Claude's stop sends its queue by itself. */
+  const sendQueued = () => {
+    if (queueCli === "claude") pressEscape();
+    else if (queueCli) void sendQueuedNow(paneDriver(), queueCli);
+  };
   const dropPending = useCallback((ids: number[]) => {
     if (sendTarget) forgetSentPrompts(sendTarget, ids);
   }, [sendTarget]);
@@ -1691,7 +1717,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       const prefix = /^\/[\w-]+$/u.test(sent) ? sent : null;
       return entries.some((entry) =>
         entry.kind === "prompt"
-        && (recordsPrompt(entry, sent) || (!!prefix && !!slashCommand(entry.text)?.name.startsWith(prefix)))
+        && (recordsPrompt(entry, sent) || (!!prefix && !!slashCommand(entry.text)?.name.startsWith(prefix))
+          || recordedRun(entry, pending.map((other) => other.text.trim())).includes(pending.indexOf(item)))
         && (!entry.at || Date.parse(entry.at) >= item.sentAt - 5_000));
     };
     const left = pending.filter((item) => now - waitingSince(item) < PENDING_MS && !recorded(item));
@@ -2093,25 +2120,27 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           {!openStep && !browsed && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
-              {/* Queued behind a busy turn: Esc stops it and Claude sends the
-                  queue at once; ↑ in the empty composer takes it back. Both
-                  act on the whole queue; every queued bubble carries them. */}
-              {live.working && isClaudeCommand(tab?.cmd) && (
+              {/* Queued behind a busy turn: Esc stops it and the queue goes
+                  at once; ↑ in the empty composer takes it back. Both act on
+                  the whole queue; every queued bubble carries them. */}
+              {queueCli && (
                 <small className="terminal-reader-pending-hint">
                   {t("terminal.reader.sendNowHint")}
                   <UntestedTag id="terminal.reader.sendNowHint" />
                   <UntestedTag id="terminal.reader.queuePull" />
                 </small>
               )}
-              {live.working && isClaudeCommand(tab?.cmd) && (
+              {queueCli && (
                 <div className="terminal-reader-queued-actions">
-                  <button type="button" className="terminal-reader-stop" onClick={pressEscape} title={t("terminal.reader.sendNowTitle")}>
+                  <button type="button" className="terminal-reader-stop" onClick={sendQueued} title={t("terminal.reader.sendNowTitle")}>
                     {t("terminal.reader.sendNow")}
                   </button>
                   <button type="button" className="terminal-reader-stop" onClick={() => pullQueued.current?.()} title={t("terminal.reader.cancelEditTitle")}>
                     {t("terminal.reader.cancelEdit")}
                   </button>
-                  <UntestedTag id="terminal.reader.queuedActions" />
+                  {queueCli === "claude"
+                    ? <UntestedTag id="terminal.reader.queuedActions" />
+                    : <UntestedTag id="terminal.reader.queuedActionsOther" />}
                 </div>
               )}
               <small className="terminal-reader-time">{t("terminal.reader.sending")}</small>

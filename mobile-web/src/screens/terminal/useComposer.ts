@@ -22,7 +22,7 @@ import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../terminal/openCodeM
 import { agentFamily, agentInputWrites, bracketsAgentMessage } from "../../terminal/composer";
 import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../../terminal/commitPrompts";
 import { sendToSubagent, type SubagentSendFailure } from "../../terminal/subagentInput";
-import { pullQueuedPrompts, queuedHintShown } from "../../terminal/queuePull";
+import { finishSendNow, pullQueuedPrompts, queueFamily, queuedHintShown, takenPrompts } from "../../terminal/queuePull";
 import { inWorkflow, type SubagentStep } from "../../terminal/subagents";
 import {
   MAX_PENDING, arrivedPending, pendingPrompt, reworded, type PendingPrompt,
@@ -242,6 +242,8 @@ export function useComposerSend({
   storedEntries: TranscriptEntry[];
   queuedShown: boolean;
 }) {
+  /** The tab's CLI where its queue can be read off the screen. */
+  const queueCli = queueFamily(agentKey);
   const type = (value: string, prompt?: number) => {
     const delivered = write.current(value, prompt);
     // A prompt's frames report through their bubble; the composer's notice
@@ -500,11 +502,14 @@ export function useComposerSend({
    * made. A failure after the gap marks the bubble, as a dropped piece does. */
   const interruptWith = (text: string, id?: number) => {
     clearPending();
+    const release = codexQueueShown();
     if (!type(AGENT_INTERRUPT)) return false;
-    later(AGENT_INTERRUPT_GAP, () => {
+    const send = () => later(AGENT_INTERRUPT_GAP, () => {
       if (sendAgentText(text, id) || id === undefined) return;
       setPending((current) => current.map((entry) => entry.id === id ? { ...entry, failed: true, retrying: false } : entry));
     });
+    if (release) void releaseCodexQueue().finally(send);
+    else send();
     return true;
   };
   /** Send held down: interrupt and send. `fired` swallows the click the
@@ -590,6 +595,17 @@ export function useComposerSend({
       },
     );
   };
+  /** Codex's queue is on screen: an Esc would drop it into the CLI's input
+   * box, which a chat does not show, unsent. */
+  const codexQueueShown = () => queueCli === "codex" && queuedHintShown(screenRows.current(), "codex");
+  /** What sends that box on (`finishSendNow`). */
+  const releaseCodexQueue = () => finishSendNow({ rows: () => screenRows.current(), key: async (key) => type(key) }, "codex", SUBAGENT_WALK);
+  /** The working row's Stop: Esc, and what Claude does on its own for a
+   * queue, Codex's goes on too. */
+  const stopTurn = () => {
+    const release = codexQueueShown();
+    if (type(AGENT_INTERRUPT) && release) void releaseCodexQueue();
+  };
   /** The queued bubbles' Send now: Esc stops the agent's turn, and the CLI
    * then sends what waits in its queue at once (the desktop chat's Send now).
    * But Claude takes a queued message into the running turn at its next tool
@@ -611,33 +627,35 @@ export function useComposerSend({
       return;
     }
     // The phone's own read only says when to ask; the desktop reads again.
-    if (sendNowAsking.current || !queuedHintShown(screenRows.current())) return;
+    if (sendNowAsking.current || !queueCli || !queuedHintShown(screenRows.current(), queueCli)) return;
     sendNowAsking.current = sendControl.current({ type: "send_now", family: agentKey });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sendNowWaiting, liveBusy, queuedShown, liveScreen, agentKey]);
   sendNowAnswer.current = (sent) => {
     sendNowAsking.current = false;
-    if (sent) setSendNowWaiting(false);
+    if (!sent) return;
+    setSendNowWaiting(false);
+    if (queueCli === "codex") void releaseCodexQueue();
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => setSendNowWaiting(false), [tab.id]);
   /** The queued bubbles' Cancel and edit — the desktop chat's ↑ in its empty
-   * box: every prompt in Claude's queue comes back out of it into the
+   * box: every prompt in the CLI's queue comes back out of it into the
    * composer, after the draft, read off the phone's copy of the screen
    * (`queuePull`); the bubbles of those it held go. */
   const pullQueued = () => {
-    if (queuePulling) return;
+    if (queuePulling || !queueCli) return;
     const arrived = arrivedPending(storedEntries, pending);
     const queued = pending.filter((entry) => entry.held !== undefined && !arrived.has(entry.id));
     if (queued.length === 0) return;
     setQueueNote("");
     setQueuePulling(true);
-    void pullQueuedPrompts({ rows: () => screenRows.current(), key: async (key) => type(key) }, queued.map((entry) => entry.text), SUBAGENT_WALK).then((result) => {
+    void pullQueuedPrompts({ rows: () => screenRows.current(), key: async (key) => type(key) }, queued.map((entry) => entry.text), SUBAGENT_WALK, queueCli).then((result) => {
       if (!result.ok) {
         setQueueNote("terminal.reader.pullFailed");
         return;
       }
-      const taken = new Set(queued.slice(queued.length - result.pulled).map((entry) => entry.id));
+      const taken = new Set(takenPrompts(queued, result).map((entry) => entry.id));
       if (taken.size > 0) setPending((current) => current.filter((entry) => !taken.has(entry.id)));
       setDraft((current) => (current ? `${current}\n${result.text}` : result.text));
       if (!result.cleared) setQueueNote("terminal.reader.pullLeftover");
@@ -847,7 +865,7 @@ export function useComposerSend({
     setClearRefused(false);
     if (sendAgentText(NEW_CONVERSATION_COMMAND)) startedOver();
   };
-  return { type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft, submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow, pullQueued, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation };
+  return { type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft, submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow, pullQueued, stopTurn, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation };
 }
 
 /** The composer's chips and menus (Commit, the `/` menu, the Plan/Goal
