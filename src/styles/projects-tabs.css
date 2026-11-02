@@ -1017,6 +1017,27 @@
   text-align: left;
 }
 
+/* The card's two 10 px cuts are painted, so the card is not a rectangle, but a
+   `box-shadow` is: it is never drawn inside the element's own box, so each cut
+   showed a pale triangle with square edges against the darkened rim around it.
+   `drop-shadow` follows the painted shape, cuts included. `:root:root` outranks
+   the glass themes' `[data-theme] .project-pill-popup` rule in themes.css. The
+   card is small and `pointer-events: none`; only its opacity animates. */
+:root:root .project-pill-popup {
+  box-shadow: none;
+  filter: var(--shadow-2-drop);
+}
+
+/* `direction: rtl` is only there so a long path loses its head, not its tail.
+   Left alone it also throws the path's edge slashes to the far side
+   (`/home/me/proj` reads `home/me/proj/`): a neutral at the end of an RTL line
+   takes the line's direction. A left-to-right mark at each end makes them
+   resolve with the text beside them. Generated, so copying takes none of it. */
+.pill-popup-path::before,
+.pill-popup-path::after {
+  content: "\200E";
+}
+
 .pill-popup-path-row {
   display: flex;
   align-items: baseline;

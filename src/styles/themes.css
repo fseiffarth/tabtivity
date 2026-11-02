@@ -147,6 +147,7 @@
      light themes override with softer, bluer-grey shadows below. */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.24), 0 1px 3px rgba(0, 0, 0, 0.18);
   --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.22);
+  --shadow-2-drop: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.32)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.22));
   --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
   /* Motion: one quick ease for hover/press/focus feedback everywhere, one
      slower ease for layout-level movement (panel dock, drawer slide). */
@@ -435,6 +436,7 @@
      a shadow with a hue in it is the one thing that would tint this theme. */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.1);
   --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  --shadow-2-drop: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.12)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.08));
   --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.1);
   --border-color: #d4d4d4;
   --border-subtle: #e8e8e8;
@@ -519,6 +521,7 @@
   --bg-header-solid: #e8f7ff;
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
   --shadow-2: 0 4px 16px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.08);
+  --shadow-2-drop: drop-shadow(0 4px 8px rgba(16, 24, 40, 0.12)) drop-shadow(0 2px 3px rgba(16, 24, 40, 0.08));
   --shadow-3: 0 16px 48px rgba(16, 24, 40, 0.18), 0 4px 12px rgba(16, 24, 40, 0.1);
   --border-color: rgba(9, 105, 218, 0.28);
   --border-subtle: #d8e5f0;
@@ -565,6 +568,7 @@
   --bg-header-solid: #f2effa;
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
   --shadow-2: 0 4px 16px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.08);
+  --shadow-2-drop: drop-shadow(0 4px 8px rgba(16, 24, 40, 0.12)) drop-shadow(0 2px 3px rgba(16, 24, 40, 0.08));
   --shadow-3: 0 16px 48px rgba(16, 24, 40, 0.18), 0 4px 12px rgba(16, 24, 40, 0.1);
   --border-color: #ddd6f0;
   --border-subtle: #ebe7f6;
