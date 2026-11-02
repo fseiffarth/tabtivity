@@ -56,11 +56,10 @@ import {
 import { allNodeIds as nodeIdsOf } from "../../stores/tabs/layoutTree";
 import { setDetachedViewerState } from "../../stores/tabs/viewerState";
 import { withdrawnTabKinds } from "../../lib/experimental";
-import { PLATFORM } from "../../lib/platform";
 import { useTabLandStore } from "../../stores/drag/tabLand";
 import { startFocusTracking, useQuiesce } from "../../stores/power";
-import { clearStrayFullscreen } from "../../lib/window/strayFullscreen";
-import { useFullscreenMode } from "../../lib/window/fullscreenMode";
+import { startStrayFullscreenGuard } from "../../lib/window/strayFullscreen";
+import { startBoundsStream } from "../../lib/window/boundsStream";
 import { applyFastModeAttribute, useFastMode } from "../../lib/agents/fastMode";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useProjectsStore } from "../../stores/projects";
@@ -220,40 +219,11 @@ export function DetachedApp({ param }: Props) {
   // which is why the backend clears the main window's the same read-free way.
   // What is deliberately NOT cleared — a talk in progress, the page's own DOM
   // fullscreen — is the pure `mayClearStrayFullscreen`; see `lib/window/strayFullscreen`.
-  useEffect(() => {
-    if (PLATFORM === "macos") return;
-    const win = getCurrentWindow();
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // Every path in here is wrapped, and that is not defensive habit: this effect
-    // runs in a window whose ONLY content is one React root, so a throw out of it
-    // unmounts the tree and leaves a grey OS window with nothing on it and no
-    // message — observed, from a broken intermediate module during an HMR update.
-    // A guard whose failure mode is worse than the state it guards against is not
-    // worth having, so it can only ever decline to run.
-    const check = () => {
-      try {
-        if (disposed) return;
-        void clearStrayFullscreen();
-      } catch {
-        /* never take the window down over a fullscreen check */
-      }
-    };
-    const schedule = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(check, 250);
-    };
-    check();
-    const unlisteners = [
-      subscribeTauri(() => win.onResized(schedule)),
-      subscribeTauri(() => win.onFocusChanged(({ payload }) => payload && schedule())),
-    ];
-    return () => {
-      disposed = true;
-      if (timer) clearTimeout(timer);
-      for (const fn of unlisteners) fn();
-    };
-  }, []);
+  //
+  // NOT on native Wayland (`strayGuardMayAutoArm`): there the backend fullscreens
+  // a popout on purpose to place it on its screen, and this guard cannot tell
+  // that from a stray one.
+  useEffect(() => startStrayFullscreenGuard(getCurrentWindow()), []);
 
   // Per-window zoom via Ctrl +/- / Ctrl+0, handled before any editable-target
   // guard (like F11) so it works from a focused terminal too — the browser-zoom
@@ -363,65 +333,13 @@ export function DetachedApp({ param }: Props) {
   // persistence owner) so it reopens at the same place/size after a restart. We
   // read position/size straight from the move/resize event payloads (no extra
   // window-getter permissions) and debounce so a drag doesn't flood the channel.
-  useEffect(() => {
-    const win = getCurrentWindow();
-    let pos: { x: number; y: number } | null = null;
-    // Group B #236: seeded from the window's ACTUAL physical size, not from the
-    // builder's LOGICAL default. `onMoved`/`onResized` payloads are physical, so
-    // a popout that was moved but never resized used to flush the literal
-    // 900×640 as a physical rect — and respawned at half size on a 2× display.
-    // Until the read lands, a flush is refused rather than guessed at.
-    let size: { w: number; h: number } | null = null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let cancelled = false;
-    win
-      .innerSize()
-      .then((s) => {
-        if (!cancelled && !size) size = { w: s.width, h: s.height };
-      })
-      .catch(() => {});
-    const flush = () => {
-      if (!pos || !size) return;
-      // A fullscreen popout's rect is its monitor, not a place to reopen at.
-      if (useFullscreenMode.getState().on) return;
-      // #238: a park (`hide()`) / unpark (`show()`) can fire Moved/Resized with
-      // whatever geometry the WM used while the window was off screen. Persisting
-      // that would move the popout on the next launch, so a flush is only taken
-      // while the window is actually visible.
-      void detachedWindowVisible(win)
-        .then((visible) => {
-          if (!visible || cancelled || !pos || !size) return;
-          void emit(DETACHED_BOUNDS, {
-            scope: param.scope,
-            groupId: param.groupId,
-            bounds: { x: pos.x, y: pos.y, w: size.w, h: size.h },
-          });
-        })
-        .catch(() => {});
-    };
-    const schedule = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(flush, 300);
-    };
-    const unMoved = subscribeTauri(() =>
-      win.onMoved(({ payload }) => {
-        pos = { x: payload.x, y: payload.y };
-        schedule();
+  useEffect(
+    () =>
+      startBoundsStream(getCurrentWindow(), (bounds) => {
+        void emit(DETACHED_BOUNDS, { scope: param.scope, groupId: param.groupId, bounds });
       }),
-    );
-    const unResized = subscribeTauri(() =>
-      win.onResized(({ payload }) => {
-        size = { w: payload.width, h: payload.height };
-        schedule();
-      }),
-    );
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      unMoved();
-      unResized();
-    };
-  }, [param.scope, param.groupId]);
+    [param.scope, param.groupId],
+  );
 
   // #239: track whether this window is on screen (parked by a project switch,
   // or minimised), so the panes below can stop streaming and polling for a

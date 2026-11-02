@@ -39,8 +39,10 @@
  * which is exactly the leak this then rescues.
  */
 
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, type Window } from "@tauri-apps/api/window";
+import { subscribeTauri } from "../../hooks/useTauriListener";
 import { PLATFORM } from "../platform";
+import { desktopCoordinatesSupported } from "./coords";
 import { usePresentationStore } from "../../stores/viewers/presentation";
 import { useFullscreenMode } from "./fullscreenMode";
 
@@ -95,6 +97,47 @@ export function fillsScreen(
   );
 }
 
+/**
+ * Is the self-arming guard (mount, every settled resize, focus regain) allowed
+ * to run in this session? Not on macOS, and not on native Wayland.
+ *
+ * On native Wayland the BACKEND puts a popout on its screen by making it
+ * fullscreen on that output and leaving fullscreen once the compositor has
+ * placed it (`present_on_monitor`). The guard cannot tell that deliberate
+ * fullscreen from a stray one - `isFullscreen()` is a cached lie, see the module
+ * note - and its resize trigger fires on the placement's own fullscreen entry,
+ * so it unfullscreened the window before the compositor had placed it (GNOME
+ * then puts it on the pointer's screen) and left the backend waiting for a
+ * state that never came. The rescue it exists for is X11 (the window manager
+ * taking MOVE off `_NET_WM_ALLOWED_ACTIONS`) and Windows; Wayland has no such
+ * atom, and the rescue that remains there is the title-bar press (`DetachedCenterPanel`), which the
+ * user starts and so never races a placement.
+ *
+ * "Native Wayland" is the capability the drag code already uses: GDK's backend
+ * is not X11 (`desktop_coordinates_supported`). A backend too old to answer
+ * reads as unsupported, so the guard stays off until the app is restarted into
+ * the updated binary.
+ */
+export async function strayGuardMayAutoArm(): Promise<boolean> {
+  if (PLATFORM === "macos") return false;
+  return desktopCoordinatesSupported();
+}
+
+/**
+ * Is a window of this PHYSICAL size filling its monitor - the shape a popout
+ * has while the backend holds it fullscreen to place it? `dpr` converts to the
+ * CSS px `window.screen` is measured in. Never fullscreen-sized while the
+ * screen reports nothing.
+ */
+export function sizeFillsScreen(
+  size: { w: number; h: number },
+  dpr: number,
+  screen: { w: number; h: number },
+): boolean {
+  const scale = dpr > 0 && Number.isFinite(dpr) ? dpr : 1;
+  return fillsScreen({ w: size.w / scale, h: size.h / scale }, screen);
+}
+
 /** [`fillsScreen`] against this window's live viewport. */
 export function windowFillsScreen(): boolean {
   return fillsScreen(
@@ -128,4 +171,52 @@ export async function clearStrayFullscreen(): Promise<void> {
   } catch {
     /* a window that won't answer is not a reason to take anything down */
   }
+}
+
+/**
+ * The popout's continuous guard: clear a stray fullscreen at mount, 250 ms after
+ * a resize settles and on focus regain (see the `DetachedApp` note this moved
+ * out of). Returns the disposer. Armed only where [`strayGuardMayAutoArm`] says.
+ *
+ * Every path in here is wrapped, and that is not defensive habit: the effect
+ * runs in a window whose ONLY content is one React root, so a throw out of it
+ * unmounts the tree and leaves a grey OS window with nothing on it and no
+ * message (observed, from a broken intermediate module during an HMR update). A
+ * guard whose failure mode is worse than the state it guards against is not
+ * worth having, so it can only ever decline to run.
+ */
+export function startStrayFullscreenGuard(
+  win: Pick<Window, "onResized" | "onFocusChanged">,
+  settleMs = 250,
+): () => void {
+  let disposed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let unlisteners: Array<() => void> = [];
+  const check = () => {
+    try {
+      if (disposed) return;
+      void clearStrayFullscreen();
+    } catch {
+      /* never take the window down over a fullscreen check */
+    }
+  };
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(check, settleMs);
+  };
+  void strayGuardMayAutoArm()
+    .then((arm) => {
+      if (!arm || disposed) return;
+      check();
+      unlisteners = [
+        subscribeTauri(() => win.onResized(schedule)),
+        subscribeTauri(() => win.onFocusChanged(({ payload }) => payload && schedule())),
+      ];
+    })
+    .catch(() => {});
+  return () => {
+    disposed = true;
+    if (timer) clearTimeout(timer);
+    for (const fn of unlisteners) fn();
+  };
 }
