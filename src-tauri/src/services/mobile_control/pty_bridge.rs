@@ -172,31 +172,47 @@ pub enum AttachTarget {
 }
 
 /// A CLI's sign on its screen that a message typed mid-turn still waits in
-/// its queue: a row starting with `row_start` that holds `words`. While it
-/// shows, Esc stops the turn and the CLI sends the queue at once; once the
-/// turn has taken the message in (Claude does at its next tool call), the
-/// sign is gone and an Esc would stop the turn that is to answer it — so Send
-/// now presses only while it shows (`AttachTarget::send_now`).
+/// its queue: a row starting with `row_start` that holds `words` and, after
+/// them, `row_tail`. While it shows, Esc stops the turn and the queue goes on;
+/// once the turn has taken the message in (Claude does at its next tool
+/// call), the sign is gone and an Esc would stop the turn that is to answer
+/// it — so Send now presses only while it shows (`AttachTarget::send_now`).
 #[derive(Debug, Clone, Copy)]
 struct QueueHint {
     row_start: &'static str,
     words: &'static str,
+    row_tail: &'static str,
+    /// Esc presses a stop takes, [`ESC_GAP`] apart.
+    presses: u8,
 }
 
-/// Which CLIs Send now serves (probed 2026-10-25). Claude Code 2.1.310 holds
+/// Between the Escs of a stop that takes two: tmux hands two in one call to
+/// the TUI as a single sequence, which OpenCode ignores.
+const ESC_GAP: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Which CLIs Send now serves (probed 2026-11-02). Claude Code 2.1.310 holds
 /// a mid-turn message until its next tool call and says so in its empty box.
-/// Codex 0.164 and Copilot take one into the running turn at once, so there
-/// is nothing to send now; OpenCode queues one but marks it nowhere a screen
-/// can read. Any other CLI is unprobed.
+/// Codex 0.166 lists what was queued with Tab (how a chat types it,
+/// `agentQueueWrites`) under a heading of its own; Esc drops that list back
+/// into its box, and the phone then presses Enter (`finishSendNow`). OpenCode
+/// 2.2.5's mini footer counts what waits and needs Esc twice; its full TUI
+/// marks a queue nowhere, and neither does Copilot. Any other CLI is unprobed.
 fn queue_hint(family: &str) -> Option<QueueHint> {
     match family {
-        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages" }),
+        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages", row_tail: "", presses: 1 }),
+        "codex" => Some(QueueHint { row_start: "•", words: "Queued follow-up inputs", row_tail: "", presses: 1 }),
+        // The footer's opening words change with the width: `esc interrupt`,
+        // `esc stop`.
+        "opencode" => Some(QueueHint { row_start: "", words: " · ctrl+x q ", row_tail: " pending", presses: 2 }),
         _ => None,
     }
 }
 
 fn queue_hint_shown(screen: &str, hint: &QueueHint) -> bool {
-    screen.lines().any(|row| row.starts_with(hint.row_start) && row.contains(hint.words))
+    screen.lines().any(|row| {
+        let Some(rest) = row.strip_prefix(hint.row_start) else { return false };
+        rest.find(hint.words).is_some_and(|at| rest[at + hint.words.len()..].contains(hint.row_tail))
+    })
 }
 
 /// The two one-shots the bridge runs beside the attach.
@@ -242,8 +258,9 @@ impl AttachTarget {
 
     /// Send now: Esc straight into the pane (`send-keys`, so tmux's
     /// escape-time does not hold it back as an attach client's Esc is) while
-    /// `hint` is on its screen; whether it went. A local check and press are
-    /// two tmux calls milliseconds apart; a host's are one script on the host
+    /// `hint` is on its screen, as often as the CLI's stop takes; whether it
+    /// went. A local check and press are tmux calls milliseconds apart; a
+    /// host's are one script on the host
     /// (`ssh_exec::host_tmux_send_now_command`), under the probe deadline.
     fn send_now(&self, hint: QueueHint) -> bool {
         match self {
@@ -254,12 +271,17 @@ impl AttachTarget {
                 if !screen.status.success() || !queue_hint_shown(&String::from_utf8_lossy(&screen.stdout), &hint) {
                     return false;
                 }
-                let mut press = crate::services::tmux_local::tmux_command();
-                press.args(["send-keys", "-t", &format!("={name}:"), "Escape"]);
-                press.status().is_ok_and(|status| status.success())
+                (0..hint.presses).all(|press| {
+                    if press > 0 {
+                        std::thread::sleep(ESC_GAP);
+                    }
+                    let mut key = crate::services::tmux_local::tmux_command();
+                    key.args(["send-keys", "-t", &format!("={name}:"), "Escape"]);
+                    key.status().is_ok_and(|status| status.success())
+                })
             }
             Self::Host { name, ssh } => {
-                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words) else {
+                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words, hint.row_tail, hint.presses) else {
                     return false;
                 };
                 let Ok(args) = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, false, &script) else {
@@ -1705,10 +1727,33 @@ mod tests {
         assert!(!queue_hint_shown("❯ Reply only BANANA\n✽ Osmosing… (4s)\n───\n❯ \n───", &hint));
         // The words in the conversation are not the box.
         assert!(!queue_hint_shown("  it said Press up to edit queued messages\n❯ ", &hint));
-        // CLIs that take a mid-turn message in at once, or show no queue.
-        for family in ["codex", "copilot", "opencode", "gemini", "agent"] {
+        // CLIs that mark no queue on screen, or were never probed.
+        for family in ["copilot", "gemini", "agent"] {
             assert!(queue_hint(family).is_none(), "{family}");
         }
+    }
+
+    /// Screens as Codex 0.166.0 and OpenCode mini 2.2.5 drew them.
+    #[test]
+    fn send_now_reads_codex_and_opencode_queues_off_their_own_rows() {
+        let codex = queue_hint("codex").expect("codex has a hint");
+        assert_eq!(codex.presses, 1);
+        assert!(queue_hint_shown("• Working (5s • esc to interrupt)\n\n• Queued follow-up inputs\n  ↳ second\n    shift+← edit last queued message\n\n› Ask Codex", &codex));
+        // Prompts sent with Enter: Tabtivity's chat never leaves them there.
+        assert!(!queue_hint_shown("• Messages to be submitted after next tool call\n  ↳ second\n\n› Ask Codex", &codex));
+        // The heading quoted in the agent's own answer.
+        assert!(!queue_hint_shown("  it said • Queued follow-up inputs\n› Ask Codex", &codex));
+
+        let opencode = queue_hint("opencode").expect("opencode has a hint");
+        assert_eq!(opencode.presses, 2);
+        assert!(queue_hint_shown("› first\n┃\n🯦 esc interrupt · ctrl+x q 2 pending · Build · stub · Ollama · ctrl+p menu", &opencode));
+        // A phone-wide pane shortens the footer's opening words.
+        assert!(queue_hint_shown("🯦 esc stop · ctrl+x q 1 pending · Build · stub", &opencode));
+        // Nothing waits, and the full TUI draws neither.
+        assert!(!queue_hint_shown("🯦 esc interrupt · Build · stub · Ollama · ctrl+p menu", &opencode));
+        assert!(!queue_hint_shown("   ■⬝⬝⬝⬝⬝⬝⬝ esc interrupt     ↓ 1 shell  ctrl+p commands", &opencode));
+        // The key named in prose, with no count after it.
+        assert!(!queue_hint_shown("the panel opens with · ctrl+x q here", &opencode));
     }
 
     /// The local check and press against the real tmux (run with

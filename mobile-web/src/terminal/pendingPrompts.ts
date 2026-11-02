@@ -83,6 +83,20 @@ export function recordsPrompt(entry: Pick<TranscriptEntry, "text" | "cut">, text
   return entry.cut ? sent.indexOf(last, at) >= 0 : sent.endsWith(last) && sent.length - last.length >= at;
 }
 
+/** Which of `texts` one record holds together, in order: stopped with a
+ * queue, Codex sends what waited as one message, a line each. Empty when it
+ * holds no two of them. Shared with the desktop Reader's sending bubbles. */
+export function recordedRun(entry: Pick<TranscriptEntry, "text" | "cut">, texts: readonly string[]): number[] {
+  for (let from = 0; from < texts.length - 1; from += 1) {
+    for (let to = texts.length; to > from + 1; to -= 1) {
+      if (recordsPrompt(entry, texts.slice(from, to).join("\n"))) {
+        return Array.from({ length: to - from }, (_, index) => from + index);
+      }
+    }
+  }
+  return [];
+}
+
 function isCopy(entry: TranscriptEntry, text: string): boolean {
   return entry.kind === "prompt" && entry.pending === undefined && recordsPrompt(entry, text);
 }
@@ -134,6 +148,20 @@ function takeRecords(entries: readonly TranscriptEntry[], pending: readonly Pend
       if (prompt.held !== undefined) shown[record] = bubble(prompt, true);
       else shown.splice(record, 1);
       arrived.add(prompt.id);
+    }
+  }
+  // Several held prompts in one record: each keeps its bubble, in order, in
+  // the record's place.
+  const waiting = pending.filter((prompt) => prompt.held !== undefined && !arrived.has(prompt.id));
+  for (let from = 0; from < waiting.length - 1; from += 1) {
+    for (let to = waiting.length; to > from + 1; to -= 1) {
+      const run = waiting.slice(from, to);
+      const record = recordOf({ ...run[0], text: run.map((prompt) => prompt.text).join("\n"), seen: 0 }, shown);
+      if (record < 0) continue;
+      shown.splice(record, 1, ...run.map((prompt) => bubble(prompt, true)));
+      for (const prompt of run) arrived.add(prompt.id);
+      from = to - 1;
+      break;
     }
   }
   return { shown, arrived };
