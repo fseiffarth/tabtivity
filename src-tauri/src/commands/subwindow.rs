@@ -31,9 +31,12 @@ use tauri::{
 };
 
 use crate::commands::apps::{
-    TrackedWindow, WindowRegistry, WindowRegistryState, ORIGIN_DETACHED_SUBWINDOW,
+    DetachedBounds, TrackedWindow, WindowRegistry, WindowRegistryState, ORIGIN_DETACHED_SUBWINDOW,
 };
 use crate::commands::workspace::WorkspaceStateArc;
+#[cfg(target_os = "linux")]
+use crate::services::popout_screen::{identity_hash, match_monitor};
+use crate::services::popout_screen::{self, Screen, Verdict, View, Why};
 use crate::services::window_state::MonitorRect;
 
 /// Stable Tauri window label for a detached group. One window per (project,
@@ -124,6 +127,7 @@ pub fn release_detached_entry(reg: &mut WindowRegistry, label: &str) -> Option<u
     // A handshake still in flight has nothing left to retire, and the label's
     // next window must announce its own readiness.
     reg.detached_retire.forget(label);
+    reg.detached_screens.release(label);
     reg.windows.remove(label).and_then(|w| w.window_id)
 }
 
@@ -176,9 +180,11 @@ pub fn release_detach_reservation(reg: &mut WindowRegistry, label: &str) {
 pub fn on_detached_destroyed(reg: &mut WindowRegistry, label: &str) -> (Option<u64>, bool) {
     if reg.detached_retire.finish(label) {
         let kept = reg.detached_bounds.get(label).copied();
+        let kept_id = reg.detached_screens.id(label);
         let wid = release_detached_entry(reg, label);
         if let Some(b) = kept {
             reg.detached_bounds.insert(label.to_string(), b);
+            reg.detached_screens.set_id(label, kept_id);
         }
         (wid, false)
     } else {
@@ -294,12 +300,39 @@ pub async fn detach_subwindow(
     // The first respawn after a restart has no capture yet: it takes the screen
     // and size the saved layout kept from the last quit, so it too comes back on
     // its own screen rather than the pointer's.
-    let saved = win_registry
-        .lock_ok()
-        .detached_bounds
-        .get(&label)
-        .copied()
-        .or_else(|| restart_bounds(window_positions_readable(), width, height, monitor));
+    //
+    // That respawn's screen is the one this machine kept the last time the
+    // popout's placement settled or the user moved it (`popout_screen`), which
+    // outranks the saved layout's: the layout only learns it at a clean quit.
+    let kept = (!window_positions_readable())
+        .then(|| {
+            crate::services::popout_screen::load_kept(
+                &crate::services::popout_screen::kept_path(),
+                &label,
+            )
+        })
+        .flatten();
+    let saved = {
+        let mut reg = win_registry.lock_ok();
+        let mut saved = reg.detached_bounds.get(&label).copied();
+        if saved.is_none_or(|b| b.monitor.is_none()) {
+            if let Some((from_layout, id)) =
+                restart_bounds(window_positions_readable(), width, height, monitor, kept)
+            {
+                // Record it now: a popout retired before its placement ran
+                // (a fast A to B to A) must still have this screen to come back to.
+                let merged = DetachedBounds {
+                    w: saved.map_or(from_layout.w, |b| b.w),
+                    h: saved.map_or(from_layout.h, |b| b.h),
+                    ..from_layout
+                };
+                reg.detached_bounds.insert(label.clone(), merged);
+                reg.detached_screens.set_id(&label, id);
+                saved = Some(merged);
+            }
+        }
+        saved
+    };
     let saved_size = saved.map(|b| (f64::from(b.w), f64::from(b.h)));
     // A Wayland respawn (the scope just came back) must not take the focus
     // the user is typing into in the main window.
@@ -418,6 +451,8 @@ pub async fn detach_subwindow(
         let mut reg = win_registry.lock_ok();
         reg.windows.insert(label.clone(), win);
         reg.detached_building.remove(&label);
+        // Nothing GDK says of it counts until it has been placed and settled.
+        reg.detached_screens.built(&label, std::time::Instant::now());
         // Wayland: the scope this popout belongs to was left while it was
         // being built (a respawn racing the next switch). No sync will look at
         // it again, so retire it here; it is brand new, so there is no unsaved
@@ -445,29 +480,38 @@ pub async fn detach_subwindow(
     Ok(label)
 }
 
-/// The Wayland record a restart respawns from: the saved layout's screen and
-/// size, when this run has no capture of its own. Nothing where positions are
-/// readable (the saved rect places it) or without a screen and a real size.
+/// The Wayland record a restart respawns from, when this run has no capture of
+/// its own, with the identity of its screen (0 = unknown). The screen is the
+/// one the kept file holds (written when a placement settled or the user moved
+/// the popout, so it survives a signal or a crash), else the saved layout's.
+/// The size is the layout's when real, else the kept file's. Nothing where
+/// positions are readable (the saved rect places it) or without a screen and a
+/// real size.
 fn restart_bounds(
     positions_readable: bool,
     width: Option<f64>,
     height: Option<f64>,
     monitor: Option<MonitorRect>,
-) -> Option<crate::commands::apps::DetachedBounds> {
+    kept: Option<crate::services::popout_screen::KeptScreen>,
+) -> Option<(DetachedBounds, u64)> {
     if positions_readable {
         return None;
     }
-    let (monitor, w, h) = (monitor?, width?, height?);
-    if !(w >= 1.0 && h >= 1.0 && w.is_finite() && h.is_finite()) || monitor.w == 0 || monitor.h == 0 {
+    let (monitor, id) = match kept.and_then(|k| k.screen()) {
+        Some(s) => (s.rect, s.id),
+        None => (monitor?, 0),
+    };
+    let real = |w: f64, h: f64| w >= 1.0 && h >= 1.0 && w.is_finite() && h.is_finite();
+    let (w, h) = match (width, height) {
+        (Some(w), Some(h)) if real(w, h) => (w as u32, h as u32),
+        _ => kept
+            .filter(|k| k.width >= 1 && k.height >= 1)
+            .map(|k| (k.width, k.height))?,
+    };
+    if monitor.w == 0 || monitor.h == 0 {
         return None;
     }
-    Some(crate::commands::apps::DetachedBounds {
-        x: 0,
-        y: 0,
-        w: w as u32,
-        h: h as u32,
-        monitor: Some(monitor),
-    })
+    Some((DetachedBounds { x: 0, y: 0, w, h, monitor: Some(monitor) }, id))
 }
 
 /// Force a fresh popout's first paint shortly after creation, deferred on a
@@ -538,8 +582,74 @@ fn gdk_monitor_rect(m: &gtk::gdk::Monitor) -> MonitorRect {
     }
 }
 
+/// A monitor with its identity: the rect plus a hash of its make and model,
+/// which survive a resolution, scale or arrangement change that the rect does not.
+#[cfg(target_os = "linux")]
+fn gdk_screen(m: &gtk::gdk::Monitor) -> Screen {
+    use gtk::gdk::prelude::MonitorExt;
+    Screen {
+        rect: gdk_monitor_rect(m),
+        id: identity_hash(m.manufacturer().as_deref(), m.model().as_deref()),
+    }
+}
+
+/// Every connected monitor, in GDK's order. Main thread (GTK).
+#[cfg(target_os = "linux")]
+fn live_screens(d: &gtk::gdk::Display) -> Vec<Screen> {
+    (0..d.n_monitors())
+        .filter_map(|i| d.monitor(i))
+        .map(|m| gdk_screen(&m))
+        .collect()
+}
+
+/// The index into GDK's monitors of the screen a popout's record names — by
+/// make and model first, so a resolution or scale change does not lose it to
+/// the main window's screen ([`match_monitor`]). Main thread (GTK).
+#[cfg(target_os = "linux")]
+fn target_monitor_index(
+    d: &gtk::gdk::Display,
+    app: &AppHandle,
+    label: &str,
+    rect: MonitorRect,
+) -> Option<i32> {
+    let id = app.state::<WindowRegistryState>().lock_ok().detached_screens.id(label);
+    match_monitor(&Screen { rect, id }, &live_screens(d)).map(|i| i as i32)
+}
+
+/// One look at a popout, for [`popout_screen::PopoutScreens::observe`]: is it
+/// shown and fullscreen, which monitor GDK says its surface is on, and its size.
+/// A window that is not mapped reads as not shown, and GDK's answer for one
+/// that entered no output (the origin monitor) is never trusted on its own: the
+/// observation also needs the window to have settled. Main thread (GTK).
+#[cfg(target_os = "linux")]
+fn sample_popout(win: &tauri::WebviewWindow) -> View {
+    use gtk::prelude::*;
+    let blind = View { shown: false, fullscreen: false, seen: None, twins: false, size: None };
+    let Some(gdk_win) = win.gtk_window().ok().and_then(|w| w.window()) else {
+        return blind;
+    };
+    let d = gdk_win.display();
+    let seen = d.monitor_at_window(&gdk_win).map(|m| gdk_screen(&m));
+    let twins = seen.is_some_and(|s| s.id != 0 && live_screens(&d).iter().filter(|m| m.id == s.id).count() > 1);
+    View {
+        shown: win.is_visible().unwrap_or(false) && gdk_win.is_viewable(),
+        fullscreen: gdk_win.state().contains(gtk::gdk::WindowState::FULLSCREEN),
+        seen,
+        twins,
+        size: win.inner_size().ok().map(|s| (s.width, s.height)),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sample_popout(_win: &tauri::WebviewWindow) -> View {
+    View { shown: false, fullscreen: false, seen: None, twins: false, size: None }
+}
+
 /// The screen GDK says `win` is on. On Wayland that is the output its surface
-/// last entered — the one thing a client there knows about where it is.
+/// last entered — the one thing a client there knows about where it is — or,
+/// for a surface that entered none, a geometric guess (the origin monitor).
+/// A raw reading, good for "which screen is the main window on"; a popout's
+/// RECORD never comes from it, only from [`record_popout`].
 /// Main thread (GTK).
 #[cfg(target_os = "linux")]
 fn gdk_monitor_of(win: &tauri::WebviewWindow) -> Option<MonitorRect> {
@@ -795,6 +905,7 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
             say("window gone before the placement started".to_string());
             return;
         };
+        mark_placing(&on_main, &label, true);
         // The screen it was retired from, or — that display unplugged since —
         // the main window's, so it comes back as its own window beside the main
         // one rather than on whatever screen the pointer is on.
@@ -804,7 +915,7 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
                 (0..d.n_monitors())
                     .find(|&i| d.monitor(i).is_some_and(|m| gdk_monitor_rect(&m) == rect))
             };
-            match index_of(monitor) {
+            match target_monitor_index(&d, &on_main, &label, monitor) {
                 Some(i) => Some((i, None)),
                 None => main
                     .as_ref()
@@ -816,6 +927,7 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
             (index, win.gtk_window(), gtk::gdk::Screen::default())
         else {
             say("no screen to name (the saved one and the main window's are both unknown to GDK): plain show".to_string());
+            mark_placing(&on_main, &label, false);
             let _ = win.show();
             spawn_first_paint_nudge(on_main.clone(), label);
             return;
@@ -997,10 +1109,14 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
             if gone_app.get_webview_window(&gone_label).is_none() {
                 say("window gone: placement stopped".to_string());
                 run.hop.set(MonitorHop::Done);
+                mark_placing(&gone_app, &gone_label, false);
                 return gtk::glib::ControlFlow::Break;
             }
             step(None);
             if run.hop.get() == MonitorHop::Done {
+                // Only here: restoring the size comes before the landing check
+                // and any retry, and the window is still moving until then.
+                mark_placing(&gone_app, &gone_label, false);
                 gtk::glib::ControlFlow::Break
             } else {
                 gtk::glib::ControlFlow::Continue
@@ -1045,6 +1161,9 @@ fn fit_detached_bounds(
     width: Option<f64>,
     height: Option<f64>,
 ) -> (Option<Position>, Option<Size>) {
+    if !window_positions_readable() {
+        return wayland_detached_fit(width, height);
+    }
     let (pos, size) = (detached_position(x, y), detached_size(width, height));
     let (Some(_), Some(_)) = (&pos, &size) else {
         // A partial rect was never a restore — nothing to validate.
@@ -1069,6 +1188,16 @@ fn fit_detached_bounds(
         ),
         None => (None, None),
     }
+}
+
+/// What a native-Wayland respawn applies of its saved rect: the size, as it
+/// was, and no position. There the saved x/y are (0,0) filler, so fitting the
+/// rect to the monitors would measure it against the ORIGIN monitor and shrink
+/// a big popout to that one's size; and the compositor drops a position
+/// anyway. The size was real on the screen the popout comes back to
+/// (`present_on_monitor`); a screen that is gone caps it there (`fit_size_to`).
+fn wayland_detached_fit(width: Option<f64>, height: Option<f64>) -> (Option<Position>, Option<Size>) {
+    (None, detached_size(width, height))
 }
 
 /// `w`×`h` centred on the screen the main window is on (physical px), for a
@@ -1619,26 +1748,103 @@ fn emit_retire_withdrawn(app: &AppHandle, label: &str) {
     let _ = app.emit(&format!("{RETIRE_WITHDRAWN_EVENT_PREFIX}{label}"), ());
 }
 
-/// The size and screen a Wayland popout has right now, kept for the moment it
-/// comes back (a respawn, or the re-show of a hidden one). The screen it is
-/// on, so it lands there again rather than wherever GNOME puts new windows
-/// (the pointer's screen). A surface that never entered an output keeps the
-/// last one known.
-fn remember_wayland_bounds(reg: &WindowRegistryState, win: &tauri::WebviewWindow, label: &str) {
-    let Ok(size) = win.inner_size() else { return };
+/// Mark `label`'s placement begun or finished (`set_detached_placing`): what
+/// GDK says of a popout while it is placed, and for a moment after, is not
+/// recorded as its screen or size. `present_on_monitor` sets it as the hop
+/// starts and clears it where the hop ends.
+fn mark_placing(app: &AppHandle, label: &str, placing: bool) {
+    let reg = app.state::<WindowRegistryState>();
     let mut reg = reg.lock_ok();
-    let monitor =
-        gdk_monitor_of(win).or_else(|| reg.detached_bounds.get(label).and_then(|b| b.monitor));
-    reg.detached_bounds.insert(
-        label.to_string(),
-        crate::commands::apps::DetachedBounds {
-            x: 0,
-            y: 0,
-            w: size.width,
-            h: size.height,
-            monitor,
-        },
-    );
+    // A window released meanwhile (destroyed mid-hop) has no placement left to mark.
+    if placing || reg.windows.contains_key(label) {
+        reg.set_detached_placing(label, placing);
+    }
+}
+
+/// The screen `label`'s record names, with its identity.
+fn recorded_screen(reg: &WindowRegistry, label: &str) -> Option<Screen> {
+    let rect = reg.detached_bounds.get(label)?.monitor?;
+    Some(Screen { rect, id: reg.detached_screens.id(label) })
+}
+
+/// Fold one [`Verdict`] into the registry's record for `label`. Answers whether
+/// the recorded screen changed (so the kept file needs the new one).
+fn apply_verdict(reg: &mut WindowRegistry, label: &str, v: &Verdict) -> bool {
+    if v.screen.is_none() && v.size.is_none() {
+        return false;
+    }
+    let old = reg.detached_bounds.get(label).copied();
+    let Some((w, h)) = v.size.or(old.map(|b| (b.w, b.h))) else {
+        return false;
+    };
+    let before = recorded_screen(reg, label);
+    let monitor = v.screen.map(|s| s.rect).or(old.and_then(|b| b.monitor));
+    reg.detached_bounds
+        .insert(label.to_string(), DetachedBounds { x: 0, y: 0, w, h, monitor });
+    if let Some(s) = v.screen {
+        reg.detached_screens.set_id(label, s.id);
+    }
+    recorded_screen(reg, label) != before
+}
+
+/// How much of a look at a popout to say in the log.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Say {
+    /// Only what changed the record (the once-a-second poll).
+    Changes,
+    /// Every outcome (a retire, a hide, the quit).
+    Always,
+}
+
+/// Look at one popout now and fold what is trustworthy into its record
+/// ([`popout_screen::PopoutScreens::observe`]): the screen it was last truly
+/// shown on and its settled size, never a guess, a fullscreen size or a
+/// mid-placement reading. A reading that does not qualify leaves the previous
+/// record. The kept file is written (off this thread) when the screen changed,
+/// or whenever `Say::Always` found a settled window. Main thread (GTK).
+fn record_popout(reg: &WindowRegistryState, win: &tauri::WebviewWindow, label: &str, say: Say) -> Verdict {
+    let view = sample_popout(win);
+    let (verdict, changed, kept) = {
+        let mut g = reg.lock_ok();
+        let recorded = recorded_screen(&g, label);
+        let verdict = g
+            .detached_screens
+            .observe(label, std::time::Instant::now(), view, recorded);
+        let changed = apply_verdict(&mut g, label, &verdict);
+        let kept = g.detached_bounds.get(label).and_then(|b| {
+            let screen = recorded_screen(&g, label)?;
+            Some(popout_screen::KeptScreen::new(screen, (b.w, b.h), popout_screen::now_secs()))
+        });
+        (verdict, changed, kept)
+    };
+    let settled = verdict.size.is_some();
+    if changed || (say == Say::Always && settled) {
+        if let Some(kept) = kept {
+            popout_screen::persist(label, Some(kept));
+        }
+    }
+    if say == Say::Always || changed || verdict.why == Why::UserMoved {
+        let seen = view.seen.map(|s| (s.rect.x, s.rect.y, s.rect.w, s.rect.h));
+        eprintln!(
+            "popout {label}: screen record {:?} (gdk says {seen:?}, shown {}, fullscreen {}) -> {:?}",
+            verdict.why,
+            view.shown,
+            view.fullscreen,
+            kept.map(|k| (k.x, k.y, k.w, k.h)),
+        );
+    }
+    verdict
+}
+
+/// The size and screen a Wayland popout has right now, kept for the moment it
+/// comes back (a respawn, or the re-show of a hidden one): the screen it was
+/// last truly shown on, so it lands there again rather than wherever GNOME
+/// puts new windows (the pointer's screen). A popout that is not placed yet,
+/// whose placement has not finished, or that is fullscreen keeps its previous
+/// record whole — a fast A to B to A, or a retire mid-hop, must not replace a
+/// good record with GDK's guess or the hop's fullscreen size.
+fn remember_wayland_bounds(reg: &WindowRegistryState, win: &tauri::WebviewWindow, label: &str) {
+    record_popout(reg, win, label, Say::Always);
 }
 
 /// One popout's screen and size for the saved layout (native Wayland).
@@ -1652,8 +1858,9 @@ pub struct DetachedScreen {
 /// The screen and size each of `labels` has, for the saved layout to keep at
 /// quit so a restart respawns it there (`detach_subwindow`'s `monitor`). Native
 /// Wayland only — elsewhere the saved position already says it, and this
-/// answers nothing. A shown popout is read off GDK now; a retired or hidden
-/// one answers its last capture; one with neither is left out.
+/// answers nothing. A shown popout is looked at now; every answer is the
+/// RECORD ([`record_popout`]), never a bare reading, so a retired, hidden or
+/// not-yet-placed one answers its last good one; one with none is left out.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detached_window_screens(
     app: AppHandle,
@@ -1668,16 +1875,15 @@ pub async fn detached_window_screens(
         let reg = on_main.state::<WindowRegistryState>();
         let mut out = std::collections::HashMap::new();
         for label in labels {
-            let live = on_main
+            if let Some(win) = on_main
                 .get_webview_window(&label)
                 .filter(|w| w.is_visible().unwrap_or(false))
-                .and_then(|w| Some((gdk_monitor_of(&w)?, w.inner_size().ok()?)));
-            let screen = match live {
-                Some((monitor, size)) => Some(DetachedScreen { w: size.width, h: size.height, monitor }),
-                None => reg.lock_ok().detached_bounds.get(&label).and_then(|b| {
-                    Some(DetachedScreen { w: b.w, h: b.h, monitor: b.monitor? })
-                }),
-            };
+            {
+                record_popout(&reg, &win, &label, Say::Always);
+            }
+            let screen = reg.lock_ok().detached_bounds.get(&label).and_then(|b| {
+                (b.w >= 1 && b.h >= 1).then_some(DetachedScreen { w: b.w, h: b.h, monitor: b.monitor? })
+            });
             if let Some(screen) = screen {
                 out.insert(label, screen);
             }
@@ -1688,6 +1894,70 @@ pub async fn detached_window_screens(
         return Default::default();
     }
     rx.await.unwrap_or_default()
+}
+
+/// Native Wayland, on every way out of the process that gets this far (a
+/// SIGTERM or SIGINT, `app.exit`, a `pkill`): look at every shown popout one
+/// last time and let the kept file take it, before the windows go. The
+/// window's own quit does this through `detached_window_screens`; the signal
+/// path never ran that, and the file is also written whenever the record
+/// changes, which is all a SIGKILL or a crash leaves. Main thread (GTK).
+pub fn remember_screens_at_exit(app: &AppHandle) {
+    if window_positions_readable() {
+        return;
+    }
+    let reg = app.state::<WindowRegistryState>();
+    let labels = crate::services::window_service::all_detached_labels(&reg.lock_ok().windows);
+    for label in labels {
+        if let Some(win) = app
+            .get_webview_window(&label)
+            .filter(|w| w.is_visible().unwrap_or(false))
+        {
+            record_popout(&reg, &win, &label, Say::Always);
+        }
+    }
+    popout_screen::drain_at_exit();
+}
+
+/// How often the screen tracker looks at the popouts.
+const SCREEN_TRACK_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Native Wayland: keep every shown popout's record current as it settles and
+/// as the user moves it, so the kept file is right whenever the process ends —
+/// not only at a clean quit. One look a second, only while a popout exists, the
+/// reading on the main thread and the file write on its own worker.
+pub fn spawn_screen_tracker(app: AppHandle) {
+    if window_positions_readable() {
+        return;
+    }
+    let busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(SCREEN_TRACK_POLL);
+        let labels = {
+            let reg = app.state::<WindowRegistryState>();
+            let reg = reg.lock_ok();
+            crate::services::window_service::all_detached_labels(&reg.windows)
+        };
+        // A look still queued behind a busy main thread is not stacked up.
+        if labels.is_empty() || busy.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            continue;
+        }
+        let (on_main, flag) = (app.clone(), busy.clone());
+        if app
+            .run_on_main_thread(move || {
+                let reg = on_main.state::<WindowRegistryState>();
+                for label in labels {
+                    if let Some(win) = on_main.get_webview_window(&label) {
+                        record_popout(&reg, &win, &label, Say::Changes);
+                    }
+                }
+                flag.store(false, std::sync::atomic::Ordering::Release);
+            })
+            .is_err()
+        {
+            busy.store(false, std::sync::atomic::Ordering::Release);
+        }
+    });
 }
 
 /// The unsaved-work fallback, already marked parked by [`settle_retire`]:
@@ -1888,6 +2158,11 @@ pub fn attach_subwindow(
     let wid = release_detached_entry(&mut win_registry.lock_ok(), &registry_id);
     if let Some(wid) = wid {
         workspace.lock_ok().backend.unset_parkable(wid);
+    }
+    // Docked or closed for good: the kept screen goes with the popout, so a
+    // later group of the same label starts clean.
+    if !window_positions_readable() {
+        popout_screen::persist(&registry_id, None);
     }
     if let Some(window) = app.get_webview_window(&registry_id) {
         // `destroy()` (not `close()`) so the removal is immediate: `close()` fires
@@ -2777,14 +3052,113 @@ mod tests {
     #[test]
     fn a_wayland_restart_respawns_on_the_screen_the_layout_kept() {
         let right = rect(2560, 0, 2560, 1440);
-        let b = restart_bounds(false, Some(900.0), Some(640.0), Some(right)).expect("a record");
-        assert_eq!((b.w, b.h, b.monitor), (900, 640, Some(right)));
+        let (b, id) = restart_bounds(false, Some(900.0), Some(640.0), Some(right), None).expect("a record");
+        assert_eq!((b.w, b.h, b.monitor, id), (900, 640, Some(right), 0));
         // Readable positions: the saved rect places it, no screen record.
-        assert!(restart_bounds(true, Some(900.0), Some(640.0), Some(right)).is_none());
+        assert!(restart_bounds(true, Some(900.0), Some(640.0), Some(right), None).is_none());
         // No screen kept (an older layout) or no real size: the plain respawn.
-        assert!(restart_bounds(false, Some(900.0), Some(640.0), None).is_none());
-        assert!(restart_bounds(false, Some(0.0), Some(640.0), Some(right)).is_none());
-        assert!(restart_bounds(false, None, Some(640.0), Some(right)).is_none());
-        assert!(restart_bounds(false, Some(900.0), Some(640.0), Some(rect(0, 0, 0, 0))).is_none());
+        assert!(restart_bounds(false, Some(900.0), Some(640.0), None, None).is_none());
+        assert!(restart_bounds(false, Some(0.0), Some(640.0), Some(right), None).is_none());
+        assert!(restart_bounds(false, None, Some(640.0), Some(right), None).is_none());
+        assert!(restart_bounds(false, Some(900.0), Some(640.0), Some(rect(0, 0, 0, 0)), None).is_none());
+    }
+
+    fn kept(x: i32, w: u32, id: u64, size: (u32, u32)) -> popout_screen::KeptScreen {
+        popout_screen::KeptScreen::new(Screen { rect: rect(x, 0, w, 1440), id }, size, 1)
+    }
+
+    #[test]
+    fn a_restart_prefers_the_screen_the_machine_kept_over_the_layouts() {
+        // The signal path never saved the layout's screen; the kept file has
+        // it (with the monitor's identity). It outranks an older layout value
+        // and supplies the size when the layout has none.
+        let (layout, file) = (rect(0, 0, 1920, 1080), kept(2560, 2560, 9, (1200, 800)));
+        let (b, id) = restart_bounds(false, Some(900.0), Some(640.0), Some(layout), Some(file)).unwrap();
+        assert_eq!((b.monitor, b.w, b.h, id), (Some(rect(2560, 0, 2560, 1440)), 900, 640, 9));
+        let (b, _) = restart_bounds(false, None, None, Some(layout), Some(file)).unwrap();
+        assert_eq!((b.w, b.h), (1200, 800));
+        // Nothing in the layout at all (an upgrade, a layout that never saw a
+        // quit): the kept file alone is enough.
+        assert!(restart_bounds(false, None, None, None, Some(file)).is_some());
+        // A kept entry without a usable screen falls back to the layout's.
+        let bad = popout_screen::KeptScreen { w: 0, ..file };
+        let (b, id) = restart_bounds(false, Some(900.0), Some(640.0), Some(layout), Some(bad)).unwrap();
+        assert_eq!((b.monitor, id), (Some(layout), 0));
+    }
+
+    fn registry_with_record(label: &str, screen: Screen) -> WindowRegistry {
+        let mut reg = WindowRegistry::default();
+        reg.detached_bounds.insert(
+            label.to_string(),
+            DetachedBounds { x: 0, y: 0, w: 900, h: 640, monitor: Some(screen.rect) },
+        );
+        reg.detached_screens.set_id(label, screen.id);
+        reg
+    }
+
+    #[test]
+    fn a_verdict_that_kept_the_screen_keeps_the_record_and_takes_the_settled_size() {
+        let (label, good) = ("detached-p1-g-1", Screen { rect: rect(1920, 0, 1920, 1080), id: 7 });
+        let mut reg = registry_with_record(label, good);
+        // Not settled: nothing at all changes (the fullscreen size included).
+        let unsettled = Verdict { why: Why::Unsettled, screen: None, size: None };
+        assert!(!apply_verdict(&mut reg, label, &unsettled));
+        let b = reg.detached_bounds[label];
+        assert_eq!((b.w, b.h, b.monitor), (900, 640, Some(good.rect)));
+        // It landed elsewhere: the wanted screen stays, the size is the window's.
+        let landed = Verdict { why: Why::LandedElsewhere, screen: None, size: Some((1000, 700)) };
+        assert!(!apply_verdict(&mut reg, label, &landed));
+        let b = reg.detached_bounds[label];
+        assert_eq!((b.w, b.h, b.monitor), (1000, 700, Some(good.rect)));
+        assert_eq!(reg.detached_screens.id(label), 7);
+        // The user moved it: the record follows, identity included.
+        let there = Screen { rect: rect(0, 0, 1920, 1080), id: 3 };
+        let moved = Verdict { why: Why::UserMoved, screen: Some(there), size: Some((1000, 700)) };
+        assert!(apply_verdict(&mut reg, label, &moved));
+        assert_eq!(reg.detached_bounds[label].monitor, Some(there.rect));
+        assert_eq!(reg.detached_screens.id(label), 3);
+    }
+
+    #[test]
+    fn a_retire_keeps_the_screen_identity_with_the_record_and_a_release_drops_both() {
+        let (label, good) = ("detached-p1-g-1", Screen { rect: rect(1920, 0, 1920, 1080), id: 7 });
+        let mut reg = registry_with_record(label, good);
+        reg.windows.insert(label.to_string(), tracked(label, None));
+        reg.detached_retire.mark_retiring(label);
+        on_detached_destroyed(&mut reg, label);
+        assert_eq!(recorded_screen(&reg, label), Some(good));
+        reg.detached_retire.mark_retiring(label);
+        reg.windows.insert(label.to_string(), tracked(label, None));
+        release_detached_entry(&mut reg, label);
+        assert_eq!(recorded_screen(&reg, label), None);
+        assert_eq!(reg.detached_screens.id(label), 0);
+    }
+
+    #[test]
+    fn the_placement_mark_is_the_registrys() {
+        let mut reg = WindowRegistry::default();
+        let label = "detached-p1-g-1";
+        assert!(!reg.is_detached_placing(label));
+        reg.set_detached_placing(label, true);
+        assert!(reg.is_detached_placing(label));
+        reg.set_detached_placing(label, false);
+        assert!(!reg.is_detached_placing(label));
+        reg.set_detached_placing(label, true);
+        release_detached_entry(&mut reg, label);
+        assert!(!reg.is_detached_placing(label));
+    }
+
+    #[test]
+    fn a_wayland_respawn_applies_the_saved_size_and_never_a_position() {
+        // x/y are (0,0) filler there; fitting them against the monitors shrank a
+        // big popout to the origin monitor's size.
+        let (pos, size) = wayland_detached_fit(Some(3000.0), Some(1800.0));
+        assert!(pos.is_none());
+        match size {
+            Some(Size::Physical(s)) => assert_eq!((s.width, s.height), (3000, 1800)),
+            other => panic!("expected the saved physical size, got {other:?}"),
+        }
+        let partial = wayland_detached_fit(None, Some(10.0));
+        assert!(partial.0.is_none() && partial.1.is_none());
     }
 }

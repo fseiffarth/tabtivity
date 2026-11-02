@@ -1587,6 +1587,9 @@ pub fn run() {
             // external monitor otherwise leaves a borderless popout larger than
             // the laptop panel, with its title bar and resize edges off-screen.
             commands::subwindow::spawn_monitor_watcher(_app.handle().clone());
+            // Native Wayland: each popout's screen is kept current as it
+            // settles or the user moves it, for a restart after a signal.
+            commands::subwindow::spawn_screen_tracker(_app.handle().clone());
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
@@ -2669,6 +2672,13 @@ pub fn run() {
                         }
                     }
                 }
+            }
+            // The popouts are still on screen when an exit is asked for (a
+            // SIGTERM, `pkill`, `app.exit`, the last window closing): the one
+            // moment their screens can still be read. The window's own quit
+            // has saved them through `detached_window_screens` by now.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                commands::subwindow::remember_screens_at_exit(_app);
             }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;

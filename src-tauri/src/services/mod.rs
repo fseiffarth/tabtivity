@@ -184,6 +184,9 @@ pub mod webkit_gpu;
 pub mod win_links;
 pub mod window_service;
 pub mod window_state;
+// Which screen a native-Wayland popout was last truly shown on, and when a
+// toolkit reading may become that record (kept across a crash in a small file).
+pub mod popout_screen;
 
 pub use app_core::services::text_completion;
 // One FIFO worker thread: the state-file commands' way off the GTK thread.
