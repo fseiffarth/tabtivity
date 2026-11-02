@@ -3587,6 +3587,16 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+  - [ ] 🖐️ Manual phone QA — an agent notice leads with its time (2026-11-02; `push.rs` `at`, `sw.js`; ⚠️ never run on a phone; sidecar + PWA rebuild first): let an agent ask or finish with the phone locked → the body reads "14:32 · Needs your answer" / "14:32 · Finished “…”" in the phone's clock format; with a long prompt the time is still visible in the collapsed notice. With "Only that something wants you" the body is the time alone. A calendar reminder is unchanged.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
   - [ ] 🖐️ Manual phone QA — a pocketed phone still gets the notice (2026-10-01; `TerminalControl::Visibility` / `TerminalEvent::Features`, `TerminalRegistry::is_watched`; ⚠️ never run on a phone; sidecar + PWA rebuild first): Agents → "Also when one finishes a turn". Open an agent tab on the phone, send a prompt, switch to another app (or lock the screen) before the turn ends → the "Finished …" notice arrives, and the tab's row still reads unread/done on the desktop until the phone is looked at again. Back in the tab, with the page in front: the next finished turn does not notify. Coming back from the other app must not replay the history (the socket was kept).
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)

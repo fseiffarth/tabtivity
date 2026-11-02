@@ -148,6 +148,13 @@ function fallbackTitle(data, lang) {
   }
   return ENGLISH_TITLES[slot];
 }
+/* The moment an agent notice stands for (`at`, seconds), in ms; undefined for
+ * any other notice or a payload without a usable one. */
+function noticeMoment(data) {
+  if (data.kind !== "agent" || typeof data.at !== "number") return undefined;
+  const moment = data.at * 1000;
+  return Number.isNaN(new Date(moment).getTime()) ? undefined : moment;
+}
 self.addEventListener("push", (event) => {
   let data = {};
   try {
@@ -159,14 +166,20 @@ self.addEventListener("push", (event) => {
   const title = typeof data.title === "string" && data.title
     ? Promise.resolve(data.title)
     : pageLanguage().then((lang) => fallbackTitle(data, lang));
-  const body = typeof data.body === "string" ? data.body : "";
+  const text = typeof data.body === "string" ? data.body : "";
+  /* The time leads: a system tray cuts a long body at its end. Formatted here
+   * so it is the phone's clock, not the desktop's. */
+  const timestamp = noticeMoment(data);
+  const clock = timestamp === undefined ? "" : new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const body = clock && text ? `${clock} · ${text}` : clock || text;
   const tag = typeof data.tag === "string" && OPAQUE_ID.test(data.tag) ? `tabtivity-${data.tag}` : undefined;
   const target = data.kind === "agent" && OPAQUE_ID.test(String(data.project)) && OPAQUE_ID.test(String(data.tab))
     ? { section: "projects", projectId: data.project, tabId: data.tab }
     : { section: data.kind === "agent" ? "projects" : "calendar" };
-  event.waitUntil(title.then((text) => self.registration.showNotification(text, {
+  event.waitUntil(title.then((heading) => self.registration.showNotification(heading, {
     body,
     tag,
+    timestamp,
     // A question replacing an older notice for the same tab must still ring.
     renotify: tag !== undefined,
     icon: "/icons/icon-192.png",
