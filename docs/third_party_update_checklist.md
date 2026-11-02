@@ -554,6 +554,14 @@ aliases, and anything about where or how credentials are stored.
 
 ### 1.2 Codex
 
+Chat's queue (`mobile-web/src/terminal/queuePull.ts`, `queue_hint` in
+`pty_bridge.rs`, `agentQueueWrites`): mid-turn, Tab still lists a prompt under
+`• Queued follow-up inputs` with `… edit last queued message`, that key still
+takes one back at a time, Esc still drops the list into the box, Tab on an idle
+box still leaves the words, Enter on an empty box still does nothing. OpenCode's
+mini footer still reads `· ctrl+x q N pending`, its panel's rows and ctrl+d
+still work, and two Escs still have to come in separate calls.
+
 API keys: `services/agent_api_keys.rs` selects a launch-only custom Codex
 provider with `env_key=OPENAI_API_KEY`, `wire_api="responses"`,
 `requires_openai_auth=false`, `supports_websockets=false` and a loopback base

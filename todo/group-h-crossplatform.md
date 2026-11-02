@@ -3894,6 +3894,35 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cm — Send now and Cancel and edit on Codex and OpenCode mini** (2026-11-02;
+  ✅ code-complete, `MobileQueuePull.test.ts` and the walks run against the real
+  Codex 0.166.0 and OpenCode 2.2.5 on a stub model; ⚠️ never seen in the app).
+  A chat's Codex prompt now goes in with Tab, so it waits for the turn's end
+  unless Send now is pressed.
+  - [ ] 🖐️ Phone and desktop Chat, Codex, agent working: send two prompts. Both
+    bubbles carry the pair; Send now stops the turn and both go as one prompt,
+    each bubble staying where it was. Stop and holding Send keep them too.
+    Cancel and edit brings them back into the composer.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ `opencode --mini`, agent working: the pair shows once the footer
+    counts `pending`; Send now and Cancel and edit both work. A full `opencode`
+    tab shows no pair and never quits.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [~] **31bq — Edit a phone prompt until the agent takes it in** (2026-09-29;
   ✅ code-complete, automated tests passing — `MobileHeldPromptEdit.test.tsx`,
   bridge case in `MobilePhoneDrivenStatus.test.tsx`, protocol
