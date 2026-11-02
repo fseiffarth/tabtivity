@@ -2919,8 +2919,8 @@ html[data-header-drag] * {
 
 /* ── Command palette ──────────────────────────────────────────────────
    A framed dialog hung from the upper third, so a shrinking result list does
-   not move the box you are typing in. Its surface, rail and cut corners are the
-   floating recipe's (apps.css); only the fixed input and footer are its own. */
+   not move the box you are typing in. Its surface and rail are the floating
+   recipe's (apps.css); only the fixed input and footer are its own. */
 .modal-backdrop.command-palette-backdrop {
   align-items: flex-start;
   padding-top: 12vh;

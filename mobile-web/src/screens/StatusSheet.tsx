@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CloseIcon } from "../glyphs";
 import { useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
@@ -46,7 +46,7 @@ function duration(seconds: number): string {
  * (model, mode, context) — free, and about *this* tab, where the quota panel is
  * about the whole account.
  */
-export function StatusSheet({ tab, live, onLimits, onClose, signIn, facts }: {
+export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
   tab: TabRow;
   live: SessionStatus | null;
   /** Hands a fresh panel's 5h/week windows to the facts row, so a Refresh
@@ -57,11 +57,6 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn, facts }: {
    * slash command typed into the session (`signIn.ts`) — when it can; the
    * sheet then offers Sign in. */
   signIn?: { hint: string; start: () => void } | null;
-  /** The Focus screen's facts — model, mode, worktree, location, context,
-   * limits — as the sheet's first rows. Its header caption sums them up and
-   * opens this sheet. The live model, mode and context then stay out of the
-   * state line below, which would only repeat them. */
-  facts?: ReactNode;
 }) {
   useBackLayer(onClose);
   const t = useT();
@@ -105,14 +100,12 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn, facts }: {
         </div>
       </header>
 
-      {facts && <div className="session-facts">{facts}</div>}
-
       {report && <p className={`status-headline ${report.state}`}>
         <strong>{t(STATE_TEXT[report.state])}{report.state === "interrupted" && isUntested("mobile.tabs.statusMotion") && <> · {t("mobile.focus.untested")}</>}</strong>
         {report.agent && <span>{report.agent}</span>}
-        {!facts && live?.model && <span>{live.model}</span>}
-        {!facts && live?.mode && <span>{live.mode}</span>}
-        {!facts && live?.context && <span>{t("mobile.status.contextLeft", { context: live.context })}</span>}
+        {live?.model && <span>{live.model}</span>}
+        {live?.mode && <span>{live.mode}</span>}
+        {live?.context && <span>{t("mobile.status.contextLeft", { context: live.context })}</span>}
       </p>}
 
       {error && <p className="sheet-note error" role="alert">{error}</p>}

@@ -126,19 +126,16 @@
   --accent-contrast: #ffffff;
   /* Corner-radius scale for the whole app. Every surface/button rule reads one
      of these tokens, so the app-wide feel flips from here: --radius-sm for
-     small controls (inputs, buttons, chips), --radius for panels/cards/menus,
-     --radius-lg for dialogs and large surfaces, --radius-full for circles and
-     pill shapes. Defined once on :root (not per theme); a theme that wants
-     rounded controls back can override these in its own block.
-     The house style is SQUARE for anything a pointer acts on: buttons, inputs
-     and chips (--radius-sm), the popover/menu surfaces and cards that read
-     --radius, and the dialog/overlay shells on --radius-lg are all
-     flat-cornered, so a menu, the overlay behind it and the buttons inside
-     both share one edge. Only shapes where the round IS the affordance
-     (--radius-full pills, 50% circles) still curve. */
-  --radius-sm: 0px;
-  --radius: 0px;
-  --radius-lg: 0px;
+     small controls (inputs, buttons, chips), --radius for menus, hover cards,
+     toasts and cards, --radius-lg for dialogs, the palette and the Chat view's
+     bubbles, --radius-full for circles and pill shapes. Defined once on :root
+     (not per theme); a theme can override these in its own block.
+     The house style is ROUNDED, one soft scale on every theme (2026-11-02: it
+     was square, then the floating surfaces got cut corners, and the user
+     wanted neither). */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
   --radius-full: 999px;
   /* Elevation scale. Depth is expressed by surface tone (--bg-main < --bg-panel
      < --bg-elevated) plus these soft layered shadows — not by loud borders.
@@ -147,7 +144,6 @@
      light themes override with softer, bluer-grey shadows below. */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.24), 0 1px 3px rgba(0, 0, 0, 0.18);
   --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.22);
-  --shadow-2-drop: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.32)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.22));
   --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
   /* Motion: one quick ease for hover/press/focus feedback everywhere, one
      slower ease for layout-level movement (panel dock, drawer slide). */
@@ -436,7 +432,6 @@
      a shadow with a hue in it is the one thing that would tint this theme. */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.1);
   --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
-  --shadow-2-drop: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.12)) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.08));
   --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.18), 0 4px 12px rgba(0, 0, 0, 0.1);
   --border-color: #d4d4d4;
   --border-subtle: #e8e8e8;
@@ -521,7 +516,6 @@
   --bg-header-solid: #e8f7ff;
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
   --shadow-2: 0 4px 16px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.08);
-  --shadow-2-drop: drop-shadow(0 4px 8px rgba(16, 24, 40, 0.12)) drop-shadow(0 2px 3px rgba(16, 24, 40, 0.08));
   --shadow-3: 0 16px 48px rgba(16, 24, 40, 0.18), 0 4px 12px rgba(16, 24, 40, 0.1);
   --border-color: rgba(9, 105, 218, 0.28);
   --border-subtle: #d8e5f0;
@@ -568,7 +562,6 @@
   --bg-header-solid: #f2effa;
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
   --shadow-2: 0 4px 16px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.08);
-  --shadow-2-drop: drop-shadow(0 4px 8px rgba(16, 24, 40, 0.12)) drop-shadow(0 2px 3px rgba(16, 24, 40, 0.08));
   --shadow-3: 0 16px 48px rgba(16, 24, 40, 0.18), 0 4px 12px rgba(16, 24, 40, 0.1);
   --border-color: #ddd6f0;
   --border-subtle: #ebe7f6;
@@ -645,9 +638,6 @@
   --control-bg: #202329;
   --control-hover-bg: #282b33;
   --control-border: #363a43;
-  --radius-sm: 4px;
-  --radius: 8px;
-  --radius-lg: 12px;
 }
 
 /* No accent wash over soft_dark's header: a 32% blue band over neutral gray

@@ -998,7 +998,7 @@
   gap: 3px;
   border: 0;
   border-top: 2px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   padding: 6px 10px;
   white-space: nowrap;
   pointer-events: none;
@@ -1015,17 +1015,6 @@
   text-overflow: ellipsis;
   direction: rtl;
   text-align: left;
-}
-
-/* The card's two 10 px cuts are painted, so the card is not a rectangle, but a
-   `box-shadow` is: it is never drawn inside the element's own box, so each cut
-   showed a pale triangle with square edges against the darkened rim around it.
-   `drop-shadow` follows the painted shape, cuts included. `:root:root` outranks
-   the glass themes' `[data-theme] .project-pill-popup` rule in themes.css. The
-   card is small and `pointer-events: none`; only its opacity animates. */
-:root:root .project-pill-popup {
-  box-shadow: none;
-  filter: var(--shadow-2-drop);
 }
 
 /* `direction: rtl` is only there so a long path loses its head, not its tail.
@@ -2480,8 +2469,8 @@ button.tab-todo-link {
      hairline ring drawn around the accent wash below, not as an edge. The
      elevation shadow is what separates the menu from what it floats over; the
      accent top rail — matching the header bar and the dialog chrome above — is
-     the only edge that carries meaning. Fill, rail and the cut corners are
-     painted by the floating recipe in apps.css; the border only holds the
+     the only edge that carries meaning. Fill and rail are painted by
+     the floating recipe in apps.css; the border only holds the
      rail's room. */
   border: 0;
   border-top: 2px solid transparent;

@@ -41,13 +41,17 @@ older per-feature `*-btn` classes have not been folded in.
 ## Floating surfaces
 
 One recipe in `apps.css`: `--bg-elevated`, an accent rail, an accent `::before`
-wash, two 10 px cut corners, `--shadow-2` (popovers, hover cards, toasts) or
-`--shadow-3` (dialogs, palette). To add a member, follow the comment at the top
-of the recipe; `theme/FloatingRecipe.test.ts` holds the lists together.
+wash, rounded corners from the radius tokens (`--radius` 10 px for menus, hover
+cards and toasts, `--radius-lg` 14 px for dialogs and the palette), `--shadow-2`
+(popovers, hover cards, toasts) or `--shadow-3` (dialogs, palette). To add a
+member, follow the comment at the top of the recipe;
+`theme/FloatingRecipe.test.ts` holds the lists together.
 
-The cut is a painted 135° gradient, **not a `clip-path`**: a clip takes the
-elevation shadow off and cuts whatever hangs outside the surface (a submenu).
-The window chrome stays square.
+The corners were two painted 10 px cuts until 2026-11-02, when the user asked
+for round; `--radius-sm/--radius/--radius-lg` went from 0 to 6 / 10 / 14 px on
+`:root` at the same time, so buttons and fields soften too. Never a
+`clip-path` here: it takes the elevation shadow off and cuts whatever hangs
+outside the surface (a submenu).
 
 Enter is opacity plus a 4 px rise over `--motion-enter` (dialogs 4/3 of it, the
 backdrop fades only). Exit is opacity over `--motion-exit`, and only

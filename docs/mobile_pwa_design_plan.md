@@ -15,6 +15,15 @@ the `--fs-*` scale, and chrome glyphs drawn as text characters (‹ ✕ ⋯ ◷ 
 
 ## Fixed decisions
 
+Revised 2026-11-02, after the user saw the pass in the dev build ("i do not like
+the edgy everywhere … put back the statusline at its old place"): every cut
+corner became a radius — `--oct-sm/md/lg` are `--r-sm/md/lg` (8 / 12 / 16 px,
+sheets `--r-sheet` 20 px), the corner-layer rules are plain `border-radius`,
+the hexagon status badge is a rounded square — and the facts strip is back
+above the composer in its old place; the header caption and the Status sheet's
+facts rows are gone (`mobile.design.rounded`). The bullets below describe the
+pass as first built; design: canvas "Rounded Theme".
+
 - **One mechanism for cut corners.** Reuse the corner-layer rule the Mail /
   To-do / Calendar block already uses (`--oct`, `--oct-edge`, `--oct-img`,
   clip-path) for every bordered element; a borderless one is only clipped.

@@ -11,7 +11,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { keysSent, stubTerminalSideChannels, openFacts } from "../helpers/mobileTerminalHost";
+import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -134,7 +134,6 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     render(<Terminal tab={{ id: "tab", label: "Codex", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
 
-    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     await paint(MODEL_STEP);
 
@@ -170,7 +169,6 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     render(<Terminal tab={{ id: "tab", label: "Codex", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
 
-    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     await settle(400);
     FakeWebSocket.sent = [];
@@ -199,7 +197,6 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     render(<Terminal tab={{ id: "tab", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
 
-    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     await paint([
       "Select Model",
@@ -240,7 +237,6 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
 
     // A status line too narrow to name the model: the chip says the last one
     // the tab answered with, not "Model".
-    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Fable 5.1" }));
     expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];
@@ -285,7 +281,6 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     const HAIKU = "5. Haiku                  Haiku 4.5";
     render(<Terminal tab={{ id: "tab", label: "Claude", kind: "agent", agent_model: "Fable 5.1", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
-    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Fable 5.1" }));
     await settle(400);
     await paint(claudeWindow([`     ${DEFAULT}`, `     ${OPUS}`, `   ❯ ${FABLE}`]));
@@ -311,7 +306,6 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     await paint("┃  Ask anything...\n\n  qwen3:8b · /tmp");
     await settle(400);
     expect(screen.queryByRole("button", { name: "qwen3:8b" })).toBeNull();
-    openFacts();
     expect(document.querySelector(".session-facts .fact-model")?.textContent).toBe("qwen3:8b");
     expect(FakeWebSocket.sent).toEqual([]);
   });

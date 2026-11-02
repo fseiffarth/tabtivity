@@ -6,7 +6,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stubTerminalSideChannels, openFacts } from "../helpers/mobileTerminalHost";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 /** xterm's trim emitter, as the lazy history rides it: `onTrim(listener)`. */
 class FakeTrimEmitter {
@@ -179,7 +179,6 @@ describe(`${BRAND.display} Mobile terminal pipeline`, () => {
     // mode chip — and the walk that confirms a switch against it — read the
     // same status line, so it must still be rebuilt here.
     await paint("Done.", "> ", "⏸ plan mode on (shift+tab to cycle)");
-    openFacts();
     expect(screen.getByTitle("Choose the permission mode").textContent).toBe("plan");
   });
 

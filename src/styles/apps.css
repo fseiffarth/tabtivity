@@ -812,8 +812,7 @@
      as its edge, and it is the elevation shadow that actually separates a modal
      from the app behind it. The accent top rail — matching the header's tint, so
      every dialog reads as the same themed chrome, with no per-dialog exceptions
-     — is the only edge left that carries meaning. Fill, rail and the cut
-     corners are the floating recipe's (below); the border holds the rail's room. */
+     — is the only edge left that carries meaning. Fill and rail are the floating recipe's (below); the border holds the rail's room. */
   border: 0;
   border-top: 3px solid transparent;
   border-radius: var(--radius-lg);
@@ -822,21 +821,22 @@
 
 /* ── The floating recipe ─────────────────────────────────────────────────
    Every surface that floats over the window — menus, dialogs, hover cards,
-   toasts — is one paint: --bg-elevated, an accent top rail, an accent wash, and
-   two cut corners (10px, top-left and bottom-right, the Reader's and the
-   phone's). The window chrome stays square.
+   toasts — is one paint: --bg-elevated, an accent top rail and an accent wash,
+   on the corners its own radius token gives it (--radius for menus, cards and
+   toasts, --radius-lg for dialogs). The corners were two painted 10px cuts
+   until 2026-11-02; the user asked for round. Never a `clip-path` here: it
+   takes the elevation shadow with it and cuts off whatever hangs outside a
+   surface (a submenu).
 
-   The cut is PAINTED, not a `clip-path`. A clip takes the elevation shadow with
-   it, and it would cut off whatever hangs outside a surface (a submenu). A
-   135deg gradient hits both corners on a box of any shape, its hard stops 7px
-   in along the diagonal are the 10px legs, and the half-pixel ramp is the
-   antialiasing. The rail starts after the cut.
+   The rail is a background layer rather than a border colour so the glass
+   themes can swap the fill under it; a background follows the radius, so the
+   rail's ends curve with the corners.
 
    To add a member: this list, the wash below, the two glass lists in themes.css
-   and the blur exemption in projects-tabs.css; strip its own background, border
-   and radius, keep `border-top: 2px solid transparent` for the rail's room, and
-   make sure it forms a stacking context (fixed, or absolute WITH a z-index), or
-   the `z-index: -1` wash paints behind its own background. */
+   and the blur exemption in projects-tabs.css; strip its own background and
+   border, keep `border-top: 2px solid transparent` for the rail's room and a
+   radius token, and make sure it forms a stacking context (fixed, or absolute
+   WITH a z-index), or the `z-index: -1` wash paints behind its own background. */
 .project-dialog,
 .settings-dialog,
 .stats-dialog,
@@ -857,14 +857,8 @@
   --surface-fill: var(--bg-elevated);
   --surface-rail: 2px;
   background:
-    linear-gradient(var(--accent), var(--accent)) 10px 0 / 100% var(--surface-rail) no-repeat border-box,
-    linear-gradient(
-      135deg,
-      transparent 6.8px,
-      var(--surface-fill) 7.3px,
-      var(--surface-fill) calc(100% - 7.3px),
-      transparent calc(100% - 6.8px)
-    ) border-box;
+    linear-gradient(var(--accent), var(--accent)) 0 0 / 100% var(--surface-rail) no-repeat border-box,
+    var(--surface-fill);
 }
 
 .project-dialog,
@@ -876,7 +870,7 @@
 
 /* Accent wash as a `::before` overlay, NOT folded into `background` — the glass
    themes replace the fill with `--glass-elevated`, and only an overlay tints
-   whatever shows through without making it opaque. It takes the same cut. The
+   whatever shows through without making it opaque. It follows the same corners. The
    wash spanning the full scroll is handled by the frame, not by this rule: a
    scrolling dialog uses `.dialog-framed` (its surface is overflow:hidden and
    never scrolls, so this overlay covers the whole fixed frame while the inner
@@ -902,13 +896,7 @@
   content: "";
   position: absolute;
   inset: calc(-1 * var(--surface-rail)) 0 0;
-  background: linear-gradient(
-    135deg,
-    transparent 6.8px,
-    var(--accent) 7.3px,
-    var(--accent) calc(100% - 7.3px),
-    transparent calc(100% - 6.8px)
-  );
+  background: var(--accent);
   opacity: 0.32;
   pointer-events: none;
   z-index: -1;

@@ -8,7 +8,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { keysSent, stubTerminalSideChannels, openFacts } from "../helpers/mobileTerminalHost";
+import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -138,7 +138,6 @@ describe(`${BRAND.display} Mobile — Cursor agent's model sheet`, () => {
     render(<Terminal tab={cursorTab} back={() => {}} />);
     await act(async () => {});
 
-    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];

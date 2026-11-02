@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stubTerminalSideChannels, openFacts } from "../helpers/mobileTerminalHost";
+import { stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -412,7 +412,6 @@ describe(`${BRAND.display} Mobile composer + and the frozen reading view`, () =>
     await paint("Earlier answer\n> \n? for shortcuts");
 
     // Claude's silent default earns the mode sheet from the label alone.
-    openFacts();
     fireEvent.click(screen.getByTitle("Choose the permission mode"));
     expect(screen.getByRole("dialog", { name: "Permission mode" })).toBeTruthy();
 

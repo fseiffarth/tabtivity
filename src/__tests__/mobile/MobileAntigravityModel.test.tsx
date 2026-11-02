@@ -14,7 +14,7 @@
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { keysSent, stubTerminalSideChannels, openFacts } from "../helpers/mobileTerminalHost";
+import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -174,7 +174,6 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () 
     render(<Terminal tab={antigravityTab} back={() => {}} />);
     await act(async () => {});
 
-    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];
@@ -225,7 +224,6 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () 
     await paint(DONE);
     await settle(900);
     expect(screen.queryByRole("dialog")).toBeNull();
-    openFacts();
     expect(screen.getByRole("button", { name: "Gemini 3.8 Flash · high" })).toBeTruthy();
   });
 
@@ -233,7 +231,6 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () 
     render(<Terminal tab={antigravityTab} back={() => {}} />);
     await act(async () => {});
 
-    openFacts();
     fireEvent.click(screen.getByRole("button", { name: "Model" }));
     await settle(400);
     FakeWebSocket.sent = [];

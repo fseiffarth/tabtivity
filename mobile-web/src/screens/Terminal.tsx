@@ -2302,55 +2302,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} />
         </div>}
   </>;
-  /** The header caption under an agent tab's name: what the Status sheet's
-   * rows say, in one line — the CLI (when the tab is named otherwise), the
-   * model, the mode (plan mode lit), the branch and the context left. */
-  const captionMode = status?.mode ?? activeMode;
-  const captionPlan = captionMode === "plan";
-  const captionParts = [
-    ...(agentLabel !== tab.label ? [agentLabel] : []),
-    ...(modelChip !== t("terminal.reader.model") ? [modelChip] : []),
-    ...(captionMode && !captionPlan ? [captionMode] : []),
-  ];
   const shownBranch = statusBranch ?? linkedBranch ?? cwdBranch;
-  const captionTail = [
-    ...(shownBranch ? [`⎇ ${shownBranch}`] : []),
-    ...(contextLeft ? [t("terminal.reader.contextLeft", { percent: contextLeft })] : []),
-  ];
-  /** A row in the Status sheet that opens a sheet of its own puts the Status
-   * sheet away first: one sheet at a time. */
-  const fromStatus = (open: () => void) => () => {
-    setStatusSheet(false);
-    open();
-  };
-  /** The facts row, now the Status sheet's head: the model, mode, worktree
-   * and location as tappable rows, the context and the two usage limits. No
-   * facts in a Tabby chat — its head's model dropdown says enough. */
-  const facts = !bare && tab.kind === "agent" ? <>
-    {/* A local-model tab keeps the model it was launched on: the
-        driver's list would only offer to move it off. */}
-    {tab.local_model
-      ? <span className="fact-model">{modelChip}</span>
-      : <button className="fact-action" disabled={!connected} onClick={fromStatus(selectModel)} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
-    <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={fromStatus(openModeSheet)} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
-    {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-    {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-    {tab.worktree && <span className="fact-worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: tab.worktree.label })}</span>}
-    {/* As on the desktop Reader: the branch moves the agent to another
-        worktree of the project, where the move applies. */}
-    {tab.worktree_movable
-      ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={fromStatus(openWorktreeSheet)} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {shownBranch ?? t("terminal.reader.worktreeButton")}</span></button>
-      : status?.branch && <span className="fact-branch"><BranchIcon size="1em" /> {status.branch}</span>}
-    {tab.worktree_movable && isUntested("mobile.facts.worktreeSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-    {/* As the desktop tab's ⌂/☁ badge: where a remote project's agent runs. */}
-    {tab.location_movable && <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={fromStatus(openLocationSheet)} aria-haspopup="dialog" aria-expanded={locationSheet} title={t("mobile.location.hint")}><span className="fact-action-label">{tab.on_host && tab.host_label ? t("mobile.location.remoteNamed", { name: tab.host_label }) : t(tab.on_host ? "mobile.location.remote" : "mobile.location.here")}</span></button>}
-    {tab.location_movable && isUntested("mobile.facts.locationSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-    {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
-    {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
-    {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
-    {(shownLimits.session || shownLimits.week) && isUntested("mobile.facts.limitBars") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-    {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
-  </> : null;
   return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
         ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} model={{
@@ -2359,12 +2311,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           disabled: !connected || tab.agent_status === "working" || tab.agent_status === "question",
           expanded: assistantSheet,
         }} />
-        // An agent tab's caption sums up its Status sheet — lamp, CLI, model,
-        // mode, branch, context — and is the way into it; the rows themselves
-        // (model, mode, worktree, location, limits) live in the sheet.
-        : tab.kind === "agent"
-          ? <div className="terminal-title"><h1>{tab.label}</h1><button className="focus-caption" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} aria-label={t("terminal.reader.status.button")} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="focus-caption-text">{captionParts.join(" · ")}{captionPlan && <b className="focus-caption-plan">{captionParts.length > 0 ? " · " : ""}{t("mobile.composer.plan")}</b>}{captionTail.length > 0 && `${captionParts.length > 0 || captionPlan ? " · " : ""}${captionTail.join(" · ")}`}{captionParts.length === 0 && !captionPlan && captionTail.length === 0 && t("mobile.focus.agentSession")}</span>{(isUntested("mobile.focus.caption") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}</button></div>
-          : <div className="terminal-title"><h1>{tab.label}</h1><small>{[t("mobile.focus.shellSession"), ...(tab.worktree ? [t("terminal.reader.worktree", { name: tab.worktree.label })] : [])].join(" · ")}</small></div>}
+        : <div className="terminal-title"><h1>{tab.label}</h1><small>{[t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession"), ...(tab.kind !== "agent" && tab.worktree ? [t("terminal.reader.worktree", { name: tab.worktree.label })] : [])].join(" · ")}</small></div>}
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
           desktop's "Project files on the phone" switch is on. */}
@@ -2679,6 +2626,39 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         <button className="primary" onClick={() => setMarkupAway(null)}>{t("mobile.markup.awayBack")}</button>
       </div>}
       {signInError && !signInSheet && <div className="inbox-upload error" role="alert"><strong>{t("mobile.signIn.open")}</strong><span>{signInError}</span><button onClick={() => setSignInError("")} aria-label={t("mobile.signIn.hide")}><CloseIcon size="1em" /></button></div>}
+      {/* No facts row in a Tabby chat: its head's model dropdown says enough
+          (the desktop's Tabby view draws none either). */}
+      {!bare && (tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">
+        {/* An agent tab's model, mode and status lead the row as tappable facts:
+            the composer keeps the whole bar for the draft and its buttons. */}
+        {tab.kind === "agent" && <>
+          <button className="fact-action" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="fact-action-label">{t("terminal.reader.status.button")}</span></button>
+          {/* A local-model tab keeps the model it was launched on: the
+              driver's list would only offer to move it off. */}
+          {tab.local_model
+            ? <span className="fact-model">{modelChip}</span>
+            : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
+          <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
+          {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+          {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+          {(isUntested("mobile.design.rounded") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+        </>}
+        {tab.worktree && <span className="fact-worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: tab.worktree.label })}</span>}
+        {/* As on the desktop Reader: the branch moves the agent to another
+            worktree of the project, where the move applies. */}
+        {tab.worktree_movable
+          ? <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openWorktreeSheet} aria-haspopup="dialog" aria-expanded={worktreeSheet} title={t("terminal.reader.worktreeSwitchHint")}><span className="fact-action-label">⎇ {shownBranch ?? t("terminal.reader.worktreeButton")}</span></button>
+          : status?.branch && <span className="fact-branch"><BranchIcon size="1em" /> {status.branch}</span>}
+        {tab.worktree_movable && isUntested("mobile.facts.worktreeSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+        {/* As the desktop tab's ⌂/☁ badge: where a remote project's agent runs. */}
+        {tab.location_movable && <button className="fact-action" disabled={!connected || tab.agent_status === "working" || tab.agent_status === "question"} onClick={openLocationSheet} aria-haspopup="dialog" aria-expanded={locationSheet} title={t("mobile.location.hint")}><span className="fact-action-label">{tab.on_host && tab.host_label ? t("mobile.location.remoteNamed", { name: tab.host_label }) : t(tab.on_host ? "mobile.location.remote" : "mobile.location.here")}</span></button>}
+        {tab.location_movable && isUntested("mobile.facts.locationSwitch") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+        {contextLeft && <span className="fact-context">{t("terminal.reader.contextLeft", { percent: contextLeft })}</span>}
+        {limitFact(shownLimits.session, sessionReset, "mobile.facts.session", "mobile.facts.sessionLabel")}
+        {limitFact(shownLimits.week, weekReset, "mobile.facts.week", "mobile.facts.weekLabel")}
+        {(shownLimits.session || shownLimits.week) && isUntested("mobile.facts.limitBars") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+        {(sessionReset || weekReset) && isUntested("mobile.facts.limitResets") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+      </div>}
       {/* The chat's tips, each its own card, one at a time right over the
           composer (the cards' ⋯ and ＋ have theirs on the tab list). A Tabby
           chat has no files, markup, Commit or status line. */}
@@ -2882,7 +2862,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       onPick={chooseLocation}
       onClose={() => { if (!locationMoving) setLocationSheet(false); }}
     />}
-    {statusSheet && <StatusSheet tab={tab} live={status} onLimits={rememberLimits} onClose={() => setStatusSheet(false)} signIn={signInWay} facts={facts} />}
+    {statusSheet && <StatusSheet tab={tab} live={status} onLimits={rememberLimits} onClose={() => setStatusSheet(false)} signIn={signInWay} />}
     {signInSheet && <SignInSheet
       tabId={tab.id}
       agent={agentLabel}

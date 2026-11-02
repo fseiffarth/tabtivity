@@ -2,8 +2,8 @@
  * The floating recipe (apps.css): one paint for every surface. The shape of the
  * failure is a member present in one list and not the others, which shows as a
  * single menu with a square corner, or a glass theme's menu going untinted. The
- * cut stays a paint: a `clip-path` on these would take the elevation shadow off
- * and cut whatever hangs outside a surface.
+ * corners are a radius token, never a `clip-path`: a clip would take the
+ * elevation shadow off and cut whatever hangs outside a surface.
  */
 import { describe, it, expect } from "vitest";
 import { readAppStylesheet } from "../helpers/cssCorpus";
@@ -52,20 +52,12 @@ describe("the floating recipe", () => {
     }
   });
 
-  it("never cuts with a clip-path, which would take the shadow", () => {
+  it("never clips with a clip-path, which would take the shadow", () => {
     for (const member of MEMBERS) {
       expect(css).not.toMatch(new RegExp(`\\.${member}\\s*\\{[^}]*clip-path`));
     }
   });
 
-  it("shades a hover card with a drop-shadow, so its cuts are not left pale", () => {
-    // A box-shadow is a rectangle that stops at the element's own box: each painted
-    // cut then shows a pale triangle against the darkened rim around it.
-    expect(css).toMatch(/:root:root \.project-pill-popup\s*\{\s*box-shadow:\s*none;\s*filter:\s*var\(--shadow-2-drop\)/);
-    const blocks = [...css.matchAll(/--shadow-2:\s*0 4px 16px/g)].length;
-    expect(blocks).toBeGreaterThan(0);
-    expect([...css.matchAll(/--shadow-2-drop:\s*drop-shadow\(/g)].length).toBe(blocks);
-  });
 
   it("zeroes the motion tokens once, past the theme blocks", () => {
     expect(css).toMatch(/prefers-reduced-motion: reduce\)\s*\{\s*:root:root\s*\{[^}]*--motion-exit: 0ms/);

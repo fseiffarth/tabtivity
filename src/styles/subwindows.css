@@ -2444,71 +2444,21 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-color: var(--accent-secondary);
 }
 /* Plain Dark / Plain Light / Light Lavender / System (follow OS — marked by
-   `data-theme-pick`, since it paints as Fancy Dark or Fancy Light) draw the
-   bubbles as octagons: 45° cut corners, the tail corner left square so it
-   still says whose it is. A clip-path would cut the border and shadow off
-   the diagonals, so the bubble itself paints the rim (rim over fill, as a
-   border over its own background) and a 1px-inset `::before` the fill, cut
-   0.59px less (1px perpendicular inset of a 45° edge, minus the 1px shift)
-   so the rim stays 1px on the diagonals too. */
+   `data-theme-pick`, since it paints as Fancy Dark or Fancy Light) give the
+   bubbles their own ink and rim and no shadow; the corners are the base rule's
+   (they were octagons until 2026-11-02). */
 [data-theme="dark"] .terminal-reader-turn,
 [data-theme="light"] .terminal-reader-turn,
 [data-theme="light_lavender"] .terminal-reader-turn,
 [data-theme-pick="system"] .terminal-reader-turn {
-  --oct-tl: 10px;
-  --oct-tr: 10px;
-  --oct-br: 10px;
-  --oct-bl: 10px;
-  --cut-tl: var(--oct-tl);
-  --cut-tr: var(--oct-tr);
-  --cut-br: var(--oct-br);
-  --cut-bl: var(--oct-bl);
-  isolation: isolate;
-  padding: 9px 13px 19px;
-  border: none;
-  border-radius: 0;
+  border: 1px solid var(--turn-rim);
   box-shadow: none;
-  background: linear-gradient(var(--turn-rim), var(--turn-rim)), var(--turn-fill);
-}
-/* Declared on both so each resolves its own `--cut-*`. */
-[data-theme="dark"] .terminal-reader-turn,
-[data-theme="light"] .terminal-reader-turn,
-[data-theme="light_lavender"] .terminal-reader-turn,
-[data-theme-pick="system"] .terminal-reader-turn,
-[data-theme="dark"] .terminal-reader-turn::before,
-[data-theme="light"] .terminal-reader-turn::before,
-[data-theme="light_lavender"] .terminal-reader-turn::before,
-[data-theme-pick="system"] .terminal-reader-turn::before {
-  clip-path: polygon(
-    var(--cut-tl) 0,
-    calc(100% - var(--cut-tr)) 0,
-    100% var(--cut-tr),
-    100% calc(100% - var(--cut-br)),
-    calc(100% - var(--cut-br)) 100%,
-    var(--cut-bl) 100%,
-    0 calc(100% - var(--cut-bl)),
-    0 var(--cut-tl)
-  );
-}
-[data-theme="dark"] .terminal-reader-turn::before,
-[data-theme="light"] .terminal-reader-turn::before,
-[data-theme="light_lavender"] .terminal-reader-turn::before,
-[data-theme-pick="system"] .terminal-reader-turn::before {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  z-index: -1;
   background: var(--turn-fill);
-  --cut-tl: max(0px, calc(var(--oct-tl) - 0.59px));
-  --cut-tr: max(0px, calc(var(--oct-tr) - 0.59px));
-  --cut-br: max(0px, calc(var(--oct-br) - 0.59px));
-  --cut-bl: max(0px, calc(var(--oct-bl) - 0.59px));
 }
 [data-theme="dark"] .terminal-reader-turn.user,
 [data-theme="light"] .terminal-reader-turn.user,
 [data-theme="light_lavender"] .terminal-reader-turn.user,
 [data-theme-pick="system"] .terminal-reader-turn.user {
-  --oct-br: 0px;
   --turn-fill: color-mix(in srgb, var(--accent) 24%, var(--bg-main));
   --turn-rim: color-mix(in srgb, var(--accent) 55%, transparent);
 }
@@ -2516,7 +2466,6 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 [data-theme="light"] .terminal-reader-turn.agent,
 [data-theme="light_lavender"] .terminal-reader-turn.agent,
 [data-theme-pick="system"] .terminal-reader-turn.agent {
-  --oct-bl: 0px;
   --turn-fill: color-mix(in srgb, var(--text-primary) 9%, var(--bg-main));
   --turn-rim: color-mix(in srgb, var(--text-primary) 18%, transparent);
 }
@@ -2527,7 +2476,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   --turn-rim: var(--accent-secondary);
 }
 /* The prompt an answer at the top belongs to, pinned there once its bubble
-   has scrolled away — the user bubble itself (octagon themes included), two
+   has scrolled away — the user bubble itself (the plain themes included), two
    lines at most; a click scrolls back to the whole of it. As the phone's
    `.readable-pinned-prompt`. */
 .terminal-reader-turn.terminal-reader-pinned-prompt {
@@ -2545,12 +2494,6 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   font-size: var(--text-sm);
   text-align: left;
   cursor: var(--cur-pointer, pointer);
-}
-[data-theme="dark"] .terminal-reader-turn.terminal-reader-pinned-prompt,
-[data-theme="light"] .terminal-reader-turn.terminal-reader-pinned-prompt,
-[data-theme="light_lavender"] .terminal-reader-turn.terminal-reader-pinned-prompt,
-[data-theme-pick="system"] .terminal-reader-turn.terminal-reader-pinned-prompt {
-  padding: 7px 13px;
 }
 /* Its bubble's time, after the words rather than in the corner: the pinned
    copy is two lines at most and has no room under them. */

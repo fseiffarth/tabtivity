@@ -275,6 +275,12 @@ Where the code differs from the plan above, and why:
 - **Cut corners are painted, not a `clip-path`.** A clip takes the elevation
   shadow off (the Reader's bubbles hit the same thing) and cuts whatever hangs
   outside a surface. The surfaces paint a 135° hard-stop gradient instead.
+- **Rounded since 2026-11-02.** After seeing the pass in the dev build the user
+  rejected the cut corners ("the edgy everywhere"): the recipe now rounds on
+  `--radius` / `--radius-lg`, the radius tokens are 6 / 10 / 14 px instead of
+  0, and the Reader's plain-theme bubbles are rounded like the other themes'.
+  The painted cut and `--shadow-2-drop` are gone. Design: canvas "Rounded
+  Theme" (2026-11-02).
 - **10 px goes to badges only** needed a second pass: the step-1 mapping keeps
   every 10 px rule at `--text-xs`, so 245 non-badge rules moved up to 11.
 - **`.is-entering` is not a class:** entry is a CSS animation on the surface
