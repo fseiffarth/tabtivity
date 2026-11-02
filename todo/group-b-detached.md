@@ -52,6 +52,19 @@
   directions), then quit and start again. Expect a brief fullscreen flash on
   the popout's screen, then the popout there at its size. Not run live
   (`subwindow.rs` `present_on_monitor`, `detached_window_screens`).
+  **Still failing on 2026-11-02 (user), reworked the same day.** Probed on a
+  private headless GNOME Shell 50.1 with two screens, the real screen read off
+  a compositor screenshot: leaving fullscreen within ~15 ms of the show lands
+  on the pointer's screen, from ~20 ms on the named one. So the hop itself
+  works; what broke it was anything leaving fullscreen early, and the popout's
+  own stray-fullscreen guard did exactly that (now off on native Wayland). The
+  hop now checks where it landed and goes round once more if wrong, the record
+  holds only a settled reading (a wrong landing no longer overwrites it, a
+  user's move does), and `detached-screens.json` keeps it across SIGTERM or a
+  crash. Never run in the app. Additional checks: a fast A→B→A switch; drag a
+  popout to the other screen, then switch away and back; `pkill` and relaunch.
+  If it still fails, the `popout-place #n` and `screen record` stderr lines show
+  which link broke.
   - [ ] ✅ Works on Linux (Wayland)
   - [ ] ❌ Doesn't work on Linux (Wayland)
 - [ ] 🖐️ **Wayland popout respawns on its own screen (2026-09-25).** A popout
