@@ -33,6 +33,8 @@ import {
   removeKeyFromTree,
   splitSubtree,
   applyResize,
+  nameSubtree,
+  withGroupName,
   moveKeyInTree,
 } from "./tabs/layoutTree";
 import { normalizeTodoId } from "./tabs/tabEntries";
@@ -374,6 +376,8 @@ export interface DetachedSeed {
    * up-to-date value but the popout ignores it — it owns its zoom once open.
    */
   zoom?: number;
+  /** A multi-pane popout's own name (`DetachedGroup.name`). */
+  name?: string;
   /**
    * The owning project's identity, captured at seed time — the detached window
    * is inert to the projects store, so this is how its tab strip renders the
@@ -435,11 +439,12 @@ export function buildSeed(
   subtree: LayoutNode,
   zoom?: number,
   remote?: DetachedRemoteInfo,
+  name?: string,
 ): DetachedSeed {
   const keys = new Set(orderedTabKeys(subtree));
   // Ship only the popout's own tabs (it renders just this subtree).
   const tabs = allScopeTabs.filter((t) => keys.has(t.key));
-  return { scope, groupId, tabs, subtree, zoom, remote };
+  return { scope, groupId, tabs, subtree, zoom, remote, ...(name ? { name } : {}) };
 }
 
 /**
@@ -502,6 +507,9 @@ export type DetachedEdit =
   // popout-side, mirrored by the main window into its detached record so the
   // state persists + survives a dock.
   | { kind: "files"; groupId: string; open?: boolean; width?: number; folder?: string }
+  // Name one pane (`groupId`), or the whole popout without it. An empty name
+  // removes it. Same split as the file viewer: optimistic here, recorded by main.
+  | { kind: "name"; groupId?: string; name: string }
   // Group B #231 — pane writes forwarded by the popout's store seam
   // (`stores/detachedContext`): viewer state (scroll/zoom/breakpoints…), a tmux
   // session rename, a Files tab's browsed folder. Payload-only; no node change.
@@ -637,6 +645,12 @@ export function applyEditToSubtree(
         ...(edit.width != null ? { filesWidth: edit.width } : {}),
         ...(edit.folder != null ? { filesFolder: edit.folder } : {}),
       }));
+    case "name": {
+      const { groupId, name } = edit;
+      return groupId
+        ? mapGroup(subtree, groupId, (grp) => withGroupName(grp, name))
+        : nameSubtree(subtree, name).subtree;
+    }
     case "add":
     case "addToScope":
       // The detached window can't mint the tab key — it leaves the subtree as-is
@@ -956,6 +970,7 @@ export function reseedDetached(scope: string, groupId: string, landedKey?: strin
     entry.subtree,
     entry.zoom,
     projectInfoForScope(scope),
+    entry.name,
   );
   void emit(detachedSeedEvent(entry.label), landedKey ? { ...seed, landedKey } : seed);
 }
@@ -1092,6 +1107,7 @@ export async function listenDetachedHost(): Promise<() => void> {
       entry.subtree,
       entry.zoom,
       projectInfoForScope(scope),
+      entry.name,
     );
     void emit(detachedSeedEvent(label), seed);
     publishStatus(true);

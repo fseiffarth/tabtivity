@@ -2334,6 +2334,7 @@ pub fn run() {
             commands::subwindow::desktop_coordinates_supported,
             commands::subwindow::snap_detached_window,
             commands::subwindow::focus_detached_window,
+            commands::subwindow::set_detached_title,
             commands::subwindow::sync_detached_scope,
             commands::subwindow::detached_window_is_parked,
             commands::subwindow::detached_window_screens,

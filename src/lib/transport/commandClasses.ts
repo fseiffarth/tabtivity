@@ -697,6 +697,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["detached_window_screens", "client"],
   ["detach_subwindow", "client"],
   ["focus_detached_window", "client"],
+  ["set_detached_title", "client"],
   ["snap_detached_window", "client"],
   ["sync_detached_scope", "client"],
   ["sync_apply_delete", "core"],

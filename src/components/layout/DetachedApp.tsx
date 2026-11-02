@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRendererWatchdog } from "../../lib/window/rendererWatchdog";
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { detachedWindowVisible } from "../../lib/window/detachedVisibility";
 import { answerRetireRequests } from "../../lib/window/unsavedWork";
@@ -53,7 +54,11 @@ import {
   type TabEntry,
   type TabKind,
 } from "../../stores/tabs";
-import { allNodeIds as nodeIdsOf } from "../../stores/tabs/layoutTree";
+import {
+  allNodeIds as nodeIdsOf,
+  nameSubtree,
+  subtreeName,
+} from "../../stores/tabs/layoutTree";
 import { setDetachedViewerState } from "../../stores/tabs/viewerState";
 import { withdrawnTabKinds } from "../../lib/experimental";
 import { useTabLandStore } from "../../stores/drag/tabLand";
@@ -110,6 +115,9 @@ export function DetachedApp({ param }: Props) {
   // The popout's content tree. Usually a single group; can become a SplitNode
   // once split-in-popout (multi-pane) lands in the renderer (Phase 2).
   const [group, setGroup] = useState<LayoutNode | null>(null);
+  // A multi-pane popout's own name (`DetachedGroup.name`); `windowName` below is
+  // what the window actually goes by.
+  const [ownName, setOwnName] = useState<string | undefined>();
   const [tabs, setTabs] = useState<TabEntry[]>([]);
   // Group B #237: the WM × asks rather than discarding. `null` = not asking.
   const [closeChoice, setCloseChoice] = useState<null | { resolveDefault: boolean }>(null);
@@ -406,6 +414,7 @@ export function DetachedApp({ param }: Props) {
       // hooks normally read them). Must precede setGroup/setTabs.
       for (const t of ev.payload.tabs) setDetachedViewerState(t.key, t.viewerState);
       setGroup(ev.payload.subtree);
+      setOwnName(ev.payload.name);
       setTabs(ev.payload.tabs);
       setRemoteInfo(ev.payload.remote);
       // Seed THIS window's otherwise-empty remoteStatus store with every host's
@@ -504,7 +513,9 @@ export function DetachedApp({ param }: Props) {
   // store seam installed below (which binds once) always reaches the current one.
   const pushEdit = (edit: DetachedEdit) => {
     setGroup((g) => (g ? applyEditToSubtree(g, edit) : g));
-    if (edit.kind === "rename") {
+    if (edit.kind === "name") {
+      if (!edit.groupId && group) setOwnName(nameSubtree(group, edit.name).name);
+    } else if (edit.kind === "rename") {
       setTabs((ts) => applyRenameToTabs(ts, edit.key, edit.label));
     } else if (edit.kind === "setColor") {
       // Optimistic, like the two beside it: the picker stays open after a pick,
@@ -535,6 +546,16 @@ export function DetachedApp({ param }: Props) {
       }),
     [label],
   );
+
+  // The OS title follows the name, which is how a popout is told apart in the
+  // taskbar and in Alt+Tab. An unnamed window never asks: it keeps its "win-N".
+  const windowName = group ? subtreeName(group, ownName) : undefined;
+  const titledName = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (windowName === titledName.current) return;
+    titledName.current = windowName;
+    void invoke("set_detached_title", { label, name: windowName ?? null }).catch(() => {});
+  }, [label, windowName]);
 
   // Closing the LAST tab closes the whole popout window — an empty detached
   // window has nothing to render (it would strand on "Loading subwindow…").
@@ -752,6 +773,8 @@ export function DetachedApp({ param }: Props) {
         pushEdit({ kind: "add", tab, targetGroupId, edge })
       }
       onFiles={(groupId, patch) => pushEdit({ kind: "files", groupId, ...patch })}
+      windowName={windowName}
+      onName={(groupId, name) => pushEdit({ kind: "name", groupId, name })}
       />
     </>
   );

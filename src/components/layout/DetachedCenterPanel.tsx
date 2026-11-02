@@ -196,6 +196,10 @@ interface Props {
    *  file viewer): applied optimistically popout-side and streamed to the main
    *  window so the flag persists (and survives a dock-back). */
   onFiles: (groupId: string, patch: { open?: boolean; width?: number; folder?: string }) => void;
+  /** What this window goes by (`subtreeName`), shown in its title bar. */
+  windowName?: string;
+  /** Name one pane, or the whole window without a `groupId`; "" removes the name. */
+  onName?: (groupId: string | undefined, name: string) => void;
 }
 
 /**
@@ -228,6 +232,8 @@ export function DetachedCenterPanel({
   onMove,
   onAddTab,
   onFiles,
+  windowName,
+  onName,
 }: Props) {
   // The popout's "+" add-tab menu: which group opened it + where to anchor it.
   const t = useT();
@@ -241,6 +247,9 @@ export function DetachedCenterPanel({
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   // Right-click on a tab-group chip: rename / ungroup.
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string; groupId: string } | null>(null);
+  // Right-click on a bar. No `groupId` names the window; so does a pane's bar in
+  // a one-pane popout, whose window and subwindow are the same thing.
+  const [nameMenu, setNameMenu] = useState<{ x: number; y: number; groupId?: string } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
   // Dismiss this strip's tab context menu on an outside click or Escape, the way
   // the main window's `TabBar` does. It used to close only when one of its rows
@@ -1249,6 +1258,35 @@ export function DetachedCenterPanel({
     [],
   );
 
+  const openNameMenu = (e: React.MouseEvent, groupId?: string) => {
+    // A dialog or menu portaled out of this bar still bubbles here in React.
+    if (!onName || !e.currentTarget.contains(e.target as Node)) return;
+    if ((e.target as HTMLElement).closest(".tab, button, input")) return;
+    e.preventDefault();
+    setHoverTab(null);
+    setTabMenu(null);
+    setStackMenu(null);
+    setNameMenu({ x: e.clientX, y: e.clientY, groupId });
+  };
+  const promptName = async (groupId?: string) => {
+    setNameMenu(null);
+    const current =
+      (groupId ? allGroups(tree).find((g) => g.id === groupId)?.name : windowName) ?? "";
+    const name = await promptText({
+      title: t(
+        groupId
+          ? current ? "tabBar.renameSubwindow" : "tabBar.nameSubwindow"
+          : current ? "detachedTabs.renameWindow" : "detachedTabs.nameWindow",
+      ),
+      label: t(groupId ? "tabBar.subwindowNameLabel" : "detachedTabs.windowNameLabel"),
+      body: current ? t("tabBar.nameRemoveHint") : undefined,
+      initial: current,
+      unchanged: current,
+      allowEmpty: true,
+    });
+    if (name !== null) onName?.(groupId, name);
+  };
+
   // #42: grab the popout's outer title bar to move/dock the WHOLE window. Mirrors
   // the group-bar handle, but anchored to the always-full-width title strip so it
   // works the same whether or not the content is split. The window controls carry
@@ -1372,6 +1410,7 @@ export function DetachedCenterPanel({
           data-group-id={group.id}
           data-tab-count={orderedTabs.length}
           onPointerDown={(e) => onGroupBarPointerDown(e, group)}
+          onContextMenu={(e) => openNameMenu(e, tree.type === "split" ? group.id : undefined)}
         >
           {/* Move grip — the sole tab-bar handle for moving/docking this popout
               (the titlebar still moves it too). Always pinned at the far left so
@@ -1386,6 +1425,10 @@ export function DetachedCenterPanel({
           >
             <GripIcon />
           </div>
+          {/* One pane's name is the window's, already in the title bar above. */}
+          {tree.type === "split" && group.name && (
+            <span className="subwindow-name" title={group.name}>{group.name}</span>
+          )}
           {/* The tabs live in their own horizontally-scrolling strip; chevrons
               flank it and appear only on overflow — the same behaviour as the
               main-window `TabBar`. `revision` re-checks overflow when the tab set
@@ -1793,6 +1836,7 @@ export function DetachedCenterPanel({
   // generic fallback. Cheap to compute; only painted while `windowDragging`.
   const firstGroup = allGroups(tree)[0];
   const moveLabel =
+    windowName ??
     (firstGroup ? tabs.find((t) => t.key === firstGroup.activeKey)?.label : undefined) ??
     "Subwindow";
 
@@ -1804,7 +1848,11 @@ export function DetachedCenterPanel({
           in the root group's tab bar, which slid left (with the root group) once
           the popout was split; an outer frame keeps them pinned. The empty strip
           is a drag handle for moving / docking the whole window. */}
-      <div className="detached-titlebar detached-drag-handle" onPointerDown={onTitlebarPointerDown}>
+      <div
+        className="detached-titlebar detached-drag-handle"
+        onPointerDown={onTitlebarPointerDown}
+        onContextMenu={(e) => openNameMenu(e)}
+      >
         {/* The star marks the window frame — it lives HERE and nowhere else,
             which is why it was taken back off every subwindow's tab bar. */}
         <span
@@ -1831,6 +1879,11 @@ export function DetachedCenterPanel({
         >
           <GripIcon />
         </span>
+        {/* Plain text, not a control, so the title moves the window like the rest
+            of the strip; a right-click names it. */}
+        {windowName && (
+          <span className="detached-titlebar-name" title={windowName}>{windowName}</span>
+        )}
         {/* #237: dock the whole window back into the main layout. The gesture
             that used to do this (drag the popout onto the main window) went with
             the 2026-07-19 move-only rework — titlebar and grip drags are native
@@ -1931,6 +1984,24 @@ export function DetachedCenterPanel({
         <CustomAgentDialog onClose={() => setAgentDialogOpen(false)} />
       )}
       {dialogs}
+      {nameMenu && (
+        <ContextMenuPortal
+          x={nameMenu.x}
+          y={nameMenu.y}
+          onClose={() => setNameMenu(null)}
+          className="tab-new-menu"
+        >
+          <button className="tab-new-menu-item" onClick={() => void promptName(nameMenu.groupId)}>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
+            {nameMenu.groupId
+              ? t(allGroups(tree).find((g) => g.id === nameMenu.groupId)?.name
+                  ? "tabBar.renameSubwindow"
+                  : "tabBar.nameSubwindow")
+              : t(windowName ? "detachedTabs.renameWindow" : "detachedTabs.nameWindow")}
+            <UntestedTag id="detachedTabs.nameWindow" />
+          </button>
+        </ContextMenuPortal>
+      )}
       {tabMenu && createPortal(
         <div className="tab-new-menu" ref={tabMenuRef} style={{ position: "fixed", left: tabMenu.x, top: tabMenu.y }}>
           <button className="tab-new-menu-item" onClick={() => {

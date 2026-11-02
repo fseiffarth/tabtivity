@@ -938,6 +938,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("detached_window_screens", Client),
     ("detach_subwindow", Client),
     ("focus_detached_window", Client),
+    ("set_detached_title", Client),
     ("snap_detached_window", Client),
     ("sync_detached_scope", Client),
     // commands/sync.rs

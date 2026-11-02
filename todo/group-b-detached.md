@@ -1,5 +1,23 @@
 ## Group B — Detached Windows: Parity & Cross-Window Correctness
 
+- [ ] 🖐️ **Subwindows and popouts take names (2026-11-02).** Right-click the
+  empty part of a subwindow's tab bar → Name this subwindow…, or a popout's
+  title bar → Name this window…. Check: the name shows beside the grip / in the
+  title bar; a popout's name is its OS title in the taskbar and Alt+Tab, and
+  the window can still be parked by a project switch (X11); an empty name
+  removes it. It survives a restart, hide + restore, and pop out + dock back. In
+  a popout split into panes, a pane's own bar names that pane and the title bar
+  names the window; docking keeps the panes' names and drops the window's. Not
+  run live (`TabBar.tsx`, `DetachedCenterPanel.tsx`, `layoutTree.ts`,
+  `subwindow.rs`).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 - [ ] 🖐️ **A popout whose screen is gone stays detached, on the main window's
   screen (2026-10-05).** Still after the 2026-09-29 fix (Wayland): unplugging
   docked DS_GNN_GED's and DS_ShareGNN's popouts. Disconnecting stalls the main

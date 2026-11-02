@@ -516,6 +516,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const browserHome = useSettingsStore((s) => s.settings?.browser_home_url);
   const closeGroup = useTabsStore((s) => s.closeGroup);
   const hideGroup = useTabsStore((s) => s.hideGroup);
+  const setGroupName = useTabsStore((s) => s.setGroupName);
   // Per-subwindow right file viewer: toggle state lives on the group node.
   const filesOpen = !!group?.filesOpen;
   const setGroupFiles = useTabsStore((s) => s.setGroupFiles);
@@ -648,6 +649,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const [editingKey, setEditingKey] = useState<string | null>(null);
   // Right-click on a tab-group chip: its own menu (rename / ungroup / close).
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
+  // Right-click on the bar itself: the one place a subwindow's name is set.
+  const [nameMenu, setNameMenu] = useState<{ x: number; y: number } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
   const { promptText, showMessage, dialogs } = useDialogs();
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
@@ -1215,6 +1218,31 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     if (label) renameTab(key, label);
   }
 
+  function onBarContextMenu(event: React.MouseEvent) {
+    if (groupId === EMPTY_GROUP_ID) return;
+    // A dialog or menu portaled out of this bar still bubbles here in React.
+    if (!event.currentTarget.contains(event.target as Node)) return;
+    if ((event.target as HTMLElement).closest(".tab, button, input")) return;
+    event.preventDefault();
+    setMenuPos(null);
+    setTabMenu(null);
+    setStackMenu(null);
+    setNameMenu({ x: event.clientX, y: event.clientY });
+  }
+  async function nameSubwindow() {
+    setNameMenu(null);
+    const current = group?.name ?? "";
+    const name = await promptText({
+      title: t(current ? "tabBar.renameSubwindow" : "tabBar.nameSubwindow"),
+      label: t("tabBar.subwindowNameLabel"),
+      body: current ? t("tabBar.nameRemoveHint") : undefined,
+      initial: current,
+      unchanged: current,
+      allowEmpty: true,
+    });
+    if (name !== null) setGroupName(groupId, name);
+  }
+
   function onTabContextMenu(event: React.MouseEvent, key: string, index: number) {
     event.preventDefault();
     event.stopPropagation();
@@ -1611,6 +1639,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       data-group-id={groupId}
       data-tab-count={tabs.length}
       onPointerDown={onBarPointerDown}
+      onContextMenu={onBarContextMenu}
     >
       {/* Move grip — the handle for rearranging this whole subwindow (⧉ pops
           it out). Always pinned at the far left (outside the scrolling strip) so
@@ -1624,6 +1653,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       >
         <GripIcon />
       </div>
+      {group?.name && (
+        <span className="subwindow-name" title={group.name}>{group.name}</span>
+      )}
       <button
         className="tab-scroll-btn tab-popout-btn"
         title={t("tabBar.popOutTitle")}
@@ -2281,6 +2313,20 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               <MenuShortcut chord="reopenClosedTab" />
             </button>
           )}
+        </ContextMenuPortal>
+      )}
+      {nameMenu && (
+        <ContextMenuPortal
+          x={nameMenu.x}
+          y={nameMenu.y}
+          onClose={() => setNameMenu(null)}
+          className="tab-new-menu"
+        >
+          <button className="tab-new-menu-item" onClick={() => void nameSubwindow()}>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
+            {t(group?.name ? "tabBar.renameSubwindow" : "tabBar.nameSubwindow")}
+            <UntestedTag id="tabBar.nameSubwindow" />
+          </button>
         </ContextMenuPortal>
       )}
       {stackMenu && (

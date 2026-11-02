@@ -1289,6 +1289,22 @@
 }
 .tab-drag-grip:active { cursor: var(--cur-grabbing, grabbing); }
 
+/* A subwindow's name, beside its grip. Pinned like the grip, so it stays put
+   while the tabs scroll, and capped so it never takes the strip's room. */
+.subwindow-name {
+  flex: 0 1 auto;
+  align-self: center;
+  min-width: 2em;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--space-1);
+  color: var(--text-primary);
+  font-weight: 600;
+  user-select: none;
+}
+
 /* The horizontally-scrolling tab container, holding the tabs and nothing else;
    its scrollbar is hidden (chevrons + wheel drive the scroll instead).
    `flex: 0 1 auto` — it takes only the width its tabs need and shrinks when

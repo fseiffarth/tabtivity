@@ -262,6 +262,11 @@ Toolbar behavior:
   tabs' PTYs, drops their payloads, and persists, so those tabs do NOT dock back
   and do NOT restore on next launch. Dock-back is session-only — a re-docked group
   restores as docked on restart; only the main window is the persistence owner.
+  A name lives on the group node (`GroupNode.name`, set by right-clicking a bar),
+  so it follows the group through detach, dock and hide. A multi-pane popout's own
+  name is `DetachedGroup.name`; `subtreeName` reads either and `nameSubtree` writes
+  either. `set_detached_title` puts it in the OS title, only after the X11 resolver
+  has finished matching the numbered `win-N` title.
   `attachOnly` never spawns a PTY, so the main window keeps owning the process.
 - Each tab with kind `"agent"` or `"shell"` renders a `TerminalView` backed by
   a PTY. Tabs with kind `"local_agent"` also render a PTY, using `vibe` with a

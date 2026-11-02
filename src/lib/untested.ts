@@ -31,6 +31,8 @@ export type UntestedEntry = {
 
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
+  "tabBar.nameSubwindow": { area: "tabs", what: "Right-click the empty part of a subwindow's tab bar → Name this subwindow…: the name shows beside the grip, survives a restart, hiding and restoring, and popping out and docking back; an empty name removes it" },
+  "detachedTabs.nameWindow": { area: "tabs", what: "Right-click a popout's title bar → Name this window…: the name shows in the title bar and as the OS window title (taskbar, Alt+Tab) and survives a restart; a popped-out named subwindow keeps its name as the window's; in a split popout a pane's own bar names that pane" },
   "agents.launchDefaults": { area: "agents", what: "Manage CLIs → each installed CLI → Default model and effort: saved per CLI, applied to new desktop/phone sessions across projects and root; explicit choices, resumes and local-model tabs keep their settings; reset restores CLI defaults" },
   "terminal.reader.launchDefaults": { area: "agents", what: "Agent pane · Chat view · the model list (/model) and Claude's effort list end in a folded Default for new tabs: <model · effort | CLI default> row; opened, it is Manage CLIs → Default model and effort for this tab's CLI (no help text); saving there changes only new sessions, not this one; hidden for CLIs with no verified startup option" },
   "mobile.model.launchDefaults": { area: "mobile", what: "Phone · model sheet (and its effort step) ends in a folded Default for new tabs: <model · effort | CLI default> row: model field, effort list, Save defaults / Use CLI defaults — the same per-CLI setting as Manage CLIs; this session keeps its model; not on local-model, Tabby or host tabs" },

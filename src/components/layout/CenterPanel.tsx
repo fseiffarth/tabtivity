@@ -365,7 +365,7 @@ function CenterPanelImpl() {
       // allowLastGroup: a restored popout may be the scope's only group (its
       // in-window siblings held only non-restorable tabs and were dropped); it
       // must still re-detach into its own window rather than stay docked.
-      detachGroup(t.id, { bounds: t.bounds, zoom: t.zoom, allowLastGroup: true });
+      detachGroup(t.id, { bounds: t.bounds, zoom: t.zoom, name: t.name, allowLastGroup: true });
     }
   }, [scope, pendingRespawn, consumePendingRespawn, detachGroup]);
 

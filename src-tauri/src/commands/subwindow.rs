@@ -48,11 +48,21 @@ pub fn detached_label(scope: &str, group_id: &str) -> String {
 /// Human-friendly, per-session-unique OS window title for a detached group,
 /// e.g. "Tabtivity win-1". This string is load-bearing on X11: the resolver in
 /// `platform::x11::find_window_for_title` matches on it exactly to recover the
-/// native window id, so it must stay unique among live detached windows.
-/// Uniqueness comes from the caller assigning a distinct sequence number per
-/// live window (lowest free positive int); see `detach_subwindow`.
+/// native window id, so it must stay unique among live detached windows and in
+/// place until the resolver is done (only then does a name replace it, see
+/// [`detached_window_title`]). Uniqueness comes from the caller assigning a
+/// distinct sequence number per live window (lowest free positive int); see
+/// `detach_subwindow`.
 pub fn detached_title(seq: u32) -> String {
     format!("{app} win-{seq}", app = crate::brand::DISPLAY)
+}
+
+/// The title a window goes by once it is built: its name, else its number.
+pub fn detached_window_title(seq: u32, name: Option<&str>) -> String {
+    match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("{name} — {app}", app = crate::brand::DISPLAY),
+        None => detached_title(seq),
+    }
 }
 
 /// The query string the DetachedApp renderer reads to mount a single group.
@@ -257,6 +267,8 @@ pub async fn detach_subwindow(
     // quit (`detached_window_screens`), GDK's logical rect. Ignored elsewhere,
     // and once this run has a record of its own.
     monitor: Option<MonitorRect>,
+    // The window's name, for its OS title once the resolver below has finished.
+    name: Option<String>,
 ) -> Result<String, String> {
     let label = detached_label(&project_id, &group_id);
 
@@ -420,6 +432,9 @@ pub async fn detach_subwindow(
     // and macOS we read the HWND / NSWindow number straight off the Tauri
     // window by its label.
     let window_id = resolve_detached_window_id(&app, &label, &title);
+    if name.is_some() {
+        let _ = win.set_title(&detached_window_title(seq, name.as_deref()));
+    }
 
     if let Some(wid) = window_id {
         // Opt the detached window into the parkable override so the switch path
@@ -2065,6 +2080,33 @@ pub fn focus_detached_window(app: AppHandle, label: String) -> bool {
     win.set_focus().is_ok()
 }
 
+/// Put a popout's name in its OS title (the taskbar and Alt+Tab show it); no
+/// name brings the numbered one back. Refused while the window is being built:
+/// the X11 resolver is still matching the numbered title, and `detach_subwindow`
+/// applies the name itself when it is done.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_detached_title(
+    app: AppHandle,
+    win_registry: State<'_, WindowRegistryState>,
+    label: String,
+    name: Option<String>,
+) -> bool {
+    if !label.starts_with("detached-") {
+        return false;
+    }
+    let seq = {
+        let reg = win_registry.lock_ok();
+        if reg.detached_building.contains(&label) {
+            return false;
+        }
+        reg.detached_seqs.get(&label).copied()
+    };
+    let (Some(seq), Some(win)) = (seq, app.get_webview_window(&label)) else {
+        return false;
+    };
+    win.set_title(&detached_window_title(seq, name.as_deref())).is_ok()
+}
+
 /// How often the monitor-arrangement watcher re-reads the connected displays.
 /// One cheap runtime query; the cost of noticing an unplug late is a popout the
 /// user cannot reach, so this stays in the "within a breath" range rather than
@@ -2302,6 +2344,18 @@ mod tests {
         // Distinct numbers produce distinct titles (the X11 resolver key must be
         // unique per live window).
         assert_ne!(detached_title(1), detached_title(2));
+    }
+
+    #[test]
+    fn a_name_replaces_the_number_but_never_equals_the_main_title() {
+        assert_eq!(
+            detached_window_title(3, Some(" Paper draft ")),
+            concat!("Paper draft — ", crate::app_name!()),
+        );
+        assert_eq!(detached_window_title(3, None), detached_title(3));
+        assert_eq!(detached_window_title(3, Some("  ")), detached_title(3));
+        // The main window is resolved by its exact bare title.
+        assert_ne!(detached_window_title(3, Some(crate::brand::DISPLAY)), crate::brand::DISPLAY);
     }
 
     #[test]

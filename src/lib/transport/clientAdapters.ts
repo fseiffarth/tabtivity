@@ -74,6 +74,7 @@ export function adaptClientCommand(client: WsClient, cmd: string, args: Args): P
     case "detach_subwindow":
     case "attach_subwindow":
     case "focus_detached_window":
+    case "set_detached_title":
     case "snap_detached_window":
     case "sync_detached_scope":
     case "detached_retire_ack":

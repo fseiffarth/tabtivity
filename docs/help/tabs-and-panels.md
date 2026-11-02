@@ -33,6 +33,13 @@ Settings → Agents → Manage CLIs (see `agent-clis`).
 - Drag a file from the file tree onto a tab bar or pane edge to open it there.
 - Drag a tab (or a whole tab bar) out of the window to pop it into its own
   window; drag it back to dock it.
+- Name a subwindow: right-click the empty part of its tab bar → **Name this
+  subwindow…**. The name shows beside the grip and is saved with the layout;
+  save an empty name to remove it. A popped-out window is named the same way
+  from its title bar, and the name also becomes the window's title in the
+  taskbar and Alt+Tab. A named subwindow keeps its name when you pop it out or
+  dock it back. A window split into several panes has its own name, and each
+  pane can have one too; docking keeps the panes' names, not the window's.
 - Right-click a tab for Rename, Duplicate, Close, Close others, and its task.
   Shift+right-click renames inline; double-click also renames.
 - Group tabs: right-click a tab → New tab group… (or Add to group “…”). A

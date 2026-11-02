@@ -342,6 +342,20 @@ body {
   height: 13px;
 }
 
+/* The window's name, on the strip it moves by: plain text, so a press on it
+   drags like one anywhere else. Shrinks before the window controls do. */
+.detached-titlebar-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--space-2);
+  color: var(--text-primary);
+  font-weight: 600;
+  user-select: none;
+}
+
 /* The layout tree lives below the title bar and is the positioning context for
    the absolutely-inset split/subwindow nodes + the split-preview overlay. (In the
    main window the panel itself plays this role; here the title bar sits above, so
