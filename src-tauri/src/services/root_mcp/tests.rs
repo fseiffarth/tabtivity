@@ -1928,7 +1928,7 @@ fn events_move_between_calendars_by_id_or_all_at_once() {
     let (r, changes) = f.call("calendar_move_events", json!({ "ids": [a, a], "to": "Work" }));
     assert_eq!(r["isError"], false, "{r}");
     assert_eq!(text(&r)["moved"], json!([a]), "a repeated id moves once");
-    let [change] = changes.as_slice() else { panic!("one row, got {}", changes.len()) };
+    let [change] = changes.as_slice() else { panic!("expected exactly one row") };
     assert_eq!((change.kind, change.op, change.local), ("event", "upsert", false));
     assert_eq!(change.row["id"], a, "a move keeps the event's identity");
     assert_eq!(change.row["end"], "2026-09-18T10:30", "and its times");

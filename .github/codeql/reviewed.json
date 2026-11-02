@@ -276,7 +276,7 @@
     "line": 990,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "a1e6e1c9dad61998c1f07b8119b3600db81a2eaa2df936392f902925162d355e",
+    "sha256": "1c7a0d4073b178e4bdb63d79bca483cc140e0a3f1c06a7d4ee72002bd81e40e2",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_open reads only the fixed settings.json leaf to check the assistant opt-in."
   },
   {
@@ -284,7 +284,7 @@
     "line": 1029,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "a1e6e1c9dad61998c1f07b8119b3600db81a2eaa2df936392f902925162d355e",
+    "sha256": "1c7a0d4073b178e4bdb63d79bca483cc140e0a3f1c06a7d4ee72002bd81e40e2",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_devices reads only the fixed settings.json leaf for the assistant's per-phone list."
   },
   {
@@ -292,7 +292,7 @@
     "line": 1282,
     "source": "let projects: Vec<ProjectRecord> = match fs::read(state_dir.join(\"projects.json\")) {",
     "rule": "rust/path-injection",
-    "sha256": "a1e6e1c9dad61998c1f07b8119b3600db81a2eaa2df936392f902925162d355e",
+    "sha256": "1c7a0d4073b178e4bdb63d79bca483cc140e0a3f1c06a7d4ee72002bd81e40e2",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. launch_place reads only the fixed projects.json registry, never a project-folder file."
   },
   {
@@ -300,7 +300,7 @@
     "line": 1546,
     "source": "fs::read(&path)",
     "rule": "rust/path-injection",
-    "sha256": "a1e6e1c9dad61998c1f07b8119b3600db81a2eaa2df936392f902925162d355e",
+    "sha256": "1c7a0d4073b178e4bdb63d79bca483cc140e0a3f1c06a7d4ee72002bd81e40e2",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. read_session reads <state_dir>/sessions/<key>/terminals.json, where project_key maps every character outside [A-Za-z0-9_-] to '_' (and empty to 'x'), so no id can climb out of sessions/."
   },
   {
