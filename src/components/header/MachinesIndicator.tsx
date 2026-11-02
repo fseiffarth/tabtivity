@@ -169,8 +169,9 @@ type HandCheck = { ok: boolean; at: number; error?: string };
  *  apart from `stores/remote/globalMachines` on purpose: its `reachable` is the
  *  sweep's map, and a hand probe must not be filed as one (nor may it touch
  *  `status`, which means "a session we opened"). A row prefers its hand check
- *  only while it is the newer of the two. Shared by the dropdown and the
- *  overlay, so both surfaces and the header's lamps read the same answer.
+ *  while it is the newer of the two, or while no sweep has answered for that
+ *  machine. Shared by the dropdown and the overlay, so both surfaces and the
+ *  header's lamps read the same answer.
  *  `sweeping` is the machines the sweep in flight has not heard back from, which
  *  is what lets a row with no answer yet say "checking" rather than "not checked". */
 const useMachineChecksStore = create<{
@@ -613,14 +614,20 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
    *  the sweep's decision to skip it can never disagree. */
   const autoTouchable = (m: GlobalMachine) => mayAutoTouch(settings, targetOfSpec(m));
 
-  /** The reachability a row should believe: a hand Check wins while it is the
-   *  newer of the two, otherwise the sweep's answer — and `undefined` (nobody
-   *  asked) stays `undefined` rather than collapsing into "no". */
-  const reachOf = (id: string): boolean | undefined => {
+  /** Whether a row's hand Check still stands: it is newer than the last sweep,
+   *  or the sweeps have said nothing about this machine. `sweepAt` is one stamp
+   *  for the whole fleet and a sweep skips a tagged cluster by design, so without
+   *  the second half any sweep would wipe the only answer such a row ever has. */
+  const checkStands = (id: string): boolean => {
     const local = checked[id];
-    if (local && local.at >= sweepAt) return local.ok;
-    return reachable[id];
+    return !!local && (local.at >= sweepAt || reachable[id] === undefined);
   };
+
+  /** The reachability a row should believe: a hand Check while it stands,
+   *  otherwise the sweep's answer — and `undefined` (nobody asked) stays
+   *  `undefined` rather than collapsing into "no". */
+  const reachOf = (id: string): boolean | undefined =>
+    checkStands(id) ? checked[id]?.ok : reachable[id];
   const stateOf = (m: GlobalMachine): RowState =>
     rowStateOf(status[m.id] ?? "off", reachOf(m.id));
 
@@ -1986,13 +1993,13 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
               ? name
               : `${name} — ${t(awaitingSweep ? "machines.badge.checking" : STATE_WORD[state])}`;
             // Both error channels on one line, freshest first: this component's
-            // (the explicit HPC login), then a Check newer than the last sweep,
-            // then the store's — a failed connect, a failed probe, and now also
+            // (the explicit HPC login), then a Check that still stands, then the
+            // store's — a failed connect, a failed probe, and now also
             // `setAutoConnect`'s "auto-connect not saved: …".
             const check = checked[m.id];
             const rowError =
               localErrors[m.id] ??
-              (check && check.at >= sweepAt ? check.error : undefined) ??
+              (checkStands(m.id) ? check?.error : undefined) ??
               errors[m.id];
             const shift = partShift(idx);
             // A row shows its icon actions only while nothing has taken the row
