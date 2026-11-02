@@ -22,7 +22,7 @@ import {
 import { useI18nStore, useT } from "../../lib/i18n";
 import { useSettingsStore } from "../../stores/settings";
 import { ContextMenuPortal } from "./ContextMenuPortal";
-import { CalendarIcon } from "./icons/Icon";
+import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon } from "./icons/Icon";
 
 /**
  * **The** day-entry field — `common/TimeField`'s other half, and the one control
@@ -216,10 +216,10 @@ export function DateField({
             <button type="button" className="date-pop-nav" aria-label={t("dateField.prevYear")}
               onClick={() => setCursor(addYears(cursor, -1))}>«</button>
             <button type="button" className="date-pop-nav" aria-label={t("dateField.prevMonth")}
-              onClick={() => setCursor(addMonths(cursor, -1))}>‹</button>
+              onClick={() => setCursor(addMonths(cursor, -1))}><ChevronLeftIcon /></button>
             <span className="date-pop-title">{monthName(lang, civil.month)} {civil.year}</span>
             <button type="button" className="date-pop-nav" aria-label={t("dateField.nextMonth")}
-              onClick={() => setCursor(addMonths(cursor, 1))}>›</button>
+              onClick={() => setCursor(addMonths(cursor, 1))}><ChevronRightIcon /></button>
             <button type="button" className="date-pop-nav" aria-label={t("dateField.nextYear")}
               onClick={() => setCursor(addYears(cursor, 1))}>»</button>
           </div>

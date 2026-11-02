@@ -203,7 +203,8 @@ describe("CenterPanel — pointer drag → edge split (integration)", () => {
       await act(async () => {
         fireEvent.click(container.querySelector(".center-placeholder-action")!);
       });
-      expect(requests).toEqual([{ request: { kind: "menu" }, groupId: EMPTY_GROUP_ID, besideActive: undefined }]);
+      // No agent behind the first number here, so the start falls back to the menu.
+      expect(requests[requests.length - 1]).toEqual({ request: { kind: "menu" }, groupId: EMPTY_GROUP_ID, besideActive: undefined });
       expect(container.querySelector(".tab-new-btn")?.getAttribute("aria-expanded")).toBe("true");
       expect(document.querySelector(".tab-add-menu")).not.toBeNull();
       expect(useTabsStore.getState().scope).toBe("p");

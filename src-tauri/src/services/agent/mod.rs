@@ -12,6 +12,7 @@ pub mod agent_bin;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
 pub mod agent_changes;
+pub mod agent_defaults;
 pub mod agent_chats;
 // `--agent-exec`: an agent's secrets mapped from their app-named carriers to
 // the CLI's own variable names, just before the agent runs (no common name on
@@ -52,7 +53,14 @@ pub mod agent_turn;
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
 pub mod agent_versions;
+// One overview of the CLIs in use: plan, account, usage windows
+// (docs/cli_overview_plan.md).
+pub mod cli_overview;
 pub mod codex_bind;
+// Codex's release package, fetched ahead of its installer with no deadline and
+// a resumable `.part`; the installer's own download has neither.
+#[cfg(unix)]
+pub mod codex_package;
 // Codex's own SQLite thread store (`~/.codex/state_<n>.sqlite`), read
 // read-only for the model a Codex tab is running now that its releases
 // no longer write the JSONL rollout the model tag used to come from.

@@ -19,6 +19,20 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
 - *Both:* the network pane's per-connection table (interfaces only; an
   explanatory warning is shown in the pane).
 
+- [ ] 🖐️ **Cross-platform install/model smoke test:** run the reusable
+  [cross-platform testing checklist](../docs/cross-platform-testing.md), starting
+  with every CLI's install/download buttons, Ollama install/upgrade, and local
+  model pull/pause/resume/load. Keep a separate run record for each OS/build;
+  leave results unchecked until tested live.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+
 30. **Windows support follow-ups.** Windows is past the compile stage (state
     paths, shell fallback, browser profiles, network detection, app-icon
     helpers, NSIS packaging, and a Windows CI package job all exist). Native
@@ -3573,6 +3587,16 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+  - [ ] 🖐️ Manual phone QA — an agent notice leads with its time (2026-11-02; `push.rs` `at`, `sw.js`; ⚠️ never run on a phone; sidecar + PWA rebuild first): let an agent ask or finish with the phone locked → the body reads "14:32 · Needs your answer" / "14:32 · Finished “…”" in the phone's clock format; with a long prompt the time is still visible in the collapsed notice. With "Only that something wants you" the body is the time alone. A calendar reminder is unchanged.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
   - [ ] 🖐️ Manual phone QA — a pocketed phone still gets the notice (2026-10-01; `TerminalControl::Visibility` / `TerminalEvent::Features`, `TerminalRegistry::is_watched`; ⚠️ never run on a phone; sidecar + PWA rebuild first): Agents → "Also when one finishes a turn". Open an agent tab on the phone, send a prompt, switch to another app (or lock the screen) before the turn ends → the "Finished …" notice arrives, and the tab's row still reads unread/done on the desktop until the phone is looked at again. Back in the tab, with the page in front: the next finished turn does not notify. Coming back from the other app must not replay the history (the socket was kept).
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
@@ -3729,6 +3753,35 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [~] **31cl — The phone's Diverged list** (2026-10-30; code-complete, automated
+  tests passing — `MobileDiverged.test.ts`, `MobileDivergedSheet.test.tsx`,
+  `mobile_control::diverged`, `the_diverged_list_goes_through_the_window_behind_its_switches`;
+  ⚠️ never run live). Rationale in `docs/context/mobile_access.md`. Untested ids
+  `mobile.project.diverged`, `mobile.project.sync`.
+  - Needs the sidecar updated and the PWA rebuilt (`npm run backend:stale`,
+    `npm run mobile:bundle`).
+  - [ ] 🖐️ Manual QA, desktop + phone — (1) A remote project with a mirror, one
+    file edited on each side since the last sync, one new local file, Project
+    files on: the drawer shows ± Diverged with a count; the list shows both kinds;
+    tapping a file shows its diff; no action buttons and a note about the switch.
+    (2) Turn on "Phone may resolve diverged files": Use host on one file asks with
+    the size and names the local changes it loses; Cancel moves nothing; confirm
+    and the row goes, on the desktop too. (3) Use local, Use newer and Upload, per
+    file and for all; "Exclude changed on both" keeps a true conflict out of a
+    bulk action. (4) Delete a file on one side: Delete names it and removes the
+    other copy; a file gone from both offers Forget. (5) Open the list, restore
+    that file on the desktop, then confirm the delete on the phone: it is left
+    alone and reported as changed. (6) Disconnect the project: the list says so
+    and the buttons are disabled. Close the window: the list says the desktop is
+    unavailable. (7) A `.env` that diverged is counted as hidden, never listed.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 - [~] **31cj — The phone reaches a remote project's tabs on the host** (2026-10-24;
   window + phone half code-complete, automated tests passing —
   `MobileTabReach.test.ts` (`lists` column of `projectHostReach.fixture.json`),
@@ -3842,6 +3895,119 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     launch, Settings → Mobile no longer offers Update host, and a new route
     (e.g. 31bo's project files) works without clicking anything. Relaunch again with no new
     build → no restart.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31cn — Find files on the phone: Open from Diffs, 🔍, Favorites page** (2026-11-02;
+  ✅ code-complete, `MobileChatDiffs`, `MobileFavoritesPage`, `MobileHostTabs`,
+  `MobileForgetFiles` tests and `chat_changes` Rust tests passing; ⚠️ never seen on
+  a phone). Needs a dev build: the backend half (`file` on a change, `files_off`)
+  and the PWA are both in the binary. An unpaired phone now also forgets the
+  library's favorites, recents, colours, file cards and folder trail.
+  - [ ] 🖐️ Chat → view pill → Diffs: a row per file over the changes, with its
+    count and +/−. Tapping a row narrows the changes, tapping again shows all. Open
+    shows the file, with Mark up. A deleted file and a worktree's have no Open.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Project screen → 🔍: the library opens with the keyboard up and recent
+    files showing; Back returns to the project. The box stays put while the list
+    scrolls. A search that finds nothing says git-ignored files are skipped.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Desktop switch "Project files on the phone" off: ☰ and 🔍 stay on a
+    project and the drawer names the switch. A remote project with no local copy
+    names it too, rather than saying files appear once synced.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Home → Favorites: the four segments fit one line on a narrow phone, in
+    every language. Favorites from several projects are grouped, a coloured folder
+    wears its colour, a file opens and Back returns to the page, a folder opens in
+    the library, ⋯ offers Show in folder and Unfavorite, and a moved file dims and
+    offers Remove.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31co — Files a phone chat names and changes** (2026-11-02; ✅ code-complete,
+  `MobileChatNamedFiles.test.tsx` and `named_files` tests; ⚠️ never seen live).
+  Like the desktop Chat: an answer naming a picture or PDF of the project is
+  followed by a message showing it, its path (or a Markdown link to it) opens
+  the file, and Files (N) also lists what the agent changed and named. Needs
+  Project files on the phone. The phone's bundle and the sidecar route ship
+  together: rebuild first.
+  - [ ] 🖐️ iPad and phone, Focus chat of a local agent tab: ask the agent to name
+    a PDF and a picture of the project. Each follows the answer as its own
+    message, the answer's bubble unchanged; a tap opens it in the app, Mark up
+    included. The path in the answer's words opens it too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Files (N) in the strip over the chat: Changed by the agent and Named in
+    the chat list the right files, each once; a tap opens the file; a deleted
+    file brings the note that Diffs holds more.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31cm — Send now and Cancel and edit on Codex and OpenCode mini** (2026-11-02;
+  ✅ code-complete, `MobileQueuePull.test.ts` and the walks run against the real
+  Codex 0.166.0 and OpenCode 2.2.5 on a stub model; ⚠️ never seen in the app).
+  A chat's Codex prompt now goes in with Tab, so it waits for the turn's end
+  unless Send now is pressed.
+  - [ ] 🖐️ Phone and desktop Chat, Codex, agent working: send two prompts. Both
+    bubbles carry the pair; Send now stops the turn and both go as one prompt,
+    each bubble staying where it was. Stop and holding Send keep them too.
+    Cancel and edit brings them back into the composer.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ `opencode --mini`, agent working: the pair shows once the footer
+    counts `pending`; Send now and Cancel and edit both work. A full `opencode`
+    tab shows no pair and never quits.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

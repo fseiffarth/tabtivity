@@ -4,7 +4,7 @@
 //! or `inbox/` (phone → agent, the composer's **+**, markup bakes): both only
 //! met their 1 GiB caps, after which sends and uploads were refused. This
 //! sweep runs at start and every [`EVERY`] after, over every local project,
-//! box and root folder ([`discovery::drop_box_roots`]), and deletes what has
+//! box, root and Tabby chat folder ([`discovery::drop_box_roots`]), and deletes what has
 //! sat there longer than its box keeps it. An outbox file is a copy the phone
 //! has had its look at; an inbox file is an `@` reference a resumed session
 //! may still read, so it is kept longer. A chat bubble whose file went shows
@@ -110,6 +110,31 @@ mod tests {
         assert!(outbox_of(project.path()).join("new.png").exists());
         assert!(inbox_of(project.path()).join("20260101-000000-new.png").exists());
         assert!(!outbox_of(folder.path()).join("old.png").exists());
+    }
+
+    #[test]
+    fn a_tabby_chats_files_are_swept_and_a_link_in_its_place_is_not() {
+        let state = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let chat = crate::services::assistant::chat_dir(state.path(), "1c9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a11").unwrap();
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        let inbox_of = |root: &Path| root.join(inbox::INBOX_DIR);
+        aged(&inbox_of(&chat).join("20260101-000000-old.png"), png, DAY * 91);
+        aged(&inbox_of(&chat).join("20260101-000000-new.png"), png, DAY * 89);
+
+        #[cfg(unix)]
+        let elsewhere = {
+            let elsewhere = tempfile::tempdir().unwrap();
+            aged(&inbox_of(elsewhere.path()).join("20260101-000000-old.png"), png, DAY * 91);
+            let link = chat.with_file_name("2d9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a12");
+            std::os::unix::fs::symlink(elsewhere.path(), link).unwrap();
+            elsewhere
+        };
+
+        assert_eq!(sweep(state.path(), root.path(), SystemTime::now()), (0, 1));
+        assert!(inbox_of(&chat).join("20260101-000000-new.png").exists());
+        #[cfg(unix)]
+        assert!(inbox_of(elsewhere.path()).join("20260101-000000-old.png").exists());
     }
 
     #[test]

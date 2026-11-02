@@ -23,8 +23,8 @@ const BUSY_WINDOW = 24;
  * `esc again to interrupt` after one press. A bare "esc to cancel" is a
  * dialog's footer — a question, not work — so the cancel form needs its
  * elapsed time. Copilot CLI's footer row while it works is a cycling glyph,
- * the verb and its own key hint (`◎ Working  esc esc edit prompt`, 1.0.102 and
- * 1.0.103); idle, the same row reads `← open sidebar · Interactive · …`.
+ * the verb and its own key hint (`◎ Working  esc esc edit prompt`, 1.0.102 to
+ * 1.0.105); idle, the same row reads `← open sidebar · Interactive · …`.
  * OpenCode 2's `mini` joins its status row's groups with ` · ` behind a
  * spinner glyph (`🯦 esc interrupt · Build · …`), and says `esc stop` where the
  * pane is narrow. */

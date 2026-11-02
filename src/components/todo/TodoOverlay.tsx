@@ -11,6 +11,7 @@ import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentCo
 import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
 import { TodoPane } from "./TodoPane";
 import { storageKey } from "../../lib/brand";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The header ☑ button's overlay — the todo board's only surface, and the third
@@ -126,7 +127,7 @@ export function TodoOverlayHost() {
               aria-label={t("common.close")}
               onClick={() => useTodoStore.getState().closeOverlay()}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         </div>

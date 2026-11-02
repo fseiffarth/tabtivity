@@ -183,8 +183,11 @@ pub(crate) fn box_id_of_scope(scope: &str) -> Option<&str> {
 /// Pure core of [`box_allowed_roots`]: the directories a `box:<id>`-scoped tab
 /// or viewer may live in — the box folder (once resolved), every member
 /// project's root, and each member's explicit local-mirror override
-/// (`extra["mirror"]`, the browsable tree of a remote member). `None` for an
-/// unknown box id so callers fail closed, mirroring `compute_allowed_roots`.
+/// (`extra["mirror"]`, the browsable tree of a remote member). A remote-only
+/// member adds no root at all: it has no local tree, its `directory` is only
+/// its state dir, and a stale `extra["mirror"]` is not a copy it keeps. `None`
+/// for an unknown box id so callers fail closed, mirroring
+/// `compute_allowed_roots`.
 pub(crate) fn compute_box_allowed_roots(
     boxes: &BoxesList,
     projects: &crate::schema::projects::ProjectsList,
@@ -199,6 +202,9 @@ pub(crate) fn compute_box_allowed_roots(
         let Some(p) = projects.iter().find(|p| &p.id == id) else {
             continue;
         };
+        if crate::services::remote::entry_is_remote_only(p) {
+            continue;
+        }
         if let Some(dir) = project_directory(p) {
             roots.push(dir);
         }
@@ -212,8 +218,9 @@ pub(crate) fn compute_box_allowed_roots(
 }
 
 /// State-dir-backed wrapper around [`compute_box_allowed_roots`], adding each
-/// remote member's default local-mirror root (`remote_sync::mirror_dir`) — the
-/// tree a local tab of a remote member actually runs in. `None` = unknown box.
+/// remote member's local copy (`remote::local_copy_in`: its explicit mirror,
+/// else the default one) — the tree a local tab of a remote member actually
+/// runs in; a remote-only member has none. `None` = unknown box.
 pub(crate) fn box_allowed_roots(box_id: &str) -> Option<Vec<PathBuf>> {
     let boxes = read_boxes().ok()?;
     let path = storage::projects_path();
@@ -224,14 +231,58 @@ pub(crate) fn box_allowed_roots(box_id: &str) -> Option<Vec<PathBuf>> {
     };
     let mut roots = compute_box_allowed_roots(&boxes, &projects, box_id)?;
     if let Some(b) = boxes.iter().find(|b| b.id == box_id) {
-        for id in &b.member_ids {
-            let is_remote = projects
-                .iter()
-                .any(|p| &p.id == id && p.extra.contains_key("remote"));
-            if is_remote {
-                roots.push(crate::services::remote_sync::mirror_dir(id));
-            }
-        }
+        roots.extend(member_local_copies(b, &projects, &storage::state_dir()));
     }
     Some(roots)
+}
+
+/// The local copies [`box_allowed_roots`] adds for box `b`'s remote members,
+/// in member order: `remote::local_copy_in` per member, so a remote-only
+/// member contributes none. Pure over the lists and an explicit state dir.
+fn member_local_copies(
+    b: &ProjectBox,
+    projects: &crate::schema::projects::ProjectsList,
+    state_dir: &Path,
+) -> Vec<PathBuf> {
+    b.member_ids
+        .iter()
+        .filter_map(|id| projects.iter().find(|p| &p.id == id))
+        .filter_map(|p| crate::services::remote::local_copy_in(p, state_dir))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A box tab may work in each remote member's local copy, but a
+    /// remote-only member (a VM included) has none: neither its stale
+    /// `mirror` nor its default path is added. A local member adds nothing
+    /// here (its folder comes from `compute_box_allowed_roots`).
+    #[test]
+    fn a_remote_only_member_adds_no_local_copy() {
+        let projects: crate::schema::projects::ProjectsList = serde_json::from_value(serde_json::json!([
+            { "id": "loc", "name": "L", "status": "active", "position": 0, "local_file": "", "directory": "/w/loc" },
+            { "id": "pl", "name": "P", "status": "active", "position": 1, "local_file": "",
+              "remote": { "host": "h", "remote_path": "/srv/pl" }, "mirror": "/w/pl-mirror" },
+            { "id": "df", "name": "D", "status": "active", "position": 2, "local_file": "",
+              "remote": { "host": "h", "remote_path": "/srv/df" } },
+            { "id": "ro", "name": "R", "status": "active", "position": 3, "local_file": "",
+              "remote": { "host": "h", "remote_path": "/srv/ro", "remote_only": true }, "mirror": "/w/stale" },
+            { "id": "vm", "name": "V", "status": "active", "position": 4, "local_file": "",
+              "remote": { "host": "127.0.0.1", "remote_path": "/home/u/vm", "vm": true } },
+        ]))
+        .unwrap();
+        let b = ProjectBox {
+            id: "b".into(),
+            name: "B".into(),
+            member_ids: ["loc", "pl", "df", "ro", "vm"].map(String::from).to_vec(),
+            ..ProjectBox::default()
+        };
+        let state = Path::new("state");
+        assert_eq!(
+            member_local_copies(&b, &projects, state),
+            vec![PathBuf::from("/w/pl-mirror"), crate::services::remote_sync::default_mirror_dir_in(state, "df")]
+        );
+    }
 }

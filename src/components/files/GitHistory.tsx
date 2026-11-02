@@ -13,7 +13,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
-import { LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
+import { BranchIcon, CloseIcon, LockIcon, RefreshIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename } from "../../lib/paths";
@@ -133,6 +133,9 @@ interface Props {
   projectId?: string;
   /** True for SSH remote projects (gates the lockstep UI). */
   remote?: boolean;
+  /** The remote project has no local copy (`isHostPinned`): its one repo is the
+   *  host's, so there is no lockstep to pair and no mirror worktree site. */
+  hostPinned?: boolean;
   /** The project whose git credentials a fetch uses — any project kind, unlike
    *  `projectId`; absent on a nested repo (its own remote, no provider token). */
   authProjectId?: string;
@@ -400,7 +403,7 @@ export function GitHistory(props: Props) {
   return <GitHistoryView key={props.projectDir} {...props} />;
 }
 
-function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChanged, pullRequest, onWorktreeChanged, actionsBusy = false, connected = true }: Props) {
+function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, authProjectId, onChanged, pullRequest, onWorktreeChanged, actionsBusy = false, connected = true }: Props) {
   const t = useT();
   // Every destructive git question below is asked in the panel's own dialog —
   // the native `confirm()` these used arrives themeless, titled with the page
@@ -434,7 +437,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
   const gitArgs = useMemo(() => gitWorktreeArgs(worktreeSelection), [worktreeSelection]);
   const contextVersion = useRef(0);
   // Git lockstep (#28n): only meaningful for SSH remote projects.
-  const lockstepEligible = !!(remote && projectId);
+  const lockstepEligible = !!(remote && projectId) && !hostPinned;
   const [lockstep, setLockstep] = useState<GitPeerState | null>(null);
   const [lockstepBusy, setLockstepBusy] = useState(false);
   // #28p D6: null = the Backups list is closed.
@@ -1175,7 +1178,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
           {fetching ? t("gitPull.fetchingShort") : t("gitPull.fetch")}
         </button>
         <button className="toolbar-btn git-history-refresh" onClick={load} title={t("common.refresh")} disabled={loading || actionsBusy || !connected}>
-          ⟳
+          <RefreshIcon />
         </button>
       </div>
 
@@ -1429,7 +1432,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
         <div className="git-worktree-header">
           <span className="git-worktree-title">{t("gitHistory.worktrees")}</span>
           <UntestedTag id="gitHistory.1" />
-          {remote && (
+          {remote && !hostPinned && (
             // #23 I2: two repos, two answers. `git_publish`'s "Publish from"
             // selector is the precedent — where the bytes are is not where the
             // operation runs, and for a remote project `projectDir` is the mirror.
@@ -1529,7 +1532,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
                     aria-label={t("gitHistory.selectWorktree", { name: basename(wt.path) })}
                   >
                     <span className="git-worktree-name">{basename(wt.path)}</span>
-                    <span className="git-worktree-branch">⎇ {label}</span>
+                    <span className="git-worktree-branch"><BranchIcon /> {label}</span>
                     {wt.is_main && <span className="git-worktree-main">{t("gitHistory.mainWorktree")}</span>}
                   </button>
                   {!wt.is_main && (
@@ -1560,7 +1563,7 @@ function GitHistoryView({ projectDir, projectId, remote, authProjectId, onChange
                       aria-label={t("gitHistory.removeWorktreeTitle", { path: wt.path })}
                       title={t("gitHistory.removeWorktreeTitle", { path: wt.path })}
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   )}
                 </span>
@@ -1834,7 +1837,7 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="commit-window" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("gitHistory.commitTitle", { short: commit.short })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="commit-window-meta">
           <span>{commit.author}</span>

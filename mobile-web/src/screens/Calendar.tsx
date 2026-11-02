@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { api, reloadIfApplied, wasApplied, type CalendarAction, type MobileCalendar, type MobileCalendarEvent, type MobileCalendarEventInput, type MobileCalendarInfo } from "../api";
 import { ConfirmSheet, type Confirm } from "../components/ConfirmSheet";
 import { describeFailure } from "../connection";
@@ -185,7 +186,7 @@ function CalendarEditSheet({ calendar, busy, save, onClose }: { calendar: Mobile
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.calendar.editCalendar")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button><h2>{t("mobile.calendar.editCalendar")} {isUntested("mobile.calendar.manage") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button><h2>{t("mobile.calendar.editCalendar")} {isUntested("mobile.calendar.manage") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       <p className="sheet-note">{t("mobile.calendar.editNote")}</p>
       {error && <p className="sheet-note error" role="alert">{error}</p>}
       <div className="mobile-schedule-form">

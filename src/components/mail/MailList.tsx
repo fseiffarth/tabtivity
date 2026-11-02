@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { memo, useEffect, useRef, useState } from "react";
 import {
   formatAddress,
@@ -13,7 +14,7 @@ import { modifierLabel } from "../../lib/shortcuts/shortcuts";
 import { useUse24h } from "../../lib/timeFormat";
 import { UntestedTag } from "../common/UntestedTag";
 import type { MailHeader, MailPriority, MailSort } from "../../types/mail";
-import { PaperclipIcon } from "../common/icons/Icon";
+import { CloseIcon, DotIcon, PaperclipIcon, RingIcon } from "../common/icons/Icon";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 
 /** One frozen instance, so a list without marks does not re-render on a new
@@ -439,7 +440,7 @@ function MailListImpl({
             aria-label={t("mail.clearFilters")}
             onClick={onClearFilters}
           >
-            ✕
+            <CloseIcon />
           </button>
         )}
       </div>
@@ -483,7 +484,7 @@ function MailListImpl({
         {/* The delete column has nothing to sort; the cell keeps the grid. */}
         <span className="mail-sort-spacer" aria-hidden="true" />
       </div>
-      {loading && headers.length === 0 && <div className="mail-empty">{t("mail.loading")}</div>}
+      {loading && headers.length === 0 && <SkeletonRows count={8} className="mail-skeleton" />}
       {!loading && headers.length === 0 && (
         // An empty *filter* is not an empty folder, and must not read as one.
         <div className="mail-empty">{t(filtered ? "mail.noMatches" : "mail.noMessages")}</div>
@@ -597,7 +598,7 @@ function MailListImpl({
                   onToggleSeen(h);
                 }}
               >
-                {h.seen ? "○" : "●"}
+                {h.seen ? <RingIcon /> : <DotIcon />}
               </button>
               {/* The clip is a **column**, not a glyph in front of the subject:
                   it sits under its own header, in the same place on every row,
@@ -662,7 +663,7 @@ function MailListImpl({
                       onDelete([h]);
                     }}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 );
               })()}

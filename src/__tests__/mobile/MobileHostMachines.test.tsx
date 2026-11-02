@@ -1,7 +1,7 @@
 /**
  * Starting an agent on a remote project's machine from the phone's ＋.
  *
- * The sheet's "Runs on" dropdown lists the desktop's local copy and each
+ * The sheet's "Runs on" picker lists the desktop's local copy and each
  * machine `launch-options` names under an opaque id, greys out one the desktop
  * is not connected to, and sends the pick as `host`. The sidecar resolves that
  * id to the window's location word; the window then saves the agent at that
@@ -116,6 +116,34 @@ describe("Mobile bridge — an agent on a remote project's machine", () => {
     expect(made).not.toHaveBeenCalled();
   });
 
+  it("starts a remote-only project's agent on its hosts alone, saved in the project's folder", async () => {
+    // No mirror, so no phone folder (`scope.cwd` is ""): the tab is saved with
+    // the project's directory as every host tab is; a synced-copy worker has
+    // nothing feeding it (D4), and a create that names no machine starts here.
+    const pinned: ProjectEntry = {
+      ...rem,
+      mirror: null,
+      remote: { ...rem.remote, remote_only: true } as ProjectEntry["remote"],
+      compute_hosts: [
+        { id: "w1", host: "w1.invalid", user: "u", remote_path: "/srv" },
+        { id: "w3", host: "w3.invalid", user: "u", remote_path: "/srv", shared_fs: true },
+      ] as ProjectEntry["compute_hosts"],
+    };
+    useProjectsStore.setState({ projects: [pinned] } as never);
+    for (const host of ["remote", "host:w3"]) {
+      made.mockClear();
+      expect(await create({ host, idempotency_key: `ro-key-${host}-0123456789` })).toMatchObject({ status: "created" });
+      const options = made.mock.calls[0]?.[0] as { cwd: string; spec: Omit<TabEntry, "key"> };
+      expect(options.cwd).toBe("/state/projects/rem");
+      expect(options.spec).toMatchObject({ location: host, cwd: "/state/projects/rem", kind: "agent" });
+    }
+    made.mockClear();
+    expect(await create({ host: "host:w1" })).toMatchObject({ status: "error", code: "host_not_found" });
+    expect(await create({})).toMatchObject({ status: "error", code: "project_ineligible" });
+    expect(await create({ kind: "shell", agent_id: undefined })).toMatchObject({ status: "error", code: "not_attachable" });
+    expect(made).not.toHaveBeenCalled();
+  });
+
   it("starts nothing on a host that runs on this machine", async () => {
     for (const extra of [{ worktree: "w" }, { cloud: "new" }, { api_key: true }, { local: "l1", agent_id: undefined }]) {
       expect(await create({ host: "remote", ...extra })).toMatchObject({ status: "error", code: "invalid_request" });
@@ -151,13 +179,19 @@ describe("Mobile ＋ sheet — Runs on", () => {
       { id: "m-w1", label: "gpu-1", primary: false, connected: false },
     ]));
     sheet();
-    const picker = await screen.findByRole("combobox", { name: /^Runs on/ });
-    const rows = within(picker).getAllByRole("option") as HTMLOptionElement[];
+    const picker = await screen.findByRole("button", { name: /^Runs on/ });
+    // The app's own list, unfolded in the sheet, never the phone's native picker.
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(picker.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(picker);
+    const list = screen.getByRole("list", { name: /^Runs on/ });
+    const rows = within(list).getAllByRole("button") as HTMLButtonElement[];
     expect(rows.map((row) => [row.textContent, row.disabled])).toEqual([
       ["Desktop (local copy)", false],
       ["h.invalid (primary)", false],
-      ["gpu-1 · not connected", true],
+      ["gpu-1Not connected", true],
     ]);
+    expect(rows[0].getAttribute("aria-current")).toBe("true");
     expect(screen.getByText(/connect it in the project on the desktop/)).toBeTruthy();
   });
 
@@ -167,9 +201,13 @@ describe("Mobile ＋ sheet — Runs on", () => {
       [{ id: "w-main", label: "", main: true }, { id: "w-fix", label: "fix", branch: "fix", main: false }],
     ));
     const onPick = sheet();
-    const picker = await screen.findByRole("combobox", { name: /^Runs on/ });
+    const picker = await screen.findByRole("button", { name: /^Runs on/ });
     expect(screen.getByRole("group", { name: "Agents start in" })).toBeTruthy();
-    fireEvent.change(picker, { target: { value: "m-primary" } });
+    fireEvent.click(picker);
+    fireEvent.click(within(screen.getByRole("list", { name: /^Runs on/ })).getByRole("button", { name: "h.invalid (primary)" }));
+    // The pick folds the list and the field names it.
+    expect(screen.queryByRole("list", { name: /^Runs on/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Runs on.*h\.invalid \(primary\)$/ })).toBeTruthy();
     // A worktree and a cloud session run on the desktop: neither is offered.
     expect(screen.queryByRole("group", { name: "Agents start in" })).toBeNull();
     expect(screen.queryByText("Cloud sessions")).toBeNull();
@@ -181,11 +219,11 @@ describe("Mobile ＋ sheet — Runs on", () => {
     serve(options(undefined));
     sheet();
     await screen.findByText("Cloud sessions");
-    expect(screen.queryByRole("combobox", { name: /^Runs on/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Runs on/ })).toBeNull();
     cleanup();
     serve(options([{ id: "m-primary", label: "h.invalid", primary: true, connected: true }]));
     sheet(vi.fn(), true);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(screen.queryByRole("combobox", { name: /^Runs on/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Runs on/ })).toBeNull();
   });
 });

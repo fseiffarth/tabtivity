@@ -42,9 +42,9 @@
 }
 .big-folder-head {
   margin-top: 10px;
-  padding-bottom: 4px;
+  padding-bottom: var(--space-1);
   border-bottom: 1px solid var(--border-color);
-  font-size: 10px;
+  font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -56,7 +56,7 @@
 .big-folder-row {
   padding: 5px 0;
   border-bottom: 1px solid var(--border-subtle, var(--border-color));
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 /* The export dialog's rebuildable-folder and skipped-entry lists: one size
@@ -83,7 +83,7 @@
 .big-folder-intro,
 .big-folder-note {
   margin: 8px 0 0;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--text-muted);
 }
@@ -169,11 +169,11 @@
 }
 
 .activity-year-btn {
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   border: 1px solid var(--control-border);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
   border-radius: var(--radius-sm);
   transition: background var(--transition), border-color var(--transition), color var(--transition);
@@ -199,7 +199,7 @@
 }
 
 .activity-legend span {
-  font-size: 10px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -214,7 +214,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-primary);
   white-space: nowrap;
   box-shadow: var(--shadow-2);
@@ -232,14 +232,14 @@
   max-width: min(360px, calc(100vw - 16px));
   max-height: calc(100vh - 16px);
   overflow: auto;
-  padding: 8px 11px;
+  padding: var(--space-2) 11px;
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-color));
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--text-primary);
   box-shadow: var(--shadow-2);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 400;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -301,8 +301,8 @@
    the row of small outlined buttons, so it takes their height. */
 .agent-remote-foot-picker .dropdown-trigger {
   min-height: 0;
-  padding: 3px 8px;
-  font-size: 11px;
+  padding: 3px var(--space-2);
+  font-size: var(--text-sm);
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -318,7 +318,7 @@
   flex-shrink: 0;
 }
 .agent-chord-chip {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -329,7 +329,7 @@
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   cursor: var(--cur-pointer, pointer);
 }
@@ -346,7 +346,7 @@
   margin-top: 8px;
 }
 .agent-cron-label {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   padding-top: 5px;
 }
@@ -356,7 +356,7 @@
   gap: 10px;
   flex-wrap: wrap;
   margin-top: 8px;
-  padding-top: 8px;
+  padding-top: var(--space-2);
   border-top: 1px solid var(--border-subtle);
 }
 .agent-cron-times {
@@ -375,12 +375,12 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 1px 4px 1px 7px;
+  padding: 1px var(--space-1) 1px 7px;
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
   background: var(--bg-panel);
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 .agent-cron-chip-remove {
@@ -388,7 +388,7 @@
   background: none;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1;
   padding: 1px 2px;
 }
@@ -403,14 +403,14 @@
    two units line up whatever their (always two-digit) contents. */
 .agent-cron-unit { min-width: 0; flex: 0 0 auto; }
 .agent-cron-unit .dropdown-trigger { min-width: 52px; justify-content: space-between; }
-.agent-cron-colon { color: var(--text-muted); font-size: 11px; }
+.agent-cron-colon { color: var(--text-muted); font-size: var(--text-sm); }
 .agent-cron-agents {
   display: flex;
   flex-direction: column;
   gap: 2px;
   margin-top: 10px;
 }
-.agent-cron-name { min-width: 120px; font-size: 12px; }
+.agent-cron-name { min-width: 120px; font-size: var(--text-md); }
 /* The agent grid is the endings grid (`settings-chrome.css`), short enough to
    never need its own scrollbar: the schedule card already sits in a scroll. */
 .agent-cron-grid { max-height: none; margin-top: 6px; }
@@ -419,11 +419,11 @@
 .project-ending-toggle.is-hidden:disabled:hover { background: var(--bg-main); border-color: var(--border-subtle); }
 .agent-cron-empty,
 .agent-cron-next {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 .agent-cron-warn {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--warning);
 }
 
@@ -436,7 +436,7 @@
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 .agent-version-chip,
@@ -449,11 +449,11 @@
 }
 .agent-version-drift {
   margin-top: 6px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .agent-version-stale {
   margin: 4px 0;
-  padding-left: 16px;
+  padding-left: var(--space-4);
   color: var(--text-secondary);
 }
 
@@ -472,14 +472,14 @@
 
 .ollama-status-text {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 
 .ollama-empty {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-muted);
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 
 .ollama-section-title-row {
@@ -526,8 +526,8 @@
   align-items: center;
   gap: 6px;
   margin: 6px 0 3px;
-  padding: 5px 8px 5px 9px;
-  font-size: 10px;
+  padding: 5px var(--space-2) 5px 9px;
+  font-size: var(--text-sm);
   letter-spacing: 0.1em;
   background: color-mix(in srgb, var(--accent) 13%, transparent);
   border-left: 2px solid var(--accent);
@@ -545,12 +545,12 @@
    from the note below (the global-machines menu's shape). */
 .local-model-menu > .tab-new-menu-group-label.local-model-menu-title {
   margin: 0;
-  padding: 4px 10px 3px;
+  padding: var(--space-1) 10px 3px;
   background: none;
   border-left: none;
   border-radius: 0;
-  border-bottom: 1px solid var(--border, var(--bg-panel));
-  font-size: var(--text-xs);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
   letter-spacing: 0.08em;
   color: var(--accent);
 }
@@ -561,7 +561,7 @@
    any tag) still applies. */
 :is(.local-model-menu, .models-overlay-models) .tab-new-menu-group-label.is-sub {
   margin: 8px 0 2px;
-  padding: 2px 8px 2px 0;
+  padding: 2px var(--space-2) 2px 0;
   margin-left: 11px;
   background: none;
   border-left: none;
@@ -586,7 +586,7 @@
 
 /* ── Local-model menu: live "loaded in memory" status line ───────────────── */
 .local-model-loaded-name {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-primary);
   font-weight: 600;
   white-space: nowrap;
@@ -600,7 +600,7 @@
   flex-shrink: 0;
 }
 .local-model-loaded-badges > span {
-  font-size: 10px;
+  font-size: var(--text-xs);
   line-height: 1;
   padding: 2px 5px;
   border-radius: var(--radius-sm);
@@ -636,7 +636,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 2px 10px 4px;
+  padding: 2px 10px var(--space-1);
 }
 /* One reading: label · value · a secondary fact, with the meter under all three.
    The text stays in the menu's ordinary colour and the METER carries the tone —
@@ -651,12 +651,12 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary, var(--text-primary));
 }
 .local-model-stat-label {
   min-width: 26px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--text-muted);
@@ -669,7 +669,7 @@
 /* The sensor reading beside the value (CPU temperature, GPU utilization):
    context, so it is dimmer than the value and never takes its place. */
 .local-model-stat-note {
-  font-size: 10px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -677,7 +677,7 @@
    the question is really about, pinned right so the three rows align. */
 .local-model-stat-detail {
   margin-left: auto;
-  font-size: 10px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -850,7 +850,7 @@
   font-variant-numeric: tabular-nums;
 }
 .local-model-default-tag {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   line-height: 1;
   padding: 2px 5px;
   border-radius: var(--radius-sm);
@@ -868,7 +868,7 @@
   padding: 0 10px 6px 25px;
 }
 .local-model-role-chip {
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1;
   padding: 3px 7px;
   border-radius: var(--radius-lg);
@@ -940,7 +940,7 @@
 /* "couldn't check" — a fact about the *check*, not about the model, so it is
    plain muted text and never a button: there is nothing here to click. */
 .local-model-update-note {
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1;
   color: var(--text-secondary);
   opacity: 0.75;
@@ -1024,10 +1024,10 @@
   display: inline-flex;
   align-items: baseline;
   gap: 4px;
-  padding: 3px 4px;
+  padding: 3px var(--space-1);
   border: 1px solid transparent;
   background: none;
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1;
   color: var(--text-secondary);
   opacity: 0.75;
@@ -1108,7 +1108,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
 }
@@ -1136,7 +1136,7 @@
   background: var(--warning);
   /* `--warning` is light in some themes and dark in others; near-black reads on both. */
   color: #1c1300;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 700;
   line-height: 1;
 }
@@ -1146,8 +1146,8 @@
   flex-wrap: wrap;
   gap: 6px;
   /* Clear of the corner ✕, so a sentence never runs under it. */
-  padding-right: 16px;
-  font-size: 11px;
+  padding-right: var(--space-4);
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-secondary);
 }
@@ -1172,12 +1172,12 @@
   align-items: center;
   gap: 8px;
   min-height: 26px;
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
 }
 
 /* In-flight downloads shown at the top of the brain menu. */
 .local-model-downloads {
-  padding: 4px 10px 6px;
+  padding: var(--space-1) 10px 6px;
   border-bottom: 1px solid var(--control-border);
   margin-bottom: 2px;
   display: flex;
@@ -1203,7 +1203,7 @@
   min-width: 0;
 }
 .local-model-download-pct {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
@@ -1214,7 +1214,7 @@
   background: transparent;
   border: 1px solid var(--control-border);
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--text-sm);
   padding: 1px 6px;
   cursor: var(--cur-pointer, pointer);
 }
@@ -1272,7 +1272,7 @@
    here reads as a button, which is exactly what the row beside it just had
    removed. */
 .local-model-chip {
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1;
   padding: 2px 5px;
   border-radius: var(--radius-sm);
@@ -1317,7 +1317,7 @@
    the fix rewrites a system service, which is not a thing to press in alarm. */
 .local-model-igpu-notice {
   margin: 4px 10px 6px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: 1px solid var(--warning);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--warning) 10%, transparent);
@@ -1326,7 +1326,7 @@
   gap: 6px;
 }
 .local-model-igpu-text {
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.45;
   color: var(--text-secondary);
   /* The command names a variable and a path; neither may be truncated or
@@ -1337,15 +1337,15 @@
   align-self: flex-start;
   border: 1px solid var(--warning);
   border-radius: var(--radius-sm);
-  padding: 3px 8px;
-  font-size: 12px;
+  padding: 3px var(--space-2);
+  font-size: var(--text-md);
 }
 
 /* ── Install flow (shown when Ollama is missing) ─────────────────────────── */
 .ollama-install-steps {
   margin: 4px 0 12px;
   padding-left: 20px;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
   line-height: 1.5;
 }
@@ -1370,12 +1370,12 @@
      past the panel edge and the settings pane grows a horizontal scrollbar. */
   flex: 1 1 200px;
   min-width: 0;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   background: var(--bg-main);
   border: 1px solid var(--control-border);
   border-left: 2px solid var(--accent-secondary);
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--text-sm);
   /* Terminal command: monospace on the deeper window background with a coloured
      gutter so it reads as a shell entry, not a button or a heading. */
   color: var(--text-secondary);
@@ -1392,11 +1392,11 @@
 .ollama-pull-input {
   flex: 1;
   min-width: 0;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   background: var(--control-bg);
   border: 1px solid var(--control-border);
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-primary);
 }
 .ollama-pull-input:focus {
@@ -1409,7 +1409,7 @@
 
 .ollama-catalog-sort {
   padding: 3px 6px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   background: var(--control-bg);
   border: 1px solid var(--control-border);
   color: var(--text-primary);
@@ -1423,7 +1423,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -1432,13 +1432,13 @@
   margin: 8px 0 12px;
   max-height: 160px;
   overflow: auto;
-  padding: 8px;
+  padding: var(--space-2);
   /* Live installer output: same terminal treatment as the command snippet. */
   background: var(--bg-main);
   border: 1px solid var(--control-border);
   border-left: 2px solid var(--accent-secondary);
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
@@ -1452,7 +1452,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-lg);
   background: var(--control-bg);
@@ -1470,7 +1470,7 @@
 }
 
 .ollama-model-name {
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--text-primary);
   font-family: ui-monospace, monospace;
@@ -1478,7 +1478,7 @@
 }
 
 .ollama-model-size {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -1525,9 +1525,9 @@
 }
 
 .app-update-status {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border: 1px solid var(--border-subtle);
   border-left: 2px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -1540,9 +1540,9 @@
 }
 
 .app-update-error {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--danger);
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border: 1px solid var(--danger);
   border-radius: var(--radius-sm);
   background: var(--bg-main);
@@ -1554,7 +1554,7 @@
 
 .app-update-release {
   margin-top: 8px;
-  padding: 8px;
+  padding: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-main);
@@ -1573,7 +1573,7 @@
 }
 
 .app-update-release-date {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-family: ui-monospace, monospace;
 }
@@ -1584,7 +1584,7 @@
   margin: 6px 0 0;
   max-height: 220px;
   overflow: auto;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--text-secondary);
   white-space: pre-wrap;
@@ -1599,7 +1599,7 @@
 .legacy-names-list {
   margin: 4px 0 8px;
   padding-left: 18px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--text-secondary);
   overflow-wrap: anywhere;
@@ -1613,7 +1613,7 @@
 }
 
 .app-update-progress-text {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -1625,7 +1625,7 @@
 }
 
 .ollama-download-status {
-  font-size: 10px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
@@ -1638,7 +1638,7 @@
 }
 
 .ollama-badge {
-  font-size: 10px;
+  font-size: var(--text-xs);
   padding: 1px 5px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
@@ -1667,7 +1667,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   background: var(--control-bg);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-lg);
@@ -1685,13 +1685,13 @@
 }
 
 .ollama-catalog-hint {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   flex-shrink: 0;
 }
 
 .ollama-catalog-desc {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
   line-height: 1.4;
   display: -webkit-box;
@@ -1715,13 +1715,13 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px 10px;
+  padding: var(--space-3) var(--space-4) 10px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .activity-window-title {
   flex: 1;
-  font-size: 14px;
+  font-size: var(--text-lg);
   font-weight: 650;
   color: var(--text-primary);
 }
@@ -1730,14 +1730,14 @@
    year draws only up to today, so picking another year (or the loading line
    giving way to the grid) re-sized and re-centered the window. */
 .activity-window-body {
-  padding: 16px 20px 20px;
+  padding: var(--space-4) 20px 20px;
   min-width: min(770px, calc(100vw - 32px));
 }
 
 .activity-loading {
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-muted);
-  padding: 12px 0;
+  padding: var(--space-3) 0;
   text-align: center;
 }
 
@@ -1765,11 +1765,11 @@
   transform: translate(-50%, -50%);
   z-index: 500;
   padding: 10px 20px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-color);
+  border: 0;
+  border-top: 2px solid transparent;
   border-radius: var(--radius);
-  box-shadow: var(--shadow-3);
-  font-size: 0.85rem;
+  box-shadow: var(--shadow-2);
+  font-size: var(--text-md);
   color: var(--text-secondary);
   font-family: monospace;
   pointer-events: none;
@@ -1812,7 +1812,7 @@
   display: flex;
   gap: 12px;
   margin: 2px 0 8px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   letter-spacing: 0.02em;
   color: var(--text-secondary);
 }
@@ -1861,7 +1861,7 @@ button.header-conn-lamps:hover {
 .vpn-prompt-scope {
   display: inline-block;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--text-secondary);
 }
@@ -1873,9 +1873,9 @@ button.header-conn-lamps:hover {
    the modal is still perfectly usable, it just owes the user an explanation. */
 .vpn-prompt-reason {
   margin: 4px 0 2px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-radius: var(--radius);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--text-secondary);
   background: var(--bg-hover);
@@ -1886,9 +1886,9 @@ button.header-conn-lamps:hover {
   align-items: center;
   gap: 6px;
   margin: 8px 0 2px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-radius: var(--radius);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.4;
   color: var(--success);
   background: color-mix(in srgb, var(--success) 12%, transparent);
@@ -1902,11 +1902,11 @@ button.header-conn-lamps:hover {
    no prompt at all, so it gets said out loud rather than buried in a tooltip. */
 .remote-connect-vpn-warning {
   margin: 2px 0 0;
-  padding: 6px 8px;
+  padding: 6px var(--space-2);
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
   background: color-mix(in srgb, var(--warning) 10%, transparent);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--text-secondary);
 }
@@ -1932,7 +1932,7 @@ button.header-conn-lamps:hover {
   gap: 5px;
   min-width: 0;
   height: 40px;
-  padding: 2px 4px;
+  padding: 2px var(--space-1);
 }
 
 /* Kept as an explicit marker on the right-cluster anchors (VPN, Machines,
@@ -2036,7 +2036,7 @@ html[data-header-drag] * {
   padding-inline: 5px;
 }
 .status-cluster-chevron {
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
   color: var(--text-muted);
   transition: color var(--transition);
@@ -2062,7 +2062,7 @@ html[data-header-drag] * {
 }
 
 @media (max-width: 900px) {
-  .header-right { gap: 2px; padding-inline: 4px; }
+  .header-right { gap: 2px; padding-inline: var(--space-1); }
   .header-right-gap { width: 1px; }
   .project-switcher-separator { margin-inline: 1px; }
   .project-search-wrap { width: 108px; }
@@ -2085,7 +2085,7 @@ html[data-header-drag] * {
   transition: color var(--transition);
 }
 .vpn-indicator-label {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   line-height: 1;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -2170,7 +2170,7 @@ html[data-header-drag] * {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.4;
 }
 .mobile-indicator-status span,
@@ -2182,7 +2182,7 @@ html[data-header-drag] * {
 .mobile-indicator-notice {
   margin-top: 8px;
   font-family: var(--mono-font, monospace);
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -2199,7 +2199,7 @@ html[data-header-drag] * {
 }
 .mobile-indicator-paircode code {
   font-family: var(--mono-font, monospace);
-  font-size: 20px;
+  font-size: var(--text-xl);
   font-weight: 600;
   letter-spacing: 0.16em;
   color: var(--text-primary);
@@ -2207,7 +2207,7 @@ html[data-header-drag] * {
   overflow-wrap: anywhere;
 }
 .mobile-indicator-paircode span {
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-secondary);
 }
@@ -2227,18 +2227,18 @@ html[data-header-drag] * {
   flex-direction: column;
   gap: 4px;
   margin-top: 10px;
-  padding-top: 8px;
+  padding-top: var(--space-2);
   border-top: 1px solid var(--control-border);
 }
 .mobile-indicator-devices-label {
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-secondary);
 }
 .mobile-indicator-devices-empty {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 .mobile-indicator-device {
@@ -2264,7 +2264,7 @@ html[data-header-drag] * {
   flex: 1;
   flex-direction: column;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.35;
 }
 .mobile-indicator-device-text strong {
@@ -2275,11 +2275,11 @@ html[data-header-drag] * {
 }
 .mobile-indicator-device-text span {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 .mobile-indicator-device-access,
 .mobile-indicator-device-disconnect {
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .mobile-indicator-actions {
   display: flex;
@@ -2324,20 +2324,20 @@ html[data-header-drag] * {
   overflow: visible;
 }
 .vpn-indicator-note {
-  padding: 6px 10px 8px;
-  font-size: 11px;
+  padding: 6px 10px var(--space-2);
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border, var(--bg-panel));
+  border-bottom: 1px solid var(--border-subtle);
 }
 .vpn-indicator-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
 }
 .vpn-indicator-row + .vpn-indicator-row {
-  border-top: 1px solid var(--border, var(--bg-panel));
+  border-top: 1px solid var(--border-subtle);
 }
 .vpn-indicator-head {
   display: flex;
@@ -2355,13 +2355,13 @@ html[data-header-drag] * {
 }
 .vpn-indicator-config {
   font-family: var(--mono-font, monospace);
-  font-size: 12px;
+  font-size: var(--text-md);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .vpn-indicator-holders {
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-secondary);
 }
@@ -2369,11 +2369,11 @@ html[data-header-drag] * {
   align-self: flex-start;
   margin-top: 2px;
   padding: 3px 9px;
-  border: 1px solid var(--border, var(--text-secondary));
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--danger, var(--text-primary));
-  font-size: 11px;
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
 }
 .vpn-indicator-disconnect:hover:not(:disabled) {
@@ -2393,7 +2393,7 @@ html[data-header-drag] * {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--accent, var(--text-primary));
-  font-size: 11px;
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
 }
 .vpn-indicator-connect:hover {
@@ -2414,11 +2414,11 @@ html[data-header-drag] * {
 .vpn-indicator-remove {
   align-self: flex-start;
   padding: 3px 9px;
-  border: 1px solid var(--border, var(--text-secondary));
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--danger, var(--text-primary));
-  font-size: 11px;
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
 }
 .vpn-indicator-remove:hover {
@@ -2432,7 +2432,7 @@ html[data-header-drag] * {
   align-items: center;
   gap: 6px;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   cursor: var(--cur-pointer, pointer);
 }
@@ -2447,7 +2447,7 @@ html[data-header-drag] * {
   flex-direction: row;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 /* The inline retry-password field shares its row with Retry/Cancel buttons — let
    the password wrap take the remaining width so the field isn't shrunk to nothing. */
@@ -2455,14 +2455,14 @@ html[data-header-drag] * {
   flex: 1;
 }
 .vpn-indicator-hint {
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-secondary);
 }
 .vpn-indicator-empty,
 .vpn-indicator-error {
-  padding: 8px 10px;
-  font-size: 11px;
+  padding: var(--space-2) 10px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--text-secondary);
 }
@@ -2479,9 +2479,9 @@ html[data-header-drag] * {
   align-items: flex-start;
   gap: 6px;
   margin: 4px 8px 6px;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-radius: var(--radius);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   color: var(--text-primary);
   background: color-mix(in srgb, var(--warning) 12%, transparent);
@@ -2507,7 +2507,7 @@ html[data-header-drag] * {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 4px 2px 28px;
+  padding: 0 var(--space-1) 2px 28px;
 }
 .machines-util-item {
   flex: 1 1 0;
@@ -2515,7 +2515,7 @@ html[data-header-drag] * {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 .machines-util-label {
@@ -2552,7 +2552,7 @@ html[data-header-drag] * {
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: var(--text-sm);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
   border-radius: var(--radius-sm);
@@ -2608,11 +2608,11 @@ html[data-header-drag] * {
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 1px solid var(--border, var(--text-secondary));
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
 }
@@ -2655,7 +2655,7 @@ html[data-header-drag] * {
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1;
   opacity: 0.5;
   cursor: var(--cur-grab, grab);
@@ -2704,7 +2704,7 @@ html[data-header-drag] * {
 }
 .machines-attach-kind {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--text-sm);
   flex-shrink: 0;
 }
 
@@ -2740,8 +2740,8 @@ html[data-header-drag] * {
    its own default direction and only owns the separator. */
 .machines-fleet-actions {
   flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.25));
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
 }
 .machines-fleet-actions .vpn-indicator-connect,
 .machines-fleet-actions .vpn-indicator-remove {
@@ -2779,7 +2779,7 @@ html[data-header-drag] * {
 .machines-fleet-actions .machines-row-action {
   width: 24px;
   height: 24px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 /* Deliberately NOT its own scroll container. It used to be (`max-height: 320px;
    overflow-y: auto`) and that cost twice: a second scrollbar nested inside the
@@ -2801,7 +2801,7 @@ html[data-header-drag] * {
 /* The select-all/none row sits above the list and is separated from it — it
    picks the rows rather than being one of them. */
 .machines-io-pick-all {
-  border-bottom: 1px solid var(--border, var(--bg-panel));
+  border-bottom: 1px solid var(--border-subtle);
   padding-bottom: 6px;
   margin-bottom: 2px;
   font-weight: 600;
@@ -2809,7 +2809,7 @@ html[data-header-drag] * {
 .machines-io-addr {
   display: block;
   font-family: var(--mono-font, monospace);
-  font-size: 10px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   word-break: break-all;
 }
@@ -2828,7 +2828,7 @@ html[data-header-drag] * {
   min-height: 60px;
   max-height: 160px;
   overflow-y: auto;
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   border-radius: var(--radius-sm);
   background: var(--bg-inset);
 }
@@ -2836,7 +2836,7 @@ html[data-header-drag] * {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 /* Compact variant: the lamp embedded on a project pill instead of the header,
@@ -2859,7 +2859,7 @@ html[data-header-drag] * {
 .remote-connect-target {
   margin: 2px 0 10px;
   font-family: var(--mono-font, monospace);
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
   word-break: break-all;
   display: flex;
@@ -2876,7 +2876,7 @@ html[data-header-drag] * {
   flex: 0 0 auto;
   min-width: 44px;
   font-family: var(--body-font, sans-serif);
-  font-size: 10px;
+  font-size: var(--text-sm);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-tertiary);
@@ -2890,7 +2890,7 @@ html[data-header-drag] * {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
 }
 .remote-connect-field input {
@@ -2901,7 +2901,7 @@ html[data-header-drag] * {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-secondary);
   cursor: var(--cur-pointer, pointer);
 }
@@ -2913,5 +2913,111 @@ html[data-header-drag] * {
 /* The live mic (`VoiceIndicator`): red while a Chat tab holds it; a click
    stops it. */
 .voice-indicator {
-  color: var(--danger, #d9534f);
+  color: var(--danger);
+}
+
+/* ── Command palette ──────────────────────────────────────────────────
+   A framed dialog hung from the upper third, so a shrinking result list does
+   not move the box you are typing in. Its surface and rail are the floating
+   recipe's (apps.css); only the fixed input and footer are its own. */
+.modal-backdrop.command-palette-backdrop {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.project-dialog.command-palette {
+  width: min(620px, calc(100vw - 32px));
+  max-height: 60vh;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.command-palette-input {
+  flex: none;
+  width: 100%;
+  padding: var(--space-3) var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  outline: none;
+}
+
+.command-palette-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+
+.command-palette-group {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.command-palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: 2px var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.command-palette-row.selected {
+  background: var(--control-hover-bg);
+}
+
+.command-palette-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.command-palette-detail {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.command-palette-hl {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.command-palette-empty {
+  padding: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+}
+
+.command-palette-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.command-palette kbd {
+  font-family: inherit;
+  font-size: var(--text-sm);
 }

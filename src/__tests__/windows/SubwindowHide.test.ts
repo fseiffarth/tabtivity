@@ -28,6 +28,7 @@ import {
   type SplitNode,
 } from "../../stores/tabs";
 import { serializeTree, withHiddenDocked } from "../../stores/tabs/savedLayout";
+import { subtreeName } from "../../stores/tabs/layoutTree";
 
 function tab(label: string) {
   return { label, cmd: "bash", cwd: "/p", kind: "shell" as const };
@@ -293,7 +294,8 @@ describe("tabs store — hidden-subwindow persistence", () => {
     const { right } = twoGroups();
     useTabsStore.getState().hideGroup(right.id);
     useTabsStore.getState().renameHiddenGroup(right.id, "  Builds  ");
-    expect(useTabsStore.getState().hiddenGroupsByScope["p"][0].name).toBe("Builds");
+    const parked = useTabsStore.getState().hiddenGroupsByScope["p"][0];
+    expect(subtreeName(parked.subtree, parked.name)).toBe("Builds");
 
     const snap = useTabsStore.getState().snapshotScopeForSwitch("p");
     const savedTabs = snap.tabs.map((t) => ({
@@ -307,10 +309,11 @@ describe("tabs store — hidden-subwindow persistence", () => {
     useTabsStore.getState().loadFromLayout(savedTabs, "/p", "p2", snap.tabGroups ?? undefined);
     useTabsStore.setState({ scope: "p2" });
     const [restored] = useTabsStore.getState().hiddenGroupsByScope["p2"];
-    expect(restored.name).toBe("Builds");
+    expect(subtreeName(restored.subtree, restored.name)).toBe("Builds");
 
     useTabsStore.getState().renameHiddenGroup(restored.id, "   ");
-    expect(useTabsStore.getState().hiddenGroupsByScope["p2"][0].name).toBeUndefined();
+    const cleared = useTabsStore.getState().hiddenGroupsByScope["p2"][0];
+    expect(subtreeName(cleared.subtree, cleared.name)).toBeUndefined();
   });
 
   it("withHiddenDocked returns the in-window tree unchanged with no hidden groups", () => {

@@ -516,6 +516,47 @@ describe("detached host (#42)", () => {
     expect(order.indexOf("detached_window_screens")).toBeLessThan(order.indexOf("workspace_sync"));
   });
 
+  it("app-quit teardown asks for the screens of EVERY scope's popouts and keeps a scope the backend cannot answer for", async () => {
+    // The scope the user is in is not the only one with popouts: a retired
+    // scope's (and a box's) popout answers from the backend's last capture, and
+    // one the backend has nothing for keeps the screen its saved layout had.
+    const { label } = detachSecond();
+    const boxLabel = "detached-box:b1-g-box";
+    const idleLabel = "detached-q-g-idle";
+    const earlier = { x: 0, y: 0, w: 1920, h: 1080 };
+    const kept = { x: 2560, y: 0, w: 2560, h: 1440 };
+    const subtree = useTabsStore.getState().detachedGroupsByScope["p"]![0].subtree;
+    useTabsStore.setState((s) => ({
+      detachedGroupsByScope: {
+        ...s.detachedGroupsByScope,
+        "box:b1": [{ id: "g-box", subtree, label: boxLabel, bounds: { x: 0, y: 0, w: 800, h: 600 } }],
+        q: [{ id: "g-idle", subtree, label: idleLabel, bounds: { x: 0, y: 0, w: 700, h: 500, monitor: kept } }],
+      },
+    }));
+    invokeMock.mockImplementation((cmd: unknown) =>
+      Promise.resolve(
+        cmd === "detached_window_screens"
+          ? {
+              [label]: { w: 900, h: 640, monitor: earlier },
+              [boxLabel]: { w: 800, h: 600, monitor: kept },
+            }
+          : undefined,
+      ) as Promise<undefined>,
+    );
+    try {
+      await shutdownDetachedWindows();
+    } finally {
+      invokeMock.mockImplementation(() => Promise.resolve(undefined));
+    }
+    expect(invokeMock).toHaveBeenCalledWith("detached_window_screens", {
+      labels: [label, boxLabel, idleLabel],
+    });
+    const groups = useTabsStore.getState().detachedGroupsByScope;
+    expect(groups["box:b1"]?.[0].bounds?.monitor).toEqual(kept);
+    expect(groups["p"]?.[0].bounds?.monitor).toEqual(earlier);
+    expect(groups["q"]?.[0].bounds).toEqual({ x: 0, y: 0, w: 700, h: 500, monitor: kept });
+  });
+
   it("app-quit teardown persists a scope with no project.json too (root/box), and closes it", async () => {
     // Group B #229. A scope with no matching project entry — the root scope,
     // and any `box:<id>` scope — has no `local_file`, and the teardown used to

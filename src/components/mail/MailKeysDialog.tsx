@@ -39,6 +39,7 @@ import {
 import type { MailAccount, PgpKeyInfo } from "../../types/mail";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 export interface MailKeysDialogProps {
   /** The account new keys are generated for and bound to. */
@@ -103,8 +104,8 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
           <h2>
             {t("mail.keys.title")} <UntestedTag id="mail.keys.title" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
 

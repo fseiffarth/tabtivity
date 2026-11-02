@@ -1,3 +1,4 @@
+import { CommandPalette } from "./CommandPalette";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -60,6 +61,7 @@ import { DragGhost, SplitPreviewOverlay } from "./CenterPanel";
 import { TabDropPlaceholder } from "../tabs/TabDropPlaceholder";
 import { NewTabMenu } from "../tabs/NewTabMenu";
 import { agentMachines } from "../tabs/agentMenuEntries";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { TabColorPicker } from "../tabs/TabColorPicker";
 import { TabMarkBadge } from "../tabs/TabMarkBadge";
@@ -122,7 +124,9 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
+import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
+import { ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
 
 
 interface Props {
@@ -192,6 +196,10 @@ interface Props {
    *  file viewer): applied optimistically popout-side and streamed to the main
    *  window so the flag persists (and survives a dock-back). */
   onFiles: (groupId: string, patch: { open?: boolean; width?: number; folder?: string }) => void;
+  /** What this window goes by (`subtreeName`), shown in its title bar. */
+  windowName?: string;
+  /** Name one pane, or the whole window without a `groupId`; "" removes the name. */
+  onName?: (groupId: string | undefined, name: string) => void;
 }
 
 /**
@@ -224,6 +232,8 @@ export function DetachedCenterPanel({
   onMove,
   onAddTab,
   onFiles,
+  windowName,
+  onName,
 }: Props) {
   // The popout's "+" add-tab menu: which group opened it + where to anchor it.
   const t = useT();
@@ -237,6 +247,9 @@ export function DetachedCenterPanel({
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   // Right-click on a tab-group chip: rename / ungroup.
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string; groupId: string } | null>(null);
+  // Right-click on a bar. No `groupId` names the window; so does a pane's bar in
+  // a one-pane popout, whose window and subwindow are the same thing.
+  const [nameMenu, setNameMenu] = useState<{ x: number; y: number; groupId?: string } | null>(null);
   const tabMenuRef = useRef<HTMLDivElement>(null);
   // Dismiss this strip's tab context menu on an outside click or Escape, the way
   // the main window's `TabBar` does. It used to close only when one of its rows
@@ -275,6 +288,8 @@ export function DetachedCenterPanel({
   // `!!remoteInfo` put the Local/Remote badge on every local project's tabs.
   const [localityMenu, setLocalityMenu] = useState<LocalityMenuState | null>(null);
   const isRemote = !!remoteInfo?.project?.remote;
+  // A VM or remote-only project: its tabs run only on its hosts.
+  const hostPinned = isHostPinned(remoteInfo?.project);
   const primaryHost = remoteInfo?.primaryHost;
   const computeHosts = remoteInfo?.computeHosts;
   // One bar element per group, so a per-tab drag can hit-test the bar it's over.
@@ -1243,6 +1258,35 @@ export function DetachedCenterPanel({
     [],
   );
 
+  const openNameMenu = (e: React.MouseEvent, groupId?: string) => {
+    // A dialog or menu portaled out of this bar still bubbles here in React.
+    if (!onName || !e.currentTarget.contains(e.target as Node)) return;
+    if ((e.target as HTMLElement).closest(".tab, button, input")) return;
+    e.preventDefault();
+    setHoverTab(null);
+    setTabMenu(null);
+    setStackMenu(null);
+    setNameMenu({ x: e.clientX, y: e.clientY, groupId });
+  };
+  const promptName = async (groupId?: string) => {
+    setNameMenu(null);
+    const current =
+      (groupId ? allGroups(tree).find((g) => g.id === groupId)?.name : windowName) ?? "";
+    const name = await promptText({
+      title: t(
+        groupId
+          ? current ? "tabBar.renameSubwindow" : "tabBar.nameSubwindow"
+          : current ? "detachedTabs.renameWindow" : "detachedTabs.nameWindow",
+      ),
+      label: t(groupId ? "tabBar.subwindowNameLabel" : "detachedTabs.windowNameLabel"),
+      body: current ? t("tabBar.nameRemoveHint") : undefined,
+      initial: current,
+      unchanged: current,
+      allowEmpty: true,
+    });
+    if (name !== null) onName?.(groupId, name);
+  };
+
   // #42: grab the popout's outer title bar to move/dock the WHOLE window. Mirrors
   // the group-bar handle, but anchored to the always-full-width title strip so it
   // works the same whether or not the content is split. The window controls carry
@@ -1296,6 +1340,8 @@ export function DetachedCenterPanel({
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    // The × is its own click (see `TabBar`).
+    if ((e.target as HTMLElement).closest(".tab-close")) return;
     onActivate(tab.key);
     const startX = e.clientX;
     const startY = e.clientY;
@@ -1364,6 +1410,7 @@ export function DetachedCenterPanel({
           data-group-id={group.id}
           data-tab-count={orderedTabs.length}
           onPointerDown={(e) => onGroupBarPointerDown(e, group)}
+          onContextMenu={(e) => openNameMenu(e, tree.type === "split" ? group.id : undefined)}
         >
           {/* Move grip — the sole tab-bar handle for moving/docking this popout
               (the titlebar still moves it too). Always pinned at the far left so
@@ -1376,8 +1423,12 @@ export function DetachedCenterPanel({
             title={t("detachedTabs.dragToMove")}
             aria-hidden="true"
           >
-            ⠿
+            <GripIcon />
           </div>
+          {/* One pane's name is the window's, already in the title bar above. */}
+          {tree.type === "split" && group.name && (
+            <span className="subwindow-name" title={group.name}>{group.name}</span>
+          )}
           {/* The tabs live in their own horizontally-scrolling strip; chevrons
               flank it and appear only on overflow — the same behaviour as the
               main-window `TabBar`. `revision` re-checks overflow when the tab set
@@ -1517,7 +1568,7 @@ export function DetachedCenterPanel({
                         title={next
                           ? t("agentSchedule.indicatorNext", { count: enabled.length, value: next.toLocaleString() })
                           : t("agentSchedule.indicator", { count: enabled.length })}
-                      >◷</span>
+                      ><ClockIcon /></span>
                     ) : null;
                   })()}
                   {/* Local/remote badges — parity with the main-window TabBar,
@@ -1536,6 +1587,7 @@ export function DetachedCenterPanel({
                   {isRemote && (
                     <TabLocalityBadge
                       tab={tab}
+                      pinned={hostPinned}
                       primaryHost={primaryHost}
                       computeHosts={computeHosts}
                       onOpen={(r, startOnMachines) =>
@@ -1552,11 +1604,12 @@ export function DetachedCenterPanel({
                     className="tab-close"
                     onClick={(e) => {
                       e.stopPropagation();
+                      noteTabClose(e.currentTarget);
                       onClose(tab.key);
                     }}
                     title={t("detachedTabs.closeTab")}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               </Fragment>
@@ -1684,6 +1737,7 @@ export function DetachedCenterPanel({
                       isRemoteProject: isRemote,
                       projectDirectory: resolveProjectDirectory(remoteInfo?.project ?? null),
                       mirror: resolveLocalMirror(remoteInfo?.project),
+                      hostPinned,
                       fallback: tab.cwd,
                     })}
                   />
@@ -1782,6 +1836,7 @@ export function DetachedCenterPanel({
   // generic fallback. Cheap to compute; only painted while `windowDragging`.
   const firstGroup = allGroups(tree)[0];
   const moveLabel =
+    windowName ??
     (firstGroup ? tabs.find((t) => t.key === firstGroup.activeKey)?.label : undefined) ??
     "Subwindow";
 
@@ -1793,7 +1848,11 @@ export function DetachedCenterPanel({
           in the root group's tab bar, which slid left (with the root group) once
           the popout was split; an outer frame keeps them pinned. The empty strip
           is a drag handle for moving / docking the whole window. */}
-      <div className="detached-titlebar detached-drag-handle" onPointerDown={onTitlebarPointerDown}>
+      <div
+        className="detached-titlebar detached-drag-handle"
+        onPointerDown={onTitlebarPointerDown}
+        onContextMenu={(e) => openNameMenu(e)}
+      >
         {/* The star marks the window frame — it lives HERE and nowhere else,
             which is why it was taken back off every subwindow's tab bar. */}
         <span
@@ -1818,8 +1877,13 @@ export function DetachedCenterPanel({
           title={t("detachedTabs.dragToMove")}
           aria-hidden="true"
         >
-          ⠿
+          <GripIcon />
         </span>
+        {/* Plain text, not a control, so the title moves the window like the rest
+            of the strip; a right-click names it. */}
+        {windowName && (
+          <span className="detached-titlebar-name" title={windowName}>{windowName}</span>
+        )}
         {/* #237: dock the whole window back into the main layout. The gesture
             that used to do this (drag the popout onto the main window) went with
             the 2026-07-19 move-only rework — titlebar and grip drags are native
@@ -1908,10 +1972,11 @@ export function DetachedCenterPanel({
               onClose={() => setAddMenu(null)}
               onManageAgents={() => setAgentDialogOpen(true)}
               machines={
-                isRemote && !remoteInfo?.project?.vm?.enabled
-                  ? agentMachines({ primaryHost, computeHosts, t })
+                isRemote
+                  ? agentMachines({ primaryHost, computeHosts, pinned: hostPinned, t })
                   : undefined
               }
+              hostPinned={hostPinned}
             />
           );
         })()}
@@ -1919,6 +1984,24 @@ export function DetachedCenterPanel({
         <CustomAgentDialog onClose={() => setAgentDialogOpen(false)} />
       )}
       {dialogs}
+      {nameMenu && (
+        <ContextMenuPortal
+          x={nameMenu.x}
+          y={nameMenu.y}
+          onClose={() => setNameMenu(null)}
+          className="tab-new-menu"
+        >
+          <button className="tab-new-menu-item" onClick={() => void promptName(nameMenu.groupId)}>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
+            {nameMenu.groupId
+              ? t(allGroups(tree).find((g) => g.id === nameMenu.groupId)?.name
+                  ? "tabBar.renameSubwindow"
+                  : "tabBar.nameSubwindow")
+              : t(windowName ? "detachedTabs.renameWindow" : "detachedTabs.nameWindow")}
+            <UntestedTag id="detachedTabs.nameWindow" />
+          </button>
+        </ContextMenuPortal>
+      )}
       {tabMenu && createPortal(
         <div className="tab-new-menu" ref={tabMenuRef} style={{ position: "fixed", left: tabMenu.x, top: tabMenu.y }}>
           <button className="tab-new-menu-item" onClick={() => {
@@ -1934,7 +2017,7 @@ export function DetachedCenterPanel({
               if (next) onRename?.(tab.key, next);
             });
           }}>
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
             {t("common.rename")}
           </button>
           {onSetColor && (
@@ -2001,7 +2084,7 @@ export function DetachedCenterPanel({
                       setTabMenu(null);
                     }}
                   >
-                    <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+                    <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
                     {t("tabStack.remove")}
                   </button>
                 )}
@@ -2012,7 +2095,7 @@ export function DetachedCenterPanel({
             const tab = byKey.get(tabMenu.key);
             return tab && (tab.kind === "agent" || tab.kind === "local_agent") ? (
               <button className="tab-new-menu-item" onClick={() => { setScheduleDialogKey(tab.key); setTabMenu(null); }}>
-                <span className="tab-new-menu-dot tab-new-menu-dot--accent">◷</span>
+                <span className="tab-new-menu-dot tab-new-menu-dot--accent"><ClockIcon /></span>
                 {t("agentSchedule.menu")} <UntestedTag id="agentSchedule.menu" />
               </button>
             ) : null;
@@ -2044,7 +2127,7 @@ export function DetachedCenterPanel({
                 });
               }}
             >
-              <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
               {t("tabStack.rename")}
             </button>
             <button
@@ -2054,7 +2137,7 @@ export function DetachedCenterPanel({
                 for (const key of members) onSetStack(key, undefined);
               }}
             >
-              <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
               {t("tabStack.ungroup")}
             </button>
           </ContextMenuPortal>
@@ -2069,7 +2152,8 @@ export function DetachedCenterPanel({
       {localityMenu && (
         <LocalityMenu
           menu={localityMenu}
-          current={tabLocation(byKey.get(localityMenu.key))}
+          current={tabLocation(byKey.get(localityMenu.key), hostPinned)}
+          pinned={hostPinned}
           primaryHost={primaryHost}
           computeHosts={computeHosts}
           onClose={() => setLocalityMenu(null)}
@@ -2090,6 +2174,7 @@ export function DetachedCenterPanel({
             tab={tab}
             scope={scope}
             isRemote={isRemote}
+            hostPinned={hostPinned}
             primaryHost={primaryHost}
             computeHosts={computeHosts}
             anchorX={hoverTab.x}
@@ -2097,6 +2182,7 @@ export function DetachedCenterPanel({
           />
         );
       })()}
+      <CommandPalette local={{ tabs, scope, activate: onActivate }} />
       <DragGhost />
     </div>
     </FileDropContext.Provider>

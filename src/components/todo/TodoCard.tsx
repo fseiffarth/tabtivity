@@ -27,7 +27,7 @@ import { useListReorder } from "../../hooks/useListReorder";
 import { resolveRemarkAbsPath } from "../../lib/projects/projectRemarks";
 import { jumpToSource } from "../embed/fileViewer/sourceJump";
 import { basename } from "../../lib/paths";
-import { ClockIcon, MailIcon, PinIcon } from "../common/icons/Icon";
+import { ClockIcon, CloseIcon, GripIcon, MailIcon, PencilIcon, PinIcon, WindowIcon } from "../common/icons/Icon";
 import { useArrived } from "../../stores/calendar/arrivals";
 
 interface Props {
@@ -276,7 +276,7 @@ export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: P
           title={t("todoCard.edit")}
           aria-label={t("todoCard.edit")}
         >
-          ✎
+          <PencilIcon />
         </button>
       </div>
 
@@ -394,7 +394,7 @@ export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: P
                   aria-label={t("todoCard.stepGripAria", { title: step.title })}
                   {...reorder.gripProps(step.id)}
                 >
-                  ⠿
+                  <GripIcon />
                 </button>
                 <input
                   type="checkbox"
@@ -416,7 +416,7 @@ export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: P
                   title={t("todoCard.removeStep")}
                   aria-label={t("todoCard.removeStep")}
                 >
-                  ×
+                  <CloseIcon />
                 </button>
               </li>
             ))}
@@ -511,7 +511,7 @@ export function TodoCard({ task, columns, onPointerDown, onEdit, onOpenMail }: P
                 jumpToTab(linkedTab.scope, linkedTab.key);
               }}
             >
-              ▭ {linkedTab.label}
+              <WindowIcon /> {linkedTab.label}
             </button>
           )}
         </div>

@@ -15,8 +15,8 @@
  * explicit choice outranks it and survives a relaunch (localStorage), and each
  * viewer's own switch is independent of the project-wide one in both directions.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { renderHook, act, cleanup } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
@@ -28,6 +28,8 @@ import {
   viewerSourceKey,
 } from "../../stores/remote/fileSourcePref";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
+import { useProjectsStore } from "../../stores/projects";
+import type { ProjectEntry } from "../../types";
 import { useFileSource, useIndependentFileSource } from "../../components/files/ProjectFilesPane";
 import { storageKey } from "../../lib/brand";
 
@@ -151,5 +153,63 @@ describe("useIndependentFileSource (a Files tab / the docked column)", () => {
     act(() => a.result.current[1]("local"));
     const b = renderHook(() => useIndependentFileSource(PID, true, "group:g2"));
     expect(b.result.current[0]).toBe("remote");
+  });
+});
+
+describe("a host-pinned project (no local copy)", () => {
+  // `remote_only` (docs/remote_only_projects_plan.md): the host is the only
+  // tree, so there is no side to decide and nothing to remember.
+  const PINNED = {
+    id: PID,
+    name: PID,
+    status: "active",
+    position: 0,
+    remote: { host: "h", user: "u", remote_path: "/srv/p1", remote_only: true },
+  } as ProjectEntry;
+
+  beforeEach(() => {
+    useProjectsStore.setState({ projects: [PINNED] });
+  });
+  afterEach(() => {
+    cleanup();
+    useProjectsStore.setState({ projects: [] });
+  });
+
+  it("is always the host and never latches, whatever the lamp says", () => {
+    setSsh("off");
+    const { result } = renderHook(() => useFileSource(PID, true));
+    expect(result.current[0]).toBe("remote");
+    setSsh("connected");
+    expect(result.current[0]).toBe("remote");
+    expect(useFileSourcePrefStore.getState().byProject[PID]).toBeUndefined();
+  });
+
+  it("ignores a stored Local choice and a click on one", () => {
+    useFileSourcePrefStore.setState({ byProject: { [PID]: "local" }, byViewer: {} });
+    setSsh("connected");
+    const { result } = renderHook(() => useFileSource(PID, true));
+    expect(result.current[0]).toBe("remote");
+    act(() => result.current[1]("local"));
+    expect(result.current[0]).toBe("remote");
+    expect(localStorage.getItem(storageKey("fileSourceByProject"))).toBeNull();
+  });
+
+  it("a viewer's own side is the host too, and is never written", () => {
+    setSsh("off");
+    const { result } = renderHook(() => useIndependentFileSource(PID, true, "group:g1"));
+    expect(result.current[0]).toBe("remote");
+    act(() => result.current[1]("local"));
+    expect(result.current[0]).toBe("remote");
+    setSsh("connected");
+    expect(useFileSourcePrefStore.getState().byViewer).toEqual({});
+  });
+
+  it("a VM project is pinned the same way", () => {
+    useProjectsStore.setState({
+      projects: [{ ...PINNED, remote: { host: "h", user: "u", remote_path: "/srv/p1" }, vm: { enabled: true } } as ProjectEntry],
+    });
+    setSsh("off");
+    const { result } = renderHook(() => useFileSource(PID, true));
+    expect(result.current[0]).toBe("remote");
   });
 });

@@ -36,6 +36,8 @@ import { STATUS_AGENTS, TerminalReaderStatus, type ReaderPanel } from "./Termina
 import { CONTEXT_AGENTS, TerminalReaderContext } from "./TerminalReaderContext";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
+import { ReaderLaunchDefaults } from "./ReaderLaunchDefaults";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** The phone's pacing: how often the CLI's usage panel is read again (the
  * backend floors it besides), and how often the reset countdowns tick. */
@@ -413,7 +415,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <div className="terminal-reader-picker-head">
             <strong>{shownStep?.title ?? t(permissionPicking ? "terminal.reader.modeTitle" : "terminal.reader.modelTitle")}</strong>
             {isOpenCodeTab(agentLabel) && <UntestedTag id="agents.opencode.modelList" />}
-            <button type="button" className="terminal-reader-picker-close" onClick={close} aria-label={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")} title={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")}>✕</button>
+            <button type="button" className="terminal-reader-picker-close" onClick={close} aria-label={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")} title={t(permissionPicking ? "terminal.reader.modeClose" : "terminal.reader.modelClose")}><CloseIcon /></button>
           </div>
           {shownStep ? (
             <div className="terminal-reader-options">
@@ -443,6 +445,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             ? <small className="terminal-reader-question-more">{t("terminal.reader.modelListing")}</small>
             : step?.hidden ? <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small> : null}
           {session.remembered && <small className="terminal-reader-question-more">{t("terminal.reader.modelRemembered")} <UntestedTag id="agents.modelRows.remembered" /></small>}
+          {modelPicking && tab.cmd && <ReaderLaunchDefaults cmd={tab.cmd} />}
         </div>
       )}
       {effortOpen && (
@@ -454,7 +457,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         >
           <div className="terminal-reader-picker-head">
             <strong>{t("terminal.reader.effortTitle")}</strong>
-            <button type="button" className="terminal-reader-picker-close" onClick={closeEffort} aria-label={t("terminal.reader.effortClose")} title={t("terminal.reader.effortClose")}>✕</button>
+            <button type="button" className="terminal-reader-picker-close" onClick={closeEffort} aria-label={t("terminal.reader.effortClose")} title={t("terminal.reader.effortClose")}><CloseIcon /></button>
           </div>
           <div className="terminal-reader-options">
             {CLAUDE_EFFORTS.map((level, index) => (
@@ -475,6 +478,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           </div>
           {effortFailed && <small className="terminal-reader-question-more" role="alert">{t("terminal.reader.effortFailed")}</small>}
           <small className="terminal-reader-question-more">{t("terminal.reader.effortNote")}</small>
+          {tab.cmd && <ReaderLaunchDefaults cmd={tab.cmd} />}
         </div>
       )}
       {worktreesOpen && (
@@ -486,7 +490,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         >
           <div className="terminal-reader-picker-head">
             <strong>{t("terminal.reader.worktreeTitle")}</strong>
-            <button type="button" className="terminal-reader-picker-close" onClick={closeWorktrees} aria-label={t("terminal.reader.worktreeClose")} title={t("terminal.reader.worktreeClose")}>✕</button>
+            <button type="button" className="terminal-reader-picker-close" onClick={closeWorktrees} aria-label={t("terminal.reader.worktreeClose")} title={t("terminal.reader.worktreeClose")}><CloseIcon /></button>
           </div>
           {worktrees === null ? (
             <small className="terminal-reader-question-more">{t("terminal.reader.worktreeLoading")}</small>
@@ -529,7 +533,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         >
           <div className="terminal-reader-picker-head">
             <strong>{t("terminal.reader.modeTitle")}</strong>
-            <button type="button" className="terminal-reader-picker-close" onClick={closeModes} aria-label={t("terminal.reader.modeClose")} title={t("terminal.reader.modeClose")}>✕</button>
+            <button type="button" className="terminal-reader-picker-close" onClick={closeModes} aria-label={t("terminal.reader.modeClose")} title={t("terminal.reader.modeClose")}><CloseIcon /></button>
           </div>
           <div className="terminal-reader-options">
             {modes.map((choice, index) => (

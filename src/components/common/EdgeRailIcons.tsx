@@ -99,6 +99,17 @@ export function RailAssistantIcon({ className }: IconProps) {
   return <AssistantIcon className={className} size={16} />;
 }
 
+/** CLIs: a gauge — how much of each CLI's window is used. */
+export function RailClisIcon({ className }: IconProps) {
+  return (
+    <Frame className={className}>
+      <path d="M4 16a8 8 0 0116 0" />
+      <path d="M12 16l4-5" />
+      <circle cx="12" cy="16" r="1.2" />
+    </Frame>
+  );
+}
+
 /**
  * Move the panel to the other edge. A window frame with the panel filled in on
  * the edge it sits on now and an arrow pointing at the edge it will jump to.

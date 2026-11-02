@@ -38,7 +38,7 @@ describe("connectCreatedRemoteProject", () => {
   });
 
   it("a typed, unsaved password is handed over (recorded as a password host), not ridden", async () => {
-    await connectCreatedRemoteProject("p1", "pw-test");
+    expect(await connectCreatedRemoteProject("p1", "pw-test")).toBeNull();
     expect(connects()).toEqual([
       ["remote_connect", { projectId: "p1", password: "pw-test", viaLogin: false, background: false }],
     ]);
@@ -53,7 +53,8 @@ describe("connectCreatedRemoteProject", () => {
 
   it("a failed ride (no master — e.g. Windows) leaves the project disconnected; a failed password is red", async () => {
     invokeMock.mockRejectedValue("Permission denied");
-    await connectCreatedRemoteProject("p1", null);
+    // The failure is handed back, for a caller that must wait on the connect.
+    expect(await connectCreatedRemoteProject("p1", null)).toBe("Permission denied");
     expect(lamp()).toBe("off");
 
     useRemoteStatusStore.setState({ byProject: {}, byHost: {} });

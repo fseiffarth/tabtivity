@@ -1,6 +1,7 @@
 import { useT } from "../../../lib/i18n";
 import { UntestedTag } from "../../common/UntestedTag";
 import { INTRO_GOAL_DEFS, INTRO_GOALS, INTRO_PAGE_TITLE_KEYS, type IntroGoal, type IntroPage } from "./introData";
+import { CheckIcon } from "../../common/icons/Icon";
 
 /**
  * Intro page 2 — "What do you want to do?". One toggle card per goal
@@ -48,7 +49,7 @@ export function GoalsPage({
                 <span className="settings-help">{t(def.blurbKey)}</span>
               </span>
               <span className="intro-goal-check" aria-hidden="true">
-                {on ? "✓" : ""}
+                {on ? <CheckIcon /> : ""}
               </span>
             </button>
           );

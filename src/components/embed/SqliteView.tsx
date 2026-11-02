@@ -4,7 +4,9 @@ import { ViewerHeader } from "./fileViewer/ViewerHeader";
 import { useT } from "../../lib/i18n";
 import { cellToneColor } from "../../lib/viewers/table";
 import { viewerErrorText } from "../../lib/viewers/limitError";
-import { useFileScope } from "../../lib/files/fileAccess";
+import { useFileScope, useFileSource } from "../../lib/files/fileAccess";
+import { basename } from "../../lib/paths";
+import { UntestedTag } from "../common/UntestedTag";
 
 /** One page of a table, mirroring the backend `SqlitePage` struct. */
 type SqlitePage = {
@@ -35,6 +37,10 @@ export function SqliteView({
 }) {
   const t = useT();
   const scope = useFileScope();
+  // `sqlite_tables`/`sqlite_page` open a path on this computer; a database
+  // read from a remote host (a host-pinned project's, or the Remote side of a
+  // remote one) is not there, so the viewer is off and points at the copy.
+  const hostFile = useFileSource() === "remote";
   const [tables, setTables] = useState<string[] | null>(null);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -51,6 +57,7 @@ export function SqliteView({
     setTablesError(null);
     setSelected(null);
     setOffset(0);
+    if (hostFile) return;
     invoke<string[]>("sqlite_tables", { path, projectId: scope })
       .then((names) => {
         if (cancelled) return;
@@ -63,7 +70,7 @@ export function SqliteView({
     return () => {
       cancelled = true;
     };
-  }, [path, scope]);
+  }, [path, scope, hostFile]);
 
   // Load the selected table's page whenever the table or offset changes.
   useEffect(() => {
@@ -112,7 +119,11 @@ export function SqliteView({
         className="file-viewer-body"
         style={{ display: "flex", overflow: "hidden", minHeight: 0 }}
       >
-        {tablesError != null ? (
+        {hostFile ? (
+          <div style={{ padding: "1rem", color: "var(--text-secondary, #8b949e)" }}>
+            {t("fileTree.sqliteHostOnly", { name: basename(path) || path })} <UntestedTag id="fileTree.sqliteHostOnly" />
+          </div>
+        ) : tablesError != null ? (
           <div className="file-viewer-error" style={{ padding: "1rem", color: "#f85149" }}>
             {viewerErrorText(t, tablesError)}
           </div>

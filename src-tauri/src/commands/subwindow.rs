@@ -31,9 +31,12 @@ use tauri::{
 };
 
 use crate::commands::apps::{
-    TrackedWindow, WindowRegistry, WindowRegistryState, ORIGIN_DETACHED_SUBWINDOW,
+    DetachedBounds, TrackedWindow, WindowRegistry, WindowRegistryState, ORIGIN_DETACHED_SUBWINDOW,
 };
 use crate::commands::workspace::WorkspaceStateArc;
+#[cfg(target_os = "linux")]
+use crate::services::popout_screen::{identity_hash, match_monitor};
+use crate::services::popout_screen::{self, Screen, Verdict, View, Why};
 use crate::services::window_state::MonitorRect;
 
 /// Stable Tauri window label for a detached group. One window per (project,
@@ -45,11 +48,21 @@ pub fn detached_label(scope: &str, group_id: &str) -> String {
 /// Human-friendly, per-session-unique OS window title for a detached group,
 /// e.g. "Tabtivity win-1". This string is load-bearing on X11: the resolver in
 /// `platform::x11::find_window_for_title` matches on it exactly to recover the
-/// native window id, so it must stay unique among live detached windows.
-/// Uniqueness comes from the caller assigning a distinct sequence number per
-/// live window (lowest free positive int); see `detach_subwindow`.
+/// native window id, so it must stay unique among live detached windows and in
+/// place until the resolver is done (only then does a name replace it, see
+/// [`detached_window_title`]). Uniqueness comes from the caller assigning a
+/// distinct sequence number per live window (lowest free positive int); see
+/// `detach_subwindow`.
 pub fn detached_title(seq: u32) -> String {
     format!("{app} win-{seq}", app = crate::brand::DISPLAY)
+}
+
+/// The title a window goes by once it is built: its name, else its number.
+pub fn detached_window_title(seq: u32, name: Option<&str>) -> String {
+    match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("{name} — {app}", app = crate::brand::DISPLAY),
+        None => detached_title(seq),
+    }
 }
 
 /// The query string the DetachedApp renderer reads to mount a single group.
@@ -124,6 +137,7 @@ pub fn release_detached_entry(reg: &mut WindowRegistry, label: &str) -> Option<u
     // A handshake still in flight has nothing left to retire, and the label's
     // next window must announce its own readiness.
     reg.detached_retire.forget(label);
+    reg.detached_screens.release(label);
     reg.windows.remove(label).and_then(|w| w.window_id)
 }
 
@@ -176,9 +190,11 @@ pub fn release_detach_reservation(reg: &mut WindowRegistry, label: &str) {
 pub fn on_detached_destroyed(reg: &mut WindowRegistry, label: &str) -> (Option<u64>, bool) {
     if reg.detached_retire.finish(label) {
         let kept = reg.detached_bounds.get(label).copied();
+        let kept_id = reg.detached_screens.id(label);
         let wid = release_detached_entry(reg, label);
         if let Some(b) = kept {
             reg.detached_bounds.insert(label.to_string(), b);
+            reg.detached_screens.set_id(label, kept_id);
         }
         (wid, false)
     } else {
@@ -251,6 +267,8 @@ pub async fn detach_subwindow(
     // quit (`detached_window_screens`), GDK's logical rect. Ignored elsewhere,
     // and once this run has a record of its own.
     monitor: Option<MonitorRect>,
+    // The window's name, for its OS title once the resolver below has finished.
+    name: Option<String>,
 ) -> Result<String, String> {
     let label = detached_label(&project_id, &group_id);
 
@@ -294,12 +312,39 @@ pub async fn detach_subwindow(
     // The first respawn after a restart has no capture yet: it takes the screen
     // and size the saved layout kept from the last quit, so it too comes back on
     // its own screen rather than the pointer's.
-    let saved = win_registry
-        .lock_ok()
-        .detached_bounds
-        .get(&label)
-        .copied()
-        .or_else(|| restart_bounds(window_positions_readable(), width, height, monitor));
+    //
+    // That respawn's screen is the one this machine kept the last time the
+    // popout's placement settled or the user moved it (`popout_screen`), which
+    // outranks the saved layout's: the layout only learns it at a clean quit.
+    let kept = (!window_positions_readable())
+        .then(|| {
+            crate::services::popout_screen::load_kept(
+                &crate::services::popout_screen::kept_path(),
+                &label,
+            )
+        })
+        .flatten();
+    let saved = {
+        let mut reg = win_registry.lock_ok();
+        let mut saved = reg.detached_bounds.get(&label).copied();
+        if saved.is_none_or(|b| b.monitor.is_none()) {
+            if let Some((from_layout, id)) =
+                restart_bounds(window_positions_readable(), width, height, monitor, kept)
+            {
+                // Record it now: a popout retired before its placement ran
+                // (a fast A to B to A) must still have this screen to come back to.
+                let merged = DetachedBounds {
+                    w: saved.map_or(from_layout.w, |b| b.w),
+                    h: saved.map_or(from_layout.h, |b| b.h),
+                    ..from_layout
+                };
+                reg.detached_bounds.insert(label.clone(), merged);
+                reg.detached_screens.set_id(&label, id);
+                saved = Some(merged);
+            }
+        }
+        saved
+    };
     let saved_size = saved.map(|b| (f64::from(b.w), f64::from(b.h)));
     // A Wayland respawn (the scope just came back) must not take the focus
     // the user is typing into in the main window.
@@ -387,6 +432,9 @@ pub async fn detach_subwindow(
     // and macOS we read the HWND / NSWindow number straight off the Tauri
     // window by its label.
     let window_id = resolve_detached_window_id(&app, &label, &title);
+    if name.is_some() {
+        let _ = win.set_title(&detached_window_title(seq, name.as_deref()));
+    }
 
     if let Some(wid) = window_id {
         // Opt the detached window into the parkable override so the switch path
@@ -418,6 +466,8 @@ pub async fn detach_subwindow(
         let mut reg = win_registry.lock_ok();
         reg.windows.insert(label.clone(), win);
         reg.detached_building.remove(&label);
+        // Nothing GDK says of it counts until it has been placed and settled.
+        reg.detached_screens.built(&label, std::time::Instant::now());
         // Wayland: the scope this popout belongs to was left while it was
         // being built (a respawn racing the next switch). No sync will look at
         // it again, so retire it here; it is brand new, so there is no unsaved
@@ -445,29 +495,38 @@ pub async fn detach_subwindow(
     Ok(label)
 }
 
-/// The Wayland record a restart respawns from: the saved layout's screen and
-/// size, when this run has no capture of its own. Nothing where positions are
-/// readable (the saved rect places it) or without a screen and a real size.
+/// The Wayland record a restart respawns from, when this run has no capture of
+/// its own, with the identity of its screen (0 = unknown). The screen is the
+/// one the kept file holds (written when a placement settled or the user moved
+/// the popout, so it survives a signal or a crash), else the saved layout's.
+/// The size is the layout's when real, else the kept file's. Nothing where
+/// positions are readable (the saved rect places it) or without a screen and a
+/// real size.
 fn restart_bounds(
     positions_readable: bool,
     width: Option<f64>,
     height: Option<f64>,
     monitor: Option<MonitorRect>,
-) -> Option<crate::commands::apps::DetachedBounds> {
+    kept: Option<crate::services::popout_screen::KeptScreen>,
+) -> Option<(DetachedBounds, u64)> {
     if positions_readable {
         return None;
     }
-    let (monitor, w, h) = (monitor?, width?, height?);
-    if !(w >= 1.0 && h >= 1.0 && w.is_finite() && h.is_finite()) || monitor.w == 0 || monitor.h == 0 {
+    let (monitor, id) = match kept.and_then(|k| k.screen()) {
+        Some(s) => (s.rect, s.id),
+        None => (monitor?, 0),
+    };
+    let real = |w: f64, h: f64| w >= 1.0 && h >= 1.0 && w.is_finite() && h.is_finite();
+    let (w, h) = match (width, height) {
+        (Some(w), Some(h)) if real(w, h) => (w as u32, h as u32),
+        _ => kept
+            .filter(|k| k.width >= 1 && k.height >= 1)
+            .map(|k| (k.width, k.height))?,
+    };
+    if monitor.w == 0 || monitor.h == 0 {
         return None;
     }
-    Some(crate::commands::apps::DetachedBounds {
-        x: 0,
-        y: 0,
-        w: w as u32,
-        h: h as u32,
-        monitor: Some(monitor),
-    })
+    Some((DetachedBounds { x: 0, y: 0, w, h, monitor: Some(monitor) }, id))
 }
 
 /// Force a fresh popout's first paint shortly after creation, deferred on a
@@ -538,8 +597,74 @@ fn gdk_monitor_rect(m: &gtk::gdk::Monitor) -> MonitorRect {
     }
 }
 
+/// A monitor with its identity: the rect plus a hash of its make and model,
+/// which survive a resolution, scale or arrangement change that the rect does not.
+#[cfg(target_os = "linux")]
+fn gdk_screen(m: &gtk::gdk::Monitor) -> Screen {
+    use gtk::gdk::prelude::MonitorExt;
+    Screen {
+        rect: gdk_monitor_rect(m),
+        id: identity_hash(m.manufacturer().as_deref(), m.model().as_deref()),
+    }
+}
+
+/// Every connected monitor, in GDK's order. Main thread (GTK).
+#[cfg(target_os = "linux")]
+fn live_screens(d: &gtk::gdk::Display) -> Vec<Screen> {
+    (0..d.n_monitors())
+        .filter_map(|i| d.monitor(i))
+        .map(|m| gdk_screen(&m))
+        .collect()
+}
+
+/// The index into GDK's monitors of the screen a popout's record names — by
+/// make and model first, so a resolution or scale change does not lose it to
+/// the main window's screen ([`match_monitor`]). Main thread (GTK).
+#[cfg(target_os = "linux")]
+fn target_monitor_index(
+    d: &gtk::gdk::Display,
+    app: &AppHandle,
+    label: &str,
+    rect: MonitorRect,
+) -> Option<i32> {
+    let id = app.state::<WindowRegistryState>().lock_ok().detached_screens.id(label);
+    match_monitor(&Screen { rect, id }, &live_screens(d)).map(|i| i as i32)
+}
+
+/// One look at a popout, for [`popout_screen::PopoutScreens::observe`]: is it
+/// shown and fullscreen, which monitor GDK says its surface is on, and its size.
+/// A window that is not mapped reads as not shown, and GDK's answer for one
+/// that entered no output (the origin monitor) is never trusted on its own: the
+/// observation also needs the window to have settled. Main thread (GTK).
+#[cfg(target_os = "linux")]
+fn sample_popout(win: &tauri::WebviewWindow) -> View {
+    use gtk::prelude::*;
+    let blind = View { shown: false, fullscreen: false, seen: None, twins: false, size: None };
+    let Some(gdk_win) = win.gtk_window().ok().and_then(|w| w.window()) else {
+        return blind;
+    };
+    let d = gdk_win.display();
+    let seen = d.monitor_at_window(&gdk_win).map(|m| gdk_screen(&m));
+    let twins = seen.is_some_and(|s| s.id != 0 && live_screens(&d).iter().filter(|m| m.id == s.id).count() > 1);
+    View {
+        shown: win.is_visible().unwrap_or(false) && gdk_win.is_viewable(),
+        fullscreen: gdk_win.state().contains(gtk::gdk::WindowState::FULLSCREEN),
+        seen,
+        twins,
+        size: win.inner_size().ok().map(|s| (s.width, s.height)),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sample_popout(_win: &tauri::WebviewWindow) -> View {
+    View { shown: false, fullscreen: false, seen: None, twins: false, size: None }
+}
+
 /// The screen GDK says `win` is on. On Wayland that is the output its surface
-/// last entered — the one thing a client there knows about where it is.
+/// last entered — the one thing a client there knows about where it is — or,
+/// for a surface that entered none, a geometric guess (the origin monitor).
+/// A raw reading, good for "which screen is the main window on"; a popout's
+/// RECORD never comes from it, only from [`record_popout`].
 /// Main thread (GTK).
 #[cfg(target_os = "linux")]
 fn gdk_monitor_of(win: &tauri::WebviewWindow) -> Option<MonitorRect> {
@@ -560,11 +685,15 @@ fn gdk_monitor_of(_win: &tauri::WebviewWindow) -> Option<MonitorRect> {
 #[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MonitorHop {
-    /// Asked to go fullscreen on its screen; GTK has not confirmed it yet.
+    /// Asked to go fullscreen on its screen; the compositor has not shown it
+    /// there yet.
     Entering,
     /// Fullscreen there, asked to leave it again.
     Leaving,
-    /// Back to a normal window (or given up on): nothing more to do.
+    /// Out of fullscreen: waiting for GDK's answer to catch up with where the
+    /// compositor put the window, to check it landed ([`MONITOR_HOP_SETTLE`]).
+    Settling,
+    /// A normal window (or given up on): nothing more to do.
     Done,
 }
 
@@ -574,6 +703,10 @@ enum HopAction {
     Nothing,
     Unfullscreen,
     RestoreSize,
+    /// It landed on the wrong screen (or something else took it out of
+    /// fullscreen first): ask for the fullscreen on its screen once more. A
+    /// window that is already shown is moved by it all the same.
+    Refullscreen,
     /// Past [`MONITOR_HOP_TIMEOUT`]: leave fullscreen wherever it is and take
     /// the size back, rather than stay a fullscreen window.
     GiveUp,
@@ -585,32 +718,64 @@ enum HopAction {
 struct HopView {
     /// GTK's FULLSCREEN state.
     fullscreen: bool,
+    /// It was fullscreen during this attempt and is not any more.
+    lost_fullscreen: bool,
     /// GDK's monitor index for the surface (`monitor_at_window`).
     answer: Option<usize>,
     /// What GDK would answer had the surface entered no output
-    /// ([`gdk_fallback_monitor`]).
+    /// ([`gdk_fallback_monitor`]); `None` once the surface is known to have
+    /// entered one (a retry), when the answer is never that guess.
     guess: Option<usize>,
-    /// Since the window was asked fullscreen and shown.
+    /// Since this attempt asked for the fullscreen.
     elapsed: std::time::Duration,
+    /// Since the window left fullscreen; only read while settling.
+    settled: std::time::Duration,
+    /// The window is on screen (not hidden by something else meanwhile).
+    mapped: bool,
+    /// Another attempt is still allowed ([`MONITOR_HOP_RETRIES`]).
+    retry_left: bool,
 }
 
 /// The whole round-trip decision for one look, from a window-state report or
 /// the poll: the shown proof ([`entered_target`], else the unproven delay),
-/// the step, and the give-up past the timeout. Pure; the compositor model in
-/// the tests drives it the way `present_on_monitor` does.
+/// the step, the check that it landed, and the give-up past the timeout. Pure;
+/// the compositor model in the tests drives it the way `present_on_monitor`
+/// does.
 #[cfg(any(target_os = "linux", test))]
 fn hop_tick(hop: MonitorHop, view: HopView, target: usize) -> (MonitorHop, HopAction) {
-    if hop == MonitorHop::Done {
-        return (hop, HopAction::Nothing);
+    match hop {
+        MonitorHop::Done => (hop, HopAction::Nothing),
+        MonitorHop::Settling => {
+            if view.settled < MONITOR_HOP_SETTLE {
+                return (hop, HopAction::Nothing);
+            }
+            // After the settle GDK's answer is where the compositor has the
+            // window (probed on Mutter 50.1: it matched the real position both
+            // after a wrong landing and a right one).
+            match view.answer {
+                Some(i) if i != target && view.retry_left && view.mapped => {
+                    (MonitorHop::Entering, HopAction::Refullscreen)
+                }
+                _ => (MonitorHop::Done, HopAction::Nothing),
+            }
+        }
+        MonitorHop::Entering | MonitorHop::Leaving => {
+            if view.elapsed >= MONITOR_HOP_TIMEOUT {
+                return (MonitorHop::Done, HopAction::GiveUp);
+            }
+            // Something else (the compositor refusing, the page's own
+            // stray-fullscreen guard) took it out of fullscreen before we did:
+            // it is out wherever that left it, so check where.
+            if hop == MonitorHop::Entering && view.lost_fullscreen {
+                return (MonitorHop::Settling, HopAction::RestoreSize);
+            }
+            let shown = hop == MonitorHop::Entering
+                && view.fullscreen
+                && entered_target(view.answer, view.guess, target)
+                    .unwrap_or(view.elapsed >= MONITOR_HOP_UNPROVEN_DELAY);
+            monitor_hop_step(hop, view.fullscreen, shown)
+        }
     }
-    if view.elapsed >= MONITOR_HOP_TIMEOUT {
-        return (MonitorHop::Done, HopAction::GiveUp);
-    }
-    let shown = hop == MonitorHop::Entering
-        && view.fullscreen
-        && entered_target(view.answer, view.guess, target)
-            .unwrap_or(view.elapsed >= MONITOR_HOP_UNPROVEN_DELAY);
-    monitor_hop_step(hop, view.fullscreen, shown)
 }
 
 /// One look at the round trip: GTK's fullscreen state and whether the
@@ -618,16 +783,19 @@ fn hop_tick(hop: MonitorHop, view: HopView, target: usize) -> (MonitorHop, HopAc
 /// reports arrive in is unit-tested without a compositor.
 ///
 /// It leaves fullscreen only once SHOWN. GTK reports fullscreen from the first
-/// configure, before the window's first buffer, and Mutter places a window
-/// that leaves fullscreen before it was ever shown on the pointer's screen
-/// (`meta_window_place`: `showing_for_first_time` → the current monitor) — the
-/// main window's, right after the switch. That is how every respawn came back
-/// beside the main window.
+/// configure, before the compositor has acted on the request, and Mutter
+/// places a window that leaves fullscreen before that on the pointer's screen
+/// — the main window's, right after the switch. That is how every respawn came
+/// back beside the main window. Probed on Mutter 50.1 (a private headless
+/// session, two screens, the pointer on the other one): leaving at the first
+/// report, or within ~15 ms of the show, lands on the pointer's screen; from
+/// ~20 ms on, on the fullscreen's; the surface's `wl_surface.enter` (what GDK
+/// answers from) follows at ~25 ms.
 #[cfg(any(target_os = "linux", test))]
 fn monitor_hop_step(hop: MonitorHop, fullscreen: bool, shown: bool) -> (MonitorHop, HopAction) {
     match (hop, fullscreen) {
         (MonitorHop::Entering, true) if shown => (MonitorHop::Leaving, HopAction::Unfullscreen),
-        (MonitorHop::Leaving, false) => (MonitorHop::Done, HopAction::RestoreSize),
+        (MonitorHop::Leaving, false) => (MonitorHop::Settling, HopAction::RestoreSize),
         (hop, _) => (hop, HopAction::Nothing),
     }
 }
@@ -672,17 +840,29 @@ fn entered_target(answer: Option<usize>, fallback: Option<usize>, target: usize)
     }
 }
 
-/// How long the round trip may take before the popout is simply dropped out of
+/// How long one attempt may take before the popout is simply dropped out of
 /// fullscreen and resized (a compositor that never confirms the fullscreen, or
 /// never shows it). Generous: the respawn runs during a project switch.
 #[cfg(any(target_os = "linux", test))]
 const MONITOR_HOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// When [`entered_target`] can't tell, how long after the fullscreen the
-/// window counts as shown. Mutter shows a window within a frame of its first
-/// buffer; this leaves room for a loaded switch.
+/// window counts as shown. Mutter shows a window within a frame or two of its
+/// first buffer (~20 ms probed); this leaves room for a loaded switch, and a
+/// premature leave is caught by the landing check anyway.
 #[cfg(any(target_os = "linux", test))]
 const MONITOR_HOP_UNPROVEN_DELAY: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// How long after leaving fullscreen GDK's answer is taken as where the window
+/// landed (its `enter`/`leave` follow the move within a frame or two).
+#[cfg(any(target_os = "linux", test))]
+const MONITOR_HOP_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Further attempts after a wrong landing. A second round trip works on the
+/// then-shown window (probed: it moves it onto the named screen and back), so
+/// one is enough to undo a stray early unfullscreen; more would only flash.
+#[cfg(any(target_os = "linux", test))]
+const MONITOR_HOP_RETRIES: u32 = 1;
 
 /// How often the round trip looks for the shown proof (GTK raises no signal
 /// for an output enter that doesn't change the scale).
@@ -705,15 +885,42 @@ const MONITOR_HOP_POLL: std::time::Duration = std::time::Duration::from_millis(4
 /// frame, so no nudge. A screen that is gone → the main window's screen, the
 /// size capped to it; no screen to name at all → a plain show wherever the
 /// compositor puts it.
+///
+/// Probed against a real Mutter 50.1 (a private headless GNOME Shell, two
+/// 1280x720 screens, GTK 3.24 and WebKitGTK 2.52 clients; the window's real
+/// screen read off a compositor screenshot): this round trip lands the window
+/// on the named screen, with the pointer on either screen, for a rebuilt
+/// window and for a hidden-then-reshown one, as long as it leaves fullscreen
+/// after the compositor has acted on the request (see [`monitor_hop_step`]).
+/// GDK's `monitor_at_window` matched the real screen every time once the
+/// window had settled, so the hop checks its landing with it and, if the
+/// window came out on another screen (something took it out of fullscreen
+/// early), goes round once more ([`MONITOR_HOP_RETRIES`]). Every decision is
+/// traced to stderr as `popout-place #n +ms: …` so a live run shows which
+/// link broke.
+///
+/// Every end of the placement is in the poll below: the window gone, the
+/// round trip [`MonitorHop::Done`] (landed, hidden meanwhile, no retry left,
+/// or [`HopAction::GiveUp`] at the timeout); the early returns here (no
+/// window, no screen to name) never start one.
 #[cfg(target_os = "linux")]
 fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: Option<Size>) {
+    static PLACEMENTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    // A run counter, not the label: the label carries the project id.
+    let id = PLACEMENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let on_main = app.clone();
     let label = label.to_string();
     let _ = app.run_on_main_thread(move || {
         use gtk::prelude::*;
+        let t0 = std::time::Instant::now();
+        let say = move |msg: String| {
+            eprintln!("popout-place #{id} +{}ms: {msg}", t0.elapsed().as_millis());
+        };
         let Some(win) = on_main.get_webview_window(&label) else {
+            say("window gone before the placement started".to_string());
             return;
         };
+        mark_placing(&on_main, &label, true);
         // The screen it was retired from, or — that display unplugged since —
         // the main window's, so it comes back as its own window beside the main
         // one rather than on whatever screen the pointer is on.
@@ -723,7 +930,7 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
                 (0..d.n_monitors())
                     .find(|&i| d.monitor(i).is_some_and(|m| gdk_monitor_rect(&m) == rect))
             };
-            match index_of(monitor) {
+            match target_monitor_index(&d, &on_main, &label, monitor) {
                 Some(i) => Some((i, None)),
                 None => main
                     .as_ref()
@@ -734,10 +941,24 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
         let (Some((index, fallback)), Ok(gtk_win), Some(screen)) =
             (index, win.gtk_window(), gtk::gdk::Screen::default())
         else {
+            say("no screen to name (the saved one and the main window's are both unknown to GDK): plain show".to_string());
+            mark_placing(&on_main, &label, false);
             let _ = win.show();
             spawn_first_paint_nudge(on_main.clone(), label);
             return;
         };
+        {
+            let d = gtk::gdk::Display::default();
+            let target_size = d.as_ref().and_then(|d| d.monitor(index)).map(|m| gdk_monitor_rect(&m));
+            say(format!(
+                "start target={index}/{} ({}x{}) saved screen {} size={:?}",
+                d.as_ref().map_or(0, |d| d.n_monitors()),
+                target_size.map_or(0, |r| r.w),
+                target_size.map_or(0, |r| r.h),
+                if fallback.is_some() { "gone, main window's used" } else { "found" },
+                size,
+            ));
+        }
         // Sized on the screen that is gone: no larger than the one it lands on.
         let size = match (size, fallback) {
             (Some(size), Some(rect)) => {
@@ -754,13 +975,39 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
                 }
             }
         };
-        let started = std::time::Instant::now();
-        let hop = std::rc::Rc::new(std::cell::Cell::new(MonitorHop::Entering));
+        use std::cell::Cell;
+        /// The round trip's own state, shared by the state reports and the poll.
+        struct Run {
+            hop: Cell<MonitorHop>,
+            /// 0 for the first attempt, then one per [`HopAction::Refullscreen`].
+            attempt: Cell<u32>,
+            /// When this attempt asked for the fullscreen.
+            started: Cell<std::time::Instant>,
+            /// When the window left fullscreen (set while settling).
+            left_at: Cell<Option<std::time::Instant>>,
+            /// GTK has reported fullscreen during this attempt.
+            was_fullscreen: Cell<bool>,
+            /// The last look that was traced (a look that changes nothing isn't).
+            traced: Cell<Option<(MonitorHop, bool, Option<usize>)>>,
+        }
+        let run = std::rc::Rc::new(Run {
+            hop: Cell::new(MonitorHop::Entering),
+            attempt: Cell::new(0),
+            started: Cell::new(std::time::Instant::now()),
+            left_at: Cell::new(None),
+            was_fullscreen: Cell::new(false),
+            traced: Cell::new(None),
+        });
         // One look at the round trip ([`hop_tick`]), from a window-state report
         // (its new state) or the poll (the window's current one).
         let step = std::rc::Rc::new({
-            let (hop, gtk_win) = (hop.clone(), gtk_win.clone());
+            let (run, gtk_win, screen) = (run.clone(), gtk_win.clone(), screen.clone());
             move |reported: Option<bool>| {
+                let hop = run.hop.get();
+                if hop == MonitorHop::Done {
+                    return;
+                }
+                let now = std::time::Instant::now();
                 let gdk_win = gtk_win.window();
                 let fullscreen = reported.unwrap_or_else(|| {
                     gdk_win
@@ -778,17 +1025,85 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
                         monitors.iter().map(|m| m.as_ref().map_or(none, gdk_monitor_rect)).collect();
                     (answer, gdk_fallback_monitor(gdk_win.width(), gdk_win.height(), &rects))
                 });
-                let view = HopView { fullscreen, answer, guess, elapsed: started.elapsed() };
-                let (next, action) = hop_tick(hop.get(), view, index as usize);
-                hop.set(next);
+                // A retry works on a window that has entered an output already:
+                // GDK's answer is then never its no-output guess.
+                let guess = guess.filter(|_| run.attempt.get() == 0);
+                if fullscreen {
+                    run.was_fullscreen.set(true);
+                }
+                let view = HopView {
+                    fullscreen,
+                    lost_fullscreen: run.was_fullscreen.get() && !fullscreen,
+                    answer,
+                    guess,
+                    elapsed: now.duration_since(run.started.get()),
+                    settled: run.left_at.get().map_or(std::time::Duration::ZERO, |t| now.duration_since(t)),
+                    mapped: gtk_win.is_mapped(),
+                    retry_left: run.attempt.get() < MONITOR_HOP_RETRIES,
+                };
+                // One line per change of what is seen, never one per poll.
+                let seen = (hop, fullscreen, answer);
+                if run.traced.get() != Some(seen) {
+                    run.traced.set(Some(seen));
+                    say(format!(
+                        "{hop:?}: fullscreen={fullscreen} gdk={answer:?} (unentered guess {guess:?}, \
+                         target {index})"
+                    ));
+                }
+                let (next, action) = hop_tick(hop, view, index as usize);
+                run.hop.set(next);
+                if next == MonitorHop::Settling && hop != MonitorHop::Settling {
+                    run.left_at.set(Some(now));
+                }
                 match action {
-                    HopAction::Unfullscreen => gtk_win.unfullscreen(),
-                    HopAction::RestoreSize => restore(),
+                    HopAction::Unfullscreen => {
+                        let proof = match entered_target(answer, guess, index as usize) {
+                            Some(true) => "the surface entered the target",
+                            _ => "the screen can't be told from GDK's guess; delay elapsed",
+                        };
+                        say(format!("leaving fullscreen: {proof}"));
+                        gtk_win.unfullscreen();
+                    }
+                    HopAction::RestoreSize => {
+                        if hop == MonitorHop::Entering {
+                            say("something else left fullscreen before we did; checking where it landed".to_string());
+                        }
+                        say("out of fullscreen: restoring the size".to_string());
+                        restore();
+                    }
+                    HopAction::Refullscreen => {
+                        run.attempt.set(run.attempt.get() + 1);
+                        run.started.set(now);
+                        run.left_at.set(None);
+                        run.was_fullscreen.set(false);
+                        say(format!(
+                            "landed on screen {answer:?}, wanted {index}: fullscreen on it again \
+                             (attempt {})",
+                            run.attempt.get() + 1
+                        ));
+                        gtk_win.fullscreen_on_monitor(&screen, index);
+                    }
                     HopAction::GiveUp => {
+                        say(format!(
+                            "gave up after {} ms: fullscreen={fullscreen} gdk={answer:?}; leaving \
+                             fullscreen where it is",
+                            view.elapsed.as_millis()
+                        ));
                         gtk_win.unfullscreen();
                         restore();
                     }
-                    HopAction::Nothing => {}
+                    HopAction::Nothing => {
+                        if hop == MonitorHop::Settling && next == MonitorHop::Done {
+                            let verdict = if answer == Some(index as usize) {
+                                "landed on its screen"
+                            } else if !view.mapped {
+                                "hidden meanwhile, not checked"
+                            } else {
+                                "still on another screen, no retry left"
+                            };
+                            say(format!("settled: gdk={answer:?} target={index}: {verdict}"));
+                        }
+                    }
                 }
             }
         });
@@ -797,14 +1112,26 @@ fn present_on_monitor(app: &AppHandle, label: &str, monitor: MonitorRect, size: 
             on_event(Some(ev.new_window_state().contains(gtk::gdk::WindowState::FULLSCREEN)));
             gtk::glib::Propagation::Proceed
         });
+        run.started.set(std::time::Instant::now());
         gtk_win.fullscreen_on_monitor(&screen, index);
         let _ = win.show();
+        say("fullscreen requested, shown".to_string());
 
         // GTK raises nothing when the surface enters its output, so look again
-        // until the round trip is over (or given up on).
+        // until the round trip is over (or given up on, or the window is gone).
+        let (gone_app, gone_label) = (on_main.clone(), label.clone());
         gtk::glib::timeout_add_local(MONITOR_HOP_POLL, move || {
+            if gone_app.get_webview_window(&gone_label).is_none() {
+                say("window gone: placement stopped".to_string());
+                run.hop.set(MonitorHop::Done);
+                mark_placing(&gone_app, &gone_label, false);
+                return gtk::glib::ControlFlow::Break;
+            }
             step(None);
-            if hop.get() == MonitorHop::Done {
+            if run.hop.get() == MonitorHop::Done {
+                // Only here: restoring the size comes before the landing check
+                // and any retry, and the window is still moving until then.
+                mark_placing(&gone_app, &gone_label, false);
                 gtk::glib::ControlFlow::Break
             } else {
                 gtk::glib::ControlFlow::Continue
@@ -849,6 +1176,9 @@ fn fit_detached_bounds(
     width: Option<f64>,
     height: Option<f64>,
 ) -> (Option<Position>, Option<Size>) {
+    if !window_positions_readable() {
+        return wayland_detached_fit(width, height);
+    }
     let (pos, size) = (detached_position(x, y), detached_size(width, height));
     let (Some(_), Some(_)) = (&pos, &size) else {
         // A partial rect was never a restore — nothing to validate.
@@ -873,6 +1203,16 @@ fn fit_detached_bounds(
         ),
         None => (None, None),
     }
+}
+
+/// What a native-Wayland respawn applies of its saved rect: the size, as it
+/// was, and no position. There the saved x/y are (0,0) filler, so fitting the
+/// rect to the monitors would measure it against the ORIGIN monitor and shrink
+/// a big popout to that one's size; and the compositor drops a position
+/// anyway. The size was real on the screen the popout comes back to
+/// (`present_on_monitor`); a screen that is gone caps it there (`fit_size_to`).
+fn wayland_detached_fit(width: Option<f64>, height: Option<f64>) -> (Option<Position>, Option<Size>) {
+    (None, detached_size(width, height))
 }
 
 /// `w`×`h` centred on the screen the main window is on (physical px), for a
@@ -1423,26 +1763,103 @@ fn emit_retire_withdrawn(app: &AppHandle, label: &str) {
     let _ = app.emit(&format!("{RETIRE_WITHDRAWN_EVENT_PREFIX}{label}"), ());
 }
 
-/// The size and screen a Wayland popout has right now, kept for the moment it
-/// comes back (a respawn, or the re-show of a hidden one). The screen it is
-/// on, so it lands there again rather than wherever GNOME puts new windows
-/// (the pointer's screen). A surface that never entered an output keeps the
-/// last one known.
-fn remember_wayland_bounds(reg: &WindowRegistryState, win: &tauri::WebviewWindow, label: &str) {
-    let Ok(size) = win.inner_size() else { return };
+/// Mark `label`'s placement begun or finished (`set_detached_placing`): what
+/// GDK says of a popout while it is placed, and for a moment after, is not
+/// recorded as its screen or size. `present_on_monitor` sets it as the hop
+/// starts and clears it where the hop ends.
+fn mark_placing(app: &AppHandle, label: &str, placing: bool) {
+    let reg = app.state::<WindowRegistryState>();
     let mut reg = reg.lock_ok();
-    let monitor =
-        gdk_monitor_of(win).or_else(|| reg.detached_bounds.get(label).and_then(|b| b.monitor));
-    reg.detached_bounds.insert(
-        label.to_string(),
-        crate::commands::apps::DetachedBounds {
-            x: 0,
-            y: 0,
-            w: size.width,
-            h: size.height,
-            monitor,
-        },
-    );
+    // A window released meanwhile (destroyed mid-hop) has no placement left to mark.
+    if placing || reg.windows.contains_key(label) {
+        reg.set_detached_placing(label, placing);
+    }
+}
+
+/// The screen `label`'s record names, with its identity.
+fn recorded_screen(reg: &WindowRegistry, label: &str) -> Option<Screen> {
+    let rect = reg.detached_bounds.get(label)?.monitor?;
+    Some(Screen { rect, id: reg.detached_screens.id(label) })
+}
+
+/// Fold one [`Verdict`] into the registry's record for `label`. Answers whether
+/// the recorded screen changed (so the kept file needs the new one).
+fn apply_verdict(reg: &mut WindowRegistry, label: &str, v: &Verdict) -> bool {
+    if v.screen.is_none() && v.size.is_none() {
+        return false;
+    }
+    let old = reg.detached_bounds.get(label).copied();
+    let Some((w, h)) = v.size.or(old.map(|b| (b.w, b.h))) else {
+        return false;
+    };
+    let before = recorded_screen(reg, label);
+    let monitor = v.screen.map(|s| s.rect).or(old.and_then(|b| b.monitor));
+    reg.detached_bounds
+        .insert(label.to_string(), DetachedBounds { x: 0, y: 0, w, h, monitor });
+    if let Some(s) = v.screen {
+        reg.detached_screens.set_id(label, s.id);
+    }
+    recorded_screen(reg, label) != before
+}
+
+/// How much of a look at a popout to say in the log.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Say {
+    /// Only what changed the record (the once-a-second poll).
+    Changes,
+    /// Every outcome (a retire, a hide, the quit).
+    Always,
+}
+
+/// Look at one popout now and fold what is trustworthy into its record
+/// ([`popout_screen::PopoutScreens::observe`]): the screen it was last truly
+/// shown on and its settled size, never a guess, a fullscreen size or a
+/// mid-placement reading. A reading that does not qualify leaves the previous
+/// record. The kept file is written (off this thread) when the screen changed,
+/// or whenever `Say::Always` found a settled window. Main thread (GTK).
+fn record_popout(reg: &WindowRegistryState, win: &tauri::WebviewWindow, label: &str, say: Say) -> Verdict {
+    let view = sample_popout(win);
+    let (verdict, changed, kept) = {
+        let mut g = reg.lock_ok();
+        let recorded = recorded_screen(&g, label);
+        let verdict = g
+            .detached_screens
+            .observe(label, std::time::Instant::now(), view, recorded);
+        let changed = apply_verdict(&mut g, label, &verdict);
+        let kept = g.detached_bounds.get(label).and_then(|b| {
+            let screen = recorded_screen(&g, label)?;
+            Some(popout_screen::KeptScreen::new(screen, (b.w, b.h), popout_screen::now_secs()))
+        });
+        (verdict, changed, kept)
+    };
+    let settled = verdict.size.is_some();
+    if changed || (say == Say::Always && settled) {
+        if let Some(kept) = kept {
+            popout_screen::persist(label, Some(kept));
+        }
+    }
+    if say == Say::Always || changed || verdict.why == Why::UserMoved {
+        let seen = view.seen.map(|s| (s.rect.x, s.rect.y, s.rect.w, s.rect.h));
+        eprintln!(
+            "popout {label}: screen record {:?} (gdk says {seen:?}, shown {}, fullscreen {}) -> {:?}",
+            verdict.why,
+            view.shown,
+            view.fullscreen,
+            kept.map(|k| (k.x, k.y, k.w, k.h)),
+        );
+    }
+    verdict
+}
+
+/// The size and screen a Wayland popout has right now, kept for the moment it
+/// comes back (a respawn, or the re-show of a hidden one): the screen it was
+/// last truly shown on, so it lands there again rather than wherever GNOME
+/// puts new windows (the pointer's screen). A popout that is not placed yet,
+/// whose placement has not finished, or that is fullscreen keeps its previous
+/// record whole — a fast A to B to A, or a retire mid-hop, must not replace a
+/// good record with GDK's guess or the hop's fullscreen size.
+fn remember_wayland_bounds(reg: &WindowRegistryState, win: &tauri::WebviewWindow, label: &str) {
+    record_popout(reg, win, label, Say::Always);
 }
 
 /// One popout's screen and size for the saved layout (native Wayland).
@@ -1456,8 +1873,9 @@ pub struct DetachedScreen {
 /// The screen and size each of `labels` has, for the saved layout to keep at
 /// quit so a restart respawns it there (`detach_subwindow`'s `monitor`). Native
 /// Wayland only — elsewhere the saved position already says it, and this
-/// answers nothing. A shown popout is read off GDK now; a retired or hidden
-/// one answers its last capture; one with neither is left out.
+/// answers nothing. A shown popout is looked at now; every answer is the
+/// RECORD ([`record_popout`]), never a bare reading, so a retired, hidden or
+/// not-yet-placed one answers its last good one; one with none is left out.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detached_window_screens(
     app: AppHandle,
@@ -1472,16 +1890,15 @@ pub async fn detached_window_screens(
         let reg = on_main.state::<WindowRegistryState>();
         let mut out = std::collections::HashMap::new();
         for label in labels {
-            let live = on_main
+            if let Some(win) = on_main
                 .get_webview_window(&label)
                 .filter(|w| w.is_visible().unwrap_or(false))
-                .and_then(|w| Some((gdk_monitor_of(&w)?, w.inner_size().ok()?)));
-            let screen = match live {
-                Some((monitor, size)) => Some(DetachedScreen { w: size.width, h: size.height, monitor }),
-                None => reg.lock_ok().detached_bounds.get(&label).and_then(|b| {
-                    Some(DetachedScreen { w: b.w, h: b.h, monitor: b.monitor? })
-                }),
-            };
+            {
+                record_popout(&reg, &win, &label, Say::Always);
+            }
+            let screen = reg.lock_ok().detached_bounds.get(&label).and_then(|b| {
+                (b.w >= 1 && b.h >= 1).then_some(DetachedScreen { w: b.w, h: b.h, monitor: b.monitor? })
+            });
             if let Some(screen) = screen {
                 out.insert(label, screen);
             }
@@ -1492,6 +1909,70 @@ pub async fn detached_window_screens(
         return Default::default();
     }
     rx.await.unwrap_or_default()
+}
+
+/// Native Wayland, on every way out of the process that gets this far (a
+/// SIGTERM or SIGINT, `app.exit`, a `pkill`): look at every shown popout one
+/// last time and let the kept file take it, before the windows go. The
+/// window's own quit does this through `detached_window_screens`; the signal
+/// path never ran that, and the file is also written whenever the record
+/// changes, which is all a SIGKILL or a crash leaves. Main thread (GTK).
+pub fn remember_screens_at_exit(app: &AppHandle) {
+    if window_positions_readable() {
+        return;
+    }
+    let reg = app.state::<WindowRegistryState>();
+    let labels = crate::services::window_service::all_detached_labels(&reg.lock_ok().windows);
+    for label in labels {
+        if let Some(win) = app
+            .get_webview_window(&label)
+            .filter(|w| w.is_visible().unwrap_or(false))
+        {
+            record_popout(&reg, &win, &label, Say::Always);
+        }
+    }
+    popout_screen::drain_at_exit();
+}
+
+/// How often the screen tracker looks at the popouts.
+const SCREEN_TRACK_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Native Wayland: keep every shown popout's record current as it settles and
+/// as the user moves it, so the kept file is right whenever the process ends —
+/// not only at a clean quit. One look a second, only while a popout exists, the
+/// reading on the main thread and the file write on its own worker.
+pub fn spawn_screen_tracker(app: AppHandle) {
+    if window_positions_readable() {
+        return;
+    }
+    let busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(SCREEN_TRACK_POLL);
+        let labels = {
+            let reg = app.state::<WindowRegistryState>();
+            let reg = reg.lock_ok();
+            crate::services::window_service::all_detached_labels(&reg.windows)
+        };
+        // A look still queued behind a busy main thread is not stacked up.
+        if labels.is_empty() || busy.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            continue;
+        }
+        let (on_main, flag) = (app.clone(), busy.clone());
+        if app
+            .run_on_main_thread(move || {
+                let reg = on_main.state::<WindowRegistryState>();
+                for label in labels {
+                    if let Some(win) = on_main.get_webview_window(&label) {
+                        record_popout(&reg, &win, &label, Say::Changes);
+                    }
+                }
+                flag.store(false, std::sync::atomic::Ordering::Release);
+            })
+            .is_err()
+        {
+            busy.store(false, std::sync::atomic::Ordering::Release);
+        }
+    });
 }
 
 /// The unsaved-work fallback, already marked parked by [`settle_retire`]:
@@ -1599,6 +2080,33 @@ pub fn focus_detached_window(app: AppHandle, label: String) -> bool {
     win.set_focus().is_ok()
 }
 
+/// Put a popout's name in its OS title (the taskbar and Alt+Tab show it); no
+/// name brings the numbered one back. Refused while the window is being built:
+/// the X11 resolver is still matching the numbered title, and `detach_subwindow`
+/// applies the name itself when it is done.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_detached_title(
+    app: AppHandle,
+    win_registry: State<'_, WindowRegistryState>,
+    label: String,
+    name: Option<String>,
+) -> bool {
+    if !label.starts_with("detached-") {
+        return false;
+    }
+    let seq = {
+        let reg = win_registry.lock_ok();
+        if reg.detached_building.contains(&label) {
+            return false;
+        }
+        reg.detached_seqs.get(&label).copied()
+    };
+    let (Some(seq), Some(win)) = (seq, app.get_webview_window(&label)) else {
+        return false;
+    };
+    win.set_title(&detached_window_title(seq, name.as_deref())).is_ok()
+}
+
 /// How often the monitor-arrangement watcher re-reads the connected displays.
 /// One cheap runtime query; the cost of noticing an unplug late is a popout the
 /// user cannot reach, so this stays in the "within a breath" range rather than
@@ -1692,6 +2200,11 @@ pub fn attach_subwindow(
     let wid = release_detached_entry(&mut win_registry.lock_ok(), &registry_id);
     if let Some(wid) = wid {
         workspace.lock_ok().backend.unset_parkable(wid);
+    }
+    // Docked or closed for good: the kept screen goes with the popout, so a
+    // later group of the same label starts clean.
+    if !window_positions_readable() {
+        popout_screen::persist(&registry_id, None);
     }
     if let Some(window) = app.get_webview_window(&registry_id) {
         // `destroy()` (not `close()`) so the removal is immediate: `close()` fires
@@ -1831,6 +2344,18 @@ mod tests {
         // Distinct numbers produce distinct titles (the X11 resolver key must be
         // unique per live window).
         assert_ne!(detached_title(1), detached_title(2));
+    }
+
+    #[test]
+    fn a_name_replaces_the_number_but_never_equals_the_main_title() {
+        assert_eq!(
+            detached_window_title(3, Some(" Paper draft ")),
+            concat!("Paper draft — ", crate::app_name!()),
+        );
+        assert_eq!(detached_window_title(3, None), detached_title(3));
+        assert_eq!(detached_window_title(3, Some("  ")), detached_title(3));
+        // The main window is resolved by its exact bare title.
+        assert_ne!(detached_window_title(3, Some(crate::brand::DISPLAY)), crate::brand::DISPLAY);
     }
 
     #[test]
@@ -2018,7 +2543,8 @@ mod tests {
         assert_eq!(monitor_hop_step(Entering, true, true), (Leaving, Unfullscreen));
         // A repeated fullscreen report does not ask twice.
         assert_eq!(monitor_hop_step(Leaving, true, true), (Leaving, Nothing));
-        assert_eq!(monitor_hop_step(Leaving, false, false), (Done, RestoreSize));
+        // Out of fullscreen: the size comes back once, then the landing is checked.
+        assert_eq!(monitor_hop_step(Leaving, false, false), (Settling, RestoreSize));
         // Afterwards the popout is an ordinary window: a later fullscreen is
         // someone's own, never undone here.
         assert_eq!(monitor_hop_step(Done, true, true), (Done, Nothing));
@@ -2029,68 +2555,142 @@ mod tests {
         MonitorRect { x, y, w, h }
     }
 
-    /// Mutter 50.1's side of a respawn's fullscreen hop, as its source reads,
-    /// with the timings a real switch can have. Times in ms after the popout
-    /// was asked fullscreen on `target` and shown.
+    /// Mutter 50.1's side of a respawn's fullscreen hop, as PROBED (a private
+    /// headless GNOME Shell with two screens, a GTK 3.24 client; the window's
+    /// real screen read off a compositor screenshot — see [`present_on_monitor`]):
+    ///
+    /// * a window that leaves fullscreen before the compositor has acted on the
+    ///   request (`shown_at`: ~15–20 ms after the show on an idle machine; 0 and
+    ///   12 ms failed, 20 ms and later landed) is placed on the pointer's screen;
+    ///   one that leaves after it, on the screen it is fullscreen on;
+    /// * the surface's `wl_surface.enter` (GDK's answer) follows ~25 ms after the
+    ///   show; GDK's answer then matches the window's real screen;
+    /// * a window already shown that is asked fullscreen on a screen is moved
+    ///   there, and leaving fullscreen keeps it there (the retry).
+    ///
+    /// Times in ms after the popout was asked fullscreen on `target` and shown.
     struct Compositor {
         monitors: Vec<MonitorRect>,
         /// The screen under the pointer: the main window's, after the switch.
         pointer: usize,
         /// The first configure: GTK reports FULLSCREEN from here.
         configure_at: u64,
-        /// Mutter shows the window (calc-showing after its first buffer).
+        /// The compositor has acted on the fullscreen request: shown there.
         shown_at: u64,
         /// Then sends `wl_surface.enter` for the output.
         enter_after: u64,
+        /// Something else (the page's stray-fullscreen guard) leaves fullscreen
+        /// at this time, once.
+        stray_at: Option<u64>,
+    }
+
+    impl Compositor {
+        fn new(monitors: Vec<MonitorRect>, pointer: usize, timing: (u64, u64, u64)) -> Self {
+            Compositor {
+                monitors,
+                pointer,
+                configure_at: timing.0,
+                shown_at: timing.1,
+                enter_after: timing.2,
+                stray_at: None,
+            }
+        }
     }
 
     #[derive(Debug, PartialEq)]
     struct Landing {
-        /// The screen Mutter placed it on when it left fullscreen.
+        /// The screen Mutter placed it on when it last left fullscreen.
         placed: Option<usize>,
-        /// Size restores sent (exactly one wanted).
+        /// Size restores sent (one per time it left fullscreen).
         restores: u32,
+        /// Round trips made (1 + retries).
+        attempts: u32,
     }
 
     /// Drive `policy` the way `present_on_monitor` does — a look at each
     /// window-state report and at every 40 ms poll — against [`Compositor`].
-    /// Mutter's rule (`meta_window_unmake_fullscreen` → `meta_window_place`):
-    /// a window leaving fullscreen before it was ever shown is placed on the
-    /// pointer's screen (`showing_for_first_time` → current monitor), one
-    /// shown already on the screen it is fullscreen on.
     fn land(
         c: &Compositor,
         target: usize,
         policy: impl Fn(MonitorHop, HopView, usize) -> (MonitorHop, HopAction),
     ) -> Landing {
+        use std::time::Duration;
         let (w, h) = (900, 640);
         let guess = gdk_fallback_monitor(w, h, &c.monitors);
         let mut hop = MonitorHop::Entering;
+        let mut out = Landing { placed: None, restores: 0, attempts: 1 };
+        // This attempt's start, and the compositor's delays within it: a retry
+        // works on a shown window, which the compositor moves at once.
+        let mut t0 = 0u64;
         let mut left_at: Option<u64> = None;
-        let mut out = Landing { placed: None, restores: 0 };
+        let mut settle_from: Option<u64> = None;
+        let mut was_fullscreen = false;
+        let mut stray = c.stray_at;
+        // Where the compositor has the window and from when GDK knows it, and
+        // the last screen GDK knows it on.
+        let mut on: Option<(usize, u64)> = None;
+        let mut known: Option<usize> = None;
         let mut now = 0;
-        while now <= 6000 && hop != MonitorHop::Done {
+        while now <= 12_000 && hop != MonitorHop::Done {
+            let first = out.attempts == 1;
+            let (configure, shown) = if first { (c.configure_at, c.shown_at) } else { (10, 10) };
+            let rel = now - t0;
+            // Leaving fullscreen: placed by what the compositor has done by now.
+            let leave = |now: u64,
+                         out: &mut Landing,
+                         left_at: &mut Option<u64>,
+                         on: &mut Option<(usize, u64)>| {
+                let screen = if rel >= shown { target } else { c.pointer };
+                out.placed = Some(screen);
+                *on = Some((screen, now + c.enter_after));
+                *left_at = Some(now);
+            };
+            if left_at.is_none() && rel >= shown && on.map(|(s, _)| s) != Some(target) {
+                on = Some((target, t0 + shown + c.enter_after));
+            }
+            if let Some(s) = stray {
+                if left_at.is_none() && now >= s && rel >= configure {
+                    stray = None;
+                    leave(now, &mut out, &mut left_at, &mut on);
+                }
+            }
+            if let Some((screen, at)) = on {
+                if now >= at {
+                    known = Some(screen);
+                }
+            }
             // GTK sees the unfullscreen confirmed on the next configure.
-            let fullscreen = now >= c.configure_at && left_at.is_none_or(|t| now < t + 10);
-            let entered = out
-                .placed
-                .or((now >= c.shown_at + c.enter_after).then_some(target));
-            let reported = now == c.configure_at || left_at.is_some_and(|t| now == t + 10);
+            let fullscreen = rel >= configure && left_at.is_none_or(|t| now < t + 10);
+            let reported = now == t0 + configure || left_at.is_some_and(|t| now == t + 10);
             if reported || now % 40 == 0 {
+                was_fullscreen |= fullscreen;
                 let view = HopView {
                     fullscreen,
-                    answer: entered.or(guess),
-                    guess,
-                    elapsed: std::time::Duration::from_millis(now),
+                    lost_fullscreen: was_fullscreen && !fullscreen,
+                    answer: known.or(first.then_some(guess).flatten()),
+                    guess: first.then_some(guess).flatten(),
+                    elapsed: Duration::from_millis(rel),
+                    settled: settle_from.map_or(Duration::ZERO, |t| Duration::from_millis(now - t)),
+                    mapped: true,
+                    retry_left: out.attempts - 1 < MONITOR_HOP_RETRIES,
                 };
                 let (next, action) = policy(hop, view, target);
+                if next == MonitorHop::Settling && hop != MonitorHop::Settling {
+                    settle_from = Some(now);
+                }
                 hop = next;
                 if matches!(action, HopAction::Unfullscreen | HopAction::GiveUp) && left_at.is_none() {
-                    left_at = Some(now);
-                    out.placed = Some(if now >= c.shown_at { target } else { c.pointer });
+                    leave(now, &mut out, &mut left_at, &mut on);
                 }
                 if matches!(action, HopAction::RestoreSize | HopAction::GiveUp) {
                     out.restores += 1;
+                }
+                if action == HopAction::Refullscreen {
+                    out.attempts += 1;
+                    t0 = now;
+                    left_at = None;
+                    settle_from = None;
+                    was_fullscreen = false;
                 }
             }
             now += 10;
@@ -2109,18 +2709,28 @@ mod tests {
         ]
     }
 
+    /// Every layout, every (target, pointer) pair with the two apart.
+    fn cases() -> Vec<(Vec<MonitorRect>, usize, usize)> {
+        let mut out = Vec::new();
+        for monitors in layouts() {
+            for target in 0..monitors.len() {
+                for pointer in (0..monitors.len()).filter(|&p| p != target) {
+                    out.push((monitors.clone(), target, pointer));
+                }
+            }
+        }
+        out
+    }
+
     #[test]
     fn the_old_hop_lands_on_the_pointers_screen_in_the_compositor_model() {
         // The model finds the bug the user kept hitting: leaving fullscreen at
-        // GTK's first fullscreen report, before Mutter has shown the window.
-        let c = Compositor {
-            monitors: layouts()[0].clone(),
-            pointer: 0,
-            configure_at: 20,
-            shown_at: 60,
-            enter_after: 10,
+        // GTK's first fullscreen report, before the compositor has acted.
+        let c = Compositor::new(layouts()[0].clone(), 0, (20, 60, 10));
+        let old = |hop, v: HopView, _| {
+            let (next, action) = monitor_hop_step(hop, v.fullscreen, true);
+            (if next == MonitorHop::Settling { MonitorHop::Done } else { next }, action)
         };
-        let old = |hop, v: HopView, _| monitor_hop_step(hop, v.fullscreen, true);
         assert_eq!(land(&c, 1, old).placed, Some(0));
     }
 
@@ -2129,48 +2739,133 @@ mod tests {
         // (configure, shown, enter after shown): a quick show, a loaded
         // switch, a very slow first frame.
         let timings = [(10, 30, 10), (20, 200, 20), (30, 1500, 30), (50, 3000, 40)];
-        for monitors in layouts() {
+        for (monitors, target, pointer) in cases() {
             let guess = gdk_fallback_monitor(900, 640, &monitors);
-            for target in 0..monitors.len() {
-                for pointer in (0..monitors.len()).filter(|&p| p != target) {
-                    for &(configure_at, shown_at, enter_after) in &timings {
-                        // Meant for the screen GDK guesses anyway, only the
-                        // unproven delay stands in for the proof.
-                        if guess == Some(target) && shown_at + enter_after >= 700 {
-                            continue;
-                        }
-                        let c = Compositor {
-                            monitors: monitors.clone(),
-                            pointer,
-                            configure_at,
-                            shown_at,
-                            enter_after,
-                        };
-                        assert_eq!(
-                            land(&c, target, hop_tick),
-                            Landing { placed: Some(target), restores: 1 },
-                            "monitors {monitors:?}, target {target}, pointer {pointer}, \
-                             timing {configure_at}/{shown_at}/{enter_after}",
-                        );
-                    }
+            for &timing in &timings {
+                let c = Compositor::new(monitors.clone(), pointer, timing);
+                let out = land(&c, target, hop_tick);
+                let case = format!("{monitors:?}, target {target}, pointer {pointer}, timing {timing:?}");
+                assert_eq!(out.placed, Some(target), "{case}");
+                if guess == Some(target) && timing.1 + timing.2 >= 700 {
+                    // Meant for the screen GDK guesses anyway, only the unproven
+                    // delay stands in for the proof: leaving early lands on the
+                    // pointer's screen, and the landing check goes round again.
+                    assert_eq!((out.restores, out.attempts), (2, 2), "{case}");
+                } else {
+                    assert_eq!((out.restores, out.attempts), (1, 1), "{case}");
                 }
             }
         }
     }
 
     #[test]
+    fn something_else_leaving_fullscreen_early_is_undone_by_one_more_round_trip() {
+        // The page's stray-fullscreen guard (or a compositor that refuses the
+        // fullscreen) takes the window out before it was shown: it lands on the
+        // pointer's screen, and the hop notices and moves it onto its own.
+        for (monitors, target, pointer) in cases() {
+            let mut c = Compositor::new(monitors.clone(), pointer, (20, 60, 10));
+            c.stray_at = Some(30);
+            assert_eq!(
+                land(&c, target, hop_tick),
+                Landing { placed: Some(target), restores: 2, attempts: 2 },
+                "{monitors:?}, target {target}, pointer {pointer}",
+            );
+            // The same stray, after the window was shown there already (the
+            // hop is still waiting on its unproven delay when it is the screen
+            // GDK guesses): nothing to undo.
+            c.stray_at = Some(100);
+            let out = land(&c, target, hop_tick);
+            assert_eq!(out.placed, Some(target), "{monitors:?}, target {target}");
+            assert_eq!(out.attempts, 1, "{monitors:?}, target {target}");
+        }
+    }
+
+    #[test]
     fn a_hop_the_compositor_never_shows_gives_up_once_at_the_timeout() {
-        let c = Compositor {
-            monitors: layouts()[0].clone(),
-            pointer: 0,
-            configure_at: 20,
-            shown_at: u64::MAX / 2,
-            enter_after: 0,
-        };
+        let c = Compositor::new(layouts()[0].clone(), 0, (20, u64::MAX / 4, 0));
         let out = land(&c, 1, hop_tick);
-        // It does not stay a fullscreen window: it leaves once, sized once.
-        assert_eq!(out.restores, 1);
+        // It does not stay a fullscreen window: it leaves once, sized once, and
+        // a give-up is not retried.
+        assert_eq!((out.restores, out.attempts), (1, 1));
         assert!(out.placed.is_some());
+    }
+
+    fn view() -> HopView {
+        use std::time::Duration;
+        HopView {
+            fullscreen: false,
+            lost_fullscreen: false,
+            answer: Some(0),
+            guess: Some(0),
+            elapsed: Duration::ZERO,
+            settled: Duration::ZERO,
+            mapped: true,
+            retry_left: true,
+        }
+    }
+
+    #[test]
+    fn the_landing_is_checked_after_the_settle_and_retried_at_most_once() {
+        use std::time::Duration;
+        use HopAction::*;
+        use MonitorHop::*;
+        let late = Duration::from_secs(1);
+        // Out of fullscreen on another screen than meant, but too soon to say.
+        let v = HopView { settled: Duration::from_millis(100), ..view() };
+        assert_eq!(hop_tick(Settling, v, 1), (Settling, Nothing));
+        // Settled on the wrong screen: once more; on none left: done.
+        let wrong = HopView { settled: late, ..view() };
+        assert_eq!(hop_tick(Settling, wrong, 1), (Entering, Refullscreen));
+        assert_eq!(hop_tick(Settling, HopView { retry_left: false, ..wrong }, 1), (Done, Nothing));
+        // On the right screen, or hidden meanwhile (a re-fullscreen would
+        // bring a parked window back fullscreen): done.
+        assert_eq!(hop_tick(Settling, HopView { answer: Some(1), ..wrong }, 1), (Done, Nothing));
+        assert_eq!(hop_tick(Settling, HopView { mapped: false, ..wrong }, 1), (Done, Nothing));
+        assert_eq!(hop_tick(Settling, HopView { answer: None, ..wrong }, 1), (Done, Nothing));
+    }
+
+    #[test]
+    fn a_fullscreen_lost_before_we_left_it_is_checked_not_waited_for() {
+        use HopAction::*;
+        use MonitorHop::*;
+        let lost = HopView { lost_fullscreen: true, ..view() };
+        assert_eq!(hop_tick(Entering, lost, 1), (Settling, RestoreSize));
+        // Leaving it is our own doing: no check needed for the report itself.
+        assert_eq!(hop_tick(Leaving, lost, 1), (Settling, RestoreSize));
+        // Never fullscreen yet (the show is still on its way): wait.
+        assert_eq!(hop_tick(Entering, view(), 1), (Entering, Nothing));
+    }
+
+    #[test]
+    fn a_retry_trusts_gdks_answer_because_the_surface_has_entered_an_output() {
+        use std::time::Duration;
+        use HopAction::*;
+        use MonitorHop::*;
+        // Meant for the screen GDK guesses for an unentered surface: on the first
+        // attempt the answer proves nothing before the delay...
+        let first = HopView { fullscreen: true, answer: Some(0), guess: Some(0), ..view() };
+        assert_eq!(hop_tick(Entering, first, 0), (Entering, Nothing));
+        assert_eq!(
+            hop_tick(Entering, HopView { elapsed: Duration::from_millis(700), ..first }, 0),
+            (Leaving, Unfullscreen)
+        );
+        // ...on a retry (no guess) the answer coming round to it does.
+        let retry = HopView { guess: None, ..first };
+        assert_eq!(hop_tick(Entering, HopView { answer: Some(1), ..retry }, 0), (Entering, Nothing));
+        assert_eq!(hop_tick(Entering, retry, 0), (Leaving, Unfullscreen));
+    }
+
+    #[test]
+    fn a_timeout_gives_up_in_either_fullscreen_step_but_not_while_settling() {
+        use std::time::Duration;
+        use HopAction::*;
+        use MonitorHop::*;
+        let slow = HopView { elapsed: MONITOR_HOP_TIMEOUT + Duration::from_millis(1), ..view() };
+        assert_eq!(hop_tick(Entering, slow, 1), (Done, GiveUp));
+        assert_eq!(hop_tick(Leaving, slow, 1), (Done, GiveUp));
+        assert_eq!(hop_tick(Done, slow, 1), (Done, Nothing));
+        assert_eq!(hop_tick(Settling, slow, 1), (Settling, Nothing));
     }
 
     #[test]
@@ -2411,14 +3106,113 @@ mod tests {
     #[test]
     fn a_wayland_restart_respawns_on_the_screen_the_layout_kept() {
         let right = rect(2560, 0, 2560, 1440);
-        let b = restart_bounds(false, Some(900.0), Some(640.0), Some(right)).expect("a record");
-        assert_eq!((b.w, b.h, b.monitor), (900, 640, Some(right)));
+        let (b, id) = restart_bounds(false, Some(900.0), Some(640.0), Some(right), None).expect("a record");
+        assert_eq!((b.w, b.h, b.monitor, id), (900, 640, Some(right), 0));
         // Readable positions: the saved rect places it, no screen record.
-        assert!(restart_bounds(true, Some(900.0), Some(640.0), Some(right)).is_none());
+        assert!(restart_bounds(true, Some(900.0), Some(640.0), Some(right), None).is_none());
         // No screen kept (an older layout) or no real size: the plain respawn.
-        assert!(restart_bounds(false, Some(900.0), Some(640.0), None).is_none());
-        assert!(restart_bounds(false, Some(0.0), Some(640.0), Some(right)).is_none());
-        assert!(restart_bounds(false, None, Some(640.0), Some(right)).is_none());
-        assert!(restart_bounds(false, Some(900.0), Some(640.0), Some(rect(0, 0, 0, 0))).is_none());
+        assert!(restart_bounds(false, Some(900.0), Some(640.0), None, None).is_none());
+        assert!(restart_bounds(false, Some(0.0), Some(640.0), Some(right), None).is_none());
+        assert!(restart_bounds(false, None, Some(640.0), Some(right), None).is_none());
+        assert!(restart_bounds(false, Some(900.0), Some(640.0), Some(rect(0, 0, 0, 0)), None).is_none());
+    }
+
+    fn kept(x: i32, w: u32, id: u64, size: (u32, u32)) -> popout_screen::KeptScreen {
+        popout_screen::KeptScreen::new(Screen { rect: rect(x, 0, w, 1440), id }, size, 1)
+    }
+
+    #[test]
+    fn a_restart_prefers_the_screen_the_machine_kept_over_the_layouts() {
+        // The signal path never saved the layout's screen; the kept file has
+        // it (with the monitor's identity). It outranks an older layout value
+        // and supplies the size when the layout has none.
+        let (layout, file) = (rect(0, 0, 1920, 1080), kept(2560, 2560, 9, (1200, 800)));
+        let (b, id) = restart_bounds(false, Some(900.0), Some(640.0), Some(layout), Some(file)).unwrap();
+        assert_eq!((b.monitor, b.w, b.h, id), (Some(rect(2560, 0, 2560, 1440)), 900, 640, 9));
+        let (b, _) = restart_bounds(false, None, None, Some(layout), Some(file)).unwrap();
+        assert_eq!((b.w, b.h), (1200, 800));
+        // Nothing in the layout at all (an upgrade, a layout that never saw a
+        // quit): the kept file alone is enough.
+        assert!(restart_bounds(false, None, None, None, Some(file)).is_some());
+        // A kept entry without a usable screen falls back to the layout's.
+        let bad = popout_screen::KeptScreen { w: 0, ..file };
+        let (b, id) = restart_bounds(false, Some(900.0), Some(640.0), Some(layout), Some(bad)).unwrap();
+        assert_eq!((b.monitor, id), (Some(layout), 0));
+    }
+
+    fn registry_with_record(label: &str, screen: Screen) -> WindowRegistry {
+        let mut reg = WindowRegistry::default();
+        reg.detached_bounds.insert(
+            label.to_string(),
+            DetachedBounds { x: 0, y: 0, w: 900, h: 640, monitor: Some(screen.rect) },
+        );
+        reg.detached_screens.set_id(label, screen.id);
+        reg
+    }
+
+    #[test]
+    fn a_verdict_that_kept_the_screen_keeps_the_record_and_takes_the_settled_size() {
+        let (label, good) = ("detached-p1-g-1", Screen { rect: rect(1920, 0, 1920, 1080), id: 7 });
+        let mut reg = registry_with_record(label, good);
+        // Not settled: nothing at all changes (the fullscreen size included).
+        let unsettled = Verdict { why: Why::Unsettled, screen: None, size: None };
+        assert!(!apply_verdict(&mut reg, label, &unsettled));
+        let b = reg.detached_bounds[label];
+        assert_eq!((b.w, b.h, b.monitor), (900, 640, Some(good.rect)));
+        // It landed elsewhere: the wanted screen stays, the size is the window's.
+        let landed = Verdict { why: Why::LandedElsewhere, screen: None, size: Some((1000, 700)) };
+        assert!(!apply_verdict(&mut reg, label, &landed));
+        let b = reg.detached_bounds[label];
+        assert_eq!((b.w, b.h, b.monitor), (1000, 700, Some(good.rect)));
+        assert_eq!(reg.detached_screens.id(label), 7);
+        // The user moved it: the record follows, identity included.
+        let there = Screen { rect: rect(0, 0, 1920, 1080), id: 3 };
+        let moved = Verdict { why: Why::UserMoved, screen: Some(there), size: Some((1000, 700)) };
+        assert!(apply_verdict(&mut reg, label, &moved));
+        assert_eq!(reg.detached_bounds[label].monitor, Some(there.rect));
+        assert_eq!(reg.detached_screens.id(label), 3);
+    }
+
+    #[test]
+    fn a_retire_keeps_the_screen_identity_with_the_record_and_a_release_drops_both() {
+        let (label, good) = ("detached-p1-g-1", Screen { rect: rect(1920, 0, 1920, 1080), id: 7 });
+        let mut reg = registry_with_record(label, good);
+        reg.windows.insert(label.to_string(), tracked(label, None));
+        reg.detached_retire.mark_retiring(label);
+        on_detached_destroyed(&mut reg, label);
+        assert_eq!(recorded_screen(&reg, label), Some(good));
+        reg.detached_retire.mark_retiring(label);
+        reg.windows.insert(label.to_string(), tracked(label, None));
+        release_detached_entry(&mut reg, label);
+        assert_eq!(recorded_screen(&reg, label), None);
+        assert_eq!(reg.detached_screens.id(label), 0);
+    }
+
+    #[test]
+    fn the_placement_mark_is_the_registrys() {
+        let mut reg = WindowRegistry::default();
+        let label = "detached-p1-g-1";
+        assert!(!reg.is_detached_placing(label));
+        reg.set_detached_placing(label, true);
+        assert!(reg.is_detached_placing(label));
+        reg.set_detached_placing(label, false);
+        assert!(!reg.is_detached_placing(label));
+        reg.set_detached_placing(label, true);
+        release_detached_entry(&mut reg, label);
+        assert!(!reg.is_detached_placing(label));
+    }
+
+    #[test]
+    fn a_wayland_respawn_applies_the_saved_size_and_never_a_position() {
+        // x/y are (0,0) filler there; fitting them against the monitors shrank a
+        // big popout to the origin monitor's size.
+        let (pos, size) = wayland_detached_fit(Some(3000.0), Some(1800.0));
+        assert!(pos.is_none());
+        match size {
+            Some(Size::Physical(s)) => assert_eq!((s.width, s.height), (3000, 1800)),
+            other => panic!("expected the saved physical size, got {other:?}"),
+        }
+        let partial = wayland_detached_fit(None, Some(10.0));
+        assert!(partial.0.is_none() && partial.1.is_none());
     }
 }

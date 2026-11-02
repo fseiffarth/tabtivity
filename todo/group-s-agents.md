@@ -24,6 +24,19 @@
   - [ ] ❌ Doesn't work on Windows
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ OpenCode permission and `mini` questions from the Chat (`agents.opencode.v2`): in a full and a
+  `--mini` OpenCode tab with `"permission": {"shell": "ask"}`, ask for a command: the tab's lamp turns to
+  decision and the Chat shows the command with Allow once / Always allow / Reject; each answers from the
+  Chat and from the phone (`mini`: Always allow then asks Confirm / Cancel). Run from the checklist §1.5
+  against OpenCode 2.2.5 with a stub model, never in a tab.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 
 - [ ] Live-check Codex resume after a deliberate backend restart (2026-09-15):
   tabs started together in one folder must retain distinct conversations.
@@ -2872,3 +2885,48 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+
+### Voice in the Chat — `docs/desktop_voice_plan.md`, `docs/context/voice.md`
+
+- [x] Phase 1 built (not run live): dictation (step 3), read-aloud and the
+  hands-free loop (step 4), phone hands-free (step 5), docs (step 6).
+- [ ] 🖐️ Test gate, desktop — Chat tab → mic → install card → the install
+  tab finishes and verifies. Dictate two sentences in German, then English:
+  the words land in the draft, "Heard:" updates while you speak. End with
+  "go on" / "los": it sends without the words; "was ist los" stays text.
+  Turn on **Read aloud**: the OS voice speaks the answer once the turn ends,
+  code blocks are announced, and the mic hears none of it. **Judge the
+  voice: good enough, or is Piper needed?** Settings → Experimental →
+  Hands-free, then the chip: ask, pause, the chime, the prompt goes after the
+  window; once more, say "stop" in the window and the draft stays. The answer
+  is read, the mic listens again, and stays paused while the agent still
+  runs tools. Sit silent in a noisy room for a minute: nothing is sent.
+  Ctrl+Shift+Q stops the voice and the agent keeps going. With a headset and
+  Headset mode on, talking over the voice stops it. **Judge: is interrupting
+  like this enough?** Start the mic in a second tab: the first stops, the
+  header indicator follows. Quit: no speech process or audio stream is left.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Test gate, phone — Focus menu → Hands-free (and Read answers
+  aloud): ask, pause, the chime and "Sending…", the prompt goes; say "stop"
+  or tap the line in the window and it stays. The answer is read, the mic
+  reopens after the turn; a tap on "Reading the answer…" stops the voice. A
+  question is read with its numbered rows and "two" picks the second.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] Phone: probe whether a headset's media button reaches the page through
+  the Media Session API (plan step 5); if it does, it toggles talk/stop.
+- [ ] `voice_voices` and a system-voice picker in Settings → Voice (needs a
+  per-language filter: espeak-ng lists thousands of variants).

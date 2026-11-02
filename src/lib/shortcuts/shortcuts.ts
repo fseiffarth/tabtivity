@@ -58,6 +58,7 @@ export type ShortcutAction =
   | "cycleBox"
   | "cycleBoxBack"
   | "shortcutHelp"
+  | "commandPalette"
   | "rootConsole"
   | "projectShell"
   | "newShellTab"
@@ -78,6 +79,7 @@ export type ShortcutAction =
   | "terminalPaste"
   | "terminalKeySelect"
   | "readerDictate"
+  | "readerStopSpeaking"
   | "editorFind"
   | "editorReplace"
   | "editorAutocomplete"
@@ -279,6 +281,16 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     default: { key: "F1" },
     untested: "shortcut.shortcutHelp",
   },
+  // The command palette listens for its own chord (`layout/CommandPalette`), in
+  // the popouts too, and yields to a focused field or terminal: Ctrl+K is the
+  // shell's kill-line and the prompt field's make-link.
+  {
+    action: "commandPalette",
+    labelKey: "shortcut.commandPalette",
+    group: "navigation",
+    default: { key: "k", ctrl: true },
+    untested: "desktop.palette",
+  },
   // The root console (`layout/RootOverlay`): the cross-project management
   // overlay that replaced switching to the root scope. Handled in the same
   // capture-phase listener as the steering chord, for the same reason — it has
@@ -434,6 +446,17 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     context: "terminal",
     default: { key: "d", ctrl: true, shift: true },
     untested: "terminal.reader.voice.dictate",
+  },
+  // The Chat's stop key (step 4): the voice reading an answer stops (never
+  // the agent's turn), and a hands-free send window is cancelled.
+  // Ctrl+Shift+Q: no terminal or editor default, and Q for quiet.
+  {
+    action: "readerStopSpeaking",
+    labelKey: "shortcut.readerStopSpeaking",
+    group: "terminal",
+    context: "terminal",
+    default: { key: "q", ctrl: true, shift: true },
+    untested: "terminal.reader.voice.readAloud",
   },
   // The text editor's own keys (`FileViewerPane`), answered only while it has
   // focus. Redo also answers Ctrl+Shift+Z while at its default

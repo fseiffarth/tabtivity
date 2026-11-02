@@ -113,6 +113,38 @@ describe("the agent pane's Reader", () => {
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
   });
 
+  it("draws a turn the user cut off as an Interrupted rule, not an answer", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript"
+        ? { ...transcript, entries: [transcript.entries[0], { kind: "interrupted", text: "[Request interrupted by user]", at: "2026-09-30T08:00:30Z" }] }
+        : []));
+    reader(host);
+    await screen.findByText("fix the parser");
+    const rule = host.querySelector(".terminal-reader-command.interrupted");
+    expect(rule?.getAttribute("role")).toBe("separator");
+    expect(rule?.textContent).toContain("■ Interrupted");
+    expect(host.querySelector(".terminal-reader-turn.agent")).toBeNull();
+    expect(host.textContent).not.toContain("[Request interrupted");
+  });
+
+  it("pins the prompt a long turn left behind Show earlier turns", async () => {
+    invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript"
+        ? { ...transcript, entries: transcript.entries.slice(1, 2), cutPrompt: { kind: "prompt", text: "plan the release", at: "2026-09-30T07:59:00Z" } }
+        : []));
+    reader(host);
+    const earlier = await screen.findByRole("button", { name: "Show earlier turns" });
+    expect(earlier.dataset.prompt).toBe("plan the release");
+    expect(earlier.dataset.promptTime).toBeTruthy();
+    // Scrolled past the button: the turn on screen reads against its prompt.
+    const list = host.querySelector<HTMLElement>(".terminal-reader-list")!;
+    const box = (top: number, height: number) => ({ top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    list.getBoundingClientRect = () => box(100, 400);
+    earlier.getBoundingClientRect = () => box(20, 30);
+    fireEvent.scroll(list);
+    expect(host.querySelector(".terminal-reader-pinned-prompt-text")?.textContent).toBe("plan the release");
+  });
+
   it("counts the subagents of earlier turns only when those turns hold one", async () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, agentsEarlier: 2 } : []));
@@ -1164,6 +1196,17 @@ describe("the Reader's live rows", () => {
     expect((box as HTMLTextAreaElement).value).toBe("");
     fireEvent.keyDown(box, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Codex status" })).toBeNull();
+  });
+
+  it("warns under Codex's chat as its recorded limits run low", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex" }] } }));
+    invoke.mockImplementation((command: string) => Promise.resolve(command === "agent_tab_transcript"
+      ? { ...transcript, usage: { session: { used: 91 }, week: { used: 30 } } } : []));
+    term = fakeTerminal(["›", "gpt-6 · 75% context left"]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    expect(await screen.findByText("Heads up: less than 10% of your 5h limit left.")).toBeTruthy();
+    expect(screen.queryByText(/of your weekly limit left/)).toBeNull();
   });
 });
 

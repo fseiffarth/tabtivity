@@ -24,6 +24,7 @@ import {
 } from "../../lib/viewers/yaml";
 import { cellKind, isContainer } from "../../lib/viewers/yamlGrid";
 import { useT } from "../../lib/i18n";
+import { ChevronRightIcon, CloseIcon, GripIcon } from "../common/icons/Icon";
 
 /**
  * The YAML/JSON **card grid** (#yaml-grid) — the third view on the file, beside the
@@ -143,7 +144,7 @@ export function YamlGrid({
           {crumbs.map((node, i) => (
             <span key={node.id} className="yaml-crumb-wrap">
               <span className="yaml-crumb-sep" aria-hidden="true">
-                ›
+                <ChevronRightIcon />
               </span>
               <button
                 className={`yaml-crumb${i === crumbs.length - 1 ? " on" : ""}`}
@@ -481,7 +482,7 @@ function CardGrip({ drag, title }: { drag: CardDrag | null; title: string }) {
       aria-label={t("yamlGrid.reorderLabel", { title })}
       {...drag.grip}
     >
-      ⠿
+      <GripIcon />
     </button>
   );
 }
@@ -561,7 +562,7 @@ function LevelCard({
               ctx.onChange(deleteNode(ctx.text, node));
             }}
           >
-            ×
+            <CloseIcon />
           </button>
         )}
       </div>
@@ -656,7 +657,7 @@ function FieldRow({
           aria-label={t("yamlGrid.deleteLabel", { title: label })}
           onClick={() => ctx.onChange(deleteNode(ctx.text, entry))}
         >
-          ×
+          <CloseIcon />
         </button>
       )}
     </div>

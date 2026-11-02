@@ -10,6 +10,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { Dropdown } from "../common/Dropdown";
 import { useT } from "../../lib/i18n";
 import { useDialogs, type ConfirmSpec } from "../common/PromptDialogs";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The Box editor — the one surface where a box is managed wholesale: rename it,
@@ -133,7 +134,7 @@ export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
           <h2>
             {t("boxEditor.title")} <UntestedTag id="boxEditor.title" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
           <label>

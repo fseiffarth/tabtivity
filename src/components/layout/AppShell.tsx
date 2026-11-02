@@ -66,6 +66,7 @@ import {
   RailSwitchSideIcon,
 } from "../common/EdgeRailIcons";
 import { availableSidePanelViews } from "../files/sidePanelViews";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { useDevTodoAvailable } from "../files/DevTodoView";
 import { useHpcJobsStore } from "../../stores/remote/hpc/hpcJobs";
 import { HostKeyConfirmDialog } from "../common/HostKeyConfirmDialog";
@@ -126,6 +127,7 @@ import type { FilesPanelView } from "../../types";
 import { noteTerminalOutputChars } from "../../dev/terminalOutputRate";
 import { BRAND } from "../../lib/brand";
 import { PdfLoadWarningHost } from "./PdfLoadWarningHost";
+import { CheckIcon } from "../common/icons/Icon";
 
 // Dev-only perf panel (src/dev/). The ternary is statically resolved at build
 // time (`import.meta.env.DEV` → false), so in a shipped bundle the lazy() —
@@ -407,6 +409,9 @@ export function AppShell() {
   const activeRemote = useProjectsStore(
     (s) => !!s.projects.find((p) => p.id === activeId)?.remote,
   );
+  const activePinned = useProjectsStore((s) =>
+    isHostPinned(s.projects.find((p) => p.id === activeId)),
+  );
   // The edge rail offers every view the panel's own view row does for this
   // scope — the same table (`sidePanelViews`), so the two never read
   // differently. SLURM is only known once the panel's probe ran; the rail
@@ -416,6 +421,7 @@ export function AppShell() {
     inBox: scope.startsWith(BOX_SCOPE_PREFIX),
     projectId: activeId,
     remote: activeRemote,
+    mirror: !activePinned,
     slurm: activeSlurm,
     remarks: remarksEnabled,
     todo: devTodo,
@@ -1485,7 +1491,7 @@ export function AppShell() {
                 void updateSettings({ side_panel_auto_hide: !autoHide });
               }}
             >
-              {autoHide ? "✓ " : ""}
+              {autoHide ? <><CheckIcon />{" "}</> : ""}
               {t("appShell.railAutoHide")}
               <UntestedTag id="sidePanel.ideToggle" />
             </button>

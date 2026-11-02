@@ -24,7 +24,7 @@
      --border-color / --border-subtle       → separators, outlines
      --text-primary / --text-secondary / --text-muted → text tiers
      --accent                               → the theme's hue (buttons, active
-       pill, links, scrollbar thumb, focus rings). -hover/-active and the
+       pill, links, scrollbar thumb). -hover/-active, --focus-ring and the
        pill-active/hover washes DERIVE from it automatically (see the base
        block); override them only when the derivation direction is wrong
        (the achromatic pair) or the theme wants a different hue there.
@@ -37,6 +37,11 @@
    Tip: a minimal theme is surfaces + borders + text tiers + ONE --accent +
    controls — hover/active/pill washes and the status softs derive themselves.
    `soft_dark` below is the smallest real example.
+
+   Not per theme, one set on :root for all of them: the type scale
+   (--text-xs…xl), spacing (--space-*), radii, motion and the z-index contract.
+   A style rule reads these tokens rather than a literal, so a theme's colours
+   reach it and the Theme Customizer can move it.
    ───────────────────────────────────────────────────────────────────── */
 
 /* ── Theme: fancy_dark (default) ─────────────────────────────────────── */
@@ -121,19 +126,16 @@
   --accent-contrast: #ffffff;
   /* Corner-radius scale for the whole app. Every surface/button rule reads one
      of these tokens, so the app-wide feel flips from here: --radius-sm for
-     small controls (inputs, buttons, chips), --radius for panels/cards/menus,
-     --radius-lg for dialogs and large surfaces, --radius-full for circles and
-     pill shapes. Defined once on :root (not per theme); a theme that wants
-     rounded controls back can override these in its own block.
-     The house style is SQUARE for anything a pointer acts on: buttons, inputs
-     and chips (--radius-sm), the popover/menu surfaces and cards that read
-     --radius, and the dialog/overlay shells on --radius-lg are all
-     flat-cornered, so a menu, the overlay behind it and the buttons inside
-     both share one edge. Only shapes where the round IS the affordance
-     (--radius-full pills, 50% circles) still curve. */
-  --radius-sm: 0px;
-  --radius: 0px;
-  --radius-lg: 0px;
+     small controls (inputs, buttons, chips), --radius for menus, hover cards,
+     toasts and cards, --radius-lg for dialogs, the palette and the Chat view's
+     bubbles, --radius-full for circles and pill shapes. Defined once on :root
+     (not per theme); a theme can override these in its own block.
+     The house style is ROUNDED, one soft scale on every theme (2026-11-02: it
+     was square, then the floating surfaces got cut corners, and the user
+     wanted neither). */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
   --radius-full: 999px;
   /* Elevation scale. Depth is expressed by surface tone (--bg-main < --bg-panel
      < --bg-elevated) plus these soft layered shadows — not by loud borders.
@@ -636,9 +638,6 @@
   --control-bg: #202329;
   --control-hover-bg: #282b33;
   --control-border: #363a43;
-  --radius-sm: 4px;
-  --radius: 8px;
-  --radius-lg: 12px;
 }
 
 /* No accent wash over soft_dark's header: a 32% blue band over neutral gray
@@ -670,24 +669,38 @@
   --warning-soft: color-mix(in srgb, var(--warning) 18%, transparent);
   --danger-soft: color-mix(in srgb, var(--danger) 18%, transparent);
   --text-tertiary: var(--text-muted);
-  /* Type scale. The app's five sanctioned UI sizes — new rules read a token,
+  /* Type scale. The app's six sanctioned UI sizes — every rule reads a token,
      never a bare px, so density can be retuned from here (and a future UI-
-     scale setting has one place to act). --text-xs is the floor: nothing
-     user-readable renders below 10px. The base 13px matches .app-shell. */
+     scale setting has one place to act). Body 13 (--text-base, set on
+     .app-shell), secondary 12 (tab labels, chips, table cells), meta 11
+     (section heads, timestamps), badges 10; --text-xl is dialog and page
+     titles. --text-xs is the floor: nothing user-readable renders below 10px.
+     docs/context/desktop_ui_system.md has the whole system. */
   --text-xs: 10px;
   --text-sm: 11px;
   --text-md: 12px;
   --text-base: 13px;
   --text-lg: 15px;
-  /* Spacing scale (4px grid) for new rules — the existing corpus migrates
-     opportunistically. Odd one-off gaps (3px, 5px, 7px) are drift, not design. */
+  --text-xl: 18px;
+  /* Spacing scale (4px grid). Odd one-off gaps (3px, 5px, 7px) are drift, not
+     design. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
   /* Entrance easing for menus/dialogs/reveals — the splash's arrival curve,
      promoted to a token. Pair with --transition/--transition-slow durations. */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* The floating surfaces' enter and exit durations (popovers, hover cards,
+     toasts; a dialog takes 4/3 of --motion-enter). base.css zeroes both,
+     --transition and --transition-slow under prefers-reduced-motion. */
+  --motion-enter: 120ms;
+  --motion-exit: 80ms;
+  /* The keyboard focus ring (base.css). The accent, so the ink themes inherit
+     their ink; adjustable on its own in the Theme Customizer. */
+  --focus-ring: var(--accent);
   /* Layering contract, in one place instead of scattered comments. The app's
      layers, bottom to top: hint bubbles (90) < modal backdrop (100) <
      elevated dialogs (110) < context menus/popovers (1000, catcher just
@@ -789,7 +802,7 @@
 [data-theme="light_lavender"] .stats-dialog,
 [data-theme="fancy_dark"] .file-delete-dialog,
 [data-theme="light_lavender"] .file-delete-dialog {
-  background: var(--glass-elevated);
+  --surface-fill: var(--glass-elevated);
   /* Glass fill only — no lit frame. The near-white hairline these surfaces used
      to wear read as a stray outline rather than a lit edge, so the glass themes
      now keep the shared --border-color edge and the accent top rail from the
@@ -800,6 +813,12 @@
 /* Menus take the glass fill; like the dialogs above they carry no frame of
    their own — only the elevation shadow and the accent rail from the shared
    surface rule. */
+[data-theme="fancy_dark"] .project-pill-popup,
+[data-theme="light_lavender"] .project-pill-popup,
+[data-theme="fancy_dark"] .project-switch-toast,
+[data-theme="light_lavender"] .project-switch-toast,
+[data-theme="fancy_dark"] .hint-bubble,
+[data-theme="light_lavender"] .hint-bubble,
 [data-theme="fancy_dark"] .context-menu,
 [data-theme="light_lavender"] .context-menu,
 [data-theme="fancy_dark"] .tab-new-menu,
@@ -820,9 +839,8 @@
 [data-theme="light_lavender"] .presentation-settings,
 [data-theme="fancy_dark"] .cal-alarm-popup,
 [data-theme="light_lavender"] .cal-alarm-popup {
-  background: var(--glass-elevated);
-  border-top-color: var(--accent);
-  box-shadow: var(--shadow-3);
+  --surface-fill: var(--glass-elevated);
+  box-shadow: var(--shadow-2);
 }
 
 /* No ambient color wash behind the chrome (there were two faint radial

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { openOutside, refreshProjectFile, sentName, viewerFileUrl, type OutboxFile, type TabRow, type ViewerScope } from "../api";
 import { layerKey } from "../markup/store";
@@ -395,7 +396,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   }
   return <div className={`outbox-viewer${isText ? " outbox-text-sheet" : ""}`} role="dialog" aria-modal="true" aria-label={sentName(file)}>
     <div className="outbox-viewer-head">
-      <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")}>✕</button>
+      <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")}><CloseIcon size="1em" /></button>
       <div className="outbox-viewer-title">
         <h2>{sentName(file)}</h2>
         <small>

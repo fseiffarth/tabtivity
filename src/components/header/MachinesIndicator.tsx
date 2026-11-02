@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { targetLabel } from "../../lib/remote/machineLabel";
 import { create } from "zustand";
@@ -33,6 +34,7 @@ import { MachinesOverlayFrame } from "./MachinesOverlay";
 import { MachinesGlyph } from "./HeaderGlyphs";
 import { BRAND } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
+import { CloseIcon, GripIcon, MoreIcon, PencilIcon, RefreshIcon } from "../common/icons/Icon";
 
 const MENU_ID = "machines";
 
@@ -143,6 +145,12 @@ const PROBE_MIN_INTERVAL_MS = 60_000;
  *  the menu is on screen — gentler than the system monitor's 3 s remote poll. */
 const UTIL_POLL_MS = 10_000;
 
+/** How long a surface stays open before it asks any host anything. The list
+ *  comes from memory and the states follow it, so nothing that talks to a
+ *  machine may run ahead of the first paint — store-driven effects flush before
+ *  it. It also means a pointer merely crossing the header logs in nowhere. */
+const SWEEP_SETTLE_MS = 150;
+
 /** The open-sweep's two brakes, one pair for both surfaces (the dropdown and
  *  the overlay). In flight: a second open while the first sweep is still
  *  running must not stack a second round trip per host (`stores/remote/hostBusy`'s
@@ -161,18 +169,25 @@ type HandCheck = { ok: boolean; at: number; error?: string };
  *  apart from `stores/remote/globalMachines` on purpose: its `reachable` is the
  *  sweep's map, and a hand probe must not be filed as one (nor may it touch
  *  `status`, which means "a session we opened"). A row prefers its hand check
- *  only while it is the newer of the two. Shared by the dropdown and the
- *  overlay, so both surfaces and the header's lamps read the same answer. */
+ *  while it is the newer of the two, or while no sweep has answered for that
+ *  machine. Shared by the dropdown and the overlay, so both surfaces and the
+ *  header's lamps read the same answer.
+ *  `sweeping` is the machines the sweep in flight has not heard back from, which
+ *  is what lets a row with no answer yet say "checking" rather than "not checked". */
 const useMachineChecksStore = create<{
   sweepAt: number;
   checked: Record<string, HandCheck>;
+  sweeping: Record<string, true>;
   setSweepAt: (at: number) => void;
   setChecked: (update: (prev: Record<string, HandCheck>) => Record<string, HandCheck>) => void;
+  setSweeping: (update: (prev: Record<string, true>) => Record<string, true>) => void;
 }>((set) => ({
   sweepAt: 0,
   checked: {},
+  sweeping: {},
   setSweepAt: (at) => set({ sweepAt: at }),
   setChecked: (update) => set((s) => ({ checked: update(s.checked) })),
+  setSweeping: (update) => set((s) => ({ sweeping: update(s.sweeping) })),
 }));
 
 /**
@@ -229,9 +244,11 @@ export { targetLabel };
  * Detaching a machine from a project never touches this list — see
  * `stores/remote/globalMachines.ts` / `commands::global_machines`.
  *
- * It shares the header's hover-menu interaction with Mobile and VPN. Opening it
- * refreshes the fleet snapshot; an in-flight guard and per-machine minimum
- * interval prevent repeated probes, and a machine tagged HPC remains excluded
+ * It shares the header's hover-menu interaction with Mobile and VPN. The list
+ * shows at once, from memory, with each row's last known state; the fleet
+ * snapshot is refreshed behind it (`SWEEP_SETTLE_MS` later), row by row as hosts
+ * answer. An in-flight guard and per-machine minimum interval prevent repeated
+ * probes, and a machine tagged HPC remains excluded
  * (`lib/remote/hpc/hpcHost`'s `mayAutoTouch`) — its row alone offers Check (◎) and login.
  *
  * **A row reads two maps, not one** (see `RowState`): `status` is a session THIS
@@ -274,6 +291,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const machines = useGlobalMachinesStore((s) => s.machines);
+  const machinesLoaded = useGlobalMachinesStore((s) => s.loaded);
   const status = useGlobalMachinesStore((s) => s.status);
   // The other half of a row's truth: the last probe answer, kept apart from
   // `status` on purpose (see `RowState`). Absent = never probed.
@@ -363,6 +381,11 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   const setSweepAt = useMachineChecksStore((s) => s.setSweepAt);
   const checked = useMachineChecksStore((s) => s.checked);
   const setChecked = useMachineChecksStore((s) => s.setChecked);
+  const sweeping = useMachineChecksStore((s) => s.sweeping);
+  const setSweeping = useMachineChecksStore((s) => s.setSweeping);
+  // Whether this surface has been up for `SWEEP_SETTLE_MS`: everything that talks
+  // to a machine hangs off this rather than off `open`.
+  const [settled, setSettled] = useState(false);
   const [checking, setChecking] = useState<Set<string>>(new Set());
   // Failures of the two calls this component makes itself (the hand Check, the
   // explicit HPC login) — the store's `errors` map is written by the store's own
@@ -591,14 +614,20 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
    *  the sweep's decision to skip it can never disagree. */
   const autoTouchable = (m: GlobalMachine) => mayAutoTouch(settings, targetOfSpec(m));
 
-  /** The reachability a row should believe: a hand Check wins while it is the
-   *  newer of the two, otherwise the sweep's answer — and `undefined` (nobody
-   *  asked) stays `undefined` rather than collapsing into "no". */
-  const reachOf = (id: string): boolean | undefined => {
+  /** Whether a row's hand Check still stands: it is newer than the last sweep,
+   *  or the sweeps have said nothing about this machine. `sweepAt` is one stamp
+   *  for the whole fleet and a sweep skips a tagged cluster by design, so without
+   *  the second half any sweep would wipe the only answer such a row ever has. */
+  const checkStands = (id: string): boolean => {
     const local = checked[id];
-    if (local && local.at >= sweepAt) return local.ok;
-    return reachable[id];
+    return !!local && (local.at >= sweepAt || reachable[id] === undefined);
   };
+
+  /** The reachability a row should believe: a hand Check while it stands,
+   *  otherwise the sweep's answer — and `undefined` (nobody asked) stays
+   *  `undefined` rather than collapsing into "no". */
+  const reachOf = (id: string): boolean | undefined =>
+    checkStands(id) ? checked[id]?.ok : reachable[id];
   const stateOf = (m: GlobalMachine): RowState =>
     rowStateOf(status[m.id] ?? "off", reachOf(m.id));
 
@@ -670,10 +699,21 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     setDisconnectAllArm(false);
     setEditId(null);
     setAttachId(null);
-    // Reachability first, then the busy sweep over whatever we hold a SESSION on
-    // — a probe answer is not a session, and asking a host we never logged into
-    // what it is running costs a second doomed login. On-open only: the busy
-    // reading is never polled (see `stores/remote/hostBusy`).
+    const settle = window.setTimeout(() => setSettled(true), SWEEP_SETTLE_MS);
+    return () => {
+      window.clearTimeout(settle);
+      setSettled(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  useEffect(() => {
+    if (!settled) return;
+    // Per host: reachability first, then the busy reading if we hold a SESSION
+    // there — a probe answer is not a session, and asking a host we never logged
+    // into what it is running costs a second doomed login. Each host goes on as
+    // soon as its own probe lands, so a dead machine delays nobody else's. On-open
+    // only: the busy reading is never polled (see `stores/remote/hostBusy`).
     //
     // Both brakes are on before any of it. Nothing sweeps while a sweep is in
     // flight, and nothing sweeps at all unless some eligible machine's answer has
@@ -690,25 +730,31 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     );
     if (due.length === 0) return;
     probeBrakes.inFlight = true;
-    void probeAll()
+    setSweeping(() => Object.fromEntries(eligible.map((m) => [m.id, true as const])));
+    void probeAll((id) => {
+      setSweeping((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      const gm = useGlobalMachinesStore.getState();
+      const m = gm.machines.find((mm) => mm.id === id);
+      if (m && gm.status[id] === "connected") void useHostBusyStore.getState().probeGlobal(m);
+    })
       .then(() => {
         const at = Date.now();
         for (const m of eligible) probeBrakes.lastAt.set(m.id, at);
         setSweepAt(at);
-        const gm = useGlobalMachinesStore.getState();
-        const probeBusy = useHostBusyStore.getState().probeGlobal;
-        for (const m of gm.machines) {
-          if ((gm.status[m.id] ?? "off") === "connected") void probeBusy(m);
-        }
       })
       // A rejected sweep must still release the in-flight brake, or the menu
       // would never probe again for the rest of the session.
       .catch(() => {})
       .finally(() => {
         probeBrakes.inFlight = false;
+        setSweeping(() => ({}));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, probeAll]);
+  }, [settled, probeAll]);
 
   // Inline utilization bars: while the menu is open, read every connected
   // Detailed machine's CPU/GPU once now and every `UTIL_POLL_MS` after. A
@@ -728,7 +774,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
       );
     }
   }, []);
-  usePoll(sweepUtilization, UTIL_POLL_MS, { enabled: open });
+  usePoll(sweepUtilization, UTIL_POLL_MS, { enabled: settled });
 
   const orderKey = machines.map((m) => m.id).join("|");
 
@@ -1869,7 +1915,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                   title={t("machines.retryAllTitle")}
                   onClick={() => void runRetryAll()}
                 >
-                  {retryAllBusy ? "⋯" : "↻"}
+                  {retryAllBusy ? <MoreIcon /> : <RefreshIcon />}
                 </button>
               )}
               {machines.length > 0 && connectedCount > 0 && (
@@ -1899,7 +1945,8 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             </div>
           )}
 
-          {machines.length === 0 && (
+          {machines.length === 0 && !machinesLoaded && <SkeletonRows count={3} />}
+          {machines.length === 0 && machinesLoaded && (
             <div className="vpn-indicator-row">
               <div className="vpn-indicator-empty">{t("machines.empty")}</div>
             </div>
@@ -1918,12 +1965,18 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             // no longer answers) can be caught: nothing downgrades `status` any
             // more, because nothing but an explicit action writes it.
             const state = stateOf(m);
-            const badge = STATE_BADGE[state];
+            // A row with an answer keeps showing it while the sweep re-asks; only
+            // one with nothing to show says the answer is on its way.
+            const awaitingSweep = state === "unknown" && sweeping[m.id] === true;
+            const badge = awaitingSweep ? "machines.badge.checking" : STATE_BADGE[state];
             // "Not checked" has two different reasons and the row must say which:
             // a tagged cluster is never in any sweep, so its answer will stay
             // unknown until the Check button is pressed.
-            const stateTip =
-              state === "unknown" && hpc ? t("machines.tip.unknownHpc") : t(STATE_TIP[state]);
+            const stateTip = awaitingSweep
+              ? t("machines.tip.checking")
+              : state === "unknown" && hpc
+                ? t("machines.tip.unknownHpc")
+                : t(STATE_TIP[state]);
             // Only a machine we hold a LIVE session on pulses: a reading taken
             // before it dropped says nothing about it now — and a stale row is by
             // definition one whose session may already be gone.
@@ -1936,15 +1989,17 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             // share their colour with another (red covers error and stale, grey
             // covers all three sessionless ones) — for those the label carries
             // the word the colour cannot.
-            const lampText = LAMP_SAYS_IT.has(state) ? name : `${name} — ${t(STATE_WORD[state])}`;
+            const lampText = LAMP_SAYS_IT.has(state)
+              ? name
+              : `${name} — ${t(awaitingSweep ? "machines.badge.checking" : STATE_WORD[state])}`;
             // Both error channels on one line, freshest first: this component's
-            // (the explicit HPC login), then a Check newer than the last sweep,
-            // then the store's — a failed connect, a failed probe, and now also
+            // (the explicit HPC login), then a Check that still stands, then the
+            // store's — a failed connect, a failed probe, and now also
             // `setAutoConnect`'s "auto-connect not saved: …".
             const check = checked[m.id];
             const rowError =
               localErrors[m.id] ??
-              (check && check.at >= sweepAt ? check.error : undefined) ??
+              (checkStands(m.id) ? check?.error : undefined) ??
               errors[m.id];
             const shift = partShift(idx);
             // A row shows its icon actions only while nothing has taken the row
@@ -2000,7 +2055,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                   }}
                   disabled={st === "connecting"}
                 >
-                  {st === "connected" || state === "error" ? "↻" : "▷"}
+                  {st === "connected" || state === "error" ? <RefreshIcon /> : "▷"}
                 </button>
                 {/* Ask this one host whether it answers, because the user
                     asked. It is the only reachability a tagged machine has
@@ -2017,7 +2072,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     void runCheck(m);
                   }}
                 >
-                  {checking.has(m.id) ? "⋯" : "◎"}
+                  {checking.has(m.id) ? <MoreIcon /> : "◎"}
                 </button>
                 {st === "connected" && (
                   <button
@@ -2055,7 +2110,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     startEdit(m);
                   }}
                 >
-                  ✎
+                  <PencilIcon />
                 </button>
                 <button
                   type="button"
@@ -2067,7 +2122,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     setRemoveArm(m.id);
                   }}
                 >
-                  ✕
+                  <CloseIcon />
                 </button>
               </div>
             );
@@ -2107,7 +2162,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                       nudgeMachine(m.id, back ? -1 : 1);
                     }}
                   >
-                    ⠿
+                    <GripIcon />
                   </button>
                   {/* The Models overlay tile's icon box. */}
                   {isOverlay && (
@@ -2629,7 +2684,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
               title={t("common.close")}
               onClick={() => closeMenu(MENU_ID)}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
           <div className="menu-scroll-region">

@@ -66,6 +66,14 @@ describe("Mobile project screen — tabs on the remote host", () => {
     expect(screen.getByText(/and its tabs on the remote host while the desktop is connected to it/)).toBeTruthy();
   });
 
+  it("names the machine on the chip when the host sends one", async () => {
+    vi.stubGlobal("fetch", host(detail([hostTab({ host_label: "gpu-box" }), localTab])));
+    render(<Project id="p1" back={() => {}} terminal={vi.fn()} />);
+    await screen.findByText("Host Claude");
+    const chips = Array.from(document.querySelectorAll(".tab-card-meta .agent-mode-mark")).map((chip) => chip.textContent);
+    expect(chips).toEqual(["gpu-box"]);
+  });
+
   it("says to connect the project on the desktop, and never restarts an unreachable host tab", async () => {
     const fetchMock = host(detail([hostTab({ available: false, host_down: true })]));
     vi.stubGlobal("fetch", fetchMock);
@@ -128,5 +136,47 @@ describe("the rules behind the controls", () => {
     expect(knownFailureCodes()).toEqual(expect.arrayContaining(["host_offline", "tab_on_host"]));
     expect(describeFailure("host_offline")).toBe("The desktop is not connected to this project's host. Connect the project on the desktop to open the tab.");
     expect(describeFailure("tab_on_host")).toBe("This tab runs on the project's remote host, where the phone cannot do that.");
+  });
+});
+
+describe("Mobile project screen — the way to the files", () => {
+  const search = () => screen.queryByRole("button", { name: "Search the project's files" });
+
+  it("goes from the header's search straight to the library's box, and back to the project", async () => {
+    vi.stubGlobal("fetch", host({ ...detail([localTab]), entries: [], truncated: false }));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("Local Claude");
+    fireEvent.click(search()!);
+    const box = await screen.findByRole("searchbox", { name: "Search the project's files" });
+    expect(document.activeElement).toBe(box);
+    fireEvent.click(document.querySelector<HTMLButtonElement>(".files-library-back")!);
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    // The menu still opens as the drawer, not the search it was last left on.
+    fireEvent.click(screen.getByRole("button", { name: "Project menu" }));
+    expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+
+  it("offers no search where the project has no files to find", async () => {
+    vi.stubGlobal("fetch", host(detail([localTab], { files: false, folder: false })));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("Local Claude");
+    expect(search()).toBeNull();
+  });
+
+  it("names the desktop's switch while only that keeps the files away", async () => {
+    vi.stubGlobal("fetch", host(detail([localTab], { files: false, files_off: true })));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("Local Claude");
+    fireEvent.click(search()!);
+    expect((await screen.findByRole("dialog")).textContent).toContain("Project files on the phone");
+    expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+
+  it("does not promise a sync while the switch keeps a remote project's files away", async () => {
+    vi.stubGlobal("fetch", host(detail([localTab], { files: false, files_off: true, folder: false })));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("Local Claude");
+    expect(document.querySelector(".project-host-note")?.textContent).toContain("Project files on the phone");
+    expect(document.querySelector(".project-host-note")?.textContent).not.toContain("once the desktop has synced");
   });
 });

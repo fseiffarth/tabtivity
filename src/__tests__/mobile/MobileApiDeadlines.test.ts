@@ -19,6 +19,7 @@ import {
   TAB_CREATE_TIMEOUT,
   LOCAL_MODELS_TIMEOUT,
   finishSignIn,
+  HOST_SEARCH_TIMEOUT,
   getLocalModels,
   localModelAction,
   openSignInTab,
@@ -148,5 +149,11 @@ describe(`${BRAND.display} Mobile request deadlines`, () => {
     expect(armed.mock.calls).toEqual([[deadline]]);
     expect(deadline).toBeGreaterThan(10_000);
     armed.mockRestore();
+  });
+
+  it("outwaits a remote host's search, whose walk the sidecar bounds", () => {
+    const deadline = /const SEARCH_DEADLINE: Duration = Duration::from_secs\((\d+)\);/.exec(read("src-tauri/src/services/mobile_control/host_files.rs"));
+    expect(deadline).not.toBeNull();
+    expect(HOST_SEARCH_TIMEOUT).toBeGreaterThan(Number(deadline![1]) * 1000);
   });
 });

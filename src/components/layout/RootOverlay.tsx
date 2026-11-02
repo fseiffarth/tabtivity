@@ -32,6 +32,7 @@ import { dividerFraction } from "../../stores/tabs/layoutTree";
 import { canDuplicateTab, isSingletonTabKind } from "../../stores/tabs/tabKinds";
 import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
+import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { registerHostBoundTab } from "../../lib/remote/hostBound";
 import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { tabColorCss } from "../../lib/theme/tabColors";
@@ -65,6 +66,7 @@ import { useRootReviewStore } from "../../stores/rootReview";
 import { useMailStore } from "../../stores/mail";
 import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
 import { usePoll } from "../../lib/usePoll";
+import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 /** What the backend's `root-mcp-changed` event carries (`services::root_mcp::Change`). */
 type RootMcpChange = (
@@ -784,7 +786,7 @@ function RootOverlay() {
               {filled ? "⤡" : "⤢"}
             </button>
             <button className="subwindow-hide" title={t("common.close")} onClick={close}>
-              ×
+              <CloseIcon />
             </button>
           </div>
         </div>
@@ -1051,10 +1053,11 @@ function GroupStrip({
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
+                noteTabClose(e.currentTarget);
                 closeTab(tab.key);
               }}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         );
@@ -1068,7 +1071,7 @@ function GroupStrip({
         className="tab-new-menu"
       >
         <button className="tab-new-menu-item" onClick={() => void renameTab(menuTab.key)}>
-          <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+          <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
           {t("common.rename")}
           <UntestedTag id="rootConsole.tabMenu" />
         </button>
@@ -1091,7 +1094,7 @@ function GroupStrip({
             closeTab(menuTab.key);
           }}
         >
-          <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+          <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
           {t("common.close")}
           <MenuShortcut chord="closeTab" />
         </button>
@@ -1103,7 +1106,7 @@ function GroupStrip({
             tabs.filter((tb) => tb.key !== menuTab.key).forEach((tb) => closeTab(tb.key));
           }}
         >
-          <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+          <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
           {t("tabBar.closeOthers")}
         </button>
         <button
@@ -1114,7 +1117,7 @@ function GroupStrip({
             tabs.slice(0, tabMenu.index).forEach((tb) => closeTab(tb.key));
           }}
         >
-          <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+          <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
           {t("tabBar.closeToLeft")}
         </button>
         <button
@@ -1125,7 +1128,7 @@ function GroupStrip({
             tabs.slice(tabMenu.index + 1).forEach((tb) => closeTab(tb.key));
           }}
         >
-          <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+          <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
           {t("tabBar.closeToRight")}
         </button>
         {closedAgentTabs.length > 0 && (

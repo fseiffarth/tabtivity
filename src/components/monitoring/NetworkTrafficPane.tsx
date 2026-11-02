@@ -10,6 +10,7 @@ import { isCarefulHost, primaryTargetOf } from "../../lib/remote/carefulHost";
 import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
 import { useT } from "../../lib/i18n";
 import { usePoll, type PollRun } from "../../lib/usePoll";
+import { DotIcon } from "../common/icons/Icon";
 
 export interface NetworkInterfaceSnapshot {
   name: string;
@@ -274,8 +275,8 @@ function TrafficGraph({
         )}
       </svg>
       <div className="network-graph-legend">
-        <span className="receive">● {t("network.download")}</span>
-        <span className="transmit">● {t("network.upload")}</span>
+        <span className="receive"><DotIcon /> {t("network.download")}</span>
+        <span className="transmit"><DotIcon /> {t("network.upload")}</span>
         <span className="network-history-label">{t("network.rollingMin", { span: spanMin })}</span>
       </div>
     </div>

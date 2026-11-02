@@ -6,6 +6,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import type { SubPanelProps } from "./subPanelProps";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * "Remote Connections" settings panel: a standard/default remote path per SSH
@@ -111,7 +112,7 @@ export function RemoteHostsSettings({ onBack, onClose }: SubPanelProps) {
                 onClick={() => removeHost(host)}
                 title={t("common.remove")}
               >
-                ×
+                <CloseIcon />
               </button>
             </div>
           ))}

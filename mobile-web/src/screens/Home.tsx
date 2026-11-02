@@ -9,8 +9,11 @@ import { placeBeside } from "../tabReorder";
 import { Activity } from "./Activity";
 import { BUNDLE_VERSION } from "../buildInfo";
 import { isUntested } from "../../../src/lib/untested";
+import { ListSkeleton } from "../components/ListSkeleton";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { SpeechLangSheet, speechLangSummary } from "../components/SpeechLangPicker";
+import { ReadAloudSheet, readAloudSummary } from "../components/ReadAloudSheet";
+import { readBrief, readingRate } from "../speechOutput";
 import { ThemeRow, ThemeSheet } from "../components/ThemePicker";
 import { TipsRow, TipsSheet, tipsOff } from "../components/TipsPicker";
 import { LanguageRow, LanguageSheet } from "../components/LanguagePicker";
@@ -18,6 +21,7 @@ import { readPhoneTheme, type PhoneTheme } from "../theme";
 import { SendToDesktop } from "../components/SendToDesktop";
 import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
+import { CliOverviewSection } from "./CliOverviewSheet";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
@@ -30,6 +34,8 @@ import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
 import { AssistantIcon } from "../../../src/components/common/icons/Icon";
+import { DiamondIcon, GripIcon, PlusIcon, SearchIcon } from "../glyphs";
+import { FavoritesPage } from "../components/FavoritesPage";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
 import { useVisiblePoll } from "../visiblePoll";
@@ -38,7 +44,7 @@ import { useVisiblePoll } from "../visiblePoll";
  * sentence stays one translatable string. The project screen's hint too. */
 export function GripHint({ text }: { text: string }) {
   const [before, after = ""] = text.split("{grip}");
-  return <>{before}<span aria-hidden="true">⠿</span>{after}</>;
+  return <>{before}<GripIcon size="1em" />{after}</>;
 }
 
 /** A project row's agent tabs by state — working, waiting on a decision,
@@ -68,12 +74,14 @@ function projectTile(project: ProjectRow): string {
   return firstGrapheme(project.label).toUpperCase();
 }
 
-/** The three modes of the Projects section. `agents` is not a filter over the
+/** The four modes of the Projects section. `agents` is not a filter over the
  * project list but a different list entirely — every project's agent tabs that
  * are working, waiting or done, flat — so it is the one mode worth remembering
- * across the re-mounts a tab switch and a terminal visit cause. */
-type HomeView = "active" | "agents" | "search";
-const HOME_VIEWS: [HomeView, TranslationKey][] = [["active", "mobile.home.viewActive"], ["agents", "mobile.home.viewAgents"], ["search", "mobile.home.viewSearch"]];
+ * across the re-mounts a tab switch and a terminal visit cause. `favorites` is
+ * no project list either: the files and folders starred across all projects
+ * (`FavoritesPage`). */
+type HomeView = "active" | "agents" | "favorites" | "search";
+const HOME_VIEWS: [HomeView, TranslationKey][] = [["active", "mobile.home.viewActive"], ["agents", "mobile.home.viewAgents"], ["favorites", "mobile.home.viewFavorites"], ["search", "mobile.home.viewSearch"]];
 
 export function Home({ open, openTab, tabby, todo, mail }: {
   open: (id: string) => void;
@@ -91,6 +99,9 @@ export function Home({ open, openTab, tabby, todo, mail }: {
    * fix it mid-answer has already been read to in the wrong voice. */
   const [speechLang, setSpeechLang] = useState<SpeechLang>(() => readSpeechLang());
   const [speechLangSheet, setSpeechLangSheet] = useState(false);
+  /** How read-aloud reads: whole or brief, and its rate (`speechOutput.ts`). */
+  const [reading, setReading] = useState(() => ({ brief: readBrief(), rate: readingRate() }));
+  const [readingSheet, setReadingSheet] = useState(false);
   const [languageSheet, setLanguageSheet] = useState(false);
   /** What a Mark up Submit tells the agent — worded here and nowhere else. */
   const [markupInstruction, setMarkupInstruction] = useState(() => customMarkupPrompts());
@@ -111,7 +122,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   /** The Projects heading's ＋: a new project, made by name in the desktop's
    * projects folder (`NewProjectSheet`). */
   const [newProject, setNewProject] = useState(false);
-  const rowSheetOpen = languageSheet || themeSheet || tipsSheet || speechLangSheet || pushSheet || markupInstructionSheet || markupOpenSheet;
+  const rowSheetOpen = languageSheet || themeSheet || tipsSheet || speechLangSheet || readingSheet || pushSheet || markupInstructionSheet || markupOpenSheet;
   const [push, setPush] = useState<HostPushState | null>(null);
   useEffect(() => {
     if (pushSupport() !== "supported") return;
@@ -150,7 +161,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   useEffect(() => {
     // The agents mode reads its own list; leaving this poll running behind it
     // would be a catalog load per tick for a list nothing is showing.
-    if (view === "agents") return;
+    if (view === "agents" || view === "favorites") return;
     // Without an abort, typing "ab" then "abc" on mobile data could land the
     // older response last and leave the wrong result set on screen.
     const controller = new AbortController();
@@ -245,15 +256,15 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       </button>
     </header>
     <div className="projects-row">
-      <h1>{view === "agents" ? t("mobile.home.agentsTitle") : t("mobile.home.projectsTitle")}</h1>
-      {view !== "agents" && <button
+      <h1>{view === "agents" ? t("mobile.home.agentsTitle") : view === "favorites" ? t("mobile.home.viewFavorites") : t("mobile.home.projectsTitle")}</h1>
+      {view !== "agents" && view !== "favorites" && <button
         className="primary new-tab"
         onClick={() => setNewProject(true)}
         aria-haspopup="dialog"
         aria-expanded={newProject}
         aria-label={t("mobile.newProject.title")}
         title={t("mobile.newProject.title")}
-      ><span aria-hidden="true">＋</span></button>}
+      ><PlusIcon size="1em" /></button>}
     </div>
     {/* One segmented track. The Agents segment carries how many tabs are
         asking something; its name stays the view's. */}
@@ -264,7 +275,8 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       onClick={() => choose(id)}
     >{t(label)}{id === "agents" && asking > 0 && <span className="home-switch-badge" aria-hidden="true">{asking}</span>}</button>)}</nav>
     {view === "agents" && <Activity open={openAgentTab} onConnection={setOffline} />}
-    {view !== "agents" && <>
+    {view === "favorites" && <FavoritesPage />}
+    {view !== "agents" && view !== "favorites" && <>
       {view === "search" && <input className="search" placeholder={t("mobile.home.searchPlaceholder")} value={query} autoFocus onChange={(event) => setQuery(event.target.value)} />}
       {offline && <p className="error connection-error">
         <strong>{describeUnavailable(offline).title}</strong>
@@ -276,9 +288,9 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       {/* Its own head only under Needs you (CSS): with nothing above it, the
           page title already says what this list is. */}
       {view === "active" && listed.length > 0 && <h2 className="home-section-head home-projects-head">{t("mobile.home.projectsTitle")}</h2>}
-      {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.home.loading")}</p>}
+      {!loaded && !offline && <ListSkeleton label={t("mobile.home.loading")} />}
       {loaded && rows.length === 0 && <div className="home-empty">
-        <span className="home-empty-glyph" aria-hidden="true">{view === "search" ? "⌕" : "◇"}</span>
+        <span className="home-empty-glyph" aria-hidden="true">{view === "search" ? <SearchIcon size="1em" /> : <DiamondIcon size="1em" />}</span>
         {view !== "search" && <strong>{t("mobile.home.emptyActiveTitle")}</strong>}
         <p>{view === "search"
           ? query.trim() ? t("mobile.home.noMatch") : t("mobile.home.typeToSearch")
@@ -304,7 +316,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
             aria-label={t("mobile.home.move", { label: project.label })}
             title={t("mobile.home.moveHint")}
             {...drag.gripProps(project.id)}
-          ><span aria-hidden="true">⠿</span></button>}
+          ><GripIcon size="1em" /></button>}
         </div>
       </div>)}</section>}
       {canReorder && !hintGone && <p className="home-hint">
@@ -313,12 +325,14 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       </p>}
     </>}
     {/* What goes to the desktop rather than coming from it: a file for its
-        inbox and the local models it runs. They stay on the page, not in a
-        sheet — closing one would drop the upload rows still in flight. */}
+        inbox and the local models it runs — plus its agent CLIs' plans and
+        limits. They stay on the page, not in a sheet — closing one would drop
+        the upload rows still in flight. */}
     <h2 className="home-section-head">{t("mobile.home.desktopHead")}</h2>
     <div className="home-desktop">
       <SendToDesktop />
       <LocalModelsSection />
+      <CliOverviewSection />
     </div>
     {/* What this phone does, as against what the desktop is doing, behind
         the header's gear. A row's own sheet replaces it while open, and
@@ -333,6 +347,10 @@ export function Home({ open, openTab, tabby, todo, mail }: {
           <TipsRow off={tipsAreOff} open={() => setTipsSheet(true)} expanded={tipsSheet} />
           <li><button aria-haspopup="dialog" aria-expanded={speechLangSheet} onClick={() => setSpeechLangSheet(true)}>
             <span><strong>{t("mobile.speech.language")}{isUntested("mobile.speech.language") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{speechLangSummary(speechLang, t)}</small></span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          </button></li>
+          <li><button aria-haspopup="dialog" aria-expanded={readingSheet} onClick={() => setReadingSheet(true)}>
+            <span><strong>{t("mobile.speech.reading")}{isUntested("mobile.speech.reading") && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong><small>{readAloudSummary(reading.brief, reading.rate, t)}</small></span>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
           </button></li>
           <li><button aria-haspopup="dialog" aria-expanded={pushSheet} onClick={() => setPushSheet(true)}>
@@ -367,6 +385,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}
     {tipsSheet && <TipsSheet off={tipsAreOff} onChange={setTipsAreOff} onClose={() => setTipsSheet(false)} />}
     {speechLangSheet && <SpeechLangSheet chosen={speechLang} onChoose={setSpeechLang} onClose={() => setSpeechLangSheet(false)} />}
+    {readingSheet && <ReadAloudSheet onChange={(brief, rate) => setReading({ brief, rate })} onClose={() => setReadingSheet(false)} />}
     {pushSheet && <NotificationsSheet onChange={setPush} onClose={() => setPushSheet(false)} />}
     {markupInstructionSheet && <MarkupInstructionSheet onChange={setMarkupInstruction} onClose={() => setMarkupInstructionSheet(false)} />}
     {markupOpenSheet && <MarkupOpenSheet chosen={markupOpen} onChoose={setMarkupOpen} onClose={() => setMarkupOpenSheet(false)} />}

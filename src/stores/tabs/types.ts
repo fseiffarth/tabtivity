@@ -454,6 +454,10 @@ export interface GroupNode {
   // and width — so it persists with the layout, travels with a detach, and is
   // freed when the group (subwindow) is dropped.
   filesFolder?: string;
+  // The name the user gave this subwindow, shown beside its grip. Lives on the
+  // node, so it persists with the layout and travels through detach, dock and
+  // hide without being copied anywhere. Unset, the subwindow has no label.
+  name?: string;
   // Emptied by closing its last tab while `close_subwindow_on_last_tab` is off:
   // the subwindow stays standing, empty with its +, instead of collapsing away.
   // Session-only (never persisted); dropped once a tab lands in the group.
@@ -513,6 +517,10 @@ export interface DetachedGroup {
   // streamed back over DETACHED_ZOOM. Persisted (via the saved tree) and shipped
   // in the popout's seed so it reopens at the zoom it was left at. Undefined = 100%.
   zoom?: number;
+  // The name of a popout that is more than one pane. A single-pane popout's name
+  // is its group's (`GroupNode.name`), so docking needs no hand-off; read either
+  // through `subtreeName`, write through `nameSubtree`.
+  name?: string;
 }
 
 /**
@@ -530,8 +538,10 @@ export interface HiddenGroup {
   // a multi-pane split was hidden whole.
   subtree: LayoutNode;
   label: string; // debug/label tag, mirrors DetachedGroup.label
-  // The name the user gave it in the side panel's Hidden list. Unset, the list
-  // calls it "Hidden <n>" by its position.
+  // The name of a hidden subtree of several panes, given in the side panel's
+  // Hidden list (or carried over from a popout). A single pane's lives on its
+  // group, as `DetachedGroup.name` explains. Unnamed, the list calls it
+  // "Hidden <n>" by its position.
   name?: string;
 }
 
@@ -588,6 +598,9 @@ export type DetachedEditPayload =
   // right file viewer), or record the folder it browsed to. Applied to the group
   // node inside the popout's subtree.
   | { kind: "files"; groupId: string; open?: boolean; width?: number; folder?: string }
+  // Name one pane of the popout (`groupId`), or the whole popout without it. An
+  // empty name removes it.
+  | { kind: "name"; groupId?: string; name: string }
   // Group B #231 — pane writes forwarded from a popout's empty store. Each is the
   // popout-side twin of one payload write the main store already knows how to
   // make; the seam in the store actions below emits them instead of touching the
@@ -691,6 +704,8 @@ export type SavedLayoutTree =
       bounds?: WindowBounds;
       // A detached popout's own per-window zoom (see DetachedGroup.zoom).
       zoom?: number;
+      // A multi-pane popout's own name (DetachedGroup.name).
+      detachedName?: string;
       // When true, this split subtree was HIDDEN (parked out of the tiled layout).
       // Persisted as a docked node so its tabs survive, but tagged so restore
       // routes it back into `hiddenGroupsByScope` instead of the live tree.
@@ -711,6 +726,8 @@ export type SavedLayoutTree =
       bounds?: WindowBounds;
       // A detached popout's own per-window zoom (see DetachedGroup.zoom).
       zoom?: number;
+      // A multi-pane popout's name, kept by the pane a prune left alone.
+      detachedName?: string;
       // When true, this group was HIDDEN (see the split variant's note). Restore
       // moves it into `hiddenGroupsByScope` rather than docking it live.
       hidden?: boolean;
@@ -719,6 +736,8 @@ export type SavedLayoutTree =
       filesOpen?: boolean;
       filesWidth?: number;
       filesFolder?: string;
+      // The subwindow's name (GroupNode.name).
+      name?: string;
     };
 
 /**

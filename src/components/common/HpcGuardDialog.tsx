@@ -34,6 +34,12 @@ const COPY: Record<HpcGuardKind, { title: TranslationKey; body: TranslationKey; 
     body: "hpcGuard.hostScan.body",
     go: "hpcGuard.hostScan.go",
   },
+  // A remote-only project's content search / name listing (`host_search`).
+  "host-search": {
+    title: "hpcGuard.hostSearch.title",
+    body: "hpcGuard.hostSearch.body",
+    go: "hpcGuard.hostSearch.go",
+  },
   connect: {
     title: "hpcGuard.connect.title",
     body: "hpcGuard.connect.body",

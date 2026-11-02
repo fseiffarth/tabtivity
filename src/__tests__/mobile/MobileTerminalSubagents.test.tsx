@@ -228,7 +228,7 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     expect(starting.disabled).toBe(true);
     // Each says when it started; the one that has reported back wears the ✓.
     expect(card.querySelector(".transcript-time")).not.toBeNull();
-    expect(card.querySelector(".agent-status.done")?.textContent).toContain("✓");
+    expect(card.querySelector(".agent-status.done .app-icon")).toBeTruthy();
     expect(starting.querySelector(".agent-status")).toBeNull();
 
     fireEvent.click(card);

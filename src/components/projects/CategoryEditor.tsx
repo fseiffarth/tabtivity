@@ -10,6 +10,7 @@ import {
   projectCategories,
 } from "../../lib/theme/categoryColor";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * Modal to manage a project's category tags. Categories color/group a project in
@@ -86,7 +87,7 @@ export function CategoryEditor({
       >
         <div className="settings-title-row">
           <h2>{project.name} — {t("categoryEditor.titleSuffix")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
         <div className="project-dialog-path">{t("categoryEditor.desc")}</div>
@@ -106,7 +107,7 @@ export function CategoryEditor({
                 >
                   <span className="category-chip-dot" />
                   {cat}
-                  {on && <span className="category-chip-x" aria-hidden>×</span>}
+                  {on && <span className="category-chip-x" aria-hidden><CloseIcon /></span>}
                 </button>
               );
             })}

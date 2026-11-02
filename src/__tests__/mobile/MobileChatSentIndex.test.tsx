@@ -139,6 +139,41 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
     expect(files.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("shuts the open list on a tap anywhere else, but not on a scroll or inside it", async () => {
+    vi.stubGlobal("fetch", sidecarFetch([
+      { name: "board.md", kind: "text/markdown", size: 900, modified: secs("2026-10-04T10:16:10Z"), from_tab: true },
+    ], TRANSCRIPT));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const index = screen.getByRole("navigation", { name: "Files in this conversation" });
+    const toggle = within(index).getByRole("button", { name: /^Files \(1\)/ });
+    const answer = screen.getByText("A whiteboard. Here is it typed up.");
+    const press = (target: Element, type: string, y: number) => fireEvent(target, new MouseEvent(type, { bubbles: true, clientX: 20, clientY: y }));
+    const tap = (target: Element) => { press(target, "pointerdown", 100); press(target, "pointerup", 100); };
+
+    fireEvent.click(toggle);
+    tap(within(index).getByRole("region"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    press(answer, "pointerdown", 100);
+    press(answer, "pointerup", 300);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    press(answer, "pointerdown", 100);
+    press(answer, "pointercancel", 100);
+    press(answer, "pointerup", 100);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(within(index).getByRole("button", { name: /^Open board\.md/ }));
+    await settle();
+    tap(screen.getByRole("dialog", { name: "board.md" }));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await settle();
+
+    tap(answer);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("leaves out a side that carried nothing", async () => {
     vi.stubGlobal("fetch", sidecarFetch([
       { name: "plot.png", kind: "image/png", size: 9_000, modified: secs("2026-10-04T10:16:10Z"), from_tab: true },

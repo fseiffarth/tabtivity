@@ -22,6 +22,7 @@ import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { describeTabCost, tabCost } from "../../lib/tabCost";
 import { UntestedTag } from "../common/UntestedTag";
+import { DotIcon } from "../common/icons/Icon";
 
 /** Friendly, human-readable name for a tab kind, shown as the card's muted
  *  sub-line. Falls back to the raw kind for anything unmapped. */
@@ -78,6 +79,15 @@ interface AgentTabFeatures {
   ownMcpOff?: string[];
   skills: string[];
   apiKeys: ("anthropic" | "gemini" | "openai")[];
+}
+
+/** The last answer per tab in this window: a card the pointer comes back to, or
+ *  crosses onto from the next tab, paints whole at once instead of blanking. */
+const knownFeatures = new Map<string, AgentTabFeatures | null>();
+
+/** Test seam. */
+export function _clearKnownFeaturesForTest(): void {
+  knownFeatures.clear();
 }
 
 /** Names past this many collapse into "+N more". */
@@ -158,6 +168,9 @@ export function TabHoverCard({
   /** Whether the owning project is a remote (SSH) one — gates the locality
    *  line. The detached window is inert to the projects store and omits it. */
   isRemote = false,
+  /** The owning project lives only on its host (`isHostPinned`): the line says
+   *  where the tab really runs, whatever location it stored. */
+  hostPinned = false,
   /** Primary host name + worker machines, so the locality line can name the
    *  concrete machine ("Primary (gpu-1)", "gpu-2") not just "on host". Omitted by
    *  the detached window (inert to the projects store) → falls back to "on host". */
@@ -169,6 +182,7 @@ export function TabHoverCard({
   tab: TabEntry;
   scope: string;
   isRemote?: boolean;
+  hostPinned?: boolean;
   primaryHost?: string;
   computeHosts?: LocalityHost[];
   anchorX: number;
@@ -177,7 +191,7 @@ export function TabHoverCard({
   const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   // null until measured — kept hidden for that first frame so the clamp doesn't
-  // flash the card at the un-clamped position.
+  // flash the card at the un-clamped position (`settled` below holds it too).
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
   const ptyId = `${scope}:${tab.key}`;
@@ -200,17 +214,25 @@ export function TabHoverCard({
 
   // What the agent was handed — sandbox, MCP servers, skills, API key — asked
   // once per hover; a tab this window's backend did not spawn answers null and
-  // gets no rows.
-  const [features, setFeatures] = useState<AgentTabFeatures | null>(null);
+  // gets no rows. Those rows are a good part of the card and the answer reads
+  // and parses the home's config, so a first hover stays hidden until it is in:
+  // painted first, the card visibly jumps when they land. The answer is held
+  // with its tab's id, or one tab's rows would show on the next tab's card.
+  const [answer, setAnswer] = useState<{ id: string; features: AgentTabFeatures | null } | null>(null);
+  const held = answer?.id === ptyId ? answer : null;
+  const features = held ? held.features : (knownFeatures.get(ptyId) ?? null);
+  const settled = !isAgent || held !== null || knownFeatures.has(ptyId);
   useEffect(() => {
     if (!isAgent) return;
     let live = true;
+    const settle = (f: AgentTabFeatures | null) => {
+      knownFeatures.set(ptyId, f);
+      if (live) setAnswer({ id: ptyId, features: f });
+    };
     invoke<AgentTabFeatures | null>("agent_tab_features", { id: ptyId })
-      .then((f) => {
-        // Nothing known, or an answer not shaped like one: no rows.
-        if (live && f && !Array.isArray(f)) setFeatures(f);
-      })
-      .catch(() => {});
+      // Nothing known, or an answer not shaped like one: no rows.
+      .then((f) => settle(f && !Array.isArray(f) ? f : null))
+      .catch(() => settle(null));
     return () => {
       live = false;
     };
@@ -226,7 +248,7 @@ export function TabHoverCard({
       : t(KIND_LABEL_KEY[tab.kind]),
   ];
   if (isRemote && isLocatableKind(tab.kind)) {
-    const loc = effectiveTabLocation(tab);
+    const loc = effectiveTabLocation(tab, { hostPinned });
     if (remoteHostIdOf(loc) === null) {
       kindBits.push(t("tabHoverCard.localMirror"));
     } else {
@@ -329,12 +351,12 @@ export function TabHoverCard({
         // Own the position via left/top (with JS clamping); drop the shared
         // class's centring transform so the measured box maps 1:1 to the window.
         transform: "none",
-        visibility: pos ? "visible" : "hidden",
+        visibility: pos && settled ? "visible" : "hidden",
       }}
     >
       <span className="tab-popup-header">
         <span className="tab-popup-dot" style={{ color: TAB_ACCENT[tab.kind] }}>
-          ●
+          <DotIcon />
         </span>
         <span className="tab-popup-label">{tab.label}</span>
       </span>

@@ -12,6 +12,7 @@ import { BrowserBlockedNotice } from "./BrowserBlockedNotice";
 import { BrowserReaderView } from "./BrowserReaderView";
 import { BrowserStartPage } from "./BrowserStartPage";
 import { useBrowserEvents } from "./useBrowserEvents";
+import { MoreIcon, RefreshIcon } from "../common/icons/Icon";
 
 /**
  * The in-app browser tab (TODO group J #61), behind the `web_browser`
@@ -176,7 +177,7 @@ export function BrowserPane({ tab, visible }: BrowserPaneProps) {
           disabled={!state.url || state.loading}
           onClick={() => load(state.url)}
         >
-          ⟳
+          <RefreshIcon />
         </button>
 
         <BrowserAddressBar
@@ -212,7 +213,7 @@ export function BrowserPane({ tab, visible }: BrowserPaneProps) {
             setMenuPos(menuPos ? null : { x: rect.right - 190, y: rect.bottom + 4 });
           }}
         >
-          ⋯
+          <MoreIcon />
         </button>
       </div>
 

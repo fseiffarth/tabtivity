@@ -6,6 +6,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { MachinesGlyph } from "./HeaderGlyphs";
 import { storageKey } from "../../lib/brand";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The **Machines overlay**'s chrome — what a click on the header's Machines
@@ -87,7 +88,7 @@ export function MachinesOverlayFrame({ children }: { children: ReactNode }) {
               aria-label={t("common.close")}
               onClick={close}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         </div>

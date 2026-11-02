@@ -36,6 +36,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/scripts/lib/brand.sh"
 # What the launcher trusts: the verified-build list and its own installed copy.
 . "$ROOT/scripts/lib/dev-launcher.sh"
+# Speech on the GPU where this machine can build it (voice_gpu_feature).
+. "$ROOT/scripts/lib/voice_gpu.sh"
+VOICE_GPU="$(voice_gpu_feature)"
 APP_DIR="$APP_SHARE_DIR"
 DESKTOP_DIR="$HOME/.local/share/applications"
 BINARY_DEST="$APP_DIR/$APP_DEV_BIN_NAME"
@@ -104,7 +107,7 @@ if [ "$MODE" = head ]; then
   # exhausted them (see the --tree branch), and a detached background build is
   # the last place to want that.
   ( cd "$SRC" && npm run build )
-  cargo build --release --features custom-protocol --manifest-path "$SRC/src-tauri/Cargo.toml"
+  cargo build --release --features "custom-protocol${VOICE_GPU:+,$VOICE_GPU}" --manifest-path "$SRC/src-tauri/Cargo.toml"
 else
   SRC="$ROOT"
   cd "$ROOT"
@@ -128,14 +131,14 @@ else
   # opens "Could not connect to localhost" and nothing else (2026-09-02).
   build_log="$(mktemp)"
   trap 'rm -f "$build_log"' EXIT
-  if ! npm run tauri -- build --no-bundle 2>&1 | tee "$build_log"; then
+  if ! npm run tauri -- build --no-bundle ${VOICE_GPU:+--features "$VOICE_GPU"} 2>&1 | tee "$build_log"; then
     # Two ways inotify runs dry: no instance left ("Too many open files") and no
     # *watch* left ("OS file watch limit reached", fs.inotify.max_user_watches —
     # hit 2026-09-13 with the default 65536 and a dev server + Tabtivity watching).
     if grep -qE "Too many open files|file watch limit reached" "$build_log"; then
       echo "package-dev: tauri-cli could not set up its file watcher; building without it." >&2
       npm run build
-      cargo build --release --features custom-protocol \
+      cargo build --release --features "custom-protocol${VOICE_GPU:+,$VOICE_GPU}" \
         --manifest-path "$ROOT/src-tauri/Cargo.toml"
     else
       exit 1

@@ -19,6 +19,7 @@ import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { MailAiSettings } from "./MailAiSettings";
 import type { MailAccount } from "../../types/mail";
+import { CloseIcon } from "../common/icons/Icon";
 
 export interface MailAiSettingsDialogProps {
   account: MailAccount;
@@ -42,8 +43,8 @@ export function MailAiSettingsDialog({ account, onClose }: MailAiSettingsDialogP
           <h2>
             {t("mailAi.settingsTitle")} <UntestedTag id="mailAi.settingsTitle#2" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         <div className="dialog-scroll">

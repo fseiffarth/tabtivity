@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { getTranscript, type TabRow, type TranscriptEntry } from "../api";
 import { openSubagent, splitByWork, subagentsIn, type SubagentStep } from "../terminal/subagents";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
@@ -51,7 +52,7 @@ export function SubagentsSheet({ tab, onClose, onOpen }: {
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet subagents-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.subagentSheet.title", { label: tab.label })} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button><h2>{t("mobile.subagentSheet.title", { label: tab.label })} {untested && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button><h2>{t("mobile.subagentSheet.title", { label: tab.label })} {untested && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       {entries === null
         ? <p className="sheet-note" role="status">{t("mobile.subagentSheet.loading")}</p>
         : refs.length === 0

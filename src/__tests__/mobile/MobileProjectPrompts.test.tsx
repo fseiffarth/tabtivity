@@ -45,7 +45,7 @@ describe("Mobile project — collected prompts", () => {
   it("sends a prompt to the agent tab and schedules one with the text prefilled", async () => {
     const terminal = vi.fn();
     render(<Project id="p1" back={() => {}} terminal={terminal} />);
-    fireEvent.click(await screen.findByRole("button", { name: "◷ Collected prompts" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Collected prompts" }));
     expect(await screen.findByRole("dialog", { name: "Collected prompts" })).toBeTruthy();
     expect(await screen.findByText("Run the tests")).toBeTruthy();
     // Only the agent tab is a target.

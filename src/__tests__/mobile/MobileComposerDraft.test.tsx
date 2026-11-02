@@ -45,6 +45,7 @@ class FakeWebSocket {
 
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { Project } from "../../../mobile-web/src/screens/Project";
+import { Activity } from "../../../mobile-web/src/screens/Activity";
 import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
 const TAB = { id: "tab-7", label: "Claude", kind: "agent" as const, available: true, viewer_busy: false };
@@ -196,7 +197,7 @@ describe(`${BRAND.display} Mobile composer drafts — the project's tab list`, (
     vi.unstubAllGlobals();
   });
 
-  it("lifts a tab holding an unsent message under the working ones and shows it like a prompt, with no time", async () => {
+  it("lifts a tab holding an unsent message under the working ones and marks it Not sent where a prompt has its time", async () => {
     writeDraft("t-drafted", "the reply I have not sent");
     writeDraft("t-asked", "and a follow-up");
     render(<Project id="p1" back={() => {}} terminal={vi.fn()} />);
@@ -206,7 +207,7 @@ describe(`${BRAND.display} Mobile composer drafts — the project's tab list`, (
     expect(titles).toEqual(["Busy", "Asked", "Drafted", "Recent"]);
     const row = draft.closest(".tab-card-prompt");
     expect(row?.classList.contains("draft")).toBe(true);
-    expect(row?.querySelector(".tab-card-prompt-when")).toBeNull();
+    expect(row?.querySelector(".tab-card-prompt-when")?.textContent).toBe("Not sent");
     // It stands in for "nothing read yet" on a card with no prompts…
     expect(screen.queryAllByText("Nothing read from this session's transcript yet.")).toHaveLength(1);
     // …and leads the sent ones on a card that has some, which keep their time.
@@ -214,5 +215,26 @@ describe(`${BRAND.display} Mobile composer drafts — the project's tab list`, (
     expect(asked?.classList.contains("latest")).toBe(false);
     expect(asked?.querySelector(".tab-card-prompt-when")).not.toBeNull();
     expect(screen.getByText("and a follow-up").closest(".tab-card-prompt")?.classList.contains("draft")).toBe(true);
+  });
+});
+
+describe(`${BRAND.display} Mobile composer drafts — the Agents list`, () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("marks an unsent message Not sent where the last prompt would be, and leaves a sent one unmarked", async () => {
+    localStorage.clear();
+    const row = (id: string, label: string, text: string) => ({ id, label, kind: "agent", available: true, viewer_busy: false, project_id: "p1", project_label: "Alpha", prompts: [{ text, at: "2026-10-25T07:00:00Z" }] });
+    const body = { desktop_available: true, tabs: [row("t-drafted", "Drafted", "sent before the draft"), row("t-sent", "Sent", "sent and nothing since")] };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })));
+    writeDraft("t-drafted", "the reply I have not sent");
+    render(<Activity open={() => {}} onConnection={() => {}} />);
+    const draft = await screen.findByText("the reply I have not sent");
+    expect(draft.classList.contains("draft")).toBe(true);
+    expect(draft.querySelector(".activity-draft-mark")?.textContent).toBe("Not sent");
+    const sent = screen.getByText("sent and nothing since");
+    expect(sent.classList.contains("draft")).toBe(false);
+    expect(sent.querySelector(".activity-draft-mark")).toBeNull();
   });
 });

@@ -30,7 +30,7 @@ import type {
   StagedAttachment,
 } from "../../types/mail";
 import { useMailStore, type MailComposeMode } from "../../stores/mail";
-import { WarningIcon } from "../common/icons/Icon";
+import { CloseIcon, WarningIcon } from "../common/icons/Icon";
 import { AttachmentPreview } from "./MailAttachmentPreview";
 import { MailRecipientField } from "./MailRecipientField";
 import { ErrorNote } from "../common/ErrorNote";
@@ -599,7 +599,7 @@ export function MailComposeDialog({
                       title={t("mail.removeAttachment")}
                       onClick={() => void doRemoveAttachment(a.staged_id)}
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   </span>
                 );
@@ -697,8 +697,8 @@ export function MailComposeDialog({
           <h2>
             {composeTitle(t, mode)} <UntestedTag id="mailComposeDialog.1" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         {form}

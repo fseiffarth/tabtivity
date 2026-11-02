@@ -17,7 +17,7 @@
  *    the overlay stays open to come back to.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, waitFor, within } from "@testing-library/react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -197,6 +197,44 @@ describe("Machines overlay", () => {
       .join("\n");
     expect(labels).toMatch(/up, not connected — build\.example\.org/);
     expect(labels).not.toMatch(/not checked/i);
+  });
+
+  it("keeps a tagged cluster's hand Check through a sweep that skipped it", async () => {
+    // Ids of their own: the sweep's brake is per machine and outlives a test.
+    const open = { id: "sweep-open", host: "open.example.org" };
+    const cluster = { id: "sweep-cluster", host: "login.example.org" };
+    let landSweep = () => {};
+    const probeAll = vi.fn(() => new Promise<void>((resolve) => { landSweep = resolve; }));
+    useSettingsStore.setState({
+      settings: { machines_enabled: true, hpc_hosts: { [targetKey(cluster)]: true } } as never,
+      loaded: true,
+    });
+    useGlobalMachinesStore.setState({ machines: [open, cluster], status: {}, probeAll });
+    invokeMock.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "ssh_probe" ? { ok: true, error: "" } : null) as never,
+    );
+    useMachinesOverlayStore.setState({ open: true });
+    render(
+      <>
+        <MachinesIndicator />
+        <MachinesOverlayHost />
+      </>,
+    );
+    // The sweep is out when the Check is pressed, and lands after its answer.
+    await waitFor(() => expect(probeAll).toHaveBeenCalled());
+    const tile = within(dialog().querySelectorAll<HTMLElement>(".machines-tile")[1]);
+    await act(async () => {
+      fireEvent.click(tile.getByRole("button", { name: /check/i }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      landSweep();
+    });
+    const header = document.querySelector(".machines-indicator-btn")!;
+    const labels = [...header.querySelectorAll("[aria-label], [title]")]
+      .map((el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? "")
+      .join("\n");
+    expect(labels).toMatch(/up, not connected — login\.example\.org/);
   });
 
   it("stays open when a machine is handed to a project", () => {

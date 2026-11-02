@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import type { SubPanelProps } from "./subPanelProps";
+import { CloseIcon } from "../common/icons/Icon";
 
 export function FileTypeSettings({ onBack, onClose }: SubPanelProps) {
   const t = useT();
@@ -92,7 +93,7 @@ export function FileTypeSettings({ onBack, onClose }: SubPanelProps) {
               }}
               title={t("common.remove")}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         ))}

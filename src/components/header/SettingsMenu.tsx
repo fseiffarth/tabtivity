@@ -1,3 +1,4 @@
+import { OPEN_PALETTE_EVENT } from "../layout/CommandPalette";
 import { UntestedTag } from "../common/UntestedTag";
 import { MenuShortcut } from "../common/MenuShortcut";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
@@ -82,6 +83,10 @@ export function SettingsMenu() {
           <button role="menuitem" onClick={() => fire("app:open-shortcut-help")}>
             {t("shortcutHelp.title")}
             <MenuShortcut chord="shortcutHelp" />
+          </button>
+          <button role="menuitem" onClick={() => fire(OPEN_PALETTE_EVENT)}>
+            {t("palette.menuRow")}
+            <MenuShortcut chord="commandPalette" />
           </button>
           <button role="menuitem" onClick={() => fire("app:open-how-to-start")}>
             {t("projectSwitcher.howToStartMenu")}

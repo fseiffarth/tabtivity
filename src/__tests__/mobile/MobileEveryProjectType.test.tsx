@@ -167,6 +167,7 @@ describe("Mobile bridge — remote, container and VM projects", () => {
       { type: "undo_clear" },
       { type: "tab_worktrees" },
       { type: "move_worktree", worktree: "w1" },
+      { type: "move_location", location: "remote" },
       { type: "assistant_models" },
       { type: "switch_assistant_model", model: "opus" },
     ];
@@ -191,6 +192,19 @@ describe("Mobile bridge — remote, container and VM projects", () => {
     expect(attention["ctr:ctr-model"]).toBeUndefined();
     expect(await ask({ type: "tab_input", request_id: "inp", project_id: "ctr", tmux_session: tmux("ctr-agent") }))
       .toMatchObject({ status: "seen" });
+  });
+
+  it("moves a remote project's agent between machines only to a place the project has", async () => {
+    const target = { project_id: "rem", tmux_session: tmux("rem-local") };
+    // `rem` names no worker: a `host:` word the sidecar should not have sent.
+    expect(await ask({ ...target, type: "move_location", request_id: "l1", location: "host:w1" }))
+      .toMatchObject({ status: "error", code: "location_not_found" });
+    expect(await ask({ ...target, type: "move_location", request_id: "l2", location: "local" }))
+      .toMatchObject({ status: "worktree_moved", moved: "carried" });
+    // Every tab is at work here: the restart would end the turn.
+    expect(await ask({ ...target, type: "move_location", request_id: "l3", location: "remote" }))
+      .toMatchObject({ status: "error", code: "tab_busy" });
+    expect(useTabsStore.getState().tabsByScope.rem.find((tab) => tab.key === "rem-local")?.location).toBeUndefined();
   });
 
   it("serves a remote project's tabs on its host and on a worker", async () => {

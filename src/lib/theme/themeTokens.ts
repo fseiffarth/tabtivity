@@ -50,6 +50,7 @@ export const THEME_TOKEN_GROUPS: readonly ThemeTokenGroup[] = [
       { name: "--accent-secondary" },
       { name: "--accent-soft" },
       { name: "--accent-contrast" },
+      { name: "--focus-ring" },
     ],
   },
   {

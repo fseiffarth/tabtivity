@@ -9,6 +9,7 @@ import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/head
 import { UntestedTag } from "../common/UntestedTag";
 import { InboxGlyph } from "./HeaderGlyphs";
 import { usePoll } from "../../lib/usePoll";
+import { CloseIcon } from "../common/icons/Icon";
 
 const MENU_ID = "inbox";
 
@@ -305,7 +306,7 @@ export function InboxIndicator() {
                         armed === file.name ? void remove(file.name) : setArmed(file.name)
                       }
                     >
-                      {armed === file.name ? t("inbox.deleteConfirm") : "✕"}
+                      {armed === file.name ? t("inbox.deleteConfirm") : <CloseIcon />}
                     </button>
                   </div>
                 ))}

@@ -62,7 +62,8 @@ export async function vibeLocalTabSpec(
  *
  * In a Mobile-access scope the tab also records that line (`localLaunch`), which
  * makes it restorable and so reachable from the phone; elsewhere it stays the
- * session-only tab it always was.
+ * session-only tab it always was. OpenCode resumes, so it keeps a key and the
+ * line in every scope, and comes back in its conversation on its model.
  */
 export async function localLaunchTabSpec(
   scope: string,
@@ -76,6 +77,7 @@ export async function localLaunchTabSpec(
     "prepare_local_launch",
     { agent: driver, model },
   );
+  const sessionId = cmd === "opencode" ? crypto.randomUUID() : undefined;
   return {
     label: `${model} · ${driverLabel}`,
     cmd,
@@ -83,11 +85,12 @@ export async function localLaunchTabSpec(
     // Nothing else here names the model — cmd/args are the resolved launcher —
     // so record it for the usage recap's per-model breakdown. It is a label,
     // not an authority: see the `hostBoundUid` note above (#150).
-    env: { [envName("LOCAL_MODEL")]: model },
+    env: { [envName("LOCAL_MODEL")]: model, ...(sessionId ? { [envName("TAB_UID")]: sessionId } : {}) },
     cwd,
     kind: "local_agent",
     localDriver: driver,
     hostBoundUid: await registerHostBoundTab(scope),
-    ...(mobileScope(scope) ? { localLaunch: { driver, model, args: [...args] } } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionId || mobileScope(scope) ? { localLaunch: { driver, model, args: [...args] } } : {}),
   };
 }

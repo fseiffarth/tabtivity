@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type { InternalViewer } from "../../../lib/viewers/fileUtils";
 import { FileIcon } from "../../common/icons/FileIcon";
-import { FileImageIcon } from "../../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, FileImageIcon } from "../../common/icons/Icon";
 import type {
   TexFileDiagnostics,
   TexFileNode,
@@ -111,7 +111,7 @@ export function TexStructureRail({
         aria-label={t("texWorkspace.showStructure")}
         onClick={onShow}
       >
-        ›
+        <ChevronRightIcon />
       </button>
       <TexBackButton {...nav} />
       <TexUpButton {...nav} />
@@ -390,7 +390,7 @@ export function TexStructureSidebar({
           aria-label={t("texWorkspace.hideStructure")}
           onClick={onHide}
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       </div>
       <div className="tex-structure-body">

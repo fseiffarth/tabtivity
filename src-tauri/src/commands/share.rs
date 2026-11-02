@@ -150,6 +150,7 @@ pub async fn share_add(share: String) -> Result<ProjectEntry, String> {
             manual_validation_confirmed: None,
             skip_scaffold: true,
             remote: None,
+            remote_only: false,
             mirror_parent: None,
         };
         let entry = match crate::commands::projects::import_project_blocking(request) {

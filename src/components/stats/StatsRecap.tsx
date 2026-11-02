@@ -41,6 +41,7 @@ import {
   type TokenRows,
   type TokenSplit,
 } from "../../lib/tokenStats";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** Human duration, matching the header timer's phrasing; none at all reads `0m`. */
 function formatTime(t: (key: TranslationKey) => string, secs: number): string {
@@ -534,7 +535,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
               </button>
             ))}
           </div>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
 
         <div className="dialog-scroll">

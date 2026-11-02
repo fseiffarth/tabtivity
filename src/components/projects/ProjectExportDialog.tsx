@@ -20,6 +20,7 @@ import type {
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { ErrorNote } from "../common/ErrorNote";
 import { NAMES } from "../../lib/brand";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * "Export project…" — write one project into a single `.tabtivityproj` file that
@@ -67,7 +68,14 @@ export function ProjectExportDialog({
   const hostConnected = useRemoteStatusStore(
     (s) => s.byProject[project.id]?.ssh === "connected",
   );
-  const fromHost = !!preview?.remote && mirrorSource === "host";
+  // A remote-only project has no local copy: its tree comes from the host or not
+  // at all (the backend refuses `mirrorSource: "local"` for it).
+  const remoteOnly = !!preview?.remoteOnly;
+  const wantsHost = remoteOnly || mirrorSource === "host";
+  const fromHost = !!preview?.remote && wantsHost;
+  // Whether the files part is actually carried: for a remote-only project only
+  // while the host can be read.
+  const carriesMirror = includeMirror && (!remoteOnly || hostConnected);
 
   const toggleKept = (path: string) =>
     setKept((prev) => {
@@ -95,9 +103,11 @@ export function ProjectExportDialog({
 
   // The host's tree is measured only once that copy is picked.
   useEffect(() => {
-    if (mirrorSource !== "host") return;
+    if (!wantsHost) return;
     if (!hostConnected) {
-      setMirrorSource("local");
+      // A mirrored project falls back to its local copy; a remote-only one has
+      // none, so it just waits for the connection.
+      if (!remoteOnly) setMirrorSource("local");
       return;
     }
     if (hostTally) return;
@@ -109,7 +119,7 @@ export function ProjectExportDialog({
     return () => {
       alive = false;
     };
-  }, [mirrorSource, hostConnected, hostTally, project.id]);
+  }, [wantsHost, remoteOnly, hostConnected, hostTally, project.id]);
 
   // Progress for a tree that can take minutes: a bundle is written file by
   // file, and a dialog that only says "Exporting…" for three minutes is
@@ -128,7 +138,7 @@ export function ProjectExportDialog({
     if (!preview) return 0;
     const history = includeAgentHistory ? preview.agentHistoryBytes : 0;
     if (fromHost) {
-      if (!hostTally || !includeMirror) return history;
+      if (!hostTally || !carriesMirror) return history;
       return (
         hostTally.bytes +
         (includeGit ? hostTally.gitBytes : 0) +
@@ -144,7 +154,7 @@ export function ProjectExportDialog({
     const tree = preview.bytes + (includeGit ? preview.gitBytes : 0) + rebuildable;
     const carried = preview.remote ? includeMirror : includeFiles;
     return (carried ? tree : 0) + history;
-  }, [preview, fromHost, hostTally, includeFiles, includeGit, includeMirror, skipRebuildable, kept, includeAgentHistory]);
+  }, [preview, fromHost, hostTally, includeFiles, includeGit, includeMirror, carriesMirror, skipRebuildable, kept, includeAgentHistory]);
 
   /** The sizes the git and rebuildable switches show: the host's when its
    *  copy is the one packed. */
@@ -179,8 +189,8 @@ export function ProjectExportDialog({
           includeFiles,
           includeGit,
           includeSession,
-          includeMirror,
-          mirrorSource,
+          includeMirror: carriesMirror,
+          mirrorSource: remoteOnly ? "host" : mirrorSource,
           skipRebuildable,
           keepRebuildable: skipRebuildable && !fromHost ? [...kept] : [],
           includeAgentHistory,
@@ -210,8 +220,8 @@ export function ProjectExportDialog({
             {t("transfer.exportTitle", { name: project.name })}{" "}
             <UntestedTag id="transfer.export" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
 
@@ -233,14 +243,30 @@ export function ProjectExportDialog({
                     <span className="settings-help">{t("transfer.includeMirrorHelp")}</span>
                   </span>
                   <Toggle
-                    checked={includeMirror && !mirrorUnavailable}
+                    checked={remoteOnly ? carriesMirror : includeMirror && !mirrorUnavailable}
                     aria-label={t("transfer.includeMirror")}
-                    disabled={mirrorUnavailable && !hostConnected}
+                    disabled={(mirrorUnavailable || remoteOnly) && !hostConnected}
                     onChange={(e) => setIncludeMirror(e.target.checked)}
                     size="sm"
                   />
                 </label>
-                {includeMirror && (
+                {remoteOnly && (
+                  <p className="settings-help">
+                    {t("transfer.remoteOnlyNote")}{" "}
+                    {!hostConnected
+                      ? t("transfer.mirrorSourceHostOffline")
+                      : hostError
+                        ? hostError
+                        : hostTally
+                          ? t("transfer.mirrorSourceHostHelp", {
+                              count: String(hostTally.files),
+                              size: formatBytes(hostTally.bytes),
+                            })
+                          : t("transfer.mirrorSourceHostMeasuring")}{" "}
+                    <UntestedTag id="transfer.remoteOnly" />
+                  </p>
+                )}
+                {includeMirror && !remoteOnly && (
                   <fieldset className="container-scope-fieldset">
                     <legend>{t("transfer.mirrorSourceLegend")}</legend>
                     <label className="container-scope-option">
@@ -515,7 +541,7 @@ export function ProjectExportDialog({
                 loading ||
                 !preview ||
                 !!preview.blocked ||
-                (fromHost && includeMirror && !hostTally)
+                (fromHost && carriesMirror && !hostTally)
               }
             >
               {busy ? t("transfer.exporting") : t("transfer.exportEllipsis")}

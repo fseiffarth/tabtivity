@@ -17,6 +17,25 @@ and the restore allow-list (`terminal_service`) and the phone's resumable set
 (`mobile_control`) read it directly — one table, so a new CLI never restores
 as a shell.
 
+## Startup model and effort defaults
+
+Manage CLIs → each installed CLI → Default model and effort saves
+`agent_launch_defaults` in application settings, keyed by CLI binary.
+`services::agent_defaults` supplies both the UI capabilities (`list_agents`)
+and native launch arguments / environment values. Blank means CLI default.
+`launch_prep` applies them after session resolution, before SSH/container/fence
+wrapping, so desktop and headless phone launches use the same defaults.
+MCP grants are decided first: Vibe's native `VIBE_ACTIVE_MODEL` is also a
+legacy local-model marker and must not change the tab's authority.
+
+A resume request is noted before resolving it (Copilot consumes `--continue`),
+and resolved resume arguments are checked again. Explicit model/profile
+choices keep their own effort; an explicit effort alone can use the default
+model. Local-model tabs, logins, assistant chats and tmux attaches are excluded.
+OpenCode v2 combines model and effort as `provider/model#variant`; an effort
+there and in Junie requires a model. Unsupported startup options are explained
+in the card instead of guessed. These controls are tagged as untested live.
+
 ## Mechanism
 
 `services/agent_session.rs`, installed at startup: Tabtivity installs a
@@ -127,8 +146,15 @@ top-level session gets `--session <id>`; one noted at an earlier launch
 (host-only `live_sessions/<uid>.opencode`) without a record never took a
 prompt and starts fresh; a tab from before the plugin keeps `--continue`. The
 Reader reads the same record (`opencode_store`), else the folder's newest
-since the last fresh launch. Remote and local-model OpenCode tabs are as
-before.
+since the last fresh launch. Remote OpenCode tabs are as before.
+
+A local-model OpenCode tab (`local_agent`, 2.x `mini`) resumes the same way
+against its local-model home's store and record: it mints the key in every
+scope, keeps its launch line (`localLaunch`) and restores on that line plus
+the resume flag (`tabKinds.resumeArgsOf`), because `--model ollama/<m>` picks
+both the provider and `mini`. A tab saved before it had a key mints one at
+restore and goes through `--continue` once. Assistant chats stay out of
+`resolve`: `assistant::launch_line` decides theirs.
 
 OpenCode 2 uses the same plugin file with a default `{id, server, setup}`
 entrypoint: recent V1 calls `server`, V2 registers a prompt hook in `setup`

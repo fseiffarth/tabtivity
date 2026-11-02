@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import {
   ApiError,
   createPrompt,
@@ -111,7 +112,7 @@ export function PromptsSheet({ projectId, tabs, onClose, onSchedule }: {
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("agentPrompts.heading")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button><h2>{t("agentPrompts.heading")} {isUntested("mobile.sheet.prompts") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button><h2>{t("agentPrompts.heading")} {isUntested("mobile.sheet.prompts") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       <p className="sheet-note">{t("mobile.prompts.note")}</p>
       {agentTabs.length > 0
         ? <label className="mobile-prompt-target">{t("agentPrompts.target")}<select value={target?.id ?? ""} disabled={held} onChange={(event) => setTargetId(event.target.value)}>{agentTabs.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}</select></label>

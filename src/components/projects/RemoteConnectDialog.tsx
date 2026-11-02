@@ -24,7 +24,7 @@ import { useVpnSectionVisible } from "../../stores/remote/vpn/vpnStatus";
 import { VpnTunnelUpNotice } from "../common/VpnTunnelUpNotice";
 import { formatRemoteTarget, resolveLocalMirror, type ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
-import { TerminalIcon } from "../common/icons/Icon";
+import { CloseIcon, TerminalIcon } from "../common/icons/Icon";
 
 /**
  * Centered "Connect" modal for an existing remote (SSH) project — the single
@@ -323,7 +323,7 @@ function RemoteConnectDialogInner({
               ? t("remoteConnect.titleWorker", { host: host.label || host.host })
               : t("remoteConnect.titleProject")}
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={close}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={close}><CloseIcon /></button>
         </div>
 
         <div className="dialog-scroll">

@@ -1,3 +1,4 @@
+import { StartHere } from "./StartHere";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import { usePaneRects, type PaneRegionRect } from "./usePaneRects";
@@ -76,7 +77,6 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
-import { requestNewTab } from "../../lib/shortcuts/newTabChord";
 import { UntestedTag } from "../common/UntestedTag";
 import { openProjectDialog } from "../../lib/projects/projectDialogEvent";
 import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
@@ -365,7 +365,7 @@ function CenterPanelImpl() {
       // allowLastGroup: a restored popout may be the scope's only group (its
       // in-window siblings held only non-restorable tabs and were dropped); it
       // must still re-detach into its own window rather than stay docked.
-      detachGroup(t.id, { bounds: t.bounds, zoom: t.zoom, allowLastGroup: true });
+      detachGroup(t.id, { bounds: t.bounds, zoom: t.zoom, name: t.name, allowLastGroup: true });
     }
   }, [scope, pendingRespawn, consumePendingRespawn, detachGroup]);
 
@@ -1120,19 +1120,7 @@ function CenterPanelImpl() {
                 </button>
               </div>
             ) : (
-              <div className="center-placeholder-card">
-                <h2 className="center-placeholder-title">{t("centerPanel.noTabsOpen")}</h2>
-                <div className="center-placeholder-hint">
-                  {t("centerPanel.noTabsGuidance")}
-                </div>
-                <button
-                  className="center-placeholder-action"
-                  aria-label={t("centerPanel.openTab")}
-                  onClick={() => requestNewTab({ kind: "menu" }, { groupId: EMPTY_GROUP_ID })}
-                >
-                  {t("centerPanel.openTab")} <UntestedTag id="centerPanel.openTab" />
-                </button>
-              </div>
+              <StartHere scope={scope} groupId={EMPTY_GROUP_ID} />
             )}
           </div>
         </Subwindow>

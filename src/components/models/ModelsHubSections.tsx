@@ -20,6 +20,7 @@ import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { DEFAULT_COMPACT_AGENT_IDS } from "../../lib/tabs/newTabItems";
 import { useAutoloadNotice, type HubAgentInfo, type ModelsHub } from "./useModelsHub";
+import { CloseIcon, DotIcon } from "../common/icons/Icon";
 
 /**
  * The Models & agents sections, rendered by both surfaces: the header's hover
@@ -868,7 +869,7 @@ export function LocalModelsSection({
             aria-label={t("localModel.autostartDismiss")}
             onClick={restoreDismiss}
           >
-            ✕
+            <CloseIcon />
           </button>
           <div className="local-model-autostart-text">
             <span className="local-model-autostart-sentence">{restoreSentence}</span>
@@ -920,7 +921,7 @@ export function LocalModelsSection({
             aria-label={t("localModel.autostartDismiss")}
             onClick={autoDismiss}
           >
-            ✕
+            <CloseIcon />
           </button>
           <div className="local-model-autostart-text">
             <span className="local-model-autostart-sentence">{autoNoteTitle}</span>
@@ -1182,7 +1183,7 @@ export function LocalModelsSection({
       <div className="tab-new-menu-group-label">{t("localModel.localModelsGroup")}</div>
       <button className="tab-new-menu-item" onClick={onManageModels}>
         <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-          ●
+          <DotIcon />
         </span>
         {installed ? t("localModel.manageLocalModels") : t("localModel.installOllamaEllipsis")}
         {/* The dropdown's door now opens the overlay's Ollama tab, not Settings;
@@ -1206,7 +1207,7 @@ export function LocalModelsSection({
             onClick={checkUpdates}
           >
             <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-              ●
+              <DotIcon />
             </span>
             {checkingUpdates ? t("localModel.checkingUpdates") : t("localModel.checkUpdates")}
             {/* The click must always report back — but only where nothing
@@ -1496,7 +1497,7 @@ export function LocalModelsSection({
                         shifts only the chips inboard of it. */}
                     <div className="local-model-load-name-line">
                       <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-                        ●
+                        <DotIcon />
                       </span>
                       <span className="local-model-loaded-name">{m.name}</span>
                       <span className="local-model-load-facts">

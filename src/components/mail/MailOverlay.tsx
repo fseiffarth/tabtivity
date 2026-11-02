@@ -14,11 +14,12 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { useDialogs } from "../common/PromptDialogs";
 import { MailGlyph } from "../header/HeaderGlyphs";
-import { BookIcon } from "../common/icons/Icon";
+import { BookIcon, CloseIcon, DotIcon, PencilIcon } from "../common/icons/Icon";
 import { OverlayApprovals } from "../layout/OverlayApprovals";
 import { OverlayAgentColumn, OverlayAgentToggle } from "../layout/OverlayAgentColumn";
 import { useOverlayAgent, useOverlayAgentMaxWidth } from "../layout/useOverlayAgent";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
+import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { MailAccountMenu } from "./MailAccountMenu";
 import { MailPane } from "./MailPane";
 import { MailMessageView } from "./MailMessageView";
@@ -260,14 +261,14 @@ function MailOverlay({ open }: { open: boolean }) {
                 >
                   {tab.kind === "compose" && (
                     <span className="mail-tab-kind" aria-hidden="true">
-                      ✎
+                      <PencilIcon />
                     </span>
                   )}
                   {tab.kind === "contacts" && <BookIcon className="mail-tab-kind" />}
                   <span className="tab-label">{label}</span>
                   {tab.kind === "compose" && tab.dirty && (
                     <span className="mail-tab-dirty" title={t("mail.tabUnsent")} aria-label={t("mail.tabUnsent")}>
-                      ●
+                      <DotIcon />
                     </span>
                   )}
                   <button
@@ -278,10 +279,11 @@ function MailOverlay({ open }: { open: boolean }) {
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
+                      noteTabClose(e.currentTarget);
                       void closeTab(tab);
                     }}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               );
@@ -311,7 +313,7 @@ function MailOverlay({ open }: { open: boolean }) {
               aria-label={t("common.close")}
               onClick={() => useMailStore.getState().closeOverlay()}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         </div>

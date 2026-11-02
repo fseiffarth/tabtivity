@@ -4,6 +4,7 @@ import { LESSONS, categoryLabel } from "../../lib/lessons";
 import { UntestedTag } from "../common/UntestedTag";
 import { useTourStore } from "../../stores/tour";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The lesson picker: a small modal listing the task "lessons" (add a project,
@@ -33,7 +34,7 @@ export function LessonsMenu({ onClose }: { onClose: () => void }) {
       >
         <div className="settings-title-row">
           <h2>{t("lessons.title")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         {/* `.settings-dialog` is a split-scroll FRAME: it clips (overflow:hidden,
             padding 0, gap 0) and the `.dialog-scroll` child does the scrolling.

@@ -9,7 +9,7 @@ button { color:inherit; }
 :root { --screen-measure:720px; }
 /* Home and the project screen's scale: type, 4pt spacing, group surfaces,
    the 44px hit box, octagon cuts (docs/mobile_home_redesign_plan.md). */
-:root { --fs-large:1.75rem; --fs-title:1.25rem; --fs-headline:1.0625rem; --fs-body:.9375rem; --fs-sub:.875rem; --fs-foot:.8125rem; --fs-caption:.75rem; --fs-micro:.6875rem; --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-7:32px; --surface-group:#1a1d2b; --surface-raised:#222637; --hairline:#2b3040; --edge:#363c50; --ink-muted:#98a0b4; --hit:44px; --oct-sm:6px; --oct-md:10px; --oct-lg:14px; }
+:root { --fs-large:1.75rem; --fs-title:1.25rem; --fs-headline:1.0625rem; --fs-body:.9375rem; --fs-sub:.875rem; --fs-foot:.8125rem; --fs-caption:.75rem; --fs-micro:.6875rem; --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:20px; --sp-6:24px; --sp-7:32px; --surface-group:#1a1d2b; --surface-raised:#222637; --hairline:#2b3040; --edge:#363c50; --ink-muted:#98a0b4; --hit:44px; --r-sm:8px; --r-md:12px; --r-lg:16px; --r-sheet:20px; }
 @media (min-width:900px) { :root { --screen-measure:100vw; } }
 .screen { max-width:var(--screen-measure); min-height:100dvh; margin:auto; padding:max(22px,env(safe-area-inset-top)) 18px max(24px,env(safe-area-inset-bottom)); }
 @media (min-width:900px) { .screen { padding-inline:max(28px,env(safe-area-inset-left)) max(28px,env(safe-area-inset-right)); } }
@@ -18,21 +18,23 @@ header { min-height:52px; justify-content:space-between; }
 h1 { margin:0; font-size:1.35rem; }
 .pair { display:grid; align-content:center; gap:18px; max-width:440px; }
 label { display:grid; gap:7px; color:#b7bac8; }
-input { width:100%; border:1px solid #3a3e50; border-radius:12px; padding:13px; background:#171a24; color:#fff; }
+input { width:100%; border:1px solid var(--edge); border-radius:12px; padding:13px; background:var(--surface-group); color:#fff; }
 input.code { font:700 1.7rem ui-monospace,monospace; letter-spacing:.3em; text-align:center; }
 /* Every dropdown in the PWA. The native arrow is drawn hard against the right
    border and a mobile engine gives it no inset of its own, so it is replaced by
    one we place: `appearance:none` plus a chevron background, with the padding
    reserving the room it sits in. Long option text (project and calendar names)
    ellipsizes instead of running under it. */
-select { width:100%; min-width:0; appearance:none; -webkit-appearance:none; border:1px solid #3a3e50; border-radius:10px; padding:10px 34px 10px 10px; background-color:#171a24; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239aa0b4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; background-size:12px 8px; color:#fff; text-overflow:ellipsis; }
-button { border:1px solid #383c4d; background:#1b1e29; border-radius:11px; padding:11px 14px; }
+select { width:100%; min-width:0; appearance:none; -webkit-appearance:none; border:1px solid var(--edge); border-radius:10px; padding:10px 34px 10px 10px; background-color:var(--surface-group); background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239aa0b4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; background-size:12px 8px; color:#fff; text-overflow:ellipsis; }
+button { border:1px solid var(--edge); background:var(--surface-raised); border-radius:11px; padding:11px 14px; }
 button:disabled { opacity:.45; }
 .primary { background:#6c5ce7; border-color:#8c7df4; font-weight:700; }
 .back { font-size:2rem; padding:0 13px; border:0; background:transparent; }
 nav { display:flex; gap:8px; margin:20px 0; }
 nav button,.keys button { flex:1; }
-.selected { background:#3b326e !important; border-color:#7c6cff !important; }
+/* A colour, not the `background` shorthand: a cut-corner control keeps its
+   rim when it is the picked one. */
+.selected { --rim:#7c6cff; background-color:#3b326e !important; border-color:#7c6cff !important; }
 .search { margin-bottom:16px; }
 /* The Agents list's order, above the cards: a label and the pick on one line,
    the select taking the width the label leaves. */
@@ -100,7 +102,7 @@ nav button,.keys button { flex:1; }
 .project-screen .tab-card-head { min-height:64px; }
 .project-screen .tab-card-head .card { padding:18px 0 10px 12px; }
 /* A card's or Home row's leading tile: one accent tint, no per-row hue. */
-.tab-card-tile,.home-tile { --o:var(--oct-sm); display:grid; place-items:center; flex:0 0 auto; background:#2e2b48; color:#bcb0ff; font-weight:700; line-height:1; }
+.tab-card-tile,.home-tile { --o:var(--r-sm); display:grid; place-items:center; flex:0 0 auto; background:#2e2b48; color:#bcb0ff; font-weight:700; line-height:1; }
 .tab-card-tile { align-self:flex-start; width:40px; height:40px; margin:12px 0 0 12px; font-size:var(--fs-sub); letter-spacing:-.02em; }
 .tab-card-tile.file { background:none; }
 .home-tile { width:36px; height:36px; font-size:var(--fs-body); }
@@ -111,7 +113,7 @@ nav button,.keys button { flex:1; }
 .tab-card-open { position:absolute; inset:0; padding:0; border:0; border-radius:0; background:transparent; }
 .tab-card-open:disabled { opacity:1; }
 .tab-card-title > strong { font-size:var(--fs-headline); font-weight:650; letter-spacing:-.01em; overflow-wrap:anywhere; }
-.tab-card-model:active { background:#343a52; }
+.tab-card-model:active { background:var(--surface-raised); }
 /* The name and model share a row when there is room, then wrap without
    truncating the tab name. The stronger selector overrides the generic card. */
 .tab-card-head .tab-card-main .tab-card-title { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; }
@@ -121,9 +123,9 @@ nav button,.keys button { flex:1; }
    name's 28px line under 18px), so a wrapping name grows downward. */
 .tab-card-head .tab-card-main { align-items:flex-start; }
 .tab-card-head .tab-card-main .tab-card-title > strong { line-height:28px; }
-/* The model is a quiet button: it still opens the picker, but the session name
-   and live state carry the stronger visual weight. */
-.tab-card-main .tab-card-model { position:relative; z-index:1; display:inline-block; flex:0 1 auto; max-width:100%; margin:0; padding:5px 8px; border:1px solid #414861; border-radius:8px; background:#2b3145; color:#b6bdd8; font-size:.72rem; font-weight:600; line-height:16px; text-align:left; text-transform:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* The model is plain metadata that still opens the picker on a tap: no chip,
+   the muted footnote type, its hit box padded past the text. */
+.tab-card-main .tab-card-model { position:relative; z-index:1; display:inline-block; flex:0 1 auto; max-width:100%; margin:-6px 0; padding:6px 0; border:0; border-radius:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-foot); font-weight:500; line-height:16px; text-align:left; text-transform:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tab-card-main .tab-card-model:disabled { opacity:1; }
 .tab-card-grip { position:relative; z-index:1; flex:0 0 auto; width:44px; padding:0; border:0; border-left:1px solid #2d3040; border-radius:0 11px 0 0; background:transparent; color:#6f7488; font-size:1.05rem; touch-action:none; cursor:grab; }
 .tab-card-grip:active { cursor:grabbing; color:#d3d6e4; }
@@ -156,8 +158,8 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .git-mark.git-broken { color:#8b949e; }
 .git-mark.git-broken > i { background:none; border:1px dashed currentColor; box-sizing:border-box; }
 .tab-card-foot { display:flex; align-items:center; gap:8px; margin-left:64px; padding:8px 14px 10px 0; border-top:1px solid var(--hairline); }
-.tab-card-when { min-width:0; flex:1 1 auto; color:#a9b0c6; font-size:.78rem; line-height:1.3; }
-.tab-card .agent-status { padding:5px 9px; border-radius:999px; font-size:.72rem; line-height:1; white-space:nowrap; }
+.tab-card-when { min-width:0; flex:1 1 auto; color:var(--ink-muted); font-size:var(--fs-foot); line-height:1.3; }
+.tab-card .agent-status { padding:5px 9px; border-radius:6px; font-size:var(--fs-caption); line-height:1; white-space:nowrap; }
 .tab-card-icon { position:relative; z-index:1; flex:0 0 auto; display:grid; place-items:center; width:var(--hit); height:var(--hit); padding:0; border:0; border-radius:11px; background:transparent; color:#a3aac0; font-size:1rem; line-height:1; }
 .tab-card-icon:active { background:rgba(56,60,80,.8); color:#d3d6e4; }
 .tab-card-icon.accent { background:#2e2b48; color:#bcb0ff; font-size:1.15rem; }
@@ -183,10 +185,17 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
 .tab-card-prompt.latest .tab-card-prompt-when { color:#afa5f4; font-size:.7rem; font-weight:700; }
 .tab-card-prompt-text { min-width:0; overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:1; overflow-wrap:anywhere; }
 .tab-card-prompt.latest .tab-card-prompt-text { -webkit-line-clamp:3; }
+/* Typed and not sent: the colour of a file card's unsent marks, in the slot a
+   sent prompt's time takes; the italics keep the text itself from reading as
+   something the agent was told. */
+.tab-card-prompt.draft .tab-card-prompt-when { color:#f28b82; }
+.tab-card-prompt.draft .tab-card-prompt-text { font-style:italic; }
 /* The same reading on the flat Agents list, where a row is one tap tall: two
    lines, then ellipsis. */
 .activity-prompt { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; color:#b6bacb; overflow-wrap:anywhere; }
-.agent-status { display:inline-flex; align-items:center; gap:5px; padding:4px 8px; border:1px solid currentColor; border-radius:0; font-weight:700; text-transform:capitalize; }
+.activity-prompt.draft { font-style:italic; }
+.activity-draft-mark { margin-inline-end:6px; color:#f28b82; font-size:.9em; font-style:normal; font-weight:700; }
+.agent-status { display:inline-flex; align-items:center; gap:5px; padding:4px 8px; border:1px solid currentColor; border-radius:6px; font-weight:700; text-transform:capitalize; }
 .agent-status.working { color:#6fe29c; background:#173827; }
 .agent-status.question { color:#ffd36b; background:#493b1d; }
 .agent-status.done { color:#91e6a9; background:#193a29; }
@@ -199,6 +208,7 @@ small .git-mark::before { content:"·"; margin:0 1px 0 5px; color:#9aa0b4; font-
    the card's border tinted to match, so a tab in either mode stands out in a
    list of look-alikes. A tab colour keeps its left edge. */
 .agent-mode-mark { display:inline-flex; align-items:center; flex:0 0 auto; padding:3px 6px; border:1px solid currentColor; border-radius:6px; background:color-mix(in srgb, currentColor 16%, transparent); font-size:.66rem; font-weight:800; letter-spacing:.05em; line-height:1; }
+.agent-mode-mark.host { display:inline-block; min-width:0; max-width:14em; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .agent-mode-mark.plan { color:#b3a8ff; }
 .agent-mode-mark.goal { color:#6fd6e0; }
 /* Subagents at work (`SubagentCount`): the mode pills' shape in the accent,
@@ -223,23 +233,13 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 .card.in-plan { border-color:#7b6ee0; }
 .card.in-goal { border-color:#4fb3c0; }
 .card.in-plan.has-tab-color,.card.in-goal.has-tab-color { border-left-color:var(--tab-color); }
-/* The project screen's tab cards are octagons, drawn as two clipped layers
-   under an unclipped card (the grip sits in its cut): `::before` the outline
-   in `--oct-edge`, `::after` the flat face 1px in, its cut .41px shorter so
-   the diagonals keep the edge's weight. Plan/goal/focus retint the outline;
-   a tab colour is a 3px left stripe, cuts included; drops draw on the face. */
-.project-screen .tab-card { --oct:var(--oct-md); --oct-edge:var(--edge); --oct-face:var(--surface-group); isolation:isolate; border:0; border-radius:0; background:none; box-shadow:none; }
-.project-screen .tab-card::before,.project-screen .tab-card::after { content:""; position:absolute; z-index:-1; clip-path:polygon(var(--cut) 0,calc(100% - var(--cut)) 0,100% var(--cut),100% calc(100% - var(--cut)),calc(100% - var(--cut)) 100%,var(--cut) 100%,0 calc(100% - var(--cut)),0 var(--cut)); pointer-events:none; }
-.project-screen .tab-card::before { --cut:var(--oct); inset:0; background:var(--oct-edge); }
-.project-screen .tab-card::after { --cut:calc(var(--oct) - .41px); inset:1px; background:var(--oct-face); }
-.project-screen .tab-card:focus-within { --oct-edge:#8578ed; }
-.project-screen .tab-card.in-plan { --oct-edge:#7b6ee0; }
-.project-screen .tab-card.in-goal { --oct-edge:#4fb3c0; }
-.project-screen .tab-card.has-tab-color::before { background:linear-gradient(90deg, var(--tab-color) calc(var(--oct) + 3px), var(--oct-edge) 0); }
-.project-screen .tab-card.has-tab-color::after { left:3px; }
-.project-screen .tab-card.drop-before,.project-screen .tab-card.drop-after { box-shadow:none; }
-.project-screen .tab-card.drop-before::after { box-shadow:inset 0 3px 0 0 #7c6cff; }
-.project-screen .tab-card.drop-after::after { box-shadow:inset 0 -3px 0 0 #7c6cff; }
+/* The project screen's tab cards: the group surface in a rounded frame whose
+   edge plan/goal/focus retint; a tab colour is the 3px left edge (`.card`). */
+.project-screen .tab-card { border-color:var(--edge); border-radius:var(--r-md); background:var(--surface-group); box-shadow:none; }
+.project-screen .tab-card:focus-within { border-color:#8578ed; }
+.project-screen .tab-card.in-plan { border-color:#7b6ee0; }
+.project-screen .tab-card.in-goal { border-color:#4fb3c0; }
+.project-screen .tab-card.has-tab-color { border-left-color:var(--tab-color); }
 /* A wide screen stands cards two to a line, so a drop line is a side; Home's
    grouped project list stays one column. */
 @media (min-width:900px) {
@@ -249,42 +249,38 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
   .tab-card.drop-after { box-shadow:inset -3px 0 0 0 #7c6cff; }
   .home-projects > .tab-card.drop-before { box-shadow:inset 0 3px 0 0 #7c6cff; }
   .home-projects > .tab-card.drop-after { box-shadow:inset 0 -3px 0 0 #7c6cff; }
-  .project-screen .tab-card.drop-before::after { box-shadow:inset 3px 0 0 0 #7c6cff; }
-  .project-screen .tab-card.drop-after::after { box-shadow:inset -3px 0 0 0 #7c6cff; }
 }
-/* The grip is a 36px triangle in the lower-right cut (`clip-path` clips its
-   hit area too), its ⠿ turned along the cut; the text steps clear of it. */
-.project-screen .tab-card-grip { position:absolute; right:0; bottom:0; width:36px; height:36px; border:0; border-radius:0; clip-path:polygon(100% 0,100% 100%,0 100%); }
-.project-screen .tab-card-grip > span { position:absolute; right:4px; bottom:4px; display:grid; place-items:center; width:16px; height:16px; line-height:1; transform:rotate(45deg); }
+/* The grip is a 36px square in the lower-right corner, under the card's own
+   radius; the text steps clear of it. */
+.project-screen .tab-card-grip { position:absolute; right:0; bottom:0; width:36px; height:36px; border:0; border-radius:0 0 calc(var(--r-md) - 1px) 0; background:transparent; }
+.project-screen .tab-card-grip > span { position:absolute; right:6px; bottom:6px; display:grid; place-items:center; width:16px; height:16px; line-height:1; }
 .project-screen .tab-card:has(.tab-card-grip) .tab-card-prompts { margin-right:26px; }
 .project-screen .tab-card:has(.tab-card-grip) .tab-card-foot { padding-right:26px; }
-/* The state badge: a hexagon, on a file card's tile corner or leading an agent card's name. Taps pass through it. */
-.tab-card .tab-card-status { position:absolute; top:38px; left:38px; z-index:2; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:0; background:currentColor; clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); font-size:.72rem; line-height:1; pointer-events:none; }
+/* The state badge: a rounded square, on a file card's tile corner or leading an agent card's name. Taps pass through it. */
+.tab-card .tab-card-status { position:absolute; top:38px; left:38px; z-index:2; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:6px; background:currentColor; font-size:.72rem; line-height:1; pointer-events:none; }
 /* On an agent card it leads the name (there is no tile to ride on). */
 .tab-card-title > .tab-card-status { position:relative; top:auto; left:auto; flex:0 0 auto; }
-.tab-card .tab-card-status::before { content:""; position:absolute; inset:1.5px; background:var(--status-face); clip-path:polygon(25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%); }
+.tab-card .tab-card-status::before { content:""; position:absolute; inset:1.5px; border-radius:4.5px; background:var(--status-face); }
 .tab-card .tab-card-status.working { --status-face:#173827; font-size:.56rem; }
 .tab-card .tab-card-status.question { --status-face:#493b1d; }
 .tab-card .tab-card-status.done { --status-face:#193a29; }
 .tab-card .tab-card-status.interrupted { --status-face:#46202a; }
-/* The Activity pill breathes; the working hexagon is drawn only as a
-   solid bright line, four of its six edges long (each edge spans 60° seen
-   from the centre, so 240°), running around its edge: a conic sweep whose start angle turns
-   (registered `--hex-run`, so the shape itself stays still), clipped to the
-   hexagon's edge ring. The asking hexagon pulses — it
-   swells and a faint fill glows inside it; the pill's ? tips its head. ✓ and
-   ■ land once. */
+/* The Activity pill breathes; the working badge is drawn only as a solid
+   bright arc, two thirds of its rim, running around its edge: a conic sweep
+   whose start angle turns (registered `--hex-run`, so the shape itself stays
+   still), masked to a 1.5px ring. The asking badge pulses — it swells and a
+   faint fill glows inside it; the pill's ? tips its head. ✓ and ■ land once. */
 .agent-status-glyph { display:inline-block; position:relative; z-index:1; }
 .agent-status.working:not(.tab-card-status) .agent-status-glyph { animation:agent-status-breathe 1.6s ease-in-out infinite; }
 .agent-status.question .agent-status-glyph { animation:agent-status-ask 2.6s ease-in-out infinite; transform-origin:50% 85%; }
 .agent-status.done .agent-status-glyph { animation:agent-status-pop .5s cubic-bezier(.3,1.6,.5,1) both; }
 .agent-status.interrupted .agent-status-glyph { animation:agent-status-stop .45s cubic-bezier(.3,1.5,.5,1) both; }
 @property --hex-run { syntax:"<angle>"; inherits:false; initial-value:0deg; }
-.tab-card .tab-card-status.working { --hex-ring:polygon(evenodd,25% 6.7%,75% 6.7%,100% 50%,75% 93.3%,25% 93.3%,0 50%,25% 6.7%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),1.5px 50%,calc(1.5px + .25*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(1.5px + .75*(100% - 3px)) calc(1.5px + .933*(100% - 3px)),calc(100% - 1.5px) 50%,calc(1.5px + .75*(100% - 3px)) calc(1.5px + .067*(100% - 3px)),calc(1.5px + .25*(100% - 3px)) calc(1.5px + .067*(100% - 3px))); background:none; }
+.tab-card .tab-card-status.working { background:none; }
 .tab-card .tab-card-status.working::before { display:none; }
-.tab-card .tab-card-status.working::after { content:""; position:absolute; inset:0; background:conic-gradient(from var(--hex-run), transparent 0 120deg, currentColor 0); clip-path:var(--hex-ring); animation:agent-status-hex-run 1.4s linear infinite; }
+.tab-card .tab-card-status.working::after { content:""; position:absolute; inset:0; padding:1.5px; border-radius:inherit; background:conic-gradient(from var(--hex-run), transparent 0 120deg, currentColor 0); -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0); mask-composite:exclude; animation:agent-status-hex-run 1.4s linear infinite; }
 .tab-card .tab-card-status.question { animation:agent-status-hex-pulse 1.6s ease-in-out infinite; }
-.tab-card .tab-card-status.question::after { content:""; position:absolute; inset:0; background:currentColor; animation:agent-status-hex-glow 1.6s ease-in-out infinite; }
+.tab-card .tab-card-status.question::after { content:""; position:absolute; inset:0; border-radius:inherit; background:currentColor; animation:agent-status-hex-glow 1.6s ease-in-out infinite; }
 .tab-card .tab-card-status.question .agent-status-glyph { animation:none; }
 @keyframes agent-status-breathe { 50% { opacity:.55; } }
 @keyframes agent-status-hex-run { to { --hex-run:360deg; } }
@@ -322,10 +318,10 @@ small { color:#9498aa; }
 .new-tab-sheet .create { margin-top:4px; gap:10px; }
 .new-tab-sheet .create > .primary { min-height:48px; }
 .new-tab-agents { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-.new-tab-agents .agent-create { flex-wrap:wrap; align-content:start; gap:6px; min-width:0; padding:6px; border:1px solid #383c4d; border-radius:12px; background:#1b1e29; }
+.new-tab-agents .agent-create { flex-wrap:wrap; align-content:start; gap:6px; min-width:0; padding:6px; border:1px solid var(--edge); background-color:var(--surface-raised); }
 /* The agent's name is the tile's headline: the accent face the agent tab
    icons wear (`.tab-card-icon.accent`), so it reads apart from its modes. */
-.new-tab-agents .agent-create > button:first-child { flex:1 0 100%; min-width:0; min-height:44px; padding:6px 10px; border:0; border-radius:9px; background:#2e2b48; color:#bcb0ff; font-weight:700; overflow-wrap:anywhere; }
+.new-tab-agents .agent-create > button:first-child { flex:1 0 100%; min-width:0; min-height:44px; padding:6px 10px; border:0; border-radius:0; background:#2e2b48; color:#bcb0ff; font-weight:700; overflow-wrap:anywhere; }
 .new-tab-sheet .new-tab-file,.project-files .new-tab-file,.files-library .new-tab-file { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:52px; padding:8px 12px; text-align:left; }
 .new-tab-sheet .new-tab-file > span,.project-files .new-tab-file > span,.files-library .new-tab-file > span { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .new-tab-sheet .new-tab-file small,.project-files .new-tab-file small,.files-library .new-tab-file small { color:#aeb4c8; font-size:.76rem; }
@@ -340,17 +336,23 @@ small { color:#9498aa; }
 .new-tab-where { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .new-tab-where > small { flex:1 0 100%; padding:0 6px; color:#9da3b6; font-size:.8rem; }
 .new-tab-where > button { min-height:36px; padding:6px 10px; font-size:.8rem; overflow-wrap:anywhere; }
-/* "Runs on": the label beside a compact select (the base select's chevron),
-   the note under both. */
-.new-tab-machine { display:grid; gap:4px; }
-.new-tab-machine > label { display:flex; align-items:center; gap:8px; min-width:0; }
-.new-tab-machine small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
-.new-tab-machine select { flex:1 1 auto; padding:7px 30px 7px 12px; background-position:right 10px center; font-size:.85rem; text-overflow:ellipsis; }
+/* "Runs on": the label beside a field drawn as the compact select, which
+   unfolds the sheets' `.option-list` under it (no native picker); the note
+   under both. Only the chevron's turn moves. */
+.new-tab-machine { display:grid; gap:6px; }
+.new-tab-machine-field { display:flex; align-items:center; gap:8px; min-width:0; }
+.new-tab-machine-field > small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
+.new-tab-machine-toggle { display:flex; flex:1 1 auto; align-items:center; gap:8px; min-width:0; padding:7px 10px 7px 12px; border-color:var(--edge); background-color:#0b0d13; color:#fff; font-size:.85rem; text-align:left; }
+.new-tab-machine-toggle.open { --rim:#7c6cff; }
+.new-tab-machine-toggle > span { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.new-tab-machine-toggle > svg { width:16px; height:16px; flex:0 0 auto; fill:none; stroke:#9aa0b4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .15s ease; }
+.new-tab-machine-toggle.open > svg { transform:rotate(180deg); }
+.new-tab-machine-list button { font-size:.9rem; }
 /* The local-model group: the agents grid under a label worded like "Agents start in". */
 .new-tab-local { display:flex; flex-direction:column; gap:6px; }
 .new-tab-local > small { padding:0 6px; color:#9da3b6; font-size:.8rem; overflow-wrap:anywhere; }
 .new-tab-local > .sheet-note { margin:0; }
-.new-tab-held { padding:2px 6px; border-top:1px dashed #383c4d; color:#9da3b6; font-size:.8rem; }
+.new-tab-held { padding:2px 6px; border-top:1px dashed var(--edge); color:#9da3b6; font-size:.8rem; }
 .new-tab-held summary { padding:8px 0; cursor:pointer; }
 .new-tab-held ul { display:grid; gap:6px; margin:0; padding:0 0 6px; list-style:none; }
 .new-tab-held li { display:flex; flex-wrap:wrap; gap:2px 8px; min-width:0; overflow-wrap:anywhere; }
@@ -360,6 +362,11 @@ small { color:#9498aa; }
 .new-tab-cloud-agent { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 0 8px; }
 .new-tab-cloud-agent > strong { flex:1 1 auto; min-width:0; color:#aeb4c8; font-size:.9rem; font-weight:600; overflow-wrap:anywhere; }
 .new-tab-cloud-agent > button { min-height:36px; padding:6px 10px; font-size:.8rem; }
+/* The model sheet's launch defaults: the fold above, its fields stacked. */
+.launch-defaults[open] { display:grid; gap:10px; padding-bottom:8px; }
+.launch-defaults > .sheet-note { padding:0; }
+.launch-defaults input { padding:10px; border-radius:10px; }
+.launch-defaults-actions { display:flex; flex-wrap:wrap; gap:8px; }
 /* Home: slim bar, large title, one segmented switch, then inset groups with
    hairline rows. No gradients: accent for actions and selection, colour for
    state. The project screen shares the gutter and the ground. */
@@ -376,9 +383,11 @@ small { color:#9498aa; }
 .home-settings svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .projects-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:var(--sp-3); }
 .projects-row h1 { font-size:var(--fs-large); font-weight:700; letter-spacing:-.02em; }
-.projects-row > .new-tab { --o:var(--oct-sm); display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; font-size:1.25rem; line-height:1; }
-.home-switch { --o:var(--oct-md); gap:2px; margin:var(--sp-4) 0 var(--sp-2); padding:3px; background:var(--surface-group); }
-.home-switch > button { --o:var(--oct-sm); display:flex; align-items:center; justify-content:center; gap:6px; min-height:38px; padding:0 var(--sp-2); border:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:600; }
+.projects-row > .new-tab { --o:var(--r-sm); display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; font-size:1.25rem; line-height:1; }
+.home-switch { --o:var(--r-md); gap:2px; margin:var(--sp-4) 0 var(--sp-2); padding:3px; background:var(--surface-group); }
+.home-switch > button { --o:var(--r-sm); display:flex; align-items:center; justify-content:center; gap:6px; min-height:38px; padding:0 var(--sp-2); border:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:600; }
+/* Four segments have to fit the narrowest phones in every language. */
+@media (max-width:359px) { .home-switch > button { min-width:0; padding:0 2px; font-size:var(--fs-micro); } }
 .home-switch > button.selected { background:#2e2b48 !important; color:#e7e9f2; }
 .home-switch-badge { min-width:18px; padding:1px 5px; border-radius:999px; background:#493b1d; color:#ffd36b; font-size:var(--fs-micro); font-weight:700; font-variant-numeric:tabular-nums; }
 /* The projects' caption shows only under Needs you; alone, the title says it. */
@@ -387,7 +396,7 @@ small { color:#9498aa; }
 .home-projects-head { display:none; }
 .home-needs ~ .home-projects-head { display:block; }
 /* An inset group. Never put a sheet in one: the clip would cut it off. */
-.home-group,.home-screen > .home-projects { --o:var(--oct-lg); display:grid; gap:0; background:var(--surface-group); }
+.home-group,.home-screen > .home-projects { --o:var(--r-lg); display:grid; gap:0; background:var(--surface-group); }
 .home-group > * + *,.home-projects > * + * { border-top:1px solid var(--hairline); }
 .home-needs-row,.home-group-more { display:flex; align-items:center; gap:var(--sp-3); width:100%; min-height:52px; padding:10px var(--sp-3); border:0; border-radius:0; background:transparent; text-align:left; }
 .home-needs-row > .agent-status { flex:0 0 auto; justify-content:center; width:28px; height:28px; padding:0; }
@@ -413,7 +422,7 @@ small { color:#9498aa; }
 .project-host-note { display:flex; align-items:flex-start; gap:var(--sp-1); }
 .project-host-note > span { flex:1 1 auto; min-width:0; }
 .home-hint > button,.project-hint > button,.project-host-note > button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -6px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.2rem; }
-.hint-message { margin:12px 0; padding:10px 14px; border:1px solid #4a426e; border-radius:14px; background:#211e35; color:#e6e9f2; font-size:var(--fs-sub); line-height:1.45; }
+.hint-message { --rim:#4a426e; margin:12px 0; padding:10px 14px; border:1px solid #4a426e; background-color:#211e35; color:#e6e9f2; font-size:var(--fs-sub); line-height:1.45; }
 .hint-message-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .hint-message-head > button { flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -8px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.3rem; }
 .hint-message > p { margin:8px 0; }
@@ -431,8 +440,8 @@ small { color:#9498aa; }
 .home-desktop { display:grid; gap:2px; }
 .home-desktop > .phone-settings { gap:0; margin-top:0; }
 .home-desktop > .phone-settings > h2 { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.home-desktop > .phone-settings .option-list button { --o:var(--oct-md); min-height:56px; border-radius:0; background:var(--surface-group); }
-.project-foot { --o:var(--oct-md); display:grid; margin-top:var(--sp-6); background:var(--surface-group); }
+.home-desktop > .phone-settings .option-list button { --o:var(--r-md); min-height:56px; border-radius:0; background:var(--surface-group); }
+.project-foot { --o:var(--r-md); display:grid; margin-top:var(--sp-6); background:var(--surface-group); }
 .project-foot > * + *,.project-closed-row { border-top:1px solid var(--hairline); }
 .project-closed { display:grid; }
 .project-foot-row,.project-closed-row { display:flex; align-items:center; gap:var(--sp-3); width:100%; min-height:var(--hit); padding:10px var(--sp-4); border:0; border-radius:0; background:transparent; font-size:var(--fs-body); text-align:left; }
@@ -443,9 +452,9 @@ small { color:#9498aa; }
 .project-closed-row.reopening { display:flex; gap:8px; color:#8fb8ff; }
 .project-closed-row.reopening:disabled { opacity:1; }
 .project-activate { margin-bottom:var(--sp-3); }
-.project-activate > button { --o:var(--oct-md); width:100%; min-height:var(--hit); border:0; }
-/* The octagon these screens cut their pieces to, each its own `--o`. */
-.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { clip-path:polygon(var(--o) 0,calc(100% - var(--o)) 0,100% var(--o),100% calc(100% - var(--o)),calc(100% - var(--o)) 100%,var(--o) 100%,0 calc(100% - var(--o)),0 var(--o)); }
+.project-activate > button { --o:var(--r-md); width:100%; min-height:var(--hit); border:0; }
+/* The radius these screens round their pieces to, each its own `--o`. */
+.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { border-radius:var(--o); }
 /* The four top-level sections. Fixed to the bottom edge so it survives the long
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
@@ -460,7 +469,12 @@ small { color:#9498aa; }
 /* The ✓ rides beside the row, never inside it: a button in a button is invalid
    markup and would fold finishing the thing into the tap that opens it. */
 .mobile-alert-row-wrap { display:flex; align-items:center; }
-.mobile-alert-row-wrap .mobile-alert-row { flex:1 1 auto; min-width:0; }
+.mobile-alert-row-wrap .mobile-alert-row,.mobile-alert-row-wrap .home-needs-row { flex:1 1 auto; min-width:0; }
+/* ▶ Continue beside an interrupted row: the ✓'s height, in the interrupted
+   mark's colours (`.agent-status.interrupted`). */
+.home-needs-continue { display:inline-flex; align-items:center; gap:5px; height:38px; flex:0 0 auto; margin-right:var(--sp-2); padding:0 10px; border-radius:11px; border-color:#ff8a93; background:#46202a; color:#ff8a93; font-size:var(--fs-sub); font-weight:700; }
+.home-needs-continue > span { font-size:.7rem; }
+.home-needs-continue:disabled { opacity:.55; }
 /* The board card's own check, same size and same square, so a tick means one
    thing across the phone (`.todo-check`). */
 .mobile-alert-done { width:38px; height:38px; flex:0 0 auto; margin-right:var(--sp-2); padding:0; border-radius:11px; border-color:#776db4; background:#24203b; color:#fff; font-size:1rem; font-weight:800; }
@@ -477,36 +491,21 @@ button.mobile-alert-row { cursor:pointer; }
 .mobile-alerts-error { margin:0; padding:10px 12px; border:1px solid #6d3b46; border-radius:11px; background:rgba(60,30,38,.6); color:#f3c3ca; font-size:.85rem; }
 .projects-empty { margin:0; padding:var(--sp-6) var(--sp-4); color:var(--ink-muted); text-align:center; }
 /* Home's own controls — the search, the Agents list's rows and sort, the
-   notices, the ✓ — are cut to the octagon too. These hang nothing over their
-   edges, so the element itself is clipped. The clip
-   takes the corners of the border with it, so a bordered element repaints the
-   four cuts as its first background layers (`--oct-corners`): each a square
-   `--oct` wide whose gradient turns to the edge colour on the diagonal and
-   stays it for 1px (`--oct-lw` on the left, so a tab colour's 3px edge runs
-   into its cuts). `--oct-edge` is the border colour, so a state retints both.
-   Borderless elements need only the clip. The outer shadows go: a clip would
-   cut them off anyway. */
-.home-screen .search,.home-screen .activity-sort select,.home-screen .mobile-alerts-error,.home-screen .mobile-alert-done,.home-screen .cards > button.card,.home-screen .error,.home-screen .notice,.home-screen .inbox-upload,.home-screen .inbox-upload button {
-  --oct:10px; --oct-edge:#383c4d;
-  --oct-corners:linear-gradient(to bottom right, var(--oct-lc, var(--oct-edge)) calc(50% + var(--oct-lw, 1px)), transparent 0) top left / var(--oct) var(--oct) no-repeat border-box,
-    linear-gradient(to bottom left, var(--oct-edge) calc(50% + 1px), transparent 0) top right / var(--oct) var(--oct) no-repeat border-box,
-    linear-gradient(to top left, var(--oct-edge) calc(50% + 1px), transparent 0) bottom right / var(--oct) var(--oct) no-repeat border-box,
-    linear-gradient(to top right, var(--oct-lc, var(--oct-edge)) calc(50% + var(--oct-lw, 1px)), transparent 0) bottom left / var(--oct) var(--oct) no-repeat border-box;
-  border-radius:0; box-shadow:none;
-  clip-path:polygon(var(--oct) 0,calc(100% - var(--oct)) 0,100% var(--oct),100% calc(100% - var(--oct)),calc(100% - var(--oct)) 100%,var(--oct) 100%,0 calc(100% - var(--oct)),0 var(--oct));
-}
-.home-screen .cards > button.card { --oct:12px; }
-.home-screen .activity-sort select,.home-screen .mobile-alert-done,.home-screen .inbox-upload { --oct:8px; }
-.home-screen .inbox-upload button { --oct:6px; }
-.home-screen .search,.home-screen .activity-sort select { --oct-edge:#3a3e50; border-color:var(--oct-edge); }
-.home-screen .search { background:var(--oct-corners),#171a24; }
-.home-screen .activity-sort select { background:var(--oct-corners),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239aa0b4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6'/%3E%3C/svg%3E") right 10px center / 12px 8px no-repeat,#171a24; }
-.home-screen .mobile-alerts-error { --oct-edge:#6d3b46; border-color:var(--oct-edge); background:var(--oct-corners),rgba(60,30,38,.6); }
-.home-screen .cards > button.card { border-color:var(--oct-edge); background:var(--oct-corners),rgba(28,31,43,.92); }
-.home-screen .mobile-alert-done { --oct-edge:#776db4; border-color:var(--oct-edge); background:var(--oct-corners),#24203b; }
-.home-screen .cards > button.card.in-plan { --oct-edge:#7b6ee0; }
-.home-screen .cards > button.card.in-goal { --oct-edge:#4fb3c0; }
-.home-screen .cards > button.card.has-tab-color { --oct-lc:var(--tab-color); --oct-lw:3px; border-left-color:var(--tab-color); }
+   notices, the ✓ — are rounded to the same scale. `--rim` is the border
+   colour, so a state retints it. The outer shadows go. */
+.home-screen .search,.home-screen .activity-sort select,.home-screen .mobile-alerts-error,.home-screen .mobile-alert-done,.home-screen .home-needs-continue,.home-screen .cards > button.card,.home-screen .error,.home-screen .notice,.home-screen .inbox-upload,.home-screen .inbox-upload button { --rim:#383c4d; border-radius:var(--r-md); box-shadow:none; }
+.home-screen .activity-sort select,.home-screen .mobile-alert-done,.home-screen .home-needs-continue,.home-screen .inbox-upload { border-radius:var(--r-sm); }
+.home-screen .inbox-upload button { border-radius:6px; }
+.home-screen .search,.home-screen .activity-sort select { --rim:#3a3e50; border-color:var(--rim); }
+.home-screen .search { background:#171a24; }
+.home-screen .activity-sort select { background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239aa0b4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6'/%3E%3C/svg%3E") right 10px center / 12px 8px no-repeat,#171a24; }
+.home-screen .mobile-alerts-error { --rim:#6d3b46; border-color:var(--rim); background:rgba(60,30,38,.6); }
+.home-screen .cards > button.card { border-color:var(--rim); background:rgba(28,31,43,.92); }
+.home-screen .mobile-alert-done { --rim:#776db4; border-color:var(--rim); background:#24203b; }
+.home-screen .home-needs-continue { --rim:#ff8a93; border-color:var(--rim); background:#46202a; }
+.home-screen .cards > button.card.in-plan { --rim:#7b6ee0; }
+.home-screen .cards > button.card.in-goal { --rim:#4fb3c0; }
+.home-screen .cards > button.card.has-tab-color { border-left:3px solid var(--tab-color); }
 .todo-create { display:grid; grid-template-columns:1fr 120px auto; gap:8px; margin:14px 0; }
 /* Adding a column is a rare, structural act, and it now sits at the foot of the
    column list where a new column would land — drawn as a ghost so it reads as
@@ -743,66 +742,53 @@ button.mobile-alert-row { cursor:pointer; }
 .mail-mobile-folders button span { flex:1; min-width:0; }
 .mail-mobile-folders button.has-unread span { font-weight:700; color:#fff; }
 .mail-mobile-folders button.has-unread small { color:#d6d0ff; }
-/* Mail, To-do and Calendar are cut to the home screen's octagon as well, on the
-   same two rules: a bordered element is clipped and repaints its four cut
-   corners as gradient layers in `--oct-edge` (`--oct-lc`/`--oct-lw` for a
-   heavier left edge); a borderless one is only clipped. Unlike the home block
-   the layers are set as longhands, so each element keeps its own background
-   colour, and a dropdown's chevron rides along as a fifth layer (`--oct-extra`).
-   The defaults sit in `:where()` so any rule can retint or resize a piece. */
-:where(:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"]))) { --oct:10px; --oct-edge:#383c4d; }
-:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) select { --oct-extra:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239aa0b4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.6 6 6.4 11 1.6'/%3E%3C/svg%3E"); --oct-extra-at:right 12px center; --oct-extra-size:12px 8px; }
+/* Mail, To-do and Calendar are rounded to the home screen's scale as well, on
+   the same two rules: a bordered element takes `--r` and its rim colour
+   `--rim` (`--rim-l`/`--rim-lw` for a heavier left edge); a borderless one
+   only `--r`. The defaults sit in `:where()` so any rule can retint or resize
+   a piece. */
+:where(:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"]))) { --r:var(--r-md); --rim:#383c4d; }
 :is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"])) {
-  --oct-img:linear-gradient(to bottom right, var(--oct-lc, var(--oct-edge)) calc(50% + var(--oct-lw, 1px)), transparent 0),
-    linear-gradient(to bottom left, var(--oct-edge) calc(50% + 1px), transparent 0),
-    linear-gradient(to top left, var(--oct-edge) calc(50% + 1px), transparent 0),
-    linear-gradient(to top right, var(--oct-lc, var(--oct-edge)) calc(50% + var(--oct-lw, 1px)), transparent 0);
-  border-radius:0; box-shadow:none; border-color:var(--oct-edge); border-left-color:var(--oct-lc, var(--oct-edge));
-  background-image:var(--oct-img),var(--oct-extra, none);
-  background-position:top left,top right,bottom right,bottom left,var(--oct-extra-at, center);
-  background-size:var(--oct) var(--oct),var(--oct) var(--oct),var(--oct) var(--oct),var(--oct) var(--oct),var(--oct-extra-size, auto);
-  background-repeat:no-repeat; background-origin:border-box;
-  clip-path:polygon(var(--oct) 0,calc(100% - var(--oct)) 0,100% var(--oct),100% calc(100% - var(--oct)),calc(100% - var(--oct)) 100%,var(--oct) 100%,0 calc(100% - var(--oct)),0 var(--oct));
+  border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
 }
-:where(:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.notice:not(.todo-mobile-note),.error),.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div),.todo-screen .todo-column-count,.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i)) { --oct:10px; }
+:where(:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.notice:not(.todo-mobile-note),.error),.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div),.todo-screen .todo-column-count,.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i)) { --r:var(--r-md); }
 :is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.notice:not(.todo-mobile-note),.error),.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div),.todo-screen .todo-column-count,.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i) {
-  border-radius:0;
-  clip-path:polygon(var(--oct) 0,calc(100% - var(--oct)) 0,100% var(--oct),100% calc(100% - var(--oct)),calc(100% - var(--oct)) 100%,var(--oct) 100%,0 calc(100% - var(--oct)),0 var(--oct));
+  border-radius:var(--r);
 }
 /* Sizes and edges, per piece. Inputs, dropdowns and text areas keep the input
    border; a primary button its brighter one. */
-:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(input,select,textarea) { --oct:8px; --oct-edge:#3a3e50; }
-:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) .primary { --oct-edge:#8c7df4; }
-/* The clip would cut a focus outline away entirely, so focus retints the edge. */
-:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(input,select,textarea):focus { --oct-edge:#7c6cff; outline:0; }
-:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.mail-mobile-folders button,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-reply button,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div,.todo-editor :is(button,fieldset),.todo-mobile-filters .todo-inline-check,.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-warning) { --oct:8px; }
-:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.mail-mobile-account,.mail-mobile-message pre,.mail-mobile-reply,.todo-add-column) { --oct:12px; }
-.mail-mobile-row.unread { --oct-lc:#8c7df4; --oct-lw:4px; }
-.todo-screen .todo-mobile-search { --oct:10px; }
-.todo-mobile-column { --oct:10px; }
-.todo-mobile-card { --oct:7px; --oct-edge:#2a2f44; --oct-lc:var(--todo-accent, #7c6cff); --oct-lw:2px; }
-.todo-check { --oct:6px; --oct-edge:#776db4; }
-.todo-mobile-actions button,.todo-mobile-actions select { --oct:5px; }
-.todo-mobile-actions button { --oct-edge:#272c3b; }
-.todo-mobile-actions button:first-child { --oct-edge:#31364a; }
-.todo-mobile-actions select { --oct-extra-at:right 9px center; --oct-edge:#272c3b; }
-.todo-mobile-column-head > div > button { --oct:6px; --oct-edge:transparent; }
-.todo-fab { --oct:17px; }
-.todo-chip,.todo-column-count,.todo-editor .todo-tag-list button { --oct:6px; }
-.todo-chip { --oct-edge:transparent; }
-.todo-chip.due.overdue { --oct-edge:#65323d; }
-.todo-chip.due.today { --oct-edge:#66522a; }
-.todo-chip.due.soon { --oct-edge:#2f4658; }
-.todo-tag-list button { --oct-edge:#3d3860; }
-.todo-editor { --oct:14px; --oct-edge:#524a78; }
-.mobile-calendar-day { --oct:6px; --oct-edge:#303545; }
-.mobile-calendar-hour-add { --oct:6px; }
-.mobile-calendar-day.today > span { --oct:6px; }
-.mobile-calendar-event > i,.mobile-calendar-manage-row > i { --oct:3px; }
+:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(input,select,textarea) { --r:var(--r-sm); --rim:#3a3e50; }
+:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) .primary { --rim:#8c7df4; }
+/* Focus retints the rim; the field draws no outline of its own. */
+:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(input,select,textarea):focus { --rim:#7c6cff; outline:0; }
+:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.mail-mobile-folders button,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-reply button,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div,.todo-editor :is(button,fieldset),.todo-mobile-filters .todo-inline-check,.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-warning) { --r:var(--r-sm); }
+:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.mail-mobile-account,.mail-mobile-message pre,.mail-mobile-reply,.todo-add-column) { --r:var(--r-md); }
+.mail-mobile-row.unread { --rim-l:#8c7df4; --rim-lw:4px; }
+.todo-screen .todo-mobile-search { --r:var(--r-md); }
+.todo-mobile-column { --r:var(--r-md); }
+.todo-mobile-card { --r:7px; --rim:#2a2f44; --rim-l:var(--todo-accent, #7c6cff); --rim-lw:2px; }
+.todo-check { --r:6px; --rim:#776db4; }
+.todo-mobile-actions button,.todo-mobile-actions select { --r:5px; }
+.todo-mobile-actions button { --rim:#272c3b; }
+.todo-mobile-actions button:first-child { --rim:#31364a; }
+.todo-mobile-actions select { --rim:#272c3b; }
+.todo-mobile-column-head > div > button { --r:6px; --rim:transparent; }
+.todo-fab { --r:17px; }
+.todo-chip,.todo-column-count,.todo-editor .todo-tag-list button { --r:6px; }
+.todo-chip { --rim:transparent; }
+.todo-chip.due.overdue { --rim:#65323d; }
+.todo-chip.due.today { --rim:#66522a; }
+.todo-chip.due.soon { --rim:#2f4658; }
+.todo-tag-list button { --rim:#3d3860; }
+.todo-editor { --r:14px; --rim:#524a78; }
+.mobile-calendar-day { --r:6px; --rim:#303545; }
+.mobile-calendar-hour-add { --r:6px; }
+.mobile-calendar-day.today > span { --r:6px; }
+.mobile-calendar-event > i,.mobile-calendar-manage-row > i { --r:3px; }
 /* The shared `.selected` paints the picked day with `!important`, which would
    wipe the corner layers; the day repaints them the same way, in its own
    colours, and drops the outline the clip would only cut off. */
-.mobile-calendar-screen .mobile-calendar-day.selected { --oct-edge:#9c8cff; outline:0; border-color:var(--oct-edge) !important; background-color:#282248 !important; background-image:var(--oct-img) !important; background-position:top left,top right,bottom right,bottom left !important; background-size:var(--oct) var(--oct) !important; background-repeat:no-repeat !important; background-origin:border-box !important; }
+.mobile-calendar-screen .mobile-calendar-day.selected { --rim:#9c8cff; outline:0; border-color:var(--rim) !important; background-color:#282248 !important; }
 @media (max-width:480px) { .mail-mobile-row > div { display:grid; gap:3px; } .mail-mobile-pager button { padding-inline:9px; } }
 @media (max-width:360px) { .projects-row { margin-top:14px; } .mobile-calendar-day { min-height:48px; } .mobile-tab { font-size:.68rem; } }
 /* While the full-bleed terminal is up: no document scroll to lose the header
@@ -810,25 +796,39 @@ button.mobile-alert-row { cursor:pointer; }
 body.terminal-open { min-height:0; overflow:hidden; }
 .terminal-screen { height:100dvh; display:grid; grid-template-rows:auto 1fr auto; position:relative; background:#0b0d13; padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
 .terminal-screen header { padding:0 12px; gap:8px; }
+/* The Focus head: ‹ in a 44px box, the name over its caption, the view pill;
+   a hairline under it, as the project screen's. */
+.terminal-screen > header { gap:4px; padding:0 8px 0 2px; border-bottom:1px solid var(--hairline); }
+.terminal-screen > header > .back,.project-header > .back { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; }
+.back > .app-icon { width:22px; height:22px; }
+.back > .app-icon g { stroke-width:2.2; }
+.terminal-screen .terminal-title h1 { font-size:var(--fs-headline); font-weight:650; }
+/* The caption under an agent tab's name: the Status sheet in one line, and
+   the way into it. */
 .terminal-title { display:grid; min-width:0; flex:1; gap:1px; }
 .terminal-title h1,.terminal-title small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* Tabby's model dropdown under its CLI's: a caption that stays on a phone,
    where the other titles' captions go. */
 .terminal-title .tabby-model { justify-self:start; color:var(--ink-muted); font-size:var(--fs-caption); }
-.terminal-view-switch { display:flex; gap:3px; padding:3px; border:1px solid #34384a; border-radius:10px; background:#151822; }
-.terminal-view-switch button { padding:6px 9px; border:0; border-radius:7px; background:transparent; font-size:.76rem; }
+/* A segment: a dark track, the picked half lit. In the Focus head it is one
+   pill, the view's name over its menu. */
+.terminal-view-switch { display:flex; gap:2px; padding:2px; border:0; border-radius:0; background:#0b0d13; }
+.terminal-view-switch button { min-height:30px; padding:0 12px; border:0; border-radius:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-foot); font-weight:600; }
+.terminal-view-switch button.selected { color:#e7e9f2; }
+.terminal-screen > header .terminal-view-switch { padding:0; background:transparent; }
+.terminal-view-switch .view-pill { display:inline-flex; align-items:center; height:34px; padding:0 10px 0 12px; background:var(--surface-group); color:#e7e9f2; }
 /* An agent tab's Focus opens a list once it is up: where Focus reads from. */
 .view-caret { display:inline-block; width:5px; height:5px; margin:0 1px 2px 6px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); opacity:.75; }
 .focus-menu-backdrop { position:fixed; inset:0; z-index:12; }
-.focus-menu { position:absolute; top:calc(env(safe-area-inset-top) + 50px); right:10px; display:grid; gap:3px; width:min(300px,calc(100vw - 20px)); padding:6px; border:1px solid #383c4d; border-radius:14px; background:#171a24; color:#e7e9f2; box-shadow:0 12px 28px rgba(4,5,9,.6); }
-.focus-menu button { display:flex; align-items:center; gap:12px; width:100%; padding:11px 12px; border:0; border-radius:10px; background:#1e2230; text-align:left; }
-.focus-menu button[aria-checked="true"] { color:#8fb6ff; background:#1c2336; }
+.focus-menu { position:absolute; top:calc(env(safe-area-inset-top) + 50px); right:10px; display:grid; gap:2px; width:min(300px,calc(100vw - 20px)); padding:6px; border:1px solid var(--edge); background-color:var(--surface-group); color:#e7e9f2; }
+.focus-menu button { display:flex; align-items:center; gap:12px; width:100%; padding:11px 12px; border:0; border-radius:0; background:var(--surface-raised); text-align:left; }
+.focus-menu button[aria-checked="true"] { color:#d7d3f5; background:#2e2b48; }
 .focus-menu button.unavailable { opacity:.6; }
-.focus-menu-rule { margin:3px 4px; border:0; border-top:1px solid #2c3040; }
+.focus-menu-rule { margin:3px 4px; border:0; border-top:1px solid var(--hairline); }
 .focus-menu button > span { display:grid; flex:1; gap:3px; min-width:0; }
 .focus-menu strong { font-weight:600; }
-.focus-menu em { margin-left:6px; color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
-.focus-menu small { color:#98a0b4; font-size:.8rem; overflow-wrap:anywhere; }
+.focus-menu em { margin-left:6px; color:#8fb8ff; font-size:var(--fs-micro); font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+.focus-menu small { color:var(--ink-muted); font-size:var(--fs-foot); overflow-wrap:anywhere; }
 .focus-menu svg { width:19px; height:19px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .terminal-body { position:relative; min-height:0; overflow:hidden; }
 /* The Diffs view (components/ChatChanges): over the chat or the terminal,
@@ -839,21 +839,26 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .chat-changes-title strong { font-size:.85rem; }
 .chat-changes-title em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
 .chat-changes-title small { color:var(--ink-muted); font-size:.72rem; }
-.chat-changes-head select { flex:0 1 46%; width:auto; padding:6px 30px 6px 9px; font-size:.78rem; background-position:right 10px center; }
 .chat-changes-close { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; background:transparent; }
 .chat-changes-close svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; }
 .chat-changes-scope { display:block; margin:0 0 8px; color:var(--ink-muted); font-size:.75rem; }
+/* A row per changed file over the changes; a long list scrolls on its own, so
+   the changes stay in reach. */
+.chat-changes-files { display:grid; gap:2px; max-height:36vh; margin:0 0 8px; padding:0; overflow-y:auto; overscroll-behavior:contain; list-style:none; }
+.chat-changes-files li { display:flex; align-items:stretch; gap:2px; min-width:0; }
+.chat-changes-files li.picked { background:#1d2a44; }
+.chat-changes-open { flex:0 0 auto; padding:0 12px; border:0; border-radius:0; background:transparent; color:#8fb8ff; font-size:.8rem; font-weight:600; }
 .chat-changes-list { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
-.chat-change { min-width:0; border:1px solid #2c3a55; border-radius:10px; background:#151b28; overflow:hidden; }
-.chat-change.fresh { border-color:#6c5ce7; }
-.chat-change-head { display:grid; gap:3px; width:100%; padding:9px 11px; border:0; border-radius:0; background:transparent; color:#dbe4f6; text-align:left; }
+.chat-change { --rim:#2c3a55; min-width:0; border:1px solid #2c3a55; background-color:#151b28; overflow:hidden; }
+.chat-change.fresh { --rim:#6c5ce7; }
+.chat-change-head,.chat-changes-file { display:grid; gap:3px; width:100%; min-width:0; padding:9px 11px; border:0; border-radius:0; background:transparent; color:#dbe4f6; text-align:left; }
 .chat-change-path { display:flex; gap:6px; align-items:baseline; min-width:0; }
 .chat-change-path em { flex:0 0 auto; color:#8fb8ff; font-size:.64rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
 .chat-change-path strong { min-width:0; font-size:.82rem; font-weight:600; overflow-wrap:anywhere; }
-.chat-change-head small { color:var(--ink-muted); font-size:.72rem; }
-.chat-change-head small i { color:#a99cf0; font-style:normal; }
-.chat-change-head .add, .chat-diff-line.add span { color:#56d364; }
-.chat-change-head .del, .chat-diff-line.del span { color:#f8817a; }
+.chat-change-head small,.chat-changes-file small { color:var(--ink-muted); font-size:.72rem; }
+.chat-change-head small i,.chat-changes-file small i { color:#a99cf0; font-style:normal; }
+.chat-change-head .add, .chat-changes-file .add, .chat-diff-line.add span { color:#56d364; }
+.chat-change-head .del, .chat-changes-file .del, .chat-diff-line.del span { color:#f8817a; }
 .chat-change-diff { display:grid; padding:0 0 6px; border-top:1px solid #262a3a; font:400 .75rem/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-x:auto; }
 .chat-diff-line { display:flex; min-width:0; }
 .chat-diff-line span { flex:0 0 auto; width:4ch; padding-right:6px; color:#5d6479; text-align:right; -webkit-user-select:none; user-select:none; }
@@ -909,13 +914,13 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .terminal-wide-hint::after { right:0; background:linear-gradient(90deg,rgba(11,13,19,0),rgba(11,13,19,.94)); }
 .terminal-wide-hint.wide-left::before,.terminal-wide-hint.wide-right::after { opacity:1; }
 .terminal-body > .terminal.focus-source ~ .terminal-wide-hint { display:none; }
-.alt-screen-notice { position:absolute; inset:0; display:grid; align-content:center; justify-items:center; gap:9px; padding:26px; text-align:center; background:linear-gradient(180deg,#10131b,#0b0d13); }
+.alt-screen-notice { position:absolute; inset:0; display:grid; align-content:center; justify-items:center; gap:9px; padding:26px; text-align:center; background:#0b0d13; }
 .alt-screen-notice strong { color:#e7e9f2; font-size:1rem; }
 .alt-screen-notice span { max-width:30ch; color:#9298aa; font-size:.85rem; line-height:1.5; }
 .alt-screen-notice button { margin-top:5px; }
-.readable-output { position:absolute; inset:0; overflow:auto; padding:12px 14px 46px; background:linear-gradient(180deg,#10131b,#0b0d13); overscroll-behavior:contain; scrollbar-color:#454b62 #10131b; scrollbar-width:thin; -webkit-overflow-scrolling:touch; }
+.readable-output { position:absolute; inset:0; overflow:auto; padding:12px 14px 46px; background:#0b0d13; overscroll-behavior:contain; scrollbar-color:#454b62 #0b0d13; scrollbar-width:thin; -webkit-overflow-scrolling:touch; }
 .readable-output::-webkit-scrollbar { width:7px; }
-.readable-output::-webkit-scrollbar-track { background:#10131b; }
+.readable-output::-webkit-scrollbar-track { background:#0b0d13; }
 .readable-output::-webkit-scrollbar-thumb { border-radius:0; background:#454b62; }
 /* The session text itself. It stays monospaced — a terminal's alignment is
    meaning — but soft-wraps at the phone's width with a hanging indent, so a
@@ -950,19 +955,24 @@ body.terminal-open { min-height:0; overflow:hidden; }
    words. The stored session is prose from a file, not a screen, so it reads
    in the UI face; an answer keeps its line breaks and wraps at the phone's
    edge. An answer is a bubble on the left, the mirror of the prompt's; tool
-   output and raw screen rows (`.agent` without `.answer`) stay flat. */
-.readable-turn.agent.answer { width:auto; max-width:92%; padding:8px 12px; border-radius:16px 16px 16px 4px; background:#1d2030; color:#e3e6f2; }
+   output and raw screen rows (`.agent` without `.answer`) stay flat. An
+   answer is flat too: no bubble, the chat's full width, its time under the
+   text — only the prompt, which is the reader's own, keeps one. */
+.readable-turn.agent.answer { width:100%; max-width:100%; padding:0; border-radius:0; background:transparent; color:#e3e6f2; }
+.readable-turn.agent.answer .transcript-time { margin:4px 0 0; text-align:left; }
 /* A message carries no buttons: what can be done with it — copy it, hear it
-   read — is a click-hold on the bubble away (`useMessageMenu`), so the chat
-   spends its width on words. The system's own long-press callout would fight
-   that press, so it is off over a bubble. */
-.readable-turn.user,.readable-turn.agent.answer { position:relative; -webkit-touch-callout:none; }
+   read — is a tap on the bubble away (`useMessageMenu`), so the chat spends
+   its width on words. A hold is the phone's own: it selects text right in the
+   bubble, with the system's handles and callout. */
+.readable-turn.user,.readable-turn.agent.answer { position:relative; }
 .readable-turn.agent.answer .readable-line { padding-left:0; text-indent:0; }
 /* A slash command (`CommandDivider`) steers the CLI rather than talking to
    the agent, so it is no bubble: a hairline across the chat with the command
    centred on it, in the prompt's violet. */
-.readable-command { display:flex; align-items:center; gap:10px; width:100%; margin:6px 0; color:#a99cf0; font:500 .8rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; -webkit-touch-callout:none; }
+.readable-command { display:flex; align-items:center; gap:10px; width:100%; margin:6px 0; color:#a99cf0; font:500 .8rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
 .readable-command::before,.readable-command::after { content:""; flex:1 1 0; min-width:16px; border-top:1px solid #3a3466; }
+.readable-command.interrupted { color:#ff8a93; }
+.readable-command.interrupted::before,.readable-command.interrupted::after { border-top-color:#6d3b46; }
 .readable-command-text { flex:0 1 auto; min-width:0; max-width:80%; text-align:center; overflow-wrap:anywhere; }
 .readable-lines.transcript { font:400 .9rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif; }
 /* The stored session holds one bubble per message the agent wrote, so the
@@ -975,12 +985,11 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* …and is outlined in the rule's violet, so it reads as that command's
    text rather than a prompt of its own. */
 .readable-turn.user.command-args { border:1px solid #7a6ad8; }
-.readable-lines.transcript .readable-turn.agent.answer { border:1px solid #2a2e42; }
 /* A plan put up for approval (Claude's `ExitPlanMode`) is the agent's
    answer too, but the one waiting on a yes: full width, headed "Plan" and
    outlined in plan mode's violet, so it stands apart from the answers
    around it. */
-.readable-lines.transcript .readable-turn.agent.answer.plan { width:100%; max-width:100%; border-color:#7a6ad8; background:#1f1b36; box-shadow:inset 3px 0 0 #8c7df4; }
+.readable-lines.transcript .readable-turn.agent.answer.plan { width:100%; max-width:100%; padding:8px 12px; border:1px solid #7a6ad8; border-radius:10px 10px 10px 0; background:#1f1b36; box-shadow:inset 3px 0 0 #8c7df4; }
 .transcript-plan-head { display:block; margin-bottom:6px; color:#b6aaf7; font:600 .72rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; letter-spacing:.06em; text-transform:uppercase; }
 .transcript-plan-head em { font-style:normal; opacity:.75; text-transform:none; letter-spacing:0; }
 .transcript-text { margin:0; min-width:0; white-space:pre-wrap; overflow-wrap:break-word; }
@@ -1010,7 +1019,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-md blockquote { margin:0 0 .6em; padding:2px 0 2px 10px; border-left:3px solid #4a4f68; color:#b9bdcc; }
 .transcript-md hr { margin:.8em 0; border:0; border-top:1px solid #34384a; }
 .transcript-md .md-link { color:#b7c9ff; }
-.transcript-md .md-link[data-href] { text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
+.transcript-md .md-link[data-href], .transcript-md [data-path-link] { color:#b7c9ff; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
 .transcript-md .md-math { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85em; }
 .transcript-md .md-table { display:block; max-width:100%; margin:0 0 .6em; overflow-x:auto; border-collapse:collapse; font-size:.82rem; -webkit-overflow-scrolling:touch; }
 .transcript-md .md-table th,.transcript-md .md-table td { padding:4px 8px; border:1px solid #34384a; text-align:left; vertical-align:top; }
@@ -1035,14 +1044,14 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-time { display:block; margin:2px -4px -3px 0; text-align:right; color:#8d93a8; font:400 .68rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif; font-variant-numeric:tabular-nums; }
 .readable-turn.user .transcript-time { color:#a69fd4; }
 .transcript-day { display:flex; justify-content:center; width:100%; margin:4px 0; }
-.transcript-day span { padding:2px 10px; border-radius:10px; background:#1a1d2b; color:#9aa1b8; font:500 .72rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif; }
+.transcript-day span { padding:2px 10px; background:var(--surface-group); color:var(--ink-muted); font:500 var(--fs-micro)/1.5 Inter,ui-sans-serif,system-ui,sans-serif; }
 .transcript-day em { font-style:normal; opacity:.8; }
 .readable-lines.transcript > .transcript-day + .readable-turn.user { margin-top:0; }
 /* A subagent the agent spawned (`SubagentCard`): on the agent's side, but a
    card rather than a bubble — the agent did not say it — in the working
    row's blue, with a chevron when it opens its own conversation. */
-.transcript-agent { justify-self:start; display:flex; align-items:center; gap:10px; max-width:92%; min-width:0; padding:8px 10px; border:1px solid #2c3a55; border-radius:12px; background:#131926; color:#dbe4f6; font:inherit; text-align:left; }
-.transcript-agent:not(:disabled):active { background:#1a2233; }
+.transcript-agent { --rim:#2c3a55; justify-self:start; display:flex; align-items:center; gap:10px; max-width:92%; min-width:0; padding:8px 10px; border:1px solid #2c3a55; background-color:#131926; color:#dbe4f6; font:inherit; text-align:left; }
+.transcript-agent:not(:disabled):active { background-color:#1a2233; }
 .transcript-agent:disabled { opacity:.7; }
 .transcript-agent svg { flex:0 0 auto; width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .transcript-agent-icon { color:#8fb8ff; }
@@ -1059,8 +1068,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* Over a subagent's conversation: back up, its task, and ‹ n of m › through
    the subagents beside it. Sticks to the top of the reading view, over its
    padding, so the way back never scrolls away. */
-.subagent-bar { position:sticky; top:-12px; z-index:2; display:flex; align-items:center; gap:8px; margin:-12px -14px 12px; padding:8px 10px; border-bottom:1px solid #262a3a; background:#10131b; }
-.subagent-bar button { display:grid; place-items:center; width:32px; height:32px; padding:0; border:1px solid #34384a; border-radius:9px; background:#151823; color:#c8cdda; }
+.subagent-bar { position:sticky; top:-12px; z-index:2; display:flex; align-items:center; gap:8px; margin:-12px -14px 12px; padding:8px 10px; border-bottom:1px solid var(--hairline); background:#0b0d13; }
+.subagent-bar button { --rim:#34384a; display:grid; place-items:center; width:32px; height:32px; padding:0; border:1px solid #34384a; background-color:#151823; color:#c8cdda; }
 .subagent-bar button:disabled { opacity:.35; }
 .subagent-bar svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .subagent-title { display:grid; flex:1 1 auto; min-width:0; }
@@ -1072,7 +1081,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* Keep the session's subagents within reach even after their cards scroll away. */
 /* The strip over the chat: the subagent index and the sent-files index side by
    side, one list open at a time. */
-.chat-index { position:sticky; top:-12px; z-index:2; display:flex; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid #262a3a; background:#10131b; }
+.chat-index { position:sticky; top:-12px; z-index:2; display:flex; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid var(--hairline); background:#0b0d13; }
 /* Not the global `nav` row: the chip stacks over its list at full width. */
 .chat-index > nav { display:block; flex:1 1 0; min-width:0; margin:0; }
 /* An open list takes the strip's full width; the shut chip moves to a line of
@@ -1081,13 +1090,13 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .chat-index > nav.open { flex:1 0 100%; }
 .chat-index:has(> nav.open) > nav:not(.open) { order:-1; }
 .chat-index .subagent-index-toggle span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.subagent-index-toggle { display:flex; align-items:center; gap:8px; width:100%; padding:5px 7px; border:1px solid #343f58; border-radius:9px; background:#171e2d; color:#dbe4f6; font:600 .78rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; }
+.subagent-index-toggle { --rim:#343f58; display:flex; align-items:center; gap:8px; width:100%; padding:5px 7px; border:1px solid #343f58; background-color:#171e2d; color:#dbe4f6; font:600 .78rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; }
 .subagent-index-toggle span { flex:1; }
 .subagent-index-toggle em { color:#8fb8ff; font-size:.62rem; font-style:normal; text-transform:uppercase; }
 .subagent-index-toggle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .subagent-index-toggle svg.expanded { transform:rotate(180deg); }
 .subagent-index-list { display:grid; gap:4px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
-.subagent-index-list button, .git-rows > li { display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
+.subagent-index-list button, .git-rows > li { --rim:#2c3a55; display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; background-color:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
 .subagent-index-list button:disabled { opacity:.6; }
 .subagent-index-list small, .git-rows > li > small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
 .subagent-index-list span, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
@@ -1107,22 +1116,39 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .sent-index-name, .sent-index-list small { overflow:hidden; padding:0 2px; text-overflow:ellipsis; white-space:nowrap; }
 .sent-index-name { font-size:.74rem; font-weight:600; }
 .sent-index-list small { color:#95a6c8; font-size:.64rem; }
+.sent-index-more { padding:0 2px; color:#95a6c8; font-size:.68rem; }
+.sent-index-head.changed { color:#8fd0a8; }
+.sent-index-head.named { color:#c9b37e; }
 .git-sheet { max-height:92dvh; }
 .git-body { display:grid; gap:6px; overflow:auto; }
 .git-head { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; padding:2px 6px; color:#9da3b6; font-size:.84rem; }
-.git-head strong { padding:3px 9px; border-radius:999px; background:#1c2336; color:#8fb6ff; font-size:.8rem; overflow-wrap:anywhere; }
+.git-head strong { padding:3px 9px; background:#1c2336; color:#8fb6ff; font-size:.8rem; overflow-wrap:anywhere; }
 .git-section { margin:6px 0 0; padding:0 6px; color:#9da3b6; font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .git-rows { display:grid; gap:4px; margin:0; padding:0; list-style:none; }
-.git-rows > li.current { border-color:#8fb6ff; background:#1c2336; }
+.git-rows > li.current { --rim:#8fb6ff; background-color:#1c2336; }
 .git-rows > li.git-more > span { color:#9da3b6; text-align:center; }
 .git-rows .git-quiet { color:#9da3b6; font-style:normal; }
 .git-rows .git-mark { margin-left:6px; }
+.diverged-bulk { display:grid; gap:6px; padding:0 2px; }
+.diverged-exclude { display:flex; align-items:center; gap:8px; min-height:36px; color:#9da3b6; font-size:.8rem; }
+.diverged-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.diverged-actions button { --rim:#2c3a55; display:inline-flex; align-items:center; gap:5px; min-height:38px; padding:0 10px; border:1px solid #2c3a55; background-color:#10131b; color:#dbe4f6; font:inherit; font-size:.76rem; }
+.diverged-actions button.danger { --rim:#6b2f38; color:#ffb4c0; }
+.diverged-actions button:disabled { opacity:.45; }
+.diverged-row { gap:6px !important; }
+.diverged-name { display:block; width:100%; padding:0; border:0; background:none; color:inherit; font:inherit; font-size:.8rem; line-height:1.35; text-align:left; overflow-wrap:anywhere; }
+.git-rows > li.diverged-row > small.diverged-cue { font-size:.68rem; letter-spacing:.03em; text-transform:none; color:#9da3b6; }
+.git-rows > li.diverged-row > small.diverged-cue.remote { color:#f0b35a; }
+.git-rows > li.diverged-row > small.diverged-cue.local { color:#56d364; }
+.diverged-when, .git-rows > li.diverged-row > small.diverged-when { color:#9da3b6; font-size:.7rem; letter-spacing:0; text-transform:none; white-space:pre-line; }
+.diverged-ask { display:grid; gap:4px; max-height:44dvh; overflow:auto; }
+.diverged-ask ul { margin:0; padding:0 6px 4px 22px; color:#dbe4f6; font-size:.8rem; overflow-wrap:anywhere; }
 .git-remote > summary { cursor:pointer; }
 .git-remote > .git-rows { padding-top:6px; }
 .readable-empty button { margin-top:6px; }
 /* What the screen is drawing right now, under the stored session: shown only
    while it holds a choice the session is waiting on. */
-.transcript-screen { display:grid; gap:11px; padding:10px 10px 12px; border:1px solid #383c4d; border-radius:20px; background:#171a24; }
+.transcript-screen { display:grid; gap:11px; padding:10px 10px 12px; border:1px solid var(--edge); background-color:var(--surface-group); }
 /* Its own label only: a bare `small` also caught every option's note in the
    list below and set it in tiny blue capitals. */
 .transcript-screen > small { padding:0 4px; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; letter-spacing:.05em; }
@@ -1143,6 +1169,10 @@ body.terminal-open { min-height:0; overflow:hidden; }
    does not shuffle the row on every repaint. */
 .transcript-working-facts { min-width:0; margin-left:auto; overflow:hidden; color:#787f93; font-size:.72rem; font-variant-numeric:tabular-nums; white-space:nowrap; text-overflow:ellipsis; }
 .transcript-working-facts em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+/* The working row's Stop, after the facts: the desktop Chat's pill. */
+.transcript-working-stop { --rim:#3a3f52; flex:none; margin-left:auto; min-height:28px; padding:2px 12px; border:1px solid #3a3f52; background-color:transparent; color:#c8cde0; font:500 .72rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; }
+.transcript-working-facts + .transcript-working-stop { margin-left:0; }
+.transcript-working-stop em { color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
 /* A running shell, under the working row: its `$` where the dots are, and the
    agent's few words on it cut to one line. */
 .transcript-shell-mark { width:15px; text-align:center; color:#8fb8ff; font:600 .78rem/1 ui-monospace,SFMono-Regular,Menlo,monospace; }
@@ -1172,7 +1202,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .readable-pinned-prompt em { flex:0 0 auto; color:#a99cf0; font-size:.68rem; font-style:normal; }
 .readable-jump { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); padding:8px 14px; border:1px solid #4c5165; border-radius:999px; background:rgba(23,26,36,.94); color:#e7e9f2; font-size:.78rem; box-shadow:0 6px 18px rgba(0,0,0,.35); }
 .terminal-controls { min-height:0; overflow:auto; }
-.last-sent { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px; align-items:start; margin:6px 7px 0; padding:8px 10px; border-radius:9px; background:#211d35; color:#dcd6ff; font-size:.78rem; }
+.last-sent { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px; align-items:start; margin:6px 8px 0; padding:8px 10px; background:#211d35; color:#dcd6ff; font-size:.78rem; }
 .last-sent span { color:#9e91e9; font-weight:750; text-transform:uppercase; letter-spacing:.06em; }
 .last-sent p { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
 /* Scrolls sideways rather than clipping: an agent tab's row leads with its
@@ -1196,7 +1226,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .fact-action:active { background:rgba(255,255,255,.08); }
 .fact-action:disabled { color:#8b90a5; opacity:.6; }
 .fact-action-plan { box-shadow:inset 0 0 0 1px #8c7df4; background:rgba(120,104,217,.28); color:#fff; }
-.fact-action-label { min-width:0; overflow:hidden; text-overflow:ellipsis; text-decoration:underline dotted rgba(185,190,208,.45); text-underline-offset:3px; }
+.fact-action-label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 /* The same lamp the tab row shows, so the state reads without opening the
    sheet. `idle` is dim rather than absent: a missing lamp reads as broken. */
 .fact-lamp { width:7px; height:7px; flex:0 0 auto; border-radius:50%; background:#5a6178; }
@@ -1204,9 +1234,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .fact-lamp.question { background:#ffd36b; box-shadow:0 0 6px #ffd36b; }
 .fact-lamp.done { background:#91e6a9; }
 .fact-lamp.interrupted { background:#ff8a93; }
-.prompt-composer { display:flex; flex-direction:column; gap:2px; margin:7px 7px 2px; padding:6px 8px 8px 12px; border:1px solid #454a60; border-radius:16px; background:#171a24; box-shadow:0 6px 20px rgba(0,0,0,.18); }
-.prompt-composer:focus-within { border-color:#8c7df4; box-shadow:0 0 0 2px rgba(120,104,217,.4),0 6px 20px rgba(0,0,0,.18); }
-.prompt-composer textarea { width:100%; min-height:42px; max-height:min(200px,32vh); resize:none; border:0; padding:8px 0; appearance:none; -webkit-appearance:none; background-color:#171a24 !important; color:#fff !important; -webkit-text-fill-color:#fff; caret-color:#fff; line-height:1.35; }
+.prompt-composer { --rim:var(--edge); display:flex; flex-direction:column; gap:4px; margin:4px 8px 6px; padding:8px 8px 8px 12px; border:1px solid var(--edge); background-color:var(--surface-group); }
+.prompt-composer:focus-within { --rim:#7c6cff; }
+.prompt-composer textarea { width:100%; min-height:42px; max-height:min(200px,32vh); resize:none; border:0; padding:8px 0; appearance:none; -webkit-appearance:none; background-color:var(--surface-group) !important; color:#fff !important; -webkit-text-fill-color:#fff; caret-color:#fff; font-size:var(--fs-body); line-height:1.4; }
 .prompt-composer textarea:focus { outline:0; }
 /* A pen writes here (`penWriting.ts`): about four lines to handwrite in, as
    the question box gives it; a longer draft still grows to the max-height. */
@@ -1215,32 +1245,31 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .composer-bar { display:flex; align-items:center; gap:6px; }
 .composer-bar svg,.composer-dictate svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
 .composer-dictate,.composer-bar .send-icon { display:grid; place-items:center; width:40px; min-width:40px; height:40px; padding:0; border:0; border-radius:10px; }
-.composer-add { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:#252a3a; color:#c8cdda; }
+.composer-add { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:0; background:var(--surface-raised); color:#c8cdda; }
 /* The ＋ turns into an ✕ while its tray is up, as messengers do. */
 .composer-add svg { transition:transform .15s ease-out; }
 .composer-add.open svg { transform:rotate(45deg); }
-/* Send is a round button, as messengers draw it. */
-.composer-bar .send-icon { border-radius:50%; }
+/* Send is the bar's one accent: a cut-corner square. */
+.composer-bar .send-icon { border-radius:0; }
 .composer-spacer { flex:1 0 0; }
 /* Folds the key row under the composer in and out; lit while it shows. */
-.composer-keys { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:transparent; color:#c8cdda; }
+.composer-keys { display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:0; background:transparent; color:#c8cdda; }
 .composer-keys.open { color:#8c7df4; }
 .keys-untested { align-self:center; flex:0 0 auto; }
-.composer-chips { display:flex; flex:1 1 0; min-width:0; align-items:center; justify-content:space-evenly; }
-/* Plan / Goal: lead the draft with `/plan` or `/goal`; lit while it does.
-   Clear, right of them, sends `/clear` at once. */
-.composer-prefix { flex:0 0 auto; height:30px; padding:0 11px; border:1px solid #3a3f55; border-radius:15px; background:transparent; color:#c8cdda; font:inherit; font-size:.8rem; }
-.composer-prefix.active { border-color:#8c7df4; background:rgba(120,104,217,.28); color:#fff; }
+/* Plan | Goal, one segment: lead the draft with `/plan` or `/goal`; the
+   half that does is lit. */
+.composer-segment { display:inline-flex; flex:0 0 auto; gap:2px; padding:2px; background:#0b0d13; }
+.composer-prefix { flex:0 0 auto; height:28px; padding:0 11px; border:0; border-radius:0; background:transparent; color:#c8cdda; font:inherit; font-size:var(--fs-foot); font-weight:600; }
+.composer-prefix.active { background-color:rgba(120,104,217,.32); color:#fff; }
 .composer-prefix:disabled { opacity:.5; }
-/* The Undo chip while the cleared conversation comes back: dots, not dimmed. */
-.composer-prefix.composer-undoing { display:inline-flex; align-items:center; gap:6px; border-color:#8fb8ff; color:#d9dce7; }
-.composer-prefix.composer-undoing:disabled { opacity:1; }
-/* Commit: an icon chip, so a fourth chip still fits a narrow phone. */
-.composer-prefix.composer-commit { display:grid; place-items:center; width:30px; padding:0; }
-.composer-bar .composer-commit svg { width:17px; height:17px; }
-/* What this chat changed and has not committed, on the chip's corner. */
-.composer-prefix.composer-commit { position:relative; }
-.composer-commit-count { position:absolute; top:-6px; right:-7px; min-width:17px; height:17px; padding:0 4px; border-radius:9px; background:#d29922; color:#14161f; font-size:.66rem; font-weight:700; line-height:17px; text-align:center; font-variant-numeric:tabular-nums; pointer-events:none; }
+/* Clear (Undo right after) and Commit: icon buttons, their words kept for a
+   screen reader (`.visually-hidden`). */
+.composer-tool { position:relative; display:grid; place-items:center; flex:0 0 auto; width:36px; height:36px; padding:0; border:0; border-radius:0; background:transparent; color:#c8cdda; }
+.composer-tool:disabled { opacity:.5; }
+.composer-tool.composer-undoing:disabled { opacity:1; color:#8fb8ff; }
+.composer-tool > .app-icon,.composer-bar .composer-commit svg { width:20px; height:20px; }
+/* What this chat changed and has not committed, on the button's corner. */
+.composer-commit-count { position:absolute; top:-2px; right:-3px; min-width:17px; height:17px; padding:0 4px; background:#d29922; color:#14161f; font-size:var(--fs-micro); font-weight:700; line-height:17px; text-align:center; font-variant-numeric:tabular-nums; pointer-events:none; }
 .commit-files { display:grid; gap:4px; }
 .commit-files .git-section { margin:0; }
 .commit-files code { font-size:.8rem; overflow-wrap:anywhere; }
@@ -1251,7 +1280,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
    deleted a character at a time — and the mic, right above Send. */
 .composer-field { display:flex; align-items:flex-start; gap:4px; }
 .composer-field textarea { flex:1 1 auto; min-width:0; }
-.composer-clear { display:grid; place-items:center; flex:0 0 auto; width:32px; height:32px; margin-top:5px; padding:0; border:0; border-radius:50%; background:#2a2e3e; color:#c8cdda; }
+.composer-clear { display:grid; place-items:center; flex:0 0 auto; width:32px; height:32px; margin-top:5px; padding:0; border:0; border-radius:0; background:var(--surface-raised); color:#c8cdda; }
 .composer-clear svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 /* The `/` menu: the slash commands that continue a draft, drawn inside the
    composer above the field because the CLI's own menu only ever opens in the
@@ -1259,19 +1288,19 @@ body.terminal-open { min-height:0; overflow:hidden; }
    so a long list scrolls rather than pushing the field off the screen. */
 /* Fixed, not max-height: it sits on the bottom-docked composer, so a list that
    narrowed with each typed letter moved its head up and down. */
-.slash-menu { display:flex; flex-direction:column; flex:0 0 auto; height:min(40vh,260px); overflow-y:auto; overscroll-behavior:contain; margin:0 -4px 4px -8px; padding-bottom:4px; border-bottom:1px solid #2b2f3f; }
-.slash-menu-head { padding:2px 8px 4px; color:#767a8b; font-size:.7rem; letter-spacing:.06em; text-transform:uppercase; }
+.slash-menu { display:flex; flex-direction:column; flex:0 0 auto; height:min(40vh,260px); overflow-y:auto; overscroll-behavior:contain; margin:0 -4px 4px -8px; padding-bottom:4px; border-bottom:1px solid var(--hairline); }
+.slash-menu-head { padding:2px 8px 4px; color:var(--ink-muted); font-size:var(--fs-caption); letter-spacing:.06em; text-transform:uppercase; }
 .slash-menu-head em { font-style:normal; color:#ffd36b; letter-spacing:0; text-transform:none; }
 .slash-row { display:flex; align-items:center; gap:4px; }
-.slash-pick { flex:1 1 auto; min-width:0; display:flex; align-items:baseline; gap:8px; padding:8px; border:0; border-radius:9px; background:transparent; color:#e7e9f2; text-align:left; }
-.slash-pick:active { background:#262a3a; }
+.slash-pick { flex:1 1 auto; min-width:0; display:flex; align-items:baseline; gap:8px; padding:8px; border:0; border-radius:0; background:transparent; color:#e7e9f2; text-align:left; }
+.slash-pick:active { background:var(--surface-raised); }
 .slash-pick strong { flex:0 0 auto; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.86rem; font-weight:600; color:#dcd6ff; }
 .slash-pick small { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#9498aa; font-size:.76rem; }
 .slash-row.used .slash-pick small { color:#b3a9f5; }
 /* Claude's one suggestion: the `/` menu's look, as tall as its text, which wraps. */
 .prompt-suggestion { height:auto; max-height:min(30vh,180px); }
 .prompt-suggestion .slash-pick strong { max-width:none; white-space:normal; overflow-wrap:anywhere; font-family:inherit; font-weight:500; }
-.slash-forget { flex:0 0 auto; width:32px; height:32px; padding:0; border:0; border-radius:50%; background:transparent; color:#767a8b; }
+.slash-forget { flex:0 0 auto; width:32px; height:32px; padding:0; border:0; border-radius:0; background:transparent; color:#767a8b; }
 .composer-dictate { color:#dcd6ff; background:transparent; }
 .composer-dictate.listening { color:#fff; background:#7a3151; box-shadow:0 0 0 2px rgba(227,107,154,.22); }
 .composer-dictate.listening svg rect { fill:currentColor; stroke:none; }
@@ -1286,20 +1315,29 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .keys button { flex:0 0 auto; min-width:58px; padding:10px 8px; }
 .keys button:disabled { opacity:.42; }
 .keys button.selected { background:#8c7df4; color:#0b0d13; }
-.voice-feedback { margin:6px 6px 0; padding:9px 11px; border-radius:9px; background:#29253d; color:#e8e3ff; font-size:.86rem; overflow-wrap:anywhere; }
+.voice-feedback { margin:6px 8px 0; padding:9px 11px; background:#29253d; color:#e8e3ff; font-size:.86rem; overflow-wrap:anywhere; }
 .voice-feedback.error { background:#3b2027; color:#ffb4c0; }
 .voice-feedback em { margin-left:6px; color:#8fb8ff; font-size:.6rem; font-style:normal; text-transform:uppercase; letter-spacing:.05em; }
+/* Hands-free's line is the large tap target that cancels the send window or
+   stops the voice reading the answer. */
+button.voice-feedback.hands-free { display:block; box-sizing:border-box; width:calc(100% - 16px); min-height:52px; border:0; text-align:left; font:inherit; font-size:.92rem; cursor:pointer; }
 .danger { color:#ff9aa6; }
 /* The facts row buttons' bottom sheet: a phone list in place of walking a TUI
    dialog with the arrow keys. */
-.sheet-backdrop { position:fixed; inset:0; z-index:12; display:flex; align-items:flex-end; background:rgba(4,5,9,.7); }
+.sheet-backdrop { position:fixed; inset:0; z-index:12; display:flex; align-items:flex-end; background:rgba(4,5,9,.7); animation:sheet-backdrop-in .18s ease-out; }
 /* A sheet a viewer over the chat opened (the markup view's model chip): above the viewer's 13. */
 .sheet-lift { position:relative; z-index:14; }
-.option-sheet { display:grid; gap:11px; width:100%; max-height:82dvh; padding:8px 10px calc(16px + env(safe-area-inset-bottom)); border-top:1px solid #383c4d; border-radius:20px 20px 0 0; background:#171a24; overflow:auto; overscroll-behavior:contain; }
+/* A sheet: the group surface, its top corners rounded to `--r-sheet` (the
+   bottom is the screen's). It slides up; transform and opacity only. */
+.option-sheet { display:grid; gap:10px; width:100%; max-height:82dvh; padding:8px 12px calc(16px + env(safe-area-inset-bottom)); border:1px solid var(--edge); border-bottom:0; border-radius:var(--r-sheet) var(--r-sheet) 0 0; background-color:var(--surface-group); overflow:auto; overscroll-behavior:contain; animation:sheet-up .18s cubic-bezier(.2,.8,.2,1); }
 .sheet-grip { justify-self:center; width:38px; height:4px; border-radius:999px; background:#3d4256; }
-.option-sheet header { min-height:0; padding-inline:2px; }
-.option-sheet h2 { flex:1; margin:0; font-size:1.02rem; text-align:center; }
-.option-sheet h2 small { margin-left:6px; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; }
+/* Title left, ✕ right: the markup puts the ✕ first, so it moves by order;
+   the empty twin that used to centre the title steps out. */
+.option-sheet header { min-height:44px; gap:8px; padding-inline:2px; }
+.option-sheet header > .sheet-close { order:2; }
+.option-sheet header > span.sheet-close { display:none; }
+.option-sheet h2 { flex:1; min-width:0; margin:0 0 0 4px; font-size:var(--fs-title); font-weight:650; text-align:left; }
+.option-sheet h2 small { margin-left:6px; color:#8fb8ff; font-size:var(--fs-micro); font-weight:600; text-transform:uppercase; }
 
 .schedule-sheet { max-height:92dvh; }
 /* The status sheet: the session's own state, then the CLI's usage panel as
@@ -1312,58 +1350,66 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .status-sheet > .mobile-schedule-actions { margin-top:auto; flex-wrap:wrap; align-items:center; }
 .status-sheet .sheet-pending { flex-basis:100%; }
 .status-sheet header .terminal-view-switch { flex:0 0 auto; }
-.status-headline { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; padding:2px 6px; color:#9da3b6; font-size:.84rem; }
-.status-headline strong { padding:3px 9px; border-radius:999px; background:#242938; color:#c9cddb; font-size:.8rem; }
+.status-headline { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; padding:2px 4px; color:var(--ink-muted); font-size:var(--fs-sub); }
+.status-headline strong { padding:4px 9px; background:var(--surface-raised); color:#c9cddb; font-size:var(--fs-caption); }
 .status-headline.working strong { background:#173827; color:#6fe29c; }
 .status-headline.question strong { background:#493b1d; color:#ffd36b; }
 .status-headline.done strong { background:#193a29; color:#91e6a9; }
 .status-headline.interrupted strong { background:#46202a; color:#ff8a93; }
-.usage-meter { display:grid; gap:5px; padding:11px; border:1px solid #383c4d; border-radius:12px; background:#1d202b; }
+.usage-meter { display:grid; gap:5px; padding:12px; border:1px solid var(--edge); background-color:var(--surface-raised); }
 .usage-meter > div:first-child { display:flex; gap:8px; align-items:baseline; }
-.usage-meter strong { flex:1; min-width:0; font-size:.9rem; overflow-wrap:anywhere; }
+.usage-meter strong { flex:1; min-width:0; font-size:var(--fs-sub); overflow-wrap:anywhere; }
 .usage-meter > div:first-child span { font-variant-numeric:tabular-nums; color:#c9cddb; }
-.usage-meter small { color:#9da4b8; }
-.usage-bar { display:block; height:8px; border-radius:999px; background:#11141c; overflow:hidden; }
-.usage-bar span { display:block; height:100%; border-radius:999px; background:linear-gradient(90deg,#6c8dff,#8fb8ff); }
+.usage-meter small { color:var(--ink-muted); font-size:var(--fs-foot); }
+.usage-bar { display:block; height:8px; background:#0b0d13; overflow:hidden; }
+.usage-bar span { display:block; height:100%; background:#7c6cff; }
 .usage-notes { display:grid; gap:6px; margin:0; padding:0; list-style:none; }
-.usage-notes li { display:flex; flex-wrap:wrap; gap:8px; padding:9px 11px; border-radius:10px; background:#1a1e29; font-size:.84rem; }
+.usage-notes li { display:flex; flex-wrap:wrap; gap:8px; padding:10px 12px; background:var(--surface-raised); font-size:var(--fs-sub); }
 .usage-notes strong { color:#c9cddb; }
-.usage-notes span { color:#9da4b8; overflow-wrap:anywhere; }
-.usage-today { display:grid; gap:4px; padding:11px; border-top:1px solid #383c4d; }
+.usage-notes span { color:var(--ink-muted); overflow-wrap:anywhere; }
+/* Home → Agent CLIs sheet: one card per CLI, its windows as the status
+   sheet's meters. */
+.cli-overview-list { display:grid; gap:9px; margin:0; padding:0; list-style:none; }
+.cli-overview-card { display:grid; gap:7px; padding:12px; border:1px solid var(--edge); background-color:var(--surface-raised); }
+.cli-overview-card > small { color:#9da4b8; }
+.cli-overview-head { display:flex; gap:8px; align-items:baseline; }
+.cli-overview-head strong { flex:1; min-width:0; overflow-wrap:anywhere; }
+.cli-overview-plan { padding:1px 8px; border:1px solid #4a5068; color:#c9cddb; font-size:var(--fs-caption); }
+.usage-today { display:grid; gap:4px; padding:12px 4px; border-top:1px solid var(--hairline); }
 .usage-today strong { font-size:.9rem; }
 .usage-today span { color:#c9cddb; font-size:.86rem; }
 .usage-today small { color:#9da4b8; }
 /* The panel as the CLI printed it: box drawing only lines up in a monospace
    face, and a phone is narrower than the panel, so this scrolls rather than
    wrapping a bar chart into nonsense. */
-.usage-raw { margin:0; padding:11px; border:1px solid #383c4d; border-radius:12px; background:#11141c; color:#dfe3ee; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.78rem; line-height:1.45; white-space:pre; overflow-x:auto; overscroll-behavior-x:contain; }
+.usage-raw { margin:0; padding:12px; border:1px solid var(--edge); background-color:#0b0d13; color:#dfe3ee; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.78rem; line-height:1.45; white-space:pre; overflow-x:auto; overscroll-behavior-x:contain; }
 .mobile-schedule-list { display:grid; gap:9px; }
-.mobile-schedule-list article { display:grid; gap:6px; padding:11px; border:1px solid #383c4d; border-radius:12px; background:#1d202b; }
+.mobile-schedule-list article { display:grid; gap:6px; padding:12px; border:1px solid var(--edge); background-color:var(--surface-raised); }
 .mobile-schedule-list article p { margin:0; white-space:pre-wrap; }
-.mobile-schedule-list article small { color:#9da4b8; }
+.mobile-schedule-list article small { color:var(--ink-muted); }
 .mobile-schedule-list article > div { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
 .mobile-schedule-list article > div label { margin-right:auto; }
-.mobile-schedule-form { display:grid; gap:10px; padding-top:10px; border-top:1px solid #383c4d; }
+.mobile-schedule-form { display:grid; gap:10px; padding-top:10px; border-top:1px solid var(--hairline); }
 .mobile-schedule-form h3 { margin:0; font-size:.95rem; }
 .mobile-prompt-target { display:grid; gap:4px; padding-inline:2px; font-size:.84rem; color:#9da3b6; }
 .mobile-prompt-target select { width:100%; }
 .mobile-schedule-form > label { display:grid; gap:5px; color:#b8bed0; font-size:.82rem; }
 .mobile-schedule-form textarea,
 .mobile-schedule-form select,
-.mobile-schedule-form input { box-sizing:border-box; width:100%; padding:9px 10px; border:1px solid #42485c; border-radius:9px; background:#11141c; color:#f2f4fa; font:inherit; }
+.mobile-schedule-form input { box-sizing:border-box; width:100%; padding:9px 10px; border:1px solid var(--edge); border-radius:9px; background-color:#0b0d13; color:#f2f4fa; font:inherit; }
 .mobile-schedule-form input.markup-ask-dial { padding:0; border:0; background:none; accent-color:#8c7df4; min-height:32px; }
 .mobile-schedule-weekdays { display:flex; flex-wrap:wrap; gap:7px; }
-.mobile-schedule-weekdays label { display:flex; gap:4px; align-items:center; padding:6px 8px; border:1px solid #383c4d; border-radius:999px; }
+.mobile-schedule-weekdays label { display:flex; gap:4px; align-items:center; padding:6px 8px; border:1px solid var(--edge); }
 .mobile-schedule-weekdays input { width:auto; }
 .mobile-schedule-in { display:grid; gap:5px; color:#b8bed0; font-size:.82rem; }
 .mobile-schedule-in > div { display:flex; gap:8px; align-items:center; }
 .mobile-schedule-in input { width:5.5em; }
 .mobile-schedule-actions { display:flex; justify-content:flex-end; gap:8px; }
-.sheet-close { width:42px; flex:0 0 auto; padding:7px 0; border:0; border-radius:10px; background:transparent; color:#c9cddb; font-size:1.05rem; }
-.sheet-note { margin:0; padding:2px 6px 4px; color:#9da3b6; font-size:.84rem; overflow-wrap:anywhere; }
+.sheet-close { display:grid; place-items:center; width:var(--hit); height:var(--hit); flex:0 0 auto; padding:0; border:0; border-radius:0; background:transparent; color:#c9cddb; font-size:20px; }
+.sheet-note { margin:0; padding:2px 4px 4px; color:var(--ink-muted); font-size:var(--fs-sub); overflow-wrap:anywhere; }
 .sheet-note.error { color:#ffb4c0; }
 .notifications-group { display:grid; gap:6px; }
-.notifications-group h3 { margin:4px 6px 0; color:#9da3b6; font-size:.78rem; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+.notifications-group h3 { margin:4px 4px 0; color:var(--ink-muted); font-size:var(--fs-caption); font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
 /* The composer's ＋ as an attach tray (`AttachSheet`): round, coloured icon
    tiles with a short name under each. The fills are messenger colours that
    read on every theme, so they are kept as written. */
@@ -1380,19 +1426,19 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .attach-label { text-align:center; line-height:1.2; overflow-wrap:anywhere; }
 .attach-tile .untested { margin-left:0; }
 .option-list { display:grid; gap:3px; margin:0; padding:0; list-style:none; }
-.option-list-group { margin:10px 5px 3px; color:#98a0b4; font-size:.76rem; font-weight:700; letter-spacing:.04em; }
+.option-list-group { margin:14px 4px 8px; color:var(--ink-muted); font-size:var(--fs-caption); font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
 .option-list-group:first-child { margin-top:2px; }
-.option-list button { display:flex; align-items:center; gap:12px; width:100%; padding:13px 14px; border:0; border-radius:13px; background:#1e2230; text-align:left; }
-.option-list button.current { color:#8fb6ff; background:#1c2336; }
+.option-list button { display:flex; align-items:center; gap:12px; width:100%; min-height:52px; padding:12px; border:0; border-radius:0; background:var(--surface-raised); text-align:left; }
+.option-list button.current { color:#d7d3f5; background:#2e2b48; }
 .option-list button > span { display:grid; flex:1; gap:3px; min-width:0; }
 .option-list strong { font-weight:600; overflow-wrap:anywhere; }
-.option-list small { color:#98a0b4; font-size:.82rem; overflow-wrap:anywhere; }
-.option-list button.current small { color:#7ea3dd; }
+.option-list small { color:var(--ink-muted); font-size:var(--fs-foot); overflow-wrap:anywhere; }
+.option-list button.current small { color:#b3a8ff; }
 .option-list svg { width:21px; height:21px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 /* The files drawer (`ProjectFiles`): the sheet's own look, stood up along the
    right edge instead of the bottom, slid in by transform + opacity only. */
 .files-drawer-backdrop { align-items:stretch; justify-content:flex-end; }
-.project-files { align-content:start; width:min(88vw, 420px); max-height:none; height:100%; padding:max(22px, calc(12px + env(safe-area-inset-top))) calc(10px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) 10px; border-top:0; border-left:1px solid #383c4d; border-radius:20px 0 0 20px; animation:files-drawer-in .18s ease-out; }
+.project-files { align-content:start; width:min(88vw, 420px); max-height:none; height:100%; padding:max(22px, calc(12px + env(safe-area-inset-top))) calc(10px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) 10px; border:0; border-left:1px solid var(--edge); border-radius:20px 0 0 20px; animation:files-drawer-in .18s ease-out; }
 /* Its head: a real row with room above it, the close a round cross (the
    composer's clear button) rather than a bare ✕ glyph; the empty twin on the
    right keeps the title centred. */
@@ -1417,6 +1463,7 @@ span.files-close { background:transparent; }
 .files-library-head h2 small { flex:0 0 auto; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; }
 .files-library-more { justify-self:end; display:grid; place-items:center; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:#2a2e3e; color:#c8cdda; }
 .files-library-more svg, .option-list .files-more svg { stroke-width:3.2; }
+.files-library-bar { flex:0 0 auto; display:grid; gap:11px; padding:10px 10px 0; }
 .files-library-body { flex:1; display:grid; align-content:start; gap:11px; min-height:0; padding:10px 10px calc(16px + env(safe-area-inset-bottom)); overflow:auto; overscroll-behavior:contain; }
 /* A list row's ⋯, after its ↗ Share. */
 .option-list .files-more { flex:0 0 auto; width:auto; padding:0 12px; color:#98a0b4; }
@@ -1450,6 +1497,7 @@ span.files-close { background:transparent; }
 @media (prefers-reduced-motion:reduce) { .files-thumb { transition:none; } }
 /* Favorites (a sideways strip of tiles at the root) and recent files. */
 .files-saved { display:grid; gap:8px; min-width:0; }
+.home-favorites { display:grid; gap:16px; min-width:0; }
 .files-saved h3 { margin:0; padding:0 4px; color:#98a0b4; font-size:.76rem; font-weight:650; letter-spacing:.04em; text-transform:uppercase; }
 .files-strip { display:flex; gap:10px; overflow-x:auto; overscroll-behavior-x:contain; padding-bottom:4px; scrollbar-width:none; }
 .files-strip > .files-tile { flex:0 0 96px; }
@@ -1457,8 +1505,9 @@ span.files-close { background:transparent; }
 /* A remote project's side switch above the search box: the terminal view
    switch, as wide as the box, its two sides alike. */
 .files-side-switch { margin:0 4px; }
-.files-side-switch button { flex:1 1 0; }
-/* The search box under the head, and a hit's folder above its times. */
+.files-side-switch button { flex:1 1 0; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+/* The search box under the head, outside the scrolling list so it stays in
+   reach, and a hit's folder above its times. */
 .files-search { width:auto; margin:0 4px; padding:10px 12px; border-radius:11px; }
 /* Upload here: one line under the search box, as wide as it, the arrow in a
    tinted tile before the label; the add-only note below it is fine print. */
@@ -1503,16 +1552,12 @@ span.files-close { background:transparent; }
 .files-list li.files-folded > button:first-child strong { color:#aeb4c4; font-weight:500; }
 /* Local models sheet: the files-list row with its trailing button (Load /
    Unload as the files' Share), the model's facts in the option-row surface. */
-.local-models-list .local-model-info { display:grid; flex:1; gap:3px; min-width:0; padding:13px 14px; border-radius:13px; background:#1e2230; }
+.local-models-list .local-model-info { display:grid; flex:1; gap:3px; min-width:0; padding:12px; background:var(--surface-raised); }
 .local-models-list .local-model-tabs { color:#8fb8ff; }
 .local-models-list .transcript-working-dots { vertical-align:middle; }
 .local-models-start { min-height:48px; }
-/* Select text (`MessageMenu`): the message again, as plain text the phone's
-   own selection handles and callout work on — the bubble's hold is the menu,
-   so it cannot be selected in place. */
-.message-select-text { max-height:52dvh; overflow:auto; overscroll-behavior:contain; padding:10px 12px; border-radius:13px; background:#1e2230; color:#e3e6f2; font:400 .92rem/1.5 Inter,ui-sans-serif,system-ui,sans-serif; white-space:pre-wrap; overflow-wrap:anywhere; -webkit-user-select:text; user-select:text; -webkit-touch-callout:default; }
 /* A tapped chat link's address (`LinkSheet`): the host alone, then all of it. */
-.link-sheet-target { display:grid; gap:4px; margin:0 0 10px; padding:10px 12px; border-radius:13px; background:#1e2230; color:#e3e6f2; }
+.link-sheet-target { display:grid; gap:4px; margin:0 0 10px; padding:10px 12px; background:var(--surface-raised); color:#e3e6f2; }
 .link-sheet-target strong { font:650 .98rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; overflow-wrap:anywhere; }
 .link-sheet-target code { max-height:30dvh; overflow:auto; color:#b9bdcc; font:400 .8rem/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; overflow-wrap:anywhere; -webkit-user-select:text; user-select:text; }
 .sheet-pending { flex:0 0 auto; color:#c8cdda; font-size:.78rem; }
@@ -1537,29 +1582,29 @@ span.files-close { background:transparent; }
    row, walked with ←/→ or a tap, the one on screen marked as the option
    list's highlighted row is. */
 .question-tabs.stepped { align-items:center; gap:6px; }
-.question-tabs.stepped button { min-height:36px; padding:6px 12px; border:0; border-radius:13px; background:#1e2230; color:#e7e9f2; font:600 .92rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif; }
+.question-tabs.stepped button { min-height:36px; padding:6px 12px; border:0; border-radius:0; background:var(--surface-raised); color:#e7e9f2; font:600 .92rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif; }
 .question-tabs.stepped button.answered { color:#98a0b4; font-weight:500; }
-.question-tabs.stepped button.current { color:#8fb6ff; background:#1c2336; box-shadow:inset 0 0 0 1px #8fb6ff; }
+.question-tabs.stepped button.current { color:#d7d3f5; background:#2e2b48; box-shadow:inset 0 0 0 1px #7c6cff; }
 .question-tabs.stepped button.question-step { min-width:40px; font-size:1.05rem; }
 .question-tabs.stepped button:disabled:not(.current) { opacity:.5; }
 .question-tabs.stepped em { color:#98a0b4; font-size:.78rem; }
 /* The free-text row's field (`freeTextRow`), opened under it by a tap: the
    to-do editor's add row — a field and its button side by side. */
 .question-type { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; padding:6px 0 4px; }
-.question-type textarea { grid-column:1 / -1; min-width:0; min-height:6.5em; resize:vertical; border:1px solid #3a3e50; border-radius:12px; padding:11px 13px; background:#171a24; color:#fff; font:inherit; font-size:1rem; line-height:1.4; }
+.question-type textarea { grid-column:1 / -1; min-width:0; min-height:6.5em; resize:vertical; border:1px solid var(--edge); border-radius:0; padding:11px 13px; background-color:#0b0d13; color:#fff; font:inherit; font-size:1rem; line-height:1.4; }
 /* Send is a `.primary` inside `.option-list`, whose row-button rule outranks
    `.primary`: restate the accent fill so it is not a washed-out row. */
 .question-type > button { grid-column:2; }
-.question-type > button.primary { justify-content:center; width:auto; min-height:44px; padding:10px 20px; border:1px solid #8c7df4; border-radius:11px; background:#6c5ce7; color:#fff; font-weight:700; }
+.question-type > button.primary { justify-content:center; width:auto; min-height:44px; padding:10px 20px; border:1px solid #8c7df4; border-radius:0; background:#6c5ce7; color:#fff; font-weight:700; }
 .question-type em { grid-column:1 / -1; color:#98a0b4; font-size:.78rem; }
 /* A question kept in the chat once answered (`AskedCard`): the live card's
    rows, no longer buttons — the ones the answer took lit as the highlighted
    row is, the rest quieted as a sent list's are. */
-.asked-list li { display:flex; align-items:center; gap:12px; padding:13px 14px; border-radius:13px; background:#1e2230; }
+.asked-list li { display:flex; align-items:center; gap:12px; min-height:52px; padding:12px; border-radius:0; background:var(--surface-raised); }
 .asked-list li > span:first-child { display:grid; flex:1; gap:3px; min-width:0; }
 .asked-list li:not(.chosen) { opacity:.6; }
-.asked-list li.chosen { color:#8fb6ff; background:#1c2336; }
-.asked-list li.chosen small { color:#7ea3dd; }
+.asked-list li.chosen { color:#d7d3f5; background:#2e2b48; }
+.asked-list li.chosen small { color:#b3a8ff; }
 .asked-check { flex:0 0 auto; font-weight:700; }
 .asked-none { padding:0 4px; color:#98a0b4; font-size:.82rem; font-style:italic; }
 /* The pill the sheets' headings wear (`.option-sheet h2 small`). */
@@ -1608,14 +1653,16 @@ span.files-close { background:transparent; }
 .brand-head { position:relative; display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:6px; }
 .brand-head::before { content:""; position:absolute; top:-28px; left:50%; width:260px; height:220px; transform:translateX(-50%); background:radial-gradient(closest-side,rgba(124,108,255,.2),rgba(199,154,69,.06) 60%,transparent); pointer-events:none; }
 .brand-head-mark .splash-orbit { animation-play-state:paused; }
-.brand-head h1 { position:relative; color:#9498aa; font-size:.95rem; font-weight:500; letter-spacing:.02em; }
-.brand-screen > p { margin:0; color:#b7bac8; line-height:1.5; }
-.brand-screen label { text-align:center; }
-.brand-screen input { border-color:#2d3142; background:#11131b; }
-.brand-screen input:focus { outline:none; border-color:#7c6cff; }
-.brand-screen input:not(.code) { text-align:center; }
+.brand-head h1 { position:relative; color:#e7e9f2; font-size:var(--fs-title); font-weight:650; }
+.brand-screen > p { margin:0; color:var(--ink-muted); font-size:var(--fs-body); line-height:1.45; }
+.brand-screen label { text-align:left; color:var(--ink-muted); font-size:var(--fs-foot); }
+.brand-screen input { min-height:48px; background-color:var(--surface-group); font-size:var(--fs-body); }
+.brand-screen input:focus { outline:none; --rim:#7c6cff; }
+.brand-screen input:not(.code) { text-align:left; }
 .brand-screen .error { text-align:left; }
-.brand-screen > .primary { min-height:48px; }
+.brand-screen > .primary { min-height:52px; font-size:1rem; }
+/* The build, out of the way under the form (pairing; the lock's own line). */
+.brand-foot,.brand-screen > .splash-version { margin:8px 0 0; color:#6f7488; font-family:inherit; font-size:var(--fs-caption); letter-spacing:0; text-align:center; }
 .pair .pair-lock-hint { margin-top:2px; font-size:.88rem; }
 /* The lock's fingerprint is a round target rather than a full-width bar; its
    only motion is the waiting pulse, which animates transform/opacity on a
@@ -1637,14 +1684,14 @@ span.files-close { background:transparent; }
    animated by opacity — never a blurred shadow. */
 .local-unlock .local-unlock-status { min-height:1.4em; margin:0; color:#cfc8ff; font-weight:600; letter-spacing:.02em; }
 .local-unlock-status:empty { display:none; }
-.local-unlock-use-pin { justify-self:center; margin-top:8px; border:1px solid #383c4d; border-radius:999px; background:transparent; padding:9px 18px; color:#cfc8ff; font-weight:600; }
+.local-unlock-use-pin { justify-self:center; margin-top:8px; border:1px solid var(--edge); background-color:transparent; padding:9px 18px; color:#cfc8ff; font-weight:600; }
 .local-unlock.verifying,.local-unlock.unlocked { align-content:start; padding-top:max(12dvh,env(safe-area-inset-top)); }
 /* The lock sheet (`LocalUnlock` over `LockedHomeShell`) rises to the full
    screen for both: left at the bottom, the collapsed sheet sat exactly under
    Android's fingerprint sheet and the reader saw only the dimmed, black Home
    shell above it — the launch read as the logo and then a black screen. */
 .lock-sheet-backdrop.verifying,.lock-sheet-backdrop.unlocked { align-items:stretch; background:#000; }
-.lock-sheet-backdrop.verifying .local-unlock-sheet,.lock-sheet-backdrop.unlocked .local-unlock-sheet { max-height:none; border-top:0; border-radius:0; background:transparent; }
+.lock-sheet-backdrop.verifying .local-unlock-sheet,.lock-sheet-backdrop.unlocked .local-unlock-sheet { max-height:none; border:0; border-radius:0; background:transparent; }
 .local-unlock.verifying > :not(.brand-head):not(.local-unlock-status):not(.local-unlock-use-pin),
 .local-unlock.unlocked > :not(.brand-head):not(.local-unlock-status) { display:none; }
 .local-unlock.verifying .brand-head,.local-unlock.unlocked .brand-head { animation:local-unlock-lift 420ms cubic-bezier(.22,1,.36,1) both; }
@@ -1673,16 +1720,16 @@ span.files-close { background:transparent; }
 /* An agent waiting for a browser sign-in (`signIn.ts`): the notice over the
    composer, in the upload notices' shape, and the sheet it opens. The page
    opens from a real link, so the phone hands it to the browser on the tap. */
-.sign-in-notice { display:flex; align-items:center; gap:8px; margin:6px 7px 0; padding:6px 6px 6px 11px; border-radius:9px; background:#29253d; color:#e8e3ff; font-size:.84rem; }
+.sign-in-notice { display:flex; align-items:center; gap:8px; margin:6px 8px 0; padding:6px 6px 6px 12px; background:#29253d; color:#e8e3ff; font-size:.84rem; }
 .sign-in-notice span { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
 .sign-in-notice button { flex:0 0 auto; padding:7px 12px; }
 .sign-in-notice .sign-in-hide { padding:7px 10px; border:0; background:transparent; }
 .sign-in-open { display:flex; gap:8px; align-items:stretch; }
-.sign-in-open a { display:grid; flex:1; gap:2px; min-width:0; padding:12px 14px; border:1px solid #8c7df4; border-radius:11px; color:#fff; text-align:center; text-decoration:none; }
+.sign-in-open a { --rim:#8c7df4; display:grid; flex:1; gap:2px; min-width:0; padding:12px 14px; border:1px solid #8c7df4; color:#fff; text-align:center; text-decoration:none; }
 .sign-in-open small { color:#dcd6ff; font-weight:400; font-size:.78rem; overflow-wrap:anywhere; }
 .sign-in-open button { flex:0 0 auto; }
 .readable-cloud-link { margin-bottom:10px; }
-.sign-in-code { display:flex; gap:8px; align-items:center; padding:10px 12px; border:1px solid #383c4d; border-radius:12px; background:#11141c; }
+.sign-in-code { display:flex; gap:8px; align-items:center; padding:10px 12px; border:1px solid var(--edge); background-color:#0b0d13; }
 .sign-in-code code { flex:1; font:700 1.45rem ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.14em; text-align:center; -webkit-user-select:all; user-select:all; }
 .sign-in-answer { padding-top:0; border-top:0; }
 /* The sheet as numbered steps: a round number, then what that step takes. */
@@ -1690,14 +1737,14 @@ span.files-close { background:transparent; }
 .sign-in-steps > li { display:grid; grid-template-columns:28px minmax(0,1fr); gap:10px; align-items:start; }
 .sign-in-steps > li > div, .sign-in-steps > li > form { display:grid; gap:8px; min-width:0; }
 .sign-in-steps > li > p { margin:3px 0 0; color:#dfe3f0; font-size:.9rem; line-height:1.4; }
-.sign-in-step { display:grid; place-items:center; width:28px; height:28px; border-radius:50%; background:#29253d; color:#dcd6ff; font-weight:700; font-size:.85rem; }
+.sign-in-step { display:grid; place-items:center; width:28px; height:28px; background:#29253d; color:#dcd6ff; font-weight:700; font-size:.85rem; }
 .sign-in-paste { min-height:48px; font-size:1rem; }
 .sign-in-more { color:#aeb4c8; font-size:.84rem; }
 .sign-in-more summary { padding:6px 0; cursor:pointer; }
 .sign-in-more button { margin-top:4px; }
 .sign-in-done { display:grid; justify-items:center; gap:8px; padding:12px 0 4px; text-align:center; }
 .sign-in-done strong { font-size:1.1rem; }
-.sign-in-tick { display:grid; place-items:center; width:52px; height:52px; border-radius:50%; background:#1d3a2c; color:#8ff0b8; font-size:1.7rem; font-weight:700; }
+.sign-in-tick { display:grid; place-items:center; width:52px; height:52px; background:#1d3a2c; color:#8ff0b8; font-size:1.7rem; font-weight:700; }
 .sign-in-waiting { display:grid; justify-items:center; gap:6px; padding:10px 0; text-align:center; }
 .sign-in-waiting p { margin:0; }
 .sign-in-waiting .sign-in-choice { justify-self:stretch; margin:4px 0; text-align:left; }
@@ -1707,21 +1754,21 @@ span.files-close { background:transparent; }
 /* The ＋ sheet's sign-in list: one row per agent, its login state under it. */
 .sign-in-list { display:grid; gap:10px; }
 .sign-in-list h3 { margin:0; }
-.sign-in-agent { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 12px; border:1px solid #383c4d; border-radius:12px; background:#11141c; }
+.sign-in-agent { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 12px; border:1px solid var(--edge); background-color:var(--surface-raised); }
 .sign-in-agent > span { display:grid; flex:1 1 auto; gap:2px; min-width:0; }
 .sign-in-agent small { font-size:.76rem; overflow-wrap:anywhere; }
 .sign-in-agent small.signed-in { color:#8ff0b8; }
 .sign-in-agent small.signed-out { color:#ffb4c0; }
 .sign-in-agent .sign-in-alternate { flex-basis:100%; justify-self:start; padding:2px 0; text-align:left; }
-.inbox-upload { display:flex; align-items:center; gap:8px; margin:6px 7px 0; padding:8px 10px; border-radius:9px; background:#211d35; color:#dcd6ff; font-size:.78rem; }
+.inbox-upload { display:flex; align-items:center; gap:8px; margin:6px 8px 0; padding:8px 10px; background:#211d35; color:#dcd6ff; font-size:.78rem; }
 .inbox-upload.error { background:#3b2027; color:#ffb4c0; }
 .inbox-upload.landed { background:#1f3b2a; color:#b7f0c8; }
 .inbox-upload strong { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
 .inbox-upload span { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
-.inbox-upload button { flex:0 0 auto; padding:4px 9px; border:0; border-radius:7px; background:rgba(255,255,255,.09); color:inherit; font-size:.8rem; }
+.inbox-upload button { flex:0 0 auto; padding:4px 9px; border:0; border-radius:0; background:rgba(255,255,255,.09); color:inherit; font-size:.8rem; }
 /* Files going with the next message, as thumbnails above the composer. */
-.composer-attachments { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 7px 0; }
-.composer-thumb { position:relative; flex:0 0 auto; width:56px; height:56px; overflow:hidden; border-radius:10px; background:#211d35; color:#dcd6ff; }
+.composer-attachments { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 8px 0; }
+.composer-thumb { position:relative; flex:0 0 auto; width:56px; height:56px; overflow:hidden; background:#211d35; color:#dcd6ff; }
 .composer-thumb img { display:block; width:100%; height:100%; object-fit:cover; }
 .composer-thumb.sending img,.composer-thumb.sending .composer-thumb-file { opacity:.45; }
 .composer-thumb-file { display:grid; grid-template-rows:1fr auto; place-items:center; height:100%; padding:4px; }
@@ -1730,12 +1777,12 @@ span.files-close { background:transparent; }
 .composer-thumb-progress { position:absolute; left:50%; top:50%; width:20px; height:20px; margin:-10px 0 0 -10px; border:2px solid rgba(255,255,255,.25); border-top-color:#fff; border-radius:50%; animation:composer-thumb-spin .9s linear infinite; }
 @keyframes composer-thumb-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .composer-thumb-progress { animation:none; } }
-.composer-thumb button { position:absolute; top:3px; right:3px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:50%; background:rgba(8,10,16,.65); color:#fff; font-size:.65rem; line-height:1; }
+.composer-thumb button { position:absolute; top:3px; right:3px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:0; background:rgba(8,10,16,.65); color:#fff; font-size:.65rem; line-height:1; }
 .composer-attachments-note { flex:1 1 120px; min-width:0; color:#a69fd4; font-size:.72rem; }
 .composer-attachments-note em { font-style:normal; opacity:.8; }
 /* What the agent sent this tab, as a sheet of its own: the button beside the
    tab name opens it, in both views — the files never sit in the chat. */
-.terminal-gallery { flex:0 0 auto; display:flex; align-items:center; gap:4px; padding:4px 8px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#d8e2f5; font-size:.82rem; line-height:1; }
+.terminal-gallery { --rim:#34384a; flex:0 0 auto; display:flex; align-items:center; gap:4px; min-height:34px; padding:4px 8px; border:1px solid #34384a; background-color:#1b2333; color:#d8e2f5; font-size:.82rem; line-height:1; }
 .terminal-gallery small { color:#8fb8ff; font-size:.72rem; font-weight:650; }
 .outbox-gallery-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:10px; padding:0 4px 4px; }
 .outbox-gallery-grid .outbox-thumb,.outbox-gallery-grid .outbox-file { width:100%; }
@@ -2028,4 +2075,64 @@ span.files-close { background:transparent; }
   .print-page { break-after:page; break-inside:avoid; }
   .print-page:last-child { break-after:auto; }
   .print-page img { display:block; max-width:100%; max-height:98vh; margin:0 auto; }
+}
+/* ── The phone design pass (docs/mobile_pwa_design_plan.md) ──────────────────
+   Focus, the sheets, pairing and the lock on Home's system: the `--fs-*`,
+   `--sp-*` and surface tokens, and the one cut-corner mechanism the Mail /
+   To-do / Calendar block above uses — a bordered element is clipped and
+   repaints its four cut corners in `--rim`; a borderless one is only
+   clipped. Defaults sit in `:where()`, so any rule retints or resizes a piece
+   by setting `--r` / `--rim`. */
+:where(:is(.terminal-screen,.sheet-backdrop,.brand-screen) :is(button:not([class]),button.primary,button.danger,button.mode,button.new-tab-file,select,textarea,input:not([type="checkbox"],[type="radio"],[type="range"],[type="color"],[type="file"]))) { --r:var(--r-sm); --rim:var(--edge); }
+:where(:is(.terminal-screen,.sheet-backdrop,.brand-screen) :is(.primary,.new-tab-file)) { --r:var(--r-md); }
+:where(:is(.terminal-screen,.sheet-backdrop,.brand-screen) .primary) { --rim:#8c7df4; }
+:where(.prompt-composer,.focus-menu,.transcript-screen) { --r:var(--r-lg); }
+:where(.chat-change,.transcript-agent,.hint-message,.usage-meter,.cli-overview-card,.usage-raw,.mobile-schedule-list article,.new-tab-agents .agent-create,.sign-in-open a,.sign-in-code,.sign-in-agent) { --r:var(--r-md); --rim:var(--edge); }
+:where(.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin) { --r:var(--r-sm); --rim:var(--edge); }
+:is(.terminal-screen,.sheet-backdrop,.brand-screen) :is(button:not([class]),button.primary,button.danger,button.mode,button.new-tab-file,select,textarea,input:not([type="checkbox"],[type="radio"],[type="range"],[type="color"],[type="file"])),
+.prompt-composer,.focus-menu,.transcript-screen,.chat-change,.transcript-agent,.hint-message,.usage-meter,.cli-overview-card,.usage-raw,.mobile-schedule-list article,.new-tab-agents .agent-create,.sign-in-open a,.sign-in-code,.sign-in-agent,
+.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin {
+  border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
+}
+/* Focus retints the rim; the field draws no outline of its own. */
+:is(.terminal-screen,.sheet-backdrop,.brand-screen) :is(select,textarea,input):focus { --rim:#7c6cff; outline:0; }
+/* The composer's own field and the bare controls inside a rounded box stay plain. */
+.terminal-screen .prompt-composer textarea,.mobile-schedule-form input.markup-ask-dial { border:0; }
+/* Borderless pieces: only rounded. */
+:where(.terminal-view-switch,.terminal-view-switch button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb button) { --r:var(--r-sm); }
+:where(.focus-menu button,.composer-bar .send-icon,.voice-feedback,.last-sent,.inbox-upload,.sign-in-notice,.composer-thumb,.usage-notes li,.question-tabs.stepped button,.link-sheet-target,.local-models-list .local-model-info,.sign-in-tick,.new-tab-agents .agent-create > button:first-child,.list-skeleton > i) { --r:var(--r-md); }
+.terminal-view-switch,.terminal-view-switch button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb button,.list-skeleton > i,
+.focus-menu button,.composer-bar .send-icon,.voice-feedback,.last-sent,.inbox-upload,.sign-in-notice,.composer-thumb,.usage-notes li,.question-tabs.stepped button,.link-sheet-target,.local-models-list .local-model-info,.sign-in-tick,.new-tab-agents .agent-create > button:first-child {
+  border-radius:var(--r);
+}
+/* A sheet's list is an inset group: the raised surface, hairlines between the
+   rows, the corners of each run rounded (a group label starts a new run). */
+ul.option-list:not(.files-list) { gap:0; }
+ul.option-list:not(.files-list) > li:not(.option-list-group) { --ct:0px; --cb:0px; background:var(--surface-raised); border-radius:var(--ct) var(--ct) var(--cb) var(--cb); }
+ul.option-list:not(.files-list) > li:not(.option-list-group) + li:not(.option-list-group) { border-top:1px solid var(--hairline); }
+ul.option-list:not(.files-list) > li:first-child,ul.option-list:not(.files-list) > .option-list-group + li { --ct:var(--r-md); }
+ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) > li:has(+ .option-list-group) { --cb:var(--r-md); }
+/* A list on its way in (`ListSkeleton`): still rows, an opacity pulse. */
+.list-skeleton { display:grid; gap:var(--sp-3); margin:var(--sp-2) 0; }
+.list-skeleton > i { display:block; height:68px; background:var(--surface-group); animation:list-skeleton-pulse 1.4s ease-in-out infinite; }
+.list-skeleton > i:nth-of-type(2) { height:92px; animation-delay:.15s; }
+.list-skeleton > i:nth-of-type(3) { animation-delay:.3s; }
+.list-skeleton-note { margin:0; text-align:center; }
+@keyframes list-skeleton-pulse { 0%,100% { opacity:.55; } 50% { opacity:1; } }
+/* Text a screen reader reads where the screen shows an icon. */
+.visually-hidden { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+/* The desktop's icons were drawn for 16px; at the phone's 20–22px chrome a
+   1.4 stroke reads faint, so the phone draws them heavier — heavier still in
+   a status pill, where the glyph is a few pixels tall. */
+.app-icon g { stroke-width:1.8; }
+.agent-status-glyph .app-icon g { stroke-width:2.6; }
+.agent-status-glyph .app-icon { vertical-align:-.15em; }
+/* Motion: a sheet slides up over a fading backdrop, a screen fades in. The
+   terminal screen only fades — a transform would carry its fixed children. */
+@keyframes sheet-up { from { transform:translateY(100%); } to { transform:none; } }
+@keyframes sheet-backdrop-in { from { opacity:0; } to { opacity:1; } }
+@keyframes screen-in { from { opacity:0; } to { opacity:1; } }
+.screen,.terminal-screen { animation:screen-in .14s ease-out; }
+@media (prefers-reduced-motion:reduce) {
+  .sheet-backdrop,.option-sheet,.screen,.terminal-screen,.list-skeleton > i { animation:none; }
 }

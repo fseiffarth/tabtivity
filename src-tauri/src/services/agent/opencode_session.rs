@@ -29,8 +29,10 @@
 //!   session while the store still has it; otherwise the folder's newest, as
 //!   before, created since the last fresh launch.
 //!
-//! Remote tabs (their store is on the far host) and local-model tabs (their
-//! own home) are left as they were. AppHandle-free.
+//! A local-model tab records and resumes the same way, against its local-model
+//! home's store. Remote tabs (their store is on the far host) and assistant
+//! chats (`assistant::launch_line` decides theirs, one chat to a folder) are
+//! left as they were. AppHandle-free.
 
 use std::path::{Path, PathBuf};
 
@@ -339,12 +341,11 @@ fn write_launch_in(dir: &Path, uid: &str, launch: Launch) -> std::io::Result<()>
 pub fn resolve(opts: PtyOptions) -> PtyOptions {
     let remote = !opts.local_only
         && opts.project_id.as_deref().is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
-    if remote || opts.local_model {
+    if remote || opts.assistant.is_some() {
         return opts;
     }
     let project_id = opts.project_id.clone();
-    let home = crate::services::agent_home::scope_home(project_id.as_deref());
-    let db = opencode_store::db_path_for(project_id.as_deref());
+    let (home, db) = home_and_store(project_id.as_deref(), opts.local_model);
     let registered = register_in_home(&home);
     resolve_in(
         opts,
@@ -353,6 +354,16 @@ pub fn resolve(opts: PtyOptions) -> PtyOptions {
         |uid| recorded_session(project_id.as_deref(), uid),
         |id| opencode_store::resumable_session(&db, id),
     )
+}
+
+/// The agent home a tab's OpenCode runs in, and the store that home keeps: a
+/// local-model tab's are apart from the scope's.
+fn home_and_store(project_id: Option<&str>, local_model: bool) -> (PathBuf, PathBuf) {
+    if local_model {
+        (crate::services::agent_home::local_model_home(project_id), opencode_store::local_model_db_path_for(project_id))
+    } else {
+        (crate::services::agent_home::scope_home(project_id), opencode_store::db_path_for(project_id))
+    }
 }
 
 /// Testable core of [`resolve`]; `notes` holds the launch notes.
@@ -501,6 +512,37 @@ mod tests {
         assert_eq!(out.args, ["--model", "m", "--session", "ses_mine"]);
         assert_eq!(out.env.get(TAB_AGENT_ENV).map(String::as_str), Some("opencode"));
         assert!(matches!(read_launch_in(&notes, UID), Some(Launch::Fresh(_))));
+    }
+
+    #[test]
+    fn a_local_model_tab_comes_back_in_its_session_on_its_model() {
+        // The restored line: the launch line, then the resume flag. `--model`
+        // has to survive: it picks the provider, and OpenCode 2's `mini`.
+        let notes = tmp("local");
+        let mut local = opts(&["--model", "ollama/qwen3:8b", "--continue"]);
+        local.local_model = true;
+        let mut out = resolve_in(local, &notes, true, |_| Some("ses_mine".into()), |_| true);
+        assert_eq!(out.args, ["--model", "ollama/qwen3:8b", "--session", "ses_mine"]);
+        v2_launch_args(&mut out.args);
+        assert_eq!(out.args, ["mini", "--model", "ollama/qwen3:8b", "--session", "ses_mine", "--standalone"]);
+    }
+
+    #[test]
+    fn a_local_model_tab_is_resolved_against_its_own_home_and_store() {
+        let (home, db) = home_and_store(Some("p1"), true);
+        assert_eq!(home, crate::services::agent_home::local_model_home(Some("p1")));
+        assert!(db.starts_with(&home));
+        let (scope_home, scope_db) = home_and_store(Some("p1"), false);
+        assert_eq!(scope_home, crate::services::agent_home::scope_home(Some("p1")));
+        assert!(scope_db.starts_with(&scope_home) && scope_db != db);
+    }
+
+    #[test]
+    fn an_assistant_chat_keeps_the_continue_its_launch_line_decided() {
+        let mut chat = opts(&["--model", "ollama/qwen3:8b", "--continue"]);
+        chat.local_model = true;
+        chat.assistant = Some(serde_json::from_str(r#"{"cli":"opencode_local","model":"qwen3:8b"}"#).unwrap());
+        assert_eq!(resolve(chat).args, ["--model", "ollama/qwen3:8b", "--continue"]);
     }
 
     #[test]

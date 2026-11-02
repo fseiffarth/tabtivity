@@ -95,11 +95,11 @@ export function tabTerminalSpawn(
     terminalCwd: string;
     sandbox?: boolean;
     tmuxSession?: string;
-    vmProject?: boolean;
+    hostPinned?: boolean;
     attachOnly?: boolean;
   },
 ) {
-  const location = effectiveTabLocation(tab, { vmProject: !!derived.vmProject });
+  const location = effectiveTabLocation(tab, { hostPinned: !!derived.hostPinned });
   // A Tabby chat: the backend builds the argv and the environment from the
   // launch and reads one thing from the renderer, the chat's uid, which is the
   // tab's `sessionId`. Nothing else is sent, so a stale or planted `env`/`args`

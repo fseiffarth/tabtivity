@@ -145,9 +145,7 @@ pub fn new_manifest_state() -> SyncManifestState {
 /// `commands::projects::remote_project_state_dir`, kept here to stay
 /// command-layer-free).
 fn state_dir(project_id: &str) -> PathBuf {
-    crate::storage::state_dir()
-        .join("remote-projects")
-        .join(project_id)
+    crate::storage::remote_project_dir_in(&crate::storage::state_dir(), project_id)
 }
 
 /// The DEFAULT local mirror root for a remote project when it carries no explicit
@@ -160,7 +158,7 @@ fn default_mirror_dir(project_id: &str) -> PathBuf {
 /// [`default_mirror_dir`] under an explicit state dir — for the pure fence
 /// planners (`agent_fence`, `mail_attach`), which tests point at a tempdir.
 pub fn default_mirror_dir_in(state_dir: &Path, project_id: &str) -> PathBuf {
-    state_dir.join("remote-projects").join(project_id).join("mirror")
+    crate::storage::remote_project_dir_in(state_dir, project_id).join("mirror")
 }
 
 /// A remote project's explicitly-chosen mirror root, read from the always-local
@@ -183,6 +181,19 @@ pub fn mirror_dir(project_id: &str) -> PathBuf {
     mirror_override(project_id).unwrap_or_else(|| default_mirror_dir(project_id))
 }
 
+/// [`mirror_dir`] for a caller that needs a remote project's local tree for
+/// something other than sync: `remote::local_copy_in` over the project's
+/// registry record, so `None` for a remote-only project (it has no local copy,
+/// and the default path must not be minted as one), for a local project, and
+/// when the record cannot be read (fail closed: an unreadable registry never
+/// turns a remote-only project's default path into a tree); else exactly
+/// [`mirror_dir`]. The sync engines keep [`mirror_dir`]; their entry points
+/// refuse a remote-only project before reaching it.
+pub fn mirror_dir_opt(project_id: &str) -> Option<PathBuf> {
+    let entry = crate::services::remote::project_entry(project_id).ok()?;
+    crate::services::remote::local_copy_in(&entry, &crate::storage::state_dir())
+}
+
 /// The manifest file path: `<state_dir>/.../<id>/sync.json`.
 pub fn manifest_path(project_id: &str) -> PathBuf {
     state_dir(project_id).join("sync.json")
@@ -190,10 +201,7 @@ pub fn manifest_path(project_id: &str) -> PathBuf {
 
 /// [`manifest_path`] under an explicit state dir — see `local_loss::log_path_in`.
 pub fn manifest_path_in(state_dir: &Path, project_id: &str) -> PathBuf {
-    state_dir
-        .join("remote-projects")
-        .join(project_id)
-        .join("sync.json")
+    crate::storage::remote_project_dir_in(state_dir, project_id).join("sync.json")
 }
 
 /// Whether `abs_path` lies inside the project's local mirror. Used by the file

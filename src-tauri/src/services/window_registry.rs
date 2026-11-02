@@ -126,6 +126,26 @@ pub struct WindowRegistry {
     /// `sync_detached_scope` (`None` until the first scope change). A popout
     /// built for another scope retires as soon as its build completes.
     pub detached_active_scope: Option<String>,
+    /// Native Wayland: when each popout was last placed, and the identity of
+    /// the screen its `detached_bounds` record names — what decides whether a
+    /// reading of the window may become that record (`services::popout_screen`).
+    pub detached_screens: crate::services::popout_screen::PopoutScreens,
+}
+
+impl WindowRegistry {
+    /// Mark `label`'s placement (the fullscreen hop of `present_on_monitor`)
+    /// begun or finished. While it is under way, and for a moment after, what
+    /// GDK says about the window is not recorded as its screen or size.
+    pub fn set_detached_placing(&mut self, label: &str, placing: bool) {
+        self.detached_screens
+            .set_placing(label, placing, std::time::Instant::now());
+    }
+
+    /// Whether `label`'s placement is under way (and the mark not stale).
+    pub fn is_detached_placing(&self, label: &str) -> bool {
+        self.detached_screens
+            .is_placing(label, std::time::Instant::now())
+    }
 }
 
 pub type WindowRegistryState = Arc<Mutex<WindowRegistry>>;

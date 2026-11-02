@@ -1,4 +1,6 @@
-use std::ffi::OsStr;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -511,9 +513,8 @@ fn resolve_executable_in_dirs(
     resolve_in_dirs(dirs, bin, &refs, exists)
 }
 
-/// Resolve a command using the same effective PATH Tabtivity applies at execution.
-/// Windows resolution follows PATHEXT, including script shims.
-pub fn resolve_executable(bin: &str) -> Option<PathBuf> {
+/// The directories [`resolve_executable`] walks, in order.
+fn executable_search_dirs() -> Vec<PathBuf> {
     let current = std::env::var_os("PATH").unwrap_or_default();
     // Never the agent shims in `<state_dir>/bin`: a resolver wants the CLI
     // itself (to probe its version, to bind its install into a fence), and
@@ -521,13 +522,99 @@ pub fn resolve_executable(bin: &str) -> Option<PathBuf> {
     let shims = crate::services::agent_bin::bin_dir();
     let mut dirs: Vec<PathBuf> = extra_path_dirs().into_iter().filter(|d| *d != shims).collect();
     dirs.extend(std::env::split_paths(&current).filter(|d| *d != shims));
+    dirs
+}
+
+/// Resolve a command using the same effective PATH Tabtivity applies at execution.
+/// Windows resolution follows PATHEXT, including script shims.
+pub fn resolve_executable(bin: &str) -> Option<PathBuf> {
     resolve_executable_in_dirs(
         OsKind::current(),
-        &dirs,
+        &executable_search_dirs(),
         bin,
         std::env::var_os("PATHEXT").as_deref(),
         &|path| path.is_file(),
     )
+}
+
+/// One pass over the search path, for a caller asking about many binaries at
+/// once (the whole agent registry, with the UI waiting on the answer).
+/// [`resolve_executable`] stats every candidate, `dirs × (1 + PATHEXT)` for a
+/// CLI that isn't there; on Windows, with its long PATH, a dozen extensions and
+/// a stat that opens a handle through the filesystem filters, the registry came
+/// to tens of thousands of opens per list. Here each directory is listed once,
+/// the first time a candidate needs it, and only a name its listing holds is
+/// stat'ed, so the disk still decides what counts as a file.
+///
+/// Lives for one question: a listing is a snapshot, and a CLI installed a
+/// moment later has to be seen.
+pub struct PathLookup {
+    dirs: Vec<PathBuf>,
+    pathext: Option<OsString>,
+    /// By directory, its names through [`listed_name`]; `None` when it can't be
+    /// listed, which says nothing (a Unix directory can be searchable and
+    /// unreadable), so its candidates go to the stat as before.
+    listings: RefCell<HashMap<PathBuf, Option<HashSet<String>>>>,
+}
+
+impl PathLookup {
+    pub fn current() -> Self {
+        Self::over(executable_search_dirs(), std::env::var_os("PATHEXT"))
+    }
+
+    fn over(dirs: Vec<PathBuf>, pathext: Option<OsString>) -> Self {
+        Self { dirs, pathext, listings: RefCell::default() }
+    }
+
+    /// [`resolve_executable`], same dirs and precedence.
+    pub fn resolve(&self, bin: &str) -> Option<PathBuf> {
+        self.resolve_for(OsKind::current(), bin, &|path| path.is_file())
+    }
+
+    fn resolve_for(
+        &self,
+        os: OsKind,
+        bin: &str,
+        is_file: &impl Fn(&Path) -> bool,
+    ) -> Option<PathBuf> {
+        resolve_executable_in_dirs(os, &self.dirs, bin, self.pathext.as_deref(), &|path| {
+            self.may_exist(path) && is_file(path)
+        })
+    }
+
+    /// `path.exists()`, without the stat when its directory doesn't list it.
+    pub fn exists(&self, path: &Path) -> bool {
+        self.may_exist(path) && path.exists()
+    }
+
+    fn may_exist(&self, path: &Path) -> bool {
+        // A bare name is relative to the cwd (an empty PATH entry): nothing to list.
+        let (Some(dir), Some(name)) = (path.parent().filter(|d| !d.as_os_str().is_empty()), path.file_name())
+        else {
+            return true;
+        };
+        let mut listings = self.listings.borrow_mut();
+        let listing = listings.entry(dir.to_path_buf()).or_insert_with(|| list_dir(dir));
+        listing.as_ref().is_none_or(|names| names.contains(&listed_name(name)))
+    }
+}
+
+/// What a listing is matched by: case-folded, because Windows and macOS file
+/// names ignore case. A stat of the real path follows any match, so this only
+/// has to never miss.
+fn listed_name(name: &OsStr) -> String {
+    name.to_string_lossy().to_lowercase()
+}
+
+fn list_dir(dir: &Path) -> Option<HashSet<String>> {
+    match fs::read_dir(dir) {
+        Ok(entries) => entries
+            .map(|entry| entry.map(|entry| listed_name(&entry.file_name())))
+            .collect::<std::io::Result<_>>()
+            .ok(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(HashSet::new()),
+        Err(_) => None,
+    }
 }
 
 pub fn resolve_executable_in_dir(dir: &Path, bin: &str) -> Option<PathBuf> {
@@ -1040,6 +1127,91 @@ mod tests {
         let dirs = vec![PathBuf::from("/opt/bin")];
         let found = resolve_in_dirs(&dirs, "nope", &["exe"], &|_| false);
         assert_eq!(found, None);
+    }
+
+    #[test]
+    fn path_lookup_keeps_search_order_and_skips_what_is_not_a_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (missing, folder, first, second) = (
+            tmp.path().join("missing"),
+            tmp.path().join("folder"),
+            tmp.path().join("first"),
+            tmp.path().join("second"),
+        );
+        // A directory that merely has the binary's name doesn't count.
+        fs::create_dir_all(folder.join("tool")).unwrap();
+        for dir in [&first, &second] {
+            fs::create_dir_all(dir).unwrap();
+            fs::write(dir.join("tool"), "").unwrap();
+        }
+        let lookup = PathLookup::over(vec![missing, folder, first.clone(), second], None);
+        assert_eq!(lookup.resolve("tool"), Some(first.join("tool")));
+        assert_eq!(lookup.resolve("nope"), None);
+        assert!(lookup.exists(&first.join("tool")));
+        assert!(!lookup.exists(&first.join("nope")));
+    }
+
+    #[test]
+    fn path_lookup_stats_only_what_a_listing_holds() {
+        const PATHEXT: &str = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC";
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs: Vec<PathBuf> = (0..40).map(|i| tmp.path().join(i.to_string())).collect();
+        for dir in &dirs {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let installed = dirs[39].join("claude.cmd");
+        fs::write(&installed, "").unwrap();
+        let bins: Vec<String> =
+            std::iter::once("claude".to_string()).chain((0..29).map(|i| format!("cli{i}"))).collect();
+
+        let stats = std::cell::Cell::new(0);
+        let is_file = |path: &Path| {
+            stats.set(stats.get() + 1);
+            path == installed
+        };
+        // What one registry list cost before: 29 misses over every candidate.
+        for bin in &bins {
+            resolve_executable_in_dirs(OsKind::Windows, &dirs, bin, Some(OsStr::new(PATHEXT)), &is_file);
+        }
+        assert!(stats.get() > 29 * 40 * 12, "stats: {}", stats.get());
+
+        stats.set(0);
+        let lookup = PathLookup::over(dirs.clone(), Some(PATHEXT.into()));
+        let found: Vec<_> = bins.iter().filter_map(|bin| lookup.resolve_for(OsKind::Windows, bin, &is_file)).collect();
+        assert_eq!(found, std::slice::from_ref(&installed));
+        assert_eq!(stats.get(), 1);
+    }
+
+    #[test]
+    fn path_lookup_matches_a_name_in_any_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("TOOL.CMD"), "").unwrap();
+        let lookup = PathLookup::over(vec![tmp.path().to_path_buf()], Some(".EXE;.CMD".into()));
+        // Windows' stat ignores case; the listing must not be stricter than it.
+        let want = tmp.path().join("tool.cmd");
+        assert_eq!(lookup.resolve_for(OsKind::Windows, "tool", &|path| path == want), Some(want));
+    }
+
+    #[test]
+    fn path_lookup_leaves_a_cwd_relative_candidate_to_the_stat() {
+        let lookup = PathLookup::over(vec![PathBuf::new()], None);
+        let found = lookup.resolve_for(OsKind::Unix, "tool", &|path| path == Path::new("tool"));
+        assert_eq!(found, Some(PathBuf::from("tool")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_lookup_stats_in_a_directory_it_cannot_list() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("search-only");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("tool"), "").unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o111)).unwrap();
+        let found = PathLookup::over(vec![dir.clone()], None).resolve("tool");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(found, Some(dir.join("tool")));
     }
 
     #[test]

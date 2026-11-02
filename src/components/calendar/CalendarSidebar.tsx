@@ -6,7 +6,7 @@ import { addMonths, datePart, monthGrid, monthName, todayStr, weekdayLabel } fro
 import { useI18nStore, useT } from "../../lib/i18n";
 import { BellIcon } from "../common/BellIcon";
 import { UntestedTag } from "../common/UntestedTag";
-import { LinkIcon, LockIcon } from "../common/icons/Icon";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, LinkIcon, LockIcon, RefreshIcon } from "../common/icons/Icon";
 
 /** The palette a new calendar picks from. */
 const CALENDAR_COLORS = [
@@ -185,7 +185,7 @@ export function CalendarSidebar({
             onClick={() => setBrowse(addMonths(browse, -1))}
             title={t("calendarSidebar.prevMonthTitle")}
           >
-            ‹
+            <ChevronLeftIcon />
           </button>
           <span className="cal-mini-title">{monthName(lang, month)} {year}</span>
           <button
@@ -193,7 +193,7 @@ export function CalendarSidebar({
             onClick={() => setBrowse(addMonths(browse, 1))}
             title={t("calendarSidebar.nextMonthTitle")}
           >
-            ›
+            <ChevronRightIcon />
           </button>
         </div>
 
@@ -392,7 +392,7 @@ export function CalendarSidebar({
                 title={t("calendarSidebar.refreshCalendarTitle")}
                 onClick={() => onRefreshCalendar(cal.id)}
               >
-                ↻
+                <RefreshIcon />
               </button>
             ) : null}
 
@@ -427,7 +427,7 @@ export function CalendarSidebar({
                 title={t("calendarSidebar.deleteCalendarTitle")}
                 onClick={() => onDeleteCalendar(cal.id)}
               >
-                ×
+                <CloseIcon />
               </button>
             ) : null}
           </div>

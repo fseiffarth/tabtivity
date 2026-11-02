@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { makeNewRecoveryCode } from "../secrets";
@@ -33,7 +34,7 @@ export function SecretsNewCodeSheet({ onClose }: { onClose: () => void }) {
   return <div className="sheet-backdrop" role="presentation" onClick={code ? undefined : onClose}>
     <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("server.secrets.newCodeHeader")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header>{code ? <span className="sheet-close" aria-hidden="true" /> : <button className="sheet-close" onClick={onClose} aria-label={t("server.secrets.newCodeLater")}>✕</button>}<h2>{t("server.secrets.newCodeHeader")} {isUntested("server.secrets.newCodeAdvice") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header>{code ? <span className="sheet-close" aria-hidden="true" /> : <button className="sheet-close" onClick={onClose} aria-label={t("server.secrets.newCodeLater")}><CloseIcon size="1em" /></button>}<h2>{t("server.secrets.newCodeHeader")} {isUntested("server.secrets.newCodeAdvice") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       {code ? <>
         <p className="sheet-note">{t("server.secrets.codeIntro")}</p>
         <pre className="sheet-note" data-testid="mobile-recovery-code">{code}</pre>

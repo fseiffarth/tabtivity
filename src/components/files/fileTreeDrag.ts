@@ -208,7 +208,10 @@ export function startEntryPointerDrag(
   const inWindow = (c: { x: number; y: number }) =>
     c.x >= 0 && c.y >= 0 && c.x < window.innerWidth && c.y < window.innerHeight;
   const toNativeDrag = () => {
-    if (!dragging || nativeActive) return;
+    // A host (SFTP) listing's paths are the host's, not this machine's: the OS
+    // would be handed a path that does not exist here. The drag stays in-app
+    // (tabs, folders); "Download to…" is how a host file leaves.
+    if (!dragging || nativeActive || remoteListing) return;
     nativeActive = true;
     // The in-app drop targets are meaningless while the OS owns the drag.
     spring.cancel();

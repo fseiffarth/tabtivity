@@ -20,7 +20,7 @@
  * chip scrolls the page to its pin.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CheckboxIcon, SquareIcon } from "../../common/icons/Icon";
+import { CheckboxIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, SquareIcon } from "../../common/icons/Icon";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useT } from "../../../lib/i18n";
 import {
@@ -134,7 +134,7 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
               aria-label={t("pdfMarkup.questions.previous")}
               onClick={() => setShown(qi - 1)}
             >
-              ‹
+              <ChevronLeftIcon />
             </button>
             <span aria-live="polite">{t("pdfMarkup.questions.position", { index: qi + 1, count })}</span>
             <button
@@ -145,7 +145,7 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
               aria-label={t("pdfMarkup.questions.next")}
               onClick={() => setShown(qi + 1)}
             >
-              ›
+              <ChevronRightIcon />
             </button>
           </div>
         )}
@@ -187,7 +187,7 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
                   onClick={() => setPick(qi, toggleOption(question, pick, oi))}
                 >
                   <span className="terminal-reader-option-number">
-                    {question.multiSelect ? (chosen ? <CheckboxIcon /> : <SquareIcon />) : chosen ? "✓" : oi + 1}
+                    {question.multiSelect ? (chosen ? <CheckboxIcon /> : <SquareIcon />) : chosen ? <CheckIcon /> : oi + 1}
                   </span>
                   <span className="terminal-reader-option-label">
                     <span>
@@ -206,7 +206,7 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
               disabled={busy}
               onClick={() => setPick(qi, toggleOther(question, pick))}
             >
-              <span className="terminal-reader-option-number">{pick.other !== null ? "✓" : "…"}</span>
+              <span className="terminal-reader-option-number">{pick.other !== null ? <CheckIcon /> : "…"}</span>
               <span className="terminal-reader-option-label">
                 <span>{t("pdfMarkup.questions.other")}</span>
               </span>

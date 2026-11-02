@@ -176,20 +176,23 @@ describe(`${BRAND.display} Mobile service worker`, () => {
 describe(`${BRAND.display} Mobile push titles`, () => {
   /** Run the worker's push handler for `data`, with `pageLang` (or nothing)
    *  in the page's language cache and `browser` as the worker's navigator
-   *  language; resolves with the title the notification was shown under. */
+   *  language; `title` resolves with the title the notification was shown
+   *  under, `options` with what it was shown with. */
   function push(source: string, data: unknown, pageLang: string | null, browser = "en-US") {
     const listeners = new Map<string, (event: unknown) => void>();
     const prefs = new Map<string, Response>();
     if (pageLang !== null) prefs.set(PUSH_LANG_URL, new Response(pageLang));
     const deleted: string[] = [];
-    const shown: string[] = [];
+    const shown: { title: string; options: NotificationOptions & { timestamp?: number } }[] = [];
     const self = {
       location: { origin: ORIGIN },
       navigator: { language: browser },
       addEventListener: (name: string, listener: (event: unknown) => void) => listeners.set(name, listener),
       skipWaiting: () => undefined,
       clients: { claim: () => Promise.resolve() },
-      registration: { showNotification: (title: string) => { shown.push(title); return Promise.resolve(); } },
+      registration: {
+        showNotification: (title: string, options: NotificationOptions) => { shown.push({ title, options }); return Promise.resolve(); },
+      },
     };
     const caches = {
       open: (name: string) => Promise.resolve({
@@ -199,7 +202,7 @@ describe(`${BRAND.display} Mobile push titles`, () => {
       delete: (key: string) => { deleted.push(key); return Promise.resolve(true); },
     };
     new Function("self", "caches", "fetch", "URL", "setTimeout", source)(self, caches, () => Promise.reject(new Error("offline")), URL, setTimeout);
-    const title = new Promise<string>((resolve, reject) => {
+    const notice = new Promise<(typeof shown)[number]>((resolve, reject) => {
       listeners.get("push")!({
         data: { json: () => data },
         waitUntil: (work: Promise<unknown>) => void work.then(() => resolve(shown[0]), reject),
@@ -208,7 +211,7 @@ describe(`${BRAND.display} Mobile push titles`, () => {
     const activate = new Promise<string[]>((resolve) => {
       listeners.get("activate")!({ waitUntil: (work: Promise<unknown>) => void work.then(() => resolve(deleted)) });
     });
-    return { title, activate };
+    return { title: notice.then((row) => row.title), options: notice.then((row) => row.options), activate };
   }
 
   const stamped = stampPushTitles(SOURCE, pushTitleTable(TRANSLATIONS));
@@ -234,6 +237,27 @@ describe(`${BRAND.display} Mobile push titles`, () => {
 
   it("keeps a title the desktop sent", async () => {
     await expect(push(stamped, { ...question, title: "Aurora · Claude" }, "de").title).resolves.toBe("Aurora · Claude");
+  });
+
+  it("leads an agent notice with the phone's clock time of `at`", async () => {
+    const at = 1_793_000_000;
+    const clock = new Date(at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const full = await push(stamped, { ...question, title: "Aurora · Claude", body: "Needs your answer", at }, "de").options;
+    expect(full.body).toBe(`${clock} · Needs your answer`);
+    expect(full.timestamp).toBe(at * 1000);
+    // A phone without details has no body: the time is the whole line.
+    await expect(push(stamped, { ...question, at }, "de").options).resolves.toMatchObject({ body: clock });
+  });
+
+  it("adds no time to a calendar notice or to a push without a usable `at`", async () => {
+    const reminder = await push(stamped, { kind: "calendar", title: "Lunch", body: "12:30 · Mensa", at: 1_793_000_000 }, null).options;
+    expect(reminder.body).toBe("12:30 · Mensa");
+    expect(reminder.timestamp).toBeUndefined();
+    for (const at of [undefined, "soon", 1e30]) {
+      const options = await push(stamped, { ...question, body: "Needs your answer", at }, null).options;
+      expect(options.body).toBe("Needs your answer");
+      expect(options.timestamp).toBeUndefined();
+    }
   });
 
   it("spares the page's language cache when it purges old shells", async () => {

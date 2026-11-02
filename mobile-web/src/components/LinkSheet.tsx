@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { PATH_LINK_ATTR } from "../../../src/lib/terminal/pathCandidates";
 import { chatLinkUrl } from "../terminal/answerMarkdown";
 import { HOLD_MS } from "./MessageMenu";
 import { useBackLayer } from "../backStack";
@@ -37,7 +39,7 @@ function LinkSheet({ url, onClose }: { url: string; onClose: () => void }) {
     <section className="option-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.focus.messageMenuClose")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.focus.messageMenuClose")}><CloseIcon size="1em" /></button>
         <h2>{title} {isUntested("mobile.link.title") && <small>{t("mobile.focus.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>
@@ -75,12 +77,21 @@ export interface LinkHandlers {
  * Tappable links for a chat: `links` on every formatted message, `sheet` once
  * beside them. A tap on a link (`data-href`, set only for an address
  * `chatLinkUrl` accepts) opens `LinkSheet`; nothing opens without it. A press
- * held long enough to be the message menu's is that menu's, not a tap.
+ * held long enough to be a hold is the phone selecting the link's words, not
+ * a tap. A path link (`linkPathsInHtml`) goes to `openPath` instead: it opens
+ * a file of the project in the app, so it needs no confirmation.
  */
-export function useChatLinks(): { links: LinkHandlers; sheet: React.ReactNode } {
+export function useChatLinks(openPath?: (path: string) => void): { links: LinkHandlers; sheet: React.ReactNode } {
   const [url, setUrl] = useState<string | null>(null);
   const downAt = useRef(0);
+  const opener = useRef(openPath);
+  opener.current = openPath;
   const ask = useCallback((target: EventTarget): boolean => {
+    const path = target instanceof Element ? target.closest(`[${PATH_LINK_ATTR}]`)?.getAttribute(PATH_LINK_ATTR) : null;
+    if (path && opener.current) {
+      opener.current(path);
+      return true;
+    }
     const link = target instanceof Element ? target.closest<HTMLElement>(".md-link[data-href]") : null;
     const href = chatLinkUrl(link?.dataset.href);
     if (!href) return false;

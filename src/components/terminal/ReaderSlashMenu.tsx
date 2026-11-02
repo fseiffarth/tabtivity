@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import type { SlashSuggestion } from "../../../mobile-web/src/slashCommands";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The Reader composer's `/` menu — the phone composer's (`slashCommands`), on
@@ -53,7 +54,7 @@ export function ReaderSlashMenu({ suggestions, at, onPick, onForget }: {
               aria-label={t("mobile.slash.forget", { command: suggestion.line })}
               title={t("mobile.slash.forget", { command: suggestion.line })}
             >
-              ✕
+              <CloseIcon />
             </button>
           )}
         </div>

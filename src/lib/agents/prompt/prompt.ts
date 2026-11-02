@@ -67,7 +67,7 @@ const AFFIRM_WORD = /^(?:yes|allow|approve|accept|proceed|continue|run|apply|ok)
 const DENY_WORD =
   /^(?:no|don'?t|deny|reject|decline|cancel|keep|skip|stop|abort|quit)$/i;
 
-// Codex's startup hook-trust menu (0.160.1–0.164.0): "Hooks need review" over
+// Codex's startup hook-trust menu (0.160.1–0.166.0): "Hooks need review" over
 // "1. Review hooks / 2. Trust all and continue / 3. Continue without trusting".
 // None of its labels is a deny word, so `hasYesNoMenu` misses it, yet Codex
 // waits on it before the session starts. Anchored on the heading as well as a
@@ -79,7 +79,11 @@ const TRUST_OPTION = /(\D|^)\d{1,2}[.)][ \t]*Trust/;
 
 // OpenCode questions have no pointer or yes/no pair. Their footer identifies
 // the choice/toggle page and the final review. Cursor moves can omit spaces.
-const OPENCODE_QUESTION_KEYS = /(?:↑\s*↓\s*select|⇆\s*tab)\s*enter\s*(?:submit|confirm|toggle)\s*esc\s*dismiss/u;
+const OPENCODE_QUESTION_KEYS = /(?:↑\s*↓\s*select|⇆\s*tab)\s*enter\s*(?:submit|confirm|toggle)\s*esc\s*dismiss|enter\s*choose\s*(?:tab\s*next\s*)?esc\s*dismiss|◆\s*Questions\s*Review[\s\S]{0,1000}?enter\s*submit\s*esc\s*dismiss/u;
+// Its permission request draws chips on one row, not a menu: the row and the
+// hints it names, which a wide pane puts far right and a narrow one under it
+// (`mini` under 56 columns keeps only `pgup/pgdn scroll`).
+const OPENCODE_PERMISSION_ROW = /(?:Allow\s*once\s*Always\s*allow\s*Reject|Confirm\s*Cancel)[\s\S]{0,300}?(?:⇆\s*select\s*enter\s*confirm|pgup\/pgdn\s*scroll)/u;
 
 /**
  * True when the text holds a numbered menu offering both an affirmative and a
@@ -172,7 +176,7 @@ export function stripAnsi(text: string): string {
  * agent tab, to delete escapes that were never there.
  */
 export function looksLikeDecisionPromptStripped(plain: string): boolean {
-  if (OPENCODE_QUESTION_KEYS.test(plain)) return true;
+  if (OPENCODE_QUESTION_KEYS.test(plain) || OPENCODE_PERMISSION_ROW.test(plain)) return true;
   if (hasPointerChoice(plain)) return true;
   if (hasPointerWordMenu(plain)) return true;
   if (CODEX_HOOK_TRUST_HEADING.test(plain) && TRUST_OPTION.test(plain)) return true;

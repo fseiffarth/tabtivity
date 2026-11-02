@@ -16,6 +16,7 @@ import type {
 import { ErrorNote } from "../common/ErrorNote";
 import { exportExtensions } from "../../lib/brandMigration";
 import { useBoxesStore } from "../../stores/boxes";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * "Import project file…" — register a `.tabtivityproj` bundle written by
@@ -90,7 +91,8 @@ export function ProjectImportBundleDialog({
             bundlePath: info.path,
             name: name.trim() || null,
             targetParent: parent.trim() || null,
-            mirrorParent: info.remote ? parent.trim() || null : null,
+            // A remote-only bundle with no tree comes back mirrorless: no folder here.
+            mirrorParent: info.remote && !info.remoteOnly ? parent.trim() || null : null,
             restoreSession,
             restoreTime,
             joinBoxes,
@@ -118,8 +120,8 @@ export function ProjectImportBundleDialog({
           <h2>
             {t("transfer.importTitle")} <UntestedTag id="transfer.import" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
 
@@ -192,20 +194,26 @@ export function ProjectImportBundleDialog({
               />
             </label>
 
-            <label>
-              {t(info.remote ? "transfer.mirrorLocation" : "transfer.importLocation")}
-              <input
-                type="text"
-                value={parent}
-                onChange={(e) => setParent(e.target.value)}
-                spellCheck={false}
-              />
-            </label>
-            <div className="project-dialog-actions dialog-actions-start">
-              <button type="button" onClick={() => setPicking(true)} disabled={busy}>
-                {t("transfer.browseEllipsis")}
-              </button>
-            </div>
+            {info.remoteOnly ? (
+              <p className="settings-help">{t("transfer.bundleRemoteOnly")}</p>
+            ) : (
+              <>
+                <label>
+                  {t(info.remote ? "transfer.mirrorLocation" : "transfer.importLocation")}
+                  <input
+                    type="text"
+                    value={parent}
+                    onChange={(e) => setParent(e.target.value)}
+                    spellCheck={false}
+                  />
+                </label>
+                <div className="project-dialog-actions dialog-actions-start">
+                  <button type="button" onClick={() => setPicking(true)} disabled={busy}>
+                    {t("transfer.browseEllipsis")}
+                  </button>
+                </div>
+              </>
+            )}
 
             <label className="container-settings-toggle">
               <span>

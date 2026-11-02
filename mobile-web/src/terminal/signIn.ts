@@ -46,7 +46,7 @@ export interface SignIn {
   userCode?: string;
 }
 
-interface SignInLineLike { text: string }
+interface SignInLineLike { text: string; key?: string }
 
 /** How far up from the bottom the URL may sit. The CLI draws its prompt, a
  * spinner and a footer under it, and at phone width a long line wraps. */
@@ -181,8 +181,10 @@ export function readCloudSession(lines: readonly SignInLineLike[]): string | nul
 
 /** The note under a page a CLI scrolls inside its own window, one line per
  * Shift+↓/↑: Antigravity's sign-in page in a pane too short for its link
- * (`(1–20 of 34 lines)` at 42×24). The rows straight above it are lines 1 to
- * 20 of the page; the link's `state=` and the paste prompt are further down. */
+ * (`(1–20 of 40 lines)` at 42×24). The rows straight above it are lines 1 to
+ * 20 of the page; the link's `state=` and the paste prompt are further down.
+ * Antigravity's first-run terms draw the same note (1.4.9): they hold no
+ * sign-in link, so no page starts on them. */
 const PAGE_NOTE = /^\((\d{1,4})\s*[–-]\s*(\d{1,4}) of (\d{1,4}) lines\)$/u;
 /** The longest page assembled; the cap only bounds a misread. */
 const MAX_PAGE = 400;
@@ -190,6 +192,14 @@ const PAGE_DOWN = "\u001b[1;2B";
 const PAGE_UP = "\u001b[1;2A";
 
 interface PageWindow { first: number; last: number; total: number; rows: string[] }
+
+/** The buffer row a reading-view line starts at (`ReadableLine.key`). */
+const LINE_ROW = /^r(\d+)/u;
+
+function bufferRow(line: SignInLineLike): number | null {
+  const row = LINE_ROW.exec(line.key ?? "");
+  return row ? Number(row[1]) : null;
+}
 
 function pageNote(text: string | undefined): { first: number; last: number; total: number } | null {
   const note = PAGE_NOTE.exec((text ?? "").trim());
@@ -205,14 +215,27 @@ function cutByPage(below: string | undefined): boolean {
   return note !== null && note.last < note.total;
 }
 
-/** The lowest page window on screen: its note, and the rows it shows. */
+/** The lowest page window on screen: its note, and the rows it shows. The
+ * phone's reading view has dropped the page's blank runs, rules and logo, so a
+ * line that names its buffer row goes where that row is and a dropped row reads
+ * as blank; lines that name none are the rows themselves, counted back from the
+ * note. */
 function pageWindow(lines: readonly SignInLineLike[]): PageWindow | null {
-  const rows = lines.slice(Math.max(0, lines.length - SEARCH_WINDOW)).map((line) => line.text);
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    const note = pageNote(rows[index]);
+  const shown = lines.slice(Math.max(0, lines.length - SEARCH_WINDOW));
+  for (let index = shown.length - 1; index >= 0; index -= 1) {
+    const note = pageNote(shown[index].text);
     if (!note) continue;
     const count = note.last - note.first + 1;
-    return count <= index ? { ...note, rows: rows.slice(index - count, index) } : null;
+    const noteRow = bufferRow(shown[index]);
+    if (noteRow === null) {
+      return count <= index ? { ...note, rows: shown.slice(index - count, index).map((line) => line.text) } : null;
+    }
+    const rows = Array.from({ length: count }, () => "");
+    for (const line of shown.slice(0, index)) {
+      const at = count - (noteRow - (bufferRow(line) ?? noteRow));
+      if (at >= 0 && at < count) rows[at] = line.text;
+    }
+    return { ...note, rows };
   }
   return null;
 }

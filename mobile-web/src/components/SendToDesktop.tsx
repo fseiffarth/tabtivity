@@ -1,4 +1,5 @@
 import { ApiError, uploadToDesktop } from "../api";
+import { CloseIcon } from "../glyphs";
 import { usePhonePicks, type PickedFile } from "./phonePicks";
 import { isUntested } from "../../../src/lib/untested";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
@@ -44,7 +45,7 @@ export function SendToDesktop() {
     </ul>
     {picks.input}
     {picks.rows.map((upload) => upload.state === "failed"
-      ? <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{upload.failure}</span><button onClick={() => dismiss(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}>✕</button></div>
-      : <div key={upload.id} className="inbox-upload" role="status"><strong>{upload.name}</strong><span>{t(upload.state === "sent" ? "mobile.sendToDesktop.sent" : "mobile.sendToDesktop.sending")}</span>{upload.state === "sent" && <button onClick={() => dismiss(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}>✕</button>}</div>)}
+      ? <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{upload.failure}</span><button onClick={() => dismiss(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}><CloseIcon size="1em" /></button></div>
+      :<div key={upload.id} className="inbox-upload" role="status"><strong>{upload.name}</strong><span>{t(upload.state === "sent" ? "mobile.sendToDesktop.sent" : "mobile.sendToDesktop.sending")}</span>{upload.state === "sent" && <button onClick={() => dismiss(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}><CloseIcon size="1em" /></button>}</div>)}
   </section>;
 }

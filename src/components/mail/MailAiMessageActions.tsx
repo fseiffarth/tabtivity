@@ -19,6 +19,7 @@ import { useSettingsStore } from "../../stores/settings";
 import type { CalendarEvent, EventMailLink } from "../../types";
 import type { MailExtractedEvent, MailExtractedTask, MailHeader } from "../../types/mail";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The message pane's **local-model** controls (Group Q #204/#207/#208): summarize
@@ -268,7 +269,7 @@ export function MailAiMessageActions({ header }: { header: MailHeader }) {
               aria-label={t("mailAi.summaryHide")}
               onClick={() => setSummary(null)}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
           <ul className="mail-ai-summary-list">

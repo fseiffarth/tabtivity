@@ -1,10 +1,11 @@
+import { useEffect, useRef, useState } from "react";
 import { IS_MAC } from "../../lib/platform";
 import { startWindowDrag } from "../../lib/window/startWindowDrag";
 import { Clock } from "../header/Clock";
 import { StatusCluster } from "../header/StatusCluster";
 import { WindowControls } from "../header/WindowControls";
 import { HeaderSlot } from "../header/HeaderSlot";
-import { isHeaderPinned, orderedHeaderIds, useHeaderPinDefaults } from "../../lib/headerPins";
+import { headerWidthTier, isHeaderPinned, orderedHeaderIds, useHeaderPinDefaults } from "../../lib/headerPins";
 import { APP_ICONS } from "../header/appIcons";
 import { useSettingsStore } from "../../stores/settings";
 import { ProjectSwitcher } from "./ProjectSwitcher";
@@ -36,6 +37,19 @@ export function HeaderBar() {
   const order = useSettingsStore((s) => s.settings?.header_order);
   const pins = useSettingsStore((s) => s.settings?.header_pins);
   const pinDefaults = useHeaderPinDefaults();
+  const headerRef = useRef<HTMLElement>(null);
+  const [widthTier, setWidthTier] = useState<0 | 1 | 2 | 3>(0);
+  // The bar gives way by its own width (`headerWidthTier`): the badges and the
+  // clock fold in CSS off `data-width-tier`, the cluster through its prop.
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setWidthTier(headerWidthTier(entry.contentRect.width));
+    });
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
   // (A `workspace_info` fetch whose answer was discarded, and a
   // `workspace-changed` listener unsubscribed the moment it resolved, used to
   // sit here. What the workspace backend can do is now said in Settings →
@@ -43,7 +57,9 @@ export function HeaderBar() {
 
   return (
     <header
+      ref={headerRef}
       className={`app-header${IS_MAC ? " is-mac" : ""}`}
+      data-width-tier={widthTier}
       onMouseDown={handleDrag}
     >
       {/* The bar opens on the project strip itself: its leading box chip is the
@@ -81,7 +97,7 @@ export function HeaderBar() {
           </HeaderSlot>
         ))}
         <span className="header-right-gap" aria-hidden="true" />
-        <StatusCluster />
+        <StatusCluster narrow={widthTier >= 3} />
         {/* The clock sits between the cluster's chevron and the window
             controls: machine-level, like the readouts it follows. */}
         <Clock />

@@ -18,7 +18,7 @@ import { AgentScheduleDialog } from "./AgentScheduleDialog";
 import { AgentScheduleProposal } from "./AgentScheduleProposal";
 import { GitPushProposals } from "./GitPushMcp";
 import { isPromptTargetTab } from "./promptTarget";
-import { ArrowUpRightIcon } from "../common/icons/Icon";
+import { ArrowUpRightIcon, ClockIcon, PencilIcon, RefreshIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { storageKey } from "../../lib/brand";
 
@@ -268,7 +268,7 @@ export function AgentSchedulesView({ scope, active }: Props) {
         >
           <div className="agent-prompts-tab-main">
             <div className="agent-prompts-tab-head">
-              {renaming === tab.key ? <input className="agent-prompts-rename" defaultValue={tab.label} autoFocus aria-label={t("tabBar.renameAriaLabel")} ref={(node) => node?.select()} onKeyDown={(event) => { if (event.key === "Enter") commitRename(tab.key, event.currentTarget.value); if (event.key === "Escape") setRenaming(null); }} onBlur={(event) => commitRename(tab.key, event.target.value)} /> : <><button className="agent-prompts-tab-name" type="button" title={t("agentPrompts.jumpTitle", { tab: tab.label })} onClick={() => jumpToTab(scope, tab.key)}><strong>{tab.label}</strong></button><button className="agent-composer-chip agent-prompts-rename-btn" type="button" title={t("common.rename")} aria-label={t("tabBar.renameAriaLabel")} onClick={() => setRenaming(tab.key)}>✎</button></>}
+              {renaming === tab.key ? <input className="agent-prompts-rename" defaultValue={tab.label} autoFocus aria-label={t("tabBar.renameAriaLabel")} ref={(node) => node?.select()} onKeyDown={(event) => { if (event.key === "Enter") commitRename(tab.key, event.currentTarget.value); if (event.key === "Escape") setRenaming(null); }} onBlur={(event) => commitRename(tab.key, event.target.value)} /> : <><button className="agent-prompts-tab-name" type="button" title={t("agentPrompts.jumpTitle", { tab: tab.label })} onClick={() => jumpToTab(scope, tab.key)}><strong>{tab.label}</strong></button><button className="agent-composer-chip agent-prompts-rename-btn" type="button" title={t("common.rename")} aria-label={t("tabBar.renameAriaLabel")} onClick={() => setRenaming(tab.key)}><PencilIcon /></button></>}
               <small>{tab.cmd}</small>
               {model && <small className="agent-prompts-model" data-testid="agent-model" title={t("agentPrompts.modelTagTitle")}>{model}</small>}
               {!isResumableAgentTab(tab) && <small className="danger-text">{t("agentPrompts.nonResumable")}</small>}
@@ -276,18 +276,18 @@ export function AgentSchedulesView({ scope, active }: Props) {
             <small className="agent-prompts-tab-when" data-testid="agent-tab-times">{timesLabel(tab, state)}</small>
             {promptByTab[`${scope}:${tab.key}`] && <small className="agent-prompts-tab-when agent-prompts-last-prompt" data-testid="agent-last-prompt" title={`${t("agentPrompts.lastPromptTitle")}\n\n${promptByTab[`${scope}:${tab.key}`]}`}>{t("agentPrompts.lastPrompt", { prompt: promptByTab[`${scope}:${tab.key}`] })}</small>}
             <small className="agent-prompts-tab-when">{summary.total === 0 ? t("agentPrompts.noSchedules") : summary.next ? `${summary.enabled} · ${t("agentPrompts.nextRun", { relative: relativeToNow(summary.next, now, lang) })}` : queued.length ? `${summary.enabled} · ${t("agentPrompts.queuedCount", { count: queued.length })}` : `${summary.enabled} · ${t("agentSchedule.noNext")}`}</small>
-            {continueLabel(tab) && <small className="agent-prompts-tab-when" data-testid="agent-continue-status">⟳ {continueLabel(tab)}</small>}
+            {continueLabel(tab) && <small className="agent-prompts-tab-when" data-testid="agent-continue-status"><RefreshIcon /> {continueLabel(tab)}</small>}
             {open && <AgentTabComposer scope={scope} tab={tab} offered={prefaceCommandsFor(tab.cmd, settings?.agent_preface_commands)} models={agentModelsFor(tab.cmd, settings?.agent_models)} />}
           </div>
           <div className="agent-prompts-tab-actions">
             <button className="agent-composer-chip" type="button" onClick={() => jumpToTab(scope, tab.key)}><ArrowUpRightIcon /> {t("agentPrompts.jump")}</button>
             <button className={`agent-composer-chip${open ? " active" : ""}`} type="button" aria-pressed={open} onClick={() => setUnfolded((keys) => keys.includes(tab.key) ? keys.filter((key) => key !== tab.key) : [...keys, tab.key])}>{t("agentPrompts.composerToggle")}</button>
-            <button className={`agent-composer-chip${tab.autoContinue ? " active" : ""}`} type="button" aria-pressed={!!tab.autoContinue} data-testid="agent-continue-toggle" onClick={() => { setAutoContinue(scope, tab.key, !tab.autoContinue); void persistScopeLayout(scope); }}>⟳ {t("agentContinue.toggle")}</button>
+            <button className={`agent-composer-chip${tab.autoContinue ? " active" : ""}`} type="button" aria-pressed={!!tab.autoContinue} data-testid="agent-continue-toggle" onClick={() => { setAutoContinue(scope, tab.key, !tab.autoContinue); void persistScopeLayout(scope); }}><RefreshIcon /> {t("agentContinue.toggle")}</button>
             {schedules.filter((s) => s.origin).map((schedule) => <div key={schedule.id}>
               <small>{schedule.message}</small>
               <AgentScheduleProposal projectId={scope} targetId={tab.scheduleTargetId!} schedule={schedule} />
             </div>)}
-            <button className="settings-btn sm" type="button" onClick={() => setDialog(tab)}>◷ {t("agentPrompts.schedulesButton")}</button>
+            <button className="settings-btn sm" type="button" onClick={() => setDialog(tab)}><ClockIcon /> {t("agentPrompts.schedulesButton")}</button>
           </div>
         </div>;
       })}

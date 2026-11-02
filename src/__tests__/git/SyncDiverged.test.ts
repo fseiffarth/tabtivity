@@ -10,8 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve([])) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
-import { mtimeDivergenceCue } from "../../components/files/ProjectFilesView";
-import { splitByDeleteSide, splitByNewerSide, withoutChangedOnBoth } from "../../stores/remote/sync";
+import { mtimeDivergenceCue, splitByDeleteSide, splitByNewerSide, withoutChangedOnBoth } from "../../lib/remote/divergedRows";
 import type { TranslationKey } from "../../lib/i18n";
 
 // The cue's text is asserted as the raw key — the wording is i18n's business.

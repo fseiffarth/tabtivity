@@ -79,6 +79,13 @@ export function sessionKindFromName(name: string): TmuxSessionKind {
   return "other";
 }
 
+/** Whether `name` was minted for `scope`. Only a Tabtivity name says so: a
+ *  renamed or foreign session, or another project's under "All host sessions",
+ *  answers false. */
+export function sessionMintedFor(name: string, scope: string): boolean {
+  return tmuxSessionRest(name)?.startsWith(`${sanitizeForTmuxName(scope)}--`) ?? false;
+}
+
 /**
  * Whether persistent sessions are enabled for a remote project. **Default ON** —
  * `undefined`/`true` mean enabled; only an explicit `false` (the pill's toggle)

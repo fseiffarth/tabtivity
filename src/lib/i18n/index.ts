@@ -87,19 +87,37 @@ export function registerDict(lang: Language, dict: Dict) {
   if (s.lang === lang) s.bumpDictGen();
 }
 
-const dictsInFlight = new Set<Language>();
+const dictsInFlight = new Map<Language, Promise<boolean>>();
 
-/** Idempotently start the background load of `lang`'s dictionary. */
-function ensureDict(lang: Language) {
-  if (lang === "en" || loadedDicts[lang] || dictsInFlight.has(lang)) return;
-  dictsInFlight.add(lang);
-  dictLoaders[lang]()
-    .then((m) => registerDict(lang, m.dict))
-    .catch(() => {
-      // Chunk failed to load (dev-server hiccup, torn install): English stands
-      // in; clearing the in-flight mark lets a later applyLanguage retry.
+/** Idempotently start the background load of `lang`'s dictionary. Resolves
+ *  `true` once `translate` answers in `lang`, `false` if the chunk failed to
+ *  load (English stands in); never rejects. */
+function ensureDict(lang: Language): Promise<boolean> {
+  if (lang === "en" || loadedDicts[lang]) return Promise.resolve(true);
+  const inFlight = dictsInFlight.get(lang);
+  if (inFlight) return inFlight;
+  const load = dictLoaders[lang]()
+    .then((m) => {
+      registerDict(lang, m.dict);
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      // Loaded: `loadedDicts` answers from now on. Failed (dev-server hiccup,
+      // torn install): clearing the in-flight mark lets a later call retry.
       dictsInFlight.delete(lang);
     });
+  dictsInFlight.set(lang, load);
+  return load;
+}
+
+/** Load `lang`'s dictionary even when it is not the UI language: the phone's
+ *  voice speaks and listens in its own speech language (`speechLang.ts`), so
+ *  the voice templates and spoken lines (`lib/voice/voiceCommands.ts`) must be
+ *  there when the UI reads another. Resolves `true` once `translate(lang, …)`
+ *  answers in `lang`, `false` when the chunk failed (English stands in). */
+export function loadDict(lang: Language): Promise<boolean> {
+  return ensureDict(lang);
 }
 
 const LANG_CACHE_KEY = storageDashKey("lang");
@@ -133,14 +151,14 @@ export const useI18nStore = create<I18nStore>((set) => ({
 // First paint: start fetching the cached language's dictionary immediately, in
 // parallel with the rest of startup — settings only confirm (or change) the
 // choice later via `applyLanguage`.
-ensureDict(cachedLang());
+void ensureDict(cachedLang());
 
 /** Apply a language app-wide: flips the reactive store and caches it so the next
  *  launch paints this language before settings finish loading. Mirrors
  *  `applyTheme` in `stores/settings`. */
 export function applyLanguage(value: string | null | undefined) {
   const lang = normalizeLang(value);
-  ensureDict(lang);
+  void ensureDict(lang);
   useI18nStore.getState().setLangLocal(lang);
   try {
     localStorage.setItem(LANG_CACHE_KEY, lang);

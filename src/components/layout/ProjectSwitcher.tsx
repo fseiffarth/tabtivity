@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { useHeaderMenu } from "../../hooks/useHeaderMenu";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -22,14 +23,17 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { GIT_DOT_TICK_MS, gitDotProbedAt, gitDotsDue, remoteGitDotStep, useGitDirtyStore } from "../../stores/gitDirty";
 import { useRemoteStatusStore, type ConnState } from "../../stores/remote/remoteStatus";
 import { useAgentFenceMarksStore } from "../../stores/agentFenceMarks";
+import { usePhonePresencePoll } from "../../stores/phonePresence";
 import { projectStations, useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useQuiesce, saverInterval } from "../../stores/power";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useT } from "../../lib/i18n";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
 import { observeStripResize } from "../../lib/observeStripResize";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 // Re-exported for tests and any external callers that imported these scaffold
 // helpers from ProjectSwitcher before the dialog was extracted (the public
@@ -95,7 +99,9 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   const scope = useTabsStore((s) => s.scope);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPanel, setSettingsPanel] = useState<SettingsPanelKind>("main");
+  const projectsLoaded = useProjectsStore((s) => s.loaded);
   const [settingsAnchor, setSettingsAnchor] = useState<string | undefined>(undefined);
+  const [settingsReveal, setSettingsReveal] = useState<{ path: string[]; open?: boolean } | undefined>(undefined);
   // "clone" is the import dialog opened straight onto its GitHub/GitLab source —
   // the same dialog, so the source can still be switched back inside it.
   const [dialog, setDialog] = useState<"new" | "import" | "clone" | "bundle" | null>(null);
@@ -127,11 +133,12 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
       // guide's "Open Mobile settings").
       const detail = (e as CustomEvent).detail as
         | SettingsPanelKind
-        | { panel?: SettingsPanelKind; anchor?: string }
+        | { panel?: SettingsPanelKind; anchor?: string; reveal?: { path: string[]; open?: boolean } }
         | undefined;
       const named = typeof detail === "string" ? { panel: detail } : detail;
       setSettingsPanel(named?.panel ?? "main");
       setSettingsAnchor(named?.anchor);
+      setSettingsReveal(named?.reveal);
       setShowSettings(true);
     };
     // Steering's Escape out of the settings region closes the dialog again.
@@ -208,6 +215,8 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     [gitDotTargets],
   );
   const quiesce = useQuiesce();
+  // Feeds the phone marks on the pills and tabs.
+  usePhonePresencePoll();
   // Fast mode withdraws the dots entirely: this is a `git status` per local
   // project every 12–36 s, for projects the user is not currently in, and the dot
   // it feeds is the definition of an aid — the project's own file view says the
@@ -544,7 +553,9 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
    */
   const addAndAudit = async (project: ProjectEntry) => {
     await addProject(project);
-    if (project.remote) useBigFoldersStore.getState().openOnce(project.id);
+    // The big-folder ask is about what to sync into the mirror: a project pinned
+    // to its host (remote-only or VM) has none.
+    if (project.remote && !isHostPinned(project)) useBigFoldersStore.getState().openOnce(project.id);
   };
 
   return (
@@ -555,6 +566,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             onClose={() => setShowSettings(false)}
             initialPanel={settingsPanel}
             initialAnchor={settingsAnchor}
+            initialReveal={settingsReveal}
           />
         </Suspense>,
         document.body,
@@ -660,7 +672,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
               scrollPills(-1);
             }}
           >
-            ‹
+            <ChevronLeftIcon />
           </button>
           <div
             className="project-pills-scroll"
@@ -669,6 +681,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             // window; pills/boxes are nested so their press is left untouched.
             onMouseDown={startWindowDrag}
           >
+            {!projectsLoaded && <SkeletonRows count={3} className="project-pills-skeleton" />}
             {visibleProjects.map((project) => {
               const isCurrentBoxMember = currentBoxMemberIds.has(project.id);
               // The swatches a member pill wears: one per box it is in, in the
@@ -728,7 +741,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
               scrollPills(1);
             }}
           >
-            ›
+            <ChevronRightIcon />
           </button>
         </div>
         <div className="project-switcher-separator" />

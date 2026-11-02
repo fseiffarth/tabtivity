@@ -85,8 +85,26 @@ function ordinalOf(word: string): number | undefined {
  * pick — "one", "option two", "Nummer 3, bitte", "the second one", "die
  * Zweite" — so a sentence that merely contains a number is never taken for
  * one. A number outside the card is no pick, and nothing is guessed at.
+ *
+ * `labels`, when given, are the rows' own words: an utterance that says one
+ * row's label whole — case and punctuation aside — picks it ("an option's
+ * words"). Two rows with the same words pick neither.
  */
-export function matchOption(utterance: string, count: number): number | null {
+export function matchOption(utterance: string, count: number, labels?: readonly string[]): number | null {
+  const pick = matchOptionNumber(utterance, count);
+  if (pick !== null || !labels) return pick;
+  const said = utteranceWords(utterance).join(" ");
+  if (!said) return null;
+  let found: number | null = null;
+  for (let index = 0; index < Math.min(count, labels.length); index++) {
+    if (utteranceWords(labels[index]).join(" ") !== said) continue;
+    if (found !== null) return null;
+    found = index;
+  }
+  return found;
+}
+
+function matchOptionNumber(utterance: string, count: number): number | null {
   let words = utteranceWords(utterance);
   while (words.length > 0 && OPTION_POLITE.has(words[words.length - 1])) words = words.slice(0, -1);
   while (words.length > 0 && OPTION_POLITE.has(words[0])) words = words.slice(1);
@@ -137,6 +155,10 @@ export function spokenText(markdown: string, codeLabel: string): string {
     .trim();
 }
 
+/** A sentence: up to an end mark followed by a space or the end, so the dot
+ * in "chime.ts", "v0.2" or "3.5" is no sentence's end. */
+export const SENTENCE = /[^\s][\s\S]*?(?:[.!?…]+(?=\s|$)|$)\s*/gu;
+
 /** `text` in pieces of at most `max` characters, each short enough for the
  * caller's voice to speak whole: sentences, packed together while they fit,
  * and a sentence too long for one piece cut at a word. */
@@ -147,7 +169,7 @@ export function speechChunks(text: string, max: number): string[] {
     if (open) chunks.push(open);
     open = "";
   };
-  for (const sentence of text.match(/[^.!?…]+[.!?…]*\s*/g) ?? []) {
+  for (const sentence of text.match(SENTENCE) ?? []) {
     let rest = sentence.trim();
     if (!rest) continue;
     if (open && open.length + 1 + rest.length <= max) {

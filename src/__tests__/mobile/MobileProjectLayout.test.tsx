@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { resetTips } from "../../../mobile-web/src/components/HintMessage";
+import { writeTipShownAt } from "../../../mobile-web/src/prefs";
 
 const fetchMock = vi.fn();
 
@@ -86,15 +87,18 @@ describe("Mobile project screen — layout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Read" }));
     expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
     early.unmount();
+    // One tip per half hour on the phone: let it pass.
+    writeTipShownAt(Date.now() - 30 * 60_000);
     const first = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     expect(await screen.findByText(/Tapping ＋ opens Claude; hold ＋ to start a different agent/)).toBeTruthy();
     fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
     expect(screen.queryByText(/hold ＋ to start a different agent/)).toBeNull();
-    // Held once, the next tip — the cards' ⋯ — takes its place.
-    expect(screen.getByText(/The ⋯ on a tab's card/)).toBeTruthy();
+    // Held once, it is gone; the next tip — the cards' ⋯ — waits out the half hour.
+    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
     first.unmount();
+    writeTipShownAt(Date.now() - 30 * 60_000);
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
-    await screen.findByText("claude 1");
+    expect(await screen.findByText(/The ⋯ on a tab's card/)).toBeTruthy();
     expect(screen.queryByText(/hold ＋ to start a different agent/)).toBeNull();
   });
 

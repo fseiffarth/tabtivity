@@ -7,6 +7,7 @@ import { useT } from "../../lib/i18n";
 import { patchDefaultApps } from "../../lib/defaultApps";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
+import { CloseIcon } from "../common/icons/Icon";
 
 interface InstalledApp {
   name: string;
@@ -182,7 +183,7 @@ export function SetDefaultAppDialog({ ext, fileName, projectId, onClose }: Props
       >
         <div className="settings-title-row">
           <h2>{t("setDefaultApp.title", { ext })} <UntestedTag id="setDefaultApp.patch" /></h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <p className="settings-help">
           {t("setDefaultApp.bodyPre")} <strong>{fileName}</strong> {t("setDefaultApp.bodyMid")}{" "}

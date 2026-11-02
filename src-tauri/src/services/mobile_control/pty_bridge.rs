@@ -35,6 +35,25 @@ struct ViewerSlot {
     /// bundle — counts as watching, which is what holding the slot used to
     /// mean for every viewer.
     hidden: AtomicBool,
+    /// Who holds it, for the desktop's phone marks (admin `Presence`).
+    viewer: Viewer,
+}
+
+/// The phone holding a tab and the scope the tab is in — the desktop's own
+/// ids, never sent to a phone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Viewer {
+    pub device_id: String,
+    pub project_id: String,
+}
+
+/// A held tab, as the desktop's phone marks read it ([`TerminalRegistry::viewers`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldTab {
+    pub tmux_session: String,
+    pub viewer: Viewer,
+    /// The page is in front of someone (see [`TerminalRegistry::is_watched`]).
+    pub watched: bool,
 }
 
 type ViewerSlots = Arc<Mutex<HashMap<String, Arc<ViewerSlot>>>>;
@@ -96,20 +115,33 @@ impl TerminalRegistry {
             .is_some_and(|slot| !slot.hidden.load(Ordering::Acquire))
     }
 
+    /// Every tab a phone holds right now, and whether it is on screen.
+    pub fn viewers(&self) -> Vec<HeldTab> {
+        self.busy
+            .lock_ok()
+            .iter()
+            .map(|(name, slot)| HeldTab {
+                tmux_session: name.clone(),
+                viewer: slot.viewer.clone(),
+                watched: !slot.hidden.load(Ordering::Acquire),
+            })
+            .collect()
+    }
+
     /// Claims the tab, displacing an existing viewer if there is one.
     ///
     /// A phone that is backgrounded before its `detached` frame flushes leaves
     /// the slot held until the idle reaper (`IDLE_TIMEOUT`) fires, and the user
     /// was locked out of their own agent for minutes after glancing at another
     /// app. The newest viewer wins instead.
-    async fn acquire(&self, name: &str) -> Result<BusyGuard, String> {
+    async fn acquire(&self, name: &str, viewer: Viewer) -> Result<BusyGuard, String> {
         let deadline = tokio::time::Instant::now() + EVICTION_WAIT;
         loop {
             {
                 let mut busy = self.busy.lock_ok();
                 match busy.get(name) {
                     None => {
-                        let slot = Arc::new(ViewerSlot::default());
+                        let slot = Arc::new(ViewerSlot { viewer: viewer.clone(), ..ViewerSlot::default() });
                         busy.insert(name.to_string(), slot.clone());
                         return Ok(BusyGuard {
                             name: name.into(),
@@ -140,31 +172,47 @@ pub enum AttachTarget {
 }
 
 /// A CLI's sign on its screen that a message typed mid-turn still waits in
-/// its queue: a row starting with `row_start` that holds `words`. While it
-/// shows, Esc stops the turn and the CLI sends the queue at once; once the
-/// turn has taken the message in (Claude does at its next tool call), the
-/// sign is gone and an Esc would stop the turn that is to answer it — so Send
-/// now presses only while it shows (`AttachTarget::send_now`).
+/// its queue: a row starting with `row_start` that holds `words` and, after
+/// them, `row_tail`. While it shows, Esc stops the turn and the queue goes on;
+/// once the turn has taken the message in (Claude does at its next tool
+/// call), the sign is gone and an Esc would stop the turn that is to answer
+/// it — so Send now presses only while it shows (`AttachTarget::send_now`).
 #[derive(Debug, Clone, Copy)]
 struct QueueHint {
     row_start: &'static str,
     words: &'static str,
+    row_tail: &'static str,
+    /// Esc presses a stop takes, [`ESC_GAP`] apart.
+    presses: u8,
 }
 
-/// Which CLIs Send now serves (probed 2026-10-25). Claude Code 2.1.310 holds
+/// Between the Escs of a stop that takes two: tmux hands two in one call to
+/// the TUI as a single sequence, which OpenCode ignores.
+const ESC_GAP: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Which CLIs Send now serves (probed 2026-11-02). Claude Code 2.1.310 holds
 /// a mid-turn message until its next tool call and says so in its empty box.
-/// Codex 0.164 and Copilot take one into the running turn at once, so there
-/// is nothing to send now; OpenCode queues one but marks it nowhere a screen
-/// can read. Any other CLI is unprobed.
+/// Codex 0.166 lists what was queued with Tab (how a chat types it,
+/// `agentQueueWrites`) under a heading of its own; Esc drops that list back
+/// into its box, and the phone then presses Enter (`finishSendNow`). OpenCode
+/// 2.2.5's mini footer counts what waits and needs Esc twice; its full TUI
+/// marks a queue nowhere, and neither does Copilot. Any other CLI is unprobed.
 fn queue_hint(family: &str) -> Option<QueueHint> {
     match family {
-        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages" }),
+        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages", row_tail: "", presses: 1 }),
+        "codex" => Some(QueueHint { row_start: "•", words: "Queued follow-up inputs", row_tail: "", presses: 1 }),
+        // The footer's opening words change with the width: `esc interrupt`,
+        // `esc stop`.
+        "opencode" => Some(QueueHint { row_start: "", words: " · ctrl+x q ", row_tail: " pending", presses: 2 }),
         _ => None,
     }
 }
 
 fn queue_hint_shown(screen: &str, hint: &QueueHint) -> bool {
-    screen.lines().any(|row| row.starts_with(hint.row_start) && row.contains(hint.words))
+    screen.lines().any(|row| {
+        let Some(rest) = row.strip_prefix(hint.row_start) else { return false };
+        rest.find(hint.words).is_some_and(|at| rest[at + hint.words.len()..].contains(hint.row_tail))
+    })
 }
 
 /// The two one-shots the bridge runs beside the attach.
@@ -210,8 +258,9 @@ impl AttachTarget {
 
     /// Send now: Esc straight into the pane (`send-keys`, so tmux's
     /// escape-time does not hold it back as an attach client's Esc is) while
-    /// `hint` is on its screen; whether it went. A local check and press are
-    /// two tmux calls milliseconds apart; a host's are one script on the host
+    /// `hint` is on its screen, as often as the CLI's stop takes; whether it
+    /// went. A local check and press are tmux calls milliseconds apart; a
+    /// host's are one script on the host
     /// (`ssh_exec::host_tmux_send_now_command`), under the probe deadline.
     fn send_now(&self, hint: QueueHint) -> bool {
         match self {
@@ -222,12 +271,17 @@ impl AttachTarget {
                 if !screen.status.success() || !queue_hint_shown(&String::from_utf8_lossy(&screen.stdout), &hint) {
                     return false;
                 }
-                let mut press = crate::services::tmux_local::tmux_command();
-                press.args(["send-keys", "-t", &format!("={name}:"), "Escape"]);
-                press.status().is_ok_and(|status| status.success())
+                (0..hint.presses).all(|press| {
+                    if press > 0 {
+                        std::thread::sleep(ESC_GAP);
+                    }
+                    let mut key = crate::services::tmux_local::tmux_command();
+                    key.args(["send-keys", "-t", &format!("={name}:"), "Escape"]);
+                    key.status().is_ok_and(|status| status.success())
+                })
             }
             Self::Host { name, ssh } => {
-                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words) else {
+                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words, hint.row_tail, hint.presses) else {
                     return false;
                 };
                 let Ok(args) = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, false, &script) else {
@@ -562,6 +616,36 @@ fn is_interrupt_frame(bytes: &[u8]) -> bool {
     bytes == [MouseReportFilter::ESC] || bytes == [0x03]
 }
 
+/// The gaps the phone leaves between the writes of one message (its
+/// `AGENT_KEY_GAP` / `AGENT_SUBMIT_GAP`), kept again where the frames reach the
+/// pane. A cellular link can hold the frames back and hand them over in one
+/// burst; written back to back, an agent TUI reads the line reset, the text
+/// and the Enter as one chunk: a paste, whose CR is a new line, not a submit.
+/// The phone showed the prompt as sent while it sat unsent in Claude's composer
+/// (2026-10-30).
+const INPUT_KEY_GAP: std::time::Duration = std::time::Duration::from_millis(80);
+
+const INPUT_SUBMIT_GAP: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Whether a frame opens with a control byte — a key the TUI reads on its own.
+fn opens_with_key(bytes: &[u8]) -> bool {
+    bytes.first().is_some_and(|&b| b < 0x20 || b == 0x7f)
+}
+
+/// How long after the previous write (`previous_key`: it opened with a control
+/// byte) this frame waits before it goes into the pane. A lone Enter keeps the
+/// submit gap; a key frame, or any frame after one, the key gap. Plain text
+/// after plain text goes at once, so typing never queues.
+fn input_gap(previous_key: bool, bytes: &[u8]) -> std::time::Duration {
+    if bytes == b"\r" {
+        INPUT_SUBMIT_GAP
+    } else if previous_key || opens_with_key(bytes) {
+        INPUT_KEY_GAP
+    } else {
+        std::time::Duration::ZERO
+    }
+}
+
 /// Whether a close for `reason` tells the phone to come back. `replaced` means
 /// another viewer took over; that client must not fight its way back in a
 /// reconnect loop. `session_expired` retries through the phone's silent
@@ -833,6 +917,7 @@ impl Drop for PtySession {
 pub async fn attach(
     socket: WebSocket,
     target: AttachTarget,
+    viewer: Viewer,
     registry: TerminalRegistry,
     auth: Arc<Mutex<AuthStore>>,
     token: String,
@@ -852,7 +937,7 @@ pub async fn attach(
     on_seen: impl Fn(),
 ) -> Result<(), String> {
     let tmux_name = target.name().to_string();
-    let guard = registry.acquire(&tmux_name).await?;
+    let guard = registry.acquire(&tmux_name, viewer).await?;
     // Do this before the live attach starts redrawing. The browser receives it
     // before every PTY byte below, and tmux's clear/redraw then leaves these
     // lines in xterm's normal scrollback buffer above the live screen. The
@@ -976,6 +1061,9 @@ pub async fn attach(
     // The held Esc came as a frame of its own: the Esc key, an interrupt once
     // it goes out.
     let mut held_esc_key = false;
+    // When the pane was last written to, and whether that write opened with a
+    // key (`input_gap`).
+    let mut last_write: Option<(tokio::time::Instant, bool)> = None;
     // The phone spoke: its session slides (`auth::SESSION_IDLE`). Every frame
     // it sends, not the tick — a tick is the sidecar checking, not the phone.
     let touch = |auth: &Arc<Mutex<AuthStore>>| {
@@ -1043,6 +1131,7 @@ pub async fn attach(
                     // The Esc key the frame path held back: told here, once
                     // it reached the pane.
                     if !held.is_empty() {
+                        last_write = Some((tokio::time::Instant::now(), true));
                         last_input_report = Some(std::time::Instant::now());
                         on_input(std::mem::take(&mut held_esc_key));
                     }
@@ -1078,6 +1167,12 @@ pub async fn attach(
                         if !deliver(&mut ws_tx, Message::Text(ack_frame(input_frames).into())).await { break Ok(()); }
                         continue;
                     }
+                    // A frame that came in a burst waits out the gap the phone
+                    // left before it (`input_gap`).
+                    if let Some((at, previous_key)) = last_write {
+                        tokio::time::sleep_until(at + input_gap(previous_key, &bytes)).await;
+                    }
+                    last_write = Some((tokio::time::Instant::now(), opens_with_key(&bytes)));
                     // The AI switch: nothing typed reaches an agent while it is
                     // off. The frame is still acked — it was handled, by
                     // dropping it — and the phone is told why.
@@ -1204,8 +1299,8 @@ mod tests {
         tmux_window_size_command, MOBILE_SCROLLBACK_LINES,
     };
     use super::{
-        ack_frame, closing_retries, deliver, input_report_due, is_interrupt_frame, replay_frames, OutputQueue, IDLE_TIMEOUT,
-        INPUT_REPORT_INTERVAL, REPLAY_CHUNK, WRITE_TIMEOUT,
+        ack_frame, closing_retries, deliver, input_gap, input_report_due, is_interrupt_frame, replay_frames, OutputQueue,
+        IDLE_TIMEOUT, INPUT_KEY_GAP, INPUT_REPORT_INTERVAL, INPUT_SUBMIT_GAP, REPLAY_CHUNK, WRITE_TIMEOUT,
     };
     use super::MouseReportFilter;
     use crate::services::mobile_control::protocol::{TerminalControl, TerminalEvent, MAX_OUTPUT_QUEUE};
@@ -1385,16 +1480,30 @@ mod tests {
         assert!(!is_interrupt_frame(b""));
     }
 
+    #[test]
+    fn a_bursted_message_keeps_its_gaps_into_the_pane() {
+        use std::time::Duration;
+        // The phone's message: line reset, text, Enter.
+        assert_eq!(input_gap(false, b"\x01\x0b"), INPUT_KEY_GAP);
+        assert_eq!(input_gap(true, b"write the ideas file"), INPUT_KEY_GAP);
+        assert_eq!(input_gap(false, b"\r"), INPUT_SUBMIT_GAP);
+        // A bracketed paste opens with Esc: a key frame of its own.
+        assert_eq!(input_gap(false, b"\x1b[200~text\x1b[201~"), INPUT_KEY_GAP);
+        // Typing, and a shell line that carries its own Enter, never wait.
+        assert_eq!(input_gap(false, b"a"), Duration::ZERO);
+        assert_eq!(input_gap(false, b"ls -la\r"), Duration::ZERO);
+    }
+
     #[tokio::test]
     async fn a_reconnecting_viewer_evicts_the_previous_one() {
         use super::TerminalRegistry;
         let registry = TerminalRegistry::default();
-        let first = registry.acquire(concat!(crate::app_slug!(), "-p--agent-1")).await.expect("first");
+        let first = registry.acquire(concat!(crate::app_slug!(), "-p--agent-1"), super::Viewer::default()).await.expect("first");
         assert!(registry.is_busy(concat!(crate::app_slug!(), "-p--agent-1")));
         assert!(!first.evicted());
         let waiter = {
             let registry = registry.clone();
-            tokio::spawn(async move { registry.acquire(concat!(crate::app_slug!(), "-p--agent-1")).await })
+            tokio::spawn(async move { registry.acquire(concat!(crate::app_slug!(), "-p--agent-1"), super::Viewer::default()).await })
         };
         // The incumbent is asked to leave; releasing hands the slot over.
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
@@ -1414,7 +1523,7 @@ mod tests {
         use super::TerminalRegistry;
         let registry = TerminalRegistry::default();
         assert!(!registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")), "nobody attached");
-        let viewer = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3")).await.expect("viewer");
+        let viewer = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3"), super::Viewer::default()).await.expect("viewer");
         // A phone that never reports (an older bundle) counts as watching.
         assert!(registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
         assert!(!viewer.hidden());
@@ -1432,9 +1541,24 @@ mod tests {
         viewer.set_visible(false);
         drop(viewer);
         assert!(!registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
-        let next = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3")).await.expect("next viewer");
+        let next = registry.acquire(concat!(crate::app_slug!(), "-p--agent-3"), super::Viewer::default()).await.expect("next viewer");
         assert!(registry.is_watched(concat!(crate::app_slug!(), "-p--agent-3")));
         drop(next);
+    }
+
+    /// The desktop's phone marks: who holds which tab, on screen or not.
+    #[tokio::test]
+    async fn viewers_name_the_phone_and_scope_holding_each_tab() {
+        use super::{HeldTab, TerminalRegistry, Viewer};
+        let registry = TerminalRegistry::default();
+        let name = concat!(crate::app_slug!(), "-p--agent-4");
+        let viewer = Viewer { device_id: "phone-a".into(), project_id: "p".into() };
+        let held = registry.acquire(name, viewer.clone()).await.expect("viewer");
+        assert_eq!(registry.viewers(), vec![HeldTab { tmux_session: name.into(), viewer: viewer.clone(), watched: true }]);
+        held.set_visible(false);
+        assert_eq!(registry.viewers(), vec![HeldTab { tmux_session: name.into(), viewer, watched: false }]);
+        drop(held);
+        assert!(registry.viewers().is_empty());
     }
 
     #[test]
@@ -1459,8 +1583,8 @@ mod tests {
     async fn an_incumbent_that_never_leaves_still_yields_session_busy() {
         use super::TerminalRegistry;
         let registry = TerminalRegistry::default();
-        let _held = registry.acquire(concat!(crate::app_slug!(), "-p--agent-2")).await.expect("first");
-        match registry.acquire(concat!(crate::app_slug!(), "-p--agent-2")).await {
+        let _held = registry.acquire(concat!(crate::app_slug!(), "-p--agent-2"), super::Viewer::default()).await.expect("first");
+        match registry.acquire(concat!(crate::app_slug!(), "-p--agent-2"), super::Viewer::default()).await {
             Ok(_) => panic!("a held slot must not be handed over"),
             Err(reason) => assert_eq!(reason, "session_busy"),
         }
@@ -1603,10 +1727,33 @@ mod tests {
         assert!(!queue_hint_shown("❯ Reply only BANANA\n✽ Osmosing… (4s)\n───\n❯ \n───", &hint));
         // The words in the conversation are not the box.
         assert!(!queue_hint_shown("  it said Press up to edit queued messages\n❯ ", &hint));
-        // CLIs that take a mid-turn message in at once, or show no queue.
-        for family in ["codex", "copilot", "opencode", "gemini", "agent"] {
+        // CLIs that mark no queue on screen, or were never probed.
+        for family in ["copilot", "gemini", "agent"] {
             assert!(queue_hint(family).is_none(), "{family}");
         }
+    }
+
+    /// Screens as Codex 0.166.0 and OpenCode mini 2.2.5 drew them.
+    #[test]
+    fn send_now_reads_codex_and_opencode_queues_off_their_own_rows() {
+        let codex = queue_hint("codex").expect("codex has a hint");
+        assert_eq!(codex.presses, 1);
+        assert!(queue_hint_shown("• Working (5s • esc to interrupt)\n\n• Queued follow-up inputs\n  ↳ second\n    shift+← edit last queued message\n\n› Ask Codex", &codex));
+        // Prompts sent with Enter: Tabtivity's chat never leaves them there.
+        assert!(!queue_hint_shown("• Messages to be submitted after next tool call\n  ↳ second\n\n› Ask Codex", &codex));
+        // The heading quoted in the agent's own answer.
+        assert!(!queue_hint_shown("  it said • Queued follow-up inputs\n› Ask Codex", &codex));
+
+        let opencode = queue_hint("opencode").expect("opencode has a hint");
+        assert_eq!(opencode.presses, 2);
+        assert!(queue_hint_shown("› first\n┃\n🯦 esc interrupt · ctrl+x q 2 pending · Build · stub · Ollama · ctrl+p menu", &opencode));
+        // A phone-wide pane shortens the footer's opening words.
+        assert!(queue_hint_shown("🯦 esc stop · ctrl+x q 1 pending · Build · stub", &opencode));
+        // Nothing waits, and the full TUI draws neither.
+        assert!(!queue_hint_shown("🯦 esc interrupt · Build · stub · Ollama · ctrl+p menu", &opencode));
+        assert!(!queue_hint_shown("   ■⬝⬝⬝⬝⬝⬝⬝ esc interrupt     ↓ 1 shell  ctrl+p commands", &opencode));
+        // The key named in prose, with no count after it.
+        assert!(!queue_hint_shown("the panel opens with · ctrl+x q here", &opencode));
     }
 
     /// The local check and press against the real tmux (run with

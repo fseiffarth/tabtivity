@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { CloseIcon } from "../glyphs";
 import { ApiError, getLocalModels, localModelAction, wasApplied, type LocalModelAction, type LocalModelList, type LocalModelRow } from "../api";
 import { keepAliveKey, placementKey, pollDelay, sortModels, summary } from "../localModels";
 import { formatBytes } from "../../../src/lib/formatBytes";
@@ -238,7 +239,7 @@ export function LocalModelsSheet({ onClose, onChange }: {
     <section className="option-sheet local-models-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.localModels.title")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.localModels.close")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.localModels.close")}><CloseIcon size="1em" /></button>
         <h2>{t("mobile.localModels.title")}{isUntested("mobile.localModels") && <small>{t("mobile.newTab.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>

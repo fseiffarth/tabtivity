@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
+import { ChevronRightIcon } from "../common/icons/Icon";
 
 /** A small "?" that carries a long explanation as a tooltip, so the page keeps
  *  a short line and the detail is one hover (or focus) away. Not a button: it
@@ -53,7 +54,7 @@ export function AgentsFold({
         onClick={() => setOpen((o) => !o)}
       >
         <span className="agents-fold-chevron" aria-hidden="true">
-          ›
+          <ChevronRightIcon />
         </span>
         {label}
       </button>
@@ -90,7 +91,7 @@ export function AgentsGroup({
         onClick={() => setOpen((o) => !o)}
       >
         <span className="agents-group-chevron" aria-hidden="true">
-          ›
+          <ChevronRightIcon />
         </span>
         <span className="agents-group-title">{title}</span>
         <span className="agents-group-summary">{summary}</span>

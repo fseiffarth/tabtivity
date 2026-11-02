@@ -28,6 +28,7 @@ import {
   type HeaderStatusReport,
 } from "../../stores/headerStatus";
 import { useT } from "../../lib/i18n";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 // Code-split (perf plan §6): the Machines menu renders nothing while switched
 // off (Settings' "Remote features"; on by default), so its module graph loads
@@ -67,6 +68,9 @@ const MachinesIndicator = lazy(() =>
  * still said — the summary lamp takes the worst tone (red/amber) and the
  * tooltip lists every member's line — it just does not claim the width back.
  *
+ * The bar's own width has the last word: `narrow` (`headerWidthTier`, tier 3)
+ * collapses the cluster without touching that saved choice.
+ *
  * Two structural notes:
  *  - Folding is `display: none` on a wrapper, NOT unmounting. Every member stays
  *    mounted and keeps polling, because a folded widget still has to report the
@@ -80,7 +84,7 @@ const MachinesIndicator = lazy(() =>
  *    puts every widget back in the slot it always had.
  */
 
-export function StatusCluster() {
+export function StatusCluster({ narrow = false }: { narrow?: boolean } = {}) {
   const t = useT();
   const quiesce = useQuiesce();
   const [online, setOnline] = useState(navigator.onLine);
@@ -176,8 +180,10 @@ export function StatusCluster() {
   // that drew something and are not pinned. An item whose feature is off (empty
   // slot) is not counted, or the toggle would unfold nothing.
   const foldable = HEADER_ITEM_IDS.filter((id) => present[id] && !isHeaderPinned(pins, id, pinDefaults)).length;
-  const hasToggle = foldable >= 1 || dragFoldable;
-  const collapsed = !expanded && !foldPeek && hasToggle;
+  const hasToggle = foldable >= 1 || dragFoldable || narrow;
+  // `narrow`: the bar's last width tier takes the cluster back to its lamp
+  // whatever the user's choice; widening restores that choice untouched.
+  const collapsed = (!expanded || narrow) && !foldPeek && hasToggle;
 
   // Alerts leads the row by default: it is the one member that is a *control*
   // rather than a readout, so it takes the row's head — the slot nearest the
@@ -198,7 +204,7 @@ export function StatusCluster() {
     ),
     resources: (
       <AppResourceDisplay
-        folded={collapsed && !isHeaderPinned(pins, "resources", pinDefaults)}
+        folded={collapsed && (narrow || !isHeaderPinned(pins, "resources", pinDefaults))}
         peek={resourcePeek}
       />
     ),
@@ -233,7 +239,7 @@ export function StatusCluster() {
           {i === pinnedCount && !collapsed && hasToggle && (
             <span className="header-fold-separator" aria-hidden="true" />
           )}
-          <HeaderSlot id={id}>{members[id] ?? APP_ICONS[id]}</HeaderSlot>
+          <HeaderSlot id={id} narrow={narrow}>{members[id] ?? APP_ICONS[id]}</HeaderSlot>
         </Fragment>
       ))}
       {/* The toggle only exists once there is something to fold. */}
@@ -242,16 +248,19 @@ export function StatusCluster() {
           type="button"
           className="global-apps-menu-btn status-cluster-toggle"
           aria-expanded={!collapsed}
+          aria-disabled={narrow || undefined}
           aria-label={collapsed ? t("statusCluster.expandTitle") : t("statusCluster.collapseTitle")}
           title={toggleTitle}
           onPointerEnter={collapsed ? () => setResourcePeek((n) => n + 1) : undefined}
-          onClick={() => void updateSettings({ header_status_expanded: collapsed })}
+          onClick={() => {
+            if (!narrow) void updateSettings({ header_status_expanded: collapsed });
+          }}
         >
           {collapsed && <ConnLamp status={summaryLamp(all)} label={t("statusCluster.label")} />}
           {/* Points the way the cluster moves: ‹ opens it leftwards into the bar,
               › folds it back towards the window controls beside it. */}
           <span className="status-cluster-chevron" aria-hidden>
-            {collapsed ? "‹" : "›"}
+            {collapsed ? <ChevronLeftIcon /> : <ChevronRightIcon />}
           </span>
         </button>
       )}

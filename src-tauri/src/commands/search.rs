@@ -6,11 +6,20 @@
 //! contains the query as a literal substring. There is no regex in v1.
 //!
 //! The walk is pure Rust — `rg` is intentionally NOT depended upon (it is not on
-//! PATH in the build sandbox), so the literal walker below is the only
+//! PATH in the build sandbox), so the literal walker below is the only local
 //! implementation and is exactly what the tests exercise.
+//!
+//! A remote-only project has no local tree: its search runs on the host, one
+//! bounded `grep` over the pooled SSH master (`services::remote::host_search`,
+//! `docs/remote_only_projects_plan.md` E6a), parsed into the same
+//! [`SearchMatch`]. A plain Remote project keeps searching its mirror (the
+//! frontend passes the mirror as `project_dir`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::services::remote::host_search;
+use crate::tauri_host::Ctx;
 
 /// One matching line. `line`/`col` are 1-based; `col` is the char column of the
 /// first occurrence of the query in `text`.
@@ -40,23 +49,10 @@ const BINARY_SNIFF_BYTES: usize = 8 * 1024; // 8 KiB
 const DEFAULT_MAX_RESULTS: usize = 500;
 
 /// Vendor/build directories never worth searching. Mirrors
-/// `fs::should_skip_ending_scan_dir`.
+/// `fs::should_skip_ending_scan_dir`; the one list is
+/// [`host_search::SKIP_DIRS`], which a host search excludes too.
 fn should_skip_dir(name: &str) -> bool {
-    crate::brand::is_project_dir(name) || matches!(
-        name,
-        ".git"
-            | "node_modules"
-            | "target"
-            | "dist"
-            | "build"
-            | ".next"
-            | ".cache"
-            // Python vendor/artifact dirs, mirrored from fs.rs.
-            | ".venv"
-            | "venv"
-            | "__pycache__"
-            | ".tox"
-    )
+    crate::brand::is_project_dir(name) || host_search::SKIP_DIRS.contains(&name)
 }
 
 /// True when `bytes` looks like binary content (contains a NUL byte).
@@ -215,24 +211,112 @@ fn walk(
 
 /// Literal, project-confined content search. Returns up to `max_results`
 /// matching lines (default 500). Vendor/build dirs, binary files, and oversized
-/// files are skipped; symlinks are not followed.
+/// files are skipped; symlinks are not followed. `rel_root` (project-relative,
+/// POSIX) confines it to a folder; each hit's `rel` is then relative to that
+/// folder.
 ///
 /// Async + `spawn_blocking` because the walk reads every file ≤ 8 MiB in the
 /// tree — run synchronously that froze the whole window for the duration of
 /// every search on a large project (the main-thread freeze class
 /// `commands::git`'s off-thread note describes). The sync body stays
 /// directly unit-testable below.
+///
+/// A remote-only project (`project_dir` is its stored directory, resolved with
+/// `remote_target_for_dir` as the git commands do) is searched on the host
+/// instead: only over a live pooled connection (a dead one answers at once,
+/// never dials), and on an HPC-tagged host only once `confirmed`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn project_search(
+    ctx: Ctx,
     project_dir: String,
     query: String,
     case_sensitive: bool,
     max_results: Option<usize>,
+    rel_root: Option<String>,
+    confirmed: Option<bool>,
 ) -> Result<Vec<SearchMatch>, String> {
+    if let Some(target) = crate::services::remote::remote_target_for_dir(&project_dir) {
+        if target.spec.is_remote_only() {
+            let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+            let connected = crate::services::remote::is_connected(pool, &target.project_id).await;
+            let req = HostSearch { query, case_sensitive, max_results, rel_root, confirmed };
+            return host_search_run(target.spec, connected, req).await;
+        }
+    }
     app_core::rt::try_blocking("search", move || {
-        project_search_blocking(project_dir, query, case_sensitive, max_results)
+        project_search_blocking(project_dir, query, case_sensitive, max_results, rel_root)
     })
     .await
+}
+
+/// A host search's arguments, as the command received them.
+struct HostSearch {
+    query: String,
+    case_sensitive: bool,
+    max_results: Option<usize>,
+    rel_root: Option<String>,
+    confirmed: Option<bool>,
+}
+
+/// The connection gate every host walk shares (`list_project_paths` too): a
+/// remote-only project is only walked over the master the user brought up.
+pub(crate) fn host_disconnected_error() -> String {
+    "the host is not connected — connect the project to search it".to_string()
+}
+
+/// The host half of [`project_search`]. Order: the arguments, the connection,
+/// then the HPC question — so a refused or declined call did no work.
+async fn host_search_run(
+    spec: crate::schema::project::RemoteSpec,
+    connected: bool,
+    req: HostSearch,
+) -> Result<Vec<SearchMatch>, String> {
+    if host_search::query_never_matches(&req.query) {
+        return Ok(Vec::new());
+    }
+    let rel_root = host_search::validate_rel_root(req.rel_root.as_deref())?;
+    if !connected {
+        return Err(host_disconnected_error());
+    }
+    let tagged = crate::services::hpc_mode::is_hpc_spec(&spec);
+    if let Some(err) = host_search::hpc_refusal(tagged, req.confirmed, &spec) {
+        return Err(err);
+    }
+    // A confirmed run is the user naming this machine: it also clears the dial
+    // policy one layer down (`sync_big_folders`' rule).
+    let _dial = (req.confirmed == Some(true))
+        .then(|| crate::services::ssh_common::user_dial(&spec.user, &spec.host, spec.port));
+    let cap = req.max_results.unwrap_or(DEFAULT_MAX_RESULTS).max(1);
+    app_core::rt::try_blocking("search", move || {
+        let script = host_search::grep_command(&spec.remote_path, rel_root.as_deref(), &req.query, req.case_sensitive, cap)?;
+        let out = host_search::run_bounded(&spec, &script)?;
+        Ok(host_matches(&out, &spec.remote_path, rel_root.as_deref(), &req.query, req.case_sensitive, cap))
+    })
+    .await
+}
+
+/// `grep --null -n` output as [`SearchMatch`]es: `col` from the line text (the
+/// local rule; 1 when the host's case folding found what ours does not), the
+/// line cut to [`host_search::MAX_LINE_CHARS`] after the column is taken.
+fn host_matches(
+    out: &[u8],
+    remote_path: &str,
+    rel_root: Option<&str>,
+    query: &str,
+    case_sensitive: bool,
+    cap: usize,
+) -> Vec<SearchMatch> {
+    let needle_lower = (!case_sensitive).then(|| lowercase_chars(query));
+    host_search::parse_grep(out, rel_root, cap)
+        .into_iter()
+        .map(|hit| SearchMatch {
+            path: host_search::host_path(remote_path, rel_root, &hit.rel),
+            col: first_match_col(&hit.text, query, needle_lower.as_deref()).unwrap_or(1),
+            text: host_search::truncate_line(&hit.text),
+            line: hit.line,
+            rel: hit.rel,
+        })
+        .collect()
 }
 
 pub fn project_search_blocking(
@@ -240,15 +324,31 @@ pub fn project_search_blocking(
     query: String,
     case_sensitive: bool,
     max_results: Option<usize>,
+    rel_root: Option<String>,
 ) -> Result<Vec<SearchMatch>, String> {
     if query.is_empty() {
         return Ok(Vec::new());
     }
     let cap = max_results.unwrap_or(DEFAULT_MAX_RESULTS).max(1);
     let root_raw = PathBuf::from(&project_dir);
-    let root = root_raw
+    let project_root = root_raw
         .canonicalize()
         .map_err(|e| format!("invalid project_dir '{project_dir}': {e}"))?;
+    // The folder scope, checked like the host's and then held inside the
+    // project after symlinks resolve.
+    let root = match host_search::validate_rel_root(rel_root.as_deref())? {
+        None => project_root,
+        Some(rel) => {
+            let joined = rel.split('/').fold(project_root.clone(), |p, seg| p.join(seg));
+            let scoped = joined
+                .canonicalize()
+                .map_err(|e| format!("invalid search folder '{rel}': {e}"))?;
+            if !scoped.starts_with(&project_root) {
+                return Err(format!("search folder '{rel}' is outside the project"));
+            }
+            scoped
+        }
+    };
     if !root.is_dir() {
         return Err(format!("project_dir '{project_dir}' is not a directory"));
     }
@@ -284,7 +384,7 @@ mod tests {
             root.to_string_lossy().to_string(),
             "NEEDLE".into(),
             true,
-            None,
+            None, None,
         )
         .unwrap();
 
@@ -309,7 +409,7 @@ mod tests {
             root.to_string_lossy().to_string(),
             "needle".into(),
             false,
-            None,
+            None, None,
         )
         .unwrap();
 
@@ -355,7 +455,7 @@ mod tests {
             root.to_string_lossy().to_string(),
             "QUERYME".into(),
             true,
-            None,
+            None, None,
         )
         .unwrap();
 
@@ -375,7 +475,7 @@ mod tests {
             root.to_string_lossy().to_string(),
             "HIT".into(),
             true,
-            Some(3),
+            Some(3), None,
         )
         .unwrap();
 
@@ -388,7 +488,73 @@ mod tests {
         let root = dir.path();
         fs::write(root.join("a.txt"), "anything\n").unwrap();
         let matches =
-            project_search_blocking(root.to_string_lossy().to_string(), "".into(), true, None).unwrap();
+            project_search_blocking(root.to_string_lossy().to_string(), "".into(), true, None, None).unwrap();
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn rel_root_scopes_the_local_walk_and_stays_inside() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src").join("deep")).unwrap();
+        fs::write(root.join("top.txt"), "HIT\n").unwrap();
+        fs::write(root.join("src").join("deep").join("a.rs"), "x HIT\n").unwrap();
+        let dir_s = root.to_string_lossy().to_string();
+        let matches = project_search_blocking(dir_s.clone(), "HIT".into(), true, None, Some("src/".into())).unwrap();
+        // `rel` is relative to the searched folder, as the tree expects.
+        assert_eq!(rels(&matches), vec!["deep/a.rs"]);
+        assert!(project_search_blocking(dir_s.clone(), "HIT".into(), true, None, Some("..".into())).is_err());
+        assert!(project_search_blocking(dir_s.clone(), "HIT".into(), true, None, Some("/etc".into())).is_err());
+        #[cfg(unix)]
+        {
+            let outside = tempdir().unwrap();
+            fs::write(outside.path().join("o.txt"), "HIT\n").unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
+            let err = project_search_blocking(dir_s, "HIT".into(), true, None, Some("link".into())).unwrap_err();
+            assert!(err.contains("outside the project"), "{err}");
+        }
+    }
+
+    #[test]
+    fn host_grep_output_becomes_search_matches() {
+        let out = "./a:b.txt\x002:  NEEDLE here\n./src/x.rs\x007:needle\n".as_bytes();
+        let matches = host_matches(out, "/srv/p", None, "needle", false, 10);
+        assert_eq!(rels(&matches), vec!["a:b.txt", "src/x.rs"]);
+        assert_eq!((matches[0].line, matches[0].col), (2, 3));
+        assert_eq!(matches[0].path, "/srv/p/a:b.txt");
+        assert_eq!(matches[0].text, "  NEEDLE here");
+        // Case-sensitive: a hit the host's folding found but ours does not reads col 1.
+        let matches = host_matches(out, "/srv/p", None, "NEEDLE", true, 10);
+        assert_eq!(matches[1].col, 1);
+        // Under a folder scope the host prints `<rel_root>/…`; `rel` drops it, `path` keeps it.
+        let scoped = host_matches(b"src/x.rs\x001:needle\n", "/srv/p", Some("src"), "needle", true, 10);
+        assert_eq!((scoped[0].rel.as_str(), scoped[0].path.as_str()), ("x.rs", "/srv/p/src/x.rs"));
+        // A long line is cut, its column taken first.
+        let long = format!("./l.txt\x001:{}needle\n", "x".repeat(host_search::MAX_LINE_CHARS + 10));
+        let cut = host_matches(long.as_bytes(), "/srv/p", None, "needle", true, 10);
+        assert_eq!(cut[0].col as usize, host_search::MAX_LINE_CHARS + 11);
+        assert_eq!(cut[0].text.chars().count(), host_search::MAX_LINE_CHARS);
+    }
+
+    #[test]
+    fn a_host_search_refuses_before_any_work() {
+        let spec: crate::schema::project::RemoteSpec = serde_json::from_value(
+            serde_json::json!({ "host": "h.example", "user": "u", "remote_path": "/srv/p", "remote_only": true }),
+        )
+        .unwrap();
+        let req = |q: &str, rel: Option<&str>| HostSearch {
+            query: q.into(),
+            case_sensitive: true,
+            max_results: None,
+            rel_root: rel.map(str::to_string),
+            confirmed: None,
+        };
+        let run = |connected: bool, r: HostSearch| app_core::rt::block_on(host_search_run(spec.clone(), connected, r));
+        // A query no line can hold answers empty without a connection.
+        assert!(run(false, req("a\nb", None)).unwrap().is_empty());
+        // A bad folder is refused before the connection is looked at.
+        assert!(run(false, req("q", Some(".."))).unwrap_err().contains("invalid search folder"));
+        // Disconnected: an error at once, never a dial.
+        assert_eq!(run(false, req("q", None)).unwrap_err(), host_disconnected_error());
     }
 }

@@ -43,6 +43,7 @@ import type {
   WindowBounds,
 } from "./tabs/types";
 import { nextGroupId, nextKey } from "./tabs/ids";
+import { isLocatableKind, isRemoteLocation } from "./tabs/tabLocation";
 import {
   type DetachedDockTarget,
   allGroups,
@@ -55,6 +56,7 @@ import {
   insertAdjacent,
   mapGroup,
   moveKeyInTree,
+  nameSubtree,
   orderedTabKeys,
   placeKeyInTree,
   pruneCollapseCollect,
@@ -62,7 +64,9 @@ import {
   removeKeyFromTree,
   removeNodeById,
   splitSubtree,
+  subtreeName,
   vacated,
+  withGroupName,
 } from "./tabs/layoutTree";
 import {
   FILES_TAB_CMD,
@@ -133,6 +137,7 @@ export {
   isRestorableTab,
   isResumableAgentTab,
   isSavedWhileLive,
+  resumeArgsOf,
 } from "./tabs/tabKinds";
 export { effectiveTabLocation, localTabCwd, remoteHostIdOf } from "./tabs/tabLocation";
 export { pruneSavedTree } from "./tabs/savedLayout";
@@ -533,6 +538,13 @@ interface TabsStore {
    * project is no longer attached to.
    */
   detachScopeFromRemote: (scope: string, oldDir: string, newDir: string) => void;
+  /**
+   * Remote-only → Remote (`keep_local_copy`): pin every agent/shell tab of `scope`
+   * that does not already name a host to the primary (`"remote"`). Under the pin
+   * they all ran there; once the project keeps a local copy again an unset agent
+   * would default to the mirror and respawn there without its host session.
+   */
+  pinScopeTabsToHost: (scope: string) => void;
   retargetTabs: (oldAbs: string, newAbs: string) => void;
   removeTab: (key: string) => void; // drop; collapse empty groups/splits
   // The same close, aimed at a named scope instead of the active one. The
@@ -642,6 +654,9 @@ interface TabsStore {
   // Persist the folder the group's docked viewer last browsed to (see
   // GroupNode.filesFolder). Same node-write path as the flag/width.
   setGroupFilesFolder: (groupId: string, folder: string) => void;
+  // Name a subwindow of the current scope; an empty name removes it. A popout
+  // names its panes over the `name` edit instead (`applyDetachedEdit`).
+  setGroupName: (groupId: string, name: string) => void;
   // The same three writes addressed to a NAMED scope — what the root console
   // needs, since root is not the active scope while it floats over a project
   // (the plain actions above write `s.scope` and would file the console's file
@@ -672,6 +687,8 @@ interface TabsStore {
       // Restart respawn only: the popout's persisted per-window zoom, recorded on
       // the fresh detached entry so its seed restores it (see RespawnTarget.zoom).
       zoom?: number;
+      // Restart respawn only: a multi-pane popout's own name (RespawnTarget.name).
+      name?: string;
     },
   ) => string | null;
   // Drag-a-tab-to-another-monitor: pop a SINGLE existing tab out of the in-window
@@ -1658,6 +1675,20 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
+  pinScopeTabsToHost: (scope) => {
+    set((s) => {
+      const tabs = s.tabsByScope[scope] ?? [];
+      let changed = false;
+      const nextTabs = tabs.map((t) => {
+        if (!isLocatableKind(t.kind) || isRemoteLocation(t.location)) return t;
+        changed = true;
+        return { ...t, location: "remote" as const };
+      });
+      if (!changed) return {};
+      return writeScope(s, scope, nextTabs, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
+    });
+  },
+
   retargetTabs: (oldAbs, newAbs) => {
     set((s) => {
       const scope = s.scope;
@@ -2341,6 +2372,16 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
+  setGroupName: (groupId, name) => {
+    set((s) => {
+      const scope = s.scope;
+      const { tabs, layout, focusedGroupId } = scopeState(s, scope);
+      if (!layout || !findGroup(layout, groupId)) return {};
+      const next = mapGroup(layout, groupId, (g) => withGroupName(g, name));
+      return writeScope(s, scope, tabs, next, focusedGroupId);
+    });
+  },
+
   detachGroup: (groupId, opts) => {
     const scope = get().scope;
     const layout = get().layoutByScope[scope] ?? null;
@@ -2390,7 +2431,14 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           ...s.detachedGroupsByScope,
           [scope]: [
             ...existing,
-            { id: groupId, subtree, label, bounds: opts?.bounds, zoom: opts?.zoom },
+            {
+              id: groupId,
+              subtree,
+              label,
+              bounds: opts?.bounds,
+              zoom: opts?.zoom,
+              ...(opts?.name ? { name: opts.name } : {}),
+            },
           ],
         },
       };
@@ -2508,8 +2556,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       let layout = s.layoutByScope[scope] ?? null;
       // Regenerate the subtree's ids so a docked-then-redetached group never
       // collides with a live node id. The subtree may be a split (multi-pane
-      // popout), so keep it a LayoutNode.
-      const fresh = regenIds(entry.subtree);
+      // popout), so keep it a LayoutNode. A window name on what is one pane by
+      // now (its siblings closed) goes to that pane, like any single pane's.
+      const regenerated = regenIds(entry.subtree);
+      const fresh = entry.name ? nameSubtree(regenerated, entry.name).subtree : regenerated;
       if (!layout) {
         // The in-window tree emptied while detached → install as the root.
         layout = fresh;
@@ -2613,6 +2663,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       // node id (mirrors attachGroup). regenIds rewrites GROUP ids but keeps tab
       // KEYS, so an activeKey maps straight through.
       let fresh = regenIds(entry.subtree);
+      if (entry.name) fresh = nameSubtree(fresh, entry.name).subtree;
       if (opts?.activeKey) {
         const target = findGroupOfTab(fresh, opts.activeKey);
         if (target) {
@@ -2678,12 +2729,11 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const scope = s.scope;
       const entries = s.hiddenGroupsByScope[scope] ?? [];
       if (!entries.some((h) => h.id === hiddenId)) return {};
-      const trimmed = name.trim();
       return {
         hiddenGroupsByScope: {
           ...s.hiddenGroupsByScope,
           [scope]: entries.map((h) =>
-            h.id === hiddenId ? { ...h, name: trimmed || undefined } : h,
+            h.id === hiddenId ? { ...h, ...nameSubtree(h.subtree, name) } : h,
           ),
         },
       };
@@ -3024,6 +3074,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       // A subtree may be a split (multi-pane popout); each edit targets the group
       // that owns `edit.key` (or, for reorder, the group whose tabs it permutes).
       let nextSub: LayoutNode | null = sub;
+      let nextName = entry.name;
       let nextTabs = s.tabsByScope[scope] ?? null;
       switch (edit.kind) {
         case "activate": {
@@ -3199,13 +3250,22 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
             ...(edit.folder != null ? { filesFolder: edit.folder } : {}),
           }));
           break;
+        case "name": {
+          const { groupId: paneId, name } = edit;
+          if (paneId) {
+            nextSub = mapGroup(sub, paneId, (grp) => withGroupName(grp, name));
+          } else {
+            ({ subtree: nextSub, name: nextName } = nameSubtree(sub, name));
+          }
+          break;
+        }
       }
       const nextEntries = [...entries];
       // If the detached popout emptied, remove it entirely.
       if (!nextSub || orderedTabKeys(nextSub).length === 0) {
         nextEntries.splice(idx, 1);
       } else {
-        nextEntries[idx] = { ...entry, subtree: nextSub };
+        nextEntries[idx] = { ...entry, subtree: nextSub, name: nextName };
       }
       const patch: Partial<TabsStore> = {
         detachedGroupsByScope: { ...s.detachedGroupsByScope, [scope]: nextEntries },
@@ -3433,7 +3493,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
           ...s.hiddenGroupsByScope,
           [scope]: [
             ...existing,
-            { id: entry.id, subtree: entry.subtree, label: entry.label },
+            {
+              id: entry.id,
+              subtree: entry.subtree,
+              label: entry.label,
+              ...(entry.name ? { name: entry.name } : {}),
+            },
           ],
         },
       };
@@ -3729,7 +3794,9 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const sp = g ? null : findSplit(root, id);
       if (!g && !sp) continue;
       const subtree: LayoutNode = g
-        ? { type: "group", id: g.id, tabKeys: [...g.tabKeys], activeKey: g.activeKey }
+        // Spread, as `hideGroup` does: the name and the files sidebar stay parked
+        // with the group.
+        ? { ...g, tabKeys: [...g.tabKeys] }
         : (sp as SplitNode);
       hiddenGroups.push({
         id,
@@ -3970,6 +4037,7 @@ function openDetachedWindow(scope: string, groupId: string): Promise<void> {
         .find((d) => d.id === groupId);
       if (!entry) return;
       const b = entry.bounds;
+      const name = subtreeName(entry.subtree, entry.name);
       try {
         await invoke("detach_subwindow", {
           projectId: scope,
@@ -3979,6 +4047,7 @@ function openDetachedWindow(scope: string, groupId: string): Promise<void> {
           width: b?.w ?? null,
           height: b?.h ?? null,
           monitor: screenArg(b?.monitor),
+          ...(name ? { name } : {}),
         });
         return;
       } catch {

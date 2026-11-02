@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { useModalFocus } from "../../hooks/useModalFocus";
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -60,7 +61,7 @@ import { RenameDialog, containingFolderLabel } from "./RenameDialog";
 import { useDialogs } from "../common/PromptDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { FileIcon } from "../common/icons/FileIcon";
-import { ArrowDownIcon, ArrowUpIcon, PlayIcon, SearchIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, RefreshIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { storageKey } from "../../lib/brand";
@@ -256,7 +257,7 @@ function GitMarker({ status }: { status: string | undefined }) {
   if (status === "ignored") {
     return (
       <span style={{ ...slot, color: STATUS_COLOR[status] }} title={t(STATUS_TITLE_KEY[status])}>
-        ✕
+        <CloseIcon />
       </span>
     );
   }
@@ -411,7 +412,7 @@ const FileRow = React.memo(function FileRow({
               title={t("fileTree.excludedFromByteSync")}
               aria-label={t("fileTree.excludedFromByteSync")}
             >
-              ✕
+              <CloseIcon />
             </span>
           ) : (
             <>
@@ -493,7 +494,7 @@ const FileRow = React.memo(function FileRow({
                   title={t("fileTree.autoSyncing")}
                   aria-label={t("fileTree.autoSyncing")}
                 >
-                  ⟳
+                  <RefreshIcon />
                 </span>
               )}
             </>
@@ -686,7 +687,7 @@ export function FileTree({
   const [renamePrompt, setRenamePrompt] = useState<RenamePrompt>(null);
   // The panel's other questions — New File/Folder/Presentation — in the same
   // chrome the rename above wears, rather than in the browser's native boxes.
-  const { promptText, confirmAction, dialogs } = useDialogs();
+  const { promptText, confirmAction, showMessage, dialogs } = useDialogs();
   // SSH-sync Phase 2: project-relative paths whose push was blocked by a stale
   // host base, awaiting the user's keep-local / take-host / skip choice. The
   // first is shown in the conflict modal; resolving advances the queue.
@@ -723,7 +724,8 @@ export function FileTree({
   const runningRunFiles = useActivityStore((s) => s.runningRunFiles);
   const runScript = useActivityStore((s) => s.runScript);
   const {
-    isRemote, project, mirrorRoot, treatLocal, remoteListing, syncStatus, dirSyncAgg, syncProgress,
+    isRemote, project, hostPinned, mirrorRoot, treatLocal, remoteListing, syncTracked, syncStatus,
+    dirSyncAgg, syncProgress,
     refreshSyncStatus, syncPull, syncPush, syncMarkSelected, syncSetAuto, syncAutoPreview,
     syncSetExcluded, remoteSshState, remoteBlocked, primaryIsHpc, hostChildNames, setHostChildNames,
   } = useFileTreeRemote({
@@ -845,8 +847,9 @@ export function FileTree({
     </span>
   );
 
+  // Never on a host listing: an embedded app is an OS app, handed a host path.
   const isEmbeddable = (e: FileEntry): boolean =>
-    !e.is_dir && embedByExt[e.extension ?? ""] === true;
+    !remoteListing && !e.is_dir && embedByExt[e.extension ?? ""] === true;
 
   // A file can be dragged onto a tab bar if either: it opens in a built-in
   // viewer (pdf/markdown/text — always, independent of any external app), or its
@@ -867,7 +870,8 @@ export function FileTree({
   });
 
   useFileTreeSyncStatus({
-    isRemote, projectId, remoteBlocked, relPath, active, refreshSyncStatus, remoteSshState,
+    // A pinned project has no overlay to keep fresh (`syncTracked`).
+    isRemote: isRemote && !hostPinned, projectId, remoteBlocked, relPath, active, refreshSyncStatus, remoteSshState,
     primaryIsHpc, fastMode, treatLocal, remoteProbeDir, setHostChildNames,
   });
 
@@ -1117,6 +1121,16 @@ export function FileTree({
   // type with no native viewer, or an explicit external open (Shift), opens in
   // the OS default app. The single open-a-file policy — see `openFileEntry`.
   function openEntry(entry: FileEntry, external: boolean) {
+    // A host (SFTP) listing's path exists only on the host, so an app on this
+    // machine cannot open it: say where the copy comes from instead of handing
+    // the OS a path it does not have. Built-in viewers read over SFTP.
+    if (remoteListing && (external || !internalViewerFor(entry, disabledViewerSet))) {
+      void showMessage({
+        title: t("fileTree.hostFileExternalTitle"),
+        body: <>{t("fileTree.hostFileExternalBody", { name: entry.name })} <UntestedTag id="fileTree.hostFileExternalTitle" /></>,
+      });
+      return;
+    }
     openFileEntry({
       entry,
       projectDir,
@@ -1267,6 +1281,8 @@ export function FileTree({
     // doesn't reliably export the file to other apps, so suppress it and hand
     // off to the native OS drag.
     e.preventDefault();
+    // Host paths are not OS paths (see `toNativeDrag` in fileTreeDrag.ts).
+    if (remoteListing) return;
     // Dragging a row that belongs to a >1 selection exports the whole
     // selection, mirroring the pointer drag-to-tab's multi-drag.
     const paths =
@@ -2106,6 +2122,15 @@ export function FileTree({
     }
   }
 
+  /** The project's run-host preference (`RunHostPicker`). A host-pinned
+   *  project has no local side, so a stored "this computer" (written before the
+   *  pin, or by an older build) reads as unset, i.e. the primary — as the picker
+   *  itself shows it. */
+  function runHostPref() {
+    const pref = projectId ? useRunHostPrefStore.getState().byProject[projectId] : undefined;
+    return hostPinned && pref === "local" ? undefined : pref;
+  }
+
   function runShellScript(event: React.MouseEvent<HTMLButtonElement>, entry: FileEntry) {
     event.preventDefault();
     event.stopPropagation();
@@ -2135,9 +2160,7 @@ export function FileTree({
       // The machine chosen in the RunHostPicker. It only picks WHICH remote
       // machine a host-side script runs on — a script browsed on the local mirror
       // runs in a local shell regardless (same rule as the Python Run beside it).
-      runHostPref: projectId
-        ? useRunHostPrefStore.getState().byProject[projectId]
-        : undefined,
+      runHostPref: runHostPref(),
       args,
     });
     if (!plan) {
@@ -2203,9 +2226,7 @@ export function FileTree({
         remotePath: project?.remote?.remote_path,
         localRoot: mirrorRoot ?? projectDir,
         file: entry.path,
-        runHostPref: projectId
-          ? useRunHostPrefStore.getState().byProject[projectId]
-          : undefined,
+        runHostPref: runHostPref(),
       }),
       scope: projectId ?? "root",
       projectId,
@@ -2344,8 +2365,10 @@ export function FileTree({
   }
 
   // Whether the search results replace the browsed listing. The search box is
-  // only offered on a local-source tree (its backends walk the local path).
-  const canSearch = !remoteListing;
+  // offered on a local-source tree (its backends walk the local path) and on a
+  // host-pinned project, whose backends search the host (only while connected:
+  // `remoteBlocked` returned above).
+  const canSearch = !remoteListing || hostPinned;
   const searching = canSearch && searchOpen && search.trim().length > 0;
   // Folder the search is confined to: the browsed folder by default, the whole
   // project when "root" is chosen (or when already at the root).
@@ -2367,7 +2390,6 @@ export function FileTree({
    * the files themselves and cannot say that.
    */
   function renderFolderSyncSlot() {
-    const syncTracked = remoteListing || treatLocal;
     if (!syncTracked || !projectId) return null;
     const agg = dirSyncAgg[relPath];
     const state: SyncFileState = agg?.any
@@ -2387,7 +2409,7 @@ export function FileTree({
           title={t("fileTree.excludedFromByteSync")}
           aria-label={t("fileTree.excludedFromByteSync")}
         >
-          ✕
+          <CloseIcon />
         </span>
       );
     }
@@ -2437,7 +2459,7 @@ export function FileTree({
           title={t("fileTree.folderInSync", { name: label })}
           aria-label={t("fileTree.folderInSync", { name: label })}
         >
-          ✓
+          <CheckIcon />
         </span>
       );
     }
@@ -2504,7 +2526,7 @@ export function FileTree({
             {folderSyncSlot}
             {syncProgress && (
               <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
-                ⟳ {syncProgress.done}/{syncProgress.total}
+                <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
               </span>
             )}
             <button
@@ -2514,7 +2536,7 @@ export function FileTree({
               title={t("fileTree.refreshSftpTitle")}
               aria-label={t("common.refresh")}
             >
-              ↻
+              <RefreshIcon />
             </button>
           </div>
         </div>
@@ -2535,7 +2557,7 @@ export function FileTree({
                 runs. Without it the local side showed nothing at all. */}
             {syncProgress && (
               <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
-                ⟳ {syncProgress.done}/{syncProgress.total}
+                <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
               </span>
             )}
           </div>
@@ -2600,7 +2622,7 @@ export function FileTree({
                     aria-label={t("fileTree.clearSearch")}
                     onClick={() => setSearch("")}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 )}
               </>
@@ -2619,7 +2641,7 @@ export function FileTree({
                 title={t("fileTree.refreshTitle")}
                 aria-label={t("common.refresh")}
               >
-                ↻
+                <RefreshIcon />
               </button>
             )}
           </div>
@@ -2678,14 +2700,15 @@ export function FileTree({
                   </button>
                 </span>
               )}
+              {hostPinned && <UntestedTag id="fileTree.hostSearch" />}
             </div>
           )}
         </div>
       )}
-      {/* Search backends walk the canonical local path, so a remote-source
-          listing has no search box. Say why in its place — the Local/Remote
-          switch is already visible in the source row — rather than leaving the
-          affordance to silently vanish. */}
+      {/* Search backends walk the canonical local path, so the Remote side of a
+          plain remote project has no search box. Say why in its place — the
+          Local/Remote switch is already visible in the source row — rather than
+          leaving the affordance to silently vanish. */}
       {!canSearch && (
         <div className="file-tree-search-remote-hint">{t("fileTree.searchRemoteHint")}</div>
       )}
@@ -2829,7 +2852,7 @@ export function FileTree({
         );
       })()}
       </div>
-      {loading && <div className="file-tree-loading">{t("common.loading")}</div>}
+      {loading && <SkeletonRows count={6} className="file-tree-skeleton" />}
       {error && <ErrorNote className="file-tree-error" error={error} />}
       {/* What the last transfer did — the success half, which nothing reported
           before. Same chrome as the whole-project row's result line. */}
@@ -2845,11 +2868,11 @@ export function FileTree({
             title={t("common.close")}
             aria-label={t("common.close")}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       )}
-      <SyncMirrorSkips projectId={projectId ?? undefined} />
+      {!hostPinned && <SyncMirrorSkips projectId={projectId ?? undefined} />}
       {searching && (
         <FileTreeSearch
           projectDir={projectDir}
@@ -2858,6 +2881,7 @@ export function FileTree({
           mode={searchMode}
           caseSensitive={searchCase}
           scopeRel={searchScope}
+          hostPinned={hostPinned}
           onReveal={revealPath}
         />
       )}
@@ -2917,8 +2941,7 @@ export function FileTree({
           // colored action button left of the icon: red for `none` (not synced)
           // — pull/push it; orange for `amber` (host diverged from our mirror) —
           // view the diff. `green` (in sync) is the resting state and shows
-          // nothing.
-          const syncTracked = remoteListing || treatLocal;
+          // nothing. (`syncTracked`: off on a host-pinned project.)
           const rel = relForEntry(e);
           // A folder with no manifest entry of its own falls back to the rolled-up
           // state of its tracked descendants (`dirSyncAgg`): green when it contains
@@ -3207,7 +3230,9 @@ export function FileTree({
                       Offered where "Open in a new tab" is (the side panel
                       host); a tree browsing a subfolder still opens the
                       project, since the markers sit at its root. */}
-                  {projectId && (
+                  {/* None on a project pinned to its host: the markers are
+                      read off a local copy it does not have (D6). */}
+                  {projectId && !hostPinned && (
                     <IdeMenuItems projectId={projectId} onClose={() => setContextMenu(null)} />
                   )}
                   <hr />
@@ -3293,7 +3318,6 @@ export function FileTree({
             const syncSel = remoteListing ? syncStatus?.[entryRel]?.selected : false;
             // Auto-sync is symmetric across the remote/local trees (both are
             // sync-tracked); read the effective flag either way.
-            const syncTracked = remoteListing || treatLocal;
             const autoOn = syncTracked ? !!syncStatus?.[entryRel]?.auto : false;
             // Own marker only: an inherited exclusion is the transfer paths'
             // business, but the label here must describe THIS row's answer.
@@ -3355,7 +3379,7 @@ export function FileTree({
                     <hr />
                   </>
                 )}
-                {remoteListing && (
+                {remoteListing && syncTracked && (
                   <>
                     {downloadExcluded ? (
                       <button
@@ -3441,7 +3465,10 @@ export function FileTree({
                     <hr />
                   </>
                 )}
-                {isTex && texCap?.available && (
+                {/* `compile_tex` builds on this machine; a host-pinned project
+                    has no local tree to build in (its Compile is the viewer's
+                    host build tab). */}
+                {isTex && texCap?.available && !hostPinned && (
                   <>
                     <button
                       onClick={() => compileTex(entry, true)}
@@ -3747,7 +3774,7 @@ export function FileTree({
           }
         >
           <div className="file-tooltip-name">{tooltip.entry.name}</div>
-          {(remoteListing || treatLocal) && isPathExcluded(syncStatus, relForEntry(tooltip.entry)) && (
+          {syncTracked && isPathExcluded(syncStatus, relForEntry(tooltip.entry)) && (
             <div className="file-tooltip-excluded">{t("fileTree.excludedFromByteSync")}</div>
           )}
           {tooltip.entry.created_secs && (

@@ -6,6 +6,7 @@ import {
   agentInputWrites,
   bracketsAgentMessage,
 } from "../../../mobile-web/src/terminal/composer";
+import { agentQueueWrites } from "../../../shared/agentComposer";
 import { BRAND } from "../../lib/brand";
 
 describe(`${BRAND.display} Mobile agent composer writes`, () => {
@@ -99,5 +100,30 @@ describe(`${BRAND.display} Mobile agent composer writes`, () => {
     expect(agentInputWrites(hostile)).toEqual([AGENT_LINE_RESET, "end[201~ and [A up", "\r"]);
     // A tab would ask the agent's composer to complete rather than indent.
     expect(agentInputWrites("a\tb")).toEqual([AGENT_LINE_RESET, "ab", "\r"]);
+  });
+});
+
+describe("agentQueueWrites", () => {
+  const typed = ["\u0001\u000b", "fix it", "\r"];
+
+  it("queues Codex's prompt with Tab, and Enter delivers one it left in an idle box", () => {
+    expect(agentQueueWrites(typed, "codex --no-daemon", "fix it")).toEqual(["\u0001\u000b", "fix it", "\t", "\r"]);
+  });
+
+  it("leaves every other CLI on Enter", () => {
+    for (const agent of ["claude", "opencode", "copilot", undefined]) {
+      expect(agentQueueWrites(typed, agent, "fix it")).toEqual(typed);
+    }
+  });
+
+  it("keeps Enter where Codex's Tab would take a picker's row instead", () => {
+    for (const message of ["/model", "  /clear", "look at @src/ma", "use $skil"]) {
+      expect(agentQueueWrites(typed, "codex", message)).toEqual(typed);
+    }
+    expect(agentQueueWrites(typed, "codex", "mail me@example.org today")).toContain("\t");
+  });
+
+  it("has nothing to do for an empty message", () => {
+    expect(agentQueueWrites([], "codex", "")).toEqual([]);
   });
 });

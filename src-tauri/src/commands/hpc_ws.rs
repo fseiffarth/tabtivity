@@ -856,17 +856,33 @@ pub fn set_project_hpc(
     )
 }
 
+/// Why the anchor's logs cannot be pulled into the project whose primary spec is
+/// `spec`, or `None`: a remote-only project (a VM included) has no local mirror to
+/// copy them into — its logs are read over SFTP in place. Pure.
+fn pull_logs_refusal(spec: Option<&crate::schema::project::RemoteSpec>) -> Option<String> {
+    spec.is_some_and(crate::schema::project::RemoteSpec::is_remote_only).then(|| {
+        crate::services::remote::remote_only_refusal(
+            "the logs stay on the host: this project keeps no local copy to pull them into",
+        )
+    })
+}
+
 /// Copy the anchor's `logs/` into the local mirror's `logs/` — the provenance
 /// record on the machine the user actually reads logs on. Small by construction
 /// (SLURM out/err only), so it is a plain per-file SFTP read, not a sync pass;
 /// nothing is deleted locally and an unreadable file is skipped rather than
-/// failing the batch. Returns how many files were copied.
+/// failing the batch. Returns how many files were copied. Refused for a
+/// remote-only project ([`pull_logs_refusal`]).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_pull_logs(
     ctx: Ctx,
     project_id: String,
     logs_dir: String,
 ) -> Result<u32, String> {
+    let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
+    if let Some(refusal) = pull_logs_refusal(spec.as_ref()) {
+        return Err(refusal);
+    }
     let pool = ctx.get::<crate::services::remote::RemotePoolState>();
     let dir = validate_abs_path("logs folder", &logs_dir)?;
     let sftp = crate::services::remote::pooled_sftp(pool, &project_id)
@@ -896,6 +912,19 @@ pub async fn hpc_ws_pull_logs(
 
 // ── Moving the project to another workspace (Phase 2) ────────────────────────
 
+/// Why [`hpc_ws_move_root`] refuses the project whose primary spec is `spec`, or
+/// `None`. The move re-points the root at an empty folder and counts on lockstep
+/// re-seeding it from the local mirror; a remote-only project (a VM included) has
+/// no mirror, so the project would open on the empty folder and its work would
+/// stay behind at the old root, with nothing pointing at it. Pure.
+fn move_root_refusal(spec: &crate::schema::project::RemoteSpec) -> Option<String> {
+    spec.is_remote_only().then(|| {
+        crate::services::remote::remote_only_refusal(
+            "this project keeps no local copy to fill the new folder from; move its files on the host instead",
+        )
+    })
+}
+
 /// Re-point a remote project's **primary** root at `new_root` — the action a
 /// workspace expiry makes inevitable, and which nothing else in Tabtivity could do
 /// (a primary's `remote_path` is fixed at creation; the remote-machines hub's
@@ -915,6 +944,7 @@ pub async fn hpc_ws_pull_logs(
 /// The local mirror — the durable copy — is never touched, which is exactly why
 /// losing a workspace costs a re-pair rather than the work. The caller must
 /// disconnect and reconnect the project around this: the pool caches the spec.
+/// Refused for a remote-only project ([`move_root_refusal`]): it has no mirror.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn hpc_ws_move_root(
     project_id: String,
@@ -924,6 +954,9 @@ pub async fn hpc_ws_move_root(
         let root = validate_abs_path("project root", &new_root)?;
         let target = crate::services::remote::remote_target_for(&project_id)
             .ok_or_else(|| "not a remote project".to_string())?;
+        if let Some(refusal) = move_root_refusal(&target.spec) {
+            return Err(refusal);
+        }
         if target.spec.remote_path.trim_end_matches('/') == root {
             return Err("the project is already there".to_string());
         }
@@ -1000,6 +1033,40 @@ pub async fn hpc_ws_move_root(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pulling logs into the mirror is refused for a remote-only project (a VM
+    /// included); a plain Remote project, and an unresolved one, pass the gate.
+    #[test]
+    fn a_remote_only_project_refuses_the_log_pull() {
+        let spec = |extra: serde_json::Value| -> crate::schema::project::RemoteSpec {
+            let mut v = serde_json::json!({ "host": "login.example", "remote_path": "/home/alice/p" });
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(v).unwrap()
+        };
+        for posture in [serde_json::json!({ "remote_only": true }), serde_json::json!({ "vm": true })] {
+            let refusal = pull_logs_refusal(Some(&spec(posture))).expect("refused");
+            assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
+        }
+        assert_eq!(pull_logs_refusal(Some(&spec(serde_json::json!({})))), None);
+        assert_eq!(pull_logs_refusal(None), None);
+    }
+
+    /// Moving to another workspace is refused for a remote-only project (a VM
+    /// included): nothing would re-seed the new, empty root. A plain Remote
+    /// project, whose mirror re-seeds it, passes.
+    #[test]
+    fn a_remote_only_project_refuses_the_workspace_move() {
+        let spec = |extra: serde_json::Value| -> crate::schema::project::RemoteSpec {
+            let mut v = serde_json::json!({ "host": "login.example", "remote_path": "/ws/alice-p" });
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(v).unwrap()
+        };
+        for posture in [serde_json::json!({ "remote_only": true }), serde_json::json!({ "vm": true })] {
+            let refusal = move_root_refusal(&spec(posture)).expect("refused");
+            assert!(refusal.starts_with(concat!(crate::app_upper!(), "_REMOTE_ONLY:")), "{refusal}");
+        }
+        assert_eq!(move_root_refusal(&spec(serde_json::json!({}))), None);
+    }
 
     #[test]
     fn scratch_candidates_are_parsed_and_deduped_by_path() {

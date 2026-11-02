@@ -103,9 +103,26 @@ pub fn vm_allow_temporarily(project_id: String, host: String) -> Result<(), Stri
     Ok(())
 }
 
+/// Whether the project has a local mirror, for the mail reader's no-mirror
+/// rule. The posture decides first: a project that is not remote-only (or has
+/// no spec at all) keeps a local copy by definition, so it counts as having
+/// one. Only a remote-only project — every VM — is asked whether bytes already
+/// sit in its mirror folder anyway, so the rule fails closed on both counts.
 fn has_mirror(project_id: &str) -> bool {
-    std::fs::read_dir(crate::services::remote_sync::mirror_dir(project_id))
-        .is_ok_and(|mut entries| entries.next().is_some())
+    let spec = crate::services::remote::remote_target_for(project_id).map(|t| t.spec);
+    mirror_by_posture(spec.as_ref(), || {
+        std::fs::read_dir(crate::services::remote_sync::mirror_dir(project_id))
+            .is_ok_and(|mut entries| entries.next().is_some())
+    })
+}
+
+/// [`has_mirror`]'s rule over the project's spec, with the folder probe
+/// deferred so it runs only for a remote-only project.
+fn mirror_by_posture(spec: Option<&crate::schema::project::RemoteSpec>, folder_has_bytes: impl FnOnce() -> bool) -> bool {
+    match spec {
+        Some(spec) if spec.is_remote_only() => folder_has_bytes(),
+        _ => true,
+    }
 }
 
 /// Why this reader's box may not be served mail right now, gathered from the
@@ -359,6 +376,38 @@ mod tests {
         assert!(resolve_remote_rel("/root", "../etc/passwd").is_err());
         assert!(resolve_remote_rel("/root", "a//b").is_err());
         assert!(resolve_remote_rel("/root", "a/./b").is_err());
+    }
+
+    #[test]
+    fn the_mail_reader_mirror_flag_follows_the_posture_and_fails_closed() {
+        use crate::schema::project::RemoteSpec;
+        let spec = |vm: Option<bool>, remote_only: Option<bool>| -> RemoteSpec {
+            serde_json::from_value(serde_json::json!({
+                "host": "127.0.0.1", "remote_path": "/home/u/p", "vm": vm, "remote_only": remote_only,
+            }))
+            .unwrap()
+        };
+        let probed = std::cell::Cell::new(false);
+        let probe = |bytes: bool| {
+            let probed = &probed;
+            move || {
+                probed.set(true);
+                bytes
+            }
+        };
+        // A VM (remote-only always: its `vm` outranks a stray
+        // `remote_only: false`): only bytes in the folder count.
+        assert!(!mirror_by_posture(Some(&spec(Some(true), None)), probe(false)));
+        assert!(mirror_by_posture(Some(&spec(Some(true), None)), probe(true)));
+        assert!(!mirror_by_posture(Some(&spec(Some(true), Some(false))), probe(false)));
+        assert!(mirror_by_posture(Some(&spec(Some(true), Some(false))), probe(true)));
+        assert!(!mirror_by_posture(Some(&spec(None, Some(true))), probe(false)));
+        // Not remote-only, or no spec: a mirror, without looking.
+        probed.set(false);
+        assert!(mirror_by_posture(Some(&spec(None, None)), probe(false)));
+        assert!(mirror_by_posture(Some(&spec(None, Some(false))), probe(false)));
+        assert!(mirror_by_posture(None, probe(false)));
+        assert!(!probed.get(), "the folder is probed only for a remote-only project");
     }
 
     #[test]

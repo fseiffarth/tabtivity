@@ -525,10 +525,10 @@ fn the_local_catalog_carries_the_two_facts_only_ollama_knows() {
     let doc: serde_json::Value =
         serde_json::from_str(&local_catalog_json("m:latest", Some(true), None, true)).unwrap();
     let m = &doc["models"][0];
-    assert!(!m["supported_reasoning_levels"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    let levels = m["supported_reasoning_levels"].as_array().unwrap();
+    assert!(!levels.is_empty());
+    // Codex refuses the whole config over a level without one.
+    assert!(levels.iter().all(|l| l["description"].as_str().is_some_and(|d| !d.is_empty())));
     assert!(m["input_modalities"]
         .as_array()
         .unwrap()
@@ -544,6 +544,27 @@ fn the_local_catalog_carries_the_two_facts_only_ollama_knows() {
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+/// Not in the gates: `C2_PROBE_CODEX` names a real Codex, whose `debug models`
+/// parses the catalog offline, as a launch would before its TUI opens.
+#[test]
+#[ignore = "needs a real Codex in C2_PROBE_CODEX"]
+fn codex_parses_the_local_catalog() {
+    let codex = std::env::var_os("C2_PROBE_CODEX").expect("C2_PROBE_CODEX executable");
+    let dir = tempfile::tempdir().unwrap();
+    for thinking in [Some(true), Some(false), None] {
+        let path = dir.path().join("model.json");
+        std::fs::write(&path, local_catalog_json("m:latest", thinking, Some(32_768), true)).unwrap();
+        let out = std::process::Command::new(&codex)
+            .args(["debug", "models"])
+            .args(catalog_arg_pair(&path))
+            .env("CODEX_HOME", dir.path())
+            .output()
+            .expect("run codex");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && stdout.contains("m:latest"), "{thinking:?}: {stdout} {}", String::from_utf8_lossy(&out.stderr));
+    }
 }
 
 #[test]

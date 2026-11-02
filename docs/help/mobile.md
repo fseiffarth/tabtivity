@@ -441,10 +441,11 @@ and choose what reaches you, even with Tabtivity Mobile closed:
 - **Agents** — *When one needs your answer* (an agent tab waiting on a
   question or approval), or *Also when one finishes a turn*. A tap opens that
   tab. A tab you have open on the phone right then does not notify, and one
-  tab notifies at most every 30 seconds.
+  tab notifies at most every 30 seconds. Each one starts with the time it
+  happened, on your phone's clock.
 - **What a notification shows** — *Names and details* (event title, time and
   place; project and tab), or *Only that something wants you*, for a lock
-  screen others can see.
+  screen others can see; an agent notification still shows its time.
 
 Tabtivity must be running on the desktop: it is what notices the reminder or the
 agent's turn.

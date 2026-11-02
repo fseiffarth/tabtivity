@@ -224,4 +224,18 @@ describe("scheduled agent input", () => {
     await expect(submitScheduledAgentMessage("target", "hello")).resolves.toBe("project:agent");
     expect(writeMock).toHaveBeenCalled();
   });
+
+  it("types a chat's Codex prompt with Tab while it may be working, so it can be taken back", async () => {
+    registerScheduledAgentInput("codex-target", {
+      ptyId: "pty-1",
+      ready: () => false,
+      started: () => true,
+      bracketedPaste: () => true,
+      agent: "codex --no-daemon",
+      recordAuthorizedInput: vi.fn(),
+    });
+    await submitScheduledAgentMessage("codex-target", "hello", { whileBusy: true });
+    const typed = writeMock.mock.calls.map(([, bytes]) => new TextDecoder().decode(bytes as Uint8Array));
+    expect(typed.slice(-2)).toEqual(["\t", "\r"]);
+  });
 });

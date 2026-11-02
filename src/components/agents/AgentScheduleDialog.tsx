@@ -37,6 +37,7 @@ import { TimeField } from "../common/TimeField";
 import { UntestedTag } from "../common/UntestedTag";
 import { useTimerLeaseStore } from "../../stores/timerLease";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 interface Props {
   scope: string;
@@ -288,7 +289,7 @@ export function AgentScheduleDialog({ scope, tab, onClose, initialMessage, initi
       >
         <div className="settings-title-row">
           <h2>{t("agentSchedule.title", { tab: tab.label })} <UntestedTag id="agentSchedule.title" /></h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll agent-schedule-scroll">
           {/* The status board: what this tab is going to do, before any of the

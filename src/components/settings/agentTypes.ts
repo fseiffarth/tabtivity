@@ -29,6 +29,8 @@ export interface AgentVersionReport {
   checkedAt: number;
   cached: boolean;
   dismissed: boolean;
+  /** The last stored update check; absent while running an older backend. */
+  update?: AgentUpdateReport | null;
 }
 
 /** One installed CLI against its newest published release (backend
@@ -43,9 +45,13 @@ export interface AgentUpdateReport {
   /** Whether a registry is known for this CLI at all. */
   checkable: boolean;
   error: string | null;
+  /** Unix seconds of the check; absent on an answer that was never stored. */
+  checkedAt?: number;
 }
 
 export interface AgentInfo {
+  /** Native startup choices; absent while running an older backend. */
+  launch_defaults?: { model: boolean; efforts: string[]; effort_requires_model?: boolean };
   id: string;
   label: string;
   bin: string;

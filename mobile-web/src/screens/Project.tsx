@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
+import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon, UndoIcon, WindowIcon } from "../glyphs";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
+import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
 import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
@@ -33,6 +35,7 @@ import { layerKey, loadLayer } from "../markup/store";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { GripHint } from "./Home";
 import { isUntested } from "../../../src/lib/untested";
+import { ListSkeleton } from "../components/ListSkeleton";
 import { describeFailure } from "../connection";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import type { SubagentStep } from "../terminal/subagents";
@@ -57,16 +60,21 @@ const SORT_LABEL: Record<AgentSort, TranslationKey> = {
  *  close again. */
 const CLOSED_HELD_MS = 30_000;
 
+/** A project's type as its line under the header words it: the host word,
+ * with a remote project that keeps no local copy (`remote_only`) apart. */
+type NoteHost = ProjectHost | "remote_only";
 /** The line a project type that limits the phone gets under the header (the
  * desktop says the same in `mobile.hostReach.*`). A local project has none. */
-const HOST_NOTE: Partial<Record<ProjectHost, TranslationKey>> = {
+const HOST_NOTE: Partial<Record<NoteHost, TranslationKey>> = {
   remote: "mobile.project.hostRemote",
+  remote_only: "mobile.project.hostRemoteOnly",
   container: "mobile.project.hostContainer",
   vm: "mobile.project.hostVm",
 };
 /** The flag the × on that line sets, per type (`prefs.ts`). */
-const HOST_NOTE_FLAG: Partial<Record<ProjectHost, MobileFlag>> = {
+const HOST_NOTE_FLAG: Partial<Record<NoteHost, MobileFlag>> = {
   remote: "projectNoteRemote",
+  remote_only: "projectNoteRemoteOnly",
   container: "projectNoteContainer",
   vm: "projectNoteVm",
 };
@@ -179,6 +187,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * read-only file browser while the desktop's "Project files on the phone"
    * switch is on (`detail.files`). */
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /** The drawer was opened by the header's 🔍: straight to the library's search. */
+  const [filesSearch, setFilesSearch] = useState(false);
   /** The PDFs this phone opened from the drawer and the files it marked up
    * (`filesPlace.ts`), a card each after the tabs, and the one open now. */
   const [fileTabs, setFileTabs] = useState<FileTab[]>(() => readFileTabs(id));
@@ -202,6 +212,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   /** The read-only git overview (`GitSheet`), for a project scope only: a box
    * or the root console has no repo of its own. */
   const [gitOpen, setGitOpen] = useState(false);
+  /** The Diverged list (`DivergedSheet`), for a remote project with a local copy. */
+  const [divergedOpen, setDivergedOpen] = useState(false);
   const screenRef = useRef<HTMLElement | null>(null);
   /** The latest `back`, for the swipe listener that outlives a render. */
   const backRef = useRef(back);
@@ -223,7 +235,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * read over the desktop's connection (`detail.host_files`). This
    * computer's file cards stay `filesOffered`'s. */
   const hostFilesOffered = !!detail?.host_files && !assistantScope;
+  /** Only the desktop's "Project files on the phone" switch keeps a project's
+   * files away (off, the default). The 🔍 and ☰ stay and the drawer says so,
+   * rather than the way in vanishing with no word. A VM's stay in the VM
+   * whatever the switch says, and a folderless local project has none. */
+  const filesSwitchedOff = !!detail?.files_off && !assistantScope && (detail.project.kind ?? "project") === "project"
+    && (!folderless || detail.project.host === "remote");
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project" && !folderless;
+  const divergedOffered = !!detail?.diverged && !assistantScope;
   /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
    * host with none (Windows) nothing can be opened, scheduled or sent to from
    * here, so the ＋ sheet keeps only its send-a-file row, each card's ◷ and
@@ -240,7 +259,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const fabOffered = !detail || creates || !folderless;
   /** Whether the drawer has anything to hold, once the host has answered:
    * no ☰ and no swipe else. */
-  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || hostFilesOffered || gitOffered);
+  const drawerOffered = !!detail && (outbox.length > 0 || filesOffered || hostFilesOffered || filesSwitchedOff || gitOffered || divergedOffered);
   /** What a right→left swipe over a card (`data-swipe-close`) does, read at
    * the swipe: the listener below outlives the render that installed it, and
    * would otherwise close against that render's list. Set further down, once
@@ -304,14 +323,18 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   };
   /** The project types whose line under the header the reader hid with its ×. */
   const [hostNotesGone, setHostNotesGone] = useState(() => new Set(Object.entries(HOST_NOTE_FLAG).flatMap(([host, flag]) => readFlag(flag) ? [host] : [])));
-  const dropHostNote = (host: ProjectHost) => {
+  const dropHostNote = (host: NoteHost) => {
     const flag = HOST_NOTE_FLAG[host];
     if (!flag) return;
     writeFlag(flag, true);
     setHostNotesGone((gone) => new Set(gone).add(host));
   };
   const projectHost = detail?.project.host ?? "local";
-  const hostNote = hostNotesGone.has(projectHost) ? undefined : HOST_NOTE[projectHost];
+  /** Nothing of the project is on this computer (`remote_only`): its tabs run
+   * on its machines alone, so a tab the phone starts names one of them. */
+  const remoteOnly = projectHost === "remote" && detail?.project.remote_only === true;
+  const noteHost: NoteHost = remoteOnly ? "remote_only" : projectHost;
+  const hostNote = hostNotesGone.has(noteHost) ? undefined : HOST_NOTE[noteHost];
   /** The tab whose close is in flight — its ✕ is held until the desktop answers. */
   const [closingId, setClosingId] = useState<string | null>(null);
   /** The card a swipe is closing: it slides out while the desktop answers,
@@ -472,7 +495,9 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
    * a hold opens the sheet of every choice, which is also where the default
    * is starred. With no agent to start — a host without tmux, a desktop
    * listing none — the tap opens that sheet as before. */
-  const quickTarget = creates ? newTabTarget(detail?.agents ?? [], starredAgent, starredLabel) : undefined;
+  // A remote-only project's agent starts on a machine the sheet names, so
+  // there is no one-tap default.
+  const quickTarget = creates && !remoteOnly ? newTabTarget(detail?.agents ?? [], starredAgent, starredLabel) : undefined;
   const quickLabel = quickTarget?.kind === "api" ? t("newTabMenu.apiKeyEntry", { label: quickTarget.label }) : quickTarget?.label;
   const fabPress = useTapHold(
     () => { if (!quickTarget) setNewTabOpen(true); else if (!creating) void create("agent", quickTarget.agent, undefined, quickTarget.launch); },
@@ -669,7 +694,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         order is the desktop's own tab order — the one a drag writes into. Plain
         text while there is only one tab to order. */}
     <header className="project-header">
-      <button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}>‹</button>
+      <button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>
       <div className="terminal-title">{tabs.length > 1
         ? <><h1><button
           className="project-title"
@@ -683,7 +708,15 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       <div className="project-header-tools">
         {/* What this project has besides its tabs — the agent's files (the
             🖼 the Focus screen carries), Git and the file browser — lives in
-            the drawer a right→left swipe also pulls in. */}
+            the drawer a right→left swipe also pulls in. The 🔍 goes straight
+            to the search box inside it. */}
+        {(filesOffered || hostFilesOffered || filesSwitchedOff) && <button
+          className="drawer-open"
+          onClick={() => { setFilesSearch(filesOffered || hostFilesOffered); setDrawerOpen(true); }}
+          aria-haspopup="dialog"
+          aria-label={t("mobile.files.search")}
+          title={t("mobile.files.search")}
+        ><SearchIcon size="1em" /></button>}
         {drawerOffered && <button
           className="drawer-open"
           onClick={() => setDrawerOpen(true)}
@@ -704,6 +737,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       </div>
     </div>}
     {gitOpen && detail && <GitSheet projectId={id} label={detail.project.label} onClose={() => setGitOpen(false)} />}
+    {divergedOpen && detail && <DivergedSheet projectId={id} label={detail.project.label} onClose={() => setDivergedOpen(false)} onChanged={() => void load()} />}
     {/* Only once the host has answered: `!detail?.desktop_available` was also
         true while the first load was in flight, so every project opened on a
         "Desktop unavailable" notice that vanished a moment later. */}
@@ -720,11 +754,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {detail && (hostNote || folderless) && <p className="notice project-host-note">
       <span>{[
         hostNote,
-        folderless ? (hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[projectHost]) : undefined,
-      ].flatMap((key) => key ? [t(key)] : []).join(" ")} {isUntested("mobile-every-project-type") && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
-      {hostNote && <button onClick={() => dropHostNote(projectHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
+        folderless ? (filesSwitchedOff ? "mobile.project.filesOff" : remoteOnly ? (hostFilesOffered ? "mobile.project.noFolderRemoteOnlyHost" : "mobile.project.noFolderRemoteOnly") : hostFilesOffered ? "mobile.project.noFolderRemoteHost" : NO_FOLDER_NOTE[projectHost]) : undefined,
+      ].flatMap((key) => key ? [t(key)] : []).join(" ")} {(remoteOnly ? isUntested("mobile.project.remoteOnly") : isUntested("mobile-every-project-type")) && <span className="untested">{t("mobile.newTab.untested")}</span>}{hostNote && isUntested("mobile.project.hostNoteDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+      {hostNote && <button onClick={() => dropHostNote(noteHost)} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>}
     </p>}
     {error && <p className="error">{error}</p>}
+    {!detail && !error && <ListSkeleton label={t("mobile.project.loading")} rows={2} />}
+    {/* The chrome's glyphs, drawn from the desktop's icon set. */}
+    {detail && isUntested("mobile.design.icons") && <p className="project-hint"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
     <HintQueue hints={tips} vars={{ agentHold: { agent: quickLabel ?? "" } }} />
     {projectInbox.view}
     {/* An inactive project is activated before anything else here is worth
@@ -733,7 +770,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {/* No tabs: say so once and point at the ＋ below, rather than drawing a
         second button that does the same. */}
     {detail && tabs.length === 0 && shownFileTabs.length === 0 && <div className="project-empty">
-      <span className="project-empty-glyph" aria-hidden="true">▭</span>
+      <span className="project-empty-glyph" aria-hidden="true"><WindowIcon size="1em" /></span>
       <strong>{t("mobile.project.emptyTitle")}</strong>
       <p>{t(!fabOffered ? "mobile.project.emptyHintNone" : !creates ? "mobile.project.emptyHintFiles" : createVerdict === "agents" ? "mobile.project.emptyHintAgents" : "mobile.project.emptyHint")}</p>
     </div>}
@@ -786,7 +823,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           and its card comes back. */}
       {closedRows.length > 0 && <section className="project-closed" aria-label={t("mobile.project.recentlyClosed")}>
         <button className="project-foot-row" aria-expanded={closedOpen} onClick={() => setClosedOpen((open) => !open)}>
-          <span aria-hidden="true" className="project-foot-icon">↺</span>
+          <span aria-hidden="true" className="project-foot-icon"><UndoIcon size="1em" /></span>
           <span>{t("mobile.project.recentlyClosedCount", { count: closedRows.length })}{isUntested("mobile.project.reopenClosed") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
           <svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
         </button>
@@ -802,7 +839,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           ? <><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span> {t("mobile.project.reopening", { label: row.label })}{isUntested("mobile.project.reopening") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
           : <>{row.label}</>}</button>)}
       </section>}
-      <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}>◷ {t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>
+      <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}><span aria-hidden="true" className="project-foot-icon"><ClockIcon size="1em" /></span>{t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>
     </div>
     {/* Opening a session is what this screen is for, so it rides above the
         list where the thumb already is, rather than in the header's corner
@@ -819,7 +856,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       aria-busy={creating}
       aria-label={t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send")}
       title={quickTarget ? t("mobile.project.fabQuick", { agent: quickLabel ?? "" }) : t(creates ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
-    ><span aria-hidden="true" className="fab-plus">＋</span>{(isUntested("mobile.project.fab") || (quickTarget && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
+    ><span aria-hidden="true" className="fab-plus"><PlusIcon size="1em" /></span>{(isUntested("mobile.project.fab") || (quickTarget && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {moreTab && <OptionSheet
       title={moreTab.label}
       waiting=""
@@ -836,9 +873,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       headless={!detail.desktop_available}
       creates={creates}
       agentsOnly={createVerdict === "agents"}
+      remoteOnly={remoteOnly}
+      sendsFile={!folderless}
       defaultTarget={quickTarget?.key}
       defaultLabel={quickLabel}
-      onDefault={(key, label) => { writeNewTabAgent(key, label); setStarredAgent(key); setStarredLabel(label); }}
+      onDefault={remoteOnly ? undefined : (key, label) => { writeNewTabAgent(key, label); setStarredAgent(key); setStarredLabel(label); }}
       onClose={() => setNewTabOpen(false)}
       onPick={(kind, agent, mode, launch) => { setNewTabOpen(false); void create(kind, agent, mode, launch); }}
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
@@ -866,8 +905,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {/* The viewer covers the phone; the gallery stays open behind it, so
         closing the file comes back to the list it was opened from. */}
     {galleryOpen && !fileOpen && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openFile} onDetails={setFileOpen} onDelete={removeFile} onDeleteAll={removeAllFiles} onClose={() => setGalleryOpen(false)} />}
-    {drawerOpen && detail && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => setDrawerOpen(false)}
-      browse={filesOffered || hostFilesOffered} here={filesOffered} host={hostFilesOffered} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
+    {drawerOpen && detail && <ProjectFiles key={id} projectId={id} label={detail.project.label} onClose={() => { setDrawerOpen(false); setFilesSearch(false); }}
+      browse={filesOffered || hostFilesOffered} search={filesSearch} filesOff={filesSwitchedOff} here={filesOffered} host={hostFilesOffered} hostLabel={detail.host_label} showTab={markupNewTab?.show} linked={markupNewTab?.linked} menu={(outbox.length > 0 || gitOffered || divergedOffered) ? <div className="option-list drawer-menu" role="menu" aria-label={t("mobile.project.menu")}>
         {outbox.length > 0 && <button
           role="menuitem"
           aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })}
@@ -876,7 +915,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         {gitOffered && <button
           role="menuitem"
           onClick={() => { setDrawerOpen(false); setGitOpen(true); }}
-        ><span aria-hidden="true" className="project-menu-icon">⎇</span><span><strong>{t("mobile.gitSheet.menu")}</strong>{isUntested("mobile.project.gitOverview") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span></button>}
+        ><span aria-hidden="true" className="project-menu-icon"><BranchIcon size="1em" /></span><span><strong>{t("mobile.gitSheet.menu")}</strong>{isUntested("mobile.project.gitOverview") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span></button>}
+        {divergedOffered && <button
+          role="menuitem"
+          onClick={() => { setDrawerOpen(false); setDivergedOpen(true); }}
+        ><span aria-hidden="true" className="project-menu-icon"><DiffIcon size="1em" /></span><span><strong>{t("mobile.diverged.menu")}</strong>{isUntested("mobile.project.diverged") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>{!!detail?.diverged_count && <small className="project-menu-count">{detail.diverged_count}</small>}</button>}
         {isUntested("mobile.project.drawerMenu") && <p className="project-menu-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </div> : undefined} />}
     {/* A card's file: a picture opens in Mark up — its card is a markup under

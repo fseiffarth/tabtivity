@@ -600,7 +600,7 @@ export function readSelectPrompt(
 /** The key hints a select dialog prints under its rows: Claude Code's
  * `Enter to select · ↑/↓ to navigate`, its `Enter to confirm`, Codex's
  * `Press enter to confirm`. The input box's own hints name none of these. */
-const DIALOG_FOOTER = /(?:↑↓\s+select|⇆\s+tab)\s+enter\s+(?:submit|confirm|toggle)\s+esc\s+dismiss|\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
+const DIALOG_FOOTER = /(?:↑↓\s+select|⇆\s+tab)\s+enter\s+(?:submit|confirm|toggle)\s+esc\s+dismiss|enter\s+choose\s+(?:tab\s+next\s+)?esc\s+dismiss|⇆\s+select\s+enter\s+confirm|\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
 /** Non-blank lines from the bottom the footer may sit above: a status line or
  * two the CLI keeps drawing under a dialog. */
 const FOOTER_REACH = 4;
@@ -835,7 +835,7 @@ const CODEX_HOOKS_TABLE = /^\s*Event\s{2,}Installed\s{2,}Active\b/u;
 const CODEX_HOOKS_FOOTER = /^\s*(?:t (trust all)\s*·\s*)?enter (?:review|details)\s*·\s*esc (close)\s*$/u;
 
 /**
- * Codex's hooks page (0.163.0, 0.164.0): what `Review hooks` on its startup "Hooks need
+ * Codex's hooks page (0.163.0–0.166.0): what `Review hooks` on its startup "Hooks need
  * review" menu opens, and `/hooks`. A table of hook events under its heading,
  * its highlight on an event row, its answers in the footer:
  *

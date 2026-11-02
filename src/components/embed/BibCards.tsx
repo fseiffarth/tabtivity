@@ -25,6 +25,7 @@ import {
   type BibSortKey,
 } from "../../lib/viewers/tex/bib";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** How many cards are mounted at once, and how many each extension adds. Big
  *  enough that a normal file is whole on the first paint and the sentinel is
@@ -481,7 +482,7 @@ function BibCard({
           aria-label={t("bibCards.deleteEntryLabel", { key: rec.key || rec.type })}
           onClick={() => onChange(deleteBibRecord(text, rec))}
         >
-          ×
+          <CloseIcon />
         </button>
       </div>
 
@@ -549,7 +550,7 @@ function BibFieldRow({
         aria-label={t("bibCards.deleteFieldLabel", { name: field.name })}
         onClick={() => onChange(deleteBibField(text, field))}
       >
-        ×
+        <CloseIcon />
       </button>
     </div>
   );

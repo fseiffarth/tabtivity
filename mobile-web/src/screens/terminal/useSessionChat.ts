@@ -23,11 +23,11 @@ import { openSubagent, stepSibling, type SubagentStep } from "../../terminal/sub
 import { withPending, type PendingPrompt } from "../../terminal/pendingPrompts";
 import { outboxPosts } from "../../terminal/outboxPosts";
 import { inboxLeaves, useInboxFiles } from "../../terminal/inboxRefs";
+import { useChangedFiles, useNamedFiles } from "../../terminal/chatFiles";
 import { afterClear, type ClearMark } from "../../terminal/clearedSession";
 import { startVisiblePoll, type VisiblePoll } from "../../visiblePoll";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../../shared/usageReport";
-import { speak, stopSpeaking } from "../../speechOutput";
-import { spokenText } from "../../../../shared/voice";
+import { feedReading, leaveReading, MAX_SPOKEN_AT_ONCE, readAnswers, readingHeld, stopSpeaking } from "../../speechOutput";
 import { TRANSCRIPT_STEP, CODEX_AGENT, type InboxUpload, leafOfReference } from "./terminalShared";
 
 /** How often Focus re-reads the stored session while it is in view. The read
@@ -54,10 +54,6 @@ function sameTranscript(a: SessionTranscript, b: SessionTranscript): boolean {
       // A subagent's handle can arrive after its entry did.
       && entry.subagent === b.entries[index].subagent && entry.role === b.entries[index].role);
 }
-
-/** More new answers than this at once is a session that was swapped in or
- * caught up on, not one that is talking: read-aloud leaves those to the eye. */
-const MAX_SPOKEN_AT_ONCE = 3;
 
 /** Reads the agent's stored session for Focus, and what its chat has left uncommitted. */
 export function useSessionTranscript({
@@ -177,10 +173,12 @@ export function useSessionTranscript({
 /** The session chat's entries, with the prompts sent from here held in place,
  * and the files sent either way. */
 export function useSessionEntries({
-  tab, cloudTab, liveScreen, uploads, outbox, transcript, pending, clearedAt, undoing, setUndoing,
+  tab, project, cloudTab, liveScreen, uploads, outbox, transcript, pending, clearedAt, undoing, setUndoing,
   sessionFocus,
 }: {
   tab: TabRow;
+  /** The tab's project, where its files can be opened; none without one. */
+  project: string | undefined;
   cloudTab: boolean;
   liveScreen: ReadableLine[];
   uploads: InboxUpload[];
@@ -240,9 +238,21 @@ export function useSessionEntries({
     ...uploads.flatMap((upload) => upload.reference === undefined || upload.failure ? [] : [leafOfReference(upload.reference)]),
   ])], [promptLeaves, uploads]);
   const inboxFiles = useInboxFiles(tab.id, inboxNamed);
-  /** Both directions' files, for the list beside the subagent index. */
-  const chatFiles = useMemo(() => sentFiles(outbox, promptLeaves, inboxFiles), [outbox, promptLeaves, inboxFiles]);
-  return { cliReady, sessionWaiting, sinceClear, storedEntries, sessionEntries, sessionAgents, earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles };
+  /** What the chat touched in the project: the files its answers name and
+   * the ones it changed. Only where the 📁 library can open them. */
+  const filesInReach = sessionFocus && tab.kind === "agent" && !!project;
+  const answerTexts = useMemo(
+    () => sessionEntries.filter((entry) => entry.kind === "answer" && !entry.queued && !entry.questions?.length).map((entry) => entry.text),
+    [sessionEntries],
+  );
+  const namedFiles = useNamedFiles(tab.id, answerTexts, filesInReach);
+  const changed = useChangedFiles(tab.id, filesInReach);
+  /** Every file of the conversation, for the list beside the subagent index. */
+  const chatFiles = useMemo(
+    () => sentFiles(outbox, promptLeaves, inboxFiles, changed.files, namedFiles),
+    [outbox, promptLeaves, inboxFiles, changed.files, namedFiles],
+  );
+  return { cliReady, sessionWaiting, sinceClear, storedEntries, sessionEntries, sessionAgents, earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles, namedFiles, changedMore: changed.more };
 }
 
 /** The subagent conversation open in the Reader: its read, and the walk into,
@@ -366,40 +376,43 @@ export function useSubagentReader({
 }
 
 /** Speaks each new answer of the stored session once, while read-aloud is on
- * and nothing is dictated. */
+ * and nothing is dictated — through the tab's reading cursor
+ * (`speechOutput.ts`), so the spoken moves and the read position work on it.
+ * While a hands-free turn holds it (`holdReadingForTurn`), nothing is read
+ * entry by entry: the turn's answers are read once it is over (`readTurn`). */
 export function useReadAloud({
-  tab, t, listening, transcript, readAloud, sessionFocus,
+  tab, listening, transcript, readAloud, sessionFocus,
 }: {
   tab: TabRow;
-  t: ReturnType<typeof useT>;
+  /** Kept for the call site: the reading labels are said in the speech
+   * language, not the screen's (`speechOutput.ts`). */
+  t?: ReturnType<typeof useT>;
   listening: boolean;
   transcript: SessionTranscript | null;
   readAloud: boolean;
   sessionFocus: boolean;
 }) {
   /** Read-aloud: each answer that arrives at the end of the stored session is
-   * spoken once. What the first read brought is history, as is anything
+   * spoken once. What the tab's first read brought is history, as is anything
    * "earlier" reveals above it or a whole other session swapped in — only a
-   * short new tail is news. Nothing is said over dictation: the microphone
-   * would hear it. */
-  const spokenKeys = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    spokenKeys.current = null;
-    return stopSpeaking;
+   * short new tail is news. What was heard is kept per tab in memory with
+   * the read position, so a reconnect or a trip to another tab neither reads
+   * an answer twice nor skips one. Nothing is said over dictation: the
+   * microphone would hear it. */
+  useEffect(() => () => {
+    stopSpeaking();
+    leaveReading(tab.id);
   }, [tab.id]);
   useEffect(() => {
     if (!sessionFocus || !transcript) return;
     const turns = transcriptTurns(transcript.entries);
-    const seen = spokenKeys.current;
-    spokenKeys.current = new Set(turns.map((turn) => turn.key));
-    if (!seen || !readAloud || listening) return;
-    let known = -1;
-    turns.forEach((turn, index) => { if (seen.has(turn.key)) known = index; });
-    const fresh = turns.slice(known + 1).filter((turn) => turn.kind === "answer");
+    const agent = tab.agent_label ?? tab.label;
+    const answers = turns.filter((turn) => turn.kind === "answer").map((turn) => ({ id: turn.key, text: turn.text, agent }));
+    const fresh = feedReading(tab.id, turns.map((turn) => turn.key), answers, speechTag());
+    if (!fresh || !readAloud || listening || readingHeld(tab.id)) return;
     if (fresh.length === 0 || fresh.length > MAX_SPOKEN_AT_ONCE) return;
-    const code = t("mobile.speech.code");
-    for (const turn of fresh) speak(turn.key, spokenText(turn.text, code), speechTag());
-  }, [sessionFocus, transcript, readAloud, listening, t]);
+    readAnswers(tab.id, fresh[0]);
+  }, [sessionFocus, transcript, readAloud, listening, tab.id, tab.agent_label, tab.label]);
   useEffect(() => {
     if (listening || !sessionFocus) stopSpeaking();
   }, [listening, sessionFocus]);

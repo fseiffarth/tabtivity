@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
 
@@ -24,11 +25,13 @@ export interface SheetOption {
  * choices to offer; Home's voice-language row opens the same sheet, so it sits
  * here rather than being drawn twice.
  */
-export function OptionSheet({ title, note, children, options, waiting, busy, onPick, onClose }: {
+export function OptionSheet({ title, note, children, footer, options, waiting, busy, onPick, onClose }: {
   title: string;
   note?: { text: string; error?: boolean };
   /** What the choice is about, shown under the note and above the rows. */
   children?: ReactNode;
+  /** Shown under the rows. */
+  footer?: ReactNode;
   options: SheetOption[];
   /** Shown while the list is still empty. */
   waiting: string;
@@ -42,7 +45,7 @@ export function OptionSheet({ title, note, children, options, waiting, busy, onP
     <section className="option-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button>
         <h2>{title}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>
@@ -61,6 +64,7 @@ export function OptionSheet({ title, note, children, options, waiting, busy, onP
             </button>
             </li>
           </Fragment>)}</ul>}
+      {footer}
     </section>
   </div>;
 }

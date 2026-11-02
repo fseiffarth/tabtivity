@@ -3,6 +3,7 @@ import { useT } from "../../lib/i18n";
 import { formatBytes } from "../../lib/formatBytes";
 import { useSyncStore, type SyncMirrorSkip } from "../../stores/remote/sync";
 import { UntestedTag } from "../common/UntestedTag";
+import { CloseIcon } from "../common/icons/Icon";
 
 const KEYS = {
   link: "projectFilesPane.syncMirrorSkipLink",
@@ -40,7 +41,7 @@ export function SyncMirrorSkips({ projectId }: { projectId: string | undefined }
         title={t("common.close")}
         aria-label={t("common.close")}
       >
-        ×
+        <CloseIcon />
       </button>
     </div>
   );

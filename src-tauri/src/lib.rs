@@ -1587,6 +1587,9 @@ pub fn run() {
             // external monitor otherwise leaves a borderless popout larger than
             // the laptop panel, with its title bar and resize edges off-screen.
             commands::subwindow::spawn_monitor_watcher(_app.handle().clone());
+            // Native Wayland: each popout's screen is kept current as it
+            // settles or the user moves it, for a restart after a signal.
+            commands::subwindow::spawn_screen_tracker(_app.handle().clone());
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
@@ -1794,6 +1797,7 @@ pub fn run() {
             commands::vm::remote_download_size,
             commands::vm::remote_download_to,
             commands::voice::voice_status,
+            commands::voice::voice_gpu_retry,
             commands::voice::voice_model_install_script,
             commands::voice::voice_listen_start,
             commands::voice::voice_listen_pause,
@@ -1886,6 +1890,9 @@ pub fn run() {
             commands::projects::project_folder_exists,
             commands::projects::extend_project_to_remote,
             commands::projects::detach_project_from_remote,
+            commands::projects::remote_project_init_host,
+            commands::remote_unpair::remote_unpair_mirror_preview,
+            commands::remote_unpair::remote_unpair_mirror,
             commands::projects::get_time_today,
             commands::projects::archive_project,
             commands::projects::forget_project,
@@ -2111,6 +2118,7 @@ pub fn run() {
             commands::remote::remote_tmux_list,
             commands::remote::remote_tmux_kill,
             commands::remote::remote_tmux_rename,
+            commands::remote::remote_tmux_agent,
             // Read-only local/remote host + SSH transport monitoring.
             commands::network::network_host_snapshot,
             commands::network::network_ssh_link_snapshot,
@@ -2326,6 +2334,7 @@ pub fn run() {
             commands::subwindow::desktop_coordinates_supported,
             commands::subwindow::snap_detached_window,
             commands::subwindow::focus_detached_window,
+            commands::subwindow::set_detached_title,
             commands::subwindow::sync_detached_scope,
             commands::subwindow::detached_window_is_parked,
             commands::subwindow::detached_window_screens,
@@ -2503,6 +2512,7 @@ pub fn run() {
             commands::agents::agent_global_set_codex_auto_review,
             commands::agents::agent_global_open,
             commands::agents::agent_usage,
+            commands::agents::agent_overview,
             commands::agents::agent_versions,
             commands::agents::dismiss_agent_version,
             commands::agents::remembered_model_rows,
@@ -2663,6 +2673,13 @@ pub fn run() {
                         }
                     }
                 }
+            }
+            // The popouts are still on screen when an exit is asked for (a
+            // SIGTERM, `pkill`, `app.exit`, the last window closing): the one
+            // moment their screens can still be read. The window's own quit
+            // has saved them through `detached_window_screens` by now.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                commands::subwindow::remember_screens_at_exit(_app);
             }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;

@@ -368,7 +368,9 @@ installer honours the prefixes is not verified per installer.
 
 **Shell tabs.** They are still the user's terminals and are never fenced —
 but a CLI typed into one now reaches the same fence: `<state_dir>/bin` holds
-one shim per registry CLI at the front of every tab's PATH
+one shim per registry CLI at the front of every tab's PATH, plus any second
+name a vendor's installer leaves beside it (`VENDOR_ALIASES`: OpenCode's
+`opencode2` execs the real binary next to it, so it needs the same shim)
 (`services::agent_bin`), a script that execs `tabtivity --agent-shim <cli>`
 (`services::agent_shim`), which builds the calling tab's fence from
 `TABTIVITY_SCOPE` — same scope home, same shared logins — and runs it as its

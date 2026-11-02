@@ -310,6 +310,9 @@ const BOX_BAR = /^\s*(?:[│┃]\s+)?/u;
 /** The start screen's bottom row: the version, right-aligned, maybe after
  * what plugins add to the slot. */
 const HOME_FOOTER = /(?:^|\s)v?\d+\.\d+\.\d+(?:-[\w.]+)?$/u;
+/** What the box prints after the model once its limits run low (2.2), one
+ * space over: part of the row by its spacing, and no part of the variant. */
+const COMPOSER_LIMIT = /\s+(?:<?\$[\d.,]+ left|Limit reached)$/u;
 
 /** Whether `text` is the start screen's footer row, under the box's. */
 export function isOpenCodeHomeFooter(text: string): boolean {
@@ -371,7 +374,7 @@ export function openCodeComposer(
   row: { text: string; spans?: readonly { text: string; color?: string }[] },
 ): OpenCodeComposer | null {
   const lead = BOX_BAR.exec(row.text)?.[0].length ?? 0;
-  const column = row.text.slice(lead).trimEnd().split(/\s{2,}/u)[0];
+  const column = row.text.slice(lead).trimEnd().split(/\s{2,}/u)[0].replace(COMPOSER_LIMIT, "");
   if (!column || column.length > MAX_COMPOSER) return null;
   const match = COMPOSER_ROW.exec(column);
   if (!match) return null;
@@ -771,9 +774,14 @@ export function readOpenCodePicker(lines: readonly PickerLine[]): SelectPrompt |
 
 /** ctrl+p — the only way into OpenCode mini's commands. */
 const PALETTE = "";
-/** ctrl+u — clears the picker's search field, so a second tap never types onto
- * what the first one left there. */
-const CLEAR_SEARCH = "";
+/** Backspaces for the picker's search field, so a second tap never types onto
+ * what the first one left there: one for each character a query can hold, and
+ * nothing happens on an empty field. Never ctrl+u: OpenCode 2.2 binds it, in
+ * the model dialog, to its Usage screen once the session is signed in to
+ * OpenCode Console, and the label and Enter then land on that screen. The
+ * dialog takes ctrl+a and Home as well, so no one key empties the field. */
+const MAX_QUERY = 200;
+const CLEAR_SEARCH = "\u007f".repeat(MAX_QUERY);
 
 /** The keys that open the model picker: the palette, the word that finds
  * "Switch model" in it, and Enter. */

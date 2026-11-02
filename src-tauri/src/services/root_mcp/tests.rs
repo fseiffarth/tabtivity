@@ -1635,7 +1635,7 @@ fn moving_a_synced_card_deletes_the_server_copy_first() {
     std::fs::write(&f.calendar, serde_json::to_string(&data).unwrap()).unwrap();
 
     let (_, changes) = f.call_unreviewed("todo_update", json!({ "id": id, "calendar": "Work" }));
-    let [delete, upsert] = changes.as_slice() else { panic!("two rows: {changes:?}") };
+    let [delete, upsert] = changes.as_slice() else { panic!("two rows, got {}", changes.len()) };
     assert_eq!((delete.kind, delete.op), ("task", "delete"));
     assert_eq!(delete.row["calendar_id"], "default");
     assert_eq!(delete.row["caldav_href"], "/cal/personal/t.ics");
@@ -1725,6 +1725,48 @@ fn projects_list_reports_remoteness_and_hides_nothing_else() {
     assert_eq!(projects[0]["directory"], "/w/alpha");
     assert_eq!(projects[0]["remote"], false);
     assert_eq!(projects[1]["remote"], true);
+    assert_eq!(projects[0]["remote_only"], false);
+    assert_eq!(projects[1]["remote_only"], false, "a plain Remote keeps its mirror");
+}
+
+/// A remote-only project (and a VM, remote-only by default) says so in the
+/// list and in `sync_status`, which reports the posture instead of a lockstep
+/// the user could take for something switched off; it is never read through a
+/// stale `mirror` in the sweep.
+#[test]
+fn a_remote_only_project_reports_its_posture() {
+    let f = Fixture::new();
+    std::fs::write(
+        &f.projects,
+        r#"[{"id":"p1","name":"Alpha","status":"active","position":0,"local_file":"","directory":"/w/alpha"},
+            {"id":"p2","name":"Beta","status":"inactive","position":1,"local_file":"","remote":{"host":"h","remote_path":"/srv/b"}},
+            {"id":"p3","name":"Gamma","status":"inactive","position":2,"local_file":"","mirror":"/w/stale",
+             "remote":{"host":"h","remote_path":"/srv/g","remote_only":true}},
+            {"id":"p4","name":"Delta","status":"inactive","position":3,"local_file":"",
+             "remote":{"host":"127.0.0.1","remote_path":"/home/u/d","vm":true}}]"#,
+    )
+    .unwrap();
+    f.write_remote_state("p3", "git_peer.json", json!({ "enabled": true, "status": "inStep" }));
+    let (r, _) = f.call("projects_list", json!({}));
+    let rows = text(&r)["projects"].clone();
+    let flag = |id: &str| rows.as_array().unwrap().iter().find(|p| p["id"] == id).unwrap()["remote_only"].clone();
+    assert_eq!((flag("p1"), flag("p2"), flag("p3"), flag("p4")), (json!(false), json!(false), json!(true), json!(true)));
+
+    let (r, _) = f.call("sync_status", json!({}));
+    let out = text(&r);
+    let row = |id: &str| out["remote_projects"].as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+    assert_eq!(row("p2")["posture"], "mirrored");
+    assert!(row("p2")["lockstep"].is_object());
+    for id in ["p3", "p4"] {
+        let pinned = row(id);
+        assert_eq!(pinned["posture"], "remote_only", "{id}");
+        assert!(pinned.get("lockstep").is_none() && pinned.get("byte_sync").is_none(), "{id}: {pinned}");
+        assert!(pinned["warnings"].is_array());
+    }
+
+    let gamma = read_projects(&f.projects).into_iter().find(|p| p.id == "p3").unwrap();
+    let checkout = local_checkout(&gamma);
+    assert!(checkout.unwrap_err().contains("remote-only"), "never the stale mirror");
 }
 
 // ── calendar_update_event ───────────────────────────────────────────────
@@ -1886,7 +1928,7 @@ fn events_move_between_calendars_by_id_or_all_at_once() {
     let (r, changes) = f.call("calendar_move_events", json!({ "ids": [a, a], "to": "Work" }));
     assert_eq!(r["isError"], false, "{r}");
     assert_eq!(text(&r)["moved"], json!([a]), "a repeated id moves once");
-    let [change] = changes.as_slice() else { panic!("one row: {changes:?}") };
+    let [change] = changes.as_slice() else { panic!("expected exactly one row") };
     assert_eq!((change.kind, change.op, change.local), ("event", "upsert", false));
     assert_eq!(change.row["id"], a, "a move keeps the event's identity");
     assert_eq!(change.row["end"], "2026-09-18T10:30", "and its times");
@@ -1961,7 +2003,7 @@ fn moving_a_synced_event_deletes_the_server_copy_first() {
     mark_synced(&f, &a, "/cal/personal/a.ics");
 
     let (_, changes) = f.call_unreviewed("calendar_move_events", json!({ "ids": [a], "to": "Work" }));
-    let [delete, upsert] = changes.as_slice() else { panic!("two rows: {changes:?}") };
+    let [delete, upsert] = changes.as_slice() else { panic!("two rows, got {}", changes.len()) };
     assert_eq!((delete.kind, delete.op), ("event", "delete"));
     assert_eq!(delete.row["calendar_id"], "default", "addressed in the calendar it left");
     assert_eq!(delete.row["caldav_href"], "/cal/personal/a.ics");

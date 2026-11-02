@@ -29,6 +29,7 @@ import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
 import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { AddTabMenuList, type AddMenuEntry, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
@@ -67,6 +68,7 @@ import {
   type LocalityMenuState,
 } from "./TabLocalityBadges";
 import { texPdfPartner, useTexPdfCandidates } from "../../lib/viewers/tex/texPdfLink";
+import { TabPhoneMark } from "../mobile/PhoneHereMark";
 import {
   startCursorPoll,
   desktopCursor,
@@ -81,6 +83,7 @@ import { carriesAcrossHosts, switchTabLocation } from "../../stores/agents/agent
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { closeTabWithConfirm } from "../../lib/remote/closeRemoteTab";
+import { closedTabSlotHeld, noteTabClose, useClosedTabSlot } from "../../lib/tabs/closedTabSlot";
 import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
 import { registerHostBoundTab } from "../../lib/remote/hostBound";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
@@ -100,6 +103,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
+import { ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
@@ -214,6 +218,8 @@ interface TabItemProps {
   landedNonce: number;
   fastMode: boolean;
   isRemoteScope: boolean;
+  /** The scope lives only on its host (`isHostPinned`). */
+  hostPinned: boolean;
   primaryHost?: string;
   computeHosts?: React.ComponentProps<typeof TabLocalityBadge>["computeHosts"];
   /** The scope's `.tex`/`.pdf` viewer tabs (`useTexPdfCandidates`). */
@@ -254,6 +260,7 @@ const TabItem = memo(function TabItem({
   landedNonce,
   fastMode,
   isRemoteScope,
+  hostPinned,
   primaryHost,
   computeHosts,
   texPdfTabs,
@@ -378,9 +385,11 @@ const TabItem = memo(function TabItem({
             ? t("agentSchedule.indicatorNext", { count: schedule.count, value: schedule.next.toLocaleString() })
             : t("agentSchedule.indicator", { count: schedule.count })}
         >
-          ◷
+          <ClockIcon />
         </span>
       )}
+      {/* A paired phone holds this tab open (stores/phonePresence). */}
+      <TabPhoneMark tmuxSession={tab.tmuxSession} />
       {/* Viewer file-source badge — remote-native (host SFTP) vs local
           mirror, a clickable toggle when the file exists on both sides.
           Shared with the detached strip (see TabLocalityBadges). */}
@@ -409,6 +418,7 @@ const TabItem = memo(function TabItem({
       {isRemoteScope && (
         <TabLocalityBadge
           tab={tab}
+          pinned={hostPinned}
           primaryHost={primaryHost}
           computeHosts={computeHosts}
           onOpen={(r, startOnMachines) => bar.openLocality(tab.key, r, startOnMachines)}
@@ -416,7 +426,11 @@ const TabItem = memo(function TabItem({
       )}
       <button
         className="tab-close"
-        onClick={(e) => { e.stopPropagation(); closeTabWithConfirm(tab.key); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          noteTabClose(e.currentTarget);
+          closeTabWithConfirm(tab.key);
+        }}
         // The chord closes the ACTIVE tab, so only the active tab's ×
         // claims it — on any other it would name a key that closes a
         // different tab than the one being pointed at.
@@ -426,7 +440,7 @@ const TabItem = memo(function TabItem({
             : t("tabBar.closeTabTitle")
         }
       >
-        ×
+        <CloseIcon />
       </button>
     </div>
   );
@@ -502,6 +516,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const browserHome = useSettingsStore((s) => s.settings?.browser_home_url);
   const closeGroup = useTabsStore((s) => s.closeGroup);
   const hideGroup = useTabsStore((s) => s.hideGroup);
+  const setGroupName = useTabsStore((s) => s.setGroupName);
   // Per-subwindow right file viewer: toggle state lives on the group node.
   const filesOpen = !!group?.filesOpen;
   const setGroupFiles = useTabsStore((s) => s.setGroupFiles);
@@ -514,8 +529,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // subscribing to the references is fine.
   const primaryHost = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.remote?.host);
   const computeHosts = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.compute_hosts);
-  // A VM project's tabs are pinned to the VM, so its agents get no machine list.
-  const isVmScope = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.vm?.enabled);
+  // A VM or remote-only project's tabs are pinned to its hosts: no Local row
+  // in the badge's menu or the agents' machine list.
+  const hostPinned = useProjectsStore((s) => isHostPinned(s.projects.find((p) => p.id === scope)));
   const scopeProject = useProjectsStore((s) => s.projects.find((p) => p.id === scope));
   // Per-tab file source (remote-native vs local mirror), published by the file
   // viewers. Lets the Remote/Local badge ride on the viewer tab itself rather
@@ -569,6 +585,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     localModelOffInRoot,
     localDrivers,
     enabledAgents,
+    refreshAgents,
     defaultAgentBin,
     vibeForLocalModel,
     compactAgentBins,
@@ -632,6 +649,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const [editingKey, setEditingKey] = useState<string | null>(null);
   // Right-click on a tab-group chip: its own menu (rename / ungroup / close).
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
+  // Right-click on the bar itself: the one place a subwindow's name is set.
+  const [nameMenu, setNameMenu] = useState<{ x: number; y: number } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
   const { promptText, showMessage, dialogs } = useDialogs();
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
@@ -643,10 +662,16 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const menuOpen = menuPos !== null;
-  // The local-model group's GPU gate; probes only while the menu is open.
-  const localModelGpu = useLocalModelPlacement(localModel, menuOpen);
+  // An install in a terminal tab sends no registry event, so each opening re-reads
+  // the CLIs: a new one is in the menu that was just opened.
+  useEffect(() => {
+    if (menuOpen) refreshAgents();
+  }, [menuOpen, refreshAgents]);
+  // The local-model group's GPU gate; probes only while the menu is open
+  // (and never on a host-pinned scope, whose menu has no such group).
+  const localModelGpu = useLocalModelPlacement(localModel, menuOpen && !hostPinned);
   // The API section's CLIs (a stored key can run them); asked while open.
-  const keyableAgents = useKeyableAgents(menuOpen);
+  const keyableAgents = useKeyableAgents(menuOpen && !hostPinned);
 
   const updateScrollState = useCallback(() => {
     const el = stripRef.current;
@@ -740,6 +765,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   }, []);
 
   const activeKey = group?.activeKey ?? null;
+  useClosedTabSlot(stripRef, `${tabs.map((tb) => tb.key).join(",")}|${activeKey}`);
 
   // Looking at a tab clears its "needs attention" flag — activating a tab (click,
   // keyboard switch, or mounting with it already active) makes it the one on screen.
@@ -773,14 +799,15 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // end, or switched to by keyboard — scrolls into view (mirrors the popout's
   // `ScrollingTabStrip`); clicks reveal through `revealTab` in the commit path.
   useEffect(() => {
-    if (!activeKey) return;
-    const tabEl = stripRef.current?.querySelector<HTMLElement>(".tab.active");
+    const strip = stripRef.current;
+    if (!activeKey || !strip || closedTabSlotHeld(strip)) return;
+    const tabEl = strip.querySelector<HTMLElement>(".tab.active");
     if (tabEl) revealTab(tabEl);
   }, [activeKey, tabs.length, revealTab]);
 
   // A remote project's "+" agent rows each get a ▾ to start on a machine.
   const addMenuMachines =
-    menuOpen && isRemoteScope && !isVmScope ? agentMachines({ primaryHost, computeHosts, t }) : undefined;
+    menuOpen && isRemoteScope ? agentMachines({ primaryHost, computeHosts, pinned: hostPinned, t }) : undefined;
 
   function openAddMenu() {
     if (menuPos) { setMenuPos(null); return; }
@@ -822,9 +849,10 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   }
 
   // Cloud sessions clone a project's repository, so they are offered in a
-  // project's menu only — not the root console's or a box's.
+  // project's menu only — not the root console's or a box's — and not on a
+  // host-pinned one, whose cloud launch would start on this machine.
   const handleAddCloud =
-    scope !== ROOT_SCOPE && !scope.startsWith(BOX_SCOPE_PREFIX)
+    scope !== ROOT_SCOPE && !scope.startsWith(BOX_SCOPE_PREFIX) && !hostPinned
       ? (item: StaticMenuItem, launch: CloudLaunch) => {
           setMenuPos(null);
           const place = placement();
@@ -1190,6 +1218,31 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     if (label) renameTab(key, label);
   }
 
+  function onBarContextMenu(event: React.MouseEvent) {
+    if (groupId === EMPTY_GROUP_ID) return;
+    // A dialog or menu portaled out of this bar still bubbles here in React.
+    if (!event.currentTarget.contains(event.target as Node)) return;
+    if ((event.target as HTMLElement).closest(".tab, button, input")) return;
+    event.preventDefault();
+    setMenuPos(null);
+    setTabMenu(null);
+    setStackMenu(null);
+    setNameMenu({ x: event.clientX, y: event.clientY });
+  }
+  async function nameSubwindow() {
+    setNameMenu(null);
+    const current = group?.name ?? "";
+    const name = await promptText({
+      title: t(current ? "tabBar.renameSubwindow" : "tabBar.nameSubwindow"),
+      label: t("tabBar.subwindowNameLabel"),
+      body: current ? t("tabBar.nameRemoveHint") : undefined,
+      initial: current,
+      unchanged: current,
+      allowEmpty: true,
+    });
+    if (name !== null) setGroupName(groupId, name);
+  }
+
   function onTabContextMenu(event: React.MouseEvent, key: string, index: number) {
     event.preventDefault();
     event.stopPropagation();
@@ -1236,6 +1289,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     // Dismiss the hover card the moment a click/drag begins so it never lingers
     // over a drag ghost or the pane below.
     setHoverTab(null);
+    // The × is its own click: a press there neither activates the tab nor, on
+    // the active one, starts a rename, either of which would move the × away.
+    if ((e.target as HTMLElement).closest(".tab-close")) return;
     // While this tab is being inline-renamed, the label is an <input>: don't
     // hijack its pointer into a tab drag (lets the caret/selection work).
     if (editingKey === tab.key) return;
@@ -1583,6 +1639,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       data-group-id={groupId}
       data-tab-count={tabs.length}
       onPointerDown={onBarPointerDown}
+      onContextMenu={onBarContextMenu}
     >
       {/* Move grip — the handle for rearranging this whole subwindow (⧉ pops
           it out). Always pinned at the far left (outside the scrolling strip) so
@@ -1594,8 +1651,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         title={t("tabBar.dragGripTitle")}
         aria-hidden="true"
       >
-        ⠿
+        <GripIcon />
       </div>
+      {group?.name && (
+        <span className="subwindow-name" title={group.name}>{group.name}</span>
+      )}
       <button
         className="tab-scroll-btn tab-popout-btn"
         title={t("tabBar.popOutTitle")}
@@ -1616,7 +1676,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(-1)}
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       )}
       <div className="tab-strip" ref={stripRef} onWheel={onStripWheel}>
@@ -1689,6 +1749,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             landedNonce={landedNonce}
             fastMode={fastMode}
             isRemoteScope={isRemoteScope}
+            hostPinned={hostPinned}
             primaryHost={primaryHost}
             computeHosts={computeHosts}
             texPdfTabs={texPdfTabs}
@@ -1711,7 +1772,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(1)}
         >
-          ›
+          <ChevronRightIcon />
         </button>
       )}
       {/* The + lives OUTSIDE the scrolling strip, beside the grip, the chevrons
@@ -1784,7 +1845,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); closeGroup(groupId); }}
           >
-            ×
+            <CloseIcon />
           </button>
         )}
       </div>
@@ -1838,13 +1899,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   compactAgentBins,
                 ),
               },
-              ...apiKeyMenuGroups({
-                keyable: keyableAgents,
-                installedBuiltins: enabledAgents,
-                remoteScope: isRemoteScope,
-                pick: handleAdd,
-                t,
-              }),
+              // A host-pinned scope (VM, remote-only) has no local tree: its
+              // API-key and local-model rows, which start on this machine,
+              // are not offered.
+              ...(hostPinned
+                ? []
+                : apiKeyMenuGroups({
+                    keyable: keyableAgents,
+                    installedBuiltins: enabledAgents,
+                    remoteScope: isRemoteScope,
+                    pick: handleAdd,
+                    t,
+                  })),
               // Box scope: one row-trio per member — files view, shell, and a
               // (resume-safe, member-cwd) Claude tab. Empty members list (or a
               // non-box scope) contributes no group at all.
@@ -1882,16 +1948,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               // Only offer agents whose binary is actually installed: Mistral/vibe
               // (checked against `vibeForLocalModel`) and the drivers the backend
               // already marks `available` — and only once the model is on the GPU.
-              localModelMenuGroup({
-                localModel,
-                localModelOffInRoot,
-                localDrivers,
-                vibeForLocalModel,
-                gpu: localModelGpu,
-                onVibe: (model) => void handleOllamaModel(model),
-                onLaunch: (id, label, model) => void handleLocalLaunch(id, label, model),
-                t,
-              }),
+              ...(hostPinned
+                ? []
+                : [localModelMenuGroup({
+                    localModel,
+                    localModelOffInRoot,
+                    localDrivers,
+                    vibeForLocalModel,
+                    gpu: localModelGpu,
+                    onVibe: (model) => void handleOllamaModel(model),
+                    onLaunch: (id, label, model) => void handleLocalLaunch(id, label, model),
+                    t,
+                  })]),
               {
                 label: t("newTabMenu.groupShell"),
                 entries: [{
@@ -2011,9 +2079,20 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               {
                 label: t("newTabMenu.groupProject"),
                 entries: [{
+                  key: "search-everything",
+                  label: t("palette.menuRow"),
+                  dot: <SearchIcon />,
+                  color: "var(--text-secondary)",
+                  disabled: false,
+                  shortcut: "commandPalette",
+                  onPick: () => {
+                    window.dispatchEvent(new Event("app:open-palette"));
+                    setMenuPos(null);
+                  },
+                }, {
                   key: "close-all",
                   label: t("newTabMenu.itemCloseAllTabs"),
-                  dot: "×",
+                  dot: <CloseIcon />,
                   color: "var(--danger)",
                   disabled: !hasAnyTabs,
                   shortcut: "closeAllTabs",
@@ -2057,12 +2136,13 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         return (
           <LocalityMenu
             menu={localityMenu}
-            current={tabLocation(tab)}
+            current={tabLocation(tab, hostPinned)}
+            pinned={hostPinned}
             primaryHost={primaryHost}
             computeHosts={computeHosts}
             onClose={() => setLocalityMenu(null)}
             onChangeView={(view) => setLocalityMenu((m) => (m ? { ...m, view } : m))}
-            carriesConversation={!!tab && carriesAcrossHosts(tab, scopeProject, tabLocation(tab) === "local" ? "remote" : "local")}
+            carriesConversation={!!tab && carriesAcrossHosts(tab, scopeProject, tabLocation(tab, hostPinned) === "local" ? "remote" : "local")}
             onChoose={(_key, loc) => {
               if (!tab) return;
               void switchTabLocation(scope, tab, loc).then((result) => {
@@ -2090,7 +2170,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               else setEditingKey(key);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
             {t("common.rename")}
           </button>
           {/* The picker keeps the menu OPEN after a pick: the tab recolours behind
@@ -2144,7 +2224,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                       setTabMenu(null);
                     }}
                   >
-                    <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+                    <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
                     {t("tabStack.remove")}
                   </button>
                 )}
@@ -2169,7 +2249,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                 setTabMenu(null);
               }}
             >
-              <span className="tab-new-menu-dot tab-new-menu-dot--accent">◷</span>
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><ClockIcon /></span>
               {t("agentSchedule.menu")}
               <UntestedTag id="tabBar.2" />
             </button>
@@ -2181,7 +2261,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("common.close")}
             <MenuShortcut chord="closeTab" />
           </button>
@@ -2193,7 +2273,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeOthers")}
           </button>
           <button
@@ -2204,7 +2284,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeToLeft")}
           </button>
           <button
@@ -2215,7 +2295,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeToRight")}
           </button>
           {closedAgentTabs.length > 0 && (
@@ -2235,6 +2315,20 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           )}
         </ContextMenuPortal>
       )}
+      {nameMenu && (
+        <ContextMenuPortal
+          x={nameMenu.x}
+          y={nameMenu.y}
+          onClose={() => setNameMenu(null)}
+          className="tab-new-menu"
+        >
+          <button className="tab-new-menu-item" onClick={() => void nameSubwindow()}>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
+            {t(group?.name ? "tabBar.renameSubwindow" : "tabBar.nameSubwindow")}
+            <UntestedTag id="tabBar.nameSubwindow" />
+          </button>
+        </ContextMenuPortal>
+      )}
       {stackMenu && (
         <ContextMenuPortal
           x={stackMenu.x}
@@ -2246,14 +2340,14 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             className="tab-new-menu-item"
             onClick={() => void renameStack(stackMenu.name)}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
             {t("tabStack.rename")}
           </button>
           <button
             className="tab-new-menu-item"
             onClick={() => ungroupStack(stackMenu.name)}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
             {t("tabStack.ungroup")}
           </button>
           <button
@@ -2264,7 +2358,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               tabs.filter((tb) => tb.stack === name).forEach((tb) => closeTabWithConfirm(tb.key));
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabStack.closeAll")}
           </button>
         </ContextMenuPortal>
@@ -2281,6 +2375,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             tab={tab}
             scope={scope}
             isRemote={isRemoteScope}
+            hostPinned={hostPinned}
             primaryHost={primaryHost}
             computeHosts={computeHosts}
             anchorX={hoverTab.x}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { ApiError, createProject, MAX_PROJECT_NAME, projectFolderName, type ProjectRow } from "../api";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
@@ -46,7 +47,7 @@ export function NewProjectSheet({ onClose, onCreated }: {
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.newProject.title")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button><h2>{t("mobile.newProject.title")} {isUntested("mobile.home.newProject") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button><h2>{t("mobile.newProject.title")} {isUntested("mobile.home.newProject") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       <p className="sheet-note">{t("mobile.newProject.note")}</p>
       {error && <p className="sheet-note error" role="alert">{error}</p>}
       <div className="mobile-schedule-form">

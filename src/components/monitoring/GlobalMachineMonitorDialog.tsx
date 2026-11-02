@@ -3,6 +3,7 @@ import { lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import { useGlobalMachineMonitorStore } from "../../stores/remote/globalMachineMonitor";
 import { useT } from "../../lib/i18n";
+import { CloseIcon } from "../common/icons/Icon";
 
 // The same lazily split chunk a System Monitor tab loads (`TabPane`).
 const SystemMonitorPane = lazy(() =>
@@ -45,8 +46,8 @@ function GlobalMachineMonitorDialog({
       >
         <div className="settings-title-row">
           <h2>{t("tabKind.monitor")} — {machine.label || machine.host}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         <div className="sysmon-dialog-body">

@@ -32,6 +32,7 @@ import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
 import { DateField } from "../common/DateField";
 import { TimeField } from "../common/TimeField";
 import { UntestedTag } from "../common/UntestedTag";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** The reminder offsets the dropdown offers, in minutes before the start. */
 const REMINDER_CHOICE_KEYS: { labelKey: TranslationKey; minutes: number }[] = [
@@ -397,7 +398,7 @@ export function EventDialog({
       >
         <div className="settings-title-row">
           <h2>{creating ? t("eventDialog.newEventTitle") : t("eventDialog.editEventTitle")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
         {scopeAsk ? (

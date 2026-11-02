@@ -175,9 +175,9 @@ API keys section says so.
 
 - In a project: `+` on the tab bar → **Agents & CLIs** → the agent. The tab
   starts in the project folder.
-- The compact list shows Claude, Codex and Gemini by default; change it with
-  the "+ tab" chips in the Models & agents menu. **More agents & CLIs…** lists
-  every installed agent.
+- The compact list shows Claude, Codex and Gemini by default, and a CLI you
+  install joins it by itself; change it with the "+ tab" chips in the Models &
+  agents menu. **More agents & CLIs…** lists every installed agent.
 - The **Default** chip picks the agent Tabtivity uses when it must choose one
   itself (e.g. filling scaffold files).
 - Root console: agents are off there until you turn on their **Root** chip.

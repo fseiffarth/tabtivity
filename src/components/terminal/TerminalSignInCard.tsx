@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
 import type { SignInRequest } from "../../lib/terminal/terminalUrls";
 import { UntestedTag } from "../common/UntestedTag";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The card a terminal pane shows while the program in it waits for the user to
@@ -54,7 +55,7 @@ export function TerminalSignInCard({
         title={t("terminal.signIn.dismiss")}
         onClick={onDismiss}
       >
-        ×
+        <CloseIcon />
       </button>
       <div className="hint-bubble-title">
         {t("terminal.signIn.title")} <UntestedTag id="terminal.signIn.title" />
@@ -133,7 +134,7 @@ export function TerminalSignInDoneCard({
         title={t("terminal.signIn.dismiss")}
         onClick={onDismiss}
       >
-        ×
+        <CloseIcon />
       </button>
       <div className="hint-bubble-title">
         {t("terminal.signIn.doneTitle")} <UntestedTag id="terminal.signIn.done" />

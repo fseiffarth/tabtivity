@@ -21,6 +21,19 @@ describe("looksLikeDecisionPrompt", () => {
     expect(looksLikeDecisionPrompt("↑↓ select  enter confirm")).toBe(false);
   });
 
+  it("detects OpenCode's permission chips and mini's question form (2.2.4)", () => {
+    expect(looksLikeDecisionPrompt(" Allow once   Always allow   Reject    ctrl+f fullscreen  ⇆ select  enter confirm")).toBe(true);
+    expect(looksLikeDecisionPrompt(" Allow once   Always allow   Reject\n ctrl+f fullscreen  ⇆ select  enter confirm")).toBe(true);
+    expect(looksLikeDecisionPrompt(" Allow once   Always allow   Reject\npgup/pgdn scroll")).toBe(true);
+    expect(looksLikeDecisionPrompt(" Confirm   Cancel        ⇆ select  enter confirm  esc cancel")).toBe(true);
+    expect(looksLikeDecisionPrompt("AllowonceAlwaysallowReject\x1b[39m⇆selectenterconfirm")).toBe(true);
+    expect(looksLikeDecisionPrompt("  ↑↓ select   enter choose   tab next   esc dismiss")).toBe(true);
+    expect(looksLikeDecisionPrompt("enter choose esc dismiss pgup/pgdn scroll")).toBe(true);
+    expect(looksLikeDecisionPrompt("  ◆ Questions Review\n  Colour: Blue\n  enter submit   esc dismiss")).toBe(true);
+    expect(looksLikeDecisionPrompt("Allow once, Always allow or Reject: the three chips")).toBe(false);
+    expect(looksLikeDecisionPrompt("enter submit   esc dismiss")).toBe(false);
+  });
+
   it("detects a pointer + numbered choice (Claude/Codex approval menu)", () => {
     const screen = [
       "Do you want to make this edit to activity.ts?",

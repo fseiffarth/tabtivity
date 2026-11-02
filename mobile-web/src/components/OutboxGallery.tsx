@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { type OutboxFile, type OutboxScope } from "../api";
 import { OutboxGrid } from "./OutboxGrid";
@@ -61,7 +62,7 @@ export function OutboxGallery({ scope, files, onOpen, onDetails, onDelete, onDel
     <section className="option-sheet outbox-gallery" role="dialog" aria-modal="true" aria-label={t("mobile.outbox.region")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")}><CloseIcon size="1em" /></button>
         <h2>{t("mobile.outbox.from")} {isUntested("mobile.outbox.gallery") && <small>{t("mobile.outbox.untested")}</small>} {isUntested("mobile.outbox.share") && <small>{t("mobile.outbox.shareUntested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>

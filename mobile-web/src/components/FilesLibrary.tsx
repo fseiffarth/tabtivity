@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CloseIcon } from "../glyphs";
 import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
@@ -133,11 +134,12 @@ function tileMeta(entry: ProjectFileEntry, t: T, lang: Language): string {
 }
 
 /** The message for a listing (or a search) the sidecar refused. */
-function failureKey(reason: unknown, fallback: TranslationKey = "mobile.files.error"): TranslationKey {
+export function failureKey(reason: unknown, fallback: TranslationKey = "mobile.files.error"): TranslationKey {
   if (reason instanceof ApiError) {
     if (reason.code === "files_off") return "mobile.files.off";
     if (reason.code === "file_not_found") return "mobile.files.gone";
     if (reason.code === "host_offline") return "mobile.files.hostOffline";
+    if (reason.code === "project_not_found") return "mobile.favorites.projectGone";
   }
   return fallback;
 }
@@ -201,6 +203,31 @@ export interface ItemAction { key: string; label: string; run: () => void }
 
 /** A favorite or a recent file as the library shows it, and which list it is in. */
 type Saved = { item: FilesSaved | FilesRecent; from: "favorite" | "recent" };
+
+/** A favorite or recent as its folder lists it now: its fresh token, size and
+ * time, or the kept row of a folder past the listing's cap, which may hold it
+ * unlisted. `null` when it was moved or deleted. */
+export async function lookUpSaved(projectId: string, item: FilesSaved, side: FilesSide): Promise<ProjectFileEntry | null> {
+  try {
+    const listing = await listProjectFiles(projectId, item.trail[item.trail.length - 1]?.token, undefined, side);
+    const entry = listing.entries.find((candidate) => candidate.name === item.name && (candidate.kind === "dir") === (item.kind === "dir"));
+    return entry ?? (listing.truncated ? savedEntry(item) : null);
+  } catch (reason) {
+    if (failureKey(reason) === "mobile.files.gone") return null;
+    throw reason;
+  }
+}
+
+/** A file was opened from the folder at `crumbs`: it becomes the newest
+ * recent, and a PDF a card among the project screen's tabs too — this
+ * computer's only, since a card opens by this side's token. */
+export function noteFileOpened(projectId: string, side: FilesSide, entry: ProjectFileEntry, crumbs: FilesCrumb[]): void {
+  const { token, name, kind, size, modified } = entry;
+  if (kind === "application/pdf" && side !== "host") {
+    openFileTab(projectId, { token, name, kind, size, modified, folder: crumbs[crumbs.length - 1]?.token, place: crumbs.map((crumb) => crumb.name).join("/") });
+  }
+  recordRecent(filesPlaceId(projectId, side), { token, name, kind, size, modified, trail: crumbs });
+}
 
 /** The sheet over the library, if any: the path menu (the title), the view
  * menu (⋯), one item's menu — with the folder the item was listed in — a
@@ -273,8 +300,9 @@ const CHECK = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5
  * reloaded app alike. A remembered folder that no longer lists steps back to
  * the nearest one that does.
  *
- * The search box finds a file or folder anywhere in the project by name
- * (`files/search`; what git ignores is not searched), in the desktop's order.
+ * The search box stands above the list, which scrolls without it, and finds
+ * a file or folder anywhere in the project by name (`files/search`; what git
+ * ignores is not searched, which finding nothing says), in the desktop's order.
  * Each hit carries the sealed folders above it, so opening one moves the
  * library there: a folder is walked into, a file opens with the library
  * standing in its folder — and the results are still there when the viewer
@@ -288,7 +316,7 @@ const CHECK = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5
  * and its PDFs become no cards on the project screen. With the desktop not
  * connected to the host it says so.
  */
-export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, showTab: showTabOffer, linked, side = "here", onSide }: {
+export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, showTab: showTabOffer, linked, side = "here", onSide, hostLabel, focusSearch = false }: {
   projectId: string;
   /** The project's name: the root's title. */
   label: string;
@@ -308,6 +336,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   side?: FilesSide;
   /** Both sides are there: the root shows the switch, which calls this. */
   onSide?: (side: FilesSide) => void;
+  /** The remote side's name on the switch; without one, "Remote computer". */
+  hostLabel?: string;
+  /** Opened to search: the box takes the focus, so its recents show. */
+  focusSearch?: boolean;
 }) {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
@@ -537,13 +569,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     }
     // A PDF too: the browser's own PDF viewer has no Save or Share, so the
     // viewer's head carries them and its Open button hands the file over.
-    // It also becomes a card among the project screen's tabs — this
-    // computer's only: a card opens by this side's token.
-    if (entry.kind === "application/pdf" && !onHost) {
-      const { token, name, kind, size, modified } = entry;
-      openFileTab(projectId, { token, name, kind, size, modified, folder: at[at.length - 1].token, place: placeOf(at) });
-    }
-    recordRecent(placeId, { token: entry.token, name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, trail: crumbsOf(at) });
+    noteFileOpened(projectId, side, entry, crumbsOf(at));
     setTrail(at);
     setMarkOnOpen(mark);
     setFileOpen(asViewerFile(entry));
@@ -570,28 +596,18 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       return next;
     });
     setSavedFailure(null);
-    void listProjectFiles(projectId, item.trail[item.trail.length - 1]?.token, undefined, side).then(
-      (listing) => {
-        const entry = listing.entries.find((candidate) => candidate.name === item.name && (candidate.kind === "dir") === (item.kind === "dir"));
-        // A folder past the listing's cap may hold it unlisted: the kept token still opens it.
-        if (!entry && !listing.truncated) {
+    void lookUpSaved(projectId, item, side).then(
+      (entry) => {
+        if (!entry) {
           settle(true);
           setSheet({ kind: "gone", saved });
           return;
         }
         settle(false);
         leaveSearch();
-        open(entry ?? savedEntry(item), [trail[0], ...item.trail], mark);
+        open(entry, [trail[0], ...item.trail], mark);
       },
-      (reason: unknown) => {
-        const key = failureKey(reason);
-        if (key === "mobile.files.gone") {
-          settle(true);
-          setSheet({ kind: "gone", saved });
-        } else {
-          setSavedFailure(key);
-        }
-      },
+      (reason: unknown) => setSavedFailure(failureKey(reason)),
     );
   };
 
@@ -765,7 +781,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       <section className="option-sheet files-view-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.files.library.view")} onClick={(event) => event.stopPropagation()}>
         <span className="sheet-grip" aria-hidden="true" />
         <header>
-          <button className="sheet-close" onClick={() => setSheet(null)} aria-label={t("common.close")}>✕</button>
+          <button className="sheet-close" onClick={() => setSheet(null)} aria-label={t("common.close")}><CloseIcon size="1em" /></button>
           <h2>{t("mobile.files.library.view")}</h2>
           <span className="sheet-close" aria-hidden="true" />
         </header>
@@ -795,7 +811,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     return <div className="sheet-backdrop" role="presentation" onClick={close}>
       <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.files.color.title", { name })} onClick={(event) => event.stopPropagation()}>
         <span className="sheet-grip" aria-hidden="true" />
-        <header><button className="sheet-close" onClick={close} aria-label={t("common.close")}>✕</button><h2>{t("mobile.files.item.color")}</h2><span className="sheet-close" aria-hidden="true" /></header>
+        <header><button className="sheet-close" onClick={close} aria-label={t("common.close")}><CloseIcon size="1em" /></button><h2>{t("mobile.files.item.color")}</h2><span className="sheet-close" aria-hidden="true" /></header>
         <p className="sheet-note">{t("mobile.files.color.note", { name })}</p>
         <div className="tab-color-grid" role="group" aria-label={t("mobile.files.item.color")}>
           <button type="button" className={`tab-color-chip none${current ? "" : " is-current"}`} aria-pressed={!current} onClick={() => setFolderColor(placeId, place, null)}>
@@ -858,7 +874,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     || isUntested("mobile.files.sort") || isUntested("mobile.files.pathMenu") || isUntested("mobile.files.counts")
     || isUntested("mobile.files.thumbs") || isUntested("mobile.files.favorites") || isUntested("mobile.files.recent")
     || isUntested("mobile.files.colors") || isUntested("mobile.files.share") || isUntested("mobile.files.sections")
-    || isUntested("mobile.files.remember") || isUntested("mobile.files.search") || isUntested("mobile.files.upload")
+    || isUntested("mobile.files.remember") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
     || ((onSide !== undefined || onHost) && isUntested("mobile.files.host"));
 
   return <section ref={host} className="files-library" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")}>
@@ -877,14 +893,16 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 12h.01M12 12h.01M18.5 12h.01" /></svg>
       </button>
     </header>
-    <div className="files-library-body">
+    <div className="files-library-bar">
       {atRoot && onSide && <div className="terminal-view-switch files-side-switch" role="group" aria-label={t("mobile.files.side.label")}>
         <button className={onHost ? "" : "selected"} aria-pressed={!onHost} onClick={() => onSide("here")}>{t("mobile.files.side.here")}</button>
-        <button className={onHost ? "selected" : ""} aria-pressed={onHost} onClick={() => onSide("host")}>{t("mobile.files.side.host")}</button>
+        <button className={onHost ? "selected" : ""} aria-pressed={onHost} onClick={() => onSide("host")}>{hostLabel || t("mobile.files.side.host")}</button>
       </div>}
-      <input ref={searchBox} className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search"
+      <input ref={searchBox} className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search" autoFocus={focusSearch}
         placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
         onChange={(event) => setQuery(event.target.value)} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} />
+    </div>
+    <div className="files-library-body">
       {!searching && listing?.uploads && <button className="new-tab-file files-upload" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
         <span><strong>{t("mobile.files.upload.button")}</strong><small>{t("mobile.files.upload.hint")}</small></span>
@@ -913,7 +931,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         : !found
           ? <p className="sheet-note">{t("mobile.files.searching")}</p>
           : found.hits.length === 0
-            ? <p className="sheet-note">{t("mobile.files.noHits")}</p>
+            ? <p className="sheet-note">{t(onHost ? "mobile.files.noHits" : "mobile.files.noHitsHere")}</p>
             : <ul className={listClass} aria-label={t("mobile.files.search")}>
               {found.hits.map((hit) => item(hit, false, hit))}
             </ul>

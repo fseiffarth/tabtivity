@@ -262,6 +262,11 @@ Toolbar behavior:
   tabs' PTYs, drops their payloads, and persists, so those tabs do NOT dock back
   and do NOT restore on next launch. Dock-back is session-only — a re-docked group
   restores as docked on restart; only the main window is the persistence owner.
+  A name lives on the group node (`GroupNode.name`, set by right-clicking a bar),
+  so it follows the group through detach, dock and hide. A multi-pane popout's own
+  name is `DetachedGroup.name`; `subtreeName` reads either and `nameSubtree` writes
+  either. `set_detached_title` puts it in the OS title, only after the X11 resolver
+  has finished matching the numbered `win-N` title.
   `attachOnly` never spawns a PTY, so the main window keeps owning the process.
 - Each tab with kind `"agent"` or `"shell"` renders a `TerminalView` backed by
   a PTY. Tabs with kind `"local_agent"` also render a PTY, using `vibe` with a
@@ -448,6 +453,16 @@ remote ones no local branch tracks — capped, with `+N more`. Worktrees cross a
 the same opaque ids the ＋ sheet's "Agents start in" row uses; no path, lock
 reason or full sha is sent. Boxes and the root console have no Git entry.
 
+**Diverged (phone).** A remote project with a local copy has **± Diverged** in
+the project drawer, with a count: the files whose local and host copies disagree
+and the new files only the local copy holds. Tap a file to compare the two
+copies. With **Phone may resolve diverged files** on in the desktop's Mobile
+settings (off by default, and it needs Project files) you can use the host's or
+the local copy, use the newer one, upload new files and complete a deletion,
+per file or for all. Each asks first, as on the desktop. The desktop must be
+open, and connected to the host for the actions; the three-way merge and the
+scan for files only the host holds stay on the desktop.
+
 **Upload here (phone → a project folder).** The phone's project-files drawer
 (**Settings → Mobile → Project files on the phone**, read-only) gains one write
 behind a second host-wide switch, **Phone may add files to projects**
@@ -490,6 +505,12 @@ is asked to apply the marks to the sources and send the rebuilt file back with
 frame with no access to the session or the network. Project files need
 **Settings → Mobile → Project files on the phone**; files the agent sent work
 without it.
+
+With that switch on, the phone's chat treats files as the desktop's does: a
+picture or PDF an answer names follows it as a message of its own, a path in
+the answer opens the file, and **Files (N)** over the chat also lists what the
+agent changed and what its answers name. A file deleted since, or one in
+another worktree, stays in **Diffs**.
 
 Marking up is a loop, not one shot (`docs/done/pdf_markup_rounds_plan.md`):
 **Submit keeps the view open.** The round's marks stay on show, dimmed, and are
@@ -1342,6 +1363,18 @@ and the host-aware variants, never inferred from path conventions.
   Byte-sync is opt-in per path from an explicit manifest and does **not** read
   `.gitignore`, so a pull is previewed and confirmed before it drags a big host
   tree down.
+- **Remote-only.** A remote project created with *Keep a local copy* off has no
+  mirror at all: `RemoteSpec.remote_only` (written by the backend from the
+  create request's top-level `remoteOnly`, never taken from the renderer's
+  spec) and `RemoteSpec::is_remote_only()`, which a VM project always is, with
+  `isHostPinned` as the frontend twin. `remote::local_copy_in` /
+  `remote_sync::mirror_dir_opt` answer `None` for it, connect mints no mirror,
+  and every engine that needs a local tree refuses with the
+  `{UPPER}_REMOTE_ONLY:` sentinel (spawn, byte-sync, lockstep, worker fan-out,
+  local run host, mirror relocation, local-tree export); the cockpit words it
+  through one mapper (`remoteOnlyRefusal`). Tabs, git, search, TeX builds and
+  the phone's tabs all run on the host; the file panel and viewers read over
+  SFTP with no Local side. Rationale: `docs/context/remote_projects.md`.
 - **Losses survive a relaunch.** Local-loss warnings are file-backed, not events:
   destructive background git or sync moves record through `services::local_loss`.
 - **Credentials.** Passwords are never persisted by default; the opt-in save
@@ -1575,7 +1608,9 @@ remote git at all.
 - `compact_tab_agents` lists the built-in agent ids shown before a search in the
   `+` menu's compact Agents group. Unset means the familiar Claude/Codex/Gemini
   quick picks; an **empty list** is a deliberate choice to show agents only after
-  searching, and is not the same as unset.
+  searching, and is not the same as unset. A CLI that turns up installed while
+  the app runs joins the list (`noteInstalledAgents`); one seen installed since
+  launch keeps the chip the user left it with, through Reinstall too.
 - `mobile_indicator` controls the Mobile host-status control in the header;
   unset means visible whenever the Mobile host is enabled.
 - `keyboard_shortcuts` holds per-action chord overrides (Settings → Shortcuts).

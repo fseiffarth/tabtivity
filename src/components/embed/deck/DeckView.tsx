@@ -131,7 +131,7 @@ import { basename } from "../../../lib/paths";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
 import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
-import { ArrowUpRightIcon, PlayIcon } from "../../common/icons/Icon";
+import { ArrowUpRightIcon, PlayIcon, WindowIcon } from "../../common/icons/Icon";
 import { useDialogs } from "../../common/PromptDialogs";
 
 /** Bounds for the rail's user-resizable width (px). Wide enough at the max that
@@ -1505,7 +1505,7 @@ export function DeckView({ path, onOpenExternally, tabKey, groupId }: DeckViewPr
           T
         </button>
         <button className="file-viewer-zoom-btn" onClick={addRect} title={t("deckView.addRectTitle")}>
-          ▭
+          <WindowIcon />
         </button>
         <button
           className="file-viewer-zoom-btn"

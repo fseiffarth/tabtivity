@@ -21,6 +21,7 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../../lib/i18n";
 import { UntestedTag } from "../../common/UntestedTag";
+import { CloseIcon } from "../../common/icons/Icon";
 
 /** The host, or null when the string does not parse as a URL with one. Shown
  *  separately from the full address, never in place of it. */
@@ -53,8 +54,8 @@ export function PdfLinkConfirmDialog({
         <div className="settings-title-row">
           <h2>{t("pdfLinks.confirmTitle")}</h2>
           <UntestedTag id="pdfLinkDialog.1" />
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         <div className="dialog-scroll">
