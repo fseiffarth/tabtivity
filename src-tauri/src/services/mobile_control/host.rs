@@ -7608,6 +7608,65 @@ async fn project_files_list(
     }
 }
 
+/// `GET /api/v1/projects/{project_id}/files/entry?name=<leaf>[&dir=<token>]` —
+/// one file or folder of the folder `dir` seals (none: the root), as its
+/// listing would row it (`files::lookup`): `{ "entry": … }`, or
+/// `file_not_found` when it is no longer there. What the phone's favorites,
+/// recents and Mark up's Reload ask instead of listing the whole folder again.
+/// `name` is one leaf the browser would list; nothing else is accepted.
+/// `&on=host` asks the remote side (`host_files::entry_on`).
+async fn project_files_entry(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    // The scope first, as every files route answers it: a name is judged
+    // only where the files are open.
+    let name = query.get("name").filter(|name| files::valid_segment(name)).cloned();
+    if on_host_side(&query) {
+        let (spec, known, raw_id) = match host_files_scope(&state, &phone, &project_id) {
+            Ok(scope) => scope,
+            Err(error) => return error,
+        };
+        let Some(name) = name else {
+            return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+        };
+        let dir = match host_files_rel(&state, &raw_id, query.get("dir")) {
+            Ok(rel) => rel,
+            Err(error) => return error,
+        };
+        let key = state.auth.lock_ok().host_key().to_vec();
+        return match state.host_files.entry(&spec, known, files::child(&dir, &name), key, raw_id).await {
+            Ok(entry) => (StatusCode::OK, Json(json!({ "entry": entry }))),
+            Err(error) => files_error(error),
+        };
+    }
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let Some(name) = name else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let dir = match files_rel(&state, &raw_id, query.get("dir")) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let rel = files::child(&dir, &name);
+    // Opens and sniffs one file: off the executor, as a listing is.
+    let found = tokio::task::spawn_blocking(move || files::lookup(&root, &rel, &key, &raw_id)).await.ok().flatten();
+    match found {
+        Some(entry) => (StatusCode::OK, Json(json!({ "entry": entry }))),
+        None => api_error(StatusCode::NOT_FOUND, "file_not_found"),
+    }
+}
+
 /// `GET /api/v1/projects/{project_id}/files/search?q=<words>` — the project's
 /// files and folders whose names hold every word, each with the sealed trail
 /// of folders above it (`files::search`). Read-only, like the listing; no
@@ -8155,6 +8214,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/projects/{project_id}/files", get(project_files_list))
         .route("/api/v1/projects/{project_id}/files/raw", get(project_files_raw))
         .route("/api/v1/projects/{project_id}/files/search", get(project_files_search))
+        .route("/api/v1/projects/{project_id}/files/entry", get(project_files_entry))
         .route(
             "/api/v1/projects/{project_id}/files/upload",
             delete(project_files_upload_undo)

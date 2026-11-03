@@ -1,7 +1,17 @@
 # Phone / iPad file browsing — bugs and small improvements plan
 
-> **Status (2026-11-03): batch A (B1, B2, B3, B4, B6, B7) implemented, not
-> committed and never run on a phone or iPad; batches B and C not started.**
+> **Status (2026-11-03): batch A committed (`06905950`); batch B (B9, S1, S2)
+> implemented, gates green, not committed; neither run on a phone or iPad.
+> Batch C not started.**
+>
+> Batch B as built: S1 nonce = HMAC-SHA256 under its own HKDF label
+> (`path-token nonce v1`) over length-prefixed raw id + rel; S2 route
+> `GET …/files/entry?name=<leaf>[&dir=<token>][&on=host]` → `{ entry }`, the
+> phone's `lookUpProjectFile` / `lookUpFileRow` (`api.ts`) for favorites,
+> recents, the library's and project cards' Reload and `refreshProjectFile`;
+> an older desktop's bodiless 404/405 falls back to the folder listing. B9:
+> `still_proven` after `read_on` (lstat + realpath again) — no fake-SFTP test
+> exists, so it is covered only by review.
 > Line numbers are from `develop` at `48f4b5b9` and will drift; grep for the
 > named symbol before acting on one. Todo: **31cp** in
 > `todo/group-h-crossplatform.md`.

@@ -68,6 +68,15 @@ function hostWith(files: boolean, tickets = true) {
       hits: [{ ...ROOT.entries[1], trail: [] }], truncated: false,
     }), { status: 200 });
     if (url.startsWith("/api/v1/projects/p1/files/search")) return new Response(JSON.stringify({ hits: [], truncated: false }), { status: 200 });
+    if (url.startsWith("/api/v1/projects/p1/files/entry?")) {
+      // One row of a folder, as the desktop's `files/entry` answers it.
+      const asked = new URL(url, "http://phone").searchParams;
+      const folder = ({ "": ROOT, "tok-src": SRC, "tok-deep": DEEP } as Record<string, typeof ROOT>)[asked.get("dir") ?? ""];
+      const entry = folder?.entries.find((row) => row.name === asked.get("name"));
+      return entry
+        ? new Response(JSON.stringify({ entry }), { status: 200 })
+        : new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
+    }
     if (url.startsWith("/api/v1/projects/p1/files")) return new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
     return new Response(JSON.stringify({
       project: { id: "p1", label: "Alpha", status: "active" },

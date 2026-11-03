@@ -5,7 +5,7 @@ import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon,
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, readFlag, writeChoice, writeFlag, type MobileFlag } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -199,13 +199,12 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     setFileTabOpen(null);
     return onFileTabs(() => setFileTabs(readFileTabs(id)));
   }, [id]);
-  /** Mark up's Reload on a card's PDF: its folder listed again for the file's
-   * fresh token, size and time, which the card keeps too. */
+  /** Mark up's Reload on a card's PDF: the file looked up again in its folder
+   * for its fresh token, size and time, which the card keeps too. */
   const refreshFileTabRow = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
     const tab = fileTabOpen;
     if (!tab || tab.from === "outbox") return null;
-    const fresh = await listProjectFiles(id, tab.folder);
-    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    const entry = await lookUpFileRow(id, tab.folder, file.name);
     if (!entry) return null;
     refreshFileTab(id, { ...tab, token: entry.token, kind: entry.kind, size: entry.size, modified: entry.modified });
     return asViewerFile(entry);

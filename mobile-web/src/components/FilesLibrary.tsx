@@ -4,7 +4,7 @@ import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
+import { ApiError, listProjectFiles, lookUpFileRow, lookUpProjectFile, searchProjectFiles, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
 import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { shareAs, useOutboxShare } from "../outboxShare";
@@ -225,14 +225,16 @@ export interface ItemAction { key: string; label: string; run: () => void }
 /** A favorite or a recent file as the library shows it, and which list it is in. */
 type Saved = { item: FilesSaved | FilesRecent; from: "favorite" | "recent" };
 
-/** A favorite or recent as its folder lists it now: its fresh token, size and
- * time, or the kept row of a folder past the listing's cap, which may hold it
- * unlisted. `null` when it was moved or deleted. */
+/** A favorite or recent as its folder holds it now (`lookUpProjectFile`, one
+ * row rather than the whole folder): its fresh token, size and time, or —
+ * from an older desktop, whose folder listing was cut at its cap — the kept
+ * row. `null` when it was moved or deleted, or a file stands where a folder
+ * was (or the other way round). */
 export async function lookUpSaved(projectId: string, item: FilesSaved, side: FilesSide): Promise<ProjectFileEntry | null> {
   try {
-    const listing = await listProjectFiles(projectId, item.trail[item.trail.length - 1]?.token, undefined, side);
-    const entry = listing.entries.find((candidate) => candidate.name === item.name && (candidate.kind === "dir") === (item.kind === "dir"));
-    return entry ?? (listing.truncated ? savedEntry(item) : null);
+    const found = await lookUpProjectFile(projectId, item.trail[item.trail.length - 1]?.token, item.name, side);
+    if (found === "unlisted") return savedEntry(item);
+    return found && (found.kind === "dir") === (item.kind === "dir") ? found : null;
   } catch (reason) {
     if (failureKey(reason) === "mobile.files.gone") return null;
     throw reason;
@@ -614,12 +616,11 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     if (node && tracking.current === scrollKey) OFFSETS.set(scrollKey, node.scrollTop);
   };
 
-  /** Mark up's Reload: the open file's folder listed again, for its fresh
-   * token, size and time. The viewer keeps showing it — swapping `fileOpen`
+  /** Mark up's Reload: the open file looked up again in its folder, for its
+   * fresh size and time. The viewer keeps showing it — swapping `fileOpen`
    * would remount the viewer (its key) and lose the markup's view. */
   const refresh = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
-    const fresh = await listProjectFiles(projectId, here.token, undefined, side);
-    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    const entry = await lookUpFileRow(projectId, here.token, file.name, side);
     return entry ? asViewerFile(entry) : null;
   }, [projectId, here.token, side]);
 

@@ -27,6 +27,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::XChaCha20Poly1305;
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 
@@ -163,14 +164,41 @@ fn token_key_with(salt: &str, host_key: &[u8]) -> [u8; 32] {
     key
 }
 
-/// Seals a project-relative path for the phone. Fails only when the OS has
-/// no randomness for the nonce.
+/// The key a token's nonce is derived with: from the same host key and salt
+/// as [`token_key_with`]'s, under its own label, so it is never the cipher's.
+fn nonce_key_with(salt: &str, host_key: &[u8]) -> [u8; 32] {
+    let mut key: [u8; 32] = std::array::from_fn(|_| 0);
+    Hkdf::<Sha256>::new(Some(salt.as_bytes()), host_key)
+        .expand(b"path-token nonce v1", &mut key)
+        .expect("32 bytes is a valid HKDF-SHA256 length");
+    key
+}
+
+/// A token's nonce, made from what it seals rather than drawn at random
+/// (synthetic IV): the same path of the same project (`raw_id`, the AAD) under
+/// the same host key always seals to the same token, so the phone can key a
+/// cover, a favorite or a cached answer by it. All a repeat tells is "the same
+/// path", which the phone was shown anyway; the nonce never repeats for two
+/// different messages, which is what XChaCha20-Poly1305 needs.
+fn synthetic_nonce(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> [u8; NONCE_LEN] {
+    let mut mac = Hmac::<Sha256>::new_from_slice(&nonce_key_with(salt, host_key)).expect("HMAC accepts all key sizes");
+    // Length-prefixed, so no (raw_id, rel) pair runs into another.
+    mac.update(&(raw_id.len() as u64).to_be_bytes());
+    mac.update(raw_id.as_bytes());
+    mac.update(rel.as_bytes());
+    let digest = mac.finalize().into_bytes();
+    std::array::from_fn(|at| digest[at])
+}
+
+/// Seals a project-relative path for the phone: the same path always gives
+/// the same token ([`synthetic_nonce`]). The `Result` is kept for callers;
+/// sealing no longer fails.
 pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesError> {
     seal_with(crate::brand::MOBILE_FILES_SALT, host_key, raw_id, rel)
 }
 
 fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesError> {
-    let nonce = super::auth::random_bytes::<NONCE_LEN>().map_err(FilesError::Io)?;
+    let nonce = synthetic_nonce(salt, host_key, raw_id, rel);
     let cipher = XChaCha20Poly1305::new((&token_key_with(salt, host_key)).into());
     let sealed = cipher
         .encrypt((&nonce).into(), Payload { msg: rel.as_bytes(), aad: raw_id.as_bytes() })
@@ -859,6 +887,14 @@ fn walked_paths(root: &Path) -> Result<(Vec<(String, bool)>, bool), FilesError> 
     Ok((found, false))
 }
 
+/// The file or folder `rel` names, as its folder's listing would row it
+/// (never `ignored`, no item count): what the phone's favorites, recents and
+/// Reload look up instead of listing the whole folder again. `None` for
+/// anything [`entry`] and [`dir_entry`] would not answer.
+pub fn lookup(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
+    entry(root, rel, host_key, raw_id).or_else(|| dir_entry(root, rel, host_key, raw_id))
+}
+
 /// A folder of the project as its parent's listing would row it.
 fn dir_entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
     if rel.is_empty() || !valid_rel(rel) {
@@ -987,13 +1023,39 @@ mod tests {
     }
 
     #[test]
+    fn lookup_rows_one_file_or_folder_as_the_listing_does() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs/deep")).unwrap();
+        std::fs::write(dir.path().join("docs/a.txt"), "hello").unwrap();
+        std::fs::write(dir.path().join("docs/.env.local"), "x").unwrap();
+        let listed = list(dir.path(), "docs", KEY, "p1").unwrap();
+        for row in &listed.entries {
+            let found = lookup(dir.path(), &child("docs", &row.name), KEY, "p1").unwrap();
+            assert_eq!((&found.token, &found.name, found.kind, found.size), (&row.token, &row.name, row.kind, row.size));
+        }
+        assert_eq!(lookup(dir.path(), "docs/.env.local", KEY, "p1"), None, "hidden");
+        assert_eq!(lookup(dir.path(), "docs/gone.txt", KEY, "p1"), None);
+        assert_eq!(lookup(dir.path(), "", KEY, "p1"), None, "the root has no row");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join("docs/a.txt"), dir.path().join("docs/link.txt")).unwrap();
+            assert_eq!(lookup(dir.path(), "docs/link.txt", KEY, "p1"), None, "never through a link");
+        }
+    }
+
+    #[test]
     fn a_token_opens_only_for_its_own_project_and_host() {
         let token = seal(KEY, "p1", "src/main.rs").unwrap();
         assert_eq!(unseal(KEY, "p1", &token).as_deref(), Some("src/main.rs"));
         assert_eq!(unseal(KEY, "p2", &token), None, "replayed against another project");
         assert_eq!(unseal(b"another-host-key", "p1", &token), None);
         assert!(!token.contains("main"), "the path is not readable in the token");
-        assert_ne!(seal(KEY, "p1", "src/main.rs").unwrap(), token, "a fresh nonce per seal");
+        assert_eq!(seal(KEY, "p1", "src/main.rs").unwrap(), token, "the same path seals to the same token");
+        assert_ne!(seal(KEY, "p1", "src/main.r").unwrap(), token, "another path, another token");
+        assert_ne!(seal(KEY, "p2", "src/main.rs").unwrap(), token, "another project, another token");
+        assert_ne!(seal(b"another-host-key", "p1", "src/main.rs").unwrap(), token, "another host, another token");
+        // The length prefix keeps (raw_id, rel) pairs apart that would run together.
+        assert_ne!(synthetic_nonce("s", KEY, "p1", "2/a"), synthetic_nonce("s", KEY, "p12", "/a"));
         let mut forged = Base64UrlUnpadded::decode_vec(&token).unwrap();
         *forged.last_mut().unwrap() ^= 1;
         assert_eq!(unseal(KEY, "p1", &Base64UrlUnpadded::encode_string(&forged)), None);

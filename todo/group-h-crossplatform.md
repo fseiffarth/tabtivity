@@ -4030,8 +4030,20 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
-  - [ ] Batch B (backend + phone): B9 host read re-checked, S1 stable tokens, S2
-    one-file lookup route with re-list fallback.
+  - [x] Batch B (backend + phone): B9 host read re-checked, S1 stable tokens, S2
+    one-file lookup route with re-list fallback. (2026-11-03, uncommitted; needs a
+    dev build — the route is backend; ⚠️ never seen on a phone)
+    - [ ] 🖐️ A favorite file and a recent open from the library and the Favorites
+      page; a PDF's Mark up → Reload picks up a changed file; a remote project's
+      host-side favorite opens too. Thumbnails of an unchanged folder do not redo.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
   - [ ] Batch C (phone): B5 truncation note, S3 Refresh, S4 path bar, S5 wide-screen
     sheets/tiles, S6 44 px targets + long-press, S7 search chips, S8
     content-visibility, S9 collator language.
