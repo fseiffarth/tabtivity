@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
 import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
+import { useBoxNameCheck } from "../projects/useQuickCreateBox";
 import { useDialogs } from "../common/PromptDialogs";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { ProjectSearch } from "../projects/ProjectSearch";
@@ -80,7 +81,11 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   const addToBox = useBoxesStore((s) => s.addToBox);
   const removeFromBox = useBoxesStore((s) => s.removeFromBox);
   const boxProjects = useBoxesStore((s) => s.boxProjects);
-    const membership = useBoxMembership();
+  const membership = useBoxMembership();
+  // Box names are validated now (empty, taken, too long): a rename or an
+  // Alt-drag grouping the backend refuses says why instead of failing silently.
+  const { messageOf } = useBoxNameCheck();
+  const toastFailure = (error: unknown) => useProjectsStore.setState({ switchToast: messageOf(error) });
   const openHpcWizard = useHpcPipelineStore((s) => s.openWizard);
   // Multi-select (3b): Escape clears the Ctrl/Cmd-click pill selection.
   const anySelected = usePillSelectionStore((s) => s.selected.length > 0);
@@ -475,7 +480,11 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     // Box names are unique now, so a second "New Box" would be refused: take the
     // next free "Box N" (the user renames it via its pill).
     const name = defaultBoxName(useBoxesStore.getState().boxes, (n) => t("boxName.default", { n }));
-    await boxProjects([toId, fromId], { name });
+    try {
+      await boxProjects([toId, fromId], { name });
+    } catch (error) {
+      toastFailure(error);
+    }
   };
 
   // Empty pill-strip space doubles as a window-drag handle: pressing the bare
@@ -609,7 +618,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             boxes={boxes}
             selectedId={boxFilter}
             onSelect={(id) => void selectBox(id)}
-            onRename={(boxId, name) => void renameBox(boxId, name)}
+            onRename={(boxId, name) => void renameBox(boxId, name).catch(toastFailure)}
             // The pill's Delete is one right-click away on every box now, so it
             // asks the same question the editor's Dissolve does — and says the
             // same thing about what survives (folder, agent docs, members).

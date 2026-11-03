@@ -84,7 +84,7 @@ export interface QuickCreateBox {
 export function useQuickCreateBox(): QuickCreateBox {
   const t = useT();
   const { promptText, dialogs } = useDialogs();
-  const { check } = useBoxNameCheck();
+  const { check, messageOf } = useBoxNameCheck();
   const defaultName = useDefaultBoxName();
 
   const quickCreateBox = useCallback(
@@ -110,10 +110,16 @@ export function useQuickCreateBox(): QuickCreateBox {
       if (answered === null || !created) return null;
       const box: ProjectBox = created;
       usePillSelectionStore.getState().clear();
-      await useBoxSliceStore.getState().selectBox(box.id);
+      // The box exists now: failing to enter it (its folder could not be made)
+      // is shown, not thrown at a caller that fires `void quickCreateBox()`.
+      try {
+        await useBoxSliceStore.getState().selectBox(box.id);
+      } catch (error) {
+        useProjectsStore.setState({ switchToast: messageOf(error) });
+      }
       return box;
     },
-    [t, promptText, check, defaultName],
+    [t, promptText, check, messageOf, defaultName],
   );
 
   return { quickCreateBox, dialogs };

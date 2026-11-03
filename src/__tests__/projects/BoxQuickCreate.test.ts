@@ -213,6 +213,25 @@ describe("saveBox (the diffed save)", () => {
   });
 });
 
+describe("renameBox (the pill's inline rename)", () => {
+  it("refuses a name another box holds, or an empty one, before sending anything", async () => {
+    useBoxesStore.setState({ boxes: [box("a", [], "Alpha"), box("b", [], "Beta")] });
+    await expect(useBoxesStore.getState().renameBox("a", "beta")).rejects.toMatchObject({ problem: "taken" });
+    await expect(useBoxesStore.getState().renameBox("a", "  ")).rejects.toBeInstanceOf(BoxNameError);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(useBoxesStore.getState().boxes.find((b) => b.id === "a")?.name).toBe("Alpha");
+  });
+
+  it("lets a box respell its own name and keeps a legacy name that is not being changed", async () => {
+    useBoxesStore.setState({ boxes: [box("a", [], "Alpha"), box("b", [], "New Box"), box("c", [], "New Box")] });
+    invoke.mockImplementation(async (_cmd: string, args: { boxId: string; name: string }) => box(args.boxId, [], args.name));
+    await useBoxesStore.getState().renameBox("a", "ALPHA");
+    await useBoxesStore.getState().renameBox("b", "New Box");
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(useBoxesStore.getState().boxes.find((b) => b.id === "a")?.name).toBe("ALPHA");
+  });
+});
+
 describe("boxEditor.renamingId", () => {
   it("is set and cleared by startRename / stopRename, apart from the editor's open state", () => {
     const s = useBoxEditorStore.getState();

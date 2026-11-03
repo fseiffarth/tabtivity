@@ -391,6 +391,13 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
   },
 
   renameBox: async (boxId, name) => {
+    // A name that differs from the stored one is checked here too: a backend
+    // from before the rule would take anything, and the UI localizes the reason.
+    const held = get().boxes.find((b) => b.id === boxId);
+    if (held && name !== held.name) {
+      const problem = boxNameProblem(name, get().boxes, boxId);
+      if (problem) throw new BoxNameError(problem);
+    }
     const updated = await invoke<ProjectBox>("rename_box", { boxId, name });
     set((state) => ({
       boxes: state.boxes.map((b) => (b.id === boxId ? updated : b)),

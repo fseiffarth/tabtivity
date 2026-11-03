@@ -23,7 +23,7 @@ vi.mock("../../lib/window/startWindowDrag", () => ({ startWindowDrag }));
 
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
-import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
+import { BOX_SCOPE_PREFIX, BoxNameError, useBoxesStore } from "../../stores/boxes";
 import { resetBoxSlice } from "../../stores/boxSlice";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { useTabsStore } from "../../stores/tabs";
@@ -871,6 +871,32 @@ describe("box chip rendering (slice model)", () => {
 
     expect(boxProjects).toHaveBeenCalledWith(["p2", "p1"], { name: "Box 1" });
     expect(reorderProjects).not.toHaveBeenCalled();
+  });
+
+  it("an alt-drop the backend refuses by name says why instead of failing silently", async () => {
+    const boxProjects = vi.fn().mockRejectedValue(new BoxNameError("taken"));
+    useBoxesStore.setState({ boxes: [], boxProjects });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+      switchToast: null,
+      reorderProjects: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const container = await renderSwitcher();
+    const p1Pill = findPill(container, "p1");
+    const p2Pill = findPill(container, "p2");
+    layOut(p1Pill, { left: 0, right: 50, top: 0, bottom: 40 });
+    layOut(p2Pill, { left: 100, right: 150, top: 0, bottom: 40 });
+
+    await act(async () => {
+      pointer("pointerdown", 10, 10, p1Pill);
+      pointer("pointermove", 120, 10, window, { altKey: true });
+      pointer("pointerup", 120, 10, window, { altKey: true });
+    });
+
+    expect(useProjectsStore.getState().switchToast).toBe("A box with that name already exists.");
   });
 
   it("a plain (no-alt) drop onto a pill still reorders, not box", async () => {

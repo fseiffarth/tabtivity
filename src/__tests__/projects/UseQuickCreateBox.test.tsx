@@ -103,6 +103,19 @@ describe("useQuickCreateBox", () => {
     expect(openBox).not.toHaveBeenCalled();
   });
 
+  it("still resolves to the box, with the reason toasted, when entering it fails", async () => {
+    openBox.mockRejectedValueOnce("no folder");
+    useProjectsStore.setState({ switchToast: null });
+    render(<Host />);
+    fireEvent.click(screen.getByText("go"));
+    await waitFor(() => field());
+    await act(async () => {
+      fireEvent.keyDown(field(), { key: "Enter" });
+    });
+    expect((await result)?.id).toBe("new1");
+    expect(useProjectsStore.getState().switchToast).toBe("no folder");
+  });
+
   it("resolves null when the prompt is dismissed", async () => {
     render(<Host />);
     fireEvent.click(screen.getByText("go"));
