@@ -387,3 +387,52 @@
   max-width: 180px;
   font-size: var(--text-sm);
 }
+
+/* ── Tonight view ─────────────────────────────────────────────────────── */
+.cockpit-tonight {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 8px;
+}
+.cockpit-tonight-col {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  padding: 0 8px 8px;
+}
+.cockpit-tonight-group + .cockpit-tonight-group {
+  margin-top: 6px;
+}
+.cockpit-tonight-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 4px;
+  border-radius: 6px;
+  width: 100%;
+}
+.cockpit-tonight-row.as-button {
+  background: none;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+.cockpit-tonight-row.as-button:hover {
+  background: var(--control-hover-bg);
+}
+.cockpit-tonight-time {
+  width: 52px;
+  flex-shrink: 0;
+}
+.cockpit-tonight-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}

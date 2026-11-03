@@ -150,6 +150,31 @@ dev build.
 - cargo test (from C1's settings line): `-p tabtivity -p app-serverd` 5196
   passed, 0 failed.
 
+### C5 — Tonight view
+
+- sha: see `git log --grep "(C5)"`
+- `lib/cockpit/tonight.ts`: `tonightBucket` (≤5 min / ≤1 h / before the next
+  local midnight / before the one after / later), `scheduleItems` (enabled
+  rules' next occurrence; disabled and agent proposals have none),
+  `warmupItems` (`agent_cron` slots, today's while ahead else tomorrow's),
+  `buildComingUp` (standing items under Now, 7-day horizon), `awaySince`,
+  `buildAway`.
+- `CockpitTonight.tsx`: loads prompts / links / history per loaded project
+  while shown (and on `agent-prompts-changed`) to build each scope's Prompt
+  chart with live strands, keeping only `queued` and `chained` cards. Schedule
+  rows: Disable (`upsert … enabled: false`, the Agents view's guarded write) and
+  Send now (`queuePromptForTab`, the composer's route). Calendar events come
+  from `useAlertsFeed` (the bell's rows; timed events only).
+- Away recap: finished turns use `lastDoneByTab` (also those already read),
+  cut-off turns `lastWorkingByTab`, pushes `status: pushed` by `created_at`
+  (the proposal keeps no decision time), fired schedules `last.at`, root writes
+  `status: applied` by `created`. Mark all seen stamps `clearAttention` on the
+  finished rows. "Last input" is the newest `lastUserInputAt` over agent tabs
+  before the view opened (there is no window-wide input clock).
+- Tests: `CockpitTonight.test.ts` (7: bucket edges incl. midnight, enabled vs
+  disabled, daily recurrence across midnight, timeline order + horizon +
+  standing items, warm-up slots, away window and recap).
+
 ## Flagged for user
 
 - Header badge does not count **push requests** while the cockpit is shut:
@@ -168,3 +193,7 @@ dev build.
 - Projects cards show the git *dot level* (clean / to push / staged / dirty),
   not branch name or ahead/behind counts: those need a git read per project,
   which the view does not run (the switcher's own timer keeps the dots).
+- Tonight's "since the window last had input" is approximated by the newest
+  per-tab input stamp (`lastUserInputAt`); a window-wide input clock would be
+  a new always-on listener, which the cockpit avoids while shut. A push's
+  "landed" time is its proposal's `created_at`.
