@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import { COCKPIT_VIEWS, useCockpitStore, type CockpitView } from "../../stores/cockpit";
+import { useBoxesStore } from "../../stores/boxes";
 import { useExperimental } from "../../lib/experimental";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { storageKey } from "../../lib/brand";
@@ -40,6 +41,8 @@ export function CockpitOverlayHost() {
   const enabled = useExperimental("cockpit");
   const open = useCockpitStore((s) => s.overlayOpen);
   const view = useCockpitStore((s) => s.view);
+  const boxFilter = useCockpitStore((s) => s.boxFilter);
+  const boxes = useBoxesStore((s) => s.boxes);
   const live = enabled && open;
   const { frameRef, frameStyle, frameClass, barProps, grips, fillButton } =
     useFloatingFrame(storageKey("cockpitOverlayFrame"));
@@ -107,6 +110,18 @@ export function CockpitOverlayHost() {
             ))}
           </div>
           <div className="tab-controls root-overlay-controls">
+            {boxes.length > 0 && (
+              <select
+                className="cockpit-box-filter"
+                value={boxFilter ?? ""}
+                aria-label={t("cockpit.boxFilter")}
+                title={t("cockpit.boxFilter")}
+                onChange={(e) => useCockpitStore.getState().setBoxFilter(e.target.value || null)}
+              >
+                <option value="">{t("cockpit.boxFilterAll")}</option>
+                {boxes.map((box) => <option key={box.id} value={box.id}>{box.name}</option>)}
+              </select>
+            )}
             <OverlayApprovals />
             {fillButton}
             <button

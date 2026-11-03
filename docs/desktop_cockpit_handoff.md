@@ -121,6 +121,34 @@ dev build.
   Enter, text filter). cockpit + steering + mobile + roster suites: 219 files,
   2138 tests PASS.
 - Rust gates (from C1's settings line): clippy ×3 PASS; cargo test: see C4.
+- The phone PWA source changed (`AgentModeMarks.tsx` delegates to
+  `shared/turnDuration`, no behaviour change); it reaches the binary with the
+  post-commit dev build (`npm run mobile:bundle`).
+
+### C4 — Projects view
+
+- sha: see `git log --grep "(C4)"`
+- `lib/cockpit/projectCards.ts` (`buildProjectCards`: open first then pill
+  order, by box in box order with loose projects last, or one box; counts only
+  when loaded), `components/cockpit/CockpitProjects.tsx`.
+- Card readings, all from existing stores, nothing probed: agent bars
+  (`ScopeSetStatusBars`, the pill strip's own) + counts, git dot level
+  (`gitDirty`), pending push requests (git-readable projects only), amber
+  byte-sync entries (`sync`), SSH/VPN lamp per host (`hostStateOf`), run host,
+  time today (`get_time_today`, once a minute while shown), last activity
+  (newest working/finished stamp of its agent tabs).
+- Actions: Open (activate + close), New agent tab (Open, then the focused
+  pane's agent slot 1 — `requestNewTab`), Agents (Now narrowed to the scope,
+  with an "Only <name> ×" chip to clear), Restore (inactive →
+  `activateProject`, active but unrestored → `restoreProjectScope`).
+- Box filter: a select in the overlay's title bar (all views), shown when boxes
+  exist.
+- Tests: `CockpitProjects.test.ts` (pure: counts only when loaded, ordering,
+  box grouping / narrowing), `CockpitProjectsView.test.tsx` (not-open card has
+  no counts, Restore is the only hydrate, Agents narrows Now). Cockpit suite:
+  6 files, 40 tests (before the two new files: see below).
+- cargo test (from C1's settings line): `-p tabtivity -p app-serverd` 5196
+  passed, 0 failed.
 
 ## Flagged for user
 
@@ -137,3 +165,6 @@ dev build.
   the PDF itself: an ask carries a project-relative file, and there is no
   shared "open this file in that project's scope" helper to call; answering
   stays in `PdfMarkupQuestions` either way.
+- Projects cards show the git *dot level* (clean / to push / staged / dirty),
+  not branch name or ahead/behind counts: those need a git read per project,
+  which the view does not run (the switcher's own timer keeps the dots).

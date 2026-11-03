@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
-import { CheckIcon, ClockIcon, CloudIcon, DotIcon, QuestionIcon, RefreshIcon, RingIcon, StopIcon, type IconProps } from "../common/icons/Icon";
+import { CheckIcon, CloseIcon, ClockIcon, CloudIcon, DotIcon, QuestionIcon, RefreshIcon, RingIcon, StopIcon, type IconProps } from "../common/icons/Icon";
 
 import { AGENT_SORTS, isAgentSort } from "../../../shared/agentSort";
 import { formatClock, rosterTurnLabel } from "./cockpitFormat";
@@ -121,6 +121,7 @@ export function CockpitRoster({ roster, selected, now, onShow }: { roster: Roste
   const stateFilter = useCockpitStore((s) => s.stateFilter);
   const sort = useCockpitStore((s) => s.sort);
   const query = useCockpitStore((s) => s.query);
+  const scopeFilter = useCockpitStore((s) => s.scopeFilter);
   const boxes = useBoxesStore((s) => s.boxes);
   const filterRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -175,6 +176,11 @@ export function CockpitRoster({ roster, selected, now, onShow }: { roster: Roste
         </span>
       </div>
       <div className="cockpit-roster-controls">
+        {scopeFilter && (
+          <button type="button" className="cockpit-chip-btn on" onClick={() => useCockpitStore.getState().showScope(null)} title={t("cockpit.roster.clearScope")}>
+            {t("cockpit.roster.onlyScope", { name: roster.rows[0]?.scope.name ?? scopeFilter })} <CloseIcon />
+          </button>
+        )}
         <input
           ref={filterRef}
           type="search"

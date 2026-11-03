@@ -325,9 +325,65 @@
 
 .cockpit-meta svg,
 .cockpit-chip svg,
+.cockpit-chip-btn svg,
 .cockpit-state-mark svg,
 .cockpit-detail-head svg {
   width: 1em;
   height: 1em;
   vertical-align: -0.125em;
+}
+
+/* ── Projects view ────────────────────────────────────────────────────── */
+.cockpit-card-group + .cockpit-card-group {
+  margin-top: 8px;
+}
+.cockpit-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
+}
+.cockpit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  min-width: 0;
+}
+.cockpit-card.not-open {
+  opacity: 0.75;
+}
+.cockpit-card-head,
+.cockpit-card-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.cockpit-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cockpit-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.cockpit-chip.git-dirty,
+.cockpit-chip.git-broken,
+.cockpit-chip.lamp-error {
+  color: var(--danger);
+}
+.cockpit-chip.lamp-connected {
+  color: var(--success);
+}
+.cockpit-box-filter {
+  max-width: 180px;
+  font-size: var(--text-sm);
 }
