@@ -408,6 +408,31 @@ describe("box side panel accordion", () => {
     expect(open(container)).toEqual(["p3"]);
   });
 
+  it("keeps the remembered choice when the scope's tabs only load after the mount", async () => {
+    // A first visit to a box scope: `setScope` runs first and the tabs are
+    // hydrated from disk a moment later, so the pane mounts with no tab at all.
+    // The tabs arriving is not "the active tab moved to another member".
+    useProjectsStore.setState({
+      projects: ["p1", "p2", "p3"].map((id) => ({ ...proj(id), directory: `/p/${id}` }) as ProjectEntry),
+    });
+    useBoxAccordionStore.getState().setOpen("boxA", "p1");
+    const container = await renderBox();
+    expect(open(container)).toEqual(["p1"]);
+    await act(async () => {
+      useTabsStore.setState({ tabs: [agentTab("t1", "/p/p2", "shell")], activeKey: "t1" });
+    });
+    expect(open(container)).toEqual(["p1"]);
+    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toBe("p1");
+    // Once a tab is active, moving to another member's tab still follows it.
+    await act(async () => {
+      useTabsStore.setState({
+        tabs: [agentTab("t1", "/p/p2", "shell"), agentTab("t2", "/p/p3", "shell")],
+        activeKey: "t2",
+      });
+    });
+    expect(open(container)).toEqual(["p3"]);
+  });
+
   it("a click opens that member and folds the one before; a second click folds all", async () => {
     const container = await renderBox();
     await act(async () => {
