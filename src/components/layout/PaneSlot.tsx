@@ -17,13 +17,13 @@ import {
   isSavedWhileLive,
   isPtyTabKind,
   localTabCwd,
-  remoteHostIdOf,
   type TabEntry,
 } from "../../stores/tabs";
 import type { HostConnState } from "../../stores/remote/remoteStatus";
 import { shouldPersistTab, shouldPersistLocalTab } from "../../lib/terminal/tmuxSession";
 import { mobileTmuxReadyKey } from "../../lib/terminal/mobileTmuxReady";
 import { isHostPinned, tabRunsInContainer } from "../../lib/projectTabHost";
+import { paneRemoteHost } from "../../lib/tabs/remoteHold";
 import { resolveLocalMirror, resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { MOBILE_ACCESS_KEY } from "../../lib/brand";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
@@ -130,43 +130,14 @@ function PaneSlotImpl({
   const paneRemoteProj = !!paneProject?.remote;
   const paneDisconnected = paneRemoteProj && projectSsh !== "connected";
   const hostPinned = isHostPinned(paneProject);
-  // A terminal pane runs on a remote host when its effective locality resolves
-  // to one (primary or a worker). Held while THAT host's pool is down: spawning
-  // `ssh -tt` now would block on the dead pool. Multi-host: a pane on gpu-2
-  // holds iff gpu-2 is down, independent of the primary (plan §4.5).
   const location = effectiveTabLocation(tab, { hostPinned });
-  const rawHostId = remoteHostIdOf(location);
-  // A tab naming a worker that no longer exists (machine removed) falls back
-  // to the primary — matching the backend's wrap_pty_options (plan §8).
-  const paneHostId =
-    rawHostId && rawHostId !== "primary" &&
-    !paneProject?.compute_hosts?.some((h) => h.id === rawHostId)
-      ? "primary"
-      : rawHostId;
-  const paneHostSsh =
-    paneHostId === "primary"
-      ? projectSsh
-      : paneHostId
-        ? hostSsh?.[paneHostId]?.ssh
-        : undefined;
-  // A host-pinned project (VM, remote-only) has no local copy to fall back
-  // on, so its Files tab — which on a plain remote project browses the mirror
-  // while offline — holds too, on the primary's pool (the tree it lists); its
-  // terminals always resolve to a host above.
-  const holdRemoteTerminal =
-    paneRemoteProj &&
-    (isPtyTabKind(tab.kind)
-      ? paneHostId !== null && paneHostSsh !== "connected"
-      : hostPinned && tab.kind === "files" && projectSsh !== "connected");
-  // The label of the host this pane runs on (primary host, or the worker's
-  // label), for the hold placeholder + hover card.
-  const paneHostLabel =
-    paneHostId === "primary" || paneHostId === null
-      ? (paneProject?.remote?.host ?? "")
-      : (() => {
-          const w = paneProject?.compute_hosts?.find((h) => h.id === paneHostId);
-          return w?.label || w?.host || paneHostId;
-        })();
+  // Where this pane runs and whether it holds (`lib/tabs/remoteHold`, which
+  // the cockpit's detail pane reads too).
+  const {
+    hostId: paneHostId,
+    held: holdRemoteTerminal,
+    label: paneHostLabel,
+  } = paneRemoteHost(tab, paneProject, projectSsh, hostSsh);
   const projectDirectory = resolveProjectDirectory(paneProject);
   const mirror = resolveLocalMirror(paneProject);
   // The Files-tab browse dir: while a remote project is disconnected the SFTP

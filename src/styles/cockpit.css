@@ -46,3 +46,11 @@
   height: 16px;
   flex-shrink: 0;
 }
+/* The owner pane's slot while the cockpit draws its tab (`CenterPanel`). */
+.center-pane-standdown {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}

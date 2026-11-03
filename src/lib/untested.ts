@@ -966,6 +966,7 @@ export const UNTESTED = {
   "cockpit.projects.heading": { area: "cockpit", what: "Cockpit · Projects view" },
   "cockpit.tonight.heading": { area: "cockpit", what: "Cockpit · Tonight view" },
   "cockpit.usage.heading": { area: "cockpit", what: "Cockpit · Usage view" },
+  "cockpit.standDown": { area: "cockpit", what: "Cockpit detail pane showing a project's agent tab while that project is on screen behind the overlay: the tab's own pane shows \"Shown in the cockpit · Show here\" instead of the terminal, nothing restarts or resizes; closing the cockpit (or Show here) gives the pane back intact" },
 } as const satisfies Record<string, UntestedEntry>;
 
 // The phone shares this register but renders its tags in several shapes. Its

@@ -6,13 +6,16 @@ import { TabScopeContext } from "../../lib/tabs/tabScopeContext";
 import { TabPane } from "../tabs/TabPane";
 
 interface Props {
-  /** The scope `tab` belongs to: the root scope or the Tabby scope. */
+  /** The scope `tab` belongs to: the root scope, the Tabby scope, or (the
+   *  cockpit's detail pane) a project's or box's. */
   scope: string;
   tab: TabEntry;
   /** The pane has the keyboard. */
   focused: boolean;
   /** Draw the tab's Reader always, with no on/off toggle (Tabby's chats). */
   readerAlways?: boolean;
+  /** The folder a project's or box's tab falls back to (Files, cwd). */
+  scopeDir?: string;
 }
 
 /**
@@ -27,7 +30,7 @@ interface Props {
  * copy stand down — one visible view per PTY, two would take turns resizing
  * it. Two of these for one tab are the same mistake; the caller keeps one.
  */
-export function AttachedAgentPane({ scope, tab, focused, readerAlways = false }: Props) {
+export function AttachedAgentPane({ scope, tab, focused, readerAlways = false, scopeDir }: Props) {
   const rootDir = useProjectsStore((s) => s.rootDir) ?? "";
   const tabKey = tab.key;
   useEffect(() => {
@@ -36,8 +39,9 @@ export function AttachedAgentPane({ scope, tab, focused, readerAlways = false }:
     return () => unmarkShown(tabKey, scope);
   }, [scope, tabKey]);
   // A root tab with no cwd of its own falls back to the root folder; the
-  // Tabby scope has none (its chats carry the chat folder).
-  const cwd = tab.cwd || (scope === ROOT_SCOPE ? rootDir : "");
+  // Tabby scope has none (its chats carry the chat folder); a project's or
+  // box's falls back to the folder its host passes.
+  const cwd = tab.cwd || (scope === ROOT_SCOPE ? rootDir : (scopeDir ?? ""));
   return (
     <TabScopeContext.Provider value={scope}>
       <TabPane

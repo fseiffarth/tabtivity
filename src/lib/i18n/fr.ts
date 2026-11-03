@@ -11105,4 +11105,12 @@ export const dict: Dict = {
   "settings.cockpitHelp": "Une superposition dans l'en-tête avec les agents de tous les projets, les décisions qui vous attendent, les planifications de ce soir et les machines. Elle lit ce que la fenêtre sait déjà et ne charge rien tant qu'elle est fermée.",
   "steering.cockpit.label": "Cockpit",
   "steering.cockpit.desc": "Ouvrir le cockpit : les agents de tous les projets et les décisions qui vous attendent ; Échap le referme.",
+  "cockpit.standDown": "Affiché dans le cockpit",
+  "cockpit.showHere": "Afficher ici",
+  "cockpit.detail.gone": "Cet onglet n'est plus ouvert.",
+  "cockpit.detail.inPopout": "Cet onglet est affiché dans sa propre fenêtre.",
+  "cockpit.detail.openPopout": "Ouvrir dans sa fenêtre ↗",
+  "cockpit.detail.inConsole": "La console racine est ouverte et affiche cet onglet.",
+  "cockpit.detail.connectFirst": "Sa machine n'est pas connectée. Connectez-vous d'abord.",
+  "cockpit.detail.connect": "Se connecter…",
 };

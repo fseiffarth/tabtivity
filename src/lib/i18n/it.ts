@@ -11103,4 +11103,12 @@ export const dict: Dict = {
   "settings.cockpitHelp": "Una sovrapposizione nell'intestazione con gli agenti di tutti i progetti, le decisioni che ti aspettano, le pianificazioni di stanotte e le macchine. Legge ciò che la finestra sa già e non carica nulla mentre è chiusa.",
   "steering.cockpit.label": "Cabina",
   "steering.cockpit.desc": "Apri la cabina: gli agenti di tutti i progetti e le decisioni che ti aspettano; Esc la richiude.",
+  "cockpit.standDown": "Mostrato nella cabina",
+  "cockpit.showHere": "Mostra qui",
+  "cockpit.detail.gone": "Questa scheda non è più aperta.",
+  "cockpit.detail.inPopout": "Questa scheda è mostrata nella sua finestra.",
+  "cockpit.detail.openPopout": "Apri nella sua finestra ↗",
+  "cockpit.detail.inConsole": "La console radice è aperta e mostra questa scheda.",
+  "cockpit.detail.connectFirst": "La sua macchina non è connessa. Connettiti prima.",
+  "cockpit.detail.connect": "Connetti…",
 };

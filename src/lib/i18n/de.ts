@@ -11107,4 +11107,12 @@ export const dict: Dict = {
   "settings.cockpitHelp": "Ein Overlay in der Kopfleiste mit den Agenten aller Projekte, den Entscheidungen, die auf dich warten, den Zeitplänen für heute Nacht und den Rechnern. Liest, was das Fenster schon weiß, und lädt nichts, solange es geschlossen ist.",
   "steering.cockpit.label": "Cockpit",
   "steering.cockpit.desc": "Das Cockpit öffnen: die Agenten aller Projekte und die Entscheidungen, die auf dich warten; Escape schließt es wieder.",
+  "cockpit.standDown": "Im Cockpit angezeigt",
+  "cockpit.showHere": "Hier zeigen",
+  "cockpit.detail.gone": "Dieser Tab ist nicht mehr offen.",
+  "cockpit.detail.inPopout": "Dieser Tab wird in einem eigenen Fenster angezeigt.",
+  "cockpit.detail.openPopout": "In seinem Fenster öffnen ↗",
+  "cockpit.detail.inConsole": "Die Root-Konsole ist offen und zeigt diesen Tab.",
+  "cockpit.detail.connectFirst": "Sein Rechner ist nicht verbunden. Zuerst verbinden.",
+  "cockpit.detail.connect": "Verbinden…",
 };

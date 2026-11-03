@@ -11199,4 +11199,12 @@ export const enSource = {
   "settings.cockpitHelp": "A header overlay with every project's agents, the decisions waiting on you, tonight's schedules and the machines. Reads what the window already knows and loads nothing while it is shut.",
   "steering.cockpit.label": "Cockpit",
   "steering.cockpit.desc": "Open the cockpit: every project's agents and the decisions waiting on you; Escape closes it again.",
+  "cockpit.standDown": "Shown in the cockpit",
+  "cockpit.showHere": "Show here",
+  "cockpit.detail.gone": "This tab is no longer open.",
+  "cockpit.detail.inPopout": "This tab is shown in its own window.",
+  "cockpit.detail.openPopout": "Open in its window ↗",
+  "cockpit.detail.inConsole": "The root console is open and shows this tab.",
+  "cockpit.detail.connectFirst": "Its machine is not connected. Connect first.",
+  "cockpit.detail.connect": "Connect…",
 } as const;
