@@ -380,6 +380,69 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+2443. **Browser client catch-up with `develop` since 2026-10-11.** 🤖 **Built**
+    (2026-11-03, never run live). Audit of every command and frontend event
+    `develop` added since the server work last synced: every new command has
+    a class and every `core` one a dispatcher wrapper (the tests hold both);
+    every new event the UI listens to is raised through `Ctx`; the daemon
+    starts the turn relay and the Reader's transcript watch itself. Fixed:
+    an image pasted into a terminal or the Reader composer in a browser
+    (was "image couldn't be handed to this tab": `pty_paste_clipboard_image`
+    is `client`) — the page reads its own clipboard, `pty_paste_image`
+    (`core`) files it into the tab's inbox; the file tree's ▶ run in
+    background (`run_script_detached`, did nothing) and PDF page drag/copy
+    between viewers (`pdf_clip_*`, errored) are served; the Models & agents
+    CPU/RAM/GPU meters and the intro's model recommendation read the
+    server's machine (`models_host_load`) instead of nothing; a dropped or
+    pasted file's path is quoted for the host's OS; the header's network
+    kind/SSID poll (`client`, refused every 10 s) is skipped. Still open:
+    read-aloud and dictation in a browser (hidden; the Web Speech API could
+    stand in for `voice_speak`), and the file tree's import picks a server
+    file rather than uploading one from the laptop — see #2444.
+    - [x] 🤖 Automated test — `core_dispatch` serves `pdf_clip_*`,
+      `run_script_detached` (a user's script and `cwd` held to their roots),
+      `pty_paste_image` and `models_host_load` while the bare sensors and the
+      OS clipboard stay `client`; `pty_paste_image` refuses non-pictures,
+      oversize and empty input before looking for the tab;
+      `TerminalDropText.test.ts` and `ModelsMachine.test.ts` cover the
+      browser branches.
+    - [ ] 🖐️ Manual test — in the browser client on a server: copy a
+      screenshot, Ctrl+Shift+V in a Claude tab (and paste into the Reader
+      composer): `@inbox/…png` is typed and the agent can read it; ▶ a
+      `.sh` in the file tree's run-in-background mode: the spinner clears
+      when it ends; drag a page from one PDF viewer into another; open
+      Models & agents: the CPU/RAM/GPU meters show the server's figures.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2444. **Browser client: read-aloud and laptop uploads.**
+    Read-aloud through the browser's `speechSynthesis` standing in for
+    `voice_speak` (and `voice:speaking` raised by the page itself), so the
+    Reader's chip can show in a browser; dictation stays hidden (the
+    server's whisper would need the browser's audio streamed up). An upload
+    path for the file tree's import and drop (a browser `File` → the
+    project, as `write_file_bytes` frames already carry bytes).
+    - [ ] 🤖 Automated test — the shim answers `voice_speak` from a fake
+      `speechSynthesis` and the Reader shows its chip under
+      `isServerClient()`.
+    - [ ] 🖐️ Manual test — in the browser client: Read aloud speaks an
+      answer; drop a laptop file onto the file tree and it lands in the
+      project.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 ### Z.3 — Left by P3 (multi-user; `docs/hosted_handoff.md` § P3)
 
 2349. **Finish the crate split; the daemon still links GTK.** ✅ **Done** (2026-10-03, `3c090785`): the library's toolkit deps sit behind a default `desktop` feature; the daemon is its own crate `src-serverd/` built with `default-features = false`, `ldd` shows libc/libm/libgcc_s only, and CI's test job fails on a desktop library (the box below is that step). Was: `tabtivity-serverd` is a second `[[bin]]` of `src-tauri`, so it links the

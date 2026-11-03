@@ -49,6 +49,12 @@ Read this first; keep it current when a decision or an open point changes.
   local project's agent starts in a linked worktree with no window. Still
   window-only on a server: mail, alerts, Tabby's model switch, the moves,
   Diverged and mode/cloud/local/API-key/sign-in launches (#2438).
+- **Browser client caught up with `develop`'s commands (2026-11-03,
+  #2443).** Every command and event `develop` added since 2026-10-11 was
+  audited for the daemon: image paste, ▶ run in background, PDF page
+  drag/copy and the Models & agents meters now work in the browser
+  (`docs/context/web_client.md`); read-aloud and laptop uploads remain
+  (#2444).
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 - **Released as a `.deb` (2026-10-14, plan §8.1).** Each GitHub release
