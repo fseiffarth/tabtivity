@@ -90,6 +90,10 @@ export function agentMenuEntries(opts: {
    *  a ▾ list to start it on one of them directly. Unset, or a single machine
    *  (a VM's primary alone), → no list: there is nothing to choose. */
   machines?: AgentMachine[];
+  /** A box's "Start in…" (`startIn.startInFlyout`): every agent row gets a ▾ list
+   *  of the whole box and each member instead of machines (a box has none). Given
+   *  the row's agent label ("Claude") and its item. Unset → machines, as before. */
+  startIn?: (what: string, item: StaticMenuItem) => Pick<AddMenuEntry, "machineTitle" | "machineEntries">;
   /** Start one of an installed built-in's cloud launches. Unset → no
    *  "Cloud session" row (a scope where no cloud session makes sense). */
   pickCloud?: (item: StaticMenuItem, launch: CloudLaunch) => void;
@@ -103,7 +107,9 @@ export function agentMenuEntries(opts: {
 }): AddMenuEntry[] {
   // The ▾ fly-out under an agent row: the same agent, started on a machine.
   const machinesFor = (label: string, item: () => StaticMenuItem) =>
-    opts.machines && opts.machines.length > 1
+    opts.startIn
+      ? opts.startIn(label, item())
+      : opts.machines && opts.machines.length > 1
       ? {
           machineTitle: opts.t("newTabMenu.chooseMachine", { agent: label }),
           machineEntries: opts.machines.map((m): AddMenuEntry => ({

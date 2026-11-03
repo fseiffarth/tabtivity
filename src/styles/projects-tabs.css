@@ -1438,6 +1438,51 @@
   opacity: 0.7;
 }
 
+/* Member chip (TabMemberChip): which member of a box the tab works in. A round
+   dot in the member's colour (a rounded square for the whole box: members are
+   dots, boxes are squares, never swapped) and a short name. Quiet by design:
+   the kind stripe keeps its meaning, the chip only carries ownership. No
+   shadow, no animation. */
+.tab-member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  line-height: 1;
+  color: var(--text-muted);
+}
+.tab-member-mark {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.tab-member-chip.box .tab-member-mark,
+.tab-member-mark.box {
+  border-radius: 2px;
+}
+.tab-member-name {
+  max-width: 10ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab:not(.active):not(:hover) .tab-member-chip {
+  opacity: 0.7;
+}
+/* A narrow bar (TabMemberChip sets the attribute on `.tab-bar`): the dot or
+   square alone, the name stays in the tab's hover card. */
+.tab-bar[data-narrow-chips] .tab-member-name {
+  display: none;
+}
+/* The hover card's member row: the same mark, beside the name. */
+.tab-popup-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* A tab held in a narrower closed tab's slot (lib/tabs/closedTabSlot). */
 .tab[data-slot-held] .tab-label {
   overflow: hidden;
@@ -2530,6 +2575,25 @@ button.tab-todo-link {
 }
 .tab-add-menu > .tab-new-menu-search {
   flex-shrink: 0;
+}
+/* A box's "+" menu names where a plain pick starts (decision 3): the member's
+   round dot or the box's rounded square, then "New tab in api". Pinned above the
+   search box like the unified menus' title strip; no shadow, no animation. */
+.tab-new-menu-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: var(--space-1) 10px 2px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  user-select: none;
+}
+.tab-new-menu-target-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── Unified scrolling-menu shape ───────────────────────────────────────────
