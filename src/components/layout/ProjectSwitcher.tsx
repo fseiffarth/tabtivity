@@ -1,6 +1,6 @@
 import { SkeletonRows } from "../common/SkeletonRows";
 import { useHeaderMenu } from "../../hooks/useHeaderMenu";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
@@ -31,6 +31,7 @@ import { useFastMode } from "../../lib/agents/fastMode";
 import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { boxColor } from "../../lib/theme/boxColor";
+import type { HeaderWidthTier } from "../../lib/headerPins";
 import { useT } from "../../lib/i18n";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
 import { observeStripResize } from "../../lib/observeStripResize";
@@ -66,7 +67,15 @@ const ProjectImportBundleDialog = lazy(() =>
 /** This bar's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const ADD_MENU_ID = "project-add";
 
-export function ProjectSwitcher({ open = true }: { open?: boolean }) {
+export function ProjectSwitcher({
+  open = true,
+  widthTier = 0,
+}: {
+  open?: boolean;
+  /** The header's width tier (`HeaderBar` owns it): how many box pills the
+   *  leading row may hold (`boxPillBudget`). Wide when omitted. */
+  widthTier?: HeaderWidthTier;
+}) {
   const t = useT();
   const { confirmAction, dialogs } = useDialogs();
   const projects = useProjectsStore((s) => s.projects);
@@ -317,6 +326,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // the effects that keep it in step with the scope and the boxes stay here.
   const boxFilter = useBoxSliceStore((s) => s.sliceBoxId);
   const selectBox = useBoxSliceStore((s) => s.selectBox);
+  const leaveBox = useBoxSliceStore((s) => s.leaveBox);
   const [boxCandidateFilter, setBoxCandidateFilter] = useState("");
 
   // Entering a box scope by any other door (the search popover, a restored
@@ -591,9 +601,13 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             (the Tabtivity logo) is the leftmost thing in the window — so there is
             nothing on its left to divide it from. */}
         <div
+          // A slice tints the whole strip in its box's colour (static tint, see
+          // `.project-pills-region.is-sliced`), so "I am looking at a box" reads
+          // across the row, not only on the one pill.
           className={`project-pills-region${pillOverflow.left ? " overflow-left" : ""}${
             pillOverflow.right ? " overflow-right" : ""
-          }`}
+          }${currentBox ? " is-sliced" : ""}`}
+          style={currentBox ? ({ "--slice-color": boxColor(currentBox) } as CSSProperties) : undefined}
         >
           {/* The row's leading segment: ONE chip for every scope that is not a
               project pill — the root terminal and the boxes. It sits outside .project-pills-scroll, which is what pins
@@ -609,6 +623,8 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             boxes={boxes}
             selectedId={boxFilter}
             onSelect={(id) => void selectBox(id)}
+            onLeave={() => void leaveBox()}
+            widthTier={widthTier}
             onRename={(boxId, name) => void renameBox(boxId, name)}
             // The pill's Delete is one right-click away on every box now, so it
             // asks the same question the editor's Dissolve does — and says the

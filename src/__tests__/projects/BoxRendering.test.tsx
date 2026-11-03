@@ -13,7 +13,7 @@
  * `PageStrip.test.tsx`/`DragDropSplit.test.tsx` take for their pointer drags.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act, fireEvent } from "@testing-library/react";
+import { render, act, fireEvent, cleanup } from "@testing-library/react";
 import type { ProjectBox, ProjectEntry } from "../../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(null) }));
@@ -26,6 +26,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
 import { resetBoxSlice } from "../../stores/boxSlice";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
+import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useTabsStore } from "../../stores/tabs";
 import { useActivityStore } from "../../stores/activity";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
@@ -119,6 +120,11 @@ function boxPillNames(container: HTMLElement): string[] {
   );
 }
 
+/** The fold pill `▣▾ +N` after the shown box pills (null when none is folded). */
+function foldPill(container: HTMLElement): HTMLElement | null {
+  return container.querySelector(".box-fold-pill");
+}
+
 /** Open the chip's dropdown (hovering its caret opens it — a click on the
  *  logo is "All projects") and hand back its portaled menu. */
 async function openChipMenu(container: HTMLElement): Promise<HTMLElement> {
@@ -141,6 +147,8 @@ const realSetActive = useProjectsStore.getState().setActive;
 
 beforeEach(() => {
   resetBoxSlice();
+  // The header's shared hover-menu id outlives a test's unmount.
+  useHeaderHoverMenuStore.getState().close("box-scope-chip");
   usePillDragStore.getState().end();
   useProjectsStore.setState({
     projects: [],
@@ -152,10 +160,10 @@ beforeEach(() => {
   useTabsStore.setState({ scope: "root" });
 });
 
-async function renderSwitcher() {
+async function renderSwitcher(widthTier: 0 | 1 | 2 | 3 = 0) {
   let container!: HTMLElement;
   await act(async () => {
-    ({ container } = render(<ProjectSwitcher open={true} />));
+    ({ container } = render(<ProjectSwitcher open={true} widthTier={widthTier} />));
   });
   return container;
 }
@@ -500,7 +508,7 @@ describe("box chip rendering (slice model)", () => {
     expect(boxPillNames(container)).toEqual(["boxA", "boxB"]);
   });
 
-  it("caps the row at MAX_BOX_PILLS, counts the rest on the chip, and always seats the selected box", async () => {
+  it("caps the row at MAX_BOX_PILLS, counts the rest on the fold pill, and always seats the selected box", async () => {
     const many = Array.from({ length: MAX_BOX_PILLS + 2 }, (_, i) =>
       box(`box${i}`, [], i + 1),
     );
@@ -509,7 +517,9 @@ describe("box chip rendering (slice model)", () => {
 
     const container = await renderSwitcher();
     expect(boxPillNames(container)).toEqual(many.slice(0, MAX_BOX_PILLS).map((b) => b.name));
-    expect(chip(container)!.textContent).toContain("+2");
+    // The count stands after the shown pills, no longer beside the logo.
+    expect(foldPill(container)!.textContent).toContain("+2");
+    expect(chip(container)!.textContent).not.toContain("+");
 
     // Picking an overflow box from the dropdown seats it in the last slot —
     // the box being looked at is never the one without a pill.
@@ -537,9 +547,9 @@ describe("box chip rendering (slice model)", () => {
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
 
     const container = await renderSwitcher();
-    // A hidden box has no pill, but the chip still counts it and lists it.
+    // A hidden box has no pill, but the fold pill still counts it and the list has it.
     expect(boxPillNames(container)).toEqual(["boxA"]);
-    expect(chip(container)!.textContent).toContain("+1");
+    expect(foldPill(container)!.textContent).toContain("+1");
 
     const menu = await openChipMenu(container);
     const pins = [...menu.querySelectorAll<HTMLElement>(".box-chip-menu-pin")];
@@ -1059,5 +1069,319 @@ describe("box chip status bars", () => {
     expect(rowBars[0].className).toContain("finished");
     // A box with nothing running draws no strip at all.
     expect(rowB.querySelector(".pill-status-bars")).toBeNull();
+  });
+});
+
+/** The ✕ on the selected box pill. */
+function leaveButton(container: HTMLElement): HTMLElement | null {
+  return container.querySelector(".box-pill-leave");
+}
+
+describe("header access: the way out of a box (AS2a)", () => {
+  function seedTwoBoxes(setActive = vi.fn()) {
+    useBoxesStore.setState({
+      boxes: [box("boxA", ["p1"], 5), box("boxB", ["p2"], 6)],
+      openBox: vi.fn(openBoxScope),
+    });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20), proj("p3", 30)],
+      activeId: "p3",
+      loaded: true,
+      setActive,
+    });
+  }
+
+  it("wears an always-visible ✕ on the selected pill only", async () => {
+    seedTwoBoxes();
+    const container = await renderSwitcher();
+    // Nothing selected: no ✕ anywhere.
+    expect(leaveButton(container)).toBeNull();
+
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    const pills = [...container.querySelectorAll(".box-scope-pill")];
+    expect(pills[0].querySelector(".box-pill-leave")).toBeTruthy();
+    expect(pills[1].querySelector(".box-pill-leave")).toBeNull();
+    expect(container.querySelectorAll(".box-pill-leave")).toHaveLength(1);
+    expect(leaveButton(container)!.getAttribute("title")).toBe("Show all projects (leave “boxA”)");
+  });
+
+  it("the ✕ clears the slice and hands the scope back to the project the strip was on", async () => {
+    const setActive = vi.fn(async (id: string | null) => {
+      useTabsStore.setState({ scope: id ?? "root" });
+    });
+    seedTwoBoxes(setActive);
+    useTabsStore.setState({ scope: "p3" });
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    expect(pillNames(container)).toEqual(["p1"]);
+
+    await act(async () => {
+      fireEvent.click(leaveButton(container)!);
+    });
+    expect(setActive).toHaveBeenCalledWith("p3");
+    expect(useTabsStore.getState().scope).toBe("p3");
+    expect(pillNames(container).sort()).toEqual(["p1", "p2", "p3"]);
+    expect(container.querySelector(".box-scope-pill.is-selected")).toBeNull();
+    expect(leaveButton(container)).toBeNull();
+    // Entering the box did not route through the pill's own click: the ✕ is not "select".
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+  });
+
+  it("the ✕ stays while a member is being visited, and clears just the slice there", async () => {
+    const setActive = vi.fn(async (id: string | null) => {
+      useTabsStore.setState({ scope: id ?? "root" });
+    });
+    seedTwoBoxes(setActive);
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    await act(async () => {
+      fireEvent.click(findPill(container, "p1").querySelector(".pill-main") as HTMLElement);
+    });
+    expect(useTabsStore.getState().scope).toBe("p1");
+    expect(leaveButton(container)).toBeTruthy();
+    setActive.mockClear();
+
+    await act(async () => {
+      fireEvent.click(leaveButton(container)!);
+    });
+    // Strip and tabs already agree: no second runtime switch, the strip is whole again.
+    expect(setActive).not.toHaveBeenCalled();
+    expect(pillNames(container).sort()).toEqual(["p1", "p2", "p3"]);
+  });
+
+  it("tints the strip in the box colour while a slice is selected, and not otherwise", async () => {
+    seedTwoBoxes();
+    const container = await renderSwitcher();
+    const region = container.querySelector(".project-pills-region") as HTMLElement;
+    expect(region.className).not.toContain("is-sliced");
+
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxB"));
+    });
+    expect(region.className).toContain("is-sliced");
+    expect(region.style.getPropertyValue("--slice-color")).toBe(boxColor({ id: "boxB" }));
+
+    await act(async () => {
+      fireEvent.click(leaveButton(container)!);
+    });
+    expect(region.className).not.toContain("is-sliced");
+    expect(region.style.getPropertyValue("--slice-color")).toBe("");
+  });
+
+  it("marks the scope box with a ✓ and the sliced box in bold — two marks for two states", async () => {
+    seedTwoBoxes(
+      vi.fn(async (id: string | null) => {
+        useTabsStore.setState({ scope: id ?? "root" });
+      }),
+    );
+    const container = await renderSwitcher();
+    let menu = await openChipMenu(container);
+    expect(menu.querySelector(".box-chip-menu-scope")).toBeNull();
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+
+    // In the box: scope AND slice on the same row.
+    menu = await openChipMenu(container);
+    const rowA = menuRow(menu, "boxA");
+    expect(rowA.className).toContain("is-slice");
+    expect(rowA.className).toContain("is-scope");
+    expect(rowA.querySelector(".box-chip-menu-scope")).toBeTruthy();
+    expect(menuRow(menu, "boxB").className).not.toContain("is-slice");
+    expect(menu.querySelectorAll(".box-chip-menu-scope")).toHaveLength(1);
+
+    // Visiting a member: the slice stays (bold), the scope has left (no ✓).
+    await act(async () => {
+      fireEvent.click(findPill(container, "p1").querySelector(".pill-main") as HTMLElement);
+    });
+    menu = await openChipMenu(container);
+    const visiting = menuRow(menu, "boxA");
+    expect(visiting.className).toContain("is-slice");
+    expect(visiting.className).not.toContain("is-scope");
+    expect(menu.querySelector(".box-chip-menu-scope")).toBeNull();
+  });
+});
+
+describe("header access: the caret opens on click as well as on hover (AS2a)", () => {
+  function seed() {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], openBox: vi.fn(openBoxScope) });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+  }
+
+  it("a click pins the list open past the pointer leaving; a second click closes it", async () => {
+    seed();
+    const container = await renderSwitcher();
+    const caret = container.querySelector(".box-chip-caret-btn") as HTMLElement;
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+
+    // Keyboard/touch path: no hover at all, a click alone opens it.
+    await act(async () => {
+      fireEvent.click(caret);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    expect(caret.getAttribute("aria-expanded")).toBe("true");
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.mouseLeave(caret);
+        vi.advanceTimersByTime(3000);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await act(async () => {
+      fireEvent.click(caret);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+  });
+
+  it("a hover-opened list still folds away on leaving, and a click on it keeps it", async () => {
+    seed();
+    const container = await renderSwitcher();
+    const caret = container.querySelector(".box-chip-caret-btn") as HTMLElement;
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.mouseEnter(caret);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+      await act(async () => {
+        fireEvent.mouseLeave(caret);
+        vi.advanceTimersByTime(3000);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeNull();
+
+      // Hover, then click: the click keeps what the hover opened (not a toggle shut).
+      await act(async () => {
+        fireEvent.mouseEnter(caret);
+        fireEvent.click(caret);
+      });
+      await act(async () => {
+        fireEvent.mouseLeave(caret);
+        vi.advanceTimersByTime(3000);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Escape closes a pinned list", async () => {
+    seed();
+    const container = await renderSwitcher();
+    await act(async () => {
+      fireEvent.click(container.querySelector(".box-chip-caret-btn") as HTMLElement);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+  });
+});
+
+describe("header access: the width-tier pill budget and the fold pill (AS2a)", () => {
+  const eight = () => Array.from({ length: 8 }, (_, i) => box(`box${i}`, [], i + 1));
+
+  function seed(boxes: ProjectBox[]) {
+    useBoxesStore.setState({ boxes, openBox: vi.fn(openBoxScope) });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+  }
+
+  it("holds 6 pills on tiers 0 and 1, 3 on tier 2 and only the selected box on tier 3", async () => {
+    for (const [tier, expected] of [
+      [0, 6],
+      [1, 6],
+      [2, 3],
+      [3, 0],
+    ] as const) {
+      seed(eight());
+      const container = await renderSwitcher(tier);
+      expect(boxPillNames(container)).toHaveLength(expected);
+      // The rest stand folded: `▣▾ +N` after the shown pills.
+      const fold = foldPill(container)!;
+      expect(fold).toBeTruthy();
+      expect(fold.textContent).toContain(expected === 0 ? "8" : `+${8 - expected}`);
+      // After, not before: the pill row's last child.
+      expect(container.querySelector(".box-pill-row")!.lastElementChild).toBe(fold);
+      cleanup();
+      resetBoxSlice();
+    }
+  });
+
+  it("keeps the selected box on the row at every tier, in its own place", async () => {
+    seed(eight());
+    useBoxesStore.setState({ boxes: eight() });
+    const container = await renderSwitcher(3);
+    // Select box5 through the list (the fold pill's own).
+    await act(async () => {
+      fireEvent.click(foldPill(container)!.querySelector("button") as HTMLElement);
+    });
+    await act(async () => {
+      fireEvent.click(menuRow(document.querySelector(".box-chip-menu") as HTMLElement, "box5"));
+    });
+    expect(boxPillNames(container)).toEqual(["box5"]);
+    expect(leaveButton(container)).toBeTruthy();
+    expect(foldPill(container)!.textContent).toContain("+7");
+  });
+
+  it("shows no fold pill when every box has its pill", async () => {
+    seed([box("boxA", [], 1), box("boxB", [], 2)]);
+    const container = await renderSwitcher(2);
+    expect(boxPillNames(container)).toEqual(["boxA", "boxB"]);
+    expect(foldPill(container)).toBeNull();
+  });
+
+  it("opens the list under the fold pill on hover and on click, and nothing sits beside the logo", async () => {
+    seed(eight());
+    const container = await renderSwitcher(2);
+    expect(chip(container)!.textContent).not.toContain("+");
+    const foldButton = foldPill(container)!.querySelector("button") as HTMLElement;
+    const foldRect = { left: 300, right: 360, top: 0, bottom: 40 };
+    layOut(foldPill(container)!, foldRect);
+
+    await act(async () => {
+      fireEvent.mouseEnter(foldButton);
+    });
+    const menu = document.querySelector(".box-chip-menu") as HTMLElement;
+    expect(menu).toBeTruthy();
+    expect(menu.style.left).toBe("300px");
+    expect(foldButton.getAttribute("aria-expanded")).toBe("true");
+    // The same list as the caret's: every box, shown or folded.
+    expect(menu.querySelectorAll(".box-chip-menu-row")).toHaveLength(8);
+    cleanup();
+  });
+
+  it("a click on the fold pill pins its list", async () => {
+    seed(eight());
+    const container = await renderSwitcher(2);
+    const foldButton = foldPill(container)!.querySelector("button") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(foldButton);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.mouseLeave(foldButton);
+        vi.advanceTimersByTime(3000);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

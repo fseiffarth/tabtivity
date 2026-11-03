@@ -433,7 +433,7 @@
 /* The logo is the window's move handle (BoxScopeChip's onLogoMouseDown); a
    click on it is still "All projects", so the grab cursor shows only while
    pressed. */
-.box-chip:not(.box-scope-pill) .box-chip-main:active {
+.box-chip:not(.box-scope-pill):not(.box-ghost-pill) .box-chip-main:active {
   cursor: var(--cur-grabbing, grabbing);
 }
 
@@ -456,7 +456,8 @@
   opacity: 1;
 }
 
-/* "+N": the boxes past MAX_BOX_PILLS, which only the chip's list reaches. */
+/* "+N": the boxes past the width budget (or hidden from the row), counted on the
+   fold pill; only the list it opens reaches them. */
 .box-chip-overflow {
   font-size: var(--text-sm);
   font-weight: 600;
@@ -553,6 +554,87 @@
   box-shadow: inset 0 0 0 1px var(--box-color, var(--accent));
 }
 
+/* The way out: an ✕ that stays on the SELECTED box pill (never hover-only),
+   "Show all projects". Muted until pointed at, so it reads as part of the pill
+   and not as a second label. */
+.box-pill-leave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
+}
+.box-pill-leave:hover {
+  background-color: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+
+/* A slice tints the whole strip in its box's colour (`--slice-color`, set inline
+   by ProjectSwitcher): the lit pill, its members and the line under them read
+   as one place. Static background and inset line only, nothing animated. */
+.project-pills-region.is-sliced {
+  border-radius: var(--radius-sm);
+  background-color: color-mix(in srgb, var(--slice-color, var(--accent)) 9%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--slice-color, var(--accent)) 55%, transparent);
+}
+
+/* The fold pill `▣▾ +N`, after the shown box pills: the boxes without a pill,
+   one click (or hover) from their list. The chip's own box, minus the pill's
+   inset, so it sits on the same rhythm as the pills before it. */
+.box-fold-pill {
+  padding: 0 var(--space-2);
+}
+.box-fold-pill .box-chip-caret-btn {
+  gap: 5px;
+  padding: 0;
+}
+.box-fold-pill .project-pill-box-swatch {
+  color: var(--text-secondary);
+}
+.box-fold-pill:hover .project-pill-box-swatch {
+  color: var(--text-primary);
+}
+
+/* The ghost "+ Box" pill, while there is no box: dashed, quiet, solid on hover. */
+.box-ghost-pill {
+  padding: 0 var(--space-2);
+}
+.box-ghost-pill .box-chip-main {
+  height: 26px;
+  gap: 4px;
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+.box-ghost-pill .box-chip-main:hover {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.box-ghost-plus {
+  width: 12px;
+  height: 12px;
+}
+
+/* Narrow header: the pills give up label width before they give up count
+   (the budget itself is `boxPillBudget`, passed to BoxScopeChip). */
+.app-header[data-width-tier="2"] .box-scope-pill .box-chip-main {
+  max-width: 96px;
+}
+.app-header[data-width-tier="3"] .box-scope-pill .box-chip-main {
+  max-width: 80px;
+}
+
 /* The hairline after the leading segment (★ · 🗑 · ⬡ chip), before the scrolling
    project pills — the visible edge between the fixed zone and the strip that
    moves under it. It was literally white, which is a divider that only exists on
@@ -601,6 +683,18 @@
 .box-chip-menu button.is-current {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* The sliced box in the list: bold. The scope box wears a ✓ as well (the two
+   differ while a member is being visited: slice without scope). */
+.box-chip-menu button.is-slice {
+  font-weight: 700;
+}
+.box-chip-menu-scope {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
 }
 
 /* The row a dragged pill is currently over — dropping adds it to that box. */

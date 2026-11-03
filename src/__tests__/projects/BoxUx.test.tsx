@@ -307,3 +307,43 @@ describe("box editor dialog (3c)", () => {
     expect(deleteBox).not.toHaveBeenCalled();
   });
 });
+
+describe("ghost + Box pill (AS2a)", () => {
+  it("is the row's only box UI while there is no box, and goes once one exists", async () => {
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const ghost = container.querySelector(".box-ghost-pill");
+    expect(ghost).toBeTruthy();
+    expect(ghost!.textContent).toContain("Box");
+    expect(container.querySelectorAll(".box-scope-pill")).toHaveLength(0);
+    expect(container.querySelector(".box-fold-pill")).toBeNull();
+
+    await act(async () => {
+      useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
+    });
+    expect(container.querySelector(".box-ghost-pill")).toBeNull();
+    expect(container.querySelectorAll(".box-scope-pill")).toHaveLength(1);
+  });
+
+  it("asks for a name, creates the box through the quick-create door and enters it", async () => {
+    const created = box("boxNew", [], 1);
+    const createBoxQuick = vi.fn(async () => created);
+    const openBox = vi.fn(async () => {});
+    useBoxesStore.setState({ boxes: [], createBoxQuick, openBox });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+
+    await act(async () => {
+      fireEvent.click(container.querySelector(".box-ghost-pill .box-chip-main") as HTMLElement);
+    });
+    const field = (await screen.findByRole("textbox")) as HTMLInputElement;
+    // Pre-filled with the next free default name, as every other door does.
+    expect(field.value).toBe("Box 1");
+    await act(async () => {
+      fireEvent.change(field, { target: { value: "Thesis" } });
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(createBoxQuick).toHaveBeenCalledWith({ name: "Thesis", memberIds: [] });
+    expect(openBox).toHaveBeenCalledWith("boxNew");
+  });
+});
