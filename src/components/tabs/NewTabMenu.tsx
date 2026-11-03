@@ -14,12 +14,14 @@ import {
 } from "../../stores/tabs/tabKinds";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
-import { PROJECT_FILES_TAB_CMD, ROOT_SCOPE } from "../../stores/tabs";
+import { ROOT_SCOPE } from "../../stores/tabs";
+import type { BoxMemberDir, NewTabTarget } from "../../stores/boxes";
 import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { agentMenuEntries, compactAgentMenuEntries, type AgentMachine } from "./agentMenuEntries";
 import { AddTabMenuList } from "./AddTabMenuList";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
-import { useAddTabMenuData } from "./useAddTabMenuData";
+import { useAddTabMenuData, type AddTabMenuSeed } from "./useAddTabMenuData";
+import { openInMember as openInMemberHelper, startInFlyout, targetHeading, type StartInKind } from "./startIn";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
 import { useAgentWorktreePicker } from "./agentWorktrees";
@@ -59,6 +61,14 @@ interface Props {
    *  streamed project): no row that starts a tab on this machine — the
    *  local-model and API-key groups, the ☁ Cloud fly-out — is offered. */
   hostPinned?: boolean;
+  /** A box popout: where a plain pick starts (`detachedNewTabTarget`: the active
+   *  tab's member, else the whole box) — named in the menu's first line. `projectCwd`
+   *  is then that target's folder; the kinds without a launch directory (monitor,
+   *  disk usage, …) keep the box folder. Unset outside a box. */
+  target?: NewTabTarget | null;
+  /** The popout's one-time copy of its box and members (its stores are inert),
+   *  what the "Start in…" fly-outs list. */
+  boxSeed?: AddTabMenuSeed;
 }
 
 /**
@@ -78,6 +88,8 @@ export function NewTabMenu({
   onManageAgents,
   machines,
   hostPinned = false,
+  target,
+  boxSeed,
 }: Props) {
   const t = useT();
 
@@ -104,8 +116,9 @@ export function NewTabMenu({
     customAgents,
     agentOrder,
     installedCustom,
-    boxMembers,
-  } = useAddTabMenuData(scope);
+    memberTable,
+  } = useAddTabMenuData(scope, { seed: boxSeed });
+  const fixedCwd = target && memberTable?.boxFolder ? memberTable.boxFolder : projectCwd;
   // This menu only exists while open, so the GPU gate probes for its lifetime
   // (a host-pinned scope has neither group, so it probes nothing).
   const localModelGpu = useLocalModelPlacement(localModel, !hostPinned);
@@ -150,6 +163,25 @@ export function NewTabMenu({
     onClose();
   };
 
+  /** "Start in…" and a plain Files pick in a box: `startIn.openInMember` with this
+   *  menu's way of landing a tab (the popout streams it to the main window). */
+  const openInMember = (kind: StartInKind, member: BoxMemberDir | null, item?: StaticMenuItem) => {
+    if (!memberTable) return;
+    openInMemberHelper({
+      kind,
+      member,
+      item,
+      table: memberTable,
+      launchCwd: projectCwd,
+      t,
+      viaRow: pickStatic,
+      add: pickFixed,
+      addUnique: pickFixed,
+    });
+  };
+  const startInFor = (kind: StartInKind, what: string, item?: StaticMenuItem) =>
+    startInFlyout({ what, table: memberTable, open: (member) => openInMember(kind, member, item), t });
+
   // Mistral/vibe drives the local model through its own per-model VIBE_HOME.
   const pickOllamaModel = async (model: string) => {
     onClose();
@@ -184,6 +216,7 @@ export function NewTabMenu({
       keepBelow
     >
       <AddTabMenuList
+        heading={memberTable && target ? targetHeading(target.member, memberTable, t) : undefined}
         groups={[
           {
             label: t("newTabMenu.groupAgents"),
@@ -196,6 +229,7 @@ export function NewTabMenu({
               pick: pickStatic,
               pickCloud,
               machines,
+              startIn: memberTable ? (what, item) => startInFor("agent", what, item) : undefined,
               onAddCustom: () => {
                 onClose();
                 onManageAgents();
@@ -211,6 +245,7 @@ export function NewTabMenu({
                 pick: pickStatic,
                 pickCloud,
                 machines,
+                startIn: memberTable ? (what, item) => startInFor("agent", what, item) : undefined,
                 onAddCustom: () => {
                   onClose();
                   onManageAgents();
@@ -258,46 +293,6 @@ export function NewTabMenu({
                 })),
               }]
             : []),
-          ...(boxMembers.length > 0
-            ? [{
-                label: t("newTabMenu.groupBoxMembers"),
-                entries: boxMembers.flatMap((m) => [
-                  {
-                    key: `boxfiles:${m.id}`,
-                    label: t("newTabMenu.boxMemberFiles", { name: m.name }),
-                    dot: "▤",
-                    color: TAB_ACCENT.projectfiles,
-                    onPick: () => {
-                      onPick({
-                        label: t("newTabMenu.boxMemberFiles", { name: m.name }),
-                        cmd: PROJECT_FILES_TAB_CMD,
-                        args: [],
-                        env: {},
-                        cwd: m.dir,
-                        kind: "projectfiles",
-                      });
-                      onClose();
-                    },
-                  },
-                  {
-                    key: `boxshell:${m.id}`,
-                    label: t("newTabMenu.boxMemberShell", { name: m.name }),
-                    color: TAB_ACCENT.shell,
-                    onPick: () => {
-                      onPick({
-                        label: t("newTabMenu.boxMemberShell", { name: m.name }),
-                        cmd: "",
-                        args: [],
-                        env: {},
-                        cwd: m.dir,
-                        kind: "shell",
-                      });
-                      onClose();
-                    },
-                  },
-                ]),
-              }]
-            : []),
           ...(hostPinned
             ? []
             : [localModelMenuGroup({
@@ -317,6 +312,7 @@ export function NewTabMenu({
               label: itemLabel(item, t),
               color: TAB_ACCENT[item.kind],
               onPick: () => pickStatic(item),
+              ...startInFor("shell", itemLabel(item, t), item),
             })),
           },
           {
@@ -326,7 +322,10 @@ export function NewTabMenu({
               label: itemLabel(item, t),
               color: TAB_ACCENT[item.kind],
               disabled: !projectCwd,
-              onPick: () => pickStatic(item),
+              // In a box the plain row follows the target (a member's Files is
+              // the project-files tab), as the main window's does.
+              onPick: () => (target?.cwd ? openInMember("files", target.member) : pickStatic(item)),
+              ...startInFor("files", itemLabel(item, t)),
             })),
           },
           // The same three `TabBar` offers, in the same order — this menu is the
@@ -346,7 +345,7 @@ export function NewTabMenu({
                   pickFixed({
                     label: t("newTabMenu.itemSystemMonitor"),
                     cmd: MONITOR_TAB_CMD,
-                    cwd: projectCwd,
+                    cwd: fixedCwd,
                     kind: "monitor",
                   }),
               },
@@ -359,7 +358,7 @@ export function NewTabMenu({
                   pickFixed({
                     label: t("newTabMenu.itemDiskUsage"),
                     cmd: DISKUSAGE_TAB_CMD,
-                    cwd: projectCwd,
+                    cwd: fixedCwd,
                     kind: "diskusage",
                   }),
               },
@@ -371,7 +370,7 @@ export function NewTabMenu({
                   pickFixed({
                     label: t("newTabMenu.itemNetworkTraffic"),
                     cmd: NETWORK_TAB_CMD,
-                    cwd: projectCwd,
+                    cwd: fixedCwd,
                     kind: "network",
                   }),
               },
@@ -389,7 +388,7 @@ export function NewTabMenu({
                     pickFixed({
                       label: t("newTabMenu.tabLabelProjects"),
                       cmd: BLOB_TAB_CMD,
-                      cwd: projectCwd,
+                      cwd: fixedCwd,
                       kind: "projects3d",
                     }),
                 }],
@@ -406,7 +405,7 @@ export function NewTabMenu({
                 pickFixed({
                   label: t("printing.title"),
                   cmd: PRINTING_TAB_CMD,
-                  cwd: projectCwd,
+                  cwd: fixedCwd,
                   kind: "printing",
                 }),
             }],
@@ -427,7 +426,7 @@ export function NewTabMenu({
                 pickFixed({
                   label: t("skillsLibrary.title"),
                   cmd: SKILLSLIBRARY_TAB_CMD,
-                  cwd: projectCwd,
+                  cwd: fixedCwd,
                   kind: "skillslibrary",
                 }),
             }],
@@ -446,7 +445,7 @@ export function NewTabMenu({
                 pickFixed({
                   label: t("promptChart.heading"),
                   cmd: PROMPTCHART_TAB_CMD,
-                  cwd: projectCwd,
+                  cwd: fixedCwd,
                   kind: "promptchart",
                 }),
             }],
@@ -463,7 +462,7 @@ export function NewTabMenu({
                     pickFixed({
                       label: t("newTabMenu.browser"),
                       cmd: BROWSER_TAB_CMD,
-                      cwd: projectCwd,
+                      cwd: fixedCwd,
                       kind: "browser",
                       url: browserHome || undefined,
                     }),

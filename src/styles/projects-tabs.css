@@ -2576,6 +2576,25 @@ button.tab-todo-link {
 .tab-add-menu > .tab-new-menu-search {
   flex-shrink: 0;
 }
+/* A box's "+" menu names where a plain pick starts (decision 3): the member's
+   round dot or the box's rounded square, then "New tab in api". Pinned above the
+   search box like the unified menus' title strip; no shadow, no animation. */
+.tab-new-menu-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: var(--space-1) 10px 2px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  user-select: none;
+}
+.tab-new-menu-target-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ── Unified scrolling-menu shape ───────────────────────────────────────────
    A menu that can overflow must NOT scroll on its own element: that element

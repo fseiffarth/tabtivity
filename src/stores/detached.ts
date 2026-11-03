@@ -51,7 +51,7 @@ import {
   type ConnState,
   type HostConnState,
 } from "./remote/remoteStatus";
-import { BOX_SCOPE_PREFIX, boxFolderOfScope, useBoxesStore } from "./boxes";
+import { BOX_SCOPE_PREFIX, boxFolderOfScope, newTabTarget, useBoxesStore, type NewTabTarget } from "./boxes";
 import { useActivityStore, noteAgentResting, notePtyResize, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
 import { bumpUsage } from "./usage";
 import { useRemoteMachinesStore } from "./remote/remoteMachines";
@@ -927,13 +927,30 @@ export function projectInfoForScope(scope: string): DetachedRemoteInfo | undefin
 }
 
 /**
+ * Where a tab opened from a box popout's "+" menu starts (decision 3): the root of
+ * the member the group's ACTIVE tab belongs to, else the box folder — the main
+ * window's `newTabTarget`, over the popout's seed (`remoteInfo.box` and
+ * `boxMembers`; its stores are inert). `groupTabCwds[0]` is the active tab's cwd,
+ * as the add-menu block passes it; an empty group has none, so the box folder.
+ * `null` outside a box popout.
+ */
+export function detachedNewTabTarget(
+  scope: string,
+  info: DetachedRemoteInfo | undefined,
+  groupTabCwds: (string | undefined)[],
+): NewTabTarget | null {
+  if (!info?.box) return null;
+  return newTabTarget(scope, groupTabCwds[0], [info.box], info.boxMembers ?? []);
+}
+
+/**
  * The folder a tab opened from a popout's "+" menu starts in — the same one the
- * main window's `CenterPanel` `newTabCwd` resolves: the box folder, else the
- * project directory, both from the streamed project context. A tab's own cwd
- * (the active tab's, then any) is only the fallback when the seed has none: a
- * viewer tab's cwd is its FILE's folder, so a Claude tab opened beside
- * `talk/main.pdf` used to start in `talk/` from a popout and in the project root
- * from the main window.
+ * main window's new-tab target resolves: in a box the active tab's member root
+ * (`detachedNewTabTarget`), else the box folder; otherwise the project directory,
+ * both from the streamed project context. A tab's own cwd (the active tab's,
+ * then any) is only the fallback when the seed has none: a viewer tab's cwd is
+ * its FILE's folder, so a Claude tab opened beside `talk/main.pdf` used to start
+ * in `talk/` from a popout and in the project root from the main window.
  */
 export function detachedNewTabCwd(
   scope: string,
@@ -941,6 +958,7 @@ export function detachedNewTabCwd(
   groupTabCwds: (string | undefined)[],
 ): string {
   return (
+    detachedNewTabTarget(scope, info, groupTabCwds)?.cwd ||
     (info?.box ? boxFolderOfScope(scope, [info.box]) : "") ||
     resolveProjectDirectory(info?.project) ||
     groupTabCwds.find(Boolean) ||

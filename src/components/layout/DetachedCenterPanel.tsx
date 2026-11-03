@@ -106,7 +106,7 @@ import {
 import { dividerFraction } from "../../stores/tabs/layoutTree";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
-import { detachedNewTabCwd, type DetachedRemoteInfo } from "../../stores/detached";
+import { detachedNewTabCwd, detachedNewTabTarget, type DetachedRemoteInfo } from "../../stores/detached";
 import {
   TabAgentModeMarks,
   TabSourceBadge,
@@ -1960,19 +1960,24 @@ export function DetachedCenterPanel({
       {dropActive && <div className="detached-drop-target" />}
       {/* #42: the "+" add-tab menu for the group that opened it. cwd is the
           main window's own new-tab folder (`detachedNewTabCwd`), not the active
-          tab's — a viewer tab's cwd is its file's folder. */}
+          tab's — a viewer tab's cwd is its file's folder. In a box popout it is
+          the active tab's member root (`detachedNewTabTarget`, which the menu's
+          first line names), the box folder for an empty group. */}
       {addMenu &&
         (() => {
           const g = findGroup(tree, addMenu.groupId);
           if (!g) return null;
-          const cwd = detachedNewTabCwd(scope, remoteInfo, [
+          const groupCwds = [
             byKey.get(g.activeKey ?? g.tabKeys[0] ?? "")?.cwd,
             ...g.tabKeys.map((k) => byKey.get(k)?.cwd),
-          ]);
+          ];
+          const cwd = detachedNewTabCwd(scope, remoteInfo, groupCwds);
           return (
             <NewTabMenu
               scope={scope}
               projectCwd={cwd}
+              target={detachedNewTabTarget(scope, remoteInfo, groupCwds)}
+              boxSeed={remoteInfo?.box ? { box: remoteInfo.box, members: remoteInfo.boxMembers ?? [] } : undefined}
               // The detached window is inert to the projects store, so there's no
               // project name to auto-name an agent session with — skip it.
               projectName=""
