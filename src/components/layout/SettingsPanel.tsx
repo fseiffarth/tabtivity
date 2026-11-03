@@ -2138,6 +2138,15 @@ export function SettingsDialog({
               help={t("settings.voiceHandsFreeHelp")}
             />
 
+            {/* The desktop cockpit: a header button, its overlay and the
+                steering key, all behind this one switch. */}
+            <ToggleCard
+              label={<>{t("settings.cockpit")} <UntestedTag id="settings.cockpit" /></>}
+              checked={experimentalEnabled(settings, "cockpit")}
+              onChange={(e) => void updateSettings({ cockpit: e.target.checked })}
+              help={t("settings.cockpitHelp")}
+            />
+
             {/* Mail is ONE switch. It used to be two — this gate plus a
                 `mail_global_app` sub-toggle deciding whether the header button
                 appeared *as well as* the mail tab — but the tab is retired, so

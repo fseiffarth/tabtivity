@@ -111,6 +111,7 @@ import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../store
 import { useTimerStore } from "../../stores/timer";
 import { useMailStore } from "../../stores/mail";
 import { useTodoStore } from "../../stores/todo";
+import { useCockpitStore } from "../../stores/cockpit";
 import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
@@ -166,6 +167,23 @@ function LazyMailOverlayHost() {
   return (
     <Suspense fallback={null}>
       <MailOverlayHost />
+    </Suspense>
+  );
+}
+
+// The cockpit, the same bargain: reached only from its header button, its
+// steering key and the box chip, so its graph stays out of the startup chunk
+// and nothing of it runs until the store says open.
+const CockpitOverlayHost = lazy(() =>
+  import("../cockpit/CockpitOverlay").then((m) => ({ default: m.CockpitOverlayHost })),
+);
+
+function LazyCockpitOverlayHost() {
+  const open = useCockpitStore((s) => s.overlayOpen);
+  if (!open) return null;
+  return (
+    <Suspense fallback={null}>
+      <CockpitOverlayHost />
     </Suspense>
   );
 }
@@ -1616,6 +1634,9 @@ export function AppShell() {
           nothing makes them mutually exclusive, so DOM order is the tie-break
           and the surface opened most recently should be the one on top. */}
       <LazyTodoOverlayHost />
+      {/* The cockpit (`docs/desktop_cockpit_plan.md`), after the three app
+          overlays so it wins the z-order tie (DOM order) when opened over one. */}
+      <LazyCockpitOverlayHost />
       {/* The Models & agents overlay — a click on the header's processor-chip
           button (its hover dropdown stays), and the home of the machine-level
           Skills Library. At the shell for the family's reason (it covers the

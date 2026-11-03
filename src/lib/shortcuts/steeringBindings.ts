@@ -52,6 +52,7 @@ export type SteeringAction =
   | "mail"
   | "calendar"
   | "todo"
+  | "cockpit"
   | "newShell"
   | "newMonitor"
   | "newTabMenu"
@@ -115,6 +116,8 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "mail", labelKey: "steering.mail.label", scopes: TAB_BAR, defaults: ["m"] },
   { action: "calendar", labelKey: "steering.calendar.label", scopes: TAB_BAR, defaults: ["c"] },
   { action: "todo", labelKey: "steering.todo.label", scopes: TAB_BAR, defaults: ["t"] },
+  // U: no tab-bar level had it (the cockpit's own letters were all taken).
+  { action: "cockpit", labelKey: "steering.cockpit.label", scopes: TAB_BAR, defaults: ["u"] },
   { action: "newShell", labelKey: "steering.newShell.label", scopes: ["panes"], defaults: ["n"] },
   { action: "newMonitor", labelKey: "steering.newMonitor.label", scopes: ["panes"], defaults: ["o"] },
   { action: "newTabMenu", labelKey: "steering.newTabMenu.label", scopes: ["panes"], defaults: ["+", "="] },

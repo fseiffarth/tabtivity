@@ -27,6 +27,43 @@ dev build.
   `AgentRoster.test.ts` in full: 214 files, 2091 tests PASS. cargo test (the
   bridge is `include_str!`-scanned by a Rust test): see C1's entry.
 
+### C1 — shell
+
+- sha: see `git log --grep "(C1)"`
+- `stores/cockpit.ts` (UI state only: open, view, selected PTY id, roster
+  mode / state chip / sort / text / box / scope filters, `lastClosedAt`; the
+  `overlayOpen`/`openOverlay`/`closeOverlay` names of the header family).
+- `components/cockpit/CockpitOverlay.tsx` (TodoOverlay's shape: gate,
+  Escape — ignored inside `.cockpit-detail-pane` —, backdrop, `useFloatingFrame`
+  under `cockpitOverlayFrame`), `CockpitViews.tsx` (heading + body switch; only
+  the shown view mounts). Joins the shared overlay size rule in
+  `mail-todo.css`; own layout in `src/styles/cockpit.css` (imported last).
+- Header: `header/CockpitIndicator.tsx` as header item `cockpit` (apps group,
+  pinned by default, after ☑; `headerOrder.test.ts` expectations updated for the
+  new id). Badge `cockpitBadge` in `lib/cockpit/decisions.ts`.
+- `OverlayApprovals` takes an optional `domain`; none = the whole root queue
+  (the cockpit's title bar).
+- BoxScopeChip dropdown: "Open cockpit" row under the root row.
+- Steering: action `cockpit`, default key **U** (the only free tab-bar letter
+  that is not already a mode key), legend row, condition `cockpit`
+  (`SteeringLegendState.apps.cockpit` optional so existing callers compile);
+  opens the overlay and enters the generic `overlay` region.
+- Experiment `cockpit`: `EXPERIMENTAL_FLAGS`, TS `Settings.cockpit`, Rust
+  `Option<bool>` in `schema/settings.rs`, Settings → Experimental toggle.
+  `npm run backend:stale`: the running window's backend predates the tree (it
+  only round-trips the flag through its catch-all until rebuilt; nothing in the
+  backend reads it).
+- Gates: brand, whitespace, lint (`npm run lint`), `npm run build` PASS.
+  `vitest run --changed` (758 files affected): 7243 passed, 2 failed —
+  `PdfZoomRaster` and `TerminalAiSwitch` timing tests under load average ~100;
+  both pass alone (9/9). Rust gates (clippy ×3, cargo test ×2) were still
+  running at commit time: see C2's entry. `scripts/gates.sh` itself was too
+  slow under this load (SCHED_IDLE): the same gates were run one by one.
+
 ## Flagged for user
 
-- (none yet)
+- Header badge does not count **push requests** while the cockpit is shut:
+  `git_push_mcp_proposals` settles against git per project, and the plan says
+  nothing of the cockpit runs while shut. It counts asking + interrupted +
+  schedule proposals already loaded + root approvals.
+- Steering default key for the cockpit is **U** (C, K and the rest were taken).

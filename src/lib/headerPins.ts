@@ -21,6 +21,7 @@ export const HEADER_ITEM_IDS = [
   "mail",
   "calendar",
   "todo",
+  "cockpit",
   "inbox",
   "models",
   "help",
@@ -41,6 +42,7 @@ const PINNED_BY_DEFAULT: ReadonlySet<HeaderItemId> = new Set([
   "mail",
   "calendar",
   "todo",
+  "cockpit",
   "inbox",
   "models",
   "help",
@@ -98,7 +100,7 @@ export function toggleHeaderPin(
  *  folded). An item's built-in place is the group listed here; a drag across
  *  the boundary moves it to the other one. */
 export const HEADER_GROUPS = {
-  apps: ["mail", "calendar", "todo", "inbox", "models", "help", "settings"],
+  apps: ["mail", "calendar", "todo", "cockpit", "inbox", "models", "help", "settings"],
   status: ["alerts", "conn", "battery", "mobile", "vpn", "machines", "resources", "devBuild"],
 } as const satisfies Record<string, readonly HeaderItemId[]>;
 

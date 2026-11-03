@@ -1,0 +1,48 @@
+/* cockpit.css — the desktop cockpit overlay (`components/cockpit/`,
+   `docs/desktop_cockpit_plan.md`). The frame, bar and size are the header
+   overlays' own (`mail-todo.css`, `.cockpit-overlay` joins their size rule);
+   this file holds only the views' layout. Rounded corners from the radius
+   tokens, static shadows only, and no motion of its own: rows and the detail
+   pane land in one paint, `[data-software-paint]` or not. */
+
+.cockpit-overlay-body {
+  display: flex;
+  color: var(--text-primary);
+}
+
+.cockpit-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: 10px 14px;
+  gap: 8px;
+}
+
+.cockpit-view-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cockpit-view-heading h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.cockpit-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.cockpit-overlay-glyph {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}

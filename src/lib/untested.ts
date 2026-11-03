@@ -956,6 +956,16 @@ export const UNTESTED = {
 
   // --- todo — The to-do board ---------------------------------------
   "todo.overlayTitle": { area: "todo", what: "TodoOverlay · To-do board" },
+
+  // --- cockpit — the desktop cockpit overlay (docs/desktop_cockpit_plan.md) ---
+  "cockpit.title": { area: "cockpit", what: "Header cockpit overlay (Settings → Experimental → Cockpit): opens from its header button, the box chip's Open cockpit row and steering U; moves, resizes and fills like the mail overlay; Escape and a press on the backdrop close it; four view tabs Now / Projects / Tonight / Usage; stays open across project switches; no popout copy" },
+  "cockpit.indicator": { area: "cockpit", what: "Header cockpit button: badge = agent tabs asking + interrupted + schedule proposals + root approvals, falling by itself as each is answered (never acknowledged); hidden with the experiment off" },
+  "cockpit.openFromBox": { area: "cockpit", what: "Box chip dropdown · Open cockpit row under the root row (experiment on only) opens the cockpit" },
+  "settings.cockpit": { area: "cockpit", what: "Settings → Experimental → Cockpit: switches the header button, overlay, box-chip row and steering key on and off together" },
+  "cockpit.now.heading": { area: "cockpit", what: "Cockpit · Now view" },
+  "cockpit.projects.heading": { area: "cockpit", what: "Cockpit · Projects view" },
+  "cockpit.tonight.heading": { area: "cockpit", what: "Cockpit · Tonight view" },
+  "cockpit.usage.heading": { area: "cockpit", what: "Cockpit · Usage view" },
 } as const satisfies Record<string, UntestedEntry>;
 
 // The phone shares this register but renders its tags in several shapes. Its

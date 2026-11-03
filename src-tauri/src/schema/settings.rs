@@ -726,6 +726,11 @@ pub struct Settings {
     /// listen mode is the same session as dictation's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_hands_free: Option<bool>,
+    /// EXPERIMENTAL, default OFF. The desktop cockpit overlay
+    /// (`docs/desktop_cockpit_plan.md`): every project's agents and decisions in
+    /// one header overlay. Purely a frontend gate; nothing in the backend reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cockpit: Option<bool>,
     /// EXPERIMENTAL, default OFF. The chat assistant (`docs/assistant_plan.md`,
     /// `services::assistant`): chats in a scope of its own that reach the web
     /// and nothing else. Read via [`Settings::assistant_enabled`]; the
