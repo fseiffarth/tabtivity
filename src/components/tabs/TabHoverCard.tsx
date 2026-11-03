@@ -23,6 +23,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { describeTabCost, tabCost } from "../../lib/tabCost";
 import { UntestedTag } from "../common/UntestedTag";
 import { DotIcon } from "../common/icons/Icon";
+import { tabMemberInfo, tabMemberTitle, useScopeMemberTable, type MemberTable } from "./TabMemberChip";
 
 /** Friendly, human-readable name for a tab kind, shown as the card's muted
  *  sub-line. Falls back to the raw kind for anything unmapped. */
@@ -176,6 +177,7 @@ export function TabHoverCard({
    *  the detached window (inert to the projects store) → falls back to "on host". */
   primaryHost,
   computeHosts,
+  memberTable,
   anchorX,
   anchorY,
 }: {
@@ -185,6 +187,9 @@ export function TabHoverCard({
   hostPinned?: boolean;
   primaryHost?: string;
   computeHosts?: LocalityHost[];
+  /** The box's members for the "member" row. The main window leaves it out (the
+   *  card reads its stores); the popout, inert to them, passes its seeded copy. */
+  memberTable?: MemberTable | null;
   anchorX: number;
   anchorY: number;
 }) {
@@ -201,6 +206,9 @@ export function TabHoverCard({
   // viewers on remote projects; absent otherwise.
   const fileSource = useFileSourcesStore((s) => s.byTab[tab.key]);
   const busy = useActivityStore((s) => !!s.busyByTab[ptyId]);
+  // Which member of the box this tab works in (the strip's chip, in words).
+  const ownTable = useScopeMemberTable(scope);
+  const memberInfo = tabMemberInfo(tab, memberTable ?? ownTable);
 
   // The "quiet for…" line ages while the card is up; tick it along so a card
   // hovered for a while doesn't freeze at its mount-time reading.
@@ -339,7 +347,7 @@ export function TabHoverCard({
       top = Math.max(MARGIN, anchorY - height - GAP);
     }
     setPos({ left, top });
-  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input, features]);
+  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input, features, memberInfo?.kind, memberInfo?.name]);
 
   return createPortal(
     <div
@@ -362,6 +370,17 @@ export function TabHoverCard({
       </span>
       {summary && <span className="pill-popup-description">{summary}</span>}
       <span className="tab-popup-kind">{kindBits.join(" · ")}</span>
+      {memberInfo && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabHoverCard.memberLabel")} <UntestedTag id="tabHoverCard.memberLabel" />
+          </span>
+          <span className="tab-popup-meta tab-popup-member">
+            <span className={`tab-member-mark${memberInfo.kind === "box" ? " box" : ""}`} style={{ background: memberInfo.color }} aria-hidden="true" />
+            {tabMemberTitle(memberInfo, t)}
+          </span>
+        </span>
+      )}
       {activity && (
         <span className="pill-popup-path-row">
           <span className="pill-popup-path-label">{t("tabHoverCard.activityLabel")}</span>

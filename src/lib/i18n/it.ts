@@ -6155,6 +6155,8 @@ export const dict: Dict = {
   "tabHoverCard.provider.anthropic": "Anthropic",
   "tabHoverCard.provider.gemini": "Gemini",
   "tabHoverCard.provider.openai": "OpenAI",
+  "tabHoverCard.memberLabel": "membro",
+  "tabMember.wholeBox": "Tutta la box — {name}",
   "tabCost.label": "memoria",
   "tabCost.terminal": "≈ {size} · {rows} di {cap} righe",
   "tabCost.terminalAsleep": "Scaricata: il programma continua a girare",

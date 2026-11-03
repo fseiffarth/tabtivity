@@ -51,6 +51,7 @@ import { BOX_SCOPE_PREFIX, ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { reseedDetached, startDetachedDropSession } from "./detachedDropTargets";
 import { TabHoverCard, shellLaunch } from "./TabHoverCard";
+import { TabMemberChip, tabMemberInfo, tabMemberTitle, useScopeMemberTable } from "./TabMemberChip";
 import { TabStackChip, type StackMember } from "./TabStackChip";
 import { stackNames, stripItems } from "../../lib/tabStacks";
 import { useDialogs } from "../common/PromptDialogs";
@@ -236,9 +237,9 @@ function selectOnMount(el: HTMLInputElement | null) {
 }
 
 /** Fast mode's native tooltip: the label, then a shell's launch lines. */
-function fastModeTitle(tab: TabEntry): string {
+function fastModeTitle(tab: TabEntry, member?: string): string {
   const { program, input } = shellLaunch(tab);
-  return [tab.label, program, input].filter(Boolean).join("\n");
+  return [tab.label, member, program, input].filter(Boolean).join("\n");
 }
 
 /**
@@ -270,6 +271,8 @@ const TabItem = memo(function TabItem({
   const chordHint = useChordHint();
   const stateClass = useTabStateClass(scope, tab, isActive);
   const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
+  // Which member of the box this tab works in (a box scope only), from its cwd.
+  const memberInfo = tabMemberInfo(tab, useScopeMemberTable(scope));
   // This tab's own schedules (none for a non-agent or an unscheduled tab): a
   // store reference, so the next-occurrence sort below runs once per change
   // of the list rather than per render of the bar.
@@ -322,7 +325,7 @@ const TabItem = memo(function TabItem({
       // Fast mode has no card, so the label becomes a plain tooltip —
       // otherwise a tab whose name is ellipsized would have no way at all
       // to read it out. A shell Tabtivity opened adds what it was started with.
-      title={fastMode ? fastModeTitle(tab) : undefined}
+      title={fastMode ? fastModeTitle(tab, memberInfo ? tabMemberTitle(memberInfo, t) : undefined) : undefined}
       // Styled hover card (mirrors the project pill's popup) anchored to
       // this tab's bottom-center. Skipped while inline-renaming.
       onMouseEnter={(e) => {
@@ -368,6 +371,7 @@ const TabItem = memo(function TabItem({
       ) : (
         <span className="tab-label">{tab.label}</span>
       )}
+      {!editing && <TabMemberChip info={memberInfo} label={tab.label} />}
       <TabMarkBadge tab={tab} />
       <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
       <TabContinueButton tab={tab} stateClass={stateClass} />

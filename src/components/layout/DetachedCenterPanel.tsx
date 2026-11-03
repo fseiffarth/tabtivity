@@ -55,6 +55,7 @@ import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { usePaneRects } from "./usePaneRects";
 import { useDividerDrag } from "./useDividerDrag";
 import { TabHoverCard } from "../tabs/TabHoverCard";
+import { TabMemberChip, memberTableOf, tabMemberInfo } from "../tabs/TabMemberChip";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { WindowControls } from "../header/WindowControls";
 import { DragGhost, SplitPreviewOverlay } from "./CenterPanel";
@@ -292,6 +293,13 @@ export function DetachedCenterPanel({
   const hostPinned = isHostPinned(remoteInfo?.project);
   const primaryHost = remoteInfo?.primaryHost;
   const computeHosts = remoteInfo?.computeHosts;
+  // A box's member table for the tabs' member chips, from the seed (the popout
+  // is inert to the boxes and projects stores; a member added later shows no chip
+  // here until a reseed).
+  const memberTable = useMemo(
+    () => memberTableOf(scope, remoteInfo?.box ? [remoteInfo.box] : [], remoteInfo?.boxMembers ?? []),
+    [scope, remoteInfo?.box, remoteInfo?.boxMembers],
+  );
   // One bar element per group, so a per-tab drag can hit-test the bar it's over.
   const barRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   // One body element per group, for resolving an edge-split drop target.
@@ -1552,6 +1560,7 @@ export function DetachedCenterPanel({
                 >
                   <TabStatusMark stateClass={stateClass} />
                   <span className="tab-label">{tab.label}</span>
+                  <TabMemberChip info={tabMemberInfo(tab, memberTable)} label={tab.label} />
                   <TabMarkBadge tab={tab} inPopout />
                   <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
                   <TabContinueButton tab={tab} stateClass={stateClass} />
@@ -2177,6 +2186,7 @@ export function DetachedCenterPanel({
             hostPinned={hostPinned}
             primaryHost={primaryHost}
             computeHosts={computeHosts}
+            memberTable={memberTable}
             anchorX={hoverTab.x}
             anchorY={hoverTab.y}
           />

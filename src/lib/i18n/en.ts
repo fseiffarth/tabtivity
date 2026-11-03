@@ -6284,6 +6284,8 @@ export const enSource = {
   "tabHoverCard.provider.anthropic": "Anthropic",
   "tabHoverCard.provider.gemini": "Gemini",
   "tabHoverCard.provider.openai": "OpenAI",
+  "tabHoverCard.memberLabel": "member",
+  "tabMember.wholeBox": "Whole box — {name}",
   "tabCost.label": "memory",
   "tabCost.terminal": "≈ {size} · {rows} of {cap} lines",
   "tabCost.terminalAsleep": "Unloaded — the program keeps running",
