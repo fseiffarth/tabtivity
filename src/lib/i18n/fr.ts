@@ -10395,6 +10395,8 @@ export const dict: Dict = {
   "apiProxyPort.endedMany": "{count} sessions d'agent pointaient encore vers l'ancien port ; elles ont été arrêtées avant d'y envoyer leurs conversations :",
   "apiProxyPort.endedNone": "Aucune session d'agent ne pointait vers l'ancien port. Rien n'a été arrêté.",
   "apiProxyPort.failed": "Ces sessions n'ont pas pu être arrêtées — fermez-les vous-même :",
+  "agentToolsPort.title": "Le port des outils des agents était pris",
+  "agentToolsPort.lede": "Au redémarrage de ce serveur, {app} sert les outils (MCP) des agents sur le port utilisé auparavant, pour que les agents restés actifs l'atteignent. Le port {port} était occupé par {holder} ; les outils tournent donc maintenant sur le port {newPort}.",
   "passwordInput.show": "Afficher le mot de passe",
   "passwordInput.hide": "Masquer le mot de passe",
   "usage.notReadHpc": "Non lu — étiqueté HPC, donc rien ne le lit sans demande.",

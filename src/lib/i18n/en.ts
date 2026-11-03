@@ -10624,6 +10624,8 @@ export const enSource = {
   "apiProxyPort.endedMany": "{count} agent sessions still pointed at the old port, so they were ended before they could send their conversations there:",
   "apiProxyPort.endedNone": "No agent session pointed at the old port. Nothing was ended.",
   "apiProxyPort.failed": "These sessions could not be ended — close them yourself:",
+  "agentToolsPort.title": "The agent tools' port was taken",
+  "agentToolsPort.lede": "When this server restarts, {app} serves the agents' tools (MCP) on the port it used before, so agents that kept running reach it. Port {port} was held by {holder}, so the tools now run on port {newPort}.",
   "passwordInput.show": "Show password",
   "passwordInput.hide": "Hide password",
   "usage.notReadHpc": "Not read — tagged HPC, so nothing reads it unasked.",

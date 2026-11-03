@@ -10393,6 +10393,8 @@ export const dict: Dict = {
   "apiProxyPort.endedMany": "{count} sessioni agente puntavano ancora alla vecchia porta e sono state terminate prima di poterci inviare le conversazioni:",
   "apiProxyPort.endedNone": "Nessuna sessione agente puntava alla vecchia porta. Non è stato terminato nulla.",
   "apiProxyPort.failed": "Queste sessioni non si sono potute terminare: chiudile tu:",
+  "agentToolsPort.title": "La porta degli strumenti degli agenti era occupata",
+  "agentToolsPort.lede": "Quando questo server si riavvia, {app} offre gli strumenti (MCP) degli agenti sulla porta usata prima, così gli agenti rimasti attivi la raggiungono. La porta {port} era occupata da {holder}, quindi ora gli strumenti usano la porta {newPort}.",
   "passwordInput.show": "Mostra password",
   "passwordInput.hide": "Nascondi password",
   "usage.notReadHpc": "Non letto — etichettato HPC, quindi nulla lo legge senza richiesta.",

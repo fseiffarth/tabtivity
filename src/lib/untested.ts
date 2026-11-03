@@ -142,6 +142,7 @@ export const UNTESTED = {
   "hpcGuardDialog.1": { area: "common", what: "HpcGuardDialog · {t(copy.title)}" },
   "unfencedPlatformDialog.1": { area: "common", what: "UnfencedPlatformDialog · Windows: accept once that agents run with full rights, then the tab starts" },
   "apiProxyPortDialog.1": { area: "common", what: "ApiProxyPortDialog · after a crash, when another process holds the API proxy's remembered port: who held it, and which keyed agent sessions that named it were ended" },
+  "agentToolsPortDialog.1": { area: "common", what: "ApiProxyPortDialog · a server daemon restarted and another process held its agent-tools (MCP) port: who held it, and which agent sessions that named it were ended" },
   "projectSwitcher.stopTitle": { area: "common", what: "StopProjectDialog · Stop this project's terminals?" },
   "syncConfirmDialog.1": { area: "common", what: "SyncConfirmDialog · {t(host ? \"syncConfirm.deleteHostTitle\" : \"syncConfirm.deleteLocalTitle\")}{\" \"}" },
   "syncConfirmDialog.2": { area: "common", what: "SyncConfirmDialog · {t(pull ? \"syncConfirm.pullTitle\" : \"syncConfirm.pushTitle\")}" },
