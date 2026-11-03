@@ -47,6 +47,12 @@ export function useBoxAccordion({
   const activeCwd = useTabsStore((s) =>
     s.scope === scope ? s.tabs.find((t) => t.key === s.activeKey)?.cwd ?? "" : "",
   );
+  // Whether the scope has an active tab at all. A first visit to a scope
+  // mounts the pane before its tabs are hydrated from disk, so "no tab" -> "a
+  // tab in member X" is the layout arriving, not the active tab moving.
+  const hasActiveTab = useTabsStore(
+    (s) => s.scope === scope && s.tabs.some((t) => t.key === s.activeKey),
+  );
   const agentCwds = useTabsStore((s) =>
     s.scope === scope
       ? s.tabs
@@ -76,13 +82,17 @@ export function useBoxAccordion({
   }, [agentCwds, members, folder]);
 
   // The active tab moving to another member expands it.
-  const seenActive = useRef<{ boxId: string | null; id: string | null }>({ boxId, id: activeMemberId });
+  const seenActive = useRef<{ boxId: string | null; id: string | null; had: boolean }>({
+    boxId,
+    id: activeMemberId,
+    had: hasActiveTab,
+  });
   useEffect(() => {
     const prev = seenActive.current;
-    seenActive.current = { boxId, id: activeMemberId };
-    if (!boxId || prev.boxId !== boxId || !activeMemberId || prev.id === activeMemberId) return;
+    seenActive.current = { boxId, id: activeMemberId, had: hasActiveTab };
+    if (!boxId || prev.boxId !== boxId || !prev.had || !activeMemberId || prev.id === activeMemberId) return;
     if (memberOrder.includes(activeMemberId)) setOpen(boxId, activeMemberId);
-  }, [boxId, activeMemberId, memberOrder, setOpen]);
+  }, [boxId, activeMemberId, hasActiveTab, memberOrder, setOpen]);
 
   const fallbackId = activeMemberId && memberOrder.includes(activeMemberId)
     ? activeMemberId
