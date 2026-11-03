@@ -55,6 +55,15 @@ Read this first; keep it current when a decision or an open point changes.
   drag/copy and the Models & agents meters now work in the browser
   (`docs/context/web_client.md`); read-aloud and laptop uploads remain
   (#2444).
+- **Agents caught up with `develop` (2026-11-03, #2456).** Audit of the
+  agent, CLI, MCP and key-path work since 2026-10-11: the daemon's agent
+  tools keep their loopback port across restarts (a tenant could otherwise
+  take it and answer another user's tool calls), a local-model tab's Ollama
+  is owner-checked before it starts, Tabby is refused on a server (not
+  offered in v1; `develop` made it on by default), Codex and OpenCode are
+  held off the administrator's key by the daemon too, and self-updaters stay
+  off whatever a tab's environment says. The rest was fine; the table is in
+  TODO #2456.
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 - **Released as a `.deb` (2026-10-14, plan §8.1).** Each GitHub release

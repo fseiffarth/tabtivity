@@ -1266,6 +1266,73 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+2456. **Agents on a server, caught up with `develop` (2026-11-03).** ✅ **Built**,
+    never run on a server. An audit of what `develop` added to agents, agent
+    CLIs, MCP lanes and the key path since the server work last synced
+    (2026-10-11), with these fixes:
+    - *The agent-tools port is kept across a daemon restart.* The daemon's
+      MCP listener (every lane) bound a random loopback port each start; the
+      tabs that outlived it in the tmux unit (an update restarts every
+      service) kept naming the old one, on a loopback every account shares —
+      another tenant who bound it in the gap got their tool calls and could
+      answer them. It now rebinds the port it remembers
+      (`<state>/root-mcp-port`); taken, it binds another, ends the sessions
+      naming the old one and tells the user (`api_proxy_port::Service::
+      AgentTools`, the API proxy's dialog with its own title, UntestedTag
+      `agentToolsPortDialog.1`). The desktop window's listener keeps a random
+      port (residual: a fenced agent or another account on a shared desktop
+      could take it after a crash).
+    - *A local-model agent's Ollama is judged by its owner before it starts*
+      (`launch_prep::local_model_spawn_judged`, server only): its CLI sends
+      prompts and project files to the loopback Ollama itself, so while the
+      administrator's was down another account's listener there would have
+      read and steered it. The desktop keeps relying on its other gates.
+    - *Tabby is refused on a server* (`Settings::assistant_enabled`,
+      `discovery::assistant_open`): not offered in v1, but on by default
+      since develop, so a server chat started with neither web nor help lane.
+    - *Codex and OpenCode never run on the administrator's key*, checked by
+      the daemon too (`agent_keys::admin_keyable`, `keys_wire::KEY_CLIS`):
+      both now take a user's own key through the proxy.
+    - *Self-updaters are off on a server whatever the tab's environment says*
+      (`agent_install::apply_fence_env_for`), and the OpenCode version probe
+      (before every first launch) runs with its update check off.
+    - The tmux < 3.2 refusals of keyed Codex/OpenCode tell a server user to
+      ask the administrator.
+    Checked and fine as they are: the web lane (served, never granted on a
+    server), git-push and its default-branch staging, help, markup and root
+    lanes (#2391), OpenCode 2's `--standalone` server (ephemeral port, random
+    password) and `service.json` off in every home, Codex/OpenCode on a
+    user's own key from the vault and the OpenAI meter refusals, the API
+    proxy's remembered port, voice (`Client` commands, never on a server),
+    reader fetches without a proxy (the guide says so), the MCP on/off hover
+    card and the ssh-hosts fix (both server-aware already).
+    - [x] 🤖 Automated test — `commands::root_mcp` `a_server_listener_rebinds_its_remembered_port_or_moves_off_a_taken_one`;
+      `api_proxy_port` `finds_a_session_whose_mcp_urls_name_the_tools_port`,
+      `a_remembered_port_is_a_real_port_or_none`;
+      `launch_prep` `only_a_servers_local_model_spawn_has_its_ollama_owner_judged`;
+      `settings` `a_hosted_server_offers_no_assistant`;
+      `agent_keys` `no_proxy_or_a_cli_it_cannot_serve_fails_the_spawn`;
+      `agent_install` `a_servers_fenced_spawn_switches_the_self_updaters_off_whatever_the_user_set`.
+    - [ ] 🖐️ Manual test — on a server with two accounts, alice and bob:
+      alice opens a Claude agent tab in a project and asks it to list its
+      tools; `sudo systemctl restart <slug>-serverd@alice`; the tab keeps
+      running and `cat ~alice/.local/share/<slug>-server/root-mcp-port` is
+      the port before the restart. Then stop alice's daemon, as bob bind
+      that port (`python3 -m http.server <port> --bind 127.0.0.1`), start
+      alice's daemon again: alice's browser shows "The agent tools' port was
+      taken" naming another account, the agent tab is ended, and the file
+      holds the new port. As alice, with the shared Ollama stopped and bob
+      listening on 11434, a local-model tab refuses to start naming another
+      account. Tabby is not offered to alice (new-chat menu, phone).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 2437. **An agent in a worktree from the phone with no window.** ✅ **Built**
     (2026-11-03). The ＋ sheet's "Agents start in" row needed the window;
     with none (a closed desktop window, or always on a server) the host now
