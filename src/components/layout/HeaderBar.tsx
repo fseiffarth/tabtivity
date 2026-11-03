@@ -5,7 +5,7 @@ import { Clock } from "../header/Clock";
 import { StatusCluster } from "../header/StatusCluster";
 import { WindowControls } from "../header/WindowControls";
 import { HeaderSlot } from "../header/HeaderSlot";
-import { headerWidthTier, isHeaderPinned, orderedHeaderIds, useHeaderPinDefaults } from "../../lib/headerPins";
+import { headerWidthTier, isHeaderPinned, orderedHeaderIds, useHeaderPinDefaults, type HeaderWidthTier } from "../../lib/headerPins";
 import { APP_ICONS } from "../header/appIcons";
 import { useSettingsStore } from "../../stores/settings";
 import { ProjectSwitcher } from "./ProjectSwitcher";
@@ -38,9 +38,10 @@ export function HeaderBar() {
   const pins = useSettingsStore((s) => s.settings?.header_pins);
   const pinDefaults = useHeaderPinDefaults();
   const headerRef = useRef<HTMLElement>(null);
-  const [widthTier, setWidthTier] = useState<0 | 1 | 2 | 3>(0);
+  const [widthTier, setWidthTier] = useState<HeaderWidthTier>(0);
   // The bar gives way by its own width (`headerWidthTier`): the badges and the
-  // clock fold in CSS off `data-width-tier`, the cluster through its prop.
+  // clock fold in CSS off `data-width-tier`, the cluster and the project strip's
+  // box pills (`boxPillBudget`) through their props.
   useEffect(() => {
     const header = headerRef.current;
     if (!header || typeof ResizeObserver === "undefined") return;
@@ -74,7 +75,7 @@ export function HeaderBar() {
           controls. Everything global now sits on the right, so the strip's only
           neighbours are separators. */}
       <div className="header-center no-drag">
-        <ProjectSwitcher open />
+        <ProjectSwitcher open widthTier={widthTier} />
       </div>
       {/* Right of the strip, in two groups separated by gap rather than by more
           hairlines: the global *apps and menus* (kept as their own buttons —

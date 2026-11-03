@@ -1,5 +1,8 @@
 import { create } from "zustand";
 import { useProjectsStore } from "./projects";
+import { useBoxesStore } from "./boxes";
+import { stripProjects, useBoxSliceStore } from "./boxSlice";
+import { useTabsStore } from "./tabs";
 import { storageKey } from "../lib/brand";
 
 /**
@@ -186,14 +189,15 @@ export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get)
  * pill, so a shortcut that walks the strip has to stop there too (see the
  * history note on `useKeyboard`'s cycleProject). The rest are the non-inactive
  * projects in pill display order (`position`).
+ *
+ * **A box slice narrows the ring to the pills it shows** (`stripProjects`):
+ * the box's members, inactive ones included (they have a pill in the slice),
+ * plus the project in scope. Walking a slice never lands on a project whose
+ * pill is hidden, and the badges count the same list.
  */
 export function projectStations(): (string | null)[] {
-  const ps = useProjectsStore.getState();
-  return [
-    null,
-    ...ps.projects
-      .filter((p) => p.status !== "inactive")
-      .sort((a, b) => a.position - b.position)
-      .map((p) => p.id),
-  ];
+  const sliceId = useBoxSliceStore.getState().sliceBoxId;
+  const box = sliceId ? useBoxesStore.getState().boxes.find((b) => b.id === sliceId) ?? null : null;
+  const scope = useTabsStore.getState().scope;
+  return [null, ...stripProjects(useProjectsStore.getState().projects, box, scope).map((p) => p.id)];
 }

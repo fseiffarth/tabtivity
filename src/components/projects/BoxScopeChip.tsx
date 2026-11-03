@@ -8,6 +8,7 @@ import { useBoxEditorStore } from "../../stores/boxEditor";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { boxColor } from "../../lib/theme/boxColor";
+import { boxPillBudget, type HeaderWidthTier } from "../../lib/headerPins";
 import { useT } from "../../lib/i18n";
 import { startWindowDrag } from "../../lib/window/startWindowDrag";
 import { StarIcon } from "../layout/StarIcon";
@@ -17,18 +18,41 @@ import { MenuShortcut } from "../common/MenuShortcut";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { BoxColorPicker } from "./BoxColorPicker";
-import { BoxSwatch, CheckboxIcon, SquareIcon } from "../common/icons/Icon";
+import { useQuickCreateBox } from "./useQuickCreateBox";
+import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PlusIcon, SquareIcon } from "../common/icons/Icon";
 
 /** This chip's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const SCOPE_MENU_ID = "box-scope-chip";
 
 /**
- * How many boxes stand on the row as pills of their own. Boxes are few by
- * nature (a handful of joinings, not a project list), so nearly every user
- * sees all of theirs; past this the rest stay one hover away in the chip's
- * dropdown, and the chip says how many it is holding.
+ * How many boxes stand on the row as pills of their own on a wide window.
+ * Boxes are few by nature (a handful of joinings, not a project list), so
+ * nearly every user sees all of theirs; past the budget the rest stay one click
+ * away in the list the fold pill (`▣▾ +N`, right after the shown pills) opens.
+ * A narrower header gives less (`boxPillBudget`: 6 / 3 / 1 by width tier).
  */
-export const MAX_BOX_PILLS = 6;
+export const MAX_BOX_PILLS = boxPillBudget(0);
+
+/**
+ * The boxes that get a pill under `budget`: the first `budget` by position that
+ * the user has not hidden from the row (the dropdown's per-row checkbox) —
+ * always including the selected box, which takes the last slot when it would
+ * otherwise be off the row (and stands in its own place), so the box being
+ * looked at is never the one without a pill. A budget of 1 is that box alone:
+ * with none selected the row holds no pill and the fold pill carries them all.
+ */
+export function boxPillsShown(
+  ordered: readonly ProjectBox[],
+  selectedId: string | null,
+  budget: number,
+): ProjectBox[] {
+  const selected = selectedId ? ordered.find((b) => b.id === selectedId) : undefined;
+  if (budget <= 1) return selected ? [selected] : [];
+  const head = ordered.filter((b) => !b.hide_pill).slice(0, budget);
+  if (!selected || head.includes(selected)) return head;
+  const seated = head.length < budget ? head : head.slice(0, budget - 1);
+  return ordered.filter((b) => b === selected || seated.includes(b));
+}
 
 /** How far (px) a press on the logo travels before it becomes a window move
  *  rather than a click ("All projects"). */
@@ -43,6 +67,12 @@ interface Props {
   selectedId: string | null;
   /** Pick a box (also opens its scope) or `null` to go back to all projects. */
   onSelect: (boxId: string | null) => void;
+  /** The ✕ on the selected pill: leave the box — clear the slice and, from
+   *  inside the box scope, go back to the project the strip was on
+   *  (`boxSlice.leaveBox`). */
+  onLeave: () => void;
+  /** The header's width tier: it sets how many box pills the row may hold. */
+  widthTier?: HeaderWidthTier;
   onRename: (boxId: string, name: string) => void;
   onDelete: (boxId: string) => void;
   /** The selected box's scope is the current one — the `active` treatment on
@@ -71,8 +101,12 @@ interface Props {
  * are few, so a pill each costs the strip little: one click enters a box, the
  * pill is a standing drop target for "add this project to that box", and its
  * colour is the colour its members wear as a swatch on their own pills — the
- * same box reads the same everywhere. Past `MAX_BOX_PILLS` the rest stay in
- * the dropdown and the chip counts them.
+ * same box reads the same everywhere. Past the width tier's budget the rest
+ * stay in the dropdown and the fold pill (`▣▾ +N`) counts them.
+ *
+ * The selected pill wears an always-visible ✕ ("Show all projects"), so the
+ * way out of a box is never a hover menu; with no box at all the row is one
+ * ghost "+ Box" pill.
  *
  * The slice is a *view*, not the scope: clicking a member switches to that
  * project (the box pill keeps `is-selected` but drops `active`) while the
@@ -84,6 +118,8 @@ export function BoxScopeChip({
   boxes,
   selectedId,
   onSelect,
+  onLeave,
+  widthTier = 0,
   onRename,
   onDelete,
   active,
@@ -95,8 +131,11 @@ export function BoxScopeChip({
   // Hover-opened through the SHARED header menu id, like the + menu and the
   // cluster menus beside it: one id means opening another header menu closes
   // this one in the same frame instead of both riding out their own 250 ms
-  // closing grace. A click on the chip itself is "All projects" (the menu's
-  // own row), so hover and focus are what reveal the list.
+  // closing grace. Hover and focus reveal the list; a CLICK on the caret (or on
+  // the fold pill) pins it open — it then stays until a second click, a pick,
+  // Escape or a press elsewhere, so it no longer evaporates when the pointer
+  // drifts off a 10 px target. The logo itself opens nothing (it is the root
+  // console and the window's move handle).
   const menuOpen = useHeaderHoverMenuStore((s) => s.openId === SCOPE_MENU_ID);
   const openMenu = useHeaderHoverMenuStore((s) => s.open);
   const closeMenu = useHeaderHoverMenuStore((s) => s.close);
@@ -104,26 +143,67 @@ export function BoxScopeChip({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; boxId: string } | null>(
     null,
   );
-  const [renamingId, setRenamingId] = useState<string | null>(null);
+  // Which pill is being renamed lives in `stores/boxEditor` so a gesture
+  // elsewhere (the Alt-drag that just made a box) can put its pill into rename.
+  const renamingId = useBoxEditorStore((s) => s.renamingId);
+  const setRenamingId = (id: string | null) => {
+    const editor = useBoxEditorStore.getState();
+    if (id) editor.startRename(id);
+    else editor.stopRename();
+  };
   const [renameValue, setRenameValue] = useState("");
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  // The control the list hangs under: the caret beside the logo, or the fold
+  // pill after the shown box pills.
+  const [anchor, setAnchor] = useState<"chip" | "fold">("chip");
   const chipRef = useRef<HTMLDivElement>(null);
+  const foldRef = useRef<HTMLDivElement>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
   const sprung = useRef(false);
+  const pinned = useRef(false);
 
-  const reveal = () => {
+  const reveal = (from: "chip" | "fold" = "chip") => {
     window.clearTimeout(closeTimer.current);
+    setAnchor(from);
     openMenu(SCOPE_MENU_ID);
   };
+  const holdOpen = () => window.clearTimeout(closeTimer.current);
   const scheduleClose = (e?: { clientY: number }) => {
     window.clearTimeout(closeTimer.current);
+    if (pinned.current) return;
     closeTimer.current = window.setTimeout(() => closeMenu(SCOPE_MENU_ID), headerMenuCloseDelay(e));
   };
   const dismiss = () => {
     window.clearTimeout(closeTimer.current);
+    pinned.current = false;
     closeMenu(SCOPE_MENU_ID);
   };
+  // A click: closed → open and pinned; hover-opened → pinned; pinned → closed.
+  const toggleFrom = (from: "chip" | "fold") => {
+    if (menuOpen && anchor === from && pinned.current) {
+      dismiss();
+      return;
+    }
+    reveal(from);
+    pinned.current = true;
+  };
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+  // Another header menu taking the shared id closes this one; the pin goes too.
+  useEffect(() => {
+    if (!menuOpen) pinned.current = false;
+  }, [menuOpen]);
+  // A box dissolved while its pill is in rename takes the field with it.
+  useEffect(() => {
+    if (!renamingId) return;
+    const box = boxes.find((b) => b.id === renamingId);
+    if (!box) useBoxEditorStore.getState().stopRename();
+  }, [renamingId, boxes]);
+  // The field opens on the box's own name, whichever door started the rename.
+  useEffect(() => {
+    if (!renamingId) return;
+    const box = useBoxesStore.getState().boxes.find((b) => b.id === renamingId);
+    if (box) setRenameValue(box.name);
+  }, [renamingId]);
 
   // The logo is the window's move handle. The move starts only once the press
   // has travelled LOGO_DRAG_SLOP px, so a press that stays put is still the
@@ -158,21 +238,14 @@ export function BoxScopeChip({
     logoPressCleanup.current = cleanup;
   };
 
-  // The boxes in row order, and the ones that get a pill: the first
-  // MAX_BOX_PILLS by position that the user has not hidden from the row (the
-  // dropdown's per-row checkbox) — always including the selected box, which
-  // takes the last slot when it would otherwise be off the row, so the box
-  // being looked at is never the one without a pill.
+  // The boxes in row order, and the ones that get a pill under the width
+  // tier's budget (`boxPillsShown`: the selected box always among them).
   const ordered = useMemo(() => [...boxes].sort((a, b) => a.position - b.position), [boxes]);
-  const shown = useMemo(() => {
-    const head = ordered.filter((b) => !b.hide_pill).slice(0, MAX_BOX_PILLS);
-    if (!selectedId || head.some((b) => b.id === selectedId)) return head;
-    const selected = ordered.find((b) => b.id === selectedId);
-    if (!selected) return head;
-    // A hidden box being looked at joins the row in its own place, not last.
-    const withSelected = head.length < MAX_BOX_PILLS ? head : head.slice(0, MAX_BOX_PILLS - 1);
-    return ordered.filter((b) => b === selected || withSelected.includes(b));
-  }, [ordered, selectedId]);
+  const budget = boxPillBudget(widthTier);
+  const shown = useMemo(
+    () => boxPillsShown(ordered, selectedId, budget),
+    [ordered, selectedId, budget],
+  );
   const overflow = ordered.length - shown.length;
 
   // What the chip NAMES right now — only the built-in root scope; every box
@@ -189,7 +262,8 @@ export function BoxScopeChip({
   useEffect(() => {
     if (dragging) {
       if (!menuOpen) sprung.current = true;
-      reveal();
+      // Overflow means the fold pill stands on the row: the list opens under it.
+      reveal("fold");
       return;
     }
     if (!sprung.current) return;
@@ -200,15 +274,15 @@ export function BoxScopeChip({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging]);
 
-  // Keep the dropdown anchored under the chip while it is open (the header can
-  // reflow around it — the pill strip's overflow chevrons appear and vanish).
+  // Keep the dropdown anchored under its control while it is open (the header
+  // can reflow around it — the pill strip's overflow chevrons appear and vanish).
   useEffect(() => {
     if (!menuOpen) {
       setPos(null);
       return;
     }
     const update = () => {
-      const el = chipRef.current;
+      const el = (anchor === "fold" ? foldRef.current : null) ?? chipRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
       setPos({ x: r.left, y: r.bottom });
@@ -220,7 +294,7 @@ export function BoxScopeChip({
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
     };
-  }, [menuOpen]);
+  }, [menuOpen, anchor]);
 
   // A press outside the chip, the box pills and the portaled list, or Escape,
   // closes the list — the hover grace alone can't catch a pointer that jumps
@@ -328,31 +402,24 @@ export function BoxScopeChip({
               it (or Ctrl+Shift+R), not named here. */}
           <LogoIcon className="box-chip-icon" />
         </button>
-        {/* The list's trigger: hover (or keyboard focus) opens it. */}
+        {/* The list's trigger: hover or keyboard focus opens it, a click pins it
+            open (a second click, a pick, Escape or a press elsewhere closes).
+            The count of boxes with no pill stands on the fold pill, past the
+            shown ones, no longer beside the logo. */}
         <button
           type="button"
           className="box-chip-caret-btn"
           title={t("boxChip.pickerTitle")}
           aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onMouseEnter={reveal}
+          aria-expanded={menuOpen && anchor === "chip"}
+          onMouseEnter={() => reveal("chip")}
           onMouseLeave={scheduleClose}
-          onFocus={reveal}
+          onFocus={() => reveal("chip")}
           onClick={(e) => {
             e.stopPropagation();
-            reveal();
+            toggleFrom("chip");
           }}
         >
-          {/* How many boxes have no pill on the row — whatever the chip is
-              naming, since those boxes are reachable only through its list. */}
-          {overflow > 0 && (
-            <span
-              className="box-chip-overflow"
-              title={t("boxChip.moreBoxesTitle", { count: overflow })}
-            >
-              {t("boxChip.moreBoxes", { count: overflow })}
-            </span>
-          )}
           <span className="box-chip-caret" aria-hidden>
             ▾
           </span>
@@ -373,8 +440,11 @@ export function BoxScopeChip({
           and enters the box's scope on one click. Deliberately the chip's own
           box (`.box-chip`, minus the caret) rather than a shape of its own,
           so the leading segment stays one run. */}
-      {shown.length > 0 && (
+      {(shown.length > 0 || overflow > 0 || ordered.length === 0) && (
         <div ref={pillsRef} className="box-pill-row">
+          {/* No box yet: one quiet ghost pill is the door in (first-use
+              discovery). It goes once any box exists. */}
+          {ordered.length === 0 && <GhostBoxPill />}
           {shown.map((b) => {
             const isSelected = b.id === selectedId;
             const isActive = isSelected && !!active;
@@ -420,6 +490,7 @@ export function BoxScopeChip({
                     })}
                     onClick={(e) => {
                       e.stopPropagation();
+                      dismiss();
                       onSelect(b.id);
                     }}
                   >
@@ -430,10 +501,60 @@ export function BoxScopeChip({
                     <span className="box-chip-label">{b.name}</span>
                   </button>
                 )}
+                {/* The way out, always visible on the selected pill (never
+                    hover-only): the same action as the list's "All projects". */}
+                {isSelected && renamingId !== b.id && (
+                  <>
+                    <button
+                      type="button"
+                      className="box-pill-leave"
+                      title={t("boxChip.leaveTitle", { name: b.name })}
+                      aria-label={t("boxChip.leaveTitle", { name: b.name })}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        dismiss();
+                        onLeave();
+                      }}
+                    >
+                      <CloseIcon />
+                    </button>
+                    <UntestedTag id="boxChip.leaveBox" />
+                  </>
+                )}
                 <ScopeSetStatusBars scopes={[`${BOX_SCOPE_PREFIX}${b.id}`]} />
               </div>
             );
           })}
+          {/* The boxes past the width budget (or hidden from the row), where the
+              hidden pills would be: `▣▾ +N` opens the same list as the caret,
+              under itself. With no pill shown at all it is the bare count. */}
+          {overflow > 0 && (
+            <div ref={foldRef} className="box-chip box-fold-pill">
+              <button
+                type="button"
+                className="box-chip-caret-btn"
+                title={t("boxChip.moreBoxesTitle", { count: overflow })}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen && anchor === "fold"}
+                onMouseEnter={() => reveal("fold")}
+                onMouseLeave={scheduleClose}
+                onFocus={() => reveal("fold")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFrom("fold");
+                }}
+              >
+                <BoxSwatch className="project-pill-box-swatch" />
+                <span className="box-chip-overflow">
+                  {shown.length > 0 ? t("boxChip.moreBoxes", { count: overflow }) : overflow}
+                </span>
+                <span className="box-chip-caret" aria-hidden>
+                  ▾
+                </span>
+              </button>
+              <UntestedTag id="boxChip.foldPill" />
+            </div>
+          )}
         </div>
       )}
 
@@ -447,7 +568,7 @@ export function BoxScopeChip({
             // into it has LEFT the chip: without these the close timer would
             // fold it away under the cursor. It opens flush under the chip, so
             // there is no gap to cross.
-            onMouseEnter={reveal}
+            onMouseEnter={holdOpen}
             onMouseLeave={scheduleClose}
           >
             {/* The built-in root scope, ahead of the boxes and of "All
@@ -482,10 +603,16 @@ export function BoxScopeChip({
             {ordered.length > 0 && <div className="box-chip-menu-sep" />}
             {ordered.length > 0 && (
               <div className="box-chip-menu-label">
-                {t("boxChip.onRowLabel")} <UntestedTag id="boxChip.onRowLabel" />
+                {t("boxChip.onRowLabel")} <UntestedTag id="boxChip.onRowLabel" />{" "}
+                <UntestedTag id="boxChip.marks" />
               </div>
             )}
-            {ordered.map((b) => (
+            {ordered.map((b) => {
+              // Two states, two marks: bold = the slice (the strip shows this
+              // box's projects), ✓ = the scope (you are in the box itself).
+              const isSlice = b.id === selectedId;
+              const isScope = isSlice && !!active;
+              return (
               <div key={b.id} className="box-chip-menu-row">
                 {/* Whether the box stands on the row as a pill. Its own button
                     beside the row's, so toggling never enters the box, and the
@@ -507,14 +634,21 @@ export function BoxScopeChip({
                   // hit-test sweeps `[data-box-id]` across the document, so a
                   // portaled row counts exactly as a pill does.
                   data-box-id={b.id}
-                  className={`${b.id === selectedId ? "is-current" : ""}${
+                  className={`${isSlice ? "is-current is-slice" : ""}${isScope ? " is-scope" : ""}${
                     pillDrag?.overBoxId === b.id ? " drag-over" : ""
                   }`.trim()}
                   onClick={() => pick(b.id)}
-                  title={memberCountTitle(b)}
+                  title={
+                    isScope
+                      ? t("boxChip.rowScope", { members: memberCountTitle(b) })
+                      : isSlice
+                        ? t("boxChip.rowSlice", { members: memberCountTitle(b) })
+                        : memberCountTitle(b)
+                  }
                 >
                   <BoxSwatch className="project-pill-box-swatch" color={boxColor(b)} />
                   <span className="box-chip-menu-name">{b.name}</span>
+                  {isScope && <CheckIcon className="box-chip-menu-scope" />}
                   {/* Inert bars: the row is already a button, and picking the
                       box is the way in from here. */}
                   <ScopeSetStatusBars
@@ -525,7 +659,8 @@ export function BoxScopeChip({
                   <span className="box-chip-menu-count">{b.member_ids.length}</span>
                 </button>
               </div>
-            ))}
+              );
+            })}
             <div className="box-chip-menu-sep" />
             <button
               onClick={() => {
@@ -632,6 +767,37 @@ export function BoxScopeChip({
           </button>
         </ContextMenuPortal>
       )}
+    </>
+  );
+}
+
+/**
+ * The ghost "+ Box" pill, the row's only box UI while the user has none: a
+ * quiet dashed pill that asks for a name and drops the user into the new box
+ * (`useQuickCreateBox`). Its own component so the name prompt (`dialogs`, a
+ * portal that must sit beside, not inside, the pill) mounts only while it does.
+ */
+function GhostBoxPill() {
+  const t = useT();
+  const { quickCreateBox, dialogs } = useQuickCreateBox();
+  return (
+    <>
+      <div className="box-chip box-ghost-pill">
+        <button
+          type="button"
+          className="box-chip-main"
+          title={t("boxChip.newBoxPillTitle")}
+          onClick={(e) => {
+            e.stopPropagation();
+            void quickCreateBox();
+          }}
+        >
+          <PlusIcon className="box-ghost-plus" />
+          <span className="box-chip-label">{t("boxChip.newBoxPill")}</span>
+        </button>
+        <UntestedTag id="boxChip.newBoxPill" />
+      </div>
+      {dialogs}
     </>
   );
 }

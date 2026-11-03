@@ -1,6 +1,6 @@
 import { SkeletonRows } from "../common/SkeletonRows";
 import { useHeaderMenu } from "../../hooks/useHeaderMenu";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
@@ -17,7 +17,7 @@ import { useBigFoldersStore } from "../../stores/bigFolders";
 import { useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, defaultBoxName, useBoxMembership, useBoxesStore } from "../../stores/boxes";
 import { useBoxEditorStore } from "../../stores/boxEditor";
-import { useBoxSliceStore } from "../../stores/boxSlice";
+import { stripProjects, useBoxSliceStore } from "../../stores/boxSlice";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
@@ -32,6 +32,7 @@ import { useFastMode } from "../../lib/agents/fastMode";
 import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { boxColor } from "../../lib/theme/boxColor";
+import type { HeaderWidthTier } from "../../lib/headerPins";
 import { useT } from "../../lib/i18n";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
 import { observeStripResize } from "../../lib/observeStripResize";
@@ -67,7 +68,15 @@ const ProjectImportBundleDialog = lazy(() =>
 /** This bar's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const ADD_MENU_ID = "project-add";
 
-export function ProjectSwitcher({ open = true }: { open?: boolean }) {
+export function ProjectSwitcher({
+  open = true,
+  widthTier = 0,
+}: {
+  open?: boolean;
+  /** The header's width tier (`HeaderBar` owns it): how many box pills the
+   *  leading row may hold (`boxPillBudget`). Wide when omitted. */
+  widthTier?: HeaderWidthTier;
+}) {
   const t = useT();
   const { confirmAction, dialogs } = useDialogs();
   const projects = useProjectsStore((s) => s.projects);
@@ -182,25 +191,6 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     // The same stale-object bug affected any other pill-visible metadata that
     // was not copied into that signature.
   }, [projects]);
-
-  // On steering's projects level, every pill wears its station number
-  // (the digit that jumps there — 1 is the root pill). Numbered from the SAME
-  // ring the digit handler and cycleProject walk (projectStations), so badge
-  // and jump can never disagree. On tabs and panes, digits open agent tabs,
-  // so project station badges must disappear. Only the first nine stations
-  // get a digit. A box slice hides some ring members — their digits still jump.
-  const steeringOnProjects = useKeyboardSteeringStore((s) => s.active && s.level === "projects");
-  const stationById = useMemo(() => {
-    if (!steeringOnProjects) return null;
-    const m = new Map<string, number>();
-    projectStations().forEach((id, i) => {
-      if (id && i < 9) m.set(id, i + 1);
-    });
-    return m;
-    // `projects` re-mints the map when the strip changes; projectStations reads
-    // the store imperatively, which the linter cannot see.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [steeringOnProjects, projects]);
 
   // Per-pill git "dirty" dots: poll every active local project's git state on a
   // shared interval (one loop for all pills, deduped by project id) and store
@@ -322,6 +312,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // the effects that keep it in step with the scope and the boxes stay here.
   const boxFilter = useBoxSliceStore((s) => s.sliceBoxId);
   const selectBox = useBoxSliceStore((s) => s.selectBox);
+  const leaveBox = useBoxSliceStore((s) => s.leaveBox);
   const [boxCandidateFilter, setBoxCandidateFilter] = useState("");
 
   // Entering a box scope by any other door (the search popover, a restored
@@ -380,10 +371,29 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // slice keeps its pill while the general strip — activeProjects — does not.
   const visibleProjects = useMemo<ProjectEntry[]>(() => {
     if (!currentBox) return activeProjects;
-    return projects
-      .filter((p) => currentBoxMemberIds.has(p.id) || p.id === scope)
-      .sort((a, b) => a.position - b.position);
-  }, [activeProjects, currentBox, currentBoxMemberIds, projects, scope]);
+    return stripProjects(projects, currentBox, scope);
+  }, [activeProjects, currentBox, projects, scope]);
+
+  // On steering's projects level, every pill wears its station number
+  // (the digit that jumps there — 1 is the root pill). Numbered from the SAME
+  // ring the digit handler and cycleProject walk (projectStations), so badge
+  // and jump can never disagree. On tabs and panes, digits open agent tabs,
+  // so project station badges must disappear. Only the first nine stations
+  // get a digit. A slice narrows the ring to the pills it shows (inactive
+  // members included), so the badges count the visible strip.
+  const steeringOnProjects = useKeyboardSteeringStore((s) => s.active && s.level === "projects");
+  const stationById = useMemo(() => {
+    if (!steeringOnProjects) return null;
+    const m = new Map<string, number>();
+    projectStations().forEach((id, i) => {
+      if (id && i < 9) m.set(id, i + 1);
+    });
+    return m;
+    // `visibleProjects` re-mints the map when the strip (projects, slice,
+    // scope) changes; projectStations reads the stores imperatively, which the
+    // linter cannot see.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steeringOnProjects, visibleProjects]);
 
   const boxCandidates = useMemo(() => {
     if (!currentBox) return [];
@@ -600,9 +610,13 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             (the Tabtivity logo) is the leftmost thing in the window — so there is
             nothing on its left to divide it from. */}
         <div
+          // A slice tints the whole strip in its box's colour (static tint, see
+          // `.project-pills-region.is-sliced`), so "I am looking at a box" reads
+          // across the row, not only on the one pill.
           className={`project-pills-region${pillOverflow.left ? " overflow-left" : ""}${
             pillOverflow.right ? " overflow-right" : ""
-          }`}
+          }${currentBox ? " is-sliced" : ""}`}
+          style={currentBox ? ({ "--slice-color": boxColor(currentBox) } as CSSProperties) : undefined}
         >
           {/* The row's leading segment: ONE chip for every scope that is not a
               project pill — the root terminal and the boxes. It sits outside .project-pills-scroll, which is what pins
@@ -618,6 +632,8 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             boxes={boxes}
             selectedId={boxFilter}
             onSelect={(id) => void selectBox(id)}
+            onLeave={() => void leaveBox()}
+            widthTier={widthTier}
             onRename={(boxId, name) => void renameBox(boxId, name).catch(toastFailure)}
             // The pill's Delete is one right-click away on every box now, so it
             // asks the same question the editor's Dissolve does — and says the

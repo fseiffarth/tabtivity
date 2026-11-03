@@ -204,9 +204,23 @@ export function setHeaderPin(
  * Read off the window's real width by a ResizeObserver (`HeaderBar`), because
  * the window is what resizes and a media query answers for the screen's zoom.
  */
-export function headerWidthTier(width: number): 0 | 1 | 2 | 3 {
+export function headerWidthTier(width: number): HeaderWidthTier {
   if (width >= 1280) return 0;
   if (width >= 1100) return 1;
   if (width >= 900) return 2;
   return 3;
+}
+
+/** A {@link headerWidthTier} result. */
+export type HeaderWidthTier = 0 | 1 | 2 | 3;
+
+/**
+ * How many box pills stand on the project strip's leading row at a width tier:
+ * 6 at tiers 0-1 (as before), 3 at tier 2, 1 at tier 3 — the selected box, and
+ * only it, so with no box selected the row holds no pill there and the fold pill
+ * (`▣▾ N`) is the whole of it. The boxes past the budget stay one click away in
+ * the fold pill's list.
+ */
+export function boxPillBudget(tier: HeaderWidthTier): number {
+  return tier >= 3 ? 1 : tier === 2 ? 3 : 6;
 }

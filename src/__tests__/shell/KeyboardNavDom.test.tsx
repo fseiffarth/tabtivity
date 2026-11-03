@@ -28,6 +28,8 @@ import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
+import { useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 
 function Harness() {
   useKeyboard({ onTogglePanels: () => {} });
@@ -65,6 +67,8 @@ describe("#62 keyboard nav wiring", () => {
     resetTabs();
     useSubwindowNavStore.getState().end();
     useSettingsStore.setState({ settings: null });
+    resetBoxSlice();
+    useBoxesStore.setState({ boxes: [] });
     cleanup();
   });
 
@@ -229,6 +233,57 @@ describe("#62 keyboard nav wiring", () => {
     useProjectsStore.setState({ activeId: null });
     key({ key: "Tab", shiftKey: true, ctrlKey: true });
     expect(setActive).toHaveBeenCalledWith("p1");
+  });
+
+  it("Shift+Ctrl+Tab inside a box slice walks only the pills the slice shows, an inactive member included", () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: "p1", name: "P1", status: "active", position: 1 } as never,
+        { id: "p2", name: "P2", status: "inactive", position: 2 } as never,
+        { id: "p3", name: "P3", status: "active", position: 3 } as never,
+        { id: "p4", name: "P4", status: "active", position: 4 } as never,
+      ],
+      activeId: "p1",
+    });
+    useBoxesStore.setState({
+      boxes: [{ id: "bx", name: "bx", member_ids: ["p1", "p2", "p4"], position: 0 }],
+    });
+    useBoxSliceStore.setState({ sliceBoxId: "bx" });
+    useTabsStore.setState({ scope: "p1" });
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ setActive });
+    render(<Harness />);
+
+    // p1 -> p2 (closed in the general strip, but a pill in the slice).
+    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    expect(setActive).toHaveBeenLastCalledWith("p2");
+    // p2 -> p4: p3 is not in the box, so it is skipped.
+    useTabsStore.setState({ scope: "p2" });
+    useProjectsStore.setState({ activeId: "p2" });
+    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    expect(setActive).toHaveBeenLastCalledWith("p4");
+  });
+
+  it("Shift+Ctrl+Tab from the box's own scope lands on its first visible pill", () => {
+    useProjectsStore.setState({
+      projects: [
+        { id: "p1", name: "P1", status: "active", position: 1 } as never,
+        { id: "p2", name: "P2", status: "active", position: 2 } as never,
+        { id: "p3", name: "P3", status: "active", position: 3 } as never,
+      ],
+      activeId: "p1",
+    });
+    useBoxesStore.setState({
+      boxes: [{ id: "bx", name: "bx", member_ids: ["p2", "p3"], position: 0 }],
+    });
+    useBoxSliceStore.setState({ sliceBoxId: "bx" });
+    useTabsStore.setState({ scope: "box:bx" });
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ setActive });
+    render(<Harness />);
+
+    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    expect(setActive).toHaveBeenLastCalledWith("p2");
   });
 
   it("uses a custom binding from settings when present", () => {
