@@ -139,13 +139,15 @@ fn drop_api_keys_for_old_tmux(opts: &mut PtyOptions) -> Result<(), String> {
     {
         return Ok(());
     }
+    // A server user cannot update the server's tmux.
+    let update = if crate::services::server::is_server() { "ask the administrator to update tmux" } else { "update tmux" };
     // OpenCode's inline config points it at the proxy whether or not the
     // token arrives: started without one, every request would be refused.
     if crate::services::agent_api_keys::opencode_routed(&opts.env) {
-        return Err("OpenCode API keys need tmux 3.2 or newer to keep the proxy token off argv; update tmux or select its own login in Manage CLIs → API keys".into());
+        return Err(format!("OpenCode API keys need tmux 3.2 or newer to keep the proxy token off argv; {update} or select its own login in Manage CLIs → API keys"));
     }
     if opts.env.contains_key(crate::services::agent_api_keys::OPENAI_CARRIER) {
-        return Err("Codex API keys need tmux 3.2 or newer to keep the proxy token off argv; update tmux or select its own login in Manage CLIs → API keys".into());
+        return Err(format!("Codex API keys need tmux 3.2 or newer to keep the proxy token off argv; {update} or select its own login in Manage CLIs → API keys"));
     }
     let dropped = drop_carriers(&mut opts.env);
     if dropped.is_empty() {
@@ -307,6 +309,27 @@ async fn prepare_agent_home(
     .await
 }
 
+/// Whether a spawn's Ollama listener is judged by its owner before the agent
+/// starts: a local-model agent on a hosted server (`local_model_run`: a
+/// local-model tab or a local assistant profile, not a remote run). Its CLI
+/// talks to the shared Ollama on loopback itself, sending every prompt and the
+/// project files it reads, and takes the answers as the model's — so while
+/// the administrator's Ollama is down, another account that bound its port
+/// would read this user's agent and steer its tool calls. The daemon's own
+/// Ollama requests are judged the same way (`ollama_client::owner_gate`);
+/// the desktop leaves this to those gates. Pure.
+fn local_model_spawn_judged(server: bool, local_model_run: bool) -> bool {
+    server && local_model_run
+}
+
+/// The loopback Ollama this process is configured for is held by an
+/// acceptable owner, or by nobody (the CLI's own connect then fails plainly);
+/// otherwise the spawn is refused with the owner check's reason.
+fn local_model_listener_ok() -> Result<(), String> {
+    let addr = crate::services::ollama_client::ollama_addr()?;
+    crate::services::ollama_client::owner_gate(&addr).map_err(|why| format!("Local model not started: {why}"))
+}
+
 /// What the assistant gate decided about one spawn ([`assistant_gate`]).
 #[derive(Debug)]
 struct AssistantPlan {
@@ -382,6 +405,9 @@ fn assistant_gate(opts: &mut PtyOptions, state_dir: &std::path::Path, enabled: b
         return Err(format!("terminal: refusing to spawn tab '{}': a {name} launch belongs to the {name} scope only", opts.id));
     }
     if !enabled {
+        if crate::services::server::is_server() {
+            return Err(format!("{name} is not offered on this server yet; use it in the desktop app"));
+        }
         return Err(format!("{name} is switched off in Settings \u{2192} Experimental"));
     }
     crate::services::assistant::validate_launch(&launch).map_err(|r| r.to_string())?;
@@ -966,6 +992,13 @@ pub async fn prepare(
             .project_id
             .as_deref()
             .is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
+    let local_model_run = !remote_agent_run && (opts.local_model || crate::services::agent_api_keys::is_local_model(&opts));
+    if local_model_spawn_judged(crate::services::server::is_server(), local_model_run) {
+        // Reads `/proc` (the listener's owner): off the async workers.
+        tokio::task::spawn_blocking(local_model_listener_ok)
+            .await
+            .map_err(|e| format!("Local model: {e}"))??;
+    }
     let mut resume_claim = if opts.cmd == "codex" && !remote_agent_run && !assistant {
         crate::services::codex_bind::reserve_resume(&mut opts)
     } else {
@@ -1503,6 +1536,19 @@ fn reattaches_session(project: Option<&str>, host: Option<&str>, session: &str, 
 
 #[cfg(test)]
 mod tests {
+    /// On a server a local-model agent's Ollama is judged before it starts; a
+    /// cloud agent, a remote run and every desktop spawn are not.
+    #[test]
+    fn only_a_servers_local_model_spawn_has_its_ollama_owner_judged() {
+        assert!(local_model_spawn_judged(true, true));
+        assert!(!local_model_spawn_judged(true, false));
+        assert!(!local_model_spawn_judged(false, true));
+        // Off a server there is no tenant to judge against; the gate itself
+        // answers for no listener at all (nothing to be fooled by).
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert_eq!(crate::services::ollama_client::owner_gate(&format!("127.0.0.1:{free}")), Ok(()));
+    }
+
     #[test]
     fn a_sign_in_is_not_an_ai_spawn() {
         let opts = |cmd: &str, args: &[&str]| PtyOptions {

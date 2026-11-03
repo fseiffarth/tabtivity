@@ -85,8 +85,15 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
 /// interval has passed, starts a background self-update — so an unguarded
 /// daily probe would be Tabtivity updating somebody else's CLI.
 /// `MUSE_NO_AUTO_UPDATE=1` skips that branch of the launcher (read out of the
-/// 1.3.0 launcher, 2026-09-25) and the version still prints.
-const VERSION_ENV: &[(&str, &[(&str, &str)])] = &[("muse", &[("MUSE_NO_AUTO_UPDATE", "1")])];
+/// 1.3.0 launcher, 2026-09-25) and the version still prints. OpenCode is
+/// probed before its first launch (the 2.x flags) and runs outside any fence
+/// here, so its update check is off too — on a hosted server only the
+/// administrator updates a CLI (plan §5.1); the switch is the one its fenced
+/// spawns get (`agent_install::apply_fence_env`).
+const VERSION_ENV: &[(&str, &[(&str, &str)])] = &[
+    ("muse", &[("MUSE_NO_AUTO_UPDATE", "1")]),
+    ("opencode", &[("OPENCODE_DISABLE_AUTOUPDATE", "1")]),
+];
 
 /// One recorded "verified against" note: the release someone actually checked,
 /// and which surface that check covered.
@@ -743,6 +750,7 @@ mod tests {
             assert!(is_supported(agent), "{agent} has a probe env but no recipe");
         }
         assert_eq!(version_env("muse"), &[("MUSE_NO_AUTO_UPDATE", "1")]);
+        assert_eq!(version_env("opencode"), &[("OPENCODE_DISABLE_AUTOUPDATE", "1")]);
         assert!(version_env("claude").is_empty());
     }
 

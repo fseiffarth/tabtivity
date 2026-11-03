@@ -985,8 +985,12 @@ pub(super) fn is_assistant_scope_id(id: &str) -> bool {
 /// detaches at `pty_bridge`'s next re-check. Raw JSON, the sidecar's way;
 /// [`crate::schema::Settings::assistant_phone_open`] is the same rule on the
 /// typed settings and a test holds the two together. The flag is on by
-/// default (unset → on). Missing or unreadable settings refuse.
+/// default (unset → on). Missing or unreadable settings refuse, and a hosted
+/// server never offers it (`Settings::assistant_enabled`).
 pub fn assistant_open(state_dir: &Path) -> bool {
+    if crate::services::server::is_server() {
+        return false;
+    }
     let Some(settings) = fs::read(state_dir.join("settings.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
