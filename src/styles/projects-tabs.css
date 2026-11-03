@@ -866,6 +866,69 @@
   color: var(--accent);
 }
 
+/* The shared membership checklist (BoxMemberChecklist): the projects of a box in
+   the box pill's menu, the boxes of a project in the project pill's Boxes group.
+   It scrolls in its own region (no row cap) and a filter field sits above it
+   once the list is long. The rows are the checkbox rows above; the name takes
+   the room and ellipsises, the "closed" label stays at the right edge. */
+.box-member-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+}
+
+.box-member-filter {
+  box-sizing: border-box;
+  width: calc(100% - 2 * var(--space-1));
+  margin: 2px var(--space-1);
+  padding: 4px var(--space-2);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-md);
+  outline: none;
+}
+
+.box-member-filter:focus {
+  border-color: var(--accent);
+}
+
+.box-member-list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
+}
+
+.context-menu button.box-member-row {
+  display: flex;
+  align-items: center;
+}
+
+.box-member-row .box-member-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.box-member-row .box-member-closed {
+  flex: 0 0 auto;
+  margin-left: var(--space-2);
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+
+/* A rename the name check refused: the field stays open, marked. */
+.project-box-rename-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 /* Box editor dialog (canonical dialog chrome; see BoxEditorDialog). */
 .box-editor {
   width: min(440px, 92vw);

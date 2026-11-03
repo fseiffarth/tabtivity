@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
 import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
-import { useBoxNameCheck } from "../projects/useQuickCreateBox";
+import { useBoxNameCheck, useQuickCreateBox } from "../projects/useQuickCreateBox";
 import { useDialogs } from "../common/PromptDialogs";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { ProjectSearch } from "../projects/ProjectSearch";
@@ -95,6 +95,8 @@ export function ProjectSwitcher({
   // Alt-drag grouping the backend refuses says why instead of failing silently.
   const { messageOf } = useBoxNameCheck();
   const toastFailure = (error: unknown) => useProjectsStore.setState({ switchToast: messageOf(error) });
+  // The "+" menu's New Box row: name it, Enter, you are in (the one create door).
+  const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
   const openHpcWizard = useHpcPipelineStore((s) => s.openWizard);
   // Multi-select (3b): Escape clears the Ctrl/Cmd-click pill selection.
   const anySelected = usePillSelectionStore((s) => s.selected.length > 0);
@@ -484,14 +486,22 @@ export function ProjectSwitcher({
 
   // Alt-drop one pill onto another: spin up a fresh box holding both projects
   // (phone-style "drag onto" grouping). Additive — neither project leaves any
-  // box it was already in; the user renames the new box via its chip.
+  // box it was already in. The box takes the next free "Box N" and its pill goes
+  // straight into rename, so a gesture with no name prompt still ends named.
   const groupProjects = async (fromId: string, toId: string) => {
     if (fromId === toId) return;
     // Box names are unique now, so a second "New Box" would be refused: take the
     // next free "Box N" (the user renames it via its pill).
     const name = defaultBoxName(useBoxesStore.getState().boxes, (n) => t("boxName.default", { n }));
     try {
-      await boxProjects([toId, fromId], { name });
+      const created = await boxProjects([toId, fromId], { name });
+      if (!created) return;
+      // In the box (its pill is then on the row), with the pill's name field
+      // open: `selectBox` sets the slice before it awaits, so the field mounts
+      // on a pill that stands there.
+      const entered = selectBox(created.id);
+      useBoxEditorStore.getState().startRename(created.id);
+      await entered;
     } catch (error) {
       toastFailure(error);
     }
@@ -635,14 +645,25 @@ export function ProjectSwitcher({
             onLeave={() => void leaveBox()}
             widthTier={widthTier}
             onRename={(boxId, name) => void renameBox(boxId, name).catch(toastFailure)}
-            // The pill's Delete is one right-click away on every box now, so it
-            // asks the same question the editor's Dissolve does — and says the
-            // same thing about what survives (folder, agent docs, members).
-            onDelete={(boxId) => {
+            // "Dissolve box…" on the pill asks the same question the editor's
+            // Dissolve does — and says the same thing about what survives
+            // (folder, agent docs, members). Dissolving the box you are in
+            // leaves it first, or the scope would stay `box:<id>` of a box that
+            // is gone.
+            onDissolve={(boxId) => {
               const target = boxes.find((b) => b.id === boxId);
               if (!target) return;
-              void confirmAction(dissolveBoxSpec(t, target.name)).then((ok) => {
-                if (ok) void deleteBox(boxId);
+              void confirmAction(dissolveBoxSpec(t, target.name)).then(async (ok) => {
+                if (!ok) return;
+                const inside =
+                  useBoxSliceStore.getState().sliceBoxId === boxId ||
+                  useTabsStore.getState().scope === `${BOX_SCOPE_PREFIX}${boxId}`;
+                try {
+                  if (inside) await leaveBox();
+                  await deleteBox(boxId);
+                } catch (error) {
+                  toastFailure(error);
+                }
               });
             }}
             active={!!boxFilter && scope === `${BOX_SCOPE_PREFIX}${boxFilter}`}
@@ -834,7 +855,7 @@ export function ProjectSwitcher({
                     className="untested"
                     onClick={() => {
                       closeHeaderMenu(ADD_MENU_ID);
-                      useBoxEditorStore.getState().openCreate();
+                      void quickCreateBox();
                     }}
                   >
                     {t("projectSwitcher.newBox")} <UntestedTag id="projectSwitcher.newBox" />
@@ -858,6 +879,7 @@ export function ProjectSwitcher({
         />
       </div>
       {dialogs}
+      {quickCreateDialogs}
     </>
   );
 }

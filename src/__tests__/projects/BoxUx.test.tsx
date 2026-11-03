@@ -1,9 +1,10 @@
 /**
- * Phase-3 box/unbox gestures (#41): the pill menu's Boxes group (checkbox rows
- * toggling additive membership, "New box with ⟨project⟩…" into the editor),
- * Ctrl/Cmd-click multi-select ("Box these (N)…", Escape/plain-click clears),
- * and the Box editor dialog (save = rename + set members; explicit, confirmed
- * dissolve replacing the old silent one).
+ * Phase-3 box/unbox gestures (#41): the pill menu's Boxes group (the shared
+ * membership checklist: additive rows that stay open and scroll, "New box with
+ * ⟨project⟩…" through the quick-create name prompt, "Remove ⟨project⟩ from
+ * ⟨box⟩" in a slice), Ctrl/Cmd-click multi-select ("Box these (N)…",
+ * Escape/plain-click clears), and the Box editor dialog (save = rename + set
+ * members; explicit, confirmed dissolve replacing the old silent one).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act, fireEvent, screen, within } from "@testing-library/react";
@@ -16,7 +17,7 @@ import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { BoxEditorDialog } from "../../components/projects/BoxEditorDialog";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
-import { resetBoxSlice } from "../../stores/boxSlice";
+import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 import { useBoxEditorStore } from "../../stores/boxEditor";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
@@ -94,6 +95,8 @@ describe("pill menu — Boxes group (3a)", () => {
       fireEvent.click(row);
     });
     expect(addToBox).toHaveBeenCalledWith("p1", "boxA");
+    // The checklist stays open across toggles: adding to three boxes is three clicks.
+    expect(menuButton("boxA")).toBeTruthy();
   });
 
   it("clicking a member box row (checked) REMOVES the project from that box", async () => {
@@ -113,7 +116,21 @@ describe("pill menu — Boxes group (3a)", () => {
     expect(removeFromBox).toHaveBeenCalledWith("p1", "boxA");
   });
 
-  it("“New box with ⟨project⟩…” opens the editor in create mode pre-checked", async () => {
+  /** Answer the quick-create name prompt that a menu row opened. */
+  async function nameTheBox(name: string): Promise<HTMLInputElement> {
+    const field = (await screen.findByRole("textbox")) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(field, { target: { value: name } });
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    return field;
+  }
+
+  it("“New box with ⟨project⟩…” asks for a name, creates the box holding the project and enters it", async () => {
+    const created = box("boxNew", ["p1"], 1);
+    const createBoxQuick = vi.fn(async () => created);
+    const openBox = vi.fn(async () => {});
+    useBoxesStore.setState({ boxes: [], createBoxQuick, openBox });
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
 
     const container = await renderSwitcher();
@@ -123,13 +140,16 @@ describe("pill menu — Boxes group (3a)", () => {
     await act(async () => {
       fireEvent.click(menuButton("New box with p1")!);
     });
-    const editor = useBoxEditorStore.getState();
-    expect(editor.open).toBe(true);
-    expect(editor.boxId).toBeNull();
-    expect(editor.initialMemberIds).toEqual(["p1"]);
+    // Never the editor in create mode: the name prompt is the whole door.
+    expect(useBoxEditorStore.getState().open).toBe(false);
+    const field = (await screen.findByRole("textbox")) as HTMLInputElement;
+    expect(field.value).toBe("Box 1");
+    await nameTheBox("Thesis");
+    expect(createBoxQuick).toHaveBeenCalledWith({ name: "Thesis", memberIds: ["p1"] });
+    expect(openBox).toHaveBeenCalledWith("boxNew");
   });
 
-  it("past 6 boxes the group caps its rows and offers “Edit boxes…”", async () => {
+  it("the group lists every box with no cap, scrolls, and has no Edit boxes… dead end", async () => {
     useBoxesStore.setState({
       boxes: Array.from({ length: 8 }, (_, i) => box(`b${i}`, [], i)),
     });
@@ -139,13 +159,78 @@ describe("pill menu — Boxes group (3a)", () => {
     await act(async () => {
       fireEvent.contextMenu(findPill(container, "p1"));
     });
-    expect(menuButton("b5")).toBeTruthy();
-    expect(menuButton("b6")).toBeUndefined();
-    const editRow = menuButton("Edit boxes")!;
-    await act(async () => {
-      fireEvent.click(editRow);
+    // The old 6-row cap is gone; all eight rows are there, in their own scroll region.
+    expect(menuButton("b0")).toBeTruthy();
+    expect(menuButton("b7")).toBeTruthy();
+    expect(document.querySelector(".context-menu .box-member-list")).toBeTruthy();
+    expect(menuButton("Edit boxes")).toBeUndefined();
+    // Eight rows are not "past 8": no filter yet.
+    expect(document.querySelector(".context-menu .box-member-filter")).toBeNull();
+  });
+
+  it("past 8 boxes a filter narrows the rows", async () => {
+    useBoxesStore.setState({
+      boxes: Array.from({ length: 10 }, (_, i) => box(`b${i}`, [], i)),
     });
-    expect(useBoxEditorStore.getState().open).toBe(true);
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+
+    const container = await renderSwitcher();
+    await act(async () => {
+      fireEvent.contextMenu(findPill(container, "p1"));
+    });
+    const filter = document.querySelector(".context-menu .box-member-filter") as HTMLInputElement;
+    expect(filter).toBeTruthy();
+    fireEvent.change(filter, { target: { value: "b7" } });
+    expect(menuButton("b7")).toBeTruthy();
+    expect(menuButton("b3")).toBeUndefined();
+    fireEvent.change(filter, { target: { value: "zzz" } });
+    expect(document.querySelector(".context-menu .box-member-list")!.textContent).toContain("Nothing matches");
+  });
+
+  it("a ticked box row keeps its place: the list does not reorder under the pointer", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", [], 1), box("boxB", [], 2)], addToBox: vi.fn().mockResolvedValue(undefined) });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    await act(async () => {
+      fireEvent.contextMenu(findPill(container, "p1"));
+    });
+    const names = () =>
+      [...document.querySelectorAll(".context-menu .box-member-row .box-member-name")].map((e) => e.textContent);
+    expect(names()).toEqual(["boxA", "boxB"]);
+    await act(async () => {
+      useBoxesStore.setState({ boxes: [box("boxA", [], 1), box("boxB", ["p1"], 2)] });
+    });
+    expect(names()).toEqual(["boxA", "boxB"]);
+  });
+
+  it("inside a box slice a member's menu offers an explicit “Remove ⟨project⟩ from ⟨box⟩”", async () => {
+    const removeFromBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], removeFromBox });
+    useProjectsStore.setState({ projects: [proj("p1", 10), proj("p2", 20)], activeId: null, loaded: true });
+    useBoxSliceStore.setState({ sliceBoxId: "boxA" });
+
+    const container = await renderSwitcher();
+    await act(async () => {
+      fireEvent.contextMenu(findPill(container, "p1"));
+    });
+    const row = menuButton("Remove p1 from boxA")!;
+    expect(row).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(removeFromBox).toHaveBeenCalledWith("p1", "boxA");
+    // An explicit remove is an action, not a toggle: the menu is done.
+    expect(menuButton("Remove p1 from boxA")).toBeUndefined();
+  });
+
+  it("outside a slice there is no Remove-from-box row", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    await act(async () => {
+      fireEvent.contextMenu(findPill(container, "p1"));
+    });
+    expect(menuButton("Remove p1 from")).toBeUndefined();
   });
 });
 
@@ -172,7 +257,10 @@ describe("multi-select (3b)", () => {
     expect(usePillSelectionStore.getState().selected).toEqual(["p2"]);
   });
 
-  it("right-click on a selected pill offers “Box these (N)…” into the editor", async () => {
+  it("right-click on a selected pill offers “Box these (N)…” through the name prompt", async () => {
+    const created = box("boxNew", ["p1", "p2"], 1);
+    const createBoxQuick = vi.fn(async () => created);
+    useBoxesStore.setState({ boxes: [], createBoxQuick, openBox: vi.fn(async () => {}) });
     useProjectsStore.setState({
       projects: [proj("p1", 10), proj("p2", 20)],
       activeId: null,
@@ -190,9 +278,16 @@ describe("multi-select (3b)", () => {
     await act(async () => {
       fireEvent.click(row);
     });
-    const editor = useBoxEditorStore.getState();
-    expect(editor.open).toBe(true);
-    expect(editor.initialMemberIds).toEqual(["p1", "p2"]);
+    expect(useBoxEditorStore.getState().open).toBe(false);
+    // The prompt names the members it will hold, and Enter creates the box.
+    expect((await screen.findByRole("dialog")).textContent).toContain("p1, p2");
+    const field = (await screen.findByRole("textbox")) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(createBoxQuick).toHaveBeenCalledWith({ name: "Box 1", memberIds: ["p1", "p2"] });
+    // The selection is spent once the box exists.
+    expect(usePillSelectionStore.getState().selected).toEqual([]);
   });
 
   it("Escape clears the selection", async () => {

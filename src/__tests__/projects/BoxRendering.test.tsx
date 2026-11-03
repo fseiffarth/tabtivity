@@ -13,7 +13,7 @@
  * `PageStrip.test.tsx`/`DragDropSplit.test.tsx` take for their pointer drags.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act, fireEvent, cleanup } from "@testing-library/react";
+import { render, act, fireEvent, cleanup, screen, within } from "@testing-library/react";
 import type { ProjectBox, ProjectEntry } from "../../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(null) }));
@@ -25,6 +25,7 @@ import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, BoxNameError, useBoxesStore } from "../../stores/boxes";
 import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
+import { useBoxEditorStore } from "../../stores/boxEditor";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
@@ -706,7 +707,9 @@ describe("box chip rendering (slice model)", () => {
     const ctx = document.querySelector(".context-menu") as HTMLElement;
     expect(ctx).toBeTruthy();
     expect(ctx.textContent).toContain("Rename");
-    expect(ctx.textContent).toContain("Delete box");
+    // One name for the action everywhere: it dissolves the grouping, nothing else.
+    expect(ctx.textContent).toContain("Dissolve box…");
+    expect(ctx.textContent).not.toContain("Delete box");
   });
 
   it("a slice never hides the project in scope, member or not", async () => {
@@ -859,9 +862,14 @@ describe("box chip rendering (slice model)", () => {
   });
 
   it("alt-dropping a pill onto another boxes the two via boxProjects", async () => {
-    const boxProjects = vi.fn().mockResolvedValue(box("newBox", ["p2", "p1"]));
+    const created = box("newBox", ["p2", "p1"]);
+    const boxProjects = vi.fn(async () => {
+      useBoxesStore.setState({ boxes: [created] });
+      return created;
+    });
     const reorderProjects = vi.fn().mockResolvedValue(undefined);
-    useBoxesStore.setState({ boxes: [], boxProjects });
+    useBoxEditorStore.getState().stopRename();
+    useBoxesStore.setState({ boxes: [], boxProjects, openBox: vi.fn(async () => {}) });
     useProjectsStore.setState({
       projects: [proj("p1", 10), proj("p2", 20)],
       activeId: null,
@@ -883,6 +891,10 @@ describe("box chip rendering (slice model)", () => {
 
     expect(boxProjects).toHaveBeenCalledWith(["p2", "p1"], { name: "Box 1" });
     expect(reorderProjects).not.toHaveBeenCalled();
+    // The gesture has no name prompt, so the new box's pill goes straight into
+    // inline rename (and the box is entered, so that pill stands on the row).
+    expect(useBoxEditorStore.getState().renamingId).toBe("newBox");
+    expect(useBoxSliceStore.getState().sliceBoxId).toBe("newBox");
   });
 
   it("an alt-drop the backend refuses by name says why instead of failing silently", async () => {
@@ -1521,5 +1533,252 @@ describe("member pill swatches open their box", () => {
     expect(pillNames(container)).toEqual(["p1", "p3"]);
     expect(badge("p1")).toBe("2");
     expect(badge("p3")).toBe("3");
+  });
+});
+
+describe("box pill menu — shared checklist, dissolve, rename check (AS5a)", () => {
+  async function openBoxMenu(container: HTMLElement): Promise<HTMLElement> {
+    await act(async () => {
+      fireEvent.contextMenu(boxPill(container)!);
+    });
+    return document.querySelector(".box-pill-menu") as HTMLElement;
+  }
+  const rowOf = (ctx: HTMLElement, id: string) => ctx.querySelector(`[data-member-id="${id}"]`) as HTMLElement;
+  const menuItem = (text: string) =>
+    [...document.querySelectorAll(".box-pill-menu button")].find((b) => b.textContent?.includes(text)) as HTMLElement;
+
+  beforeEach(() => {
+    useBoxEditorStore.setState({ open: false, boxId: null, initialMemberIds: [], renamingId: null });
+  });
+
+  it("lists closed projects with a closed label and adds or removes them like any other", async () => {
+    const addToBox = vi.fn().mockResolvedValue(undefined);
+    const removeFromBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", ["old"])], addToBox, removeFromBox });
+    useProjectsStore.setState({
+      projects: [
+        proj("p1", 10),
+        { ...proj("old", 20), status: "inactive" },
+        { ...proj("shelf", 30), status: "inactive" },
+      ],
+      activeId: null,
+      loaded: true,
+    });
+    const container = await renderSwitcher();
+    const ctx = await openBoxMenu(container);
+    // Members first (the closed member too), then the rest — closed ones among them.
+    expect([...ctx.querySelectorAll("[data-member-id]")].map((r) => r.getAttribute("data-member-id"))).toEqual([
+      "old",
+      "p1",
+      "shelf",
+    ]);
+    expect(rowOf(ctx, "old").textContent).toContain("closed");
+    expect(rowOf(ctx, "shelf").textContent).toContain("closed");
+    expect(rowOf(ctx, "p1").textContent).not.toContain("closed");
+
+    await act(async () => {
+      fireEvent.click(rowOf(ctx, "shelf"));
+    });
+    expect(addToBox).toHaveBeenCalledWith("shelf", "boxA");
+    await act(async () => {
+      fireEvent.click(rowOf(ctx, "old"));
+    });
+    expect(removeFromBox).toHaveBeenCalledWith("old", "boxA");
+    expect(document.querySelector(".box-pill-menu")).toBe(ctx);
+  });
+
+  it("never caps the rows, filters past 8 and keeps a ticked row where it is", async () => {
+    const projects = Array.from({ length: 15 }, (_, i) => proj(`proj${String(i).padStart(2, "0")}`, i));
+    useBoxesStore.setState({ boxes: [box("boxA", ["proj03"])] });
+    useProjectsStore.setState({ projects, activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const ctx = await openBoxMenu(container);
+    const ids = () => [...ctx.querySelectorAll("[data-member-id]")].map((r) => r.getAttribute("data-member-id"));
+    expect(ids()).toHaveLength(15);
+    expect(ids()[0]).toBe("proj03");
+    expect(ctx.querySelector(".box-member-list")).toBeTruthy();
+    expect(ctx.textContent).not.toContain("More projects under");
+
+    const before = ids();
+    await act(async () => {
+      useBoxesStore.setState({ boxes: [box("boxA", ["proj03", "proj07"])] });
+    });
+    expect(ids()).toEqual(before);
+
+    const filter = ctx.querySelector(".box-member-filter") as HTMLInputElement;
+    expect(filter).toBeTruthy();
+    fireEvent.change(filter, { target: { value: "proj1" } });
+    expect(ids()).toEqual(["proj10", "proj11", "proj12", "proj13", "proj14"]);
+  });
+
+  it("has no filter on a short list", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", [])] });
+    useProjectsStore.setState({ projects: [proj("p1", 1), proj("p2", 2)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const ctx = await openBoxMenu(container);
+    expect(ctx.querySelector(".box-member-filter")).toBeNull();
+  });
+
+  it("Dissolve box… asks, and from inside the box leaves it before deleting", async () => {
+    // `leaveBox` hands the scope back through `setActive` (the centre panel does
+    // the rest), so "left first" = the slice is clear and `setActive` already ran.
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ setActive });
+    const seen: { slice: string | null; handedBack: number }[] = [];
+    const deleteBox = vi.fn(async () => {
+      seen.push({ slice: useBoxSliceStore.getState().sliceBoxId, handedBack: setActive.mock.calls.length });
+    });
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], deleteBox, openBox: vi.fn(openBoxScope) });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    expect(useTabsStore.getState().scope).toBe("box:boxA");
+
+    await openBoxMenu(container);
+    await act(async () => {
+      fireEvent.click(menuItem("Dissolve box…"));
+    });
+    expect(deleteBox).not.toHaveBeenCalled();
+    const question = await screen.findByRole("dialog", { name: "Dissolve box" });
+    await act(async () => {
+      fireEvent.click(within(question).getByRole("button", { name: "Dissolve box" }));
+    });
+    expect(deleteBox).toHaveBeenCalledWith("boxA");
+    // By the time the box is deleted the slice is gone and the scope was handed back.
+    expect(seen).toEqual([{ slice: null, handedBack: 1 }]);
+  });
+
+  it("a declined Dissolve changes nothing", async () => {
+    const deleteBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", [])], deleteBox });
+    const container = await renderSwitcher();
+    await openBoxMenu(container);
+    await act(async () => {
+      fireEvent.click(menuItem("Dissolve box…"));
+    });
+    const question = await screen.findByRole("dialog", { name: "Dissolve box" });
+    await act(async () => {
+      fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    });
+    expect(deleteBox).not.toHaveBeenCalled();
+  });
+
+  async function startRenameFromMenu(container: HTMLElement): Promise<HTMLInputElement> {
+    await openBoxMenu(container);
+    await act(async () => {
+      fireEvent.click(menuItem("Rename"));
+    });
+    return container.querySelector(".project-box-rename-input") as HTMLInputElement;
+  }
+
+  it("inline rename: a taken name keeps the field open with the reason on Enter", async () => {
+    const renameBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", []), box("boxB", [], 6)], renameBox });
+    const container = await renderSwitcher();
+    const input = await startRenameFromMenu(container);
+    expect(input.value).toBe("boxA");
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "BOXB" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    // Case-insensitive duplicate: refused, field still there, marked, reason on hover.
+    const still = container.querySelector(".project-box-rename-input") as HTMLInputElement;
+    expect(still).toBeTruthy();
+    expect(still.getAttribute("aria-invalid")).toBe("true");
+    expect(still.title).toBe("A box with that name already exists.");
+    expect(renameBox).not.toHaveBeenCalled();
+
+    // Typing clears the mark; a free name is written.
+    await act(async () => {
+      fireEvent.change(still, { target: { value: "Thesis" } });
+    });
+    expect(still.getAttribute("aria-invalid")).toBeNull();
+    await act(async () => {
+      fireEvent.keyDown(still, { key: "Enter" });
+    });
+    expect(renameBox).toHaveBeenCalledWith("boxA", "Thesis");
+    expect(container.querySelector(".project-box-rename-input")).toBeNull();
+  });
+
+  it("inline rename: an empty name on Enter is refused, Escape backs out", async () => {
+    const renameBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", [])], renameBox });
+    const container = await renderSwitcher();
+    const input = await startRenameFromMenu(container);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "   " } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect((container.querySelector(".project-box-rename-input") as HTMLElement).title).toBe("Give the box a name.");
+    await act(async () => {
+      fireEvent.keyDown(container.querySelector(".project-box-rename-input")!, { key: "Escape" });
+    });
+    expect(container.querySelector(".project-box-rename-input")).toBeNull();
+    expect(renameBox).not.toHaveBeenCalled();
+  });
+
+  it("inline rename: walking away with a taken name drops it and says why", async () => {
+    const renameBox = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ switchToast: null });
+    useBoxesStore.setState({ boxes: [box("boxA", []), box("boxB", [], 6)], renameBox });
+    const container = await renderSwitcher();
+    const input = await startRenameFromMenu(container);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "boxB" } });
+      fireEvent.blur(input);
+    });
+    expect(container.querySelector(".project-box-rename-input")).toBeNull();
+    expect(renameBox).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().switchToast).toBe("A box with that name already exists.");
+  });
+
+  it("the box list's New Box row asks for a name and enters the new box", async () => {
+    const created = box("boxNew", [], 1);
+    const createBoxQuick = vi.fn(async () => created);
+    const openBox = vi.fn(async () => {});
+    useBoxesStore.setState({ boxes: [box("boxA", [])], createBoxQuick, openBox });
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "New Box"));
+    });
+    expect(useBoxEditorStore.getState().open).toBe(false);
+    const field = (await screen.findByRole("textbox")) as HTMLInputElement;
+    expect(field.value).toBe("Box 1");
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(createBoxQuick).toHaveBeenCalledWith({ name: "Box 1", memberIds: [] });
+    expect(openBox).toHaveBeenCalledWith("boxNew");
+  });
+
+  it("Edit boxes… opens the box you are in, else the first, and never create mode", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", [], 1), box("boxB", [], 2)], openBox: vi.fn(openBoxScope) });
+    const container = await renderSwitcher();
+    let menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "Edit boxes"));
+    });
+    expect(useBoxEditorStore.getState()).toMatchObject({ open: true, boxId: "boxA" });
+
+    useBoxEditorStore.getState().close();
+    await act(async () => {
+      useBoxSliceStore.setState({ sliceBoxId: "boxB" });
+    });
+    menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "Edit boxes"));
+    });
+    expect(useBoxEditorStore.getState()).toMatchObject({ open: true, boxId: "boxB" });
+  });
+
+  it("with no box there is nothing to edit: the list has no Edit boxes… row", async () => {
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    expect(menuRow(menu, "Edit boxes")).toBeUndefined();
+    expect(menuRow(menu, "New Box")).toBeTruthy();
   });
 });

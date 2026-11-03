@@ -54,13 +54,13 @@ import { VmSettingsDialog } from "./VmSettingsDialog";
 import { categoryColor, primaryCategoryColor, projectCategories } from "../../lib/theme/categoryColor";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
-import { useBoxEditorStore } from "../../stores/boxEditor";
 import { useBoxSliceStore } from "../../stores/boxSlice";
 import { useBoxesStore } from "../../stores/boxes";
-import { boxColor } from "../../lib/theme/boxColor";
+import { BoxMemberChecklist } from "./BoxMemberChecklist";
+import { useQuickCreateBox } from "./useQuickCreateBox";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
-import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PauseIcon, SquareIcon, UnlockIcon } from "../common/icons/Icon";
+import { BoxSwatch, CheckIcon, CloseIcon, PauseIcon, UnlockIcon } from "../common/icons/Icon";
 import {
   agentFenceInstallCommand,
   agentFenceMarkLevel,
@@ -1216,7 +1216,10 @@ export function ProjectPill({
   // both read it. A plain activation click clears it (see the switcher).
   const selectedPills = usePillSelectionStore((s) => s.selected);
   const isSelected = selectedPills.includes(project.id);
-  const boxesForMenu = useBoxesStore((s) => s.boxes);
+  // The box whose slice the strip shows, if this pill is one of its members: the
+  // menu then offers the explicit "Remove ⟨project⟩ from ⟨box⟩".
+  const sliceBoxId = useBoxSliceStore((s) => s.sliceBoxId);
+  const sliceBox = useBoxesStore((s) => (sliceBoxId ? (s.boxes.find((b) => b.id === sliceBoxId) ?? null) : null));
   // With `connections_headless` off Tabtivity handles no passwords at all, so neither
   // key auth nor a saved password can ever be the answer — auto-connect there means
   // the login opens in the root terminal instead (see `autoConnectInteractive` in
@@ -1266,6 +1269,8 @@ export function ProjectPill({
   const setProjectScheduleMcp = useProjectsStore((s) => s.setProjectScheduleMcp);
   const setProjectGitPushMcp = useProjectsStore((s) => s.setProjectGitPushMcp);
   const { confirmAction, showMessage, dialogs: pillDialogs } = useDialogs();
+  // "Box these (N)…" and "New box with ⟨project⟩…": the one name prompt, then in.
+  const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
   const [agentFenceStatus, setAgentFenceStatus] = useState<AgentFenceStatus | null>(null);
   useEffect(() => {
     if (!contextMenu) return;
@@ -1762,6 +1767,7 @@ export function ProjectPill({
       {/* Hover popup — hidden while context menu is open (which calls hover.close). */}
       {!contextMenu && !fastMode && <ProjectHoverCard project={project} state={hover} />}
       {pillDialogs}
+      {quickCreateDialogs}
 
       {/* The swatch click's list of this member's boxes (it is in several). */}
       {swatchMenu && boxTags && boxTags.length > 1 && (
@@ -1952,68 +1958,50 @@ export function ProjectPill({
             </button>
           </div>
 
-          {/* Boxes (3a): checkbox row per box (toggle add/remove, additive N:M),
-              "Box these (N)…" when a multi-selection includes this pill, "New
-              box with ⟨project⟩…" into the editor, and — past ~6 boxes — an
-              "Edit boxes…" overflow into the same editor. */}
+          {/* Boxes: the shared checklist (a row per box, additive N:M, stays open
+              across toggles, scrolls, filters past 8 rows), "Box these (N)…" when
+              a multi-selection includes this pill, "New box with ⟨project⟩…" — both
+              through the one name prompt, after which you are in the new box — and,
+              inside a box slice, the explicit "Remove ⟨project⟩ from ⟨box⟩". */}
           <div className="context-menu-group">
-            <div className="context-menu-group-label">{t("pill.boxesGroup")}</div>
+            <div className="context-menu-group-label">
+              {t("pill.boxesGroup")} <UntestedTag id="boxMembers.checklist" />
+            </div>
             {selectedPills.length >= 2 && isSelected && (
               <button
                 className="untested"
                 onClick={() => {
                   setContextMenu(null);
-                  useBoxEditorStore.getState().openCreate(selectedPills);
+                  void quickCreateBox(selectedPills);
                 }}
               >
                 {t("pill.boxTheseEllipsis", { count: selectedPills.length })}
                 <UntestedTag id="projectPill.4" />
               </button>
             )}
-            {boxesForMenu.slice(0, 6).map((b) => {
-              const member = b.member_ids.includes(project.id);
-              return (
-                <button
-                  key={b.id}
-                  className="context-menu-check"
-                  onClick={() => {
-                    setContextMenu(null);
-                    const store = useBoxesStore.getState();
-                    if (member) void store.removeFromBox(project.id, b.id);
-                    else void store.addToBox(project.id, b.id);
-                  }}
-                  title={t(member ? "pill.leaveBoxTitle" : "pill.joinBoxTitle", { name: b.name })}
-                >
-                  <span className="context-menu-checkmark" aria-hidden>
-                    {member ? <CheckboxIcon /> : <SquareIcon />}
-                  </span>
-                  <BoxSwatch className="context-menu-box-swatch" color={boxColor(b)} />
-                  {b.name}
-                </button>
-              );
-            })}
+            {sliceBox && sliceBox.member_ids.includes(project.id) && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  void useBoxesStore.getState().removeFromBox(project.id, sliceBox.id);
+                }}
+              >
+                {t("projectSwitcher.removeFromBox", { name: project.name, box: sliceBox.name })}
+                <UntestedTag id="boxMembers.removeFromBox" />
+              </button>
+            )}
+            <BoxMemberChecklist project={project} />
             <button
               className="untested"
               onClick={() => {
                 setContextMenu(null);
-                useBoxEditorStore.getState().openCreate([project.id]);
+                void quickCreateBox([project.id]);
               }}
             >
               {t("pill.newBoxWithEllipsis", { name: project.name })}
               <UntestedTag id="projectPill.5" />
             </button>
-            {boxesForMenu.length > 6 && (
-              <button
-                className="untested"
-                onClick={() => {
-                  setContextMenu(null);
-                  useBoxEditorStore.getState().openEditor(null);
-                }}
-              >
-                {t("pill.editBoxesEllipsis")}
-                <UntestedTag id="projectPill.6" />
-              </button>
-            )}
           </div>
 
           {/* Git */}

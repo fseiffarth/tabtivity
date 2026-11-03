@@ -18,7 +18,8 @@ import { MenuShortcut } from "../common/MenuShortcut";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { BoxColorPicker } from "./BoxColorPicker";
-import { useQuickCreateBox } from "./useQuickCreateBox";
+import { BoxMemberChecklist } from "./BoxMemberChecklist";
+import { useBoxNameCheck, useQuickCreateBox } from "./useQuickCreateBox";
 import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PlusIcon, SquareIcon } from "../common/icons/Icon";
 
 /** This chip's entry in the shared header hover-menu id (stores/headerHoverMenu). */
@@ -58,9 +59,6 @@ export function boxPillsShown(
  *  rather than a click ("All projects"). */
 const LOGO_DRAG_SLOP = 4;
 
-/** Member rows a box pill's context menu lists before deferring to the editor. */
-const MAX_MENU_MEMBER_ROWS = 12;
-
 interface Props {
   boxes: ProjectBox[];
   /** The box whose slice the pill strip is showing (`null` = every project). */
@@ -74,7 +72,9 @@ interface Props {
   /** The header's width tier: it sets how many box pills the row may hold. */
   widthTier?: HeaderWidthTier;
   onRename: (boxId: string, name: string) => void;
-  onDelete: (boxId: string) => void;
+  /** "Dissolve box…" from a pill's menu: the caller asks the confirm question,
+   *  leaves the box first when it is the one being looked at, and deletes. */
+  onDissolve: (boxId: string) => void;
   /** The selected box's scope is the current one — the `active` treatment on
    *  the box's own pill, driven off `scope` exactly as every project pill
    *  beside it is. */
@@ -121,7 +121,7 @@ export function BoxScopeChip({
   onLeave,
   widthTier = 0,
   onRename,
-  onDelete,
+  onDissolve,
   active,
   rootActive,
   onSelectRoot,
@@ -152,6 +152,13 @@ export function BoxScopeChip({
     else editor.stopRename();
   };
   const [renameValue, setRenameValue] = useState("");
+  // A refused name (empty, taken, too long) keeps the field open on Enter and
+  // says why; the box's own spelling is always fine (`check` takes its id).
+  const [renameProblem, setRenameProblem] = useState<string | null>(null);
+  const { check: checkBoxName } = useBoxNameCheck();
+  // Every "new box" door in this chip (the list's "New Box" row) goes through the
+  // one name prompt; the ghost pill has its own while no box exists.
+  const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   // The control the list hangs under: the caret beside the logo, or the fold
   // pill after the shown box pills.
@@ -203,6 +210,7 @@ export function BoxScopeChip({
     if (!renamingId) return;
     const box = useBoxesStore.getState().boxes.find((b) => b.id === renamingId);
     if (box) setRenameValue(box.name);
+    setRenameProblem(null);
   }, [renamingId]);
 
   // The logo is the window's move handle. The move starts only once the press
@@ -329,33 +337,28 @@ export function BoxScopeChip({
     if (contextMenu && !menuBox) setContextMenu(null);
   }, [contextMenu, menuBox]);
 
-  // The projects a box pill's menu offers as members: every open project.
-  // Members first, so a long list shows what the box holds before what it could.
-  const projects = useProjectsStore((s) => s.projects);
-  const memberRows = useMemo(() => {
-    if (!menuBox) return [];
-    const members = new Set(menuBox.member_ids);
-    const open = projects
-      .filter((p) => p.status !== "inactive")
-      .sort((a, b) => a.position - b.position);
-    return [...open.filter((p) => members.has(p.id)), ...open.filter((p) => !members.has(p.id))]
-      .slice(0, MAX_MENU_MEMBER_ROWS)
-      .map((p) => ({ id: p.id, name: p.name, member: members.has(p.id) }));
-  }, [menuBox, projects]);
-  const memberRowsTruncated =
-    !!menuBox &&
-    projects.filter((p) => p.status !== "inactive").length >
-      MAX_MENU_MEMBER_ROWS;
-
   const pick = (boxId: string | null) => {
     dismiss();
     onSelect(boxId);
   };
 
-  const commitRename = () => {
+  // Enter: a name that may not be written (empty, taken, too long) leaves the
+  // field open, marked, with the reason as its tooltip; Escape backs out. A blur
+  // is a walk-away, not an answer: a refused name is dropped, and the reason is
+  // still said (the caller toasts what `renameBox` refuses).
+  const commitRename = (via: "enter" | "blur") => {
     const next = renameValue.trim();
     const box = renamingId ? boxes.find((b) => b.id === renamingId) : null;
-    if (box && next && next !== box.name) onRename(box.id, next);
+    if (box && next !== box.name) {
+      const problem = checkBoxName(next, box.id);
+      if (problem && via === "enter") {
+        setRenameProblem(problem);
+        return;
+      }
+      if (!problem) onRename(box.id, next);
+      else if (next) useProjectsStore.setState({ switchToast: problem });
+    }
+    setRenameProblem(null);
     setRenamingId(null);
   };
 
@@ -473,11 +476,19 @@ export function BoxScopeChip({
                     className="project-box-rename-input"
                     autoFocus
                     value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onBlur={commitRename}
+                    aria-invalid={renameProblem ? true : undefined}
+                    title={renameProblem ?? undefined}
+                    onChange={(e) => {
+                      setRenameValue(e.target.value);
+                      setRenameProblem(null);
+                    }}
+                    onBlur={() => commitRename("blur")}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename();
-                      if (e.key === "Escape") setRenamingId(null);
+                      if (e.key === "Enter") commitRename("enter");
+                      if (e.key === "Escape") {
+                        setRenameProblem(null);
+                        setRenamingId(null);
+                      }
                     }}
                   />
                 ) : (
@@ -665,19 +676,23 @@ export function BoxScopeChip({
             <button
               onClick={() => {
                 dismiss();
-                useBoxEditorStore.getState().openCreate();
+                void quickCreateBox();
               }}
             >
-              {t("projectSwitcher.newBox")}
+              {t("projectSwitcher.newBox")} <UntestedTag id="boxChip.createDoors" />
             </button>
-            <button
-              onClick={() => {
-                dismiss();
-                useBoxEditorStore.getState().openEditor(null);
-              }}
-            >
-              {t("pill.editBoxesEllipsis")}
-            </button>
+            {/* Opens the box you are looking at, else the first one: the editor
+                is for editing, never a way into creating (that is the row above). */}
+            {ordered.length > 0 && (
+              <button
+                onClick={() => {
+                  dismiss();
+                  useBoxEditorStore.getState().openEditor(selectedId ?? ordered[0].id);
+                }}
+              >
+                {t("pill.editBoxesEllipsis")}
+              </button>
+            )}
           </div>,
           document.body,
         )}
@@ -704,48 +719,22 @@ export function BoxScopeChip({
               setRenamingId(menuBox.id);
             }}
           >
-            {t("common.rename")}
+            {t("common.rename")} <UntestedTag id="boxPill.rename" />
           </button>
           <BoxColorPicker
             box={menuBox}
             onPick={(color) => void useBoxesStore.getState().setBoxColor(menuBox.id, color)}
           />
 
-          {/* Members, right on the box: a checkbox row per open project,
-              toggling membership on the spot. The menu STAYS open across
-              toggles — adding three projects is three clicks, not three
-              right-clicks — and closes on Escape or a press elsewhere. */}
+          {/* Members, right on the box: the shared checklist (every project,
+              closed ones labelled), toggling membership on the spot. The menu
+              STAYS open across toggles — adding three projects is three clicks,
+              not three right-clicks — and closes on Escape or a press elsewhere. */}
           <div className="context-menu-group">
             <div className="context-menu-group-label">
-              {t("boxPill.membersGroup")} <UntestedTag id="boxPill.membersGroup" />
+              {t("boxPill.membersGroup")} <UntestedTag id="boxMembers.checklist" />
             </div>
-            {memberRows.map((row) => (
-              <button
-                key={row.id}
-                className="context-menu-check"
-                data-member-id={row.id}
-                onClick={() => {
-                  const store = useBoxesStore.getState();
-                  if (row.member) void store.removeFromBox(row.id, menuBox.id);
-                  else void store.addToBox(row.id, menuBox.id);
-                }}
-                title={t(row.member ? "boxPill.removeMemberTitle" : "boxPill.addMemberTitle", {
-                  name: row.name,
-                  box: menuBox.name,
-                })}
-              >
-                <span className="context-menu-checkmark" aria-hidden>
-                  {row.member ? <CheckboxIcon /> : <SquareIcon />}
-                </span>
-                {row.name}
-              </button>
-            ))}
-            {memberRows.length === 0 && (
-              <div className="context-menu-note">{t("boxEditor.noProjects")}</div>
-            )}
-            {memberRowsTruncated && (
-              <div className="context-menu-note">{t("boxPill.moreInEditor")}</div>
-            )}
+            <BoxMemberChecklist box={menuBox} />
           </div>
 
           <button
@@ -760,13 +749,14 @@ export function BoxScopeChip({
             className="danger"
             onClick={() => {
               setContextMenu(null);
-              onDelete(menuBox.id);
+              onDissolve(menuBox.id);
             }}
           >
-            {t("boxPill.deleteBox")}
+            {t("boxPill.dissolveBox")} <UntestedTag id="boxPill.dissolveBox" />
           </button>
         </ContextMenuPortal>
       )}
+      {quickCreateDialogs}
     </>
   );
 }

@@ -95,6 +95,20 @@ describe("boxes store — addToBox (additive)", () => {
     expect(invoke).not.toHaveBeenCalledWith("patch_box", expect.anything());
   });
 
+  it("a CLOSED project joins and leaves like any other: one singular patch, status untouched", async () => {
+    // The membership checklists list closed projects (a box slice shows them
+    // already); toggling one is the same additive add/remove, never a whole list.
+    useBoxesStore.setState({ boxes: [box("boxA", [])] });
+    useProjectsStore.setState({ projects: [{ ...proj("shelf"), status: "inactive" }] });
+
+    await useBoxesStore.getState().addToBox("shelf", "boxA");
+    expect(invoke).toHaveBeenCalledWith("patch_box", { boxId: "boxA", patch: { addMember: "shelf" } });
+    await useBoxesStore.getState().removeFromBox("shelf", "boxA");
+    expect(invoke).toHaveBeenCalledWith("patch_box", { boxId: "boxA", patch: { removeMember: "shelf" } });
+    expect(invoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
+    expect(useProjectsStore.getState().projects[0].status).toBe("inactive");
+  });
+
   it("refreshes the agent docs of a box that already has a folder", async () => {
     useBoxesStore.setState({ boxes: [{ ...box("boxA", []), folder: "/b/boxA" }] });
 
