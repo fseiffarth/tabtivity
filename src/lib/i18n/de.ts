@@ -11099,7 +11099,6 @@ export const dict: Dict = {
   "cockpit.projects.heading": "Alle Projekte",
   "cockpit.tonight.heading": "Als Nächstes",
   "cockpit.usage.heading": "Nutzung und Rechner",
-  "cockpit.comingSoon": "Hier ist noch nichts.",
   "cockpit.indicator": "Cockpit: Agenten und Entscheidungen aller Projekte",
   "cockpit.indicatorCount": "Cockpit: {asking} fragen, {interrupted} unterbrochen, {proposals} Vorschläge, {approvals} Freigaben",
   "cockpit.openFromBox": "Cockpit öffnen",
@@ -11223,4 +11222,9 @@ export const dict: Dict = {
   "cockpit.tonight.pushes": "Angekommene Pushes",
   "cockpit.tonight.fired": "Ausgelöste Zeitpläne",
   "cockpit.tonight.rootWrites": "Root-Schreibvorgänge",
+  "cockpit.usage.machine": "Dieser Rechner",
+  "cockpit.usage.remote": "Entfernt",
+  "cockpit.usage.noRemote": "Keine entfernten Rechner.",
+  "cockpit.usage.sessions": "{count} laufende Sitzungen",
+  "cockpit.usage.openMachines": "Globale Rechner öffnen…",
 };

@@ -175,6 +175,28 @@ dev build.
   disabled, daily recurrence across midnight, timeline order + horizon +
   standing items, warm-up slots, away window and recap).
 
+### C6 — Usage view
+
+- sha: see `git log --grep "(C6)"`
+- Split: `agents/CliOverviewView.tsx` → `CliOverviewBody` (the section, its
+  5-min `usePoll` and ⟳) + `CliOverviewView` (the side panel's scroll box
+  around it). `ModelsHubSections.RunningModelCard` exported. `MachineMeters` +
+  `useMachineMeters` were already one body for two hosts and are reused as-is.
+- `components/cockpit/CockpitUsage.tsx`: CLIs | this machine (meters, resident
+  Ollama models with the hub's Unload via `useModelsHub(true)`) + remote
+  (every project host / worker with its SSH lamp, run host, live tmux sessions
+  the sessions store last read, Connect → `useRemoteMachinesStore.open`; global
+  machines with their lamps and a button to the Machines overlay). No probe.
+- `cockpit.comingSoon` removed (all four views have bodies now).
+- Tests: `CockpitUsage.test.tsx` (one `agent_overview` read on show, no
+  ssh/probe/connect command, Connect offered for a host that is off). Its
+  `usePoll` is mocked: under jsdom the real poll's focus/visibility wait never
+  settles and `act` times out (the side panel's view has no test either).
+- Rust gates (C1's settings line), all PASS: clippy `-p tabtivity -p
+  app-serverd --all-targets`, clippy `--no-default-features --lib`, clippy
+  `-p app-serverd`; cargo test `-p tabtivity -p app-serverd` 5196 passed;
+  daemon build `--no-default-features --lib --test server_secrets` 4857 passed.
+
 ## Flagged for user
 
 - Header badge does not count **push requests** while the cockpit is shut:

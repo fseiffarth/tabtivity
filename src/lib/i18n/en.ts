@@ -11191,7 +11191,6 @@ export const enSource = {
   "cockpit.projects.heading": "Every project",
   "cockpit.tonight.heading": "Coming up",
   "cockpit.usage.heading": "Usage and machines",
-  "cockpit.comingSoon": "Nothing here yet.",
   "cockpit.indicator": "Cockpit: every project's agents and decisions",
   "cockpit.indicatorCount": "Cockpit: {asking} asking, {interrupted} interrupted, {proposals} proposals, {approvals} approvals",
   "cockpit.openFromBox": "Open cockpit",
@@ -11315,4 +11314,9 @@ export const enSource = {
   "cockpit.tonight.pushes": "Pushes that landed",
   "cockpit.tonight.fired": "Schedules that fired",
   "cockpit.tonight.rootWrites": "Root writes",
+  "cockpit.usage.machine": "This machine",
+  "cockpit.usage.remote": "Remote",
+  "cockpit.usage.noRemote": "No remote hosts.",
+  "cockpit.usage.sessions": "{count} live sessions",
+  "cockpit.usage.openMachines": "Open global machines…",
 } as const;

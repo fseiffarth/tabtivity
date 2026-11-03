@@ -436,3 +436,31 @@
   gap: 4px;
   flex-shrink: 0;
 }
+
+/* ── Usage view ───────────────────────────────────────────────────────── */
+.cockpit-usage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+.cockpit-usage-col {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cockpit-usage-section {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  padding: 0 8px 8px;
+}
+.cockpit-usage-models {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}

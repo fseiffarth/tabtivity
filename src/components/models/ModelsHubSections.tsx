@@ -533,7 +533,7 @@ function LoadOnStart({ name, hub, t }: { name: string; hub: ModelsHub; t: TFn })
 
 /** A resident model: its status, the tasks it is pinned to, where it is offered,
  *  and the two verbs that are about it right now (Unload; Update if there is one). */
-function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: ModelsHub; t: TFn }) {
+export function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: ModelsHub; t: TFn }) {
   const {
     activeModel,
     roles,
