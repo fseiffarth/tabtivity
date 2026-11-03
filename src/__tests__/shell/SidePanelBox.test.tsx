@@ -569,3 +569,207 @@ describe("box side panel accordion", () => {
     });
   });
 });
+
+/**
+ * The `⋯` menu on each member header and the one shared search field.
+ */
+describe("box side panel member menu and shared search", () => {
+  beforeEach(() => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p2"])] });
+    useProjectsStore.setState({
+      projects: [proj("p1"), proj("p2")],
+      activeId: null,
+      loaded: true,
+    });
+    useTabsStore.setState({ scope: "box:boxA" });
+  });
+
+  async function renderBox() {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<SidePanel open={true} />));
+    });
+    return container;
+  }
+
+  function section(container: HTMLElement, name: string): HTMLElement {
+    return [...container.querySelectorAll<HTMLElement>(".file-root")].find(
+      (el) => el.querySelector(".file-root-name")?.textContent === name,
+    )!;
+  }
+
+  async function openMenu(container: HTMLElement, name: string) {
+    await act(async () => {
+      fireEvent.click(section(container, name).querySelector(".file-root-more")!);
+    });
+  }
+
+  function menuRows(): string[] {
+    return [...document.querySelectorAll(".context-menu-portal button")].map(
+      (b) => b.textContent?.replace(/\s+/g, " ").trim() ?? "",
+    );
+  }
+
+  it("puts a ⋯ on every member header and none on the box folder's", async () => {
+    const container = await renderBox();
+    expect(container.querySelectorAll(".file-root-more")).toHaveLength(2);
+    expect(section(container, "boxA").querySelector(".file-root-more")).toBeNull();
+  });
+
+  it("the ⋯ menu holds Files/Git, the folder, settings and Open as tab (no Remote/Local for a local member)", async () => {
+    const container = await renderBox();
+    await openMenu(container, "p1");
+    const rows = menuRows();
+    expect(rows[0]).toBe("Files");
+    expect(rows[1]).toBe("Git");
+    expect(rows.some((r) => r.startsWith("Open folder in file manager"))).toBe(true);
+    expect(rows.some((r) => r.startsWith("Project settings"))).toBe(true);
+    expect(rows.some((r) => r.startsWith("Open as tab"))).toBe(true);
+    expect(rows).not.toContain("Remote");
+    expect(rows).not.toContain("Local");
+  });
+
+  it("the body keeps the Files/Git segmented control, but only inside the expanded section", async () => {
+    const container = await renderBox();
+    expect(section(container, "p1").querySelectorAll(".side-panel-toolbar--box-root .toolbar-btn")).toHaveLength(2);
+    expect(section(container, "p2").querySelector(".side-panel-toolbar--box-root")).toBeNull();
+    // The folder and settings buttons moved into the menu.
+    expect(section(container, "p1").querySelector(".toolbar-btn--sm")).toBeNull();
+  });
+
+  it("Git from the menu of a collapsed member expands it on the Git view", async () => {
+    const container = await renderBox();
+    await openMenu(container, "p2");
+    await act(async () => {
+      fireEvent.click(
+        [...document.querySelectorAll<HTMLElement>(".context-menu-portal button")].find(
+          (b) => b.textContent === "Git",
+        )!,
+      );
+    });
+    const row = useBoxAccordionStore.getState().byBox.boxA;
+    expect(row?.open).toBe("p2");
+    expect(row?.views?.p2).toBe("git");
+    expect(section(container, "p2").classList.contains("is-collapsed")).toBe(false);
+    expect(document.querySelector(".context-menu-portal")).toBeNull();
+  });
+
+  it("Open as tab opens the member's Files (Project) tab in its root", async () => {
+    const container = await renderBox();
+    await openMenu(container, "p2");
+    await act(async () => {
+      fireEvent.click(
+        [...document.querySelectorAll<HTMLElement>(".context-menu-portal button")].find((b) =>
+          b.textContent?.startsWith("Open as tab"),
+        )!,
+      );
+    });
+    const tab = useTabsStore.getState().tabs.find((t) => t.kind === "projectfiles");
+    expect(tab?.cwd).toBe("/p/p2");
+  });
+
+  it("Open folder in file manager asks for the member's folder", async () => {
+    const container = await renderBox();
+    await openMenu(container, "p1");
+    await act(async () => {
+      fireEvent.click(
+        [...document.querySelectorAll<HTMLElement>(".context-menu-portal button")].find((b) =>
+          b.textContent?.startsWith("Open folder in file manager"),
+        )!,
+      );
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("open_in_file_manager", { path: "/p/p1" });
+  });
+
+  it("a remote member's menu carries Remote/Local, and picking one switches the side", async () => {
+    const remoteMember = {
+      ...proj("p2"),
+      remote: { host: "h", user: "u", remote_path: "/srv/p2" },
+    } as ProjectEntry;
+    useProjectsStore.setState({ projects: [proj("p1"), remoteMember] });
+    useRemoteStatusStore.setState({ byProject: { p2: { ssh: "connected", vpn: "off" } } });
+    useFileSourcePrefStore.setState({ byProject: { p2: "remote" }, byViewer: {} });
+    const container = await renderBox();
+    await openMenu(container, "p2");
+    expect(menuRows()).toEqual(expect.arrayContaining(["Local", "Remote"]));
+    await act(async () => {
+      fireEvent.click(
+        [...document.querySelectorAll<HTMLElement>(".context-menu-portal button")].find(
+          (b) => b.textContent === "Local",
+        )!,
+      );
+    });
+    expect(useFileSourcePrefStore.getState().byProject.p2).toBe("local");
+  });
+
+  describe("shared search", () => {
+    async function openSearch(container: HTMLElement) {
+      await act(async () => {
+        fireEvent.click(container.querySelector<HTMLElement>('button[aria-label="Show search"]')!);
+      });
+    }
+
+    it("draws one field above the sections instead of one per tree", async () => {
+      const container = await renderBox();
+      expect(container.querySelector(".box-shared-search")).toBeNull();
+      await openSearch(container);
+      expect(container.querySelectorAll(".box-shared-search")).toHaveLength(1);
+      // The trees draw no box of their own.
+      expect(container.querySelectorAll(".file-tree-search-input")).toHaveLength(1);
+      expect(container.querySelector(".file-root .file-tree-search")).toBeNull();
+      // The placeholder names the expanded member.
+      expect(
+        (container.querySelector(".box-shared-search input") as HTMLInputElement).placeholder,
+      ).toContain("p1");
+    });
+
+    it("searches the expanded member only, and follows the expansion", async () => {
+      const container = await renderBox();
+      await openSearch(container);
+      const input = () => container.querySelector(".box-shared-search input") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(input(), { target: { value: "needle" } });
+      });
+      const pathCalls = () =>
+        mockInvoke.mock.calls.filter((c) => c[0] === "list_project_paths").map((c) => (c[1] as { projectDir: string }).projectDir);
+      expect(pathCalls()).toEqual(["/p/p1"]);
+      // Opening another member clears the query and searches the new one.
+      await act(async () => {
+        fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
+      });
+      expect(input().value).toBe("");
+      expect(input().placeholder).toContain("p2");
+      await act(async () => {
+        fireEvent.change(input(), { target: { value: "other" } });
+      });
+      expect(pathCalls()).toContain("/p/p2");
+    });
+
+    it("closing the toolbar toggle clears the query and removes the field", async () => {
+      const container = await renderBox();
+      await openSearch(container);
+      await act(async () => {
+        fireEvent.change(container.querySelector(".box-shared-search input")!, { target: { value: "x" } });
+      });
+      await act(async () => {
+        fireEvent.click(container.querySelector<HTMLElement>('button[aria-label="Hide search"]')!);
+      });
+      expect(container.querySelector(".box-shared-search")).toBeNull();
+    });
+
+    it("a remote member on its Remote side cannot be searched, and says so", async () => {
+      const remoteMember = {
+        ...proj("p1"),
+        remote: { host: "h", user: "u", remote_path: "/srv/p1" },
+      } as ProjectEntry;
+      useProjectsStore.setState({ projects: [remoteMember, proj("p2")] });
+      useRemoteStatusStore.setState({ byProject: { p1: { ssh: "connected", vpn: "off" } } });
+      useFileSourcePrefStore.setState({ byProject: { p1: "remote" }, byViewer: {} });
+      const container = await renderBox();
+      await openSearch(container);
+      const input = container.querySelector(".box-shared-search input") as HTMLInputElement;
+      expect(input.disabled).toBe(true);
+      expect(input.placeholder).toContain("Local");
+    });
+  });
+});

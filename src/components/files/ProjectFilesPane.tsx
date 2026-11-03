@@ -15,6 +15,9 @@ import { useFastMode } from "../../lib/agents/fastMode";
 import { memberColor } from "../../lib/theme/boxColor";
 import { useBoxAccordionStore, type BoxMemberView } from "../../stores/boxAccordion";
 import { useBoxAccordion } from "./useBoxAccordion";
+import { BoxMemberMenu } from "./BoxMemberMenu";
+import type { SharedTreeSearch } from "./fileTreeTypes";
+import { openProjectFilesTab } from "../../lib/tabs/openProjectFilesTab";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import {
   autoFileSource,
@@ -30,7 +33,7 @@ import type { SortKey } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { UntestedTag } from "../common/UntestedTag";
-import { CloseIcon, FolderIcon, GearIcon, GripIcon, HexagonIcon, RefreshIcon } from "../common/icons/Icon";
+import { CloseIcon, FolderIcon, GripIcon, HexagonIcon, MoreIcon, RefreshIcon } from "../common/icons/Icon";
 
 /**
  * THE project file view — the tree, the remote sync row and the Downloads
@@ -331,6 +334,7 @@ function BoxRootSection({
   onViewChange,
   agentCount = 0,
   springArmed = false,
+  sharedSearch,
 }: BoxRoot & {
   sortKey: SortKey;
   descending: boolean;
@@ -349,8 +353,11 @@ function BoxRootSection({
   agentCount?: number;
   /** A file drag has dwelt over this collapsed header: it opens soon. */
   springArmed?: boolean;
+  /** The pane's one search field, handed to the expanded member's tree only. */
+  sharedSearch?: SharedTreeSearch;
 }) {
   const t = useT();
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const collapsed = !expanded;
   const setView = onViewChange;
   const [showSettings, setShowSettings] = useState(false);
@@ -380,6 +387,13 @@ function BoxRootSection({
     remoteBlocked,
   });
   const toolbarBtnStyle = { marginLeft: 2 } as const;
+  const openFolder = () => {
+    const sub = rel.replace(/^\/+|\/+$/g, "");
+    const path = sub ? `${treeDir.replace(/\/+$/, "")}/${sub}` : treeDir;
+    invoke("open_in_file_manager", { path }).catch((e) =>
+      console.error("open_in_file_manager", e),
+    );
+  };
   // The header's git mark. A remote member gets none (its tree lives behind an
   // SSH pool; the box view never probes it), and a member nobody has probed yet
   // gets none either: an absent reading is omitted, never drawn as clean.
@@ -484,6 +498,22 @@ function BoxRootSection({
           )}
           {variant === "box" && <span className="file-root-kind">{t("fileRoot.kindBox")}</span>}
         </button>
+        {variant === "member" && (
+          <button
+            type="button"
+            className="file-root-more"
+            aria-haspopup="menu"
+            aria-expanded={menu !== null}
+            aria-label={t("fileRoot.moreAria")}
+            title={t("fileRoot.moreTitle")}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenu({ x: r.left, y: r.bottom + 2 });
+            }}
+          >
+            <MoreIcon />
+          </button>
+        )}
       </div>
       {!collapsed && variant === "member" && (
         <div className="side-panel-toolbar side-panel-toolbar--box-root">
@@ -498,33 +528,6 @@ function BoxRootSection({
               {t(v === "files" ? "projectFilesView.tabFiles" : "projectFilesView.tabGit")}
             </button>
           ))}
-          {!pinned && (
-            <button
-              className="toolbar-btn toolbar-btn--sm"
-              style={toolbarBtnStyle}
-              onClick={() => {
-                const sub = rel.replace(/^\/+|\/+$/g, "");
-                const path = sub ? `${treeDir.replace(/\/+$/, "")}/${sub}` : treeDir;
-                invoke("open_in_file_manager", { path }).catch((e) =>
-                  console.error("open_in_file_manager", e),
-                );
-              }}
-              title={t("projectFilesView.openInFileManagerTitle")}
-            >
-              ⧉
-            </button>
-          )}
-          {localFile && project && (
-            <button
-              className="toolbar-btn toolbar-btn--sm"
-              style={toolbarBtnStyle}
-              onClick={() => setShowSettings(true)}
-              title={t("projectFilesView.projectSettingsTitle")}
-            >
-              <GearIcon />
-            </button>
-          )}
-          <UntestedTag id="projectFilesPane.1" />
           <UntestedTag id="projectFilesPane.accordion" />
           <UntestedTag id="projectFilesPane.dropCollapsed" />
           {remote && !pinned && (
@@ -579,6 +582,7 @@ function BoxRootSection({
             searchOpen={searchOpen}
             onSearchOpenChange={onSearchOpenChange}
             refreshNonce={refreshNonce}
+            sharedSearch={sharedSearch}
           />
         </div>
       )}
@@ -592,6 +596,23 @@ function BoxRootSection({
             onChanged={() => {}}
           />
         </div>
+      )}
+      {menu && variant === "member" && (
+        <BoxMemberMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          view={view}
+          onView={(v) => {
+            setView(v);
+            if (!expanded) onToggle();
+          }}
+          onOpenFolder={pinned ? undefined : openFolder}
+          onSettings={localFile && project ? () => setShowSettings(true) : undefined}
+          source={remote && !pinned ? source : undefined}
+          onSource={remote && !pinned ? setSource : undefined}
+          onOpenTab={() => openProjectFilesTab(t, dir, "")}
+        />
       )}
       {showSettings && project && localFile && (
         <ProjectFilesSettingsDialog
@@ -815,6 +836,41 @@ export function ProjectFilesPane({
   );
   const reorderFor = useMemberReorder(activeBox, memberOrder);
   const accordion = useBoxAccordion({ scope, box: activeBox, memberOrder, active });
+  // ONE search field for the whole box, above the sections, searching the
+  // expanded member (the host's 🔍 opens it, as it opened the per-tree boxes).
+  const boxSearchOpen = !!activeBox && !!searchOpen;
+  const [boxQuery, setBoxQuery] = useState("");
+  const [boxSearchMode, setBoxSearchMode] = useState<"name" | "content">("name");
+  const [boxSearchCase, setBoxSearchCase] = useState(false);
+  const searchedRoot = boxRoots.find(
+    (r) => r.variant === "member" && r.rootId === accordion.expandedId,
+  );
+  const searchedProject = useProjectsStore((s) =>
+    searchedRoot ? s.projects.find((p) => p.id === searchedRoot.rootId) ?? null : null,
+  );
+  const searchedRemote = !!searchedRoot?.remote;
+  const [searchedSource] = useFileSource(searchedRemote ? searchedRoot!.rootId : null, searchedRemote);
+  // The search backends walk a local path: a remote member is searchable on its
+  // Local side (or when host-pinned, where they ask the host).
+  const searchable =
+    !!searchedRoot && (!searchedRemote || isHostPinned(searchedProject) || searchedSource === "local");
+  useEffect(() => {
+    // Closing the field, or moving to another member, drops the query: the next
+    // open must not silently repopulate results nobody typed there.
+    if (!boxSearchOpen) setBoxQuery("");
+  }, [boxSearchOpen]);
+  useEffect(() => {
+    setBoxQuery("");
+  }, [accordion.expandedId]);
+  const sharedSearch = useMemo<SharedTreeSearch>(
+    () => ({
+      query: searchable ? boxQuery : "",
+      mode: boxSearchMode,
+      caseSensitive: boxSearchCase,
+      onSettled: () => setBoxQuery(""),
+    }),
+    [searchable, boxQuery, boxSearchMode, boxSearchCase],
+  );
   const projectId = project?.id ?? null;
   const isRemoteProject = !!project?.remote;
   // No local copy (`isHostPinned`): the tree is always the host's, and the
@@ -994,6 +1050,81 @@ export function ProjectFilesPane({
           </button>
         </div>
       )}
+      {mountTree && boxSearchOpen && (
+        <div className="file-tree-search box-shared-search">
+          <div className="file-tree-search-row">
+            <input
+              type="text"
+              className="file-tree-search-input"
+              value={boxQuery}
+              autoFocus
+              disabled={!searchable}
+              placeholder={
+                !searchedRoot
+                  ? t("fileRoot.searchNoMember")
+                  : !searchable
+                    ? t("fileRoot.searchNeedsLocal")
+                    : boxSearchMode === "name"
+                      ? t("fileRoot.findIn", { name: searchedRoot.label })
+                      : t("fileRoot.searchIn", { name: searchedRoot.label })
+              }
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(e) => setBoxQuery(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") {
+                  if (boxQuery) setBoxQuery("");
+                  else onSearchOpenChange?.(false);
+                }
+              }}
+            />
+            {boxQuery && (
+              <button
+                type="button"
+                className="file-tree-search-clear"
+                title={t("fileTree.clearSearch")}
+                aria-label={t("fileTree.clearSearch")}
+                onClick={() => setBoxQuery("")}
+              >
+                <CloseIcon />
+              </button>
+            )}
+            <UntestedTag id="projectFilesPane.sharedSearch" />
+          </div>
+          <div className="file-tree-search-modes">
+            <button
+              type="button"
+              className={`file-tree-search-mode${boxSearchMode === "name" ? " active" : ""}`}
+              aria-pressed={boxSearchMode === "name"}
+              onClick={() => setBoxSearchMode("name")}
+              title={t("fileTree.searchNamesTitle")}
+            >
+              {t("fileTree.searchName")}
+            </button>
+            <button
+              type="button"
+              className={`file-tree-search-mode${boxSearchMode === "content" ? " active" : ""}`}
+              aria-pressed={boxSearchMode === "content"}
+              onClick={() => setBoxSearchMode("content")}
+              title={t("fileTree.searchContentTitle")}
+            >
+              {t("fileTree.searchContent")}
+            </button>
+            {boxSearchMode === "content" && (
+              <button
+                type="button"
+                className={`file-tree-search-mode${boxSearchCase ? " active" : ""}`}
+                aria-pressed={boxSearchCase}
+                onClick={() => setBoxSearchCase((v) => !v)}
+                title={t("search.caseSensitive")}
+              >
+                Aa
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="side-panel-scroll" style={{ flex: 1, overflowY: "auto" }}>
         {mountTree && activeBox ? (
           boxRoots.length === 0 ? (
@@ -1025,8 +1156,15 @@ export function ProjectFilesPane({
                 descending={descending}
                 onSortChange={compact ? undefined : onSortChange}
                 active={active}
-                searchOpen={searchOpen}
+                // The trees draw no search box in a box: the one field above
+                // the sections feeds the expanded member (`sharedSearch`).
+                searchOpen={false}
                 onSearchOpenChange={onSearchOpenChange}
+                sharedSearch={
+                  boxSearchOpen && r.variant === "member" && r.rootId === accordion.expandedId
+                    ? sharedSearch
+                    : undefined
+                }
                 refreshNonce={refreshNonce}
               />
             ))

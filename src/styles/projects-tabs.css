@@ -1002,6 +1002,31 @@
   border: 1px dashed var(--text-muted);
 }
 
+/* The ⋯ button of a member header, a sibling of the header button (a button
+   inside a button is not markup). */
+.file-root-more {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.file-root-more:hover,
+.file-root-more:focus-visible,
+.file-root-more[aria-expanded="true"] {
+  color: var(--text-primary);
+}
+
+/* The one search field above the member sections (box scope). */
+.box-shared-search {
+  margin-bottom: 6px;
+}
+
 /* Agent tabs working in this member. */
 .file-root-agents {
   flex-shrink: 0;

@@ -242,6 +242,8 @@ export const UNTESTED = {
   "projectFilesPane.2": { area: "files", what: "ProjectFilesPane · Large folders…" },
   "projectFilesPane.accordion": { area: "files", what: "Box side panel · one member section expanded at a time (the last clicked, else the active tab's), one-line headers with the member colour dot, a git dot (omitted for remote or unprobed members) and the agent-tab count; the choice is remembered per box" },
   "projectFilesPane.dropCollapsed": { area: "files", what: "Box side panel · a file dragged over a collapsed member section lands in that member's root on release, and the section opens after a short dwell" },
+  "projectFilesPane.memberMenu": { area: "files", what: "Box side panel · the ⋯ menu on a member header: Files or Git, Remote or Local, open folder, project settings, and Open as tab (the member's Files tab with the git bar)" },
+  "projectFilesPane.sharedSearch": { area: "files", what: "Box side panel · one search field above the member sections, searching the expanded member (the trees draw no search box of their own)" },
   "projectFilesView.1": { area: "files", what: "ProjectFilesView · Files" },
   "projectFilesView.2": { area: "files", what: "ProjectFilesView · Remote machines…" },
   "projectFilesView.3": { area: "files", what: "ProjectFilesView · {count} diverged" },
