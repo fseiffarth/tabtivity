@@ -14,8 +14,9 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useBigFoldersStore } from "../../stores/bigFolders";
 import { useProjectsStore } from "../../stores/projects";
-import { BOX_SCOPE_PREFIX, useBoxMembership, useBoxesStore } from "../../stores/boxes";
+import { BOX_SCOPE_PREFIX, defaultBoxName, useBoxMembership, useBoxesStore } from "../../stores/boxes";
 import { useBoxEditorStore } from "../../stores/boxEditor";
+import { useBoxSliceStore } from "../../stores/boxSlice";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
@@ -79,8 +80,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   const addToBox = useBoxesStore((s) => s.addToBox);
   const removeFromBox = useBoxesStore((s) => s.removeFromBox);
   const boxProjects = useBoxesStore((s) => s.boxProjects);
-  const openBox = useBoxesStore((s) => s.openBox);
-  const membership = useBoxMembership();
+    const membership = useBoxMembership();
   const openHpcWizard = useHpcPipelineStore((s) => s.openWizard);
   // Multi-select (3b): Escape clears the Ctrl/Cmd-click pill selection.
   const anySelected = usePillSelectionStore((s) => s.selected.length > 0);
@@ -312,12 +312,11 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     return () => window.clearInterval(id);
   }, [fenceMarkSignature, quiesce]);
 
-  // Which box's slice the strip is showing (`null` = every active project).
-  // A *view*, deliberately not the scope: clicking a member switches to that
-  // project without collapsing the slice, so hopping between a box's projects
-  // never reshuffles the row under the pointer. Session-only — a slice is where
-  // you are looking right now, not a setting.
-  const [boxFilter, setBoxFilter] = useState<string | null>(null);
+  // Which box's slice the strip is showing (`null` = every active project) lives
+  // in `stores/boxSlice`, so the ✕, the palette and the search can reach it too;
+  // the effects that keep it in step with the scope and the boxes stay here.
+  const boxFilter = useBoxSliceStore((s) => s.sliceBoxId);
+  const selectBox = useBoxSliceStore((s) => s.selectBox);
   const [boxCandidateFilter, setBoxCandidateFilter] = useState("");
 
   // Entering a box scope by any other door (the search popover, a restored
@@ -325,15 +324,13 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // scope does NOT clear it, which is exactly what keeps the strip still while
   // its projects are being visited.
   useEffect(() => {
-    if (!scope.startsWith(BOX_SCOPE_PREFIX)) return;
-    const id = scope.slice(BOX_SCOPE_PREFIX.length);
-    setBoxFilter((cur) => (cur === id ? cur : id));
+    useBoxSliceStore.getState().followScope(scope);
   }, [scope]);
 
   // A dissolved box takes its slice with it, or the strip would stay filtered
   // by something no menu can select any more.
   useEffect(() => {
-    if (boxFilter && !boxes.some((b) => b.id === boxFilter)) setBoxFilter(null);
+    useBoxSliceStore.getState().dropIfGone(boxes.map((b) => b.id));
   }, [boxes, boxFilter]);
 
   // Membership mode follows the selected slice rather than the current tab
@@ -354,37 +351,12 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
 
   // Where the UNSLICED strip last stood. A slice is a detour the scope takes
   // with it (`openBox` enters the box), so leaving it by "All projects" has to
-  // hand the scope back — otherwise the strip says "every project" while the
-  // tabs below are still the box's and not one pill on the row is lit. Only
-  // scopes seen while no slice was selected count: a member opened from inside
-  // the slice was current in the BOX's view, not in this one. Root is a
-  // legitimate value — it is where a session starts, and where a remembered
-  // project that has since been closed lands.
-  const lastUnslicedScope = useRef<string>(ROOT_SCOPE);
+  // hand the scope back (`boxSlice.selectBox(null)`) — otherwise the strip says
+  // "every project" while the tabs below are still the box's and not one pill
+  // on the row is lit.
   useEffect(() => {
-    if (boxFilter || scope.startsWith(BOX_SCOPE_PREFIX)) return;
-    lastUnslicedScope.current = scope;
+    useBoxSliceStore.getState().noteScope(scope);
   }, [boxFilter, scope]);
-
-  /** Pick a box's slice (and open its scope) or go back to every project. */
-  const selectBox = (boxId: string | null) => {
-    setBoxFilter(boxId);
-    // Picking a box makes the BOX the current scope: its tabs, its pill lit.
-    if (boxId) {
-      void openBox(boxId);
-      return;
-    }
-    // Back to every project — and to the project that view was last on (user,
-    // 2026-09-05). Only from inside a box scope: once the user has hopped to a
-    // member, strip and tabs already agree, and re-activating would be a
-    // pointless project-runtime switch. `setActive` with the id it already
-    // holds is the established way back out of a box (CenterPanel keys its
-    // `setScope` off `switchGeneration` for exactly this).
-    if (!scope.startsWith(BOX_SCOPE_PREFIX)) return;
-    const back = lastUnslicedScope.current;
-    const alive = projects.some((p) => p.id === back && p.status !== "inactive");
-    void setActive(alive ? back : null);
-  };
 
   // The built-in root scope, picked from the same chip as the boxes.
   // Root is no longer a place to switch to: it opens as the root console over
@@ -500,7 +472,10 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // box it was already in; the user renames the new box via its chip.
   const groupProjects = async (fromId: string, toId: string) => {
     if (fromId === toId) return;
-    await boxProjects([toId, fromId], { name: t("projectSwitcher.newBox") });
+    // Box names are unique now, so a second "New Box" would be refused: take the
+    // next free "Box N" (the user renames it via its pill).
+    const name = defaultBoxName(useBoxesStore.getState().boxes, (n) => t("boxName.default", { n }));
+    await boxProjects([toId, fromId], { name });
   };
 
   // Empty pill-strip space doubles as a window-drag handle: pressing the bare
@@ -633,7 +608,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
           <BoxScopeChip
             boxes={boxes}
             selectedId={boxFilter}
-            onSelect={selectBox}
+            onSelect={(id) => void selectBox(id)}
             onRename={(boxId, name) => void renameBox(boxId, name)}
             // The pill's Delete is one right-click away on every box now, so it
             // asks the same question the editor's Dissolve does — and says the
@@ -854,7 +829,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
           projects={projects}
           boxes={boxes}
           onActivateProject={(id) => void setActive(id)}
-          onOpenBox={(id) => selectBox(id)}
+          onOpenBox={(id) => void selectBox(id)}
         />
       </div>
       {dialogs}

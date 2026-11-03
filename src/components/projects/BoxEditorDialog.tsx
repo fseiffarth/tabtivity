@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ProjectEntry } from "../../types";
 import { useProjectsStore } from "../../stores/projects";
-import { useBoxesStore } from "../../stores/boxes";
+import { defaultBoxName, useBoxesStore } from "../../stores/boxes";
+import { useBoxNameCheck } from "./useQuickCreateBox";
 import { useBoxEditorStore } from "../../stores/boxEditor";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { UntestedTag } from "../common/UntestedTag";
@@ -44,6 +45,7 @@ export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
   const t = useT();
   const modalRef = useModalFocus(onClose);
   const { confirmAction, dialogs } = useDialogs();
+  const { messageOf } = useBoxNameCheck();
   const projects = useProjectsStore((s) => s.projects);
   const boxes = useBoxesStore((s) => s.boxes);
   const renameBox = useBoxesStore((s) => s.renameBox);
@@ -57,14 +59,15 @@ export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
   // draft (name + checked members) reloads whenever the target moves.
   const [target, setTarget] = useState<string>(boxId ?? "");
   const box = boxes.find((b) => b.id === target) ?? null;
-  const [name, setName] = useState<string>(box?.name ?? t("boxEditor.defaultName"));
+  const newName = () => defaultBoxName(useBoxesStore.getState().boxes, (n) => t("boxName.default", { n }));
+  const [name, setName] = useState<string>(() => box?.name ?? newName());
   const [checked, setChecked] = useState<string[]>(box?.member_ids ?? initialMemberIds);
   const [filter, setFilter] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const next = boxes.find((b) => b.id === target) ?? null;
-    setName(next?.name ?? t("boxEditor.defaultName"));
+    setName(next?.name ?? newName());
     setChecked(next?.member_ids ?? initialMemberIds);
     // Reload the draft only when the TARGET moves — not on every boxes-store
     // refresh, which would clobber half-made edits.
@@ -93,7 +96,7 @@ export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
   const save = async () => {
     setSaving(true);
     try {
-      const trimmed = name.trim() || t("boxEditor.defaultName");
+      const trimmed = name.trim() || newName();
       if (box) {
         if (trimmed !== box.name) await renameBox(box.id, trimmed);
         await setBoxMembers(box.id, checked);
@@ -102,7 +105,10 @@ export function BoxEditorDialog({ onClose }: { onClose: () => void }) {
       }
       usePillSelectionStore.getState().clear();
       onClose();
-    } catch {
+    } catch (error) {
+      // Names are validated now (empty, taken, too long): say which, rather
+      // than leaving the dialog looking unresponsive.
+      useProjectsStore.setState({ switchToast: messageOf(error) });
       setSaving(false);
     }
   };

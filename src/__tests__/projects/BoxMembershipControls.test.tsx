@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice } from "../../stores/boxSlice";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore } from "../../stores/tabs";
@@ -70,6 +71,7 @@ function openAddMenu(container: HTMLElement): HTMLElement {
 }
 
 beforeEach(() => {
+  resetBoxSlice();
   useHeaderHoverMenuStore.setState({ openId: null });
   useProjectsStore.setState({ projects: [], activeId: null, loaded: true });
   useBoxesStore.setState({ boxes: [], loaded: true });

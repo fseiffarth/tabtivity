@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn().mockResolvedValue(nu
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice } from "../../stores/boxSlice";
 
 function inactiveProj(id: string): ProjectEntry {
   return { id, name: id, status: "inactive", position: 10, local_file: `/p/${id}/project.json` };
@@ -25,6 +26,7 @@ function box(id: string, name: string, members: string[]): ProjectBox {
 }
 
 beforeEach(() => {
+  resetBoxSlice();
   useProjectsStore.setState({ projects: [], activeId: null, loaded: true });
   useBoxesStore.setState({ boxes: [], loaded: true });
 });

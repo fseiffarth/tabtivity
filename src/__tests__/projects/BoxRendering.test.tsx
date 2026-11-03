@@ -24,6 +24,7 @@ vi.mock("../../lib/window/startWindowDrag", () => ({ startWindowDrag }));
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice } from "../../stores/boxSlice";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { useTabsStore } from "../../stores/tabs";
 import { useActivityStore } from "../../stores/activity";
@@ -139,6 +140,7 @@ function menuRow(menu: HTMLElement, text: string): HTMLElement {
 const realSetActive = useProjectsStore.getState().setActive;
 
 beforeEach(() => {
+  resetBoxSlice();
   usePillDragStore.getState().end();
   useProjectsStore.setState({
     projects: [],
@@ -867,7 +869,7 @@ describe("box chip rendering (slice model)", () => {
       pointer("pointerup", 120, 10, window, { altKey: true });
     });
 
-    expect(boxProjects).toHaveBeenCalledWith(["p2", "p1"], { name: "New Box" });
+    expect(boxProjects).toHaveBeenCalledWith(["p2", "p1"], { name: "Box 1" });
     expect(reorderProjects).not.toHaveBeenCalled();
   });
 

@@ -144,23 +144,16 @@ describe("boxes store — removeFromBox (no silent dissolve)", () => {
 });
 
 describe("boxes store — boxProjects (multi-select commit)", () => {
-  it("creates a new box holding the selection", async () => {
-    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === "create_box") return Promise.resolve(box("boxNew", [], 20));
-      if (cmd === "set_box_members") {
-        return Promise.resolve(box("boxNew", args?.memberIds as string[], 20));
-      }
-      return Promise.resolve(undefined);
-    });
+  it("creates a new box holding the selection in one create_box", async () => {
+    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+      cmd === "create_box" ? Promise.resolve(box("boxNew", (args?.memberIds as string[]) ?? [], 20)) : Promise.resolve(undefined),
+    );
 
     const created = await useBoxesStore.getState().boxProjects(["p1", "p2"], { name: "Pair" });
 
     expect(created?.member_ids).toEqual(["p1", "p2"]);
-    expect(invoke).toHaveBeenCalledWith("create_box", { name: "Pair" });
-    expect(invoke).toHaveBeenCalledWith("set_box_members", {
-      boxId: "boxNew",
-      memberIds: ["p1", "p2"],
-    });
+    expect(invoke).toHaveBeenCalledWith("create_box", { name: "Pair", memberIds: ["p1", "p2"] });
+    expect(invoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
   });
 
   it("appends the selection to an existing box, deduplicated", async () => {

@@ -16,6 +16,7 @@ import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { BoxEditorDialog } from "../../components/projects/BoxEditorDialog";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice } from "../../stores/boxSlice";
 import { useBoxEditorStore } from "../../stores/boxEditor";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
@@ -61,6 +62,7 @@ function menuButton(text: string): HTMLElement | undefined {
 }
 
 beforeEach(() => {
+  resetBoxSlice();
   usePillDragStore.getState().end();
   usePillSelectionStore.getState().clear();
   useBoxEditorStore.getState().close();
@@ -252,7 +254,7 @@ describe("box editor dialog (3c)", () => {
     await act(async () => {
       fireEvent.click(save);
     });
-    expect(boxProjects).toHaveBeenCalledWith(["p1"], { name: "New box" });
+    expect(boxProjects).toHaveBeenCalledWith(["p1"], { name: "Box 1" });
     expect(onClose).toHaveBeenCalled();
   });
 
