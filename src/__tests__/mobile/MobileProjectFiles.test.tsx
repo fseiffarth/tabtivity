@@ -770,14 +770,15 @@ describe("Mobile project — Upload here", () => {
 
     fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
     pick([new File(["a"], "a.txt")]);
-    await within(sheet).findByText("The folder could not be read.");
+    // Said as what happened (`failureKey`), not as a bare error.
+    await within(sheet).findByText("This project's files cannot be browsed from the phone.");
     expect(within(sheet).queryByRole("button", { name: /^Upload here/ })).toBeNull();
 
     // The picker's input stays (still stamped with `src`): the next landing
     // lists the folder again, and that answer replaces the refusal.
     pick([new File(["b"], "b.txt")]);
     await within(sheet).findByRole("button", { name: "Open b.txt" });
-    expect(within(sheet).queryByText("The folder could not be read.")).toBeNull();
+    expect(within(sheet).queryByText("This project's files cannot be browsed from the phone.")).toBeNull();
     expect(within(sheet).getByRole("button", { name: /^Upload here/ })).toBeTruthy();
   });
 });

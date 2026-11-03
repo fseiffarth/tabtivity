@@ -1277,6 +1277,11 @@ export interface InboxAttachment { name: string; reference: string; size: number
 /** Mirrors the desktop's `inbox::MAX_INBOX_FILE`; checked here first so an
  * oversized pick fails before any bytes leave the phone. */
 export const MAX_INBOX_FILE = 24 * 1024 * 1024;
+/** The largest file other than a text the desktop hands the phone to view,
+ * save or share (`outbox::MAX_OUTBOX_FILE`, read by `files::read` and
+ * `host_files::read_on`); past it the raw route answers `file_too_large`. A
+ * longer text is answered with its head. */
+export const MAX_VIEW_FILE = 24 * 1024 * 1024;
 /** The `accept` of the fallback `<input>` behind every "a file from this
  * phone" picker (see `pickPhoneFiles`). The wildcards cover every type between
  * them — an unknown file is `application/octet-stream`. An iPhone or iPad

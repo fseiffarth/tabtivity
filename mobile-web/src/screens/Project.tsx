@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { goBack } from "../backStack";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon, UndoIcon, WindowIcon } from "../glyphs";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
@@ -425,10 +426,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   }, [id, assistantScope]);
   useEffect(() => {
     if (!fileOpen && !galleryOpen) return;
-    // The viewer opens over the gallery, so Escape closes the top one first.
+    // The viewer opens over the gallery, so Escape closes the top one first —
+    // the viewer as Back does, so a markup view's Done keeps its open note.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (fileOpen) setFileOpen(null);
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      if (fileOpen) goBack();
       else setGalleryOpen(false);
     };
     window.addEventListener("keydown", onKey);
