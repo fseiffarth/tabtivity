@@ -26,6 +26,30 @@ import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PlusIcon, SquareIcon } f
 const SCOPE_MENU_ID = "box-scope-chip";
 
 /**
+ * The status strip of one box: the agents running in the box's own scope AND
+ * in its member projects' scopes. A member's agent is the box's agent too (the
+ * project may be closed on the strip, yet its work is what the box is doing),
+ * and a pill that read idle while a member worked would say "nothing is
+ * running there". Each bar still opens its own tab.
+ */
+function BoxStatusBars({
+  box,
+  interactive,
+  className,
+}: {
+  box: ProjectBox;
+  interactive?: boolean;
+  className?: string;
+}) {
+  const memberKey = box.member_ids.join("\n");
+  const scopes = useMemo(
+    () => [`${BOX_SCOPE_PREFIX}${box.id}`, ...(memberKey ? memberKey.split("\n") : [])],
+    [box.id, memberKey],
+  );
+  return <ScopeSetStatusBars scopes={scopes} interactive={interactive} className={className} />;
+}
+
+/**
  * How many boxes stand on the row as pills of their own on a wide window.
  * Boxes are few by nature (a handful of joinings, not a project list), so
  * nearly every user sees all of theirs; past the budget the rest stay one click
@@ -532,7 +556,7 @@ export function BoxScopeChip({
                     <UntestedTag id="boxChip.leaveBox" />
                   </>
                 )}
-                <ScopeSetStatusBars scopes={[`${BOX_SCOPE_PREFIX}${b.id}`]} />
+                <BoxStatusBars box={b} />
               </div>
             );
           })}
@@ -615,7 +639,8 @@ export function BoxScopeChip({
             {ordered.length > 0 && (
               <div className="box-chip-menu-label">
                 {t("boxChip.onRowLabel")} <UntestedTag id="boxChip.onRowLabel" />{" "}
-                <UntestedTag id="boxChip.marks" />
+                <UntestedTag id="boxChip.marks" />{" "}
+                <UntestedTag id="boxChip.memberAgents" />
               </div>
             )}
             {ordered.map((b) => {
@@ -662,11 +687,7 @@ export function BoxScopeChip({
                   {isScope && <CheckIcon className="box-chip-menu-scope" />}
                   {/* Inert bars: the row is already a button, and picking the
                       box is the way in from here. */}
-                  <ScopeSetStatusBars
-                    scopes={[`${BOX_SCOPE_PREFIX}${b.id}`]}
-                    interactive={false}
-                    className="inline"
-                  />
+                  <BoxStatusBars box={b} interactive={false} className="inline" />
                   <span className="box-chip-menu-count">{b.member_ids.length}</span>
                 </button>
               </div>

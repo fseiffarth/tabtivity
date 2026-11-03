@@ -29,6 +29,9 @@ export interface FeatureHintSpec {
   /** Always-on chrome (header, project bar, tab bar): visible in every session,
    *  so it ranks below the hints for what the user has opened right now. */
   ambient?: boolean;
+  /** Extra eligibility beyond "the anchor is on screen" (the paced draw and the
+   *  hidden-anchor check still apply). Absent means always eligible. */
+  when?: (ctx: { projectCount: number; boxCount?: number }) => boolean;
 }
 
 export const FEATURE_HINTS = [
@@ -61,6 +64,14 @@ export const FEATURE_HINTS = [
   { id: "pill-box-drag", anchor: ".project-pill", ambient: true },
   { id: "root-console", anchor: ".box-chip-main", ambient: true },
   { id: "box-list", anchor: ".box-chip-caret-btn", ambient: true },
+  // Working across several projects and no box yet: points at the ghost pill,
+  // which stands on the row only while there are no boxes.
+  {
+    id: "box-create",
+    anchor: ".box-ghost-pill",
+    ambient: true,
+    when: (c) => c.projectCount >= 4 && c.boxCount === 0,
+  },
   { id: "add-menu", anchor: "[data-hint-anchor=\"add-project\"]", ambient: true },
   { id: "add-hpc", anchor: "[data-hint-anchor=\"add-project\"]", ambient: true },
   // --- Tabs ------------------------------------------------------------------

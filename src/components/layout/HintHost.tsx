@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
+import { useBoxesStore } from "../../stores/boxes";
 import { useSettingsStore } from "../../stores/settings";
 import { hintDrawn, useHintsStore } from "../../stores/hints";
 import { useTabsStore } from "../../stores/tabs";
@@ -51,6 +52,9 @@ export function HintHost() {
   const t = useT();
   const projectCount = useProjectsStore((s) => s.projects.length);
   const activeId = useProjectsStore((s) => s.activeId);
+  // Boxes only count once their file has been read, or "no boxes yet" would
+  // hint at a user whose boxes simply have not arrived.
+  const boxCount = useBoxesStore((s) => (s.loaded ? s.boxes.length : undefined));
   const settingsLoaded = useSettingsStore((s) => s.loaded);
   const projectsLoaded = useProjectsStore((s) => s.loaded);
   const seenList = useSettingsStore((s) => s.settings?.hints_seen);
@@ -119,6 +123,7 @@ export function HintHost() {
     const seen = new Set<string>(Array.isArray(seenList) ? (seenList as string[]) : []);
     const ctx: HintCtx = {
       projectCount,
+      boxCount,
       activeId,
       codexHookNeedsTrust: hasCodexTab && codexHookNeedsTrust(codexHook),
     };
@@ -148,6 +153,7 @@ export function HintHost() {
     hintsEnabled,
     seenList,
     projectCount,
+    boxCount,
     activeId,
     hasCodexTab,
     codexHook,

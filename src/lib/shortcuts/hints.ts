@@ -55,6 +55,9 @@ export type HintActionId = "codex-hooks";
 export interface HintCtx {
   /** Number of active project pills. */
   projectCount: number;
+  /** Number of boxes. Optional: absent means "not known", which never makes a
+   *  box-dependent hint eligible. */
+  boxCount?: number;
   /** The current project scope, or null at root / no active project. */
   activeId: string | null;
   /** A Codex tab is open and Codex is refusing to run Tabtivity's session hook, so
@@ -152,7 +155,7 @@ export const HINTS: HintDef[] = [
       placement: spec.placement ?? "bottom",
       titleKey: featureTitleKey(spec.id),
       bodyKey: featureBodyKey(spec.id),
-      when: () => true,
+      when: spec.when ?? (() => true),
     }),
   ),
 ];

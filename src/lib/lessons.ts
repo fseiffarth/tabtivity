@@ -1361,6 +1361,20 @@ export const LESSONS: Lesson[] = [
         titleKey: "lessons.projectBoxes.boxScopeTitle",
         bodyKey: "lessons.projectBoxes.boxScopeBody",
       },
+      {
+        id: "member-chip",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.projectBoxes.memberChipTitle",
+        bodyKey: "lessons.projectBoxes.memberChipBody",
+      },
+      {
+        id: "side-panel",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.projectBoxes.sidePanelTitle",
+        bodyKey: "lessons.projectBoxes.sidePanelBody",
+      },
     ],
   },
   {
