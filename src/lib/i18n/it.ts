@@ -5190,6 +5190,8 @@ export const dict: Dict = {
   "terminal.paste.imageRemote": "Le immagini si possono incollare solo in schede locali: il programma in questa scheda non vede i file di questo computer.",
   "terminal.paste.imageInboxFull": "La posta in arrivo del progetto è piena: l'immagine incollata non è stata salvata. Elimina dei file per incollarne altre.",
   "terminal.paste.imageFailed": "Non è stato possibile passare a questa scheda l'immagine degli appunti.",
+  "terminal.paste.imageTooLarge": "L'immagine degli appunti è troppo grande per incollarla in questa scheda.",
+  "terminal.paste.imageDenied": "Il browser non ha consentito di leggere l'immagine degli appunti. Consenti l'accesso agli appunti per questo sito e incolla di nuovo.",
   "terminal.copiedLines": "{n} righe copiate negli appunti",
   "terminal.copiedChars": "{n} caratteri copiati negli appunti",
   "terminal.linkCopied": "Link copiato negli appunti",

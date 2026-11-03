@@ -58,9 +58,14 @@
 //!   browser client has no such paths and leaves the drop out.
 //! - **`pty_paste_clipboard_image` is `Client`**: it reads the OS clipboard
 //!   of the machine the user sits at; a daemon has none.
+//!   `pty_paste_image` is its `Core` half: a browser client reads the picture
+//!   from its own clipboard and sends the bytes, which the daemon files into
+//!   the tab's inbox as the window files the OS clipboard's.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
-//!   `Client` as §3.3 lists them.
+//!   `Client` as §3.3 lists them. `models_host_load` is `Core`: the same
+//!   CPU/RAM/GPU readings, asked about the machine the shared local models
+//!   run on (the Models & agents meters), which on a server is the server.
 //! - Saved-password `*_password_state` / `*_forget_password` commands are
 //!   `Core`: §6.8 moves the opt-in store off the OS keychain, the commands'
 //!   meaning survives. Only the keychain *unlock* pair is `Off`.
@@ -672,6 +677,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("project_inbox_describe", Core),
     // commands/monitor.rs
     ("gpu_memory_snapshot", Client),
+    ("models_host_load", Core),
     ("gpu_process_snapshot", Client),
     ("machine_load_snapshot", Client),
     ("system_monitor_snapshot", Core),
@@ -974,6 +980,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("pty_kill", Core),
     ("pty_kill_scope", Core),
     ("pty_paste_clipboard_image", Client),
+    ("pty_paste_image", Core),
     ("pty_remove_view", Core),
     ("pty_resize", Core),
     ("pty_scrollback", Core),

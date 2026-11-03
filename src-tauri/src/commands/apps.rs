@@ -42,7 +42,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "desktop")]
-use tauri::{Emitter, State};
+use tauri::State;
 
 // The window registry's types and the launch origins live in
 // `services::window_registry` (S5); re-exported for the commands and callers.
@@ -737,6 +737,15 @@ fn open_file_blocking(
 
 /// Run a shell script as a fire-and-forget detached process.
 ///
+/// The event [`run_script_detached`] raises when a script it ran ends; the
+/// activity store's app-lifetime listener clears that script's spinner.
+pub const SCRIPT_FINISHED_EVENT: &str = "script-finished";
+
+/// `script-finished`'s payload, with the frontend's camelCase keys.
+fn script_finished_payload(run_id: &str, success: bool) -> serde_json::Value {
+    serde_json::json!({ "runId": run_id, "success": success })
+}
+
 /// Used by the side-panel "run in background" mode: the script is spawned with
 /// stdio fully detached, and is not tracked as a window or tab. No output is
 /// surfaced — callers that want to watch a script should open a terminal tab
@@ -758,10 +767,13 @@ fn open_file_blocking(
 /// <any path>` — so without confinement one `invoke` runs any script on the host;
 /// the only legitimate caller is the file tree's "run in background" on a file it
 /// is displaying, which is by construction inside the project.
-#[cfg(feature = "desktop")]
+///
+/// Takes a [`Ctx`] rather than an `AppHandle` (its one use is the event), so a
+/// server daemon dispatches it too: the browser client's ▶ runs the script
+/// where the project is, and `script-finished` reaches that user's pages.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn run_script_detached(
-    app: tauri::AppHandle,
+    ctx: crate::tauri_host::Ctx,
     script_path: String,
     cwd: Option<String>,
     run_id: Option<String>,
@@ -784,12 +796,10 @@ pub fn run_script_detached(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     crate::paths::augment_command_path(&mut cmd);
+    let events = ctx.0;
     crate::paths::spawn_reaped_then(cmd, move |success| {
         if let Some(run_id) = run_id {
-            let _ = app.emit(
-                "script-finished",
-                serde_json::json!({ "runId": run_id, "success": success }),
-            );
+            events.emit(SCRIPT_FINISHED_EVENT, script_finished_payload(&run_id, success));
         }
     })
     .map(|_| ())

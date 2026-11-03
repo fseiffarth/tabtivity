@@ -5192,6 +5192,8 @@ export const dict: Dict = {
   "terminal.paste.imageRemote": "Les images ne peuvent être collées que dans des onglets locaux : le programme de cet onglet ne voit pas les fichiers de cet ordinateur.",
   "terminal.paste.imageInboxFull": "La boîte de réception du projet est pleine : l'image collée n'a pas pu être enregistrée. Supprimez-en des fichiers pour en coller d'autres.",
   "terminal.paste.imageFailed": "L'image du presse-papiers n'a pas pu être transmise à cet onglet.",
+  "terminal.paste.imageTooLarge": "L'image du presse-papiers est trop grande pour être collée dans cet onglet.",
+  "terminal.paste.imageDenied": "Le navigateur n'a pas autorisé la lecture de l'image du presse-papiers. Autorisez l'accès au presse-papiers pour ce site, puis collez à nouveau.",
   "terminal.copiedLines": "{n} lignes copiées dans le presse-papiers",
   "terminal.copiedChars": "{n} caractères copiés dans le presse-papiers",
   "terminal.linkCopied": "Lien copié dans le presse-papiers",

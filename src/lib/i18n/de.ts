@@ -5214,6 +5214,8 @@ export const dict: Dict = {
   "terminal.paste.imageRemote": "Bilder lassen sich nur in lokale Tabs einfügen: Das Programm in diesem Tab sieht die Dateien dieses Computers nicht.",
   "terminal.paste.imageInboxFull": "Der Eingang des Projekts ist voll, das eingefügte Bild konnte nicht gespeichert werden. Lösche Dateien daraus, um weitere einzufügen.",
   "terminal.paste.imageFailed": "Das Bild aus der Zwischenablage konnte nicht an diesen Tab übergeben werden.",
+  "terminal.paste.imageTooLarge": "Das Bild aus der Zwischenablage ist zu groß, um es in diesen Tab einzufügen.",
+  "terminal.paste.imageDenied": "Der Browser hat das Lesen des Bildes in der Zwischenablage nicht erlaubt. Erlaube den Zugriff auf die Zwischenablage für diese Seite und füge erneut ein.",
   "terminal.copiedLines": "{n} Zeilen in die Zwischenablage kopiert",
   "terminal.copiedChars": "{n} Zeichen in die Zwischenablage kopiert",
   "terminal.linkCopied": "Link in die Zwischenablage kopiert",

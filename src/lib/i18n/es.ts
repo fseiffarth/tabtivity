@@ -5190,6 +5190,8 @@ export const dict: Dict = {
   "terminal.paste.imageRemote": "Solo se pueden pegar imágenes en pestañas locales: el programa de esta pestaña no ve los archivos de este equipo.",
   "terminal.paste.imageInboxFull": "La bandeja de entrada del proyecto está llena y no se pudo guardar la imagen pegada. Borra archivos de ella para pegar más.",
   "terminal.paste.imageFailed": "No se pudo pasar la imagen del portapapeles a esta pestaña.",
+  "terminal.paste.imageTooLarge": "La imagen del portapapeles es demasiado grande para pegarla en esta pestaña.",
+  "terminal.paste.imageDenied": "El navegador no permitió leer la imagen del portapapeles. Permite el acceso al portapapeles para este sitio y vuelve a pegar.",
   "terminal.copiedLines": "{n} líneas copiadas al portapapeles",
   "terminal.copiedChars": "{n} caracteres copiados al portapapeles",
   "terminal.linkCopied": "Enlace copiado al portapapeles",

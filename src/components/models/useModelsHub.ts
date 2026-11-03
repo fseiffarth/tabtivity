@@ -18,6 +18,7 @@ import {
 } from "../../lib/agents/localDrivers";
 import { runOllamaUpdateCheck, upgradeOllamaInTab } from "../../lib/agents/ollamaUpdateActions";
 import type { GpuSample } from "../../lib/gpu";
+import { readModelsMachine, type MachineLoad } from "../../lib/agents/modelsMachine";
 import { useT } from "../../lib/i18n";
 
 /** What `clear_local_model_conversations` answers while a tab of the model runs. */
@@ -52,26 +53,7 @@ export function localModelTabLabels(
 /** The header hover-menu id `LocalModelMenu` registers under. */
 export const LOCAL_MODEL_MENU_ID = "local-model";
 
-/**
- * The machine's CPU + memory load (backend `MachineLoadSample`). The GPU half of
- * the same question comes from `gpu_memory_snapshot`; these two are separate
- * commands because the GPU read is cached and instant while this one spans a
- * 300 ms sampling window (a CPU percentage is a ratio of two readings).
- */
-export interface MachineLoad {
-  supported: boolean;
-  cpu_percent: number;
-  num_cores: number;
-  load_avg: [number, number, number];
-  mem_total_bytes: number;
-  mem_used_bytes: number;
-  swap_total_bytes: number;
-  swap_used_bytes: number;
-  cpu_temp_c: number | null;
-  /** Hottest DIMM, where the board wires an on-module sensor (`jc42`/`spd5118`).
-      `null` — the usual answer — is "no sensor", never a cold reading. */
-  mem_temp_c?: number | null;
-}
+export type { MachineLoad };
 
 /** Machine readings shared by the hover menu and overlay; only poll while visible. */
 export function useMachineMeters(active: boolean) {
@@ -94,12 +76,13 @@ export function useMachineMeters(active: boolean) {
     if (!active) return;
     let cancelled = false;
     const check = () => {
-      void invoke<GpuSample[]>("gpu_memory_snapshot")
+      const reading = readModelsMachine();
+      void reading.gpus
         .then((g) => {
           if (!cancelled) setGpus(g);
         })
         .catch(() => {});
-      void invoke<MachineLoad>("machine_load_snapshot")
+      void reading.machine
         .then((m) => {
           if (!cancelled) setMachine(m);
         })

@@ -9,6 +9,7 @@ import { runInstallInTab } from "../../../lib/installCommand";
 import { useOllamaStatus } from "../../../lib/ollamaStatus";
 import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../../lib/agents/localDrivers";
 import type { GpuSample } from "../../../lib/gpu";
+import { readModelsMachine } from "../../../lib/agents/modelsMachine";
 import { useSettingsStore } from "../../../stores/settings";
 import { UntestedTag } from "../../common/UntestedTag";
 import { GPU_SIZING_MIN_BYTES, recommendModel, sameModel, type ModelPick } from "./introData";
@@ -103,10 +104,12 @@ export function LocalModelsPage({ onClose }: { onClose: () => void }) {
         if (live.current) setVibeStrategy(v);
       })
       .catch(() => {});
-    // Machine size, once, for the recommendation. Both reads are cheap and local.
+    // Machine size, once, for the recommendation: the machine the models run
+    // on (the server, in the browser client). Both reads are cheap.
+    const reading = readModelsMachine();
     void Promise.all([
-      invoke<{ mem_total_bytes?: number }>("machine_load_snapshot").catch(() => null),
-      invoke<GpuSample[]>("gpu_memory_snapshot").catch(() => [] as GpuSample[]),
+      reading.machine.catch(() => null),
+      reading.gpus.catch(() => [] as GpuSample[]),
     ]).then(([m, gpus]) => {
       if (!live.current) return;
       const ram = typeof m?.mem_total_bytes === "number" ? m.mem_total_bytes : 0;

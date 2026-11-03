@@ -1434,9 +1434,6 @@ pub fn run() {
         .manage(workspace)
         .manage(fs_watch)
         .manage(remote_pool)
-        // Carries PDF pages between two Tabtivity windows: they are separate WebViews
-        // with separate JS heaps, so the bytes must cross the process boundary.
-        .manage(commands::pdf_clip::PdfClipboard::default())
         .manage(commands::connect::ConnectBridgeState::default())
         .manage(sync_manifest)
         .manage(auto_sync)
@@ -2131,6 +2128,7 @@ pub fn run() {
             commands::usage_stats::usage_git_stats,
             commands::monitor::system_monitor_snapshot,
             commands::monitor::gpu_memory_snapshot,
+            commands::monitor::models_host_load,
             commands::monitor::machine_load_snapshot,
             commands::monitor::gpu_process_snapshot,
             // AC-vs-battery detection for Energy Saver mode.
@@ -2282,6 +2280,7 @@ pub fn run() {
             commands::terminal::register_host_bound_tab,
             commands::terminal::pty_drop_files,
             commands::terminal::pty_paste_clipboard_image,
+            commands::terminal::pty_paste_image,
             commands::terminal::pty_write,
             commands::terminal::pty_resize,
             commands::terminal::pty_kill,

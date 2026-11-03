@@ -674,7 +674,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     if (event.clipboardData.getData("text/plain")) return;
     event.preventDefault();
-    void pasteClipboardImage(ptyId, true).then(({ text, error }) => {
+    // The browser client files the picture the paste itself carried; the
+    // window reads the OS clipboard instead and ignores it.
+    const picture = Array.from(event.clipboardData.files).find((file) => file.type.startsWith("image/")) ?? null;
+    void pasteClipboardImage(ptyId, true, picture).then(({ text, error }) => {
       if (text && insertIntoReader(ptyId, text)) setPastedImage(text.trim());
       if (error) setSendError(t(error));
     });
