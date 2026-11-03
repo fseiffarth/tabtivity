@@ -1310,6 +1310,12 @@
 /* Only the page list scrolls: the search box above it stays pinned at the top of
    the rail (a scrolling nav carried it away with the list). */
 .settings-navigation-links { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* The app-painted thumb (lib/theme/customScrollbar.ts) sits on the container's
+   right edge, which was the buttons' right edge: it drew over every entry. Once
+   the list actually scrolls, reach into the rail's 10px side padding and keep
+   that strip as the gutter, so the thumb runs beside the divider and the
+   buttons stay as wide as the search box above them. */
+.settings-navigation-links[data-app-scrollbar] { margin-right: -10px; padding-right: 10px; }
 /* One topic group: a small-caps title (the section-header voice, one size
    down) over its entries. */
 .settings-navigation-group { display: flex; flex-direction: column; gap: 4px; }
