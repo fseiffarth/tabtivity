@@ -795,6 +795,22 @@
   flex-shrink: 0;
 }
 
+/* The swatches are also a button (a click opens the box, or lists a member's
+   boxes): padded out to a >= 16 px hit area, the padding cancelled by a
+   negative margin so the pill is no wider or taller than before. The pointer
+   cursor comes from `[role="button"]` (reset.css), so no cursor rule here. */
+.project-pill-boxdot.is-link {
+  box-sizing: content-box;
+  min-width: 10px;
+  min-height: 9px;
+  padding: 4px 3px;
+  margin: -4px -3px -4px 2px;
+  border-radius: var(--radius-sm);
+}
+.project-pill-boxdot.is-link:hover {
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+
 /* The hexagon's rim (`BoxSwatch`), the half-tone ring the square swatch wore
    as a box-shadow, so a light box colour still holds its edge. */
 .box-swatch {

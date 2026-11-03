@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { useBoxesStore, BOX_SCOPE_PREFIX } from "./boxes";
 import { useProjectsStore } from "./projects";
 import { ROOT_SCOPE, useTabsStore } from "./tabs";
+import type { ProjectBox, ProjectEntry } from "../types";
 
 /**
  * Which box's slice the project strip shows (`null` = every active project),
@@ -95,6 +96,29 @@ export const useBoxSliceStore = create<BoxSliceStore>((set, get) => ({
 
   leaveBox: () => get().selectBox(null),
 }));
+
+/**
+ * The project pills the strip shows, in pill order: the ONE list behind the
+ * rendered pills, the keyboard ring (`projectStations`: `cycleProject`, the
+ * steering digits) and the station badges, so they cannot number the strip
+ * differently.
+ *
+ * Unsliced (`box` null) it is every active project. A slice shows its box's
+ * members REGARDLESS of status (a member closed in the general strip is still
+ * open inside its box: `openBox` restored its tabs box-locally), plus the
+ * project currently in scope even when it is not a member, since a strip that
+ * hides the project you are working in has lost you.
+ */
+export function stripProjects(
+  projects: readonly ProjectEntry[],
+  box: ProjectBox | null,
+  scope: string,
+): ProjectEntry[] {
+  const byPosition = (a: ProjectEntry, b: ProjectEntry) => a.position - b.position;
+  if (!box) return projects.filter((p) => p.status !== "inactive").sort(byPosition);
+  const members = new Set(box.member_ids);
+  return projects.filter((p) => members.has(p.id) || p.id === scope).sort(byPosition);
+}
 
 /** Back to the start (a session's first state). For tests. */
 export function resetBoxSlice(): void {

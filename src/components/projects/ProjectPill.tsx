@@ -55,6 +55,7 @@ import { categoryColor, primaryCategoryColor, projectCategories } from "../../li
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useBoxEditorStore } from "../../stores/boxEditor";
+import { useBoxSliceStore } from "../../stores/boxSlice";
 import { useBoxesStore } from "../../stores/boxes";
 import { boxColor } from "../../lib/theme/boxColor";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
@@ -1207,6 +1208,9 @@ export function ProjectPill({
   // mounted and simply never opens, since it arms nothing until `open`.
   const fastMode = useFastMode();
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null);
+  // The member pill's box swatches are a door into the box (below): the small
+  // list of its boxes when it is in several, anchored under the swatches.
+  const [swatchMenu, setSwatchMenu] = useState<ContextMenuPos | null>(null);
   // Multi-select (3b): Ctrl/Cmd-click toggles membership in the shared pill
   // selection; the ring (`is-selected`) and the "Box these (N)…" menu entry
   // both read it. A plain activation click clears it (see the switcher).
@@ -1758,6 +1762,35 @@ export function ProjectPill({
       {/* Hover popup — hidden while context menu is open (which calls hover.close). */}
       {!contextMenu && !fastMode && <ProjectHoverCard project={project} state={hover} />}
       {pillDialogs}
+
+      {/* The swatch click's list of this member's boxes (it is in several). */}
+      {swatchMenu && boxTags && boxTags.length > 1 && (
+        <ContextMenuPortal
+          x={swatchMenu.x}
+          y={swatchMenu.y}
+          onClose={() => setSwatchMenu(null)}
+          className="context-menu project-pill-box-menu"
+          keepBelow
+        >
+          <div className="context-menu-group">
+            <div className="context-menu-group-label">
+              {t("pill.openBoxHeading")} <UntestedTag id="projectPill.boxSwatch" />
+            </div>
+            {boxTags.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => {
+                  setSwatchMenu(null);
+                  void useBoxSliceStore.getState().selectBox(b.id);
+                }}
+              >
+                <BoxSwatch className="context-menu-box-swatch" color={b.color} />
+                {b.name}
+              </button>
+            ))}
+          </div>
+        </ContextMenuPortal>
+      )}
 
       {/* Right-click context menu */}
       {contextMenu && (
@@ -2746,8 +2779,24 @@ export function ProjectPill({
           <span className="project-pill-label">{project.name}</span>
           {boxTags && boxTags.length > 0 && (
             <span
-              className="project-pill-boxdot"
-              title={t("pill.inBoxes", { list: boxTags.map((b) => b.name).join(", ") })}
+              className="project-pill-boxdot is-link"
+              role="button"
+              aria-haspopup={boxTags.length > 1 ? "menu" : undefined}
+              title={t(boxTags.length > 1 ? "pill.openBoxesTitle" : "pill.openBoxTitle", {
+                list: boxTags.map((b) => b.name).join(", "),
+              })}
+              // Inside the pill's own button: its press must neither start a
+              // pill drag (pointer-down) nor activate the project (click).
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (boxTags.length === 1) {
+                  void useBoxSliceStore.getState().selectBox(boxTags[0].id);
+                  return;
+                }
+                const r = e.currentTarget.getBoundingClientRect();
+                setSwatchMenu({ x: r.left, y: r.bottom });
+              }}
             >
               {/* One swatch per box, in the box's colour — the same colour
                   the box's own pill wears in the leading segment, so a

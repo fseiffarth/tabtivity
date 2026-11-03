@@ -24,7 +24,8 @@ vi.mock("../../lib/window/startWindowDrag", () => ({ startWindowDrag }));
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
-import { resetBoxSlice } from "../../stores/boxSlice";
+import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
+import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useTabsStore } from "../../stores/tabs";
@@ -150,6 +151,7 @@ beforeEach(() => {
   // The header's shared hover-menu id outlives a test's unmount.
   useHeaderHoverMenuStore.getState().close("box-scope-chip");
   usePillDragStore.getState().end();
+  useKeyboardSteeringStore.getState().exit();
   useProjectsStore.setState({
     projects: [],
     activeId: null,
@@ -1383,5 +1385,115 @@ describe("header access: the width-tier pill budget and the fold pill (AS2a)", (
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("member pill swatches open their box", () => {
+  const dot = (container: HTMLElement, name: string) =>
+    findPill(container, name).querySelector(".project-pill-boxdot") as HTMLElement;
+
+  it("a click on a single-box member's swatch opens that box, and does not activate the project", async () => {
+    const openBox = vi.fn().mockImplementation(openBoxScope);
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], openBox });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+      setActive,
+    });
+    const container = await renderSwitcher();
+
+    await act(async () => {
+      fireEvent.click(dot(container, "p1"));
+    });
+    expect(openBox).toHaveBeenCalledWith("boxA");
+    expect(setActive).not.toHaveBeenCalled();
+    // The slice follows: the strip now shows the box's members only.
+    expect(useBoxSliceStore.getState().sliceBoxId).toBe("boxA");
+    expect(pillNames(container)).toEqual(["p1"]);
+  });
+
+  it("the press on the swatch does not start a pill drag", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], openBox: vi.fn() });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+    });
+    const container = await renderSwitcher();
+    const target = dot(container, "p1");
+    layOut(findPill(container, "p1"), { left: 0, right: 80, top: 0, bottom: 24 });
+    pointer("pointerdown", 40, 12, target);
+    pointer("pointermove", 120, 12, window);
+    expect(usePillDragStore.getState().drag).toBeNull();
+  });
+
+  it("a member of several boxes gets a list of them, and a pick opens that box", async () => {
+    const openBox = vi.fn().mockImplementation(openBoxScope);
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({
+      boxes: [box("boxA", ["p1"], 5), box("boxB", ["p1"], 6), box("boxC", ["p2"], 7)],
+      openBox,
+    });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+      setActive,
+    });
+    const container = await renderSwitcher();
+
+    await act(async () => {
+      fireEvent.click(dot(container, "p1"));
+    });
+    expect(openBox).not.toHaveBeenCalled();
+    const menu = document.querySelector(".project-pill-box-menu") as HTMLElement;
+    expect(menu).toBeTruthy();
+    // Only this project's boxes, each with its swatch in the box colour.
+    const rows = [...menu.querySelectorAll("button")];
+    expect(rows.map((b) => b.textContent)).toEqual(["boxA", "boxB"]);
+    expect(rows.every((b) => b.querySelector(".context-menu-box-swatch"))).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(rows[1]);
+    });
+    expect(openBox).toHaveBeenCalledWith("boxB");
+    expect(setActive).not.toHaveBeenCalled();
+    expect(document.querySelector(".project-pill-box-menu")).toBeNull();
+  });
+
+  it("the hit area is a padded button-role span, not the bare 10 px swatch", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const el = dot(container, "p1");
+    expect(el.getAttribute("role")).toBe("button");
+    expect(el.classList.contains("is-link")).toBe(true);
+    expect(el.getAttribute("title")).toContain("boxA");
+  });
+
+  it("the station badges number the sliced pills, inactive members included", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p3"])] });
+    useProjectsStore.setState({
+      projects: [
+        proj("p1", 10),
+        { ...proj("p2", 20) },
+        { ...proj("p3", 30), status: "inactive" },
+      ],
+      activeId: null,
+      loaded: true,
+    });
+    useBoxSliceStore.setState({ sliceBoxId: "boxA" });
+    const container = await renderSwitcher();
+    act(() => {
+      useKeyboardSteeringStore.getState().enter();
+      useKeyboardSteeringStore.getState().setLevel("projects");
+    });
+    const badge = (name: string) =>
+      findPill(container, name).querySelector(".steering-station-chip")?.textContent;
+    expect(pillNames(container)).toEqual(["p1", "p3"]);
+    expect(badge("p1")).toBe("2");
+    expect(badge("p3")).toBe("3");
   });
 });

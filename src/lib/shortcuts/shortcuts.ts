@@ -265,14 +265,14 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     labelKey: "shortcut.cycleBox",
     group: "navigation",
     default: { key: "PageDown", ctrl: true, shift: true },
-    untested: "shortcut.cycleBox",
+    untested: "boxCycle.returnStop",
   },
   {
     action: "cycleBoxBack",
     labelKey: "shortcut.cycleBoxBack",
     group: "navigation",
     default: { key: "PageUp", ctrl: true, shift: true },
-    untested: "shortcut.cycleBoxBack",
+    untested: "boxCycle.returnStop",
   },
   {
     action: "shortcutHelp",

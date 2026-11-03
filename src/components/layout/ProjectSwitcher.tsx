@@ -16,7 +16,7 @@ import { useBigFoldersStore } from "../../stores/bigFolders";
 import { useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, defaultBoxName, useBoxMembership, useBoxesStore } from "../../stores/boxes";
 import { useBoxEditorStore } from "../../stores/boxEditor";
-import { useBoxSliceStore } from "../../stores/boxSlice";
+import { stripProjects, useBoxSliceStore } from "../../stores/boxSlice";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
@@ -186,25 +186,6 @@ export function ProjectSwitcher({
     // The same stale-object bug affected any other pill-visible metadata that
     // was not copied into that signature.
   }, [projects]);
-
-  // On steering's projects level, every pill wears its station number
-  // (the digit that jumps there — 1 is the root pill). Numbered from the SAME
-  // ring the digit handler and cycleProject walk (projectStations), so badge
-  // and jump can never disagree. On tabs and panes, digits open agent tabs,
-  // so project station badges must disappear. Only the first nine stations
-  // get a digit. A box slice hides some ring members — their digits still jump.
-  const steeringOnProjects = useKeyboardSteeringStore((s) => s.active && s.level === "projects");
-  const stationById = useMemo(() => {
-    if (!steeringOnProjects) return null;
-    const m = new Map<string, number>();
-    projectStations().forEach((id, i) => {
-      if (id && i < 9) m.set(id, i + 1);
-    });
-    return m;
-    // `projects` re-mints the map when the strip changes; projectStations reads
-    // the store imperatively, which the linter cannot see.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [steeringOnProjects, projects]);
 
   // Per-pill git "dirty" dots: poll every active local project's git state on a
   // shared interval (one loop for all pills, deduped by project id) and store
@@ -385,10 +366,29 @@ export function ProjectSwitcher({
   // slice keeps its pill while the general strip — activeProjects — does not.
   const visibleProjects = useMemo<ProjectEntry[]>(() => {
     if (!currentBox) return activeProjects;
-    return projects
-      .filter((p) => currentBoxMemberIds.has(p.id) || p.id === scope)
-      .sort((a, b) => a.position - b.position);
-  }, [activeProjects, currentBox, currentBoxMemberIds, projects, scope]);
+    return stripProjects(projects, currentBox, scope);
+  }, [activeProjects, currentBox, projects, scope]);
+
+  // On steering's projects level, every pill wears its station number
+  // (the digit that jumps there — 1 is the root pill). Numbered from the SAME
+  // ring the digit handler and cycleProject walk (projectStations), so badge
+  // and jump can never disagree. On tabs and panes, digits open agent tabs,
+  // so project station badges must disappear. Only the first nine stations
+  // get a digit. A slice narrows the ring to the pills it shows (inactive
+  // members included), so the badges count the visible strip.
+  const steeringOnProjects = useKeyboardSteeringStore((s) => s.active && s.level === "projects");
+  const stationById = useMemo(() => {
+    if (!steeringOnProjects) return null;
+    const m = new Map<string, number>();
+    projectStations().forEach((id, i) => {
+      if (id && i < 9) m.set(id, i + 1);
+    });
+    return m;
+    // `visibleProjects` re-mints the map when the strip (projects, slice,
+    // scope) changes; projectStations reads the stores imperatively, which the
+    // linter cannot see.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steeringOnProjects, visibleProjects]);
 
   const boxCandidates = useMemo(() => {
     if (!currentBox) return [];
