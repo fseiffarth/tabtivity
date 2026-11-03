@@ -215,7 +215,16 @@ export function ProjectSearch({
   };
 
   return (
-    <div className="project-search-wrap" ref={searchRef} onClick={(e) => e.stopPropagation()}>
+    <div
+      className="project-search-wrap"
+      ref={searchRef}
+      onClick={(e) => e.stopPropagation()}
+      // Tab (or any focus move) to another control closes the empty-field list.
+      // A blur with no target (a click on blank space) is the pointer handler's.
+      onBlur={(e) => {
+        if (e.relatedTarget instanceof Node && !searchRef.current?.contains(e.relatedTarget)) setFocused(false);
+      }}
+    >
       <input
         ref={inputRef}
         className="project-search-entry"
