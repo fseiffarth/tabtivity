@@ -72,11 +72,19 @@ export type SteeringAction =
   | "popout"
   | "menu"
   | "tabCard"
+  | "cockpitDown"
+  | "cockpitUp"
+  | "cockpitJump"
+  | "cockpitShow"
+  | "cockpitContinue"
+  | "cockpitFilter"
   | SteeringSlotAction;
 
 /** Where an action acts. `mode` is every level; `panes` covers the subwindow
- *  and tab levels, which share one handler. */
-export type SteeringScope = "mode" | "projects" | "panes" | "region";
+ *  and tab levels, which share one handler. `cockpit` is not a steering level
+ *  at all: the cockpit roster's own keys (`CockpitRoster`), kept in this table
+ *  so they are rebound where the other bare keys are. */
+export type SteeringScope = "mode" | "projects" | "panes" | "region" | "cockpit";
 
 /** The level steering is on, as the resolver sees it. */
 export type SteeringKeyContext = Exclude<SteeringScope, "mode">;
@@ -94,6 +102,7 @@ export const STEERING_BINDING_SECTIONS: { scope: SteeringScope; labelKey: Transl
   { scope: "projects", labelKey: "steering.level.projects" },
   { scope: "panes", labelKey: "steeringKeys.section.panes" },
   { scope: "region", labelKey: "steering.level.region" },
+  { scope: "cockpit", labelKey: "cockpit.title" },
 ];
 
 const TAB_BAR: readonly SteeringScope[] = ["projects", "panes"];
@@ -152,6 +161,13 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   // The right-click menu of what steering points at: the active project, the
   // active tab, the control under the region cursor.
   { action: "menu", labelKey: "steering.menu.label", scopes: ["mode"], defaults: [".", "ContextMenu"] },
+  // The cockpit roster (not steering mode: the list has the focus).
+  { action: "cockpitDown", labelKey: "cockpit.keys.down", scopes: ["cockpit"], defaults: ["j", "ArrowDown"] },
+  { action: "cockpitUp", labelKey: "cockpit.keys.up", scopes: ["cockpit"], defaults: ["k", "ArrowUp"] },
+  { action: "cockpitJump", labelKey: "cockpit.keys.jump", scopes: ["cockpit"], defaults: ["Enter"] },
+  { action: "cockpitShow", labelKey: "cockpit.keys.show", scopes: ["cockpit"], defaults: [" ", "ArrowRight"] },
+  { action: "cockpitContinue", labelKey: "cockpit.keys.continue", scopes: ["cockpit"], defaults: ["c"] },
+  { action: "cockpitFilter", labelKey: "cockpit.keys.filter", scopes: ["cockpit"], defaults: ["/"] },
 ];
 
 /** The stored overrides (action id → its whole key list). Mirrors
@@ -218,6 +234,8 @@ export function steeringSlot(action: SteeringAction | null): number | null {
 
 /** Whether two actions can both be live on one level. */
 function scopesMeet(a: readonly SteeringScope[], b: readonly SteeringScope[]): boolean {
+  // The cockpit's keys are live only in its roster, where steering is not.
+  if (a.includes("cockpit") !== b.includes("cockpit")) return false;
   if (a.includes("mode") || b.includes("mode")) return true;
   return a.some((s) => b.includes(s));
 }

@@ -102,14 +102,22 @@ export interface AgentRosterFacts {
 /**
  * The roster facts of one agent tab of `scope`, read off the stores at `now`.
  * The model and PLAN / GOAL marks are read in that order: the model tag's
- * screen re-read refreshes the marks too.
+ * screen re-read refreshes the marks too. `reread: false` reads what the model
+ * store holds without asking it to re-read — for a caller that derives in
+ * render and asks on its own clock (the cockpit).
  */
-export function agentRosterFacts(scope: string, tab: TabEntry, now: number): AgentRosterFacts {
+export function agentRosterFacts(
+  scope: string,
+  tab: TabEntry,
+  now: number,
+  { reread = true }: { reread?: boolean } = {},
+): AgentRosterFacts {
   const ptyId = `${scope}:${tab.key}`;
   const activity = useActivityStore.getState();
   const state = agentRosterState(ptyId);
   const facts: AgentRosterFacts = { ptyId, state };
-  const model = rosterModelTag(scope, tab);
+  const models = useAgentModelsStore.getState();
+  const model = reread ? rosterModelTag(scope, tab) : agentTabModelTag(scope, tab, models.byTab, models.screenByTab);
   if (model) facts.model = model;
   const marks = tabModeMarks(useAgentModelsStore.getState(), ptyId);
   if (marks?.plan) facts.plan = true;

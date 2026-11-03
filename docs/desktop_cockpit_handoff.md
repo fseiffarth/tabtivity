@@ -91,6 +91,37 @@ dev build.
   green: 141 files, 1163 tests.
 - Rust gates from C1: clippy ×3 PASS (`-D warnings`); cargo tests: see C3.
 
+### C3 — Now view
+
+- sha: see `git log --grep "(C3)"`
+- `lib/cockpit/roster.ts` (filter / count / sort via `sortAgentTabs` / group /
+  `stepSelection`), `lib/cockpit/decisions.ts` (`buildDecisions`: the eight
+  groups in rail order, empty ones dropped, `topAsking` for the default detail),
+  `shared/turnDuration.ts` (the phone's `turnDuration` now delegates to it).
+- `components/cockpit/`: `CockpitNow` (three columns, resizable rail/detail
+  widths in localStorage), `CockpitRail`, `CockpitRoster`, `CockpitDetail`,
+  `useCockpitData` (loads only while mounted), `cockpitFormat`,
+  `CockpitViewHeading` (own file, no import cycle with the body switch).
+- `agentRosterFacts(..., { reread: false })`: the cockpit derives in render and
+  asks the model store to re-read on its own 15 s tick, never per render.
+- Rail groups reuse: `TabContinueButton` (▶, AI switch respected; its prompt
+  `CONTINUE_PROMPT` is now exported for the roster's C key),
+  `GitPushProposalCard` folded in a `<details>` (its own approval, incl. a
+  push to the default branch), `AgentScheduleProposal`, `RootReviewStrip`
+  (no domain = whole queue), `AlertsMenu` with `useAlertsFeed()` (the bell's
+  rows). Selecting an unseen finished turn stamps the read mark
+  (`clearAttention`); questions and interruptions are never cleared by a look.
+- Keys: steering table scope `cockpit` (`cockpitDown/Up/Jump/Show/Continue/
+  Filter`, defaults J/↓, K/↑, Enter, Space/→, C, /); `scopesMeet` keeps them out
+  of conflicts with mode-wide keys; Settings shows them as their own section.
+- Tests: `CockpitRoster.test.ts` (pure: sort tiers, chips, text/box/scope
+  filters, grouping, turn length, step wrap, rail order/empty/newest-first,
+  finished push listed not counted), `CockpitNow.test.tsx` (lists hydrated
+  scopes only, empty rail line, asking → rail + default detail attached, J/K/
+  Enter, text filter). cockpit + steering + mobile + roster suites: 219 files,
+  2138 tests PASS.
+- Rust gates (from C1's settings line): clippy ×3 PASS; cargo test: see C4.
+
 ## Flagged for user
 
 - Header badge does not count **push requests** while the cockpit is shut:
@@ -98,3 +129,11 @@ dev build.
   nothing of the cockpit runs while shut. It counts asking + interrupted +
   schedule proposals already loaded + root approvals.
 - Steering default key for the cockpit is **U** (C, K and the rest were taken).
+- Roster rows show no ⎇ worktree chip and no *Not sent* draft: `TabEntry` has
+  no worktree field and the composer's draft is the Reader's own state; both
+  need a reading the desktop does not keep per tab yet. The last prompt is the
+  model store's `promptByTab` (what the Agents view shows).
+- A Markup-questions row jumps to the asking agent's tab rather than opening
+  the PDF itself: an ask carries a project-relative file, and there is no
+  shared "open this file in that project's scope" helper to call; answering
+  stays in `PdfMarkupQuestions` either way.

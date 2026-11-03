@@ -480,7 +480,7 @@ export function TabStatusMark({ stateClass, slots }: { stateClass: string; slots
 
 /** The word the Continue pill submits — the one the auto-continue switch sends
  *  at a rate-limit rollover, typed here on demand. */
-const CONTINUE_PROMPT = "continue";
+export const CONTINUE_PROMPT = "continue";
 
 /** A ▶ Continue pill on an agent tab whose turn the user cut off (the ■ mark,
  *  `interrupted` in the strip's state class): one click submits `continue` into
