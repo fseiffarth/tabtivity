@@ -240,6 +240,8 @@ export const UNTESTED = {
   "projectFilesPane.1": { area: "files", what: "ProjectFilesPane · Project settings" },
   "projectFilesPane.syncMirrorSkipped": { area: "files", what: "Remote tree · a line under the file tree naming mirror files a push left alone (background auto-sync or a manual push): a link or one behind a linked folder, a FIFO/device/folder where a file was, or one over 64 MiB — with the reason per file; dismissible, it clears once the file is an ordinary file again" },
   "projectFilesPane.2": { area: "files", what: "ProjectFilesPane · Large folders…" },
+  "projectFilesPane.accordion": { area: "files", what: "Box side panel · one member section expanded at a time (the last clicked, else the active tab's), one-line headers with the member colour dot, a git dot (omitted for remote or unprobed members) and the agent-tab count; the choice is remembered per box" },
+  "projectFilesPane.dropCollapsed": { area: "files", what: "Box side panel · a file dragged over a collapsed member section lands in that member's root on release, and the section opens after a short dwell" },
   "projectFilesView.1": { area: "files", what: "ProjectFilesView · Files" },
   "projectFilesView.2": { area: "files", what: "ProjectFilesView · Remote machines…" },
   "projectFilesView.3": { area: "files", what: "ProjectFilesView · {count} diverged" },

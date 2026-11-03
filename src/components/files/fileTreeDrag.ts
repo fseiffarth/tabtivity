@@ -79,7 +79,7 @@ export function beginNativeFileDrag(paths: string[]) {
 // Drag-to-move dwell before a hovered folder / crumb / ↑ spring-opens (the
 // tree navigates there and the drag continues). Long enough that sweeping the
 // cursor across folders toward a sibling never opens one by accident.
-const SPRING_LOAD_MS = 650;
+export const SPRING_LOAD_MS = 650;
 
 /** What a row's pointer drag reads from the tree it started in — the tree's
  *  state as of the render whose handler the press reached. */

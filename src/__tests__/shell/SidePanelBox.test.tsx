@@ -3,8 +3,10 @@
  * a multi-root file view: one collapsible section (`.file-root`) for the box
  * folder plus one per member project root (#41 Phase 3).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, act, fireEvent, cleanup } from "@testing-library/react";
+import { storageKey } from "../../lib/brand";
+import { SPRING_LOAD_MS } from "../../components/files/fileTreeDrag";
 import type { ProjectBox, ProjectEntry } from "../../types";
 
 const { mockInvoke } = vi.hoisted(() => ({
@@ -35,6 +37,10 @@ import { useBoxesStore } from "../../stores/boxes";
 import { useTabsStore } from "../../stores/tabs";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useFileSourcePrefStore } from "../../stores/remote/fileSourcePref";
+import { useBoxAccordionStore, resetBoxAccordion } from "../../stores/boxAccordion";
+import { useGitDirtyStore } from "../../stores/gitDirty";
+import { useDragStore } from "../../stores/drag/drag";
+import type { TabEntry } from "../../stores/tabs";
 
 function proj(id: string, _boxId?: string): ProjectEntry {
   // Membership is member_ids-only now; the second arg is kept so call sites read
@@ -59,6 +65,9 @@ beforeEach(() => {
   useTabsStore.setState({ scope: "root" });
   useRemoteStatusStore.setState({ byProject: {}, byHost: {} });
   useFileSourcePrefStore.setState({ byProject: {}, byViewer: {} });
+  resetBoxAccordion();
+  useGitDirtyStore.setState({ byId: {} });
+  useTabsStore.setState({ tabs: [], activeKey: null });
 });
 
 describe("SidePanel multi-root box view", () => {
@@ -102,6 +111,8 @@ describe("SidePanel multi-root box view", () => {
     useRemoteStatusStore.setState({ byProject: { p2: { ssh: "off", vpn: "off" } } });
     useFileSourcePrefStore.setState({ byProject: { p2: "remote" }, byViewer: {} });
     useTabsStore.setState({ scope: "box:boxA" });
+    // One member is expanded at a time: the remote one, so its prompt shows.
+    useBoxAccordionStore.getState().setOpen("boxA", "p2");
 
     let container!: HTMLElement;
     await act(async () => {
@@ -124,9 +135,16 @@ describe("SidePanel multi-root box view", () => {
     const p1Section = sections.find((el) =>
       el.querySelector(".file-root-name")?.textContent?.includes("p1"),
     )!;
+    expect(p1Section.querySelector(".file-root-body")).toBeNull();
+    expect(p1Section.classList.contains("is-collapsed")).toBe(true);
+    // Opening p1 shows its ordinary tree (no switch, no prompt) and folds p2.
+    await act(async () => {
+      fireEvent.click(p1Section.querySelector(".file-root-header")!);
+    });
     expect(p1Section.querySelector(".file-root-body")).not.toBeNull();
     expect(p1Section.querySelector(".dialog-connect-btn")).toBeNull();
     expect(p1Section.querySelector(".side-panel-source-switch")).toBeNull();
+    expect(p2Section.querySelector(".dialog-connect-btn")).toBeNull();
   });
 
   it("shows a disconnected remote member's LOCAL mirror by default", async () => {
@@ -311,6 +329,243 @@ describe("box member reorder", () => {
     expect(mockInvoke).toHaveBeenCalledWith("set_box_members", {
       boxId: "boxA",
       memberIds: ["p2", "ghost", "p3", "p1"],
+    });
+  });
+});
+
+/**
+ * The accordion: one member section expanded at a time, one-line headers with
+ * the member's facts, the choice remembered per box.
+ */
+describe("box side panel accordion", () => {
+  function agentTab(key: string, cwd: string, kind: "agent" | "shell" = "agent"): TabEntry {
+    return { key, kind, label: key, cwd } as unknown as TabEntry;
+  }
+
+  beforeEach(() => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p2", "p3"])] });
+    useProjectsStore.setState({
+      projects: [proj("p1"), proj("p2"), proj("p3")],
+      activeId: null,
+      loaded: true,
+    });
+    useTabsStore.setState({ scope: "box:boxA" });
+  });
+
+  async function renderBox() {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<SidePanel open={true} />));
+    });
+    return container;
+  }
+
+  function section(container: HTMLElement, name: string): HTMLElement {
+    return [...container.querySelectorAll<HTMLElement>(".file-root")].find(
+      (el) => el.querySelector(".file-root-name")?.textContent === name,
+    )!;
+  }
+
+  function open(container: HTMLElement): string[] {
+    return [...container.querySelectorAll(".file-root--member:not(.is-collapsed) .file-root-name")].map(
+      (el) => el.textContent ?? "",
+    );
+  }
+
+  it("opens the first member when nothing says otherwise, and folds the rest", async () => {
+    const container = await renderBox();
+    expect(open(container)).toEqual(["p1"]);
+    expect(section(container, "p2").querySelector(".file-root-body")).toBeNull();
+    // The box folder's own section is independent and open.
+    expect(section(container, "boxA").classList.contains("is-collapsed")).toBe(false);
+  });
+
+  it("opens the active tab's member", async () => {
+    useTabsStore.setState({ tabs: [agentTab("t1", "/p/p3/src", "shell")], activeKey: "t1" });
+    useProjectsStore.setState({
+      projects: ["p1", "p2", "p3"].map((id) => ({ ...proj(id), directory: `/p/${id}` }) as ProjectEntry),
+    });
+    const container = await renderBox();
+    expect(open(container)).toEqual(["p3"]);
+  });
+
+  it("follows the active tab to another member, but not on mount", async () => {
+    useProjectsStore.setState({
+      projects: ["p1", "p2", "p3"].map((id) => ({ ...proj(id), directory: `/p/${id}` }) as ProjectEntry),
+    });
+    useBoxAccordionStore.getState().setOpen("boxA", "p1");
+    useTabsStore.setState({ tabs: [agentTab("t1", "/p/p2", "shell")], activeKey: "t1" });
+    const container = await renderBox();
+    // The remembered click wins at mount ...
+    expect(open(container)).toEqual(["p1"]);
+    // ... and the active tab moving to another member opens that one.
+    await act(async () => {
+      useTabsStore.setState({
+        tabs: [agentTab("t1", "/p/p2", "shell"), agentTab("t2", "/p/p3", "shell")],
+        activeKey: "t2",
+      });
+    });
+    expect(open(container)).toEqual(["p3"]);
+  });
+
+  it("a click opens that member and folds the one before; a second click folds all", async () => {
+    const container = await renderBox();
+    await act(async () => {
+      fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
+    });
+    expect(open(container)).toEqual(["p2"]);
+    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toBe("p2");
+    await act(async () => {
+      fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
+    });
+    expect(open(container)).toEqual([]);
+    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toBeNull();
+  });
+
+  it("remembers the choice across a remount and writes it to localStorage", async () => {
+    const first = await renderBox();
+    await act(async () => {
+      fireEvent.click(section(first, "p3").querySelector(".file-root-header")!);
+    });
+    const stored = JSON.parse(localStorage.getItem(`${storageKey("boxAccordion")}`) ?? "{}");
+    expect(stored.boxA.open).toBe("p3");
+    cleanup();
+    // A fresh store read (as after a relaunch) sees the stored row.
+    useBoxAccordionStore.setState({ byBox: {} });
+    useBoxAccordionStore.setState({
+      byBox: JSON.parse(localStorage.getItem(storageKey("boxAccordion")) ?? "{}"),
+    });
+    const second = await renderBox();
+    expect(open(second)).toEqual(["p3"]);
+  });
+
+  it("renders without localStorage", async () => {
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    try {
+      const container = await renderBox();
+      await act(async () => {
+        fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
+      });
+      expect(open(container)).toEqual(["p2"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("shows the colour dot, the git dot and the agent count in the header", async () => {
+    useProjectsStore.setState({
+      projects: ["p1", "p2", "p3"].map((id) => ({ ...proj(id), directory: `/p/${id}` }) as ProjectEntry),
+    });
+    useGitDirtyStore.setState({ byId: { p1: "dirty", p2: "clean" } });
+    useTabsStore.setState({
+      tabs: [agentTab("a", "/p/p2/x"), agentTab("b", "/p/p2"), agentTab("c", "/p/p1", "shell")],
+      activeKey: null,
+    });
+    const container = await renderBox();
+    const p1 = section(container, "p1");
+    const p2 = section(container, "p2");
+    const p3 = section(container, "p3");
+    expect(p1.querySelector(".file-root-dot")).not.toBeNull();
+    expect(p1.querySelector(".file-root-dirty.git-dirty")).not.toBeNull();
+    // Clean and unprobed are omitted, never drawn as zero.
+    expect(p2.querySelector(".file-root-dirty")).toBeNull();
+    expect(p3.querySelector(".file-root-dirty")).toBeNull();
+    expect(p2.querySelector(".file-root-agents")?.textContent).toBe("✦2");
+    // A shell tab is not an agent; no agents, no count.
+    expect(p1.querySelector(".file-root-agents")).toBeNull();
+  });
+
+  it("omits the git dot for a remote member and never probes it", async () => {
+    const remoteMember = {
+      ...proj("p2"),
+      remote: { host: "h", user: "u", remote_path: "/srv/p2" },
+    } as ProjectEntry;
+    useProjectsStore.setState({ projects: [proj("p1"), remoteMember, proj("p3")] });
+    useGitDirtyStore.setState({ byId: { p2: "dirty" } });
+    const container = await renderBox();
+    expect(section(container, "p2").querySelector(".file-root-dirty")).toBeNull();
+    expect(mockInvoke).not.toHaveBeenCalledWith("git_dirty_probe", expect.objectContaining({ projectDir: expect.stringContaining("srv") }));
+  });
+
+  it("the rail takes the member colour", async () => {
+    const container = await renderBox();
+    expect(section(container, "p1").style.getPropertyValue("--file-root-accent")).toMatch(/^hsl\(/);
+  });
+
+  describe("a collapsed section still takes a drop", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      useDragStore.setState({ drag: null });
+      // @ts-expect-error restore jsdom's missing implementation
+      delete document.elementFromPoint;
+    });
+
+    it("carries the move-target attributes of its root", async () => {
+      const container = await renderBox();
+      const head = section(container, "p2").querySelector<HTMLElement>(".file-root-headrow")!;
+      expect(head.getAttribute("data-move-rel")).toBe("");
+      expect(head.getAttribute("data-move-root")).toBeTruthy();
+      // The open section's header is not a target: its tree is.
+      const open1 = section(container, "p1").querySelector<HTMLElement>(".file-root-headrow")!;
+      expect(open1.getAttribute("data-move-rel")).toBeNull();
+    });
+
+    it("opens after the dwell, keeps the source section mounted, and settles on release", async () => {
+      const container = await renderBox();
+      const head = section(container, "p2").querySelector<HTMLElement>(".file-root-headrow")!;
+      document.elementFromPoint = () => head;
+      await act(async () => {
+        useDragStore.getState().startFileDrag({
+          label: "a.txt",
+          pointerX: 5,
+          pointerY: 5,
+          filePath: "/p/p1/a.txt",
+          fileName: "a.txt",
+        });
+        useDragStore.getState().move(6, 6);
+      });
+      expect(section(container, "p2").classList.contains("is-spring-armed")).toBe(true);
+      await act(async () => {
+        vi.advanceTimersByTime(SPRING_LOAD_MS - 1);
+      });
+      expect(section(container, "p2").classList.contains("is-collapsed")).toBe(true);
+      await act(async () => {
+        vi.advanceTimersByTime(2);
+      });
+      // Both open while the drag runs: the section the file came from stays mounted.
+      expect(open(container)).toEqual(["p1", "p2"]);
+      await act(async () => {
+        useDragStore.getState().end();
+      });
+      expect(open(container)).toEqual(["p2"]);
+      expect(useBoxAccordionStore.getState().byBox.boxA?.open).toBe("p2");
+    });
+
+    it("a sweep that never dwells opens nothing", async () => {
+      const container = await renderBox();
+      const head = section(container, "p2").querySelector<HTMLElement>(".file-root-headrow")!;
+      document.elementFromPoint = () => head;
+      await act(async () => {
+        useDragStore.getState().startFileDrag({
+          label: "a.txt",
+          pointerX: 5,
+          pointerY: 5,
+          filePath: "/p/p1/a.txt",
+          fileName: "a.txt",
+        });
+        useDragStore.getState().move(6, 6);
+        vi.advanceTimersByTime(300);
+        document.elementFromPoint = () => null;
+        useDragStore.getState().move(30, 30);
+        vi.advanceTimersByTime(1000);
+        useDragStore.getState().end();
+      });
+      expect(open(container)).toEqual(["p1"]);
     });
   });
 });
