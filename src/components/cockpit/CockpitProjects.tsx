@@ -89,7 +89,7 @@ function Card({ card, now }: { card: ProjectCard; now: number }) {
       </header>
       {card.loaded && card.counts && (
         <div className="cockpit-card-row">
-          <ScopeSetStatusBars scopes={[card.id]} interactive={false} className="inline" />
+          <ScopeSetStatusBars scopes={[card.id]} interactive={false} />
           <span className="cockpit-meta">
             {t("cockpit.projects.agents", { total: card.counts.total, working: card.counts.working, asking: card.counts.asking, done: card.counts.done })}
           </span>

@@ -197,6 +197,54 @@ dev build.
   `-p app-serverd`; cargo test `-p tabtivity -p app-serverd` 5196 passed;
   daemon build `--no-default-features --lib --test server_secrets` 4857 passed.
 
+### Final full run (after C6)
+
+- `npx vitest run` (whole suite, normal priority): 1032 files, 10326 tests.
+  First pass: 3 stylesheet audits failed on cockpit CSS (a bare `col-resize`
+  cursor instead of the cursor-pack token, a focus ring in `--accent` instead
+  of `--focus-ring`, `className="inline"` on `ScopeSetStatusBars` outside the
+  known collision). Fixed in the follow-up commit; theme + cockpit suites
+  then 25 files / 231 tests PASS. Every other file passed on the full run.
+- `npm run lint`: 0 errors, 29 warnings, none in a file this branch touched.
+
+## Status and where to resume
+
+C0–C6 are on branch `cockpit` (C7, the sphere, is out of scope). Nothing has
+been run live. Next: the user's click-through below in a dev build of this
+branch, then `npm run untested -- tested cockpit.` for what works.
+
+## Live click-through (dev build of this branch)
+
+1. Settings → Experimental → **Cockpit** on. A gauge button appears after ☑
+   in the header; the box chip's dropdown gains **Open cockpit**.
+2. Have agent tabs in three projects, one stopped on a question, one cut off
+   with Esc, one finished in a tab you have not opened since. The header badge
+   counts the asking + interrupted ones (plus schedule proposals / root
+   approvals); answering one makes it fall without any acknowledgement.
+3. Open the cockpit (button, box chip row, or steering mode + **U**). Now view:
+   the rail lists Asking, Interrupted (with ▶ Continue), Finished-not-seen;
+   the detail pane shows the asking tab's Chat. Answer the question there.
+4. In the roster: J/K (or ↑/↓) move, Space/→ shows the row in the pane, Enter
+   jumps to the tab and closes the cockpit, C continues an interrupted row, /
+   focuses the filter. Settings → Keyboard steering · Cockpit rebinds them.
+5. With the cockpit resized so its project's pane is visible behind it, select
+   that project's agent: its own pane shows "Shown in the cockpit · Show here";
+   nothing restarts, the terminal does not flicker in size. Close the cockpit:
+   the pane comes back intact. Repeat with the tab popped out (pane says "Open
+   in its window ↗"), and with a remote project disconnected ("Connect first").
+6. Switch project behind the overlay (Ctrl+Tab / the pills): the cockpit stays
+   open and its detail pane keeps drawing.
+7. Approve an agent's schedule proposal and a push request from the rail.
+8. Projects: inactive projects say "not open" with no agent count; Restore
+   brings their tabs back; Agents narrows Now to that project ("Only X ×").
+9. Tonight: schedules / warm-ups / calendar events in the right buckets around
+   midnight; Disable, Send now; While you were away after closing the cockpit
+   for a while; Mark all seen.
+10. Usage: the CLI usage panel (same as the side panel's CLIs view), CPU / RAM
+    / GPU meters, a resident Ollama model's Unload, remote hosts with lamps.
+11. Platforms: Linux (X11), Linux (Wayland), Windows, macOS; under the CPU
+    paint path (`[data-software-paint]`) rows and panes land without motion.
+
 ## Flagged for user
 
 - Header badge does not count **push requests** while the cockpit is shut:

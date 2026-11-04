@@ -77,7 +77,7 @@
 }
 .cockpit-grip {
   flex: 0 0 6px;
-  cursor: col-resize;
+  cursor: var(--cur-col-resize, col-resize);
   border-radius: 6px;
 }
 .cockpit-grip:hover {
@@ -218,7 +218,7 @@
   border-color: var(--text-muted);
 }
 .cockpit-roster-list:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 .cockpit-roster-row {
