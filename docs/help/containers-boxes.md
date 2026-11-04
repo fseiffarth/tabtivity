@@ -103,7 +103,8 @@ box, **All projects** first); typing a member's name finds its box too.
 Ctrl+K has a **Boxes** group, **New box…**, **Show all projects** (inside a
 box) and **Add (current project) to (box)**. Right-click a box pill for Open, Rename,
 **Edit box…** (the box sheet: name, colour, projects, folder, phone access, and
-**Dissolve box…**), Members or **Dissolve box…**. A popout window that shows a
+**Dissolve box…**), Members, **Hide its projects from All projects** (the box's
+own row still shows them) or **Dissolve box…**. A popout window that shows a
 box carries its name and colour in the title bar. With four or more projects
 and no box, a hint points at the **+ Box** pill; the lesson "Group projects
 into a box" (Help → Lessons) walks through all of this.

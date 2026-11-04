@@ -4598,3 +4598,45 @@ html:not(.show-untested-tags) .untested-tag {
 .project-pills-skeleton > .skeleton-row {
   width: 84px;
 }
+
+/* "N hidden": the tail of the All projects row while some open projects are
+   kept off it (BarHiddenChip). Quiet like the box chip's "+N". */
+.bar-hidden-chip {
+  flex-shrink: 0;
+  align-self: center;
+  margin: 0 var(--space-1);
+  padding: 2px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: var(--cur-pointer, pointer);
+}
+.bar-hidden-chip:hover,
+.bar-hidden-chip[aria-expanded="true"] {
+  color: var(--text-primary);
+}
+
+.bar-hidden-menu .bar-hidden-row {
+  display: flex;
+  align-items: stretch;
+}
+.bar-hidden-menu .bar-hidden-row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.bar-hidden-menu .bar-hidden-box .context-menu-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.bar-hidden-menu button.bar-hidden-show {
+  flex: 0 0 auto;
+  width: 26px;
+  justify-content: center;
+  padding: 0;
+  color: var(--accent);
+}

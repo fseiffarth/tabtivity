@@ -241,6 +241,11 @@ export interface Settings {
   /** Top-bar item ids in the order the user dragged them (`lib/headerPins`).
    * An id that is absent keeps its built-in place after the listed ones. */
   header_order?: string[];
+  /** Project ids kept off the "All projects" strip (`lib/projects/barHidden`).
+   *  Still open, still in their boxes' slices and in search. */
+  bar_hidden_projects?: string[];
+  /** Box ids whose members are kept off the "All projects" strip. */
+  bar_hidden_boxes?: string[];
   /** Default printer per network, keyed by `networkKey()` in
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */

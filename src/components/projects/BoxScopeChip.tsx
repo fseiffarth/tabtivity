@@ -23,6 +23,7 @@ import { BoxColorPicker } from "./BoxColorPicker";
 import { BoxMemberChecklist } from "./BoxMemberChecklist";
 import { useBoxNameCheck, useQuickCreateBox } from "./useQuickCreateBox";
 import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PlusIcon, SquareIcon } from "../common/icons/Icon";
+import { setBoxBarHidden, useBarHidden } from "../../lib/projects/barHidden";
 
 /** This chip's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const SCOPE_MENU_ID = "box-scope-chip";
@@ -154,6 +155,7 @@ export function BoxScopeChip({
   rootStation,
 }: Props) {
   const t = useT();
+  const barHidden = useBarHidden();
   const cockpitOn = useExperimental("cockpit");
   // Hover-opened through the SHARED header menu id, like the + menu and the
   // cluster menus beside it: one id means opening another header menu closes
@@ -762,6 +764,23 @@ export function BoxScopeChip({
             box={menuBox}
             onPick={(color) => void useBoxesStore.getState().setBoxColor(menuBox.id, color)}
           />
+          {/* Keeps the members off the "All projects" strip only; this
+              slice still shows them all (lib/projects/barHidden). */}
+          <button
+            className="context-menu-check untested"
+            onClick={() => {
+              setContextMenu(null);
+              const hide = !barHidden.boxes.has(menuBox.id);
+              void setBoxBarHidden(menuBox.id, hide, new Set(boxes.map((b) => b.id)));
+            }}
+            title={t("boxPill.hideMembersTitle", { name: menuBox.name })}
+          >
+            <span className="context-menu-checkmark" aria-hidden>
+              {barHidden.boxes.has(menuBox.id) ? <CheckboxIcon /> : <SquareIcon />}
+            </span>
+            {t("boxPill.hideMembers")}
+            <UntestedTag id="boxPill.hideMembers" />
+          </button>
 
           {/* Members, right on the box: the shared checklist (every project,
               closed ones labelled), toggling membership on the spot. The menu

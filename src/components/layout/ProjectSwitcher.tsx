@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
+import { BarHiddenChip } from "../projects/BarHiddenChip";
+import { barHiddenReason, setProjectBarHidden, useBarHidden } from "../../lib/projects/barHidden";
 import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
 import { BoxEmptyLine } from "../projects/BoxEmptyLine";
 import { useBoxNameCheck, useQuickCreateBox } from "../projects/useQuickCreateBox";
@@ -91,6 +93,7 @@ export function ProjectSwitcher({
   const removeFromBox = useBoxesStore((s) => s.removeFromBox);
   const boxProjects = useBoxesStore((s) => s.boxProjects);
   const membership = useBoxMembership();
+  const barHidden = useBarHidden();
   // Box names are validated now (empty, taken, too long): a rename or an
   // Alt-drag grouping the backend refuses says why instead of failing silently.
   const { messageOf } = useBoxNameCheck();
@@ -371,10 +374,33 @@ export function ProjectSwitcher({
   // Members show REGARDLESS of status: a member closed in the general strip is
   // still open inside its box (openBox restored its tabs box-locally), so the
   // slice keeps its pill while the general strip — activeProjects — does not.
+  // The unsliced strip leaves out what the user hid from it, one by one or a
+  // whole box's members (`lib/projects/barHidden`) — except the project in
+  // scope, for the same reason a slice keeps it. A slice ignores the lists:
+  // looking into a box is where its hidden members are still found.
+  const barHiddenSplit = useMemo(() => {
+    const shown: ProjectEntry[] = [];
+    const own: ProjectEntry[] = [];
+    const byBox = new Map<string, ProjectEntry[]>();
+    for (const p of activeProjects) {
+      const why = p.id === scope ? null : barHiddenReason(p.id, membership.get(p.id), barHidden);
+      if (!why) shown.push(p);
+      else if (why.kind === "project") own.push(p);
+      else byBox.set(why.boxId, [...(byBox.get(why.boxId) ?? []), p]);
+    }
+    const groups = boxes
+      .filter((b) => byBox.has(b.id))
+      .sort((a, b) => a.position - b.position)
+      .map((box) => ({ box, members: byBox.get(box.id) ?? [] }));
+    return { shown, own, groups };
+  }, [activeProjects, barHidden, boxes, membership, scope]);
+  const aliveProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
+  const aliveBoxIds = useMemo(() => new Set(boxes.map((b) => b.id)), [boxes]);
+
   const visibleProjects = useMemo<ProjectEntry[]>(() => {
-    if (!currentBox) return activeProjects;
+    if (!currentBox) return barHiddenSplit.shown;
     return stripProjects(projects, currentBox, scope);
-  }, [activeProjects, currentBox, projects, scope]);
+  }, [barHiddenSplit, currentBox, projects, scope]);
 
   // On steering's projects level, every pill wears its station number
   // (the digit that jumps there — 1 is the root pill). Numbered from the SAME
@@ -745,6 +771,8 @@ export function ProjectSwitcher({
                   shiftPx={pillShifts.get(project.id)}
                   groupHintActive={pillDrag?.groupTargetId === project.id}
                   station={stationById?.get(project.id)}
+                  barHidden={barHidden.projects.has(project.id)}
+                  onToggleBarHidden={(hide) => void setProjectBarHidden(project.id, hide, aliveProjectIds)}
                 />
               );
             })}
@@ -763,6 +791,16 @@ export function ProjectSwitcher({
           >
             <ChevronRightIcon />
           </button>
+          {/* Outside the scroller, so "N hidden" never scrolls out of reach. */}
+          {!currentBox && (
+            <BarHiddenChip
+              projects={barHiddenSplit.own}
+              byBox={barHiddenSplit.groups}
+              aliveProjectIds={aliveProjectIds}
+              aliveBoxIds={aliveBoxIds}
+              onOpen={(id) => void setActive(id)}
+            />
+          )}
         </div>
         <div className="project-switcher-separator" />
 

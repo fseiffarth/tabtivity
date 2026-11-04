@@ -102,6 +102,10 @@ interface Props {
    *  mode is active). Renders a small overlay chip — absolutely positioned so
    *  showing it never shifts the strip. Absent outside steering mode. */
   station?: number;
+  /** The project is hidden from the "All projects" strip (`lib/projects/barHidden`).
+   *  Absent = the View group offers no hide/show row. */
+  barHidden?: boolean;
+  onToggleBarHidden?: (hide: boolean) => void;
 }
 
 /** File endings that mark a project as holding Python — the "Python interpreter…"
@@ -1199,6 +1203,8 @@ export function ProjectPill({
   shiftPx,
   groupHintActive,
   station,
+  barHidden,
+  onToggleBarHidden,
 }: Props) {
   const t = useT();
   // Shared hover card (identical popup in the right file-viewer). Owns the
@@ -1823,6 +1829,19 @@ export function ProjectPill({
             >
               {t("pill.showActivity")}
             </button>
+            {barHidden !== undefined && onToggleBarHidden && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  onToggleBarHidden(!barHidden);
+                }}
+                title={t(barHidden ? "pill.showOnAllProjectsTitle" : "pill.hideFromAllProjectsTitle")}
+              >
+                {t(barHidden ? "pill.showOnAllProjects" : "pill.hideFromAllProjects")}
+                <UntestedTag id="pill.hideFromAllProjects" />
+              </button>
+            )}
             {!hostPinned && (
               <button
                 onClick={() => {

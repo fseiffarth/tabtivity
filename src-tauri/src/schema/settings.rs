@@ -1055,6 +1055,13 @@ pub struct Settings {
     /// keeps its built-in place after the listed ones (`lib/headerPins`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_order: Option<Vec<String>>,
+    /// Project ids kept off the "All projects" strip (a view choice only:
+    /// the project stays open; `src/lib/projects/barHidden.ts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_hidden_projects: Option<Vec<String>>,
+    /// Box ids whose members are kept off the "All projects" strip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_hidden_boxes: Option<Vec<String>>,
     /// Default printer per network, keyed by the network key the frontend
     /// derives (`wlan:<ssid>`, `lan:<hashed gateway mac>`, `lan`). When the machine
     /// joins a keyed network, the print manager's host makes that printer the
