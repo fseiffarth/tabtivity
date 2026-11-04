@@ -228,7 +228,6 @@ export const enSource = {
   "mobile.slash.title": "Commands",
   "mobile.slash.recent": "Sent before",
   "mobile.slash.forget": "Forget {command}",
-  "mobile.composer.suggestionHint": "Claude's next message, in the box — edit it, clear it, or send it",
   "mobile.signIn.banner": "{agent} is waiting for you to sign in.",
   "mobile.signIn.open": "Sign in",
   "mobile.signIn.hide": "Hide the sign-in notice",

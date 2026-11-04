@@ -203,7 +203,6 @@ export const dict: Dict = {
   "mobile.slash.title": "Befehle",
   "mobile.slash.recent": "Schon gesendet",
   "mobile.slash.forget": "{command} vergessen",
-  "mobile.composer.suggestionHint": "Claudes nächste Nachricht steht im Feld — ändern, löschen oder senden",
   "mobile.signIn.banner": "{agent} wartet darauf, dass du dich anmeldest.",
   "mobile.signIn.open": "Anmelden",
   "mobile.signIn.hide": "Anmeldehinweis ausblenden",

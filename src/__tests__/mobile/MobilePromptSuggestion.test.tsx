@@ -107,7 +107,7 @@ const paint = async (text: string) => {
   await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
 };
 
-const hint = () => screen.queryByRole("group", { name: "Claude suggests" });
+const hint = () => (field().classList.contains("suggested") ? field() : null);
 const field = () => screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement;
 const SUGGESTION = "make it ask for my name";
 
