@@ -11322,6 +11322,8 @@ export const dict: Dict = {
   "cockpit.rail.title": "Vous attend",
   "cockpit.rail.expand": "Ouvrir la colonne Vous attend",
   "cockpit.rail.collapse": "Replier la colonne Vous attend",
+  "cockpit.narrow.needsYou": "Vous attend {count}",
+  "cockpit.narrow.back": "Agents",
   "cockpit.rail.empty": "Rien ne vous attend.",
   "cockpit.rail.asking": "Demande",
   "cockpit.rail.interrupted": "Interrompu",

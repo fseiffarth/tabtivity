@@ -7,6 +7,7 @@ import { useBoxesStore } from "../../stores/boxes";
 import { useExperimental } from "../../lib/experimental";
 import { COCKPIT_VIEWS, type CockpitView } from "../../lib/cockpit/views";
 import { useFloatingFrame } from "../common/useFloatingFrame";
+import { FrameBandContext, useFrameBand } from "../../lib/window/frameBand";
 import { storageKey } from "../../lib/brand";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { ARRIVAL_MS, useArrivalsStore } from "../../stores/calendar/arrivals";
@@ -25,7 +26,7 @@ import { useRootReviewStore } from "../../stores/rootReview";
 import { useMailStore } from "../../stores/mail";
 import { useRootMcpRights } from "./RootRightsBadge";
 import { usePoll } from "../../lib/usePoll";
-import { CloseIcon } from "../common/icons/Icon";
+import { ChevronDownIcon, CloseIcon } from "../common/icons/Icon";
 import { RootView, type RootBarSlots } from "./RootView";
 
 // The cockpit's views are reached only with the `cockpit` experiment on, so
@@ -229,6 +230,11 @@ function RootOverlay() {
   // opens in, so a console sized on an external display is reachable without one.
   const { frameRef, frameStyle, frameClass, framing, barProps, grips, fillButton } =
     useFloatingFrame(storageKey("rootConsoleFrame"));
+  // The frame's width band (`lib/window/frameBand`): `data-band` for the CSS, the
+  // context for the views that swap what they mount. Without the experiment
+  // the window is today's console at any width, so the band stays `wide`.
+  const measuredBand = useFrameBand(frameRef);
+  const band = cockpitOn ? measuredBand : "wide";
   // The ⚿ badge's reading (`root_mcp_status`, once per mount) — also what
   // tells the ✓ Approvals panel whether the review gate is only advisory.
   const rights = useRootMcpRights();
@@ -323,6 +329,7 @@ function RootOverlay() {
         ref={frameRef}
         className={`root-overlay subwindow focused ${frameClass}${cockpitOn ? " root-overlay-wide" : ""}`}
         style={frameStyle}
+        data-band={cockpitOn ? band : undefined}
         role="dialog"
         aria-modal="true"
         aria-label={t(cockpitOn ? "cockpit.title" : "rootConsole.title")}
@@ -382,16 +389,21 @@ function RootOverlay() {
           {!subBar && <div className="root-overlay-slot" ref={setStripEl} />}
           <div className="tab-controls root-overlay-controls" style={subBar ? undefined : controlsStyle}>
             {cockpitOn && view !== "root" && boxes.length > 0 && (
-              <select
-                className="cockpit-box-filter"
-                value={boxFilter ?? ""}
-                aria-label={t("cockpit.boxFilter")}
-                title={t("cockpit.boxFilter")}
-                onChange={(e) => useCockpitStore.getState().setBoxFilter(e.target.value || null)}
-              >
-                <option value="">{t("cockpit.boxFilterAll")}</option>
-                {boxes.map((box) => <option key={box.id} value={box.id}>{box.name}</option>)}
-              </select>
+              <span className={`cockpit-box-filter-wrap${boxFilter ? " on" : ""}`}>
+                {/* Narrow, the select folds into this ▾ (CSS, `data-band`): the
+                    native control stays, invisible, over the icon. */}
+                <span className="cockpit-box-filter-fold" aria-hidden="true"><ChevronDownIcon /></span>
+                <select
+                  className="cockpit-box-filter"
+                  value={boxFilter ?? ""}
+                  aria-label={t("cockpit.boxFilter")}
+                  title={t("cockpit.boxFilter")}
+                  onChange={(e) => useCockpitStore.getState().setBoxFilter(e.target.value || null)}
+                >
+                  <option value="">{t("cockpit.boxFilterAll")}</option>
+                  {boxes.map((box) => <option key={box.id} value={box.id}>{box.name}</option>)}
+                </select>
+              </span>
             )}
             {/* The badge only REPORTS what the tools are — which of them a root
                 tab gets, whether mail is open, whether the review gate is
@@ -429,15 +441,17 @@ function RootOverlay() {
             </div>
           </div>
         )}
-        {view === "root" ? (
-          <RootView rights={rights} slots={slots} busyRef={busyRef} />
-        ) : (
-          <div className="subwindow-body cockpit-overlay-body">
-            <Suspense fallback={null}>
-              <CockpitViewBody view={view} />
-            </Suspense>
-          </div>
-        )}
+        <FrameBandContext.Provider value={band}>
+          {view === "root" ? (
+            <RootView rights={rights} slots={slots} busyRef={busyRef} />
+          ) : (
+            <div className="subwindow-body cockpit-overlay-body">
+              <Suspense fallback={null}>
+                <CockpitViewBody view={view} />
+              </Suspense>
+            </div>
+          )}
+        </FrameBandContext.Provider>
       </div>
     </div>
   );

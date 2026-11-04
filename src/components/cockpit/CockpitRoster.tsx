@@ -82,7 +82,7 @@ export function ScopeChip({ scope }: { scope: RosterRow["scope"] }) {
   );
 }
 
-function Row({ row, selected, now }: { row: RosterRow; selected: boolean; now: number }) {
+function Row({ row, selected, now, onOpen }: { row: RosterRow; selected: boolean; now: number; onOpen?: (ptyId: string) => void }) {
   const t = useT();
   const { facts } = row;
   const turn = rosterTurnLabel(row, now, t);
@@ -94,7 +94,10 @@ function Row({ row, selected, now }: { row: RosterRow; selected: boolean; now: n
       data-pty={row.ptyId}
       className={`cockpit-roster-row state-${row.state}${selected ? " selected" : ""}`}
       style={tabColorCss(row.tab.color) ? { borderLeftColor: tabColorCss(row.tab.color) } : undefined}
-      onClick={() => useCockpitStore.getState().select(row.ptyId)}
+      onClick={() => {
+        useCockpitStore.getState().select(row.ptyId);
+        onOpen?.(row.ptyId);
+      }}
       onDoubleClick={() => jumpToRow(row.ptyId)}
     >
       <div className="cockpit-roster-line">
@@ -132,7 +135,20 @@ function Row({ row, selected, now }: { row: RosterRow; selected: boolean; now: n
  * steering · Cockpit): ↓/↑ (J/K) move, Enter jumps to the tab, Space (→)
  * shows it in the detail pane, C continues an interrupted row, / filters.
  */
-export function CockpitRoster({ roster, selected, now, onShow }: { roster: Roster; selected: string | null; now: number; onShow: (ptyId: string) => void }) {
+export function CockpitRoster({
+  roster,
+  selected,
+  now,
+  onShow,
+  onOpen,
+}: {
+  roster: Roster;
+  selected: string | null;
+  now: number;
+  onShow: (ptyId: string) => void;
+  /** A click on a row (after it was selected): the narrow window opens the detail on it. */
+  onOpen?: (ptyId: string) => void;
+}) {
   const t = useT();
   const mode = useCockpitStore((s) => s.rosterMode);
   const stateFilter = useCockpitStore((s) => s.stateFilter);
@@ -244,7 +260,7 @@ export function CockpitRoster({ roster, selected, now, onShow }: { roster: Roste
         {roster.groups.map((group) => (
           <div key={group.id || "all"} className="cockpit-roster-group">
             {mode !== "flat" && <div className="tab-new-menu-group-label">{groupLabel(group.id, group.label)}</div>}
-            {group.rows.map((row) => <Row key={row.ptyId} row={row} selected={row.ptyId === selected} now={now} />)}
+            {group.rows.map((row) => <Row key={row.ptyId} row={row} selected={row.ptyId === selected} now={now} onOpen={onOpen} />)}
           </div>
         ))}
       </div>

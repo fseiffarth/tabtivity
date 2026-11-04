@@ -11320,6 +11320,8 @@ export const dict: Dict = {
   "cockpit.rail.title": "Te necesita",
   "cockpit.rail.expand": "Abrir la columna Te necesita",
   "cockpit.rail.collapse": "Plegar la columna Te necesita",
+  "cockpit.narrow.needsYou": "Te necesita {count}",
+  "cockpit.narrow.back": "Agentes",
   "cockpit.rail.empty": "Nada te espera.",
   "cockpit.rail.asking": "Pregunta",
   "cockpit.rail.interrupted": "Interrumpido",

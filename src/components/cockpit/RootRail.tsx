@@ -4,6 +4,7 @@ import { storageKey } from "../../lib/brand";
 import type { DecisionGroupId } from "../../lib/cockpit/decisions";
 import type { RosterRow } from "../../lib/cockpit/roster";
 import { useT } from "../../lib/i18n";
+import { useFrameBandValue } from "../../lib/window/frameBand";
 import { ChevronLeftIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { CockpitRail } from "./CockpitRail";
@@ -102,11 +103,15 @@ function RootRailFull({ focusGroup, onCollapse }: { focusGroup: DecisionGroupId 
 /**
  * Root's Needs-you column (experiment on): a 40 px icon rail by default, the
  * full `CockpitRail` beside the console when opened. It reads the live stores
- * the header badge reads and nothing else while collapsed.
+ * the header badge reads and nothing else while collapsed. In a narrow window
+ * (under 820 px, `lib/window/frameBand`) there is no room for it beside the
+ * console, so it is not mounted at all (and loads nothing).
  */
 export function RootRail() {
+  const band = useFrameBandValue();
   const [open, setOpen] = useRailFold();
   const [focusGroup, setFocusGroup] = useState<DecisionGroupId | null>(null);
+  if (band === "narrow") return null;
   return open ? (
     <RootRailFull focusGroup={focusGroup} onCollapse={() => setOpen(false)} />
   ) : (

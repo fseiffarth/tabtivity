@@ -11416,6 +11416,8 @@ export const enSource = {
   "cockpit.rail.title": "Needs you",
   "cockpit.rail.expand": "Open the Needs-you rail",
   "cockpit.rail.collapse": "Fold the Needs-you rail",
+  "cockpit.narrow.needsYou": "Needs you {count}",
+  "cockpit.narrow.back": "Agents",
   "cockpit.rail.empty": "Nothing is waiting for you.",
   "cockpit.rail.asking": "Asking",
   "cockpit.rail.interrupted": "Interrupted",

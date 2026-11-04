@@ -788,6 +788,15 @@ export function ChevronLeftIcon(p: IconProps) {
   );
 }
 
+/** ⌄ — a control that drops something below it. */
+export function ChevronDownIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="m6 9 6 6 6-6" />
+    </Frame>
+  );
+}
+
 /** › — a row that opens something. */
 export function ChevronRightIcon(p: IconProps) {
   return (

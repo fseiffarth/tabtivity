@@ -539,3 +539,128 @@
   width: 24px;
   min-height: 24px;
 }
+
+/* ── Narrow windows ───────────────────────────────────────────────────────
+   The shell measures the FRAME (not the viewport: the window is movable and
+   resizable) and writes its band on it, `data-band="wide|mid|narrow"`
+   (`lib/window/frameBand`: narrow under 820 px, mid 820 to 1179 px); the views
+   that swap what they mount read the same band from context. Only the
+   cockpit experiment writes it. Flat and static; nothing here animates. */
+.cockpit-box-filter-wrap {
+  display: contents;
+}
+.cockpit-box-filter-fold {
+  display: none;
+}
+/* Narrow title bar: the label gives way (the glyph keeps its `title`), and the
+   box filter folds into a ▾ icon with the native select laid over it, invisible,
+   so a click still opens the platform's own list. A chosen box tints the icon. */
+.root-overlay[data-band="narrow"] .app-overlay-label {
+  display: none;
+}
+.root-overlay[data-band="narrow"] .cockpit-box-filter-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.root-overlay[data-band="narrow"] .cockpit-box-filter-wrap.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.root-overlay[data-band="narrow"] .cockpit-box-filter-fold {
+  display: inline-flex;
+  pointer-events: none;
+}
+.root-overlay[data-band="narrow"] .cockpit-box-filter-fold svg {
+  width: 14px;
+  height: 14px;
+}
+.root-overlay[data-band="narrow"] .cockpit-box-filter {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  opacity: 0;
+  cursor: var(--cur-pointer, pointer);
+}
+
+/* Now, middle band: the rail is the icon rail in its own rounded column, the
+   full rail in the popover; roster and detail share the rest. */
+.cockpit-now-icons {
+  flex: 0 0 auto;
+  display: flex;
+  margin-right: 6px;
+}
+.cockpit-now-icons .cockpit-rail-icons {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+/* Now, narrow: master or detail, never both. */
+.cockpit-now.narrow .cockpit-now-detail {
+  flex: 1;
+  flex-direction: column;
+}
+.cockpit-narrow-back {
+  flex: 0 0 auto;
+  padding-bottom: 6px;
+}
+.cockpit-narrow-back .settings-btn svg {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+}
+.cockpit-needs-chip {
+  margin-left: auto;
+  border: 1px solid var(--border-color);
+  background: none;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: var(--text-sm);
+  cursor: var(--cur-pointer, pointer);
+}
+.cockpit-needs-chip:hover {
+  background: var(--control-hover-bg);
+}
+.cockpit-needs-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.cockpit-needs-chip.asking {
+  color: var(--status-decision);
+  border-color: color-mix(in srgb, var(--status-decision) 55%, transparent);
+}
+/* The popover is one of the shared menu surfaces (the portal owns position and
+   layering); the real rail fills it and scrolls its own list. */
+.cockpit-needs-popover {
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100vw - 16px));
+  height: min(70vh, 560px);
+  overflow: hidden;
+  padding: 0;
+}
+.cockpit-needs-popover-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 4px;
+}
+/* Tonight and Usage stack their two columns; the view scrolls as a whole
+   instead of two short panes scrolling inside it. */
+.root-overlay[data-band="narrow"] .cockpit-tonight,
+.root-overlay[data-band="narrow"] .cockpit-usage {
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr);
+}
+.root-overlay[data-band="narrow"] .cockpit-tonight-col,
+.root-overlay[data-band="narrow"] .cockpit-usage-col {
+  overflow: visible;
+}
