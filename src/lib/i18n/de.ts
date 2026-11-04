@@ -175,6 +175,7 @@ export const dict: Dict = {
   "mobile.composer.keysShow": "Strg-, Esc-, Tab- und Pfeiltasten zeigen",
   "mobile.composer.keysHide": "Strg-, Esc-, Tab- und Pfeiltasten ausblenden",
   "mobile.composer.goalHint": "Die Nachricht mit /goal beginnen: der Agent arbeitet weiter, bis das Ziel erreicht ist",
+  "mobile.composer.clearQueued": "Der Agent arbeitet noch: Die neue Unterhaltung beginnt, sobald dieser Durchgang endet.",
   "mobile.composer.clearBusy": "Codex arbeitet noch und kann jetzt keine neue Unterhaltung beginnen. Mit Esc anhalten, dann erneut tippen.",
   "mobile.inbox.attached": "Im Projekt-Eingang — geht mit deiner nächsten Nachricht mit",
   "mobile.inbox.detach": "{name} nicht mitschicken",

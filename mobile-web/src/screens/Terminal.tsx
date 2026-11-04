@@ -1,5 +1,5 @@
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
-import { BranchIcon, ChevronLeftIcon, CloseIcon, PencilIcon, UndoIcon } from "../glyphs";
+import { BranchIcon, ChevronLeftIcon, CloseIcon, NewChatIcon, UndoIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { HintQueue, type HintKey } from "../components/HintMessage";
@@ -2631,6 +2631,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         <span>{t(editNote === "mobile.composer.heldEditFailed" ? "mobile.composer.heldEditFailed" : "mobile.composer.editingHeld")}{isUntested("mobile.chat.editHeld") && <> · <em>{t("mobile.focus.untested")}</em></>}</span>
         <button onPointerDown={(event) => event.preventDefault()} onClick={cancelEdit}>{t("mobile.composer.editCancel")}</button>
       </div>}
+      {clearQueued && <div className="voice-feedback" role="status">{t("mobile.composer.clearQueued")}{isUntested("mobile.composer.clearQueued") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}
       {clearRefused && liveBusy && <div className="voice-feedback" role="status">{t("mobile.composer.clearBusy")}{isUntested("mobile.composer.clearBusy") && <> · <em>{t("mobile.focus.untested")}</em></>}</div>}
       {lastSent && !sessionFocus && <div className="last-sent"><span>{t("mobile.composer.lastSent")}</span><p>{lastSent}</p></div>}
       {uploads.map((upload) => upload.failure && <div key={upload.id} className="inbox-upload error" role="alert"><strong>{upload.name}</strong><span>{t(upload.failure)}</span><button onClick={() => dismissUpload(upload.id)} aria-label={t("mobile.sendToDesktop.dismiss", { name: upload.name })}><CloseIcon size="1em" /></button></div>)}
@@ -2780,7 +2781,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               ? <button className="composer-tool composer-undoing" disabled aria-busy="true" onPointerDown={(event) => event.preventDefault()} aria-label={t("mobile.composer.undoing")} title={t("mobile.composer.undoing")}><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span><span className="visually-hidden">{t("mobile.composer.undoing")}</span></button>
               : undoable
               ? <button className="composer-tool" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={undoClearConversation} aria-label={t("mobile.composer.undoClearHint")} title={t("mobile.composer.undoClearHint")}><UndoIcon /><span className="visually-hidden">{t("mobile.composer.undoClear")}</span></button>
-              : <button className="composer-tool" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={clearConversation} aria-label={t("mobile.composer.clearChat")} title={t("mobile.composer.clearChat")}><PencilIcon /><span className="visually-hidden">{t("mobile.composer.clearChip")}</span></button>}
+              : <button className="composer-tool" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={clearConversation} aria-label={t("mobile.composer.clearChat")} title={t("mobile.composer.clearChat")}><NewChatIcon /><span className="visually-hidden">{t("mobile.composer.clearChip")}</span></button>}
             {((undoable && isUntested("mobile.composer.undoClear")) || (undoing && isUntested("mobile.composer.undoing"))) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
             {/* Commit opens its sheet: one commit, or split into several. */}
             {!bare && <button className="composer-tool composer-commit" disabled={!connected} onPointerDown={(event) => event.preventDefault()} onClick={() => { setCommitSheet(true); setCommitRefresh((count) => count + 1); }} aria-label={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")} aria-haspopup="dialog" aria-expanded={commitSheet} title={uncommittedCount > 0 ? t("mobile.commit.openCount", { count: uncommittedCount }) : t("mobile.commit.open")}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5" /><path d="M2 12h6.5M15.5 12H22" /></svg>{uncommittedCount > 0 && <span className="composer-commit-count" aria-hidden="true">{uncommittedCount > 99 ? "99+" : uncommittedCount}</span>}</button>}

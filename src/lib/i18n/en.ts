@@ -200,6 +200,7 @@ export const enSource = {
   "mobile.composer.keysShow": "Show the Ctrl, Esc, Tab and arrow keys",
   "mobile.composer.keysHide": "Hide the Ctrl, Esc, Tab and arrow keys",
   "mobile.composer.goalHint": "Start the message with /goal: the agent keeps working until the goal is met",
+  "mobile.composer.clearQueued": "The agent is still working: the new conversation starts when this turn ends.",
   "mobile.composer.clearBusy": "Codex is still working and can’t start a new conversation now. Stop it with Esc, then tap again.",
   "mobile.inbox.attached": "In the project inbox — goes with your next message",
   "mobile.inbox.detach": "Leave {name} out of the message",

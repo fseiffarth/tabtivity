@@ -855,9 +855,17 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     // hidden and there is nothing to undo — an Undo now resumed an older chat.
     expect(screen.getByText("add a clear button")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Bring back the conversation you just cleared" })).toBeNull();
+    // The tap is not lost from sight: the phone says the clear waits, and a
+    // second tap meanwhile queues no second /clear.
+    expect(screen.getByText(/the new conversation starts when this turn ends/)).toBeTruthy();
+    const sentBefore = FakeWebSocket.instances[0].sent.length;
+    fireEvent.click(screen.getByRole("button", { name: "Start a new conversation" }));
+    await settle();
+    expect(FakeWebSocket.instances[0].sent.length).toBe(sentBefore);
 
     rerender(<Terminal tab={{ ...TAB, agent_status: "idle" } as typeof TAB} back={() => {}} />);
     await settle();
+    expect(screen.queryByText(/the new conversation starts when this turn ends/)).toBeNull();
     expect(screen.queryByText("add a clear button")).toBeNull();
     expect(screen.getByRole("button", { name: "Bring back the conversation you just cleared" })).toBeTruthy();
   });

@@ -882,6 +882,8 @@ export function useComposerSend({
    * once — no confirm dialog. The draft is left alone. A Codex that is working
    * would refuse it, so the button says so here instead. */
   const clearConversation = () => {
+    // One already waits behind the turn: a second would clear the new chat too.
+    if (clearQueued) return;
     if (codexBusy()) {
       setClearRefused(true);
       return;

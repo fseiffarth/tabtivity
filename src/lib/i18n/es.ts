@@ -175,6 +175,7 @@ export const dict: Dict = {
   "mobile.composer.keysShow": "Mostrar las teclas Ctrl, Esc, Tab y flechas",
   "mobile.composer.keysHide": "Ocultar las teclas Ctrl, Esc, Tab y flechas",
   "mobile.composer.goalHint": "Empezar el mensaje con /goal: el agente sigue trabajando hasta cumplir el objetivo",
+  "mobile.composer.clearQueued": "El agente sigue trabajando: la conversación nueva empieza cuando termine este turno.",
   "mobile.composer.clearBusy": "Codex sigue trabajando y no puede iniciar una conversación nueva ahora. Detenlo con Esc y vuelve a tocar.",
   "mobile.inbox.attached": "En la bandeja del proyecto — va con tu próximo mensaje",
   "mobile.inbox.detach": "No adjuntar {name} al mensaje",
