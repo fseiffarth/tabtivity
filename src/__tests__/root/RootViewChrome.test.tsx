@@ -29,6 +29,9 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(),
 }));
 vi.mock("../../components/tabs/TabPane", () => ({ TabPane: () => null }));
+vi.mock("../../components/cockpit/CockpitViews", () => ({
+  CockpitViewBody: () => <div data-testid="cockpit-body" />,
+}));
 
 import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { allGroups, useTabsStore } from "../../stores/tabs";
@@ -134,6 +137,7 @@ describe("the Root view with the experiment on", () => {
     seed();
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().openView("usage"));
+    expect(await screen.findByTestId("cockpit-body")).toBeTruthy();
     expect(subBar()).toBeNull();
   });
 });

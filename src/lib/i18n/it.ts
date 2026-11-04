@@ -11318,6 +11318,8 @@ export const dict: Dict = {
   "cockpit.detail.connect": "Connetti…",
   "cockpit.root": "Radice",
   "cockpit.rail.title": "Ti aspetta",
+  "cockpit.rail.expand": "Apri la colonna Ti aspetta",
+  "cockpit.rail.collapse": "Chiudi la colonna Ti aspetta",
   "cockpit.rail.empty": "Niente ti aspetta.",
   "cockpit.rail.asking": "Chiede",
   "cockpit.rail.interrupted": "Interrotto",

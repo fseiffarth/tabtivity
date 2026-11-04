@@ -465,3 +465,77 @@
   gap: 6px;
   margin-top: 6px;
 }
+
+/* ── Root view: the Needs-you rail (experiment on) ─────────────────────────
+   Beside the console's pane region, in `.subwindow-body`'s row. Collapsed it is
+   `CockpitRail`'s groups at 40 px (`CockpitRailIcons`); open, the real rail
+   (`.cockpit-rail`) in a column of the console's height. Flat, static; the
+   amber and red are the tab strip's own status colours. */
+.cockpit-rail-icons {
+  flex: 0 0 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+.cockpit-rail-icon {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 32px;
+  min-height: 32px;
+  padding: 2px 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: var(--cur-pointer, pointer);
+}
+.cockpit-rail-icon:hover {
+  background: var(--control-hover-bg);
+}
+.cockpit-rail-icon:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.cockpit-rail-icon-count {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.cockpit-rail-icon.group-asking {
+  color: var(--status-decision);
+  border-color: color-mix(in srgb, var(--status-decision) 55%, transparent);
+}
+.cockpit-rail-icon.group-interrupted {
+  color: var(--status-interrupted);
+  border-color: color-mix(in srgb, var(--status-interrupted) 55%, transparent);
+}
+.cockpit-rail-icon.group-unseen {
+  color: var(--status-done);
+}
+.cockpit-rail-icons .untested-tag {
+  margin-top: auto;
+  writing-mode: vertical-rl;
+}
+.cockpit-root-rail-full {
+  flex: 0 0 280px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  padding: 4px;
+}
+.cockpit-rail-collapse {
+  margin-left: auto;
+  width: 24px;
+  min-height: 24px;
+}

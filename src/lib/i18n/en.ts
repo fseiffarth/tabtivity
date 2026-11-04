@@ -11414,6 +11414,8 @@ export const enSource = {
   "cockpit.detail.connect": "Connect…",
   "cockpit.root": "Root",
   "cockpit.rail.title": "Needs you",
+  "cockpit.rail.expand": "Open the Needs-you rail",
+  "cockpit.rail.collapse": "Fold the Needs-you rail",
   "cockpit.rail.empty": "Nothing is waiting for you.",
   "cockpit.rail.asking": "Asking",
   "cockpit.rail.interrupted": "Interrupted",

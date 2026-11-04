@@ -14,7 +14,8 @@ import { AlertsMenu } from "../header/AlertsMenu";
 import { TabContinueButton } from "../tabs/TabLocalityBadges";
 import type { AlertsFeed } from "../files/useAlertsFeed";
 
-const GROUP_LABEL: Record<DecisionGroupId, TranslationKey> = {
+/** Each group's heading, also the icon rail's labels. */
+export const GROUP_LABEL: Record<DecisionGroupId, TranslationKey> = {
   asking: "cockpit.rail.asking",
   interrupted: "cockpit.rail.interrupted",
   push: "cockpit.rail.push",
@@ -39,13 +40,23 @@ function Group({ id, count, children }: { id: DecisionGroupId; count: number; ch
 }
 
 /** A tab row: picks the tab for the detail pane. */
-function TabRow({ row, selected, trailing }: { row: RosterRow; selected: boolean; trailing?: ReactNode }) {
+function TabRow({
+  row,
+  selected,
+  trailing,
+  onPick,
+}: {
+  row: RosterRow;
+  selected: boolean;
+  trailing?: ReactNode;
+  onPick: (row: RosterRow) => void;
+}) {
   return (
     <div className={`cockpit-rail-row${selected ? " selected" : ""}`}>
       <button
         type="button"
         className="cockpit-rail-pick"
-        onClick={() => useCockpitStore.getState().select(row.ptyId)}
+        onClick={() => onPick(row)}
         title={row.lastPrompt}
       >
         <span className="cockpit-rail-scope">{row.scope.name}</span>
@@ -62,14 +73,31 @@ function TabRow({ row, selected, trailing }: { row: RosterRow; selected: boolean
  * — the existing cards, never a second answering UI. Empty groups are not
  * drawn; a rail with nothing says so in one line.
  */
-export function CockpitRail({ decisions, selected, alerts }: { decisions: Decisions; selected: string | null; alerts: AlertsFeed }) {
+export function CockpitRail({
+  decisions,
+  selected,
+  alerts,
+  onPick,
+  headAction,
+}: {
+  decisions: Decisions;
+  selected: string | null;
+  alerts: AlertsFeed;
+  /** A tab row picked. The Now view selects it for the detail pane (the default);
+   *  the Root view's rail, with no detail pane, jumps to the tab. */
+  onPick?: (row: RosterRow) => void;
+  /** A control at the right of the heading (the Root rail's fold button). */
+  headAction?: ReactNode;
+}) {
   const t = useT();
   const { items } = decisions;
+  const pick = onPick ?? ((row: RosterRow) => useCockpitStore.getState().select(row.ptyId));
   const close = () => useRootOverlayStore.getState().close();
   return (
     <aside className="cockpit-rail" aria-label={t("cockpit.rail.title")}>
       <div className="cockpit-column-head">
         {t("cockpit.rail.title")} <span className="cockpit-count">{decisions.total}</span>
+        {headAction}
       </div>
       <div className="cockpit-column-scroll">
         {decisions.groups.length === 0 && <p className="cockpit-empty">{t("cockpit.rail.empty")}</p>}
@@ -78,14 +106,14 @@ export function CockpitRail({ decisions, selected, alerts }: { decisions: Decisi
             case "asking":
               return (
                 <Group key={id} id={id} count={count}>
-                  {items.asking.map((row) => <TabRow key={row.ptyId} row={row} selected={row.ptyId === selected} />)}
+                  {items.asking.map((row) => <TabRow key={row.ptyId} row={row} selected={row.ptyId === selected} onPick={pick} />)}
                 </Group>
               );
             case "interrupted":
               return (
                 <Group key={id} id={id} count={count}>
                   {items.interrupted.map((row) => (
-                    <TabRow key={row.ptyId} row={row} selected={row.ptyId === selected} trailing={<TabContinueButton tab={row.tab} stateClass="interrupted" />} />
+                    <TabRow key={row.ptyId} row={row} selected={row.ptyId === selected} onPick={pick} trailing={<TabContinueButton tab={row.tab} stateClass="interrupted" />} />
                   ))}
                 </Group>
               );
@@ -147,7 +175,7 @@ export function CockpitRail({ decisions, selected, alerts }: { decisions: Decisi
             case "unseen":
               return (
                 <Group key={id} id={id} count={count}>
-                  {items.unseen.map((row) => <TabRow key={row.ptyId} row={row} selected={row.ptyId === selected} />)}
+                  {items.unseen.map((row) => <TabRow key={row.ptyId} row={row} selected={row.ptyId === selected} onPick={pick} />)}
                 </Group>
               );
             case "alerts":

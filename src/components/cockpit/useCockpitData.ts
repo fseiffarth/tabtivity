@@ -15,8 +15,11 @@ import { isAgentProposal, nextScheduleOccurrence } from "../../lib/agents/agentS
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { listMarkupQuestions, MARKUP_MCP_CHANGED } from "../../lib/viewers/markupQuestions";
 import { paneRemoteHost } from "../../lib/tabs/remoteHold";
-import type { MarkupAskRef, PushRequestRef, ScheduleProposalRef } from "../../lib/cockpit/decisions";
-import type { RosterInput, RosterScope } from "../../lib/cockpit/roster";
+import { buildDecisions, type Decisions, type MarkupAskRef, type PushRequestRef, type ScheduleProposalRef } from "../../lib/cockpit/decisions";
+import { buildRoster, type RosterInput, type RosterScope } from "../../lib/cockpit/roster";
+import { useCockpitStore } from "../../stores/cockpit";
+import { useAlertsFeed, type AlertsFeed } from "../files/useAlertsFeed";
+import { useDomainReview } from "../layout/RootReviewStrip";
 import { useT } from "../../lib/i18n";
 import type { GitPushProposal } from "../../types";
 import { GIT_PUSH_MCP_CHANGED } from "../agents/GitPushMcp";
@@ -79,7 +82,11 @@ export function useCockpitNow(): number {
  * at `now`. Re-derived when any of the readings it shows changes. Model tags
  * are re-read on mount and every tick, never per render.
  */
-export function useRosterInputs(scopes: readonly CockpitScopeTabs[], now: number): RosterInput[] {
+export function useRosterInputs(
+  scopes: readonly CockpitScopeTabs[],
+  now: number,
+  { refresh = true }: { refresh?: boolean } = {},
+): RosterInput[] {
   const busy = useActivityStore((s) => s.busyByTab);
   const attention = useActivityStore((s) => s.attentionByTab);
   const lastDone = useActivityStore((s) => s.lastDoneByTab);
@@ -95,6 +102,9 @@ export function useRosterInputs(scopes: readonly CockpitScopeTabs[], now: number
   const schedules = useAgentSchedulesStore((s) => s.byTarget);
 
   useEffect(() => {
+    // A caller that only needs the states (the Root rail) reads what the model
+    // store holds and asks it for nothing.
+    if (!refresh) return;
     const models = useAgentModelsStore.getState();
     for (const { scope, tabs } of scopes) {
       for (const tab of tabs) {
@@ -102,7 +112,7 @@ export function useRosterInputs(scopes: readonly CockpitScopeTabs[], now: number
         void models.refreshScreen(scope.id, tab);
       }
     }
-  }, [scopes, now]);
+  }, [scopes, now, refresh]);
 
   return useMemo(() => {
     // The facts are read off the stores' current state; these subscriptions
@@ -132,6 +142,54 @@ export function useRosterInputs(scopes: readonly CockpitScopeTabs[], now: number
       });
     });
   }, [scopes, now, busy, attention, lastDone, lastWorking, screenByTab, byTab, modeByTab, goalByTab, promptByTab, projects, byProject, byHost, schedules]);
+}
+
+/** What a Needs-you rail adds to the live stores' groups: the groups that need
+ *  a backend read (push requests, schedule proposals, markup asks). */
+export interface DecisionExtras {
+  push: readonly PushRequestRef[];
+  schedules: readonly ScheduleProposalRef[];
+  markup: readonly MarkupAskRef[];
+}
+const NO_EXTRAS: DecisionExtras = { push: [], schedules: [], markup: [] };
+
+/**
+ * The Needs-you groups (`buildDecisions`) over `scopes`, for a rail that is not
+ * the Now view: the live-store groups — asking, interrupted, root approvals,
+ * finished-not-seen, alerts — plus whatever `extras` a caller loaded. It
+ * carries no `useCockpitNow` clock, asks the model store for nothing and reads
+ * nothing from the backend, so a rail built on it costs a re-derivation when a
+ * store changes and nothing else. (`now` is only the minute: the states are
+ * the activity store's, which `useRosterInputs` is subscribed to.)
+ */
+export function useDecisionsFor(
+  scopes: readonly CockpitScopeTabs[],
+  extras: DecisionExtras = NO_EXTRAS,
+): { decisions: Decisions; alerts: AlertsFeed } {
+  const sort = useCockpitStore((s) => s.sort);
+  const minute = Math.floor(Date.now() / 60_000) * 60_000;
+  const inputs = useRosterInputs(scopes, minute, { refresh: false });
+  const { waiting } = useDomainReview();
+  const alerts = useAlertsFeed();
+  const rows = useMemo(
+    () => buildRoster(inputs, { stateFilter: "all", sort, mode: "flat", query: "", boxFilter: null, scopeFilter: null }).rows,
+    [inputs, sort],
+  );
+  const names = useMemo(() => Object.fromEntries(scopes.map((entry) => [entry.scope.id, entry.scope.name])), [scopes]);
+  const decisions = useMemo(
+    () =>
+      buildDecisions({
+        rows,
+        push: extras.push,
+        schedules: extras.schedules,
+        approvals: waiting,
+        markup: extras.markup,
+        alerts: alerts.enabled ? alerts.items : [],
+        names,
+      }),
+    [rows, extras, waiting, alerts.enabled, alerts.items, names],
+  );
+  return { decisions, alerts };
 }
 
 /** Run `load` now and again on each of `events`, while mounted. */

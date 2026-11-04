@@ -49,6 +49,7 @@ import { TabMarkBadge } from "../tabs/TabMarkBadge";
 import { TabMarkMenuItems } from "../tabs/TabMarkMenuItems";
 import { RootRightsBadge, type RootMcpRights } from "./RootRightsBadge";
 import { RootStartAgent } from "./RootStartAgent";
+import { RootRail } from "../cockpit/RootRail";
 import { useExperimental } from "../../lib/experimental";
 import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
@@ -481,6 +482,7 @@ export function RootView({
         soleGroupId !== EMPTY_GROUP_ID &&
         createPortal(filesToggle(soleGroupId, !!sole?.filesOpen), slots.files)}
       <div className="subwindow-body">
+        {cockpitOn && <RootRail />}
         <div
             className={`subwindow-pane-region root-overlay-region${dragging ? " dragging" : ""}`}
             ref={regionRef}

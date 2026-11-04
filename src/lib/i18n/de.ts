@@ -11322,6 +11322,8 @@ export const dict: Dict = {
   "cockpit.detail.connect": "Verbinden…",
   "cockpit.root": "Root",
   "cockpit.rail.title": "Wartet auf dich",
+  "cockpit.rail.expand": "Spalte „Wartet auf dich“ öffnen",
+  "cockpit.rail.collapse": "Spalte „Wartet auf dich“ einklappen",
   "cockpit.rail.empty": "Nichts wartet auf dich.",
   "cockpit.rail.asking": "Fragt",
   "cockpit.rail.interrupted": "Unterbrochen",
