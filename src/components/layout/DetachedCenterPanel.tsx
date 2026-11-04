@@ -127,7 +127,9 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
-import { ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
+import { BoxSwatch, ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
+import { boxScopeId } from "../../stores/boxes";
+import { boxColor } from "../../lib/theme/boxColor";
 
 
 interface Props {
@@ -1849,6 +1851,10 @@ export function DetachedCenterPanel({
     (firstGroup ? tabs.find((t) => t.key === firstGroup.activeKey)?.label : undefined) ??
     "Subwindow";
 
+  // The box this window shows (the one-time seed carries its record), for the
+  // titlebar mark.
+  const titleBox = remoteInfo?.box && scope === boxScopeId(remoteInfo.box.id) ? remoteInfo.box : null;
+
   return (
     <FileDropContext.Provider value={fileDrop}>
     <div className={`detached-center center-panel${windowDragging ? " moving" : ""}`}>
@@ -1890,6 +1896,17 @@ export function DetachedCenterPanel({
         </span>
         {/* Plain text, not a control, so the title moves the window like the rest
             of the strip; a right-click names it. */}
+        {titleBox && (
+          <span
+            className="detached-titlebar-box"
+            style={{ "--box-mark": boxColor(titleBox) } as React.CSSProperties}
+            title={t("detachedTabs.boxMarkTitle", { name: titleBox.name })}
+          >
+            <BoxSwatch className="detached-titlebar-box-swatch" color={boxColor(titleBox)} />
+            <span className="detached-titlebar-box-name">{titleBox.name}</span>
+            <UntestedTag id="detachedTabs.boxMark" />
+          </span>
+        )}
         {windowName && (
           <span className="detached-titlebar-name" title={windowName}>{windowName}</span>
         )}

@@ -359,6 +359,30 @@ body {
 
 /* The window's name, on the strip it moves by: plain text, so a press on it
    drags like one anywhere else. Shrinks before the window controls do. */
+/* The `▣ <box name>` mark of a window showing a box: the swatch in the box's
+   own colour, the name tinted toward it (kept readable on either theme). */
+.detached-titlebar-box {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 0 0 var(--space-2);
+  font-weight: 600;
+  user-select: none;
+}
+.detached-titlebar-box-swatch {
+  width: 12px;
+  height: 11px;
+}
+.detached-titlebar-box-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--box-mark) 55%, var(--text-primary));
+}
+
 .detached-titlebar-name {
   flex: 0 1 auto;
   min-width: 0;

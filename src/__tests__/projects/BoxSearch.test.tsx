@@ -15,7 +15,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn().mockResolvedValue(nu
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
-import { resetBoxSlice } from "../../stores/boxSlice";
+import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 
 function inactiveProj(id: string): ProjectEntry {
   return { id, name: id, status: "inactive", position: 10, local_file: `/p/${id}/project.json` };
@@ -130,5 +130,135 @@ describe("#41 box search results", () => {
 
     expect(setActive).toHaveBeenCalledWith("paperdraft");
     expect(openBox).not.toHaveBeenCalled();
+  });
+});
+
+function activeProj(id: string, position = 1): ProjectEntry {
+  return { id, name: id, status: "inactive", position, local_file: `/p/${id}/project.json` };
+}
+
+async function renderSwitcher() {
+  let container!: HTMLElement;
+  await act(async () => {
+    ({ container } = render(<ProjectSwitcher open={true} />));
+  });
+  const input = container.querySelector(".project-search-entry") as HTMLInputElement;
+  return { container, input };
+}
+
+describe("boxes on focus, member-name match and swatches", () => {
+  it("lists the boxes the moment the field has focus, with a coloured swatch and the member names", async () => {
+    const openBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({
+      boxes: [{ ...box("boxA", "Thesis", ["alpha", "beta"]), color: "#ff0000" }, box("boxB", "Infra", [])],
+      openBox,
+    });
+    useProjectsStore.setState({ projects: [inactiveProj("alpha"), inactiveProj("beta")], activeId: null, loaded: true });
+    const { container, input } = await renderSwitcher();
+
+    // Closed until the field is touched: nothing typed yet.
+    expect(container.querySelector(".project-search-popover")).toBeNull();
+    await act(async () => {
+      fireEvent.focus(input);
+    });
+
+    const rows = [...container.querySelectorAll(".project-search-row.is-box")] as HTMLElement[];
+    expect(rows.map((r) => r.querySelector(".project-search-box-title")?.textContent?.trim())).toEqual(["Thesis", "Infra"]);
+    expect(container.querySelector(".project-search-group")?.textContent).toContain("Boxes");
+    // The coloured BoxSwatch, not the plain hexagon icon.
+    const swatch = rows[0].querySelector("svg.box-swatch") as SVGElement;
+    expect(swatch).toBeTruthy();
+    expect(swatch.style.color).toBe("rgb(255, 0, 0)");
+    expect(rows[0].querySelector(".project-box-badge")).toBeNull();
+    expect(rows[0].querySelector("small")?.textContent).toContain("alpha, beta");
+
+    await act(async () => {
+      fireEvent.click(rows[0]);
+    });
+    expect(openBox).toHaveBeenCalledWith("boxA");
+    // A pick closes the list again.
+    expect(container.querySelector(".project-search-popover")).toBeNull();
+  });
+
+  it("opens nothing on focus when there is no box to list", async () => {
+    useProjectsStore.setState({ projects: [inactiveProj("alpha")], activeId: null, loaded: true });
+    const { container, input } = await renderSwitcher();
+    await act(async () => {
+      fireEvent.focus(input);
+    });
+    expect(container.querySelector(".project-search-popover")).toBeNull();
+  });
+
+  it("matches a box by a member's name and the member stays a row of its own", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", "Thesis", ["zebra"]), box("boxB", "Infra", ["other"])] });
+    useProjectsStore.setState({ projects: [inactiveProj("zebra"), inactiveProj("other")], activeId: null, loaded: true });
+    const { container, input } = await renderSwitcher();
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "zeb" } });
+    });
+    const boxRows = [...container.querySelectorAll(".project-search-row.is-box")];
+    expect(boxRows).toHaveLength(1);
+    expect(boxRows[0].textContent).toContain("Thesis");
+    const all = [...container.querySelectorAll(".project-search-row")];
+    expect(all.some((r) => !r.classList.contains("is-box") && r.textContent?.includes("zebra"))).toBe(true);
+  });
+
+  it("gives a project row the swatches of the boxes it belongs to", async () => {
+    useBoxesStore.setState({
+      boxes: [
+        { ...box("boxA", "Thesis", ["alpha"]), color: "#00ff00" },
+        { ...box("boxB", "Paper", ["alpha"]), position: 6, color: "#0000ff" },
+        box("boxC", "Infra", ["beta"]),
+      ],
+    });
+    useProjectsStore.setState({ projects: [inactiveProj("alpha"), inactiveProj("beta")], activeId: null, loaded: true });
+    const { container, input } = await renderSwitcher();
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "alpha" } });
+    });
+    const row = [...container.querySelectorAll(".project-search-row")].find(
+      (r) => !r.classList.contains("is-box") && r.textContent?.includes("alpha"),
+    ) as HTMLElement;
+    const swatches = [...row.querySelectorAll(".project-search-boxes svg.box-swatch")] as SVGElement[];
+    expect(swatches).toHaveLength(2);
+    expect(swatches[0].style.color).toBe("rgb(0, 255, 0)");
+    expect(swatches[1].style.color).toBe("rgb(0, 0, 255)");
+    expect(row.querySelector(".project-search-boxes")?.getAttribute("title")).toBe("Thesis, Paper");
+    // A project in no box wears none.
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "beta" } });
+    });
+    const infra = [...container.querySelectorAll(".project-search-row:not(.is-box)")].find((r) =>
+      r.textContent?.includes("beta"),
+    ) as HTMLElement;
+    expect(infra.querySelectorAll(".project-search-boxes svg").length).toBe(1);
+  });
+
+  it("leads with All projects while a box is sliced, and picking it clears the slice", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", "Thesis", ["alpha"]), box("boxB", "Infra", [])], openBox: vi.fn() });
+    useProjectsStore.setState({ projects: [activeProj("alpha")], activeId: null, loaded: true });
+    useBoxSliceStore.setState({ sliceBoxId: "boxA" });
+    const { container, input } = await renderSwitcher();
+    await act(async () => {
+      fireEvent.focus(input);
+    });
+    const rows = [...container.querySelectorAll(".project-search-row")] as HTMLElement[];
+    expect(rows[0].classList.contains("is-all")).toBe(true);
+    expect(rows[0].textContent).toContain("All projects");
+    expect(rows.slice(1).every((r) => r.classList.contains("is-box"))).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(rows[0]);
+    });
+    expect(useBoxSliceStore.getState().sliceBoxId).toBeNull();
+  });
+
+  it("has no All projects row when nothing is sliced", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", "Thesis", [])] });
+    const { container, input } = await renderSwitcher();
+    await act(async () => {
+      fireEvent.focus(input);
+    });
+    expect(container.querySelector(".project-search-row.is-all")).toBeNull();
   });
 });

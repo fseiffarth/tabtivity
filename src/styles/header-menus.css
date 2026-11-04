@@ -2985,6 +2985,12 @@ html[data-header-drag] * {
   text-overflow: ellipsis;
 }
 
+/* A box row's colour mark (`BoxSwatch`) before its name. */
+.command-palette-box-swatch {
+  width: 12px;
+  height: 11px;
+}
+
 .command-palette-detail {
   flex: none;
   max-width: 45%;

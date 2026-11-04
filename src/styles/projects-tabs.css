@@ -1389,8 +1389,37 @@
   background: color-mix(in srgb, var(--accent) 8%, var(--control-bg));
 }
 
-.project-search-row.is-box .project-box-badge {
-  margin-right: 2px;
+/* The box's own colour mark (`BoxSwatch`) before its name, and the swatches a
+   project row wears for the boxes it belongs to. */
+.project-search-box-swatch {
+  width: 12px;
+  height: 11px;
+}
+
+.project-search-box-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-search-boxes {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+}
+
+/* "All projects": the way out of a slice, plain (no box rail). */
+.project-search-row.is-all {
+  border-left: 2px solid var(--text-muted);
+}
+
+/* "Boxes" over the box rows of an empty-field list. */
+.project-search-group {
+  padding: var(--space-1) var(--space-2) 2px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 /* ── Project pill popup ─────────────────────────────────────────────── */
