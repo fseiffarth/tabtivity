@@ -1,16 +1,11 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { usePaneRects } from "./usePaneRects";
-import {
-  clampRootOverlayFrame,
-  filledRootOverlayFrame,
-  rootOverlayFrameDrag,
-  useRootOverlayStore,
-  type RootOverlayDragMode,
-  type RootOverlayFrame,
-} from "../../stores/rootOverlay";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useFloatingFrame } from "../common/useFloatingFrame";
+import { storageKey } from "../../lib/brand";
 import { useProjectsStore } from "../../stores/projects";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { useCalendarStore } from "../../stores/calendar/calendar";
@@ -61,7 +56,7 @@ import { TabColorPicker } from "../tabs/TabColorPicker";
 import { TabMarkBadge } from "../tabs/TabMarkBadge";
 import { TabMarkMenuItems } from "../tabs/TabMarkMenuItems";
 import { StarIcon } from "./StarIcon";
-import { RootReviewStrip } from "./RootReviewStrip";
+import { OverlayApprovals } from "./OverlayApprovals";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { useMailStore } from "../../stores/mail";
 import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
@@ -113,15 +108,6 @@ interface OverlayDrag {
 const DRAG_THRESHOLD_PX = 5;
 
 const NO_TABS: TabEntry[] = [];
-
-/** The eight resize grips, in the order they are drawn (edges, then corners). */
-const FRAME_GRIPS: RootOverlayDragMode[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
-
-/**
- * A press on the title bar that must NOT start a window move: the controls have
- * their own jobs, and a tab's own press is the tab drag.
- */
-const BAR_NO_DRAG = ".tab, button, .root-overlay-rights, .untested-tag";
 
 /** A group node's docked-file-viewer fields (`GroupNode`'s own three). */
 type GroupFiles = Pick<
@@ -274,45 +260,27 @@ export function RootOverlayHost() {
  * in, so a console sized on an external display is still reachable without one.
  */
 function RootOverlay() {
-  // Agent drafts awaiting approval and staged `.ics` imports wait for the user
-  // exactly as proposals do, so the badge counts all three.
-  const reviewCount =
-    useRootReviewStore((s) => s.count) + useRootReviewStore((s) => s.imports.length)
-    + useMailStore((s) => s.pendingAgentDrafts.length);
-  // The proposals panel the ✓ Approvals button drops. Open/closed is the review
-  // store's, so a flow that floats the console can also open it at the rows;
-  // the console clears it on the way out (below).
-  const reviewPanel = useRootReviewStore((s) => s.panel);
-  const setReviewPanel = useRootReviewStore((s) => s.setPanel);
-  const approvalsRef = useRef<HTMLButtonElement | null>(null);
-  const [reviewAnchor, setReviewAnchor] = useState<{ x: number; y: number } | null>(null);
   const t = useT();
   const tabs = useTabsStore((s) => s.tabsByScope[ROOT_SCOPE] ?? NO_TABS);
   const layout = useTabsStore((s) => s.layoutByScope[ROOT_SCOPE] ?? null);
   const storedFocus = useTabsStore((s) => s.focusedGroupByScope[ROOT_SCOPE] ?? null);
   const close = useRootOverlayStore((s) => s.close);
-  const storedFrame = useRootOverlayStore((s) => s.frame);
-  const filled = useRootOverlayStore((s) => s.filled);
-  const toggleFilled = useRootOverlayStore((s) => s.toggleFilled);
+  // The window's frame — the one hook the header overlays use: moved by the
+  // title bar, eight grips, double-click / ⤢ fills. Remembered per machine
+  // (`rootConsoleFrame`, localStorage) and re-clamped against the window it
+  // opens in, so a console sized on an external display is reachable without one.
+  const { frameRef, frameStyle, frameClass, framing, barProps, grips, fillButton } =
+    useFloatingFrame(storageKey("rootConsoleFrame"));
   const rootDir = useProjectsStore((s) => s.rootDir) ?? "";
   const [addMenu, setAddMenu] = useState<{ x: number; y: number; groupId: string | null } | null>(
     null,
   );
   const [manageAgents, setManageAgents] = useState(false);
   // The ⚿ badge's reading (`root_mcp_status`, once per mount) — also what
-  // tells the proposals panel whether the review gate is only advisory.
+  // tells the ✓ Approvals panel whether the review gate is only advisory.
   const rights = useRootMcpRights();
   const [drag, setDrag] = useState<OverlayDrag | null>(null);
-  // The frame while a move/resize drag is in flight — local, so a gesture costs
-  // no store write per pointer move (the docked file column's own bargain).
-  const [liveFrame, setLiveFrame] = useState<RootOverlayFrame | null>(null);
-  const [framing, setFraming] = useState(false);
-  const [viewport, setViewport] = useState(() => ({
-    w: typeof window === "undefined" ? 0 : window.innerWidth,
-    h: typeof window === "undefined" ? 0 : window.innerHeight,
-  }));
   const regionRef = useRef<HTMLDivElement>(null);
-  const frameRef = useRef<HTMLDivElement>(null);
   const bodyRefs = useRef(new Map<string, HTMLDivElement>());
   const stripRefs = useRef(new Map<string, HTMLDivElement>());
 
@@ -347,115 +315,13 @@ function RootOverlay() {
       // The proposals panel takes Escape first (the portal's own handler, on the
       // document, marks it handled) — closing the console under an open panel
       // would take the pending decision with it.
-      if (addMenu || manageAgents || dragging || framing || reviewPanel || e.defaultPrevented) return;
+      if (addMenu || manageAgents || dragging || framing || e.defaultPrevented) return;
       e.stopPropagation();
       close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [close, addMenu, manageAgents, dragging, framing, reviewPanel]);
-
-  // ── The console's own frame ─────────────────────────────────────────────
-  // A remembered frame is re-clamped against the window it actually opens in,
-  // so a console sized on an external display is still reachable on the laptop.
-  useEffect(() => {
-    const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
-    onResize();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  // Memoised because the proposals panel's anchor effect below depends on it:
-  // both helpers build a NEW frame object, so an inline expression would make
-  // the effect run on every render, set a new anchor, and render again — the
-  // update loop React aborts the whole tree over (#185, a white window).
-  const frame = useMemo(
-    () =>
-      liveFrame ??
-      (filled
-        ? filledRootOverlayFrame(viewport.w, viewport.h)
-        : storedFrame
-          ? clampRootOverlayFrame(storedFrame, viewport.w, viewport.h)
-          : null),
-    [liveFrame, filled, storedFrame, viewport.w, viewport.h],
-  );
-
-  // The panel hangs from the badge, so its point is re-read whenever the badge
-  // moves: a console dragged, resized or filled with the panel open would
-  // otherwise leave it behind. The portal clamps it into the viewport.
-  useLayoutEffect(() => {
-    if (!reviewPanel) {
-      setReviewAnchor(null);
-      return;
-    }
-    const rect = approvalsRef.current?.getBoundingClientRect();
-    const next = rect ? { x: rect.left, y: rect.bottom + 4 } : null;
-    // Same point, same object: a fresh {x,y} every run would re-render, re-run
-    // this effect and loop, whatever its dependencies happen to be.
-    setReviewAnchor((prev) =>
-      prev && next && prev.x === next.x && prev.y === next.y ? prev : next,
-    );
-  }, [reviewPanel, frame, filled, viewport.w, viewport.h]);
-
-  // A closed console has no badge for the panel to hang from.
-  useEffect(() => () => useRootReviewStore.getState().setPanel(false), []);
-
-  /**
-   * Move or resize the console. The release is bound synchronously inside
-   * pointerdown (WebKitGTK delivers the terminal event only to listeners that
-   * existed before the gesture began — the tab drag's rule), and the start rect
-   * is the element's OWN, so a drag on a console still wearing the stylesheet's
-   * default size takes over from it seamlessly.
-   */
-  const beginFrameDrag = useCallback((e: React.PointerEvent, mode: RootOverlayDragMode) => {
-    if (e.button !== 0) return;
-    const el = frameRef.current;
-    if (!el) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const r = el.getBoundingClientRect();
-    const start: RootOverlayFrame = { x: r.left, y: r.top, width: r.width, height: r.height };
-    const sx = e.clientX;
-    const sy = e.clientY;
-    let latest = start;
-    let moved = false;
-    const onMove = (ev: PointerEvent) => {
-      // A press on the bar is usually a click on the bar; only a travelled one
-      // is a move. A grip has no other meaning, so it takes the first pixel.
-      if (!moved && mode === "move" && Math.hypot(ev.clientX - sx, ev.clientY - sy) < DRAG_THRESHOLD_PX) return;
-      moved = true;
-      latest = rootOverlayFrameDrag(
-        start,
-        mode,
-        ev.clientX - sx,
-        ev.clientY - sy,
-        window.innerWidth,
-        window.innerHeight,
-      );
-      setLiveFrame(latest);
-    };
-    const teardown = () => {
-      window.removeEventListener("pointermove", onMove);
-      setLiveFrame(null);
-      setFraming(false);
-    };
-    setFraming(true);
-    bindDragRelease({
-      onCommit: () => {
-        const committed = moved ? latest : null;
-        teardown();
-        if (committed) useRootOverlayStore.getState().setFrame(committed);
-      },
-      onAbort: teardown,
-    });
-    window.addEventListener("pointermove", onMove);
-  }, []);
-
-  const onBarPointerDown = (e: React.PointerEvent) => {
-    const el = e.target as HTMLElement | null;
-    if (el?.closest(BAR_NO_DRAG)) return;
-    beginFrameDrag(e, "move");
-  };
+  }, [close, addMenu, manageAgents, dragging, framing]);
 
   // ── Measurement ─────────────────────────────────────────────────────────
   const { groupRects, measure } = usePaneRects(regionRef, bodyRefs, renderLayout);
@@ -613,7 +479,6 @@ function RootOverlay() {
     [addMenu],
   );
 
-  const reviewAdvisory = rights.reviewAdvisory;
   const groupOfKey = useMemo(() => {
     const map = new Map<string, { groupId: string; active: boolean }>();
     for (const g of groups) {
@@ -697,9 +562,7 @@ function RootOverlay() {
   const soleFiles = !split && !!sole?.filesOpen;
   const previewRect =
     drag?.overGroup && drag.edge ? groupRects[drag.overGroup] : undefined;
-  const frameStyle: React.CSSProperties | undefined = frame
-    ? { position: "fixed", left: frame.x, top: frame.y, width: frame.width, height: frame.height, margin: 0 }
-    : undefined;
+  const { title: moveHint, ...barRest } = barProps;
 
   // Everything inside opens its tabs in ROOT: the file column's double-clicks,
   // a Files tab's "Open in a new tab", a viewer's links and compiled PDFs. Root
@@ -715,38 +578,23 @@ function RootOverlay() {
     >
       <div
         ref={frameRef}
-        className={`root-overlay subwindow focused${drag ? " dragging" : ""}${
+        className={`root-overlay subwindow focused ${frameClass}${drag ? " dragging" : ""}${
           split ? " split-layout" : ""
-        }${framing ? " framing" : ""}`}
+        }`}
         style={frameStyle}
         role="dialog"
         aria-modal="true"
         aria-label={t("rootConsole.title")}
       >
-        {/* Resize grips, one per edge and corner. Withheld while the console
-            fills the window — there is nothing to drag them into. */}
-        {!filled &&
-          FRAME_GRIPS.map((mode) => (
-            <div
-              key={mode}
-              className={`root-overlay-grip grip-${mode}`}
-              title={t("rootConsole.resizeHint")}
-              onPointerDown={(e) => beginFrameDrag(e, mode)}
-            />
-          ))}
+        {/* Resize grips, one per edge and corner (withheld while the console
+            fills the window — there is nothing to drag them into). */}
+        {grips}
         {/* The title bar is also the move handle (and double-click fills the
             window): a floating subwindow you cannot put somewhere else is a
             dialog, and this one holds terminals. A press on a tab or a control
-            keeps its own meaning — see BAR_NO_DRAG. */}
-        <div
-          className="tab-bar root-overlay-bar"
-          onPointerDown={onBarPointerDown}
-          onDoubleClick={(e) => {
-            if ((e.target as HTMLElement | null)?.closest(BAR_NO_DRAG)) return;
-            toggleFilled();
-          }}
-        >
-          <div className="root-overlay-mark" title={t("rootConsole.moveHint")}>
+            keeps its own meaning — see `useFloatingFrame`'s BAR_NO_DRAG. */}
+        <div {...barRest} className={`tab-bar root-overlay-bar ${barRest.className}`}>
+          <div className="root-overlay-mark" title={moveHint}>
             <StarIcon />
           </div>
           {soleGroupId &&
@@ -760,31 +608,18 @@ function RootOverlay() {
                 enforced. It used to double as the door to the proposals, so one
                 control answered two questions and the count read as part of the
                 tools' own state; the ✓ button beside it is that door now, and
-                the panel hangs from the button that counts it. Switching the
-                tools on and off stays in Settings, where it always was. */}
+                the panel hangs from the button that counts it
+                (`OverlayApprovals`, the same pill the header overlays carry).
+                Switching the tools on and off stays in Settings, where it
+                always was. */}
             <RootRightsBadge rights={rights} />
-            <button
-              type="button"
-              ref={approvalsRef}
-              className={`root-overlay-rights root-overlay-approvals${reviewCount > 0 ? " on" : ""}`}
-              aria-expanded={reviewPanel}
-              title={t("rootReview.badgeHint")}
-              onClick={() => setReviewPanel(!reviewPanel)}
-            >
-              {t("rootReview.badge")}{reviewCount > 0 ? ` ${reviewCount}` : ""} ▾
-            </button>
             <UntestedTag id="rootOverlay.1" />
+            <OverlayApprovals advisory={rights.reviewAdvisory} />
             <UntestedTag id="rootOverlay.viewers" />
             {!split && soleGroupId && soleGroupId !== EMPTY_GROUP_ID && (
               filesToggle(soleGroupId, !!sole?.filesOpen)
             )}
-            <button
-              className="subwindow-hide"
-              title={filled ? t("rootConsole.restore") : t("rootConsole.fill")}
-              onClick={toggleFilled}
-            >
-              {filled ? "⤡" : "⤢"}
-            </button>
+            {fillButton}
             <button className="subwindow-hide" title={t("common.close")} onClick={close}>
               <CloseIcon />
             </button>
@@ -861,22 +696,6 @@ function RootOverlay() {
           {soleFiles && sole && filesColumn(sole)}
         </div>
       </div>
-      {/* The proposals, dropped from the badge (`common/ContextMenuPortal`, the
-          one popover: click-away, Escape, viewport clamp, no z-index here).
-          `keepBelow` keeps it under the badge and caps it to the room beneath,
-          so a long queue scrolls inside the panel instead of sliding up over
-          the bar it came from. */}
-      {reviewPanel && reviewAnchor && (
-        <ContextMenuPortal
-          x={reviewAnchor.x}
-          y={reviewAnchor.y}
-          keepBelow
-          className="context-menu root-review-panel"
-          onClose={() => setReviewPanel(false)}
-        >
-          <RootReviewStrip advisory={reviewAdvisory} />
-        </ContextMenuPortal>
-      )}
       {drag &&
         createPortal(
           <>
