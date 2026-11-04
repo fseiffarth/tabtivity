@@ -67,6 +67,11 @@ const ProjectImportBundleDialog = lazy(() =>
     default: m.ProjectImportBundleDialog,
   })),
 );
+const ProjectSetExportDialog = lazy(() =>
+  import("../projects/ProjectSetExportDialog").then((m) => ({
+    default: m.ProjectSetExportDialog,
+  })),
+);
 
 /** This bar's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const ADD_MENU_ID = "project-add";
@@ -123,7 +128,7 @@ export function ProjectSwitcher({
   const [settingsReveal, setSettingsReveal] = useState<{ path: string[]; open?: boolean } | undefined>(undefined);
   // "clone" is the import dialog opened straight onto its GitHub/GitLab source —
   // the same dialog, so the source can still be switched back inside it.
-  const [dialog, setDialog] = useState<"new" | "import" | "clone" | "bundle" | null>(null);
+  const [dialog, setDialog] = useState<"new" | "import" | "clone" | "bundle" | "exportSet" | null>(null);
   const addMenu = useHeaderMenu(ADD_MENU_ID);
   const showAddMenu = addMenu.open;
   const closeHeaderMenu = useHeaderHoverMenuStore((s) => s.close);
@@ -631,6 +636,11 @@ export function ProjectSwitcher({
           />
         </Suspense>
       )}
+      {dialog === "exportSet" && (
+        <Suspense fallback={null}>
+          <ProjectSetExportDialog onClose={() => setDialog(null)} />
+        </Suspense>
+      )}
 
       <div
         className="project-switcher"
@@ -881,6 +891,13 @@ export function ProjectSwitcher({
                     title={t("projectSwitcher.importBundleTitle")}
                   >
                     {t("projectSwitcher.importBundle")} <UntestedTag id="transfer.import" />
+                  </button>
+                  <button
+                    className="untested"
+                    onClick={() => { closeHeaderMenu(ADD_MENU_ID); setDialog("exportSet"); }}
+                    title={t("projectSwitcher.exportSetTitle")}
+                  >
+                    {t("projectSwitcher.exportSet")} <UntestedTag id="transfer.exportSet" />
                   </button>
                   <button
                     className="untested"

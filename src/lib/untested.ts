@@ -946,6 +946,8 @@ export const UNTESTED = {
   "terminalSignIn.label": { area: "projects", what: "TerminalSignInToggle · Sign in in a terminal: the embedded terminal runs the ssh/openvpn login itself, no shell before or after it (screen 2026-10-15 #1)" },
   "transfer.export": { area: "projects", what: "ProjectExportDialog · Export project…" },
   "transfer.import": { area: "projects", what: "ProjectImportBundleDialog · Import project file…" },
+  "transfer.exportSet": { area: "projects", what: "ProjectSetExportDialog · ＋ → Export Projects…: several projects into one file (one whole bundle per project inside), shared switches, ticked projects measured one by one, a remote-only one packed from the host while connected" },
+  "transfer.importSet": { area: "projects", what: "ProjectSetImportDialog · Import Project File on a project-set file: tick projects, one folder for local projects and one for working copies, each imported in turn; a failing one is named and the rest still land" },
   "transfer.agentHistory": { area: "projects", what: "Export/Import project · agent conversations travel (Claude, Codex, Copilot, OpenCode, Gemini, … stores; databases stripped to conversation tables; folders re-pointed)" },
   "transfer.hostCopy": { area: "projects", what: "Export project (remote) · pack the files from the host's copy over SSH" },
   "projectDialog.keepLocalCopyTitle": { area: "projects", what: "ProjectDialog · Keep a local copy off = remote-only project: no Local location; a New connects, sets up the host folder (scaffold + git init) and only then opens its agent tab, a failed setup retries alone; the auto-connect card is pre-ticked only for a password-less, VPN-less, non-HPC sign-in; an HPC host gets a warning line" },

@@ -1547,6 +1547,9 @@ export interface ExportProgress {
 /** `inspect_project_export` — a bundle's manifest, read without unpacking. */
 export interface BundleInfo {
   path: string;
+  /** The member inside a project set this describes (pass it back as the
+   *  import request's `member`); absent for a bundle file of its own. */
+  member?: string;
   format: number;
   appVersion: string;
   exportedAt: string;
@@ -1611,6 +1614,55 @@ export interface UnpairOutcome {
   /** The move out failed; the folder is still at `keptAt`. */
   moveError?: string | null;
 }
+
+/** One project's outcome in `export_project_set`. */
+export interface ExportSetMember {
+  projectId: string;
+  name: string;
+  /** Its export report; `path` is the entry name inside the set. */
+  report?: ExportReport;
+  /** Why it is not in the set (the others still are). */
+  error?: string;
+}
+
+/** `export_project_set`'s answer. */
+export interface ExportSetReport {
+  path: string;
+  bytes: number;
+  members: ExportSetMember[];
+}
+
+/** `project-export-set` progress event payload. */
+export interface ExportSetProgress {
+  index: number;
+  count: number;
+  projectId: string;
+  phase: "file" | "done";
+  done: number;
+  total: number;
+}
+
+/** One member of a project set as `inspect_project_bundle` read it. */
+export interface SetMemberInfo {
+  member: string;
+  info?: BundleInfo;
+  error?: string;
+}
+
+/** A project set, read without unpacking. */
+export interface SetInfo {
+  path: string;
+  appVersion: string;
+  exportedAt: string;
+  members: SetMemberInfo[];
+  suggestedParent: string;
+  suggestedMirrorParent: string;
+}
+
+/** `inspect_project_bundle` — a picked file is one project or a set. */
+export type InspectedBundle =
+  | { kind: "project"; info: BundleInfo }
+  | { kind: "set"; set: SetInfo };
 
 /** `import_project_export`'s answer. */
 export interface ImportBundleResult {

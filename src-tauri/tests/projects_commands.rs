@@ -1131,6 +1131,7 @@ fn full_export(project_id: &str, dest: &Path) -> ExportProjectRequest {
 fn plain_import(bundle: &Path, parent: &Path) -> ImportBundleRequest {
     ImportBundleRequest {
         bundle_path: bundle.to_string_lossy().to_string(),
+        member: None,
         name: None,
         target_parent: Some(parent.to_string_lossy().to_string()),
         mirror_parent: None,
@@ -1240,6 +1241,120 @@ fn export_import_roundtrip_carries_files_settings_and_tabs() {
         let project = load_project_blocking(imported.local_file.clone()).expect("load imported project.json");
         assert_eq!(project.id, result.entry.id);
         assert_eq!(project.directory, result.directory);
+    });
+}
+
+/// Several projects in one file: each member is a whole bundle, read in place.
+/// The set is saved inside one of the projects it carries, so neither the set
+/// nor its staging files may end up inside that project's member; a project
+/// that cannot be exported is reported and the others still travel.
+#[test]
+fn a_project_set_carries_several_projects_and_each_imports_on_its_own() {
+    use app_lib::commands::project_transfer::set::{
+        export_project_set_blocking, inspect_project_bundle_blocking, ExportSetRequest,
+        InspectedBundle,
+    };
+    with_isolated_home("transfer-set-home", |_home| {
+        let first = tempdir_in_test_projects("transfer-set-a");
+        let second = tempdir_in_test_projects("transfer-set-b");
+        let a = new_local_project("set-alpha", first.path());
+        let b = new_local_project("set-beta", second.path());
+
+        let set_path = first.path().join(concat!("both.", app_lib::app_slug!(), "proj"));
+        let report = export_project_set_blocking(
+            ExportSetRequest {
+                project_ids: vec![a.id.clone(), "no-such-project".to_string(), b.id.clone(), a.id.clone()],
+                dest_path: set_path.to_string_lossy().to_string(),
+                include_files: true,
+                include_git: true,
+                include_session: true,
+                include_mirror: true,
+                skip_rebuildable: true,
+                include_agent_history: false,
+                host_copy: Vec::new(),
+            },
+            &mut |_, _, _, _| {},
+        )
+        .expect("export set");
+        assert!(set_path.is_file());
+        assert_eq!(report.members.len(), 3, "a repeated id is packed once");
+        assert!(report.members[0].report.is_some());
+        assert!(report.members[1].error.is_some(), "an unknown project is named, not fatal");
+        assert!(report.members[2].report.is_some());
+        let leftovers: Vec<_> = fs::read_dir(first.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(".tmp") || n.starts_with(".project-set-"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging files left behind: {leftovers:?}");
+
+        let set = match inspect_project_bundle_blocking(set_path.to_string_lossy().to_string())
+            .expect("inspect set")
+        {
+            InspectedBundle::Set { set } => set,
+            InspectedBundle::Project { .. } => panic!("a set read as a single project"),
+        };
+        assert_eq!(set.members.len(), 2);
+        let names: Vec<_> = set
+            .members
+            .iter()
+            .map(|m| m.info.as_ref().expect("member readable").name.clone())
+            .collect();
+        assert_eq!(names, ["set-alpha", "set-beta"]);
+        assert!(set.members.iter().all(|m| m.info.as_ref().unwrap().id_in_use));
+
+        let landing = tempdir_in_test_projects("transfer-set-landing");
+        let mut imported_dirs = Vec::new();
+        for member in &set.members {
+            let mut req = plain_import(&set_path, landing.path());
+            req.member = Some(member.member.clone());
+            let result = import_project_export_blocking(req).expect("import member");
+            assert!(result.new_id);
+            imported_dirs.push(PathBuf::from(&result.directory));
+        }
+        for dir in &imported_dirs {
+            assert!(dir.join("notes.txt").exists());
+            assert!(dir.join("nested/info.txt").exists());
+        }
+        let alpha = &imported_dirs[0];
+        let carried: Vec<_> = fs::read_dir(alpha)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(".tmp") || n.starts_with(".project-set-") || n.starts_with("both."))
+            .collect();
+        assert!(carried.is_empty(), "the set's own files travelled: {carried:?}");
+        assert_eq!(fs::read_to_string(alpha.join("notes.txt")).unwrap(), "set-alpha:notes\n");
+
+        // A plain bundle still reads as one project through the same call.
+        let single = landing.path().join(concat!("one.", app_lib::app_slug!(), "proj"));
+        export_project_blocking(full_export(&b.id, &single), &mut |_, _| {}).expect("export");
+        assert!(matches!(
+            inspect_project_bundle_blocking(single.to_string_lossy().to_string()).expect("inspect"),
+            InspectedBundle::Project { .. }
+        ));
+    });
+}
+
+/// Saving a bundle into the project it exports: the staged file sits in the
+/// tree being walked and must not be packed into itself.
+#[test]
+fn a_bundle_saved_inside_its_own_project_does_not_pack_itself() {
+    with_isolated_home("transfer-self-home", |_home| {
+        let target = tempdir_in_test_projects("transfer-self-source");
+        let entry = new_local_project("self-project", target.path());
+        let bundle = target.path().join(concat!("self.", app_lib::app_slug!(), "proj"));
+        export_project_blocking(full_export(&entry.id, &bundle), &mut |_, _| {}).expect("export");
+        let mut zip = zip::ZipArchive::new(fs::File::open(&bundle).unwrap()).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
+            .collect();
+        assert!(names.iter().any(|n| n == "dir/notes.txt"));
+        assert!(
+            !names.iter().any(|n| n.starts_with("dir/.tmp") || n.starts_with("dir/self.")),
+            "the bundle packed its own staging file: {names:?}"
+        );
     });
 }
 

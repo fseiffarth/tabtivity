@@ -251,6 +251,42 @@ Time is merged, not added: a day is raised to the imported figure and a day this
 machine already recorded more on keeps its own number, so re-importing the same
 bundle twice cannot double a total.
 
+## Several projects at once: project sets
+
+"＋ → Export Projects…" (`ProjectSetExportDialog`) writes a **project set**
+(`commands/project_transfer/set.rs`): a zip of whole bundles, one per
+project, plus `project-set.json` naming them. Each member is exactly what
+"Export project…" writes; the set adds no layout of its own, so every
+guarantee above holds per member without being restated.
+
+- Members are **stored**, not deflated again (a bundle is already a zip), so
+  each one's bytes sit contiguous in the set. Import reads a member in place
+  through `set::FileWindow` (a seekable byte range of the set file); nothing
+  is unpacked to a temp file. `member_window` refuses any member that is not
+  stored plainly, not listed in the set manifest, or not one level under
+  `projects/`.
+- Export writes each member into a temp dir beside the destination, copies it
+  into the staged set and deletes it: one member's worth of extra disk at a
+  time. The destination, that temp dir and the staged set are all excluded
+  from every walk (`export_project_excluding`), because a set saved inside
+  one of its projects would otherwise pack itself. (The same rule now covers
+  the single export's own staged file.)
+- One project failing (an unknown id, a VM, an unreadable root) is reported in
+  `ExportSetReport.members` and the others still go in; only a set that ends
+  up empty is an error.
+- The switches are shared. A mirrored remote project packs its local mirror,
+  a remote-only one its host's copy while connected (`host_copy`) and only its
+  settings otherwise; single rebuildable folders and a mirrored project's host
+  copy stay choices of the single export.
+- The set uses the bundle's extension, so the one "Import Project File" picker
+  opens both: `inspect_project_bundle` answers `{kind: "project"}` or
+  `{kind: "set"}`, and a set hands over to `ProjectSetImportDialog`, which runs
+  the single `import_project_export` once per ticked member (`member` in the
+  request), in turn. Local members land in one parent folder, remote working
+  copies in another; a failure is named and the rest still land.
+- The set manifest's member list is informational: what import trusts about a
+  member comes from that member's own bundle manifest.
+
 ## Known gaps
 
 - Export is refused for VM projects (above). Carrying a qcow2 overlay is a
@@ -263,3 +299,5 @@ bundle twice cannot double a total.
 - Progress is emitted per 64 files (`project-export` event); there is no cancel.
 - A file name that is not valid UTF-8 travels under its lossy spelling (the
   zip stores names as text).
+- A project set has no per-project switches and no cancel; a remote-only
+  member is not measured before export.

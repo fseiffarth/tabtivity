@@ -832,7 +832,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("workspace_sync", Core),
     // commands/project_transfer.rs
     ("export_project", Core),
+    ("export_project_set", Core),
     ("import_project_export", Core),
+    ("inspect_project_bundle", Core),
     ("inspect_project_export", Core),
     ("preview_host_export", Core),
     ("preview_project_export", Core),
