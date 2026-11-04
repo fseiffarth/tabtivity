@@ -5,7 +5,9 @@ import {
   readTasksDialog,
   rowMatches,
   sendToSubagent,
+  subagentViewed,
   viewLabel,
+  viewSession,
   type SubagentDriver,
 } from "../../../mobile-web/src/terminal/subagentInput";
 
@@ -289,5 +291,37 @@ describe("sendToSubagent", () => {
     expect(state.sent).toEqual([]);
     expect(state.focus).toBe("box");
     expect(state.escInBox).toBe(0);
+  });
+});
+
+describe("viewSession", () => {
+  it("views the session again when the TUI was left on a subagent, never pressing Esc in the box", async () => {
+    const claude = fakeClaude([{ kind: "general-purpose", task: "Alpha sleeper" }]);
+    claude.state.viewed = "Alpha sleeper";
+    expect(subagentViewed(claude.driver("").rows())).toBe(true);
+    expect(await viewSession(claude.driver(""), FAST)).toBe(true);
+    expect(claude.state.viewed).toBe("main");
+    expect(claude.state.focus).toBe("box");
+    expect(claude.state.escInBox).toBe(0);
+    expect(claude.state.stopped).toEqual([]);
+    expect(subagentViewed(claude.driver("").rows())).toBe(false);
+  });
+
+  it("presses nothing while the session is the one viewed", async () => {
+    const claude = fakeClaude([{ kind: "general-purpose", task: "Alpha sleeper" }]);
+    let keys = 0;
+    const driver = claude.driver("");
+    expect(await viewSession({ rows: driver.rows, key: async (k) => { keys += 1; return driver.key(k); } }, FAST)).toBe(true);
+    expect(keys).toBe(0);
+  });
+
+  it("refuses when no input box is on screen to walk from", async () => {
+    const rows = ["  Do you want to proceed?", "  ● main", "  ◯ general-purpose  Alpha sleeper     3s · ↓ 1k tokens"];
+    // Not a list at the bottom of a box: the subagent's view, under a dialog.
+    const viewed = ["  ◯ main", "  ● general-purpose  Alpha sleeper     3s · ↓ 1k tokens"];
+    expect(await viewSession({ rows: () => rows, key: async () => true }, FAST)).toBe(true);
+    let keys = 0;
+    expect(await viewSession({ rows: () => viewed, key: async () => { keys += 1; return true; } }, FAST)).toBe(false);
+    expect(keys).toBe(0);
   });
 });

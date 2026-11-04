@@ -460,6 +460,29 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     expect(within(screen.getByTestId("subagent-transcript")).queryByText("and the frontend?")).toBeNull();
   });
 
+  it("opens the subagent Claude's terminal is viewing when the chat is chosen", async () => {
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "terminal");
+    vi.stubGlobal("fetch", subagentFetch());
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    // Viewed in Claude's own agent list, its row printing a summary.
+    terminalState.lines = [
+      `${"─".repeat(30)} Find the tests ─`,
+      "❯ Message @general-purpose…",
+      "─".repeat(40),
+      "  ◯ main",
+      "  ◯ Explore  Map the backend     3s · ↓ 1k tokens",
+      "  ● general-purpose  Reading the test folder     3s · ↓ 1k tokens",
+    ];
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Chat" }));
+    await settle();
+    await settle();
+    const bar = screen.getByRole("navigation", { name: "Subagent" });
+    within(bar).getByText("Find the tests");
+    within(screen.getByTestId("subagent-transcript")).getByText("Tests live beside the code.");
+  });
+
   it("goes back to the session when a prompt is sent from a subagent's conversation on another CLI", async () => {
     vi.stubGlobal("fetch", subagentFetch());
     render(<Terminal tab={{ ...TAB, label: "Codex", agent_label: "Codex" }} back={() => {}} />);

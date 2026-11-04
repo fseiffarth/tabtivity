@@ -61,7 +61,7 @@ import type { FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
-import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
+import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
 import { pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
@@ -517,6 +517,9 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
  * and nothing goes anywhere when that subagent cannot be reached.
  */
 /** Why a message to a subagent did not go, said in the composer. */
+/** Claude's TUI stayed on a subagent: words for the session were not sent. */
+class SubagentViewedError extends Error {}
+
 const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   not_listed: "terminal.reader.subagentNotListed",
   ambiguous: "terminal.reader.subagentAmbiguous",
@@ -704,6 +707,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     noteUserInput(ptyId);
     return writePtyInput(ptyId, ENCODER.encode(key)).then(() => true, () => false);
   };
+  /** Claude's TUI on the session again before words meant for it go in: left
+   * on a subagent (by hand in the terminal), its box sends there instead, and
+   * the session never records them — their bubbles stood as queued for good. */
+  const backToSession = async () => {
+    if (cli === "claude" && !(await viewSession({ rows: paneRows, key: paneKey }))) throw new SubagentViewedError();
+  };
 
   /** A dictated segment (`useReaderVoice`) joins the draft as typed text
    * would, undoable; one that ends in the spoken send ("go on" / "los")
@@ -770,6 +779,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       // A new conversation goes in as the Clear key's does, so the window
       // knows of it at once: Codex's hook says so only with the next prompt.
       if (isNewConversationCommand(command)) {
+        await backToSession();
         if (!(await startNewConversation(current))) return;
       } else if (subagent && !/^\s*\//u.test(text)) {
         // Words go to the open subagent; a command stays the session's.
@@ -787,6 +797,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           return;
         }
       } else {
+        await backToSession();
         // Shown as sending by the Reader's `onSentPrompt` listener.
         await sendSteeringPrompt(current, text);
       }
@@ -845,7 +856,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     return false;
   };
   const sendFailure = (error: unknown) =>
-    t(error instanceof SessionPickerOpenError ? "terminal.reader.sendPickerOpen" : "terminal.reader.sendFailed");
+    t(error instanceof SessionPickerOpenError ? "terminal.reader.sendPickerOpen"
+      : error instanceof SubagentViewedError ? "terminal.reader.subagentViewed" : "terminal.reader.sendFailed");
 
   /** The chip row (`ReaderComposerChips`): Plan / Goal only lead the draft,
    * as the phone's do; Clear and Commit act at once and leave the draft alone. */
@@ -866,6 +878,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setSending(true);
     setSendError("");
     try {
+      await backToSession();
       await action(current);
     } catch (error) {
       setSendError(sendFailure(error));
@@ -1640,6 +1653,37 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const cutPromptTime = cutPromptMoment ? chatTime(cutPromptMoment, use24h) : undefined;
   const levelEntriesRef = useRef(levelEntries);
   levelEntriesRef.current = levelEntries;
+  // The chat follows the terminal: a subagent viewed in Claude's own agent
+  // list (Terminal mode) is the one the chat opens when it is shown, so what
+  // is read and typed here is that subagent's, as it is there. Read once per
+  // show, off the screen; opened once the session's records hold it.
+  const [following, setFollowing] = useState<{ task: string; role: string } | null>(null);
+  const claudeTab = isClaudeCommand(tab?.cmd);
+  useEffect(() => {
+    if (!visible || !claudeTab) {
+      setFollowing(null);
+      return;
+    }
+    const term = terminalFor(ptyId);
+    setFollowing(term ? viewedSubagent(bufferRows(term.buffer.active)) : null);
+  }, [visible, claudeTab, ptyId]);
+  useEffect(() => {
+    if (!following || !transcript?.available || browsed) return;
+    setFollowing(null);
+    // A Workflow run is no subagent the agent list views; a description
+    // shared by two leaves the chat where it was.
+    const found = entries.filter((entry) => entry.kind === "agent" && entry.subagent && !entry.workflow
+      && isViewedSubagent(following, { task: entry.text, role: entry.role }));
+    const token = found.length === 1 ? found[0].subagent : undefined;
+    if (!token) return;
+    const entry = found[0];
+    setSubagentPath((path) => (path.length === 1 && path[0].token === token ? path
+      : openSubagent([], { token, task: entry.text, role: entry.role }, entries, -1)));
+    setSubagentListOpen(false);
+    setSubLimit(READER_STEP);
+    keepFromBottom.current = null;
+    stuck.current = true;
+  }, [following, transcript, entries, browsed]);
   const turns = useMemo(() => transcriptTurns(levelEntries), [levelEntries]);
   // The files the phone sent into the project inbox, drawn in their prompts'
   // bubbles as on the phone (`ReaderInbox`).

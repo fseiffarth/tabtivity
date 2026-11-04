@@ -553,6 +553,29 @@ describe("the Reader's subagents", () => {
     expect(cards.map((card) => !!card.querySelector(".tab-status-mark.done"))).toEqual([true, false, false]);
   });
 
+  it("opens the subagent Claude's terminal is viewing, and stays on the session otherwise", async () => {
+    const rule = "─".repeat(40);
+    const rows = [
+      `${"─".repeat(30)} Find the tests ─`,
+      "❯ Message @Explore…",
+      rule,
+      "  ◯ main",
+      "  ◯ Explore  Find the parser     3s · ↓ 1k tokens",
+      "  ● Explore  Reading the test folder     3s · ↓ 1k tokens",
+    ];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    const view = reader(host);
+    await screen.findByText("Tests sit beside the sources.");
+    expect(invoke).toHaveBeenCalledWith("agent_tab_transcript", expect.objectContaining({ subagent: "sa-2" }));
+    view.unmount();
+    // Back on the session in the terminal: the chat shows the session.
+    rows.splice(0, rows.length, rule, "❯ ", rule, "  ● main", "  ◯ Explore  Find the tests     3s · ↓ 1k tokens");
+    reader(host);
+    await screen.findByText("Both found.");
+    expect(screen.queryByText("Tests sit beside the sources.")).toBeNull();
+  });
+
   it("opens a subagent's own conversation and goes back up", async () => {
     reader(host);
     await openListed("Find the parser");
