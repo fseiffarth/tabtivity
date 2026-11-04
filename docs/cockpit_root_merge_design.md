@@ -1,6 +1,7 @@
 # Cockpit + root console: visual and interaction design
 
-Status: **design only.** Nothing here is implemented. Architecture, ownership,
+Status: **implemented (layout A) on branch `cockpit-root-merge`, not live-tested**; the
+build log is `docs/cockpit_root_merge_handoff.md`. Architecture, ownership,
 steps and gates are in `docs/cockpit_root_merge_plan.md`; this document is the
 layout and behaviour the plan defers to. Written 2026-11-04 on develop.
 Reviewed 2026-11-04: every choice that differs from the plan is now one of the
@@ -109,6 +110,11 @@ body), not the viewport:
 | 1180 px and up | label, all controls | rail, roster, detail | icon rail, region |
 | 820 to 1179 px | label | rail becomes the icon rail (the same component as Root's); roster and detail side by side, detail min 360 | same |
 | below 820 px | label hidden (glyph keeps `title`); box filter folds into a ▾ icon | master and detail: the roster fills the width, a **Needs you N** chip opens the rail in a popover (`ContextMenuPortal`), selecting a row replaces the roster with the detail and a **Agents** back button (Esc or back returns) | no icon rail; sub-bar strip scrolls with its existing chevrons |
+
+Built as a frame-width band (`lib/window/frameBand.ts`: a ResizeObserver on the
+frame, written as `data-band` for the CSS and provided by context so the column
+that is not shown is not mounted) rather than CSS `@container` rules; the
+breakpoints are the table's.
 
 Projects' grid is `auto-fill`; Tonight and Usage stack their two columns below
 820 px. The canvas's answer (stack the three columns) is replaced because it

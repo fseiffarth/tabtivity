@@ -39,9 +39,10 @@ floats over a project. The drag keeps its state local rather than in
 It is a window, not a dialog, so it behaves like one. The title bar is the move
 handle (a press on a tab or a control keeps its own meaning), eight grips on the
 edges and corners resize it, and ⤢ fills the window — as does a double-click on
-the bar. The frame lives in `stores/rootOverlay`, in localStorage rather than
-`settings.json`: where a window sits on one desk is not a preference worth
-syncing. It is re-clamped against the window it actually opens in, so a console
+the bar. The frame is `useFloatingFrame` (the hook the mail, calendar, to-do and
+models overlays use; the pure math is `lib/window/floatingFrame.ts`), kept in
+localStorage (`rootConsoleFrame`) rather than `settings.json`: where a window
+sits on one desk is not a preference worth syncing. It is re-clamped against the window it actually opens in, so a console
 sized on an external display is still reachable on the laptop panel, and an edge
 dragged past the minimum pins the opposite edge instead of pushing the console
 across the screen. An untouched console keeps the size the stylesheet gives it.
@@ -115,8 +116,52 @@ becomes the active scope:
   switch.
 
 With no project open, `CenterPanel` still shows the root scope. While the
-overlay is up, the panel's copies of the root panes stand down: two visible
+window is up, the panel's copies of the root panes stand down: two visible
 views of one PTY would take turns resizing it.
+
+## Views: one window, five
+
+With the `cockpit` experiment on, the console's window is also the cockpit's
+(`docs/context/cockpit.md`). A view strip in the title bar reads Now, Projects,
+Tonight, Usage, a divider, then **Root** (the star): the console proper, this
+whole document. `stores/rootOverlay` holds `view` (`"root" | CockpitView`) next to
+`open`; `show()` always means Root, `openView(view)` opens a cockpit view (and
+never hydrates root), `rootViewShown` asks whether root's layout is on screen (as
+against `open`, "is the window up"). Only the shown view mounts. Experiment off
+there is no strip, no sub-bar, no icon rail and no cockpit door: the window is
+today's console, the strip in the title bar.
+
+The pieces, and the rules they keep:
+
+- **`RootOverlay.tsx` is the shell, `RootView.tsx` the console.** The shell owns the
+  backdrop, the frame, the title bar, the Escape rule and `useRootMcpRights`; the
+  view owns the layout tree, pane layer, `GroupStrip`, `+` menu, file column and
+  drag. The view portals its strip, ⚿ badge and ◫ toggle into the shell's bar
+  slots (`RootBarSlots`): with the experiment on they sit in a sub-bar under the
+  title bar (a split layout keeps a strip per subwindow and has no sub-bar), so
+  the title bar never changes between views; off, they are in the title bar.
+- **One ✓ Approvals pill** (`OverlayApprovals`, the whole queue, with the review
+  gate's advisory), in the title bar of every view.
+- **Escape** is one rule in the shell: not from a pane (`.root-overlay-region`) or
+  the cockpit's detail pane (an agent's), not while a menu, dialog, drag, or the ✓
+  panel is up (`busyRef`, `framing`, `defaultPrevented`).
+- **Entry points** all land on Root and never switch the workspace to the root
+  scope: Ctrl+Shift+R, `openTabInRootConsole`, `jumpToTab(ROOT_SCOPE, key)`, a
+  roster row's Enter, the Prompt chart (`openPromptChartTab`), the phone's
+  Activate. The header gauge, steering U and the box chip open Now.
+- **Ownership.** A root tab is drawn by the Root view or, as a roster row, by the
+  Now detail pane, never both (the views never mount together); a tab docked in
+  an open app overlay is that column's. Root's slots in `CenterPanel` stand down
+  for `open` (the window covers them) and wake by what is drawn.
+- **Root's Needs-you rail** (experiment on): a 40 px icon rail of live-store
+  groups beside the console, the full `CockpitRail` on a click (fold remembered);
+  the Root tab wears the lamp of root's tabs (asking count, working ring).
+  Neither reads anything the header badge does not. Narrower than 820 px the rail
+  is not mounted.
+- **The empty Root card** offers "Start <agent> in Root" (the `+` menu's default
+  root-allowed agent, one click).
+- **Steering** walks Root's tabs while the Root view is up (`steeringScope`).
+
 
 ## Docked in the app overlays
 

@@ -1,6 +1,8 @@
 # Cockpit + root console: one surface
 
-Status: **plan only, reviewed (2026-11-04).** Nothing here is implemented. The
+Status: **implemented on branch `cockpit-root-merge`, not live-tested** (A1-A9;
+log: `docs/cockpit_root_merge_handoff.md`; the user settled the eight Open decisions
+below on 2026-11-04). Written as a plan, reviewed 2026-11-04. The
 user asked only to "merge the cockpit with the root"; what that means below is
 read from the code (develop). Visual and interaction design is
 `docs/cockpit_root_merge_design.md`; this plan covers architecture, ownership,

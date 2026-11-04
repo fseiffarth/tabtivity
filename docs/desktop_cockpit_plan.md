@@ -1,6 +1,11 @@
 # Desktop cockpit: every project's agents, decisions and machines in one overlay
 
-Status: **plan only.** Nothing here is implemented. Mockups (four artboards:
+Status: **C0-C6 implemented, not live-tested** (behind the `cockpit` experiment,
+`UntestedTag` pills). Since 2026-11-04 the cockpit is not a window of its own: its
+four views are views of the root console's window, with Root as the fifth
+(`docs/cockpit_root_merge_plan.md`; `docs/context/cockpit.md`). "Overlay" and
+"header overlay" below mean that window. C7 is a sixth view of it, not built.
+Mockups (four artboards:
 Now, Projects, Tonight, Usage): design canvas
 https://claude.ai/artifact/SnNxvyuUSCibTE8RRqZAkr (2026-11-03, private). Where it
 and this text differ, this text wins.

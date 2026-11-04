@@ -4,7 +4,9 @@ Status: **plan only.** Nothing here is implemented.
 
 **2026-11-03:** the overlay, store and header button (Step 3) are superseded by
 `docs/desktop_cockpit_plan.md`. The sphere (Steps 1–2) becomes that cockpit's
-later phase C7, fed by its `lib/cockpit/` data layer.
+later phase C7, fed by its `lib/cockpit/` data layer. Since the cockpit became
+views of the root console's window (`docs/cockpit_root_merge_plan.md`), C7 is one
+more view of that window.
 
 ## Why
 

@@ -986,3 +986,117 @@ correctness/UX work atop the same layout model #42 detaches.*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+
+- [ ] **Cockpit + root console: one window (2026-11-04, ✅ Built · 🧪 Untested).**
+  The cockpit's four views and the root console are views of one window,
+  behind Settings → Experimental → Cockpit views (off = today's console).
+  Plan `docs/cockpit_root_merge_plan.md`, design `docs/cockpit_root_merge_design.md`,
+  log `docs/cockpit_root_merge_handoff.md` (Click-through). Pills: `cockpit.*`,
+  `rootConsole.*`, `overlayApprovals.button`; clear them with `npm run untested`
+  once confirmed. *Files: `src/components/layout/{RootOverlay,RootView}.tsx`,
+  `src/components/cockpit/*`, `src/lib/window/{floatingFrame,frameBand}.ts`,
+  `src/lib/shortcuts/{tabJump,steeringScope}.ts`.*
+  - [ ] 🖐️ Manual test — Experiment off is today's console: Settings → Experimental
+    → Cockpit views off. Ctrl+Shift+R opens a window with the star mark, the tab
+    strip in the title bar, ⚿, ✓, ◫, ⤢, ✕ and nothing else: no view strip, no
+    sub-bar, no icon rail, no "Start in Root" button on the empty card, no
+    Cockpit button in the header. Drag, resize and ⤢ keep your old frame; Escape
+    closes it; a pane keeps the key in a terminal.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Experiment on, one window with five views: the title bar
+    reads Cockpit, then Now / Projects / Tonight / Usage │ ★ Root. Switching
+    views never moves or resizes the window. Ctrl+Shift+R from closed opens
+    Root, from Now switches to Root, from Root closes. The header gauge,
+    steering U and the box chip's "Open cockpit" open Now. ✓ Approvals is the
+    one pill in every view. Root's strip, ⚿ badge and ◫ sit in a sub-bar under
+    the title bar; split the console and the sub-bar goes (each subwindow
+    carries its strip).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Root's chrome: the star tab wears an amber count while a
+    root tab asks and the working ring while one works. The empty Root card has
+    "Start <agent> in Root" (one click opens the default agent; with no allowed
+    agent it says so). A 40 px icon rail beside the console shows asking /
+    interrupted / approvals / finished / alerts with counts (amber, red);
+    clicking the top button or an icon opens the full Needs-you rail beside it
+    scrolled to that group, ‹ folds it, and it remembers the fold after a
+    restart. A mouse press on it never takes the keyboard from the terminal.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Root agents in Now: with root restored (open Root once), a
+    root agent is a roster row with the ★ Root chip. Space or → draws it in the
+    detail pane (no "console is open" note); the head button reads "Open in
+    Root" and Enter switches to Root with that tab in front, the workspace stays
+    on the same project. Dock the same agent in the mail overlay (Ctrl+1): Now
+    shows "Shown in the Mail overlay." and draws nothing. Opening Projects or
+    Usage does not wake sleeping root terminals.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Narrow windows: with the experiment on, drag the window to
+    about 1000 px wide: Now's rail becomes the icon rail (click opens the full
+    rail in a popover; picking a row selects it), roster and detail side by
+    side. Under 820 px (minimum window): the label goes, the box filter becomes
+    a ▾ icon, Now shows the roster alone with a "Needs you N" chip (popover), a
+    click or Space on a row opens the detail with an Agents back bar (Escape on
+    it returns), Tonight and Usage stack and scroll, Root has no icon rail.
+    Above 1180 px nothing differs from the wide layout.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Steering in Root: with the Root view up press Shift+Space,
+    then Q (next asking agent) or ←/→. The arrows walk Root's tabs, not the
+    project tab bar behind the window; after leaving steering (Space) typing
+    goes to the root terminal. A key to a project's tab closes the window. The
+    new-tab keys do nothing there. Rebind a steering key in Settings: the new
+    key walks Root too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Root's Prompt chart: with no project open (the root
+    scope in the center) press ⧗ Prompt chart in the side panel's Agents view,
+    or Tonight → Open chart on a root item: the Root view opens with the chart
+    tab in front and the active scope does not change; a second press focuses
+    the same tab.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
