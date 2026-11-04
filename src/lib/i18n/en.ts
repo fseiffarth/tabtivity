@@ -4573,6 +4573,8 @@ export const enSource = {
   "boxEditor.phoneSwitch": "Reach this box from my phone",
   "boxEditor.phoneNoTmux": "Phone access is not available here: a box's terminals reach the phone through tmux, which this system does not have.",
   "boxEditor.phoneNoPersist": "Phone access is off for now: it needs persistent local sessions (tmux). Turn them on in Settings.",
+  "boxEditor.phoneOnNoTmux": "Phone access is still on, but it cannot work here: a box's terminals reach the phone through tmux, which this system does not have. You can switch it off.",
+  "boxEditor.phoneOnNoPersist": "Phone access is still on, but it cannot work while persistent local sessions (tmux) are off. You can switch it off here, or turn the sessions on in Settings.",
   "boxEditor.dissolveConfirmFolder": "Dissolve the box “{name}”? Member projects are untouched. The box folder ({folder}) and its agent docs stay on disk — only the grouping disappears.",
   "boxEmpty.text": "No projects yet",
   "boxEmpty.add": "Add projects…",

@@ -4411,6 +4411,8 @@ export const dict: Dict = {
   "boxEditor.phoneSwitch": "Atteindre cette boîte depuis mon téléphone",
   "boxEditor.phoneNoTmux": "L’accès par téléphone n’est pas disponible ici : les terminaux d’une boîte atteignent le téléphone via tmux, que ce système n’a pas.",
   "boxEditor.phoneNoPersist": "L’accès par téléphone est désactivé pour l’instant : il exige des sessions locales persistantes (tmux). Activez-les dans les Réglages.",
+  "boxEditor.phoneOnNoTmux": "L’accès par téléphone est toujours activé, mais il ne peut pas fonctionner ici : les terminaux d’une boîte atteignent le téléphone via tmux, que ce système n’a pas. Vous pouvez le désactiver.",
+  "boxEditor.phoneOnNoPersist": "L’accès par téléphone est toujours activé, mais il ne peut pas fonctionner tant que les sessions locales persistantes (tmux) sont désactivées. Vous pouvez le désactiver ici ou activer les sessions dans les Réglages.",
   "boxEditor.dissolveConfirmFolder": "Dissoudre la boîte « {name} » ? Les projets membres restent intacts. Le dossier de la boîte ({folder}) et ses documents d’agent restent sur le disque — seul le regroupement disparaît.",
   "boxEmpty.text": "Aucun projet pour l’instant",
   "boxEmpty.add": "Ajouter des projets…",

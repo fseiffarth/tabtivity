@@ -4409,6 +4409,8 @@ export const dict: Dict = {
   "boxEditor.phoneSwitch": "Raggiungere questa box dal mio telefono",
   "boxEditor.phoneNoTmux": "L’accesso dal telefono non è disponibile qui: i terminali di una box raggiungono il telefono tramite tmux, che questo sistema non ha.",
   "boxEditor.phoneNoPersist": "L’accesso dal telefono è per ora disattivato: richiede sessioni locali persistenti (tmux). Attivale nelle Impostazioni.",
+  "boxEditor.phoneOnNoTmux": "L’accesso dal telefono è ancora attivo, ma qui non può funzionare: i terminali di una box raggiungono il telefono tramite tmux, che questo sistema non ha. Puoi disattivarlo.",
+  "boxEditor.phoneOnNoPersist": "L’accesso dal telefono è ancora attivo, ma non può funzionare finché le sessioni locali persistenti (tmux) sono disattivate. Puoi disattivarlo qui o attivare le sessioni nelle Impostazioni.",
   "boxEditor.dissolveConfirmFolder": "Sciogliere la box “{name}”? I progetti membri restano intatti. La cartella della box ({folder}) e i suoi documenti agente restano su disco — sparisce solo il raggruppamento.",
   "boxEmpty.text": "Ancora nessun progetto",
   "boxEmpty.add": "Aggiungi progetti…",

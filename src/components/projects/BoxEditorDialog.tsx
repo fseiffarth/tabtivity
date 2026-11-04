@@ -371,9 +371,21 @@ function BoxPhoneRow({
 }) {
   const t = useT();
   const persistLocal = useSettingsStore((s) => s.settings?.persist_local_sessions);
-  if (IS_HOST_WINDOWS) return <BoxPhoneNote text={t("boxEditor.phoneNoTmux")} />;
-  if (persistLocal === false) return <BoxPhoneNote text={t("boxEditor.phoneNoPersist")} />;
-  return <BoxPhoneSwitch box={box} picker={picker} setPicker={setPicker} />;
+  const blocked = IS_HOST_WINDOWS ? "NoTmux" : persistLocal === false ? "NoPersist" : null;
+  const on = box[MOBILE_ACCESS_KEY] ?? false;
+  // Switching ON needs tmux and persistent sessions; switching OFF never does
+  // (the backend checks nothing when disabling). So a box whose access is already
+  // on keeps its switch, with a line on why it cannot work right now: access that
+  // was granted can always be taken back.
+  if (blocked && !on) return <BoxPhoneNote text={t(`boxEditor.phone${blocked}`)} />;
+  return (
+    <BoxPhoneSwitch
+      box={box}
+      picker={picker}
+      setPicker={setPicker}
+      note={blocked ? t(`boxEditor.phoneOn${blocked}`) : undefined}
+    />
+  );
 }
 
 function BoxPhoneNote({ text }: { text: string }) {
@@ -390,10 +402,12 @@ function BoxPhoneSwitch({
   box,
   picker,
   setPicker,
+  note,
 }: {
   box: ProjectBox;
   picker: { x: number; y: number } | null;
   setPicker: (at: { x: number; y: number } | null) => void;
+  note?: string;
 }) {
   const t = useT();
   const setBoxMobileAccess = useBoxesStore((s) => s.setBoxMobileAccess);
@@ -426,6 +440,7 @@ function BoxPhoneSwitch({
           ) : null
         }
       />
+      {note && <span className="box-editor-help">{note}</span>}
       {error && <ErrorNote error={error} className="project-dialog-error" />}
       {picker && (
         <MobileAccessPicker

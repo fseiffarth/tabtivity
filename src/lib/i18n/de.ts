@@ -4429,6 +4429,8 @@ export const dict: Dict = {
   "boxEditor.phoneSwitch": "Diese Box von meinem Telefon aus erreichen",
   "boxEditor.phoneNoTmux": "Der Telefonzugriff ist hier nicht verfügbar: Die Terminals einer Box erreichen das Telefon über tmux, das dieses System nicht hat.",
   "boxEditor.phoneNoPersist": "Der Telefonzugriff ist vorerst aus: Er braucht dauerhafte lokale Sitzungen (tmux). Schalte sie in den Einstellungen ein.",
+  "boxEditor.phoneOnNoTmux": "Der Telefonzugriff ist noch an, kann hier aber nicht funktionieren: Die Terminals einer Box erreichen das Telefon über tmux, das dieses System nicht hat. Du kannst ihn ausschalten.",
+  "boxEditor.phoneOnNoPersist": "Der Telefonzugriff ist noch an, kann aber nicht funktionieren, solange dauerhafte lokale Sitzungen (tmux) aus sind. Du kannst ihn hier ausschalten oder die Sitzungen in den Einstellungen einschalten.",
   "boxEditor.dissolveConfirmFolder": "Box „{name}“ auflösen? Die Mitgliedsprojekte bleiben unberührt. Der Box-Ordner ({folder}) und seine Agent-Dokumente bleiben auf der Festplatte — nur die Gruppierung verschwindet.",
   "boxEmpty.text": "Noch keine Projekte",
   "boxEmpty.add": "Projekte hinzufügen…",

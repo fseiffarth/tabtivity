@@ -23,6 +23,7 @@ import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 import { useBoxEditorStore } from "../../stores/boxEditor";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore } from "../../stores/tabs";
+import { setDetachedWindowContext } from "../../stores/detachedContext";
 
 function proj(id: string, position: number, extra: Partial<ProjectEntry> = {}): ProjectEntry {
   return { id, name: id, status: "active", position, local_file: `/p/${id}/project.json`, ...extra };
@@ -391,6 +392,28 @@ describe("phone row", () => {
   });
 });
 
+describe("phone access that is already on", () => {
+  it("can still be switched off while persistent local sessions are off", async () => {
+    useSettingsStore.setState({ settings: { persist_local_sessions: false } } as never);
+    const setBoxMobileAccess = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({
+      boxes: [box("boxA", [], { [MOBILE_ACCESS_KEY]: true, [MOBILE_DEVICES_KEY]: ["d1"] } as never)],
+      setBoxMobileAccess,
+    });
+    const { dialog } = await openSheet("boxA");
+    const toggle = dialog.querySelector('.box-editor-phone input[type="checkbox"]') as HTMLInputElement;
+    expect(toggle).toBeTruthy();
+    expect(toggle.checked).toBe(true);
+    // The line says it is still on (not "off for now") and how to get it going.
+    expect(dialog.textContent).toContain("still on");
+    expect(dialog.textContent).not.toContain("off for now");
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(setBoxMobileAccess).toHaveBeenCalledWith("boxA", false, ["d1"]);
+  });
+});
+
 describe("dissolve", () => {
   it("states the folder path in the confirm", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", [], { folder: "/b/boxA" })] });
@@ -480,5 +503,19 @@ describe("empty-box line", () => {
     });
     expect(useBoxEditorStore.getState().open).toBe(true);
     expect(useBoxEditorStore.getState().boxId).toBe("boxA");
+  });
+
+  it("has no button in a popout, where no sheet host is mounted", async () => {
+    setDetachedWindowContext({ scope: "box:boxA" } as never);
+    try {
+      let container!: HTMLElement;
+      await act(async () => {
+        ({ container } = render(<BoxEmptyLine boxId="boxA" />));
+      });
+      expect(container.textContent).toContain("No projects yet");
+      expect(container.querySelector(".box-empty-add")).toBeNull();
+    } finally {
+      setDetachedWindowContext(null);
+    }
   });
 });

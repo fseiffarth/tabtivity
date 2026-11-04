@@ -4409,6 +4409,8 @@ export const dict: Dict = {
   "boxEditor.phoneSwitch": "Acceder a esta caja desde mi móvil",
   "boxEditor.phoneNoTmux": "El acceso desde el móvil no está disponible aquí: los terminales de una caja llegan al móvil a través de tmux, que este sistema no tiene.",
   "boxEditor.phoneNoPersist": "El acceso desde el móvil está desactivado por ahora: necesita sesiones locales persistentes (tmux). Actívalas en Ajustes.",
+  "boxEditor.phoneOnNoTmux": "El acceso desde el móvil sigue activado, pero aquí no puede funcionar: los terminales de una caja llegan al móvil a través de tmux, que este sistema no tiene. Puedes desactivarlo.",
+  "boxEditor.phoneOnNoPersist": "El acceso desde el móvil sigue activado, pero no puede funcionar mientras las sesiones locales persistentes (tmux) estén desactivadas. Puedes desactivarlo aquí o activar las sesiones en Ajustes.",
   "boxEditor.dissolveConfirmFolder": "¿Disolver la caja «{name}»? Los proyectos miembros no se tocan. La carpeta de la caja ({folder}) y sus documentos de agente permanecen en disco — solo desaparece la agrupación.",
   "boxEmpty.text": "Aún no hay proyectos",
   "boxEmpty.add": "Añadir proyectos…",
