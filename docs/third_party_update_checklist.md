@@ -429,6 +429,30 @@ Claude's `/fast` — different thing.
   `/command` sent from the Chat or phone with such a character in it. Fast mode on Opus 4.8 is deprecated and ends 2026-11-30, returning an
   error rather than falling back; `api_prices` keeps pricing past usage and
   needs nothing. The binary grew from 298 to 328 MB.
+  Re-checked against 2.1.317 (2026-11-03, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.316 run of the same dump: keys
+  identical on all 19 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's `sed` extractions matching `jq` on all 23 payloads
+  counting the TUI run's, the resume start's four cost fields included; `-p
+  --resume` of a `plan` session still reports the default; `/usage` three
+  meters, `resolveResetAt` placing every reset; `--help` byte-identical;
+  notification-type and cold-resume dialog strings and the bundle's model ids
+  unchanged). The transcript gains one record type, `session-owner`
+  (`accountUuid`, `organizationUuid`, `sessionId`), now its first line and
+  repeated each turn; every reader here gates on `type`, so none takes it for
+  a turn — but a moved or exported transcript now carries the account's ids.
+  The TUI pass with `--name` reads as 2.1.316's: `readReaderLive` gives the
+  title and four options at 120, 60 and 42 columns, the lamp lights,
+  `Notification` / `permission_prompt` fired; a finished turn may draw a
+  right-aligned `◐ medium · /effort` row, which no parser reads. New in the
+  bundle: a file-send consent dialog (server flag `tengu_misty_crown`) that
+  withholds Yes in a terminal too short to show the file list ("This terminal
+  is too short. Make it taller to choose Yes, or choose No."); a Bash prompt
+  in a 60×12 pane still offers all four options. A phone tab hitting that
+  dialog would show only No — the screen's truth, not a parser fault. The
+  account-email check before web/shell calls is a tool check feeding the
+  usual prompt; the Read tool's dropped "unchanged since last read" stub was
+  read nowhere here. The binary grew from 328 to 331 MB.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
