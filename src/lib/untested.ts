@@ -790,6 +790,8 @@ export const UNTESTED = {
   "mobile.outbox.pdf": { area: "mobile", what: "OutboxViewer · A PDF opens inside the app (pdf.js page view, pinch to zoom) with Mark up / Save / Share in the head; ✕ returns to the app instead of leaving it for the phone's PDF viewer" },
   "mobile.outbox.wholeText": { area: "mobile", what: "OutboxViewer · Open the whole file reads a long text (up to 8 MB) into the app instead of the browser's tab; on an iPhone/iPad Home Screen app a bigger one offers only Save/Share" },
   "mobile.outbox.zoom": { area: "mobile", what: "OutboxViewer · Pinch, double tap and drag to zoom and pan a picture full screen; the picture fits the phone's width" },
+  "mobile.outbox.noPreview": { area: "mobile", what: "OutboxViewer · a file the phone cannot draw (an office file, an archive, a video) opens to a card — icon, name, size, \"cannot show this kind of file\" and Save — instead of an empty screen; a non-text file over 24 MB says it is too large and offers no Save, Share or Mark up (no JSON download)" },
+  "mobile.files.keepPlace": { area: "mobile", what: "FilesLibrary · the list stays where it was scrolled when a file opened from it closes (no slide-in again, covers kept) and when ‹ goes up a folder, and when the library is opened again in the same app session; Escape over a viewer or markup view acts as Back (an open note is kept); sheets take the keyboard focus and give it back" },
   "mobile.project.newTab": { area: "mobile", what: "NewTabSheet · ＋ New tab (the floating button) opens a shell or an agent" },
   "mobile.headless.tabs": { area: "mobile", what: "Project screen · With no Tabtivity window open (headless owner plan, H3) the Mobile host answers the remaining tab requests itself: rename, colour, reorder and close (the close ends the tab's tmux session and reaps its subtree; an agent tab joins the project's Recently closed row), reopen (a new tab on its resume args, started detached), Activate project (registry status), the composer's prompt record, a prompt sent while the agent works (held by the host as a send-now rule, typed into the CLI's queue at once unless the agent is on a question, its bubble's Edit working until then), Undo clear (Claude's /resume typed in; Codex relaunched), the tab status sheet (state + today's tally, no usage panel), the ＋ sheet's options (folder, shell, plain agent only) and + → From the desktop (files only, no clipboard). An open window learns of a tab created elsewhere at its next sync (`adoptSyncOutcome` adds it) or from the sidecar's `refresh` poke", tested: "2026-10-02" },
   "mobile.newTab.needsWindow": { area: "mobile", what: "Project ＋ sheet · with no Tabtivity window open the modes, ☁ sessions, worktrees, local-model agents and sign-in leave the grid for one folded \"Needs the Tabtivity window (N)\" group at the foot that lists them; the grid keeps only what the host can start (shell, plain agents, phone file)" },
@@ -974,6 +976,17 @@ export const UNTESTED = {
 
   // --- todo — The to-do board ---------------------------------------
   "todo.overlayTitle": { area: "todo", what: "TodoOverlay · To-do board" },
+
+  // --- cockpit — the desktop cockpit overlay (docs/desktop_cockpit_plan.md) ---
+  "cockpit.title": { area: "cockpit", what: "Header cockpit overlay (Settings → Experimental → Cockpit): opens from its header button, the box chip's Open cockpit row and steering U; moves, resizes and fills like the mail overlay; Escape and a press on the backdrop close it; four view tabs Now / Projects / Tonight / Usage; stays open across project switches; no popout copy" },
+  "cockpit.indicator": { area: "cockpit", what: "Header cockpit button: badge = agent tabs asking + interrupted + schedule proposals + root approvals, falling by itself as each is answered (never acknowledged); hidden with the experiment off" },
+  "cockpit.openFromBox": { area: "cockpit", what: "Box chip dropdown · Open cockpit row under the root row (experiment on only) opens the cockpit" },
+  "settings.cockpit": { area: "cockpit", what: "Settings → Experimental → Cockpit: switches the header button, overlay, box-chip row and steering key on and off together" },
+  "cockpit.now.heading": { area: "cockpit", what: "Cockpit · Now view" },
+  "cockpit.projects.heading": { area: "cockpit", what: "Cockpit · Projects view" },
+  "cockpit.tonight.heading": { area: "cockpit", what: "Cockpit · Tonight view" },
+  "cockpit.usage.heading": { area: "cockpit", what: "Cockpit · Usage view" },
+  "cockpit.standDown": { area: "cockpit", what: "Cockpit detail pane showing a project's agent tab while that project is on screen behind the overlay: the tab's own pane shows \"Shown in the cockpit · Show here\" instead of the terminal, nothing restarts or resizes; closing the cockpit (or Show here) gives the pane back intact" },
 } as const satisfies Record<string, UntestedEntry>;
 
 // The phone shares this register but renders its tags in several shapes. Its

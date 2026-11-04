@@ -52,6 +52,7 @@
 .mail-indicator-btn,
 .calendar-indicator-btn,
 .todo-indicator-btn,
+.cockpit-indicator-btn,
 .inbox-indicator-btn,
 .alerts-toggle-btn {
   /* Positioning context for the badge. It must be the BUTTON and not the
@@ -62,6 +63,7 @@
 }
 .mail-indicator-btn[aria-pressed="true"],
 .todo-indicator-btn[aria-pressed="true"],
+.cockpit-indicator-btn[aria-pressed="true"],
 .calendar-indicator-btn[aria-pressed="true"],
 .alerts-toggle-btn[aria-pressed="true"] {
   background: var(--control-hover-bg);
@@ -77,6 +79,7 @@
 .mail-indicator-btn,
 .calendar-indicator-btn,
 .todo-indicator-btn,
+.cockpit-indicator-btn,
 .inbox-indicator-btn,
 .alerts-toggle-btn,
 .local-model-btn,
@@ -95,6 +98,7 @@
 .mail-indicator-icon,
 .calendar-indicator-icon,
 .todo-indicator-icon,
+.cockpit-indicator-icon,
 .inbox-indicator-icon,
 .help-agent-icon,
 .settings-menu-icon,
@@ -144,7 +148,7 @@ svg.alerts-toggle-icon {
    ResizeObserver, never a media query: the window is what resizes). Tier 1
    folds the apps' badges, tier 2 the clock too, tier 3 the status cluster. */
 .app-header:is([data-width-tier="1"], [data-width-tier="2"], [data-width-tier="3"]) :is(
-  .mail-indicator-badge, .calendar-indicator-badge, .todo-indicator-badge, .inbox-indicator-badge
+  .mail-indicator-badge, .calendar-indicator-badge, .todo-indicator-badge, .cockpit-indicator-badge, .inbox-indicator-badge
 ) {
   display: none;
 }
@@ -156,6 +160,7 @@ svg.alerts-toggle-icon {
 .mail-indicator-badge,
 .calendar-indicator-badge,
 .todo-indicator-badge,
+.cockpit-indicator-badge,
 .inbox-indicator-badge {
   position: absolute;
   top: 1px;
@@ -476,6 +481,7 @@ svg.alerts-toggle-icon {
 .mail-overlay,
 .calendar-overlay,
 .todo-overlay,
+.cockpit-overlay,
 .models-overlay,
 .machines-overlay {
   width: min(1680px, calc(100vw - 24px));
@@ -502,6 +508,7 @@ svg.alerts-toggle-icon {
 .mail-overlay-body,
 .calendar-overlay-body,
 .todo-overlay-body,
+.cockpit-overlay-body,
 .models-overlay-body,
 .machines-overlay-body {
   position: relative;

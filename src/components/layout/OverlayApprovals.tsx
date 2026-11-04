@@ -9,14 +9,15 @@ import { RootReviewStrip, useDomainReview, type ReviewDomain } from "./RootRevie
 /**
  * The root console's ✓ Approvals pill, in a header overlay's title bar (mail,
  * calendar, to-do): the same button and the same dropped panel, narrowed to the
- * proposals that overlay's tools made. The console keeps the full queue; this
+ * proposals that overlay's tools made — or, with no `domain` (the cockpit),
+ * the whole queue, as the console shows it. The console keeps the full queue; this
  * is a second door onto the same store, so a decision made here is gone there.
  *
  * Open/closed is local: the store's `panel` is the console's own, and the two
  * panels must not open each other. The panel's click-away catcher covers the
  * window, so the overlay cannot move under it and a click-time anchor holds.
  */
-export function OverlayApprovals({ domain }: { domain: ReviewDomain }) {
+export function OverlayApprovals({ domain }: { domain?: ReviewDomain }) {
   const t = useT();
   const { waiting } = useDomainReview(domain);
   const ref = useRef<HTMLButtonElement | null>(null);

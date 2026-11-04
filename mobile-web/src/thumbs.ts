@@ -164,8 +164,24 @@ function projectOfKey(key: string): string | null {
 export class ThumbQueue {
   private active = 0;
   private readonly waiting: { start: () => void; drop: () => void }[] = [];
+  /** Holds taken (`hold`) and not yet let go: while any is, nothing new starts. */
+  private holds = 0;
 
   constructor(private readonly limit = PARALLEL) {}
+
+  /** Starts nothing new until the returned release is called — a viewer laid
+   * over the library has the radio to itself. A cover already being made
+   * finishes; the line waits. Releasing twice is releasing once. */
+  hold(): () => void {
+    this.holds += 1;
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      this.holds -= 1;
+      this.next();
+    };
+  }
 
   /** `done` settles with the task's answer, or `null` when it left the line
    * before its turn (or threw). */
@@ -199,7 +215,7 @@ export class ThumbQueue {
   }
 
   private next() {
-    while (this.active < this.limit && this.waiting.length) this.waiting.shift()?.start();
+    while (this.holds === 0 && this.active < this.limit && this.waiting.length) this.waiting.shift()?.start();
   }
 }
 
@@ -286,6 +302,12 @@ export const indexedDbThumbs: ThumbBackend = {
 let shared: ThumbCache | null = null;
 const cache = () => (shared ??= new ThumbCache(indexedDbThumbs));
 const queue = new ThumbQueue();
+
+/** Holds the covers' line (`ThumbQueue.hold`): the files library calls it
+ * while a file is open over it. */
+export function holdCovers(): () => void {
+  return queue.hold();
+}
 
 /** Every cover and recorded failure, gone — this device was unpaired
  * (`forgetDeviceData`). */

@@ -17,6 +17,8 @@ import { ScopeSetStatusBars } from "./PillStatusBars";
 import { MenuShortcut } from "../common/MenuShortcut";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
+import { useExperimental } from "../../lib/experimental";
+import { useCockpitStore } from "../../stores/cockpit";
 import { BoxColorPicker } from "./BoxColorPicker";
 import { BoxMemberChecklist } from "./BoxMemberChecklist";
 import { useBoxNameCheck, useQuickCreateBox } from "./useQuickCreateBox";
@@ -152,6 +154,7 @@ export function BoxScopeChip({
   rootStation,
 }: Props) {
   const t = useT();
+  const cockpitOn = useExperimental("cockpit");
   // Hover-opened through the SHARED header menu id, like the + menu and the
   // cluster menus beside it: one id means opening another header menu closes
   // this one in the same frame instead of both riding out their own 250 ms
@@ -628,6 +631,19 @@ export function BoxScopeChip({
               )}
               <MenuShortcut chord="rootConsole" />
             </button>
+            {/* The cockpit: every scope's agents at once, a destination of
+                its own like root, not a slice. */}
+            {cockpitOn && (
+              <button
+                onClick={() => {
+                  dismiss();
+                  useCockpitStore.getState().openOverlay();
+                }}
+              >
+                <span className="box-chip-menu-name">{t("cockpit.openFromBox")}</span>
+                <UntestedTag id="cockpit.openFromBox" />
+              </button>
+            )}
             <div className="box-chip-menu-sep" />
             <button
               className={selectedId === null ? "is-current" : undefined}

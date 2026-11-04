@@ -3988,6 +3988,68 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [ ] **31cp — Phone / iPad file browsing: bugs and small items** (2026-11-03;
+  plan only, `docs/phone_files_browsing_plan.md`). Phase 3 (L1–L12) waits for the
+  user; L1 and L11 reverse decisions 4 and 2 of the files-library plan.
+  - [x] Batch A (phone): B1 Esc runs Back (keeps an open markup note), B2 no-preview
+    card, B3 refusal sentences, B4 library stays mounted under the viewer + scroll
+    kept, B6 Favorites order, B7 sheet focus. (2026-11-03, uncommitted; ⚠️ never
+    seen on a phone; `MobileFilesLibraryViewer.test.tsx`)
+    - [ ] 🖐️ iPad with a keyboard: open a PDF from the library, Mark up, type a note,
+      press Esc — the note is kept (as Done would) and the view closes; Esc over a
+      picture closes it; same from the Favorites page and a chat's Files list.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Scroll a long folder, open a file, close it: the list is where it was, no
+      slide-in, covers stay. Go into a folder and back with ‹: the parent is where it
+      was. A .docx/.zip opens to the "cannot show" card with Save; a picture or PDF
+      over 24 MB says it is too large.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ VoiceOver or a keyboard: an item's ⋯ menu takes the focus, Tab stays in
+      it, closing it returns to ⋯; the list behind is not reachable. A sheet opened
+      while typing in a search box keeps the keyboard up. Favorites groups do not
+      jump while project names load.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch B (backend + phone): B9 host read re-checked, S1 stable tokens, S2
+    one-file lookup route with re-list fallback. (2026-11-03, uncommitted; needs a
+    dev build — the route is backend; ⚠️ never seen on a phone)
+    - [ ] 🖐️ A favorite file and a recent open from the library and the Favorites
+      page; a PDF's Mark up → Reload picks up a changed file; a remote project's
+      host-side favorite opens too. Thumbnails of an unchanged folder do not redo.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [ ] Batch C (phone): B5 truncation note, S3 Refresh, S4 path bar, S5 wide-screen
+    sheets/tiles, S6 44 px targets + long-press, S7 search chips, S8
+    content-visibility, S9 collator language.
+  - [ ] B8: check on an iPhone whether the edge swipe goes up two folders (Safari tab
+    and installed PWA) before changing anything.
+
 - [~] **31cm — Send now and Cancel and edit on Codex and OpenCode mini** (2026-11-02;
   ✅ code-complete, `MobileQueuePull.test.ts` and the walks run against the real
   Codex 0.166.0 and OpenCode 2.2.5 on a stub model; ⚠️ never seen in the app).

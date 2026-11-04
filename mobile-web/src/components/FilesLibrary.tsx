@@ -1,21 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CloseIcon } from "../glyphs";
 import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, listProjectFiles, searchProjectFiles, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
+import { ApiError, listProjectFiles, lookUpFileRow, lookUpProjectFile, searchProjectFiles, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
 import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { shareAs, useOutboxShare } from "../outboxShare";
 import { TAB_COLORS, TAB_COLOR_IDS, tabColorCss } from "../../../src/lib/theme/tabColors";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { installFocusSwipe } from "../terminal/focusSwipe";
-import { useThumb } from "../thumbs";
+import { holdCovers, useThumb } from "../thumbs";
 import { OptionSheet } from "./OptionSheet";
 import { OutboxViewer, type MarkupNewTab, type MarkupTarget } from "./OutboxViewer";
 import { usePhonePicks, type PickedFile } from "./phonePicks";
-import { useBackLayer } from "../backStack";
+import { goBack, useBackLayer } from "../backStack";
+import { useModalFocus } from "../modalFocus";
 
 /** One folder on the way down: its sealed token (none for the project root)
  * and the name the reader tapped. */
@@ -133,6 +134,18 @@ function tileMeta(entry: ProjectFileEntry, t: T, lang: Language): string {
   return [entry.modified > 0 ? stampLabel(entry.modified, lang) : null, formatBytes(entry.size)].filter(Boolean).join(" · ");
 }
 
+/** The rest of the sidecar's refusals of a listing or a search, said as
+ * what happened rather than "Error" (`FilesError::code`, `files_scope`). */
+const REFUSALS: Record<string, TranslationKey> = {
+  project_unavailable: "mobile.files.unavailable",
+  files_unavailable: "mobile.files.notBrowsable",
+  read_failed: "mobile.files.readFailed",
+  file_too_large: "mobile.files.tooLarge",
+  query_too_long: "mobile.files.queryTooLong",
+  timeout: "mobile.files.timeout",
+  offline: "mobile.files.offline",
+};
+
 /** The message for a listing (or a search) the sidecar refused. */
 export function failureKey(reason: unknown, fallback: TranslationKey = "mobile.files.error"): TranslationKey {
   if (reason instanceof ApiError) {
@@ -140,6 +153,8 @@ export function failureKey(reason: unknown, fallback: TranslationKey = "mobile.f
     if (reason.code === "file_not_found") return "mobile.files.gone";
     if (reason.code === "host_offline") return "mobile.files.hostOffline";
     if (reason.code === "project_not_found") return "mobile.favorites.projectGone";
+    const said = REFUSALS[reason.code];
+    if (said) return said;
   }
   return fallback;
 }
@@ -198,20 +213,28 @@ const MAX_QUERY = 80;
  * edge, goes up one folder (as a tab's Focus view opens the files from it). */
 const UP_SWIPE_ZONE = 1 / 3;
 
+/** Where the library's list was scrolled in each folder it showed, by side
+ * and folder (`placeOf`): going up a folder, or opening the library again in
+ * this app session, lands where the reader left that folder. Kept for the
+ * page's life only; tokens are sealed again on every listing, so names. */
+const OFFSETS = new Map<string, number>();
+
 /** One entry of an item's menu (▾ on a tile, ⋯ on a row). */
 export interface ItemAction { key: string; label: string; run: () => void }
 
 /** A favorite or a recent file as the library shows it, and which list it is in. */
 type Saved = { item: FilesSaved | FilesRecent; from: "favorite" | "recent" };
 
-/** A favorite or recent as its folder lists it now: its fresh token, size and
- * time, or the kept row of a folder past the listing's cap, which may hold it
- * unlisted. `null` when it was moved or deleted. */
+/** A favorite or recent as its folder holds it now (`lookUpProjectFile`, one
+ * row rather than the whole folder): its fresh token, size and time, or —
+ * from an older desktop, whose folder listing was cut at its cap — the kept
+ * row. `null` when it was moved or deleted, or a file stands where a folder
+ * was (or the other way round). */
 export async function lookUpSaved(projectId: string, item: FilesSaved, side: FilesSide): Promise<ProjectFileEntry | null> {
   try {
-    const listing = await listProjectFiles(projectId, item.trail[item.trail.length - 1]?.token, undefined, side);
-    const entry = listing.entries.find((candidate) => candidate.name === item.name && (candidate.kind === "dir") === (item.kind === "dir"));
-    return entry ?? (listing.truncated ? savedEntry(item) : null);
+    const found = await lookUpProjectFile(projectId, item.trail[item.trail.length - 1]?.token, item.name, side);
+    if (found === "unlisted") return savedEntry(item);
+    return found && (found.kind === "dir") === (item.kind === "dir") ? found : null;
   } catch (reason) {
     if (failureKey(reason) === "mobile.files.gone") return null;
     throw reason;
@@ -528,8 +551,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     // The viewer opens over the library and a sheet over its list, so Escape
     // closes the top one first.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (fileOpen) setFileOpen(null);
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      // The viewer is closed the way Back closes it: a markup view's Done
+      // keeps the note being typed, and a sheet over the view goes first.
+      if (fileOpen) goBack();
       else if (sheet) setSheet(null);
       else if (searching) setQuery("");
       else if (searchFocused) searchBox.current?.blur();
@@ -540,8 +565,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   }, [fileOpen, sheet, searching, searchFocused, onClose]);
 
   useEffect(() => {
-    // Remounted with the library after a file was viewed, hence `fileOpen`.
-    // Not through a sheet laid over it.
+    // Not while a file is open over the library, nor through a sheet laid
+    // over it.
     const node = host.current;
     if (fileOpen || !node) return;
     return installFocusSwipe(node, {
@@ -550,12 +575,52 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     }, { ignore: ".sheet-backdrop", leftEdge: true });
   }, [fileOpen, up]);
 
-  /** Mark up's Reload: the open file's folder listed again, for its fresh
-   * token, size and time. The viewer keeps showing it — swapping `fileOpen`
+  /** A file is open over the library, which stays mounted under it — its
+   * list keeps its place and the covers already made — but takes no focus,
+   * keys or screen reader (`inert`), and starts no new cover meanwhile. The
+   * focus goes back to what opened the file when it closes. */
+  const covered = fileOpen !== null;
+  useEffect(() => {
+    const node = host.current;
+    if (!covered || !node) return;
+    const active = document.activeElement;
+    const opener = active instanceof HTMLElement && node.contains(active) ? active : null;
+    node.setAttribute("inert", "");
+    const release = holdCovers();
+    return () => {
+      node.removeAttribute("inert");
+      release();
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
+    };
+  }, [covered]);
+
+  /** The list's scroll, kept per folder (`OFFSETS`): put back once the
+   * folder's listing is on screen, and recorded only from then on, so the
+   * blank while a folder lists never counts as where the reader left it. */
+  const body = useRef<HTMLDivElement>(null);
+  const scrollKey = `${placeId}\n${placeOf(trail)}`;
+  const tracking = useRef<string | null>(null);
+  const listingShown = !searching && !showRecents && !failure && listing !== null && listed.current === (here.token ?? "");
+  useLayoutEffect(() => {
+    if (!listingShown) {
+      tracking.current = null;
+      return;
+    }
+    if (tracking.current === scrollKey) return;
+    const node = body.current;
+    if (node) node.scrollTop = OFFSETS.get(scrollKey) ?? 0;
+    tracking.current = scrollKey;
+  }, [scrollKey, listingShown]);
+  const onBodyScroll = () => {
+    const node = body.current;
+    if (node && tracking.current === scrollKey) OFFSETS.set(scrollKey, node.scrollTop);
+  };
+
+  /** Mark up's Reload: the open file looked up again in its folder, for its
+   * fresh size and time. The viewer keeps showing it — swapping `fileOpen`
    * would remount the viewer (its key) and lose the markup's view. */
   const refresh = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
-    const fresh = await listProjectFiles(projectId, here.token, undefined, side);
-    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    const entry = await lookUpFileRow(projectId, here.token, file.name, side);
     return entry ? asViewerFile(entry) : null;
   }, [projectId, here.token, side]);
 
@@ -653,13 +718,11 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     return actions;
   };
 
-  if (fileOpen) {
-    // The folder trail names the file's layer on the phone; its token cannot.
-    const place = placeOf(trail);
-    return <OutboxViewer key={fileOpen.ref} scope={scope} file={fileOpen} pictures={pictures} startMarking={markOnOpen}
-      onStep={(next) => { setMarkOnOpen(false); setFileOpen(next); }} onClose={() => setFileOpen(null)}
-      markup={markup && { ...markup, projectId, place, folder: here.token, refresh }} newTab={showTab && { projectId, place, folder: here.token, refresh, show: showTab, linked }} />;
-  }
+  // The folder trail names the file's layer on the phone; its token cannot.
+  const place = placeOf(trail);
+  const viewer = fileOpen && <OutboxViewer key={fileOpen.ref} scope={scope} file={fileOpen} pictures={pictures} startMarking={markOnOpen}
+    onStep={(next) => { setMarkOnOpen(false); setFileOpen(next); }} onClose={() => setFileOpen(null)}
+    markup={markup && { ...markup, projectId, place, folder: here.token, refresh }} newTab={showTab && { projectId, place, folder: here.token, refresh, show: showTab, linked }} />;
 
   const openLabel = (entry: ProjectFileEntry) =>
     entry.kind === "dir" ? t("mobile.files.openFolder", { name: entry.name }) : t("mobile.files.openFile", { name: entry.name });
@@ -777,14 +840,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       <li key={key}><button className={on ? "current" : ""} aria-pressed={on} onClick={pick}><span><strong>{labelText}</strong></span>{on && CHECK}</button></li>;
     const group = (heading: TranslationKey, rows: ReactNode[]) =>
       <div className="notifications-group"><h3>{t(heading)}</h3><ul className="option-list">{rows}</ul></div>;
-    return <div className="sheet-backdrop" role="presentation" onClick={() => setSheet(null)}>
-      <section className="option-sheet files-view-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.files.library.view")} onClick={(event) => event.stopPropagation()}>
-        <span className="sheet-grip" aria-hidden="true" />
-        <header>
-          <button className="sheet-close" onClick={() => setSheet(null)} aria-label={t("common.close")}><CloseIcon size="1em" /></button>
-          <h2>{t("mobile.files.library.view")}</h2>
-          <span className="sheet-close" aria-hidden="true" />
-        </header>
+    return <LibrarySheet className="files-view-sheet" label={t("mobile.files.library.view")} title={t("mobile.files.library.view")} onClose={() => setSheet(null)}>
         {group("mobile.files.library.layout", [
           choice("grid", t("mobile.files.library.grid"), grid, () => setView({ layout: "grid" })),
           choice("list", t("mobile.files.library.list"), !grid, () => setView({ layout: "list" })),
@@ -799,8 +855,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
           choice("folders", t("mobile.files.library.foldersFirst"), view.foldersFirst, () => setView({ foldersFirst: !view.foldersFirst })),
           choice("thumbs", t("mobile.files.library.thumbs"), view.thumbs, () => setView({ thumbs: !view.thumbs })),
         ])}
-      </section>
-    </div>;
+    </LibrarySheet>;
   }
 
   /** A folder's colours: the palette's swatches and No colour, applied on the
@@ -808,10 +863,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   function colorSheet(place: string, name: string) {
     const current = tabColorCss(colors.get(place)) ? colors.get(place) : undefined;
     const close = () => setSheet(null);
-    return <div className="sheet-backdrop" role="presentation" onClick={close}>
-      <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.files.color.title", { name })} onClick={(event) => event.stopPropagation()}>
-        <span className="sheet-grip" aria-hidden="true" />
-        <header><button className="sheet-close" onClick={close} aria-label={t("common.close")}><CloseIcon size="1em" /></button><h2>{t("mobile.files.item.color")}</h2><span className="sheet-close" aria-hidden="true" /></header>
+    return <LibrarySheet className="schedule-sheet" label={t("mobile.files.color.title", { name })} title={t("mobile.files.item.color")} onClose={close}>
         <p className="sheet-note">{t("mobile.files.color.note", { name })}</p>
         <div className="tab-color-grid" role="group" aria-label={t("mobile.files.item.color")}>
           <button type="button" className={`tab-color-chip none${current ? "" : " is-current"}`} aria-pressed={!current} onClick={() => setFolderColor(placeId, place, null)}>
@@ -827,8 +879,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         <div className="mobile-schedule-form">
           <div className="mobile-schedule-actions"><button onClick={close}>{t("mobile.gitSheet.done")}</button></div>
         </div>
-      </section>
-    </div>;
+    </LibrarySheet>;
   }
 
   function sheetOver(shown: Sheet) {
@@ -874,10 +925,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     || isUntested("mobile.files.sort") || isUntested("mobile.files.pathMenu") || isUntested("mobile.files.counts")
     || isUntested("mobile.files.thumbs") || isUntested("mobile.files.favorites") || isUntested("mobile.files.recent")
     || isUntested("mobile.files.colors") || isUntested("mobile.files.share") || isUntested("mobile.files.sections")
-    || isUntested("mobile.files.remember") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
+    || isUntested("mobile.files.remember") || isUntested("mobile.files.keepPlace") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
     || ((onSide !== undefined || onHost) && isUntested("mobile.files.host"));
 
-  return <section ref={host} className="files-library" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")}>
+  return <><section ref={host} className="files-library" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")}>
     <header className="files-library-head">
       <button className="files-library-back" onClick={up}
         aria-label={parent ? t("mobile.files.library.up", { name: parent.name }) : t("mobile.files.close")}>
@@ -902,7 +953,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
         onChange={(event) => setQuery(event.target.value)} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} />
     </div>
-    <div className="files-library-body">
+    <div ref={body} className="files-library-body" onScroll={onBodyScroll}>
       {!searching && listing?.uploads && <button className="new-tab-file files-upload" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
         <span><strong>{t("mobile.files.upload.button")}</strong><small>{t("mobile.files.upload.hint")}</small></span>
@@ -951,5 +1002,31 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         : listing?.truncated && <p className="sheet-note">{t("mobile.files.truncated", { count: listing.entries.length })}</p>}
     </div>
     {sheet && sheetOver(sheet)}
-  </section>;
+  </section>{viewer}</>;
+}
+
+/** The library's own sheets (the view menu, a folder's colours): the shared
+ * sheet's frame and its keyboard focus (`useModalFocus`). Back is the
+ * library's, which closes the sheet first. */
+function LibrarySheet({ className, label, title, onClose, children }: {
+  className: string;
+  label: string;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const t = useT();
+  const dialog = useRef<HTMLElement>(null);
+  useModalFocus(dialog);
+  return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
+    <section ref={dialog} className={`option-sheet ${className}`} role="dialog" aria-modal="true" aria-label={label} onClick={(event) => event.stopPropagation()}>
+      <span className="sheet-grip" aria-hidden="true" />
+      <header>
+        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button>
+        <h2>{title}</h2>
+        <span className="sheet-close" aria-hidden="true" />
+      </header>
+      {children}
+    </section>
+  </div>;
 }

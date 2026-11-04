@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
-import { openOutside, refreshProjectFile, sentName, viewerFileUrl, type OutboxFile, type TabRow, type ViewerScope } from "../api";
+import { MAX_VIEW_FILE, openOutside, refreshProjectFile, sentName, viewerFileUrl, type OutboxFile, type TabRow, type ViewerScope } from "../api";
 import { layerKey } from "../markup/store";
 import { shareAs, useOutboxShare } from "../outboxShare";
 import { formatBytes } from "../../../src/lib/formatBytes";
@@ -199,13 +199,18 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   const [text, setText] = useState<string | null>(null);
   const [failure, setFailure] = useState("");
   const isText = file.kind.startsWith("text/");
+  /** Past the desktop's cap the raw route refuses anything but a text (whose
+   * head it sends), so the file is only named — never fetched, saved or
+   * shared as the refusal's JSON. */
+  const tooLarge = !isText && file.size > MAX_VIEW_FILE;
+  const showsImage = isImage && !tooLarge;
   // A picture's own state, by the URL it is for: the bytes for Share and the
   // neighbours wait until it is in, so the picture on screen has the radio
   // to itself; while it is not, the stage says so rather than staying blank.
   const [picture, setPicture] = useState<{ url: string; state: "loaded" | "failed" } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const pictureState = picture?.url === url ? picture.state : "loading";
-  const settled = !isImage || pictureState !== "loading";
+  const settled = !showsImage || pictureState !== "loading";
   // The whole of a long text is read in here, not handed to the browser's
   // own tab: on an iPhone or iPad the installed app could not be got back to
   // from there. Only a text too big for that still goes out — where it can.
@@ -214,7 +219,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   const strands = openingOutsideStrands();
   const sharing = useOutboxShare(scope);
   const { prepare } = sharing;
-  const shareable = shareAs(file) !== null;
+  const shareable = shareAs(file) !== null && !tooLarge;
   useEffect(() => {
     const controller = new AbortController();
     setText(null);
@@ -229,7 +234,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   useEffect(() => clearPrint, []);
   // Fetch the bytes on opening, so a tap on Share shares at once rather than
   // after the radio — the button itself does not wait for them.
-  useEffect(() => { if (settled) prepare(file); }, [prepare, file, settled]);
+  useEffect(() => { if (settled && shareable) prepare(file); }, [prepare, file, settled, shareable]);
   useEffect(() => {
     // Marking up, the arrow keys belong to the note being typed.
     if (!onStep || marking || (!previous && !next)) return;
@@ -336,10 +341,11 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   };
   const zoomed = view.scale > 1;
   const stepping = index >= 0 && steps.length > 1;
-  const isPdf = file.kind === "application/pdf";
+  /** A PDF the pdf.js frame can be handed; one past the cap is named only. */
+  const isPdf = file.kind === "application/pdf" && !tooLarge;
   /** Without an agent tab, the new-tab Submit (`newTab`). */
   const fresh = markup ? undefined : newTab;
-  const markable = (markup || fresh) && isImage && file.kind !== "image/gif";
+  const markable = (markup || fresh) && showsImage && file.kind !== "image/gif";
   /** The project the marks are kept under — a real one, not the `tab:<id>`
    * stand-in a tab without a project gets. */
   const target = markup?.projectId ?? fresh?.projectId;
@@ -375,11 +381,11 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   }
   /** Print: a picture, or a text once the whole of it is read in; a PDF's
    * pages are the reader's to print (`MarkupView`). */
-  const printable = canPrint() && !isPdf && (isImage || (isText && text !== null && (file.size <= INLINE_LIMIT || whole)));
+  const printable = canPrint() && !isPdf && (showsImage || (isText && text !== null && (file.size <= INLINE_LIMIT || whole)));
   const print = () => void printContent(isText ? { text: text ?? "" } : { pictures: [url] }, sentName(file));
   const actions = <>
     {markable && <button className="outbox-action" onClick={() => setMarking(true)} aria-label={t("mobile.markup.openFile", { name: sentName(file) })}>{t("mobile.markup.open")}</button>}
-    <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>
+    {!tooLarge && <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>}
     {shareable && <button className="outbox-action" disabled={sharing.busy === file.name} onClick={() => void sharing.share(file)}>
       {t(sharing.ready === file.name ? "mobile.outbox.shareReady" : "mobile.outbox.share")}
     </button>}
@@ -402,7 +408,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
         <small>
           {stepping && `${t("mobile.outbox.position", { index: index + 1, count: steps.length })} · `}{formatBytes(file.size)}
           {((stepping && isUntested("mobile.outbox.step")) || (isImage && isUntested("mobile.outbox.zoom"))
-            || (isText && file.size > INLINE_LIMIT && isUntested("mobile.outbox.wholeText")))
+            || (isText && file.size > INLINE_LIMIT && isUntested("mobile.outbox.wholeText"))
+            || (!isText && !showsImage && isUntested("mobile.outbox.noPreview")))
             && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </small>
       </div>
@@ -413,7 +420,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
       <pre>{text ?? (failure ? "" : t("mobile.outbox.loading"))}</pre>
       {file.size > INLINE_LIMIT && !whole && (file.size <= WHOLE_LIMIT || !strands) && <button className="outbox-open"
         onClick={() => { if (file.size <= WHOLE_LIMIT) setWholeOf(url); else void openOutside(url).then((opened) => { if (opened === "host_outdated") setFailure(t("mobile.open.hostOutdated")); }); }}>{t("mobile.outbox.whole")}</button>}
-    </div> : isImage ? <div ref={stage} className={`outbox-viewer-stage${zoomed ? " zoomed" : ""}`}
+    </div> : showsImage ? <div ref={stage} className={`outbox-viewer-stage${zoomed ? " zoomed" : ""}`}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
       <img key={attempt} ref={image} src={url} alt={sentName(file)} draggable={false}
         onLoad={() => setPicture({ url, state: "loaded" })} onError={() => setPicture({ url, state: "failed" })}
@@ -425,6 +432,14 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
       </p>}
       {previous && <button className="outbox-step outbox-step-previous" onClick={() => onStep?.(previous)} aria-label={t("mobile.outbox.previous")}><span aria-hidden="true">‹</span></button>}
       {next && <button className="outbox-step outbox-step-next" onClick={() => onStep?.(next)} aria-label={t("mobile.outbox.next")}><span aria-hidden="true">›</span></button>}
-    </div> : null}
+    </div> : <div className="outbox-no-preview">
+      {/* A kind the phone cannot draw (an office file, an archive, a video),
+          or one too large to be handed over: named, with Save where it can. */}
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5" /></svg>
+      <strong>{sentName(file)}</strong>
+      <small>{formatBytes(file.size)}</small>
+      <p>{t(tooLarge ? "mobile.outbox.tooLarge" : "mobile.outbox.noPreview")}</p>
+      {!tooLarge && <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>}
+    </div>}
   </div>;
 }

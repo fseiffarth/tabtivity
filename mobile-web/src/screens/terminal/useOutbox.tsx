@@ -3,6 +3,7 @@
 // Their effects read setters and refs the screen passes in. Those are stable,
 // so where `exhaustive-deps` cannot tell, the rule is disabled at the site
 // rather than handed a dependency the screen's own effect never had.
+import { goBack } from "../../backStack";
 import { OutboxPost } from "../../components/OutboxPost";
 import { type SentFile } from "../../components/SentFilesIndex";
 import {
@@ -77,10 +78,11 @@ export function useOutboxViewers({
     const viewerUp = outboxOpen !== null && markupAway === null;
     if (!viewerUp && !gallery && !inboxOpen) return;
     // The viewer opens from the gallery, so Escape closes the top one first;
-    // a tucked-away markup view is not on top.
+    // a tucked-away markup view is not on top. The viewer closes as Back
+    // closes it, so a markup view's Done keeps its open note.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (viewerUp) setOutboxOpen(null);
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      if (viewerUp) goBack();
       else if (inboxOpen) setInboxOpen(null);
       else setGallery(false);
     };

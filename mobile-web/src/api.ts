@@ -1277,6 +1277,11 @@ export interface InboxAttachment { name: string; reference: string; size: number
 /** Mirrors the desktop's `inbox::MAX_INBOX_FILE`; checked here first so an
  * oversized pick fails before any bytes leave the phone. */
 export const MAX_INBOX_FILE = 24 * 1024 * 1024;
+/** The largest file other than a text the desktop hands the phone to view,
+ * save or share (`outbox::MAX_OUTBOX_FILE`, read by `files::read` and
+ * `host_files::read_on`); past it the raw route answers `file_too_large`. A
+ * longer text is answered with its head. */
+export const MAX_VIEW_FILE = 24 * 1024 * 1024;
 /** The `accept` of the fallback `<input>` behind every "a file from this
  * phone" picker (see `pickPhoneFiles`). The wildcards cover every type between
  * them — an unknown file is `application/octet-stream`. An iPhone or iPad
@@ -1534,6 +1539,32 @@ export async function listProjectFiles(projectId: string, dir: string | undefine
   return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query ? `?${query}` : ""}`, { signal });
 }
 
+/** What looking one file or folder up answers: its row; `null` when it is no
+ * longer there; `unlisted` when an older desktop (no `files/entry` route) was
+ * asked by listing the folder, which was cut at its cap before the name. */
+export type ProjectFileLookup = ProjectFileEntry | null | "unlisted";
+
+/** `GET /api/v1/projects/{id}/files/entry?name=<leaf>[&dir=<token>][&on=host]`
+ * — one file or folder of the folder `dir` seals (none: the root), as its
+ * listing rows it, without listing the folder: what favorites, recents and
+ * Mark up's Reload ask. The same path always carries the same token. An older
+ * desktop has no such route (a bodiless 404 or 405): the folder is listed
+ * instead, as before. */
+export async function lookUpProjectFile(projectId: string, dir: string | undefined, name: string, side?: FilesSide, signal?: AbortSignal): Promise<ProjectFileLookup> {
+  const query = [`name=${encodeURIComponent(name)}`, dir ? `dir=${encodeURIComponent(dir)}` : "", sideQuery(side)].filter(Boolean).join("&");
+  try {
+    const answer = await api<{ entry?: ProjectFileEntry }>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/entry?${query}`, { signal });
+    if (!answer.entry?.token) throw new ApiError(200, "malformed_response");
+    return answer.entry;
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.code === "file_not_found") return null;
+    const olderHost = reason instanceof ApiError && reason.code === "request_failed" && (reason.status === 404 || reason.status === 405);
+    if (!olderHost) throw reason;
+  }
+  const listing = await listProjectFiles(projectId, dir, signal, side);
+  return listing.entries.find((entry) => entry.name === name) ?? (listing.truncated ? "unlisted" : null);
+}
+
 /** A file or folder whose name matched a search: its row, and the sealed
  * folders from the project root down to its own (empty at the root) — the
  * drawer's trail to stand in when it is opened. */
@@ -1570,14 +1601,20 @@ export async function undoProjectUpload(projectId: string, token: string): Promi
   await api<{ undone: boolean }>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/upload?f=${encodeURIComponent(token)}`, { method: "DELETE" });
 }
 
+/** A file looked up again (`lookUpProjectFile`) as the viewer takes it:
+ * `null` when it is gone, is a folder now, or could not be found unlisted. */
+export async function lookUpFileRow(projectId: string, folder: string | undefined, name: string, side?: FilesSide): Promise<ProjectFileEntry | null> {
+  const found = await lookUpProjectFile(projectId, folder, name, side);
+  return found && found !== "unlisted" && found.kind !== "dir" ? found : null;
+}
+
 /** Mark up's Reload for a project file opened by its sealed row rather than
  * from the drawer (the Focus banner's question, an outbox copy's origin):
- * its folder (`folder`, the row's token; none at the root) listed again, for
- * the file's fresh token, size and time — `null` when it is gone. */
+ * the file looked up again in its folder (`folder`, the row's token; none at
+ * the root), for its fresh token, size and time — `null` when it is gone. */
 export function refreshProjectFile(projectId: string, folder: string | undefined): (file: OutboxFile) => Promise<OutboxFile | null> {
   return async (file) => {
-    const fresh = await listProjectFiles(projectId, folder);
-    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    const entry = await lookUpFileRow(projectId, folder, file.name);
     return entry ? { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token } : null;
   };
 }

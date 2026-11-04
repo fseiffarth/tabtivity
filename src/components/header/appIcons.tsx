@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { MailIndicator } from "./MailIndicator";
 import { CalendarIndicator } from "./CalendarIndicator";
 import { TodoIndicator } from "./TodoIndicator";
+import { CockpitIndicator } from "./CockpitIndicator";
 import { InboxIndicator } from "./InboxIndicator";
 import { HelpAgentButton } from "./HelpAgentButton";
 import { SettingsMenu } from "./SettingsMenu";
@@ -15,6 +16,7 @@ export const APP_ICONS: Partial<Record<HeaderItemId, ReactNode>> = {
   mail: <MailIndicator />,
   calendar: <CalendarIndicator />,
   todo: <TodoIndicator />,
+  cockpit: <CockpitIndicator />,
   inbox: <InboxIndicator />,
   models: <LocalModelMenu />,
   help: <HelpAgentButton />,

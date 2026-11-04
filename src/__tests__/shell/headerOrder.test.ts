@@ -3,7 +3,7 @@ import { isHeaderPinned, moveHeaderItem, orderedHeaderIds, placedGroupOf, resetH
 
 describe("header icon order", () => {
   it("follows the built-in order until the user drags", () => {
-    expect(orderedHeaderIds("apps", undefined)).toEqual(["mail", "calendar", "todo", "inbox", "models", "help", "settings"]);
+    expect(orderedHeaderIds("apps", undefined)).toEqual(["mail", "calendar", "todo", "cockpit", "inbox", "models", "help", "settings"]);
   });
 
   it("moves an icon in front of another and keeps the rest", () => {
@@ -18,13 +18,13 @@ describe("header icon order", () => {
 
   it("leaves other groups' entries alone and ignores unknown ids", () => {
     const order = moveHeaderItem(["todo", "mail", "bogus"], "vpn", "alerts");
-    expect(orderedHeaderIds("apps", order)).toEqual(["todo", "mail", "calendar", "inbox", "models", "help", "settings"]);
+    expect(orderedHeaderIds("apps", order)).toEqual(["todo", "mail", "calendar", "cockpit", "inbox", "models", "help", "settings"]);
     expect(orderedHeaderIds("status", order)[0]).toBe("vpn");
   });
 
   it("resets one group", () => {
     const order = moveHeaderItem(moveHeaderItem(undefined, "inbox", "mail"), "vpn", "alerts");
-    expect(orderedHeaderIds("apps", resetHeaderGroup(order, "apps"))).toEqual(["mail", "calendar", "todo", "inbox", "models", "help", "settings"]);
+    expect(orderedHeaderIds("apps", resetHeaderGroup(order, "apps"))).toEqual(["mail", "calendar", "todo", "cockpit", "inbox", "models", "help", "settings"]);
     expect(orderedHeaderIds("status", resetHeaderGroup(order, "apps"))[0]).toBe("vpn");
   });
 

@@ -209,6 +209,12 @@ impl HostFiles {
         self.with_session(spec, known, |session| async move { search_on(&session.sftp, &root, &query, &key, &raw_id).await }).await
     }
 
+    /// One file or folder as its folder would row it ([`entry_on`]).
+    pub async fn entry(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, rel: String, key: Vec<u8>, raw_id: String) -> Result<Entry, FilesError> {
+        let root = root_of(spec).ok_or(FilesError::Unavailable)?.to_string();
+        self.with_session(spec, known, |session| async move { entry_on(&session.sftp, &root, &rel, &key, &raw_id).await }).await
+    }
+
     /// One file's bytes and media type ([`read_on`]).
     pub async fn read(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, rel: String) -> Result<(Vec<u8>, &'static str), FilesError> {
         let root = root_of(spec).ok_or(FilesError::Unavailable)?.to_string();
@@ -274,6 +280,24 @@ async fn proven(fs: &mut Fs, root: &str, rel: &str) -> Result<String, FilesError
         return Err(FilesError::NotFound);
     }
     Ok(full)
+}
+
+/// `path` (proven by [`proven`] before it was opened) once more after the
+/// read: still no link at the leaf (`lstat`), and still its own `realpath`.
+/// SFTP holds no handle to open by, so a leaf swapped for a link between the
+/// proof and the open could be read through; this drops those bytes unless
+/// the link was swapped back meanwhile — it narrows the window, it does not
+/// close it.
+async fn still_proven(fs: &mut Fs, path: &str) -> Result<(), FilesError> {
+    let meta = fs.symlink_metadata(path).await.map_err(sftp_error)?;
+    if !meta.file_type().is_some_and(|kind| kind.is_file() && !kind.is_symlink()) {
+        return Err(FilesError::NotFound);
+    }
+    let real = fs.canonicalize(path).await.map_err(sftp_error)?;
+    if real.to_str() != Some(path) {
+        return Err(FilesError::NotFound);
+    }
+    Ok(())
 }
 
 /// One name a folder read gave: kept only as a folder or a regular file.
@@ -412,7 +436,41 @@ pub async fn read_on(sftp: &Sftp, root: &str, rel: &str) -> Result<(Vec<u8>, &'s
     if meta.len().is_none() && bytes.len() as u64 == MAX_OUTBOX_FILE && !kind.starts_with("text/") {
         return Err(FilesError::TooLarge);
     }
+    still_proven(&mut fs, &path).await?;
     Ok((bytes, kind))
+}
+
+/// The file or folder `rel` names below the remote root, as its folder's
+/// listing would row it — `lstat`'d, never through a link, a file typed by its
+/// head; `NotFound` for anything else.
+pub async fn entry_on(sftp: &Sftp, root: &str, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Entry, FilesError> {
+    if rel.is_empty() {
+        return Err(FilesError::NotFound);
+    }
+    let mut fs = sftp.fs();
+    let path = proven(&mut fs, root, rel).await?;
+    let meta = fs.symlink_metadata(&path).await.map_err(sftp_error)?;
+    let file_type = meta.file_type().ok_or(FilesError::NotFound)?;
+    let kind = if file_type.is_symlink() {
+        return Err(FilesError::NotFound);
+    } else if file_type.is_dir() {
+        "dir"
+    } else if file_type.is_file() {
+        sniff(sftp, &path).await.ok_or(FilesError::NotFound)?
+    } else {
+        return Err(FilesError::NotFound);
+    };
+    let name = rel.rsplit('/').next().unwrap_or(rel).to_string();
+    Ok(Entry {
+        token: seal(host_key, raw_id, rel)?,
+        name,
+        kind,
+        size: if kind == "dir" { 0 } else { meta.len().unwrap_or(0) },
+        modified: meta.modified().map(|t| t.as_duration().as_secs()).unwrap_or(0),
+        created: None,
+        ignored: false,
+        items: None,
+    })
 }
 
 /// A name the walk found: its path below the root and its row.

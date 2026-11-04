@@ -1798,6 +1798,7 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         // Files drawer and uploads.
         ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
         ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),
+        ("GET", format!("/api/v1/projects/{p}/files/entry?name=a.txt"), Value::Null, &["files_unavailable"]),
         ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
         ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable", "files_off"]),
         ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable", "files_off"]),
@@ -2229,6 +2230,7 @@ async fn a_folder_less_project_is_no_project_to_any_folder_route() {
             ("GET", format!("/api/v1/projects/{p}/git"), Value::Null, &["not_a_project"]),
             ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),
+            ("GET", format!("/api/v1/projects/{p}/files/entry?name=a.txt"), Value::Null, &["files_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
             ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable"]),
             ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable"]),
@@ -4356,6 +4358,25 @@ async fn the_file_browser_is_off_by_default_and_reads_by_sealed_token_only() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{refused} answered: {body}");
         assert_eq!(json(&body)["error"], "file_not_found");
     }
+
+    // One row by its folder's token and its name, as the listing rows it and
+    // under the same token: a file, a folder at the root, nothing hidden,
+    // nothing gone, no path for a name.
+    let (status, _, body) = host.send(get_as(&format!("{base}/entry?dir={src}&name=main.rs"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(json(&body)["entry"], file, "the listing's row, token included");
+    let (status, _, body) = host.send(get_as(&format!("{base}/entry?name=src"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!((json(&body)["entry"]["kind"].as_str(), json(&body)["entry"]["token"].as_str()), (Some("dir"), Some(src.as_str())));
+    for (name, error) in [("gone.rs", "file_not_found"), (".env", "invalid_request"), ("src%2Fmain.rs", "invalid_request"), ("..", "invalid_request")] {
+        let (_, _, body) = host.send(get_as(&format!("{base}/entry?name={name}"), &cookie)).await;
+        assert_eq!(json(&body)["error"], error, "{name}: {body}");
+    }
+    let (_, _, body) = host.send(get_as(&format!("{base}/entry?dir=AAAA&name=main.rs"), &cookie)).await;
+    assert_eq!(json(&body)["error"], "file_not_found", "a forged folder token: {body}");
+    let (_, _, body) = host.send(get_as(&format!("{base}/entry?dir={src}"), &cookie)).await;
+    assert_eq!(json(&body)["error"], "invalid_request", "no name: {body}");
+
     let (status, _, _) = host.send(get_as(&base, "not-a-session")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, _, _) = host.send(get_as("/api/v1/projects/not-a-project/files", &cookie)).await;
@@ -4572,7 +4593,7 @@ async fn the_remote_side_of_the_files_rides_the_desktops_master_or_says_host_off
     }
     // The refresher's socket is not there: offline, without `ssh -G` or a dial.
     let local_token = files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "a.txt").unwrap();
-    for uri in [format!("{base}?on=host"), format!("{base}/search?q=notes&on=host")] {
+    for uri in [format!("{base}?on=host"), format!("{base}/search?q=notes&on=host"), format!("{base}/entry?name=a.txt&on=host")] {
         let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
         assert_eq!((status, json(&body)["error"].clone()), (StatusCode::CONFLICT, json!("host_offline")), "{uri}: {body}");
     }
@@ -5982,6 +6003,7 @@ async fn a_project_open_to_one_phone_is_an_unknown_id_to_the_other() {
             ("GET", format!("/api/v1/projects/{project}/files"), None),
             ("GET", format!("/api/v1/projects/{project}/files/raw?f={token}"), None),
             ("GET", format!("/api/v1/projects/{project}/files/search?q=paper"), None),
+            ("GET", format!("/api/v1/projects/{project}/files/entry?name=paper.pdf"), None),
             ("POST", format!("/api/v1/projects/{project}/files/upload?name=paper.pdf"), None),
             ("DELETE", format!("/api/v1/projects/{project}/files/upload?f={token}"), None),
             ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),

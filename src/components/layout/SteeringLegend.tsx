@@ -118,6 +118,7 @@ export function SteeringLegend() {
   const mail = useSettingsStore((s) => steeringAppEnabled("mail", s.settings));
   const calendar = useSettingsStore((s) => steeringAppEnabled("calendar", s.settings));
   const todo = useSettingsStore((s) => steeringAppEnabled("todo", s.settings));
+  const cockpit = useExperimental("cockpit");
   const busyByTab = useActivityStore((s) => s.busyByTab);
   const attentionByTab = useActivityStore((s) => s.attentionByTab);
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
@@ -254,7 +255,7 @@ export function SteeringLegend() {
     // Read at render: the legend redraws on every steering key.
     tabCard: inPane && !!activeTabCard(),
     multiPane,
-    apps: { mail, calendar, todo },
+    apps: { mail, calendar, todo, cockpit },
     agent: steeringAgentOffer(activeTab),
     terminal,
     // Read at render too; only where ↓ could step into it.
