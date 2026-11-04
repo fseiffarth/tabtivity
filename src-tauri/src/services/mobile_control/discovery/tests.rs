@@ -1169,6 +1169,10 @@ fn a_mobile_enabled_box_is_a_scope_with_the_folder_and_member_roots() {
     let labels: Vec<&str> = b.tabs.iter().map(|t| t.public.label.as_str()).collect();
     assert_eq!(labels, vec!["Box shell", "Lib shell", "Remote shell"]);
     assert!(!b.public.id.contains("b1"), "the opaque id must not carry the box id");
+    // Every member, as the id its own row would carry; the list narrows them
+    // per phone (`host::projects`).
+    let ids: Vec<String> = ["p-lib", "p-remote", "p-vm", "p-gone"].iter().map(|id| key_id(&[7; 32], "project", &[id])).collect();
+    assert_eq!(b.public.members.as_deref(), Some(ids.as_slice()));
 }
 
 /// One project record per host type, each with Mobile on.

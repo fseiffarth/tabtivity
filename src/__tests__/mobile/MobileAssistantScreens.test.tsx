@@ -122,7 +122,7 @@ describe("Mobile assistant — Home", () => {
     await waitFor(() => expect(urls().some((url) => url.includes("view=search"))).toBe(true));
     expect(screen.getByRole("button", { name: /Open Tabby/ })).toBeTruthy();
     // The active list without it means the switch went off.
-    fireEvent.click(screen.getByRole("button", { name: "Active" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: /Open Tabby/ })).toBeNull());
     expect(container.querySelector(".home-screen.has-fab")).toBeNull();
   });

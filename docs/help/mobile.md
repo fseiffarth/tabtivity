@@ -139,14 +139,16 @@ is refused. Works with the desktop window closed.
 
 ## Using it
 
-- The start page opens on **Active**. **Needs you** at the top lists the agent
-  tabs asking you something or cut off, the finished tabs you have not opened
-  on this phone yet, then your mail, to-do and calendar alerts (✓ resolves
-  one); **Show all** opens the rest in place, and **n working · see Agents**
-  switches to the **Agents** view. The badge on **Agents** counts the tabs
-  asking something. Your active projects follow — drag ⠿ to arrange them —
-  and **Search** finds any project with Mobile access. **Desktop** at the
-  bottom sends a file to the desktop and manages local models. The phone's own
+- At the top of the start page, three tiles count your agent tabs: **Waiting**
+  (asking you something or cut off), **Working**, and **Done** (finished, not
+  yet opened on this phone). Any tile opens the **Agents** view, every agent
+  tab in one list. **Needs you** below lists the waiting and finished tabs,
+  then your mail, to-do and calendar alerts (✓ resolves one); **Show all**
+  opens the rest in place. Your active projects follow — drag ⠿ to arrange
+  them; the button beside **Projects** switches between a list, a grid and
+  boxes. In the header, 🔍 finds any project with Mobile access and ☆ opens
+  your Favorites; ‹ or the phone's back comes home. **Desktop** at the bottom
+  sends a file to the desktop and manages local models. The phone's own
   settings, and the version of the phone app, are behind ⚙ (**This device**).
 - In a project, **＋ New tab** floats above the bottom bar. Tap a tab card to
   open it; its model opens the model picker, ◷ (shown once the tab has

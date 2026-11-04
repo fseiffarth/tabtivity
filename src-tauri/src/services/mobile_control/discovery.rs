@@ -266,6 +266,13 @@ pub struct PublicProject {
     /// readings the activity list uses. Absent when none is in any of the three.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agents: Option<AgentCounts>,
+    /// A box row only: its member projects' row ids, in the box's order — the
+    /// same opaque ids the list gives those projects, so the phone's box layout
+    /// can fold them under the box. Built from every member here and narrowed
+    /// per request (`host::projects`) to the rows this phone may list: a member
+    /// without its own Mobile switch never crosses, not even as an id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<String>>,
 }
 
 /// A project row's agent tabs by state, for the phone's project list.
@@ -637,6 +644,8 @@ struct ScopeSource {
     /// The project lives only on its host ([`host_pinned`]): a VM, or a
     /// remote-only project, which has no mirror and runs nothing here.
     pinned: bool,
+    /// A box's member project ids, raw, in the box's order; empty otherwise.
+    member_ids: Vec<String>,
 }
 
 /// A remote project's hosts as its `projects.json` record names them — never
@@ -1651,6 +1660,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: Vec::new(),
         });
     }
     if assistant_open(state_dir) {
@@ -1671,6 +1681,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: Vec::new(),
         });
     }
     for project in &projects {
@@ -1708,6 +1719,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: host == ProjectHost::Container && container_shells(project),
             hosts: ProjectHosts::of(project),
             pinned: host_pinned(project),
+            member_ids: Vec::new(),
         });
     }
     for b in &boxes {
@@ -1751,6 +1763,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: b.member_ids.clone(),
         });
     }
     Ok(sources)
@@ -1941,6 +1954,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             pending_reviews: None,
             git: None,
             agents: None,
+            members: None,
         },
         raw_id: "raw-p".into(),
         root: PathBuf::from("/"),
@@ -2217,6 +2231,8 @@ fn resolve_scope(
             .then(|| crate::services::root_mcp_review::pending_count(state_dir)),
         git: None,
         agents: None,
+        members: (source.kind == ScopeKind::Box)
+            .then(|| source.member_ids.iter().map(|id| key_id(host_key, "project", &[id])).collect()),
     };
     Some(ResolvedProject {
         public,

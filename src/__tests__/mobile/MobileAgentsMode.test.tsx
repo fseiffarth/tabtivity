@@ -56,7 +56,8 @@ const noop = () => {};
 
 async function enterAgentsMode() {
   await screen.findByText("Alpha");
-  fireEvent.click(screen.getByRole("button", { name: "Agents" }));
+  // Home's agent tiles are the Agents view's door.
+  fireEvent.click(screen.getByRole("button", { name: /^Working/ }));
 }
 
 describe("Mobile home — agents mode", () => {
@@ -156,7 +157,7 @@ describe("Mobile home — agents mode", () => {
 
     render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     expect(await screen.findByText("Claude")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Active" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await screen.findByText("Alpha");
     cleanup();
 

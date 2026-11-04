@@ -971,10 +971,22 @@ async fn projects(
     } else {
         HashMap::new()
     };
+    // A box row's members, narrowed to the projects this phone's catalog
+    // lists (its own switch and device list): the phone folds those under
+    // the box and never learns that any other member exists.
+    let listable = catalog_snapshot
+        .projects
+        .iter()
+        .filter(|p| p.public.kind == ScopeKind::Project)
+        .map(|p| p.public.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
     let mut rows = listed
         .into_iter()
         .map(|p| {
             let mut public = p.public.clone();
+            if let Some(members) = public.members.as_mut() {
+                members.retain(|id| listable.contains(id.as_str()));
+            }
             if is_git_project(p) {
                 public.git = git.get(&p.raw_id).copied();
             }
@@ -1226,6 +1238,9 @@ async fn project(
         _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None, None),
     };
     let mut public = project.public.clone();
+    // Only the list folds members under a box, and only there are they
+    // narrowed to what this phone may see: the detail sends none.
+    public.members = None;
     if is_git_project(project) {
         public.git = git.as_deref().and_then(git_dot);
     }

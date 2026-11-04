@@ -902,6 +902,24 @@ export function GridIcon(p: IconProps) {
   );
 }
 
+/** ☰ with bullets — a list of rows (the phone Home's list layout). */
+export function ListIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+    </Frame>
+  );
+}
+
+/** ☆ — a starred place (the phone's Favorites). */
+export function StarIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z" />
+    </Frame>
+  );
+}
+
 /** A gauge — CPU, RAM and GPU folded into one mark (`AppResourceDisplay`). */
 export function MeterIcon(p: IconProps) {
   return (

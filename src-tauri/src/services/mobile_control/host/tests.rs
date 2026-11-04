@@ -596,6 +596,41 @@ async fn the_git_overview_answers_projects_only_and_from_its_cache() {
     assert_eq!(json(&body)["error"], "not_a_project");
 }
 
+/// A box row names its members by the ids the list gives them, and only the
+/// members this phone may list itself: a member with Mobile off never
+/// crosses, not even as an id, and the box's own screen carries none.
+#[tokio::test]
+async fn a_box_row_lists_only_the_members_the_phone_may_see() {
+    let host = Fixture::with_box();
+    let cookie = host.pair_device(&signing_key(63)).await.0;
+    let box_row = |body: &str| {
+        json(body)["projects"].as_array().expect("rows").iter().find(|row| row["kind"] == "box").cloned().expect("box row")
+    };
+    let (status, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(box_row(&body)["members"], json!([]), "the member's own switch is off: {body}");
+
+    let path = host.state.config.state_dir.join("projects.json");
+    let mut projects: Value = serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+    projects[0][crate::brand::MOBILE_ACCESS_KEY] = json!(true);
+    projects[0]["status"] = json!("active");
+    std::fs::write(&path, serde_json::to_vec(&projects).expect("bytes")).expect("write");
+    catalog_stale(&host.state);
+
+    let (status, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let rows = json(&body)["projects"].as_array().expect("rows").clone();
+    let member = rows.iter().find(|row| row["kind"] == "project").expect("member row");
+    assert_eq!(box_row(&body)["members"], json!([member["id"]]), "{body}");
+    assert!(member.get("members").is_none(), "a project row has none: {body}");
+    assert!(!body.contains(RAW_PROJECT) && !body.contains(RAW_BOX), "{body}");
+
+    let box_id = box_row(&body)["id"].as_str().expect("box id").to_string();
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{box_id}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert!(json(&body)["project"].get("members").is_none(), "the detail sends none: {body}");
+}
+
 #[tokio::test]
 async fn mutating_routes_refuse_an_unauthenticated_request() {
     let host = Fixture::with_project();

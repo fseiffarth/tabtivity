@@ -45,8 +45,9 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * window and the mic opens again once the answer is over, off unset.
  * `voiceBrief` reads answers aloud in brief — headings and first sentences
  * (`shared/voiceReading.ts`) — rather than whole, off unset. */
-// `projectsGrid` remembers the Home project list layout on this device.
-export type MobileFlag = "projectsGrid" | "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff" | "focusHandsFree" | "voiceBrief";
+// `projectsGrid` and `projectsBoxes` remember the Home project list layout on
+// this device: boxes when `projectsBoxes` is set, else grid or list.
+export type MobileFlag = "projectsGrid" | "projectsBoxes" | "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff" | "focusHandsFree" | "voiceBrief";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
@@ -129,8 +130,9 @@ export type MobileOrder = "projectOrder";
 /** `todoCollapsedColumns` is a set rather than an order — the ids of the to-do
  * board's columns the reader has folded shut — and it rides on the same storage
  * because it is the same shape: a short list of ids this phone keeps to itself,
- * of which only membership is ever read back. */
-export type MobileIdList = MobileOrder | "todoCollapsedColumns";
+ * of which only membership is ever read back. `homeFoldedBoxes` is the same: the
+ * box rows folded shut in Home's box layout. */
+export type MobileIdList = MobileOrder | "todoCollapsedColumns" | "homeFoldedBoxes";
 
 /** How many ids one order keeps. A phone that has been used for a year should
  * not carry a list of every project it ever saw, and the ids that matter are

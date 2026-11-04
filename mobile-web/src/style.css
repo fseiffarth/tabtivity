@@ -383,24 +383,25 @@ small { color:#9498aa; }
 .home-brand strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-headline); font-weight:650; letter-spacing:.01em; }
 .home-logo-frame { display:grid; place-items:center; flex:0 0 auto; width:28px; height:28px; }
 .home-logo { width:26px; height:26px; color:#f0efff; }
+/* The logo as the root console's door: the same look, a bare button, a tap
+   target at least a row tall, and a dot while root's proposals wait. */
+button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padding:0; border:0; background:transparent; color:inherit; text-align:start; }
+.home-logo-frame { position:relative; }
+.home-brand-dot { position:absolute; top:-1px; right:-2px; width:9px; height:9px; border-radius:50%; background:var(--warn,#f5b94a); box-shadow:0 0 0 2px #0b0d13; }
 .home-header > .lamp { flex:0 0 auto; margin:0 var(--sp-2); }
 .home-offline { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; padding:4px 10px; border-radius:999px; background:#3b2027; color:#ffb4c0; font-size:var(--fs-caption); font-weight:650; }
-.home-settings { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; background:transparent; color:#d7d3f5; }
+.home-settings,.home-head-button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; background:transparent; color:#d7d3f5; }
+.home-head-button { position:relative; border-radius:var(--r-md); }
+.home-head-button[aria-pressed="true"] { background:#2e2b48; color:#e7e9f2; }
+.home-head-button > .untested { position:absolute; top:-6px; right:-4px; }
 .home-settings svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .projects-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:var(--sp-3); }
 .projects-row h1 { font-size:var(--fs-large); font-weight:700; letter-spacing:-.02em; }
 .projects-row > .new-tab { --o:var(--r-sm); display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; font-size:1.25rem; line-height:1; }
-.home-switch { --o:var(--r-md); gap:2px; margin:var(--sp-4) 0 var(--sp-2); padding:3px; background:var(--surface-group); }
-.home-switch > button { --o:var(--r-sm); display:flex; align-items:center; justify-content:center; gap:6px; min-height:38px; padding:0 var(--sp-2); border:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:600; }
 /* Four segments have to fit the narrowest phones in every language. */
-@media (max-width:359px) { .home-switch > button { min-width:0; padding:0 2px; font-size:var(--fs-micro); } }
-.home-switch > button.selected { background:#2e2b48 !important; color:#e7e9f2; }
-.home-switch-badge { min-width:18px; padding:1px 5px; border-radius:999px; background:#493b1d; color:#ffd36b; font-size:var(--fs-micro); font-weight:700; font-variant-numeric:tabular-nums; }
 /* The projects' caption shows only under Needs you; alone, the title says it. */
-.home-section-head { margin:28px var(--sp-1) var(--sp-2); color:var(--ink-muted); font-size:var(--fs-caption); font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.home-section-head { margin:var(--sp-6) 2px var(--sp-2); font-size:var(--fs-headline); font-weight:700; letter-spacing:-.01em; }
 .home-needs > .home-section-head { margin-top:var(--sp-5); }
-.home-projects-head { display:none; }
-.home-needs ~ .home-projects-head { display:block; }
 /* An inset group. Never put a sheet in one: the clip would cut it off. */
 .home-group,.home-screen > .home-projects { --o:var(--r-lg); display:grid; gap:0; background:var(--surface-group); }
 .home-group > * + *,.home-projects > * + * { border-top:1px solid var(--hairline); }
@@ -412,7 +413,6 @@ small { color:#9498aa; }
 .home-needs-copy small { color:var(--ink-muted); font-size:var(--fs-foot); }
 .home-needs-row time { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-caption); font-variant-numeric:tabular-nums; }
 .home-group-more { min-height:var(--hit); color:#bcb0ff; font-size:var(--fs-sub); font-weight:600; }
-.home-group-more-glyph { color:#6fe29c; font-size:.7rem; }
 .home-projects > .tab-card { border:0; border-radius:0; background:transparent; }
 .home-project-card .card { gap:var(--sp-3); min-height:60px; padding:10px var(--sp-3); }
 .home-project-card .card > span:nth-child(2) { display:grid; flex:1 1 auto; gap:2px; min-width:0; }
@@ -462,7 +462,7 @@ small { color:#9498aa; }
 .project-activate { margin-bottom:var(--sp-3); }
 .project-activate > button { --o:var(--r-md); width:100%; min-height:var(--hit); border:0; }
 /* The radius these screens round their pieces to, each its own `--o`. */
-.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { border-radius:var(--o); }
+.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { border-radius:var(--o); }
 /* The four top-level sections. Fixed to the bottom edge so it survives the long
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
@@ -2245,15 +2245,48 @@ ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) 
 .outbox-file > .pdf-file-cover { width:100%; aspect-ratio:3 / 4; }
 
 /* Home's optional project tiles retain the opener and a separate drag grip. */
-.projects-row h1 { margin-right:auto; }
-.home-layout-toggle { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:2px; min-width:var(--hit); min-height:var(--hit); padding:6px; }
-.home-layout-toggle[aria-pressed="true"] { background:#2e2b48; color:#bcb0ff; }
+/* Home's section heads are one size: Needs you, Projects (with its layout
+   button and ＋ at the far edge), Desktop. */
+.home-screen > .projects-row { gap:var(--sp-1); margin:var(--sp-6) 0 var(--sp-2); }
+.home-screen > .projects-row h1 { flex:1 1 auto; margin:0 0 0 2px; font-size:var(--fs-headline); letter-spacing:-.01em; }
+.home-layout-button,.home-back { position:relative; display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; border-radius:var(--r-md); background:transparent; color:var(--ink-muted); }
+.home-layout-button > .untested { position:absolute; top:-6px; right:-4px; }
+/* A view other than Active: ‹ and its title in place of the start page. */
+.home-subview-head { display:flex; align-items:center; gap:var(--sp-1); margin:var(--sp-2) 0 var(--sp-2) -10px; }
+.home-subview-head h1 { flex:1 1 auto; margin:0; font-size:var(--fs-title); font-weight:700; }
+.home-back { color:#d7d3f5; }
+/* The agent tiles: waiting, working, done unseen. A count of none stays
+   plain; a lit tile takes its state's colours. */
+.home-glance { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--sp-2); margin-top:var(--sp-3); }
+.home-glance > .untested { position:absolute; top:-8px; right:0; }
+.home-glance-tile { display:grid; align-content:space-between; gap:2px; min-width:0; min-height:76px; padding:10px 12px; border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); color:var(--ink-muted); text-align:left; }
+.home-glance-top { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-1); }
+.home-glance-top strong { min-height:1.15em; color:#e7e9f2; font-size:var(--fs-large); font-weight:700; line-height:1.15; font-variant-numeric:tabular-nums; }
+.home-glance-glyph { display:grid; font-size:1rem; }
+.home-glance-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-foot); font-weight:600; }
+.home-glance-tile.waiting.lit { border-color:#5a4823; background:#2a2414; color:#e9d9a8; }
+.home-glance-tile.waiting.lit :is(strong,.home-glance-glyph) { color:#ffd36b; }
+.home-glance-tile.working.lit { border-color:#23432f; background:#122219; color:#b9dcc6; }
+.home-glance-tile.working.lit :is(strong,.home-glance-glyph) { color:#6fe29c; }
+.home-glance-tile.done.lit .home-glance-glyph { color:#91e6a9; }
+/* Needs you: each row its own card. */
+.home-needs > .home-group { gap:var(--sp-2); background:transparent; }
+.home-needs > .home-group > * + * { border-top:0; }
+.home-needs .home-group-row,.home-needs .home-group-more { border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); overflow:hidden; }
+.home-needs .home-group-more { justify-content:center; }
+/* The box layout: one inset group per box, the projects in none after them. */
+.home-screen > .home-projects + .home-projects { margin-top:var(--sp-3); }
+.home-box-member .card { padding-left:calc(var(--sp-3) + 18px); }
+.home-box-fold svg { transition:transform .15s ease-out; }
+.home-box-fold[aria-expanded="true"] svg { transform:rotate(90deg); }
+.home-box-none { margin:var(--sp-2) var(--sp-1) var(--sp-3); color:var(--ink-muted); font-size:var(--fs-foot); }
 .home-screen > .home-projects.home-projects-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; background:transparent; }
 .home-projects-grid > .tab-card { border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); }
 .home-projects-grid .tab-card-head { position:relative; height:100%; }
-.home-projects-grid .card { flex-direction:column; align-items:flex-start; gap:10px; padding:14px; }
-.home-projects-grid .card > span:nth-child(2) { flex:1 1 auto; width:100%; }
+.home-projects-grid .card { display:grid; grid-template-columns:auto minmax(0,1fr); grid-template-areas:"tile trail" "name name"; align-content:space-between; align-items:start; gap:12px; min-height:108px; padding:12px; }
+.home-projects-grid .card > .home-tile { grid-area:tile; }
+.home-projects-grid .card > span:nth-child(2) { grid-area:name; width:auto; padding-right:28px; }
+.home-projects-grid .card > .card-trailing { grid-area:trail; display:flex; flex-wrap:wrap; justify-content:flex-end; justify-self:end; gap:4px; }
 .home-projects-grid .card strong { white-space:normal; overflow-wrap:anywhere; }
-.home-projects-grid .card-trailing { flex-wrap:wrap; }
-.home-projects-grid .tab-card-grip { position:absolute; top:0; right:0; height:var(--hit); }
+.home-projects-grid .tab-card-grip { position:absolute; right:0; bottom:0; height:var(--hit); }
 .home-projects-grid .tab-card-head > .untested { position:absolute; top:40px; right:4px; }
