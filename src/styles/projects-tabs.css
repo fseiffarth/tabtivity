@@ -1165,6 +1165,12 @@
   height: 11px;
 }
 
+.project-search-box-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .project-search-boxes {
   display: inline-flex;
   align-items: center;

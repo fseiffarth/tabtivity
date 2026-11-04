@@ -320,7 +320,7 @@ export function ProjectSearch({
                         className={`project-search-row is-box${index === selected ? " is-selected" : ""}`}
                         onClick={() => activateSearchResult(row)}
                       >
-                        <span className="project-search-name">
+                        <span className="project-search-box-title">
                           <BoxSwatch className="project-search-box-swatch" color={boxColor(row.box)} /> {row.box.name}
                         </span>
                         <small title={names.join(", ")}>{shown ? `${count}: ${shown}` : count}</small>

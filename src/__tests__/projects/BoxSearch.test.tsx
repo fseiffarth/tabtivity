@@ -163,7 +163,7 @@ describe("boxes on focus, member-name match and swatches", () => {
     });
 
     const rows = [...container.querySelectorAll(".project-search-row.is-box")] as HTMLElement[];
-    expect(rows.map((r) => r.querySelector(".project-search-name")?.textContent?.trim())).toEqual(["Thesis", "Infra"]);
+    expect(rows.map((r) => r.querySelector(".project-search-box-title")?.textContent?.trim())).toEqual(["Thesis", "Infra"]);
     expect(container.querySelector(".project-search-group")?.textContent).toContain("Boxes");
     // The coloured BoxSwatch, not the plain hexagon icon.
     const swatch = rows[0].querySelector("svg.box-swatch") as SVGElement;
