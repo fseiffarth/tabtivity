@@ -48,6 +48,8 @@ import { TabColorPicker } from "../tabs/TabColorPicker";
 import { TabMarkBadge } from "../tabs/TabMarkBadge";
 import { TabMarkMenuItems } from "../tabs/TabMarkMenuItems";
 import { RootRightsBadge, type RootMcpRights } from "./RootRightsBadge";
+import { RootStartAgent } from "./RootStartAgent";
+import { useExperimental } from "../../lib/experimental";
 import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 
@@ -159,6 +161,7 @@ export function RootView({
   busyRef: { current: boolean };
 }) {
   const t = useT();
+  const cockpitOn = useExperimental("cockpit");
   const tabs = useTabsStore((s) => s.tabsByScope[ROOT_SCOPE] ?? NO_TABS);
   const layout = useTabsStore((s) => s.layoutByScope[ROOT_SCOPE] ?? null);
   const storedFocus = useTabsStore((s) => s.focusedGroupByScope[ROOT_SCOPE] ?? null);
@@ -487,6 +490,7 @@ export function RootView({
               <div className="center-placeholder-card">
                 <div className="center-placeholder-title">{t("rootConsole.emptyTitle")}</div>
                 <div className="center-placeholder-hint">{t("rootConsole.emptyHint")}</div>
+                {cockpitOn && <RootStartAgent rootDir={rootDir} onStart={addTab} />}
               </div>
             </div>
           ) : (

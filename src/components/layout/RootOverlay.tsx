@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { useRootOverlayStore, type RootOverlayView } from "../../stores/rootOverlay";
@@ -10,7 +10,10 @@ import { useFloatingFrame } from "../common/useFloatingFrame";
 import { storageKey } from "../../lib/brand";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { ARRIVAL_MS, useArrivalsStore } from "../../stores/calendar/arrivals";
-import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
+import { ROOT_SCOPE, allGroups, useTabsStore } from "../../stores/tabs";
+import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
+import { scopeLamp, type ScopeLamp } from "../../lib/cockpit/scopeLamp";
+import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { notifyCalendarWrite } from "../../lib/calendar/calendarWriteHook";
 import type { Calendar, CalendarEvent, CalendarTask } from "../../types";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -169,6 +172,32 @@ export function RootOverlayHost() {
 }
 
 /**
+ * The Root tab's lamp: one scope's activity (root's) rolled into the tab's own
+ * state classes, so it is the tab strip's ring and `?` / ▶ mark and inherits
+ * its rules (a static dotted ring; the ▶ breathing stops under
+ * `[data-software-paint]`). It reads the activity store and root's tab list
+ * only, so it costs nothing while another view is shown, and it lives in its
+ * own component so a busy terminal re-renders this tab and not the window.
+ */
+function RootTabLamp({ children }: { children: (lamp: ScopeLamp, stateClass: string) => React.ReactNode }) {
+  const tabs = useTabsStore((s) => s.tabsByScope[ROOT_SCOPE]);
+  const busy = useActivityStore((s) => s.busyByTab);
+  const attention = useActivityStore((s) => s.attentionByTab);
+  const lamp = useMemo(
+    () => scopeLamp(ROOT_SCOPE, tabs ?? [], busy, attention),
+    [tabs, busy, attention],
+  );
+  // A question outranks work (the strip's own order for a tab that does both).
+  const stateClass =
+    lamp.asking > 0
+      ? attentionStateClass("decision")
+      : lamp.working > 0
+        ? busyStateClass(lamp.agentWorking ? "agent" : "shell", "agent")
+        : "";
+  return <>{children(lamp, stateClass)}</>;
+}
+
+/**
  * The window: backdrop, the shared floating frame (move, eight grips, fill), the
  * title bar with its slots, the ✓ Approvals pill, and the one Escape rule. It
  * shows ONE of five views (`rootOverlay.view`): the cockpit's Now / Projects /
@@ -204,6 +233,12 @@ function RootOverlay() {
   // tells the ✓ Approvals panel whether the review gate is only advisory.
   const rights = useRootMcpRights();
   const busyRef = useRef(false);
+  // With the experiment on, the Root view's strip, ⚿ badge and ◫ toggle sit in a
+  // sub-bar under the title bar (the title bar then never changes between views).
+  // A split layout keeps a strip in every subwindow and has no sole strip to
+  // move, so it drops the sub-bar and the badge stays where it always was.
+  const split = useTabsStore((s) => allGroups(s.layoutByScope[ROOT_SCOPE] ?? null).length > 1);
+  const subBar = cockpitOn && view === "root" && !split;
   // Callback refs into state: the view portals into these once they exist.
   const [stripEl, setStripEl] = useState<HTMLElement | null>(null);
   const [rightsEl, setRightsEl] = useState<HTMLElement | null>(null);
@@ -318,20 +353,34 @@ function RootOverlay() {
                   viewTab(id, <span className="tab-label">{t(VIEW_LABEL[id])}</span>, " cockpit-view-tab"),
                 )}
                 <span className="root-view-divider" role="presentation" />
-                {viewTab(
-                  "root",
-                  <>
-                    <span className="root-view-star"><StarIcon /></span>
-                    <span className="tab-label">{t("rootConsole.view.root")}</span>
-                  </>,
-                  " root-view-tab-root",
-                )}
+                <RootTabLamp>
+                  {(lamp, stateClass) =>
+                    viewTab(
+                      "root",
+                      <>
+                        <TabStatusMark stateClass={stateClass} />
+                        <span className="root-view-star"><StarIcon /></span>
+                        <span className="tab-label">{t("rootConsole.view.root")}</span>
+                        {lamp.asking > 0 && (
+                          <span
+                            className="root-view-count"
+                            title={t("cockpit.view.rootAsking", { count: lamp.asking })}
+                            aria-label={t("cockpit.view.rootAsking", { count: lamp.asking })}
+                          >
+                            {lamp.asking}
+                          </span>
+                        )}
+                      </>,
+                      ` root-view-tab-root${stateClass}`,
+                    )
+                  }
+                </RootTabLamp>
               </div>
               <UntestedTag id="rootConsole.viewStrip" />
             </>
           )}
-          <div className="root-overlay-slot" ref={setStripEl} />
-          <div className="tab-controls root-overlay-controls" style={controlsStyle}>
+          {!subBar && <div className="root-overlay-slot" ref={setStripEl} />}
+          <div className="tab-controls root-overlay-controls" style={subBar ? undefined : controlsStyle}>
             {cockpitOn && view !== "root" && boxes.length > 0 && (
               <select
                 className="cockpit-box-filter"
@@ -353,17 +402,33 @@ function RootOverlay() {
                 (`OverlayApprovals`, the same pill the header overlays carry — and
                 the one pill of every view). Switching the tools on and off stays
                 in Settings, where it always was. */}
-            <span className="root-overlay-slot" ref={setRightsEl} />
+            {!subBar && <span className="root-overlay-slot" ref={setRightsEl} />}
+            {/* The console never tagged its own ✓: without the experiment the pills
+                are exactly the ones it always had, in their old order. */}
+            <OverlayApprovals advisory={rights.reviewAdvisory} untested={cockpitOn} />
             {view === "root" && <UntestedTag id="rootOverlay.1" />}
-            <OverlayApprovals advisory={rights.reviewAdvisory} />
             {view === "root" && <UntestedTag id="rootOverlay.viewers" />}
-            <span className="root-overlay-slot" ref={setFilesEl} />
+            {!subBar && <span className="root-overlay-slot" ref={setFilesEl} />}
             {fillButton}
             <button className="subwindow-hide" title={t("common.close")} onClick={close}>
               <CloseIcon />
             </button>
           </div>
         </div>
+        {subBar && (
+          <div
+            className="tab-bar root-overlay-bar root-overlay-subbar"
+            onPointerDown={barProps.onPointerDown}
+            onDoubleClick={barProps.onDoubleClick}
+          >
+            <div className="root-overlay-slot" ref={setStripEl} />
+            <div className="tab-controls root-overlay-controls" style={controlsStyle}>
+              <span className="root-overlay-slot" ref={setRightsEl} />
+              <UntestedTag id="rootConsole.subBar" />
+              <span className="root-overlay-slot" ref={setFilesEl} />
+            </div>
+          </div>
+        )}
         {view === "root" ? (
           <RootView rights={rights} slots={slots} busyRef={busyRef} />
         ) : (
