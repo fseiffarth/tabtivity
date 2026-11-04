@@ -819,6 +819,21 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .terminal-view-switch button.selected { color:#e7e9f2; }
 .terminal-screen > header .terminal-view-switch { padding:0; background:transparent; }
 .terminal-view-switch .view-pill { display:inline-flex; align-items:center; height:34px; padding:0 10px 0 12px; background:var(--surface-group); color:#e7e9f2; }
+/* The Focus head reads as one row: ‹, the name with its connection dot right
+   after it, then the tools at the far end — ☰ and the agent's files as the
+   project screen's plain 44px icons, the view pill the one filled control.
+   `order` moves the dot (last in the markup) beside the name. */
+.terminal-screen > header > * { order:3; }
+.terminal-screen > header > .back { order:0; }
+.terminal-screen > header > .terminal-title { order:1; flex:0 1 auto; }
+.terminal-screen > header > .lamp { order:2; flex:0 0 auto; width:8px; height:8px; margin:0 auto 0 2px; box-shadow:none; }
+.terminal-screen > header > .terminal-view-switch { margin-left:2px; }
+.terminal-screen > header > :is(.drawer-open,.terminal-gallery) { width:auto; min-width:40px; height:var(--hit); padding:0 8px; border:0; background:transparent; color:#e7e9f2; }
+.terminal-screen > header > .drawer-open svg { width:20px; height:20px; }
+.terminal-screen > header > .terminal-gallery { gap:3px; }
+.terminal-screen > header > .terminal-gallery > span { display:grid; place-items:center; }
+.terminal-screen > header > .terminal-gallery .app-icon { width:20px; height:20px; }
+.terminal-screen > header > .terminal-gallery small { color:#a99cf0; font-size:var(--fs-caption); font-weight:650; font-variant-numeric:tabular-nums; }
 /* An agent tab's Focus opens a list once it is up: where Focus reads from. */
 .view-caret { display:inline-block; width:5px; height:5px; margin:0 1px 2px 6px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); opacity:.75; }
 .focus-menu-backdrop { position:fixed; inset:0; z-index:12; }
@@ -1097,6 +1112,15 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-toggle em { color:#8fb8ff; font-size:.62rem; font-style:normal; text-transform:uppercase; }
 .subagent-index-toggle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .subagent-index-toggle svg.expanded { transform:rotate(180deg); }
+/* Under the Focus head the strip is the head's second row: the head drops
+   its hairline for the strip's, the shut lists are compact filled chips at
+   their own width rather than bordered full-width bars, and the chat fades
+   out under the strip instead of showing a half-cut line. */
+.terminal-screen:has(.chat-index) > header { border-bottom-color:transparent; }
+.chat-index > nav:not(.open) { flex:0 1 auto; }
+.chat-index .subagent-index-toggle { min-height:30px; padding:4px 8px 4px 9px; border:0; background-color:var(--surface-group); }
+.chat-index .subagent-index-toggle svg { width:15px; height:15px; color:var(--ink-muted); }
+.chat-index::after { content:""; position:absolute; inset:calc(100% + 1px) 0 auto; height:10px; background:linear-gradient(rgba(11,13,19,.96),rgba(11,13,19,0)); pointer-events:none; }
 .subagent-index-list { display:grid; gap:4px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
 .subagent-index-list button, .git-rows > li { --rim:#2c3a55; display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; background-color:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
 .subagent-index-list button:disabled { opacity:.6; }
