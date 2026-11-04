@@ -1491,9 +1491,20 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 /* During a tab drag the panes stop taking the pointer, as CenterPanel's do. */
-.root-overlay.dragging .pane-layer,
-.root-overlay.dragging .center-pane {
+.root-overlay-region.dragging .pane-layer,
+.root-overlay-region.dragging .center-pane {
   pointer-events: none;
+}
+/* The shell's title-bar slots (layout/RootOverlay): the view portals its strip,
+   ⚿ badge and ◫ toggle into them, and they must not be boxes of their own. */
+.root-overlay-slot {
+  display: contents;
+}
+/* The ◫ toggle is no longer a direct child of the cluster, so the rule that
+   keeps its auto margin from splitting a reserved width (projects-tabs.css)
+   is repeated for its slot. */
+.tab-controls .root-overlay-slot > .subwindow-files-toggle {
+  margin-left: 0;
 }
 /* Where a tab dropped on a strip lands. */
 .root-overlay-strip-marker {

@@ -153,6 +153,33 @@ describe("RootOverlayHost", () => {
     expect(latest.get(b.key)?.visible).toBe(true);
   });
 
+  it("the view's strip, + and ⚿ badge sit in the shell's title bar, the file toggle beside ⤢", async () => {
+    seedRootTabs();
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().show());
+    const bar = document.querySelector(".root-overlay-bar") as HTMLElement;
+    expect(bar.contains(screen.getByText("Claude"))).toBe(true);
+    expect(bar.contains(screen.getByTitle("New tab"))).toBe(true);
+    expect(bar.querySelector(".root-overlay-rights.status")).toBeTruthy();
+    expect(bar.querySelector(".subwindow-files-toggle")).toBeTruthy();
+    // Unsplit, the layout under the bar has no strip of its own.
+    expect(document.querySelectorAll(".root-overlay-group")).toHaveLength(0);
+  });
+
+  it("Escape defers to an open + menu, then closes the console", async () => {
+    seedRootTabs();
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().show());
+    fireEvent.click(screen.getByTitle("New tab"));
+    expect(screen.getByTestId("pick-shell")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useRootOverlayStore.getState().open).toBe(true);
+    fireEvent.click(screen.getByTestId("pick-shell"));
+    expect(screen.queryByTestId("pick-shell")).toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useRootOverlayStore.getState().open).toBe(false);
+  });
+
   it("switches tabs locally and closes a tab in the ROOT scope", async () => {
     const { a, b } = seedRootTabs();
     render(<RootOverlayHost />);
