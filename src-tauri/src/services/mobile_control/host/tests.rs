@@ -4474,7 +4474,8 @@ async fn a_local_film_streams_by_range_and_revalidates_by_its_etag() {
 
     // The file changed under the phone: its old validator no longer matches,
     // and an If-Range naming it gets the whole, not a piece of the new one.
-    std::fs::OpenOptions::new().append(true).open(host.root.join("film.mp4")).unwrap().set_len(size + 1).unwrap();
+    // `write`, not `append`: Windows refuses `set_len` on an append-only handle.
+    std::fs::OpenOptions::new().write(true).open(host.root.join("film.mp4")).unwrap().set_len(size + 1).unwrap();
     let mut stale = ranged("bytes=0-3");
     stale.headers_mut().insert(header::IF_RANGE, etag.parse().unwrap());
     let (status, headers, _) = host.send(stale).await;
