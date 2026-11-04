@@ -267,3 +267,12 @@ branch, then `npm run untested -- tested cockpit.` for what works.
   per-tab input stamp (`lastUserInputAt`); a window-wide input clock would be
   a new always-on listener, which the cockpit avoids while shut. A push's
   "landed" time is its proposal's `created_at`.
+- The header button has no hover list (the ☑ / 🗓 buttons read their rows out
+  on hover); a click opens the overlay. A hover list of Asking / Interrupted
+  would be a small follow-up.
+- Tonight lists only *enabled* schedules (a disabled rule has no next run), so
+  its switch is Disable; enabling stays in the Agents view.
+- Usage's live tmux session counts are what the sessions store last read for
+  some other surface; the cockpit retains no poll of its own (no probe).
+- The help topic (`docs/help/tabs-and-panels.md` section) waits for the user's
+  test, as the plan says.
