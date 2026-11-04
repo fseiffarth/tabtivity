@@ -648,3 +648,107 @@ only; no `backend:stale`). Root's agents need root restored once (open Root).
     Prompt chart in the side panel's Agents view, or Tonight → Open chart on a root
     item: the Root view opens on the chart tab; a second press focuses it, not a
     second tab.
+
+## Final review (range `develop...HEAD`, base `b3abe5ba`)
+
+Read the whole range against the plan, the design and AGENTS.md; looked hardest
+at I2-I4 (`d29dcad0`, `eaa467ee`, `c1b4842d`, `203907cd`, `f7b4099a`, `d4f7733a`,
+`f6b7c438`, `6c3f46b4`). Note: `develop` has moved on two commits (version bump
+`0.2.60`, one Rust test fix); `git diff develop..HEAD` therefore shows those
+files reversed. The range itself (`develop...HEAD`) touches no `src-tauri/`,
+`package.json` or lockfile, and no file the two new develop commits touch, so
+the merge is clean and needs no `backend:stale`.
+
+### Checked, no finding
+
+- **Flag off.** Shell JSX against develop's `RootOverlay`: same classes, bar
+  order and pills (`OverlayApprovals untested={false}`, `rootOverlay.1` /
+  `.viewers` after the ✓), no `data-band`, no view strip, no sub-bar, no rail,
+  no Start button, no cockpit door (`openView` is reached only from flag-gated
+  doors); a stored cockpit view under a switched-off flag is written back to
+  `root`. The only flag-off cost is the frame's ResizeObserver (state flips at
+  the 820/1180 edges, nothing reads it).
+- **Flag on.** Five views, sub-bar (slots re-parent through the callback refs;
+  `controlsStyle` is reset by the view's cleanup), lamp, Start action, the
+  doors, root rows and the docked mode. `lastClosedAt` is stamped on the
+  store's edge, so every door counts.
+- **One attached view per PTY, no wakes.** Root view and Now never mount
+  together; the detail pane marks root's `shownKeys` and the center slot stands
+  down for `open` (any view); `drawnElsewhere` uses `rootViewShown ||
+  shownKeys`, so Projects/Usage wake nothing. The docked app overlay is excluded
+  by `useDockedApp`, and the unmark/mark order on an overlay close is
+  unmount-cleanup first (one flush).
+- **Nothing runs while shut.** The host's persist, `root-mcp-changed` merge and
+  the 5 s poll (`enabled: open`) are the old host; cockpit views are lazy; the
+  rail's loads exist only while the Root view / the open rail is mounted.
+- **Persisted state.** `rootConsoleFrame` (same `{frame, filled}` row, finite
+  numbers checked, re-clamped on read), `cockpitRootRail` (`=== "open"`, any
+  other value or an unavailable storage reads as folded), `cockpitRailWidth` /
+  `cockpitDetailWidth` unchanged and clamped on read.
+- **Narrow bands.** A column that is not shown is not mounted (detail in
+  `narrow` roster mode, rail in `narrow` Root); the observer is disconnected in
+  the effect's cleanup; the popover is dropped when the band is `wide`.
+- **Steering with rebindable keys.** Every group action goes to the walked
+  scope (`...InScope`), keys come from `steeringBindings` as before, the new-tab
+  keys are inert in Root, the status-key walk starts from `shownStatusTab()`.
+- **Leftovers.** No `CockpitOverlay` / `cockpitOverlayFrame` / removed store
+  fields left in `src`, `docs/context`, scripts; no TODO/FIXME/debug lines in
+  the diff; every key added is used and in all five dictionaries (the removed
+  four and `cockpit.detail.inConsole` have no readers); filemap rows exist for
+  each new file; `docs/context/{cockpit,root_console}.md` match the code;
+  the `todo/group-l-tabs.md` item has the four platform pairs per box.
+
+### Fixed
+
+- `b1b121ad` **`activeTabElement()` in a split Root returned the first
+  subwindow's active tab.** The Root branch used one selector for both layouts:
+  `.root-overlay-group.focused .tab.active` (split) and `.tab-strip
+  .tab.active:not(.root-view-tab)` (unsplit, strip in the bar). Split, the
+  second alternative also matches every other subwindow's strip, and the first
+  match in document order won, so with the second subwindow focused the steering
+  cursor / tab menu targeted the first one's tab. Now the focused group's tab
+  first, then a strip outside any `.root-overlay-group`. Regression test in
+  `SteeringInRoot.test` (fails on the old selector).
+- `d8494910` **Convention, not a bug: the steering change had no
+  `UntestedTag`.** Added the register row `steering.rootView` and its pill in
+  the cheat sheet's steering heading, with the other untested steering
+  features (clear it with `npm run untested -- tested steering.rootView`).
+
+### Flagged for user (final review)
+
+- **`jumpToTab(ROOT_SCOPE, key)` is the same with the experiment off.** The
+  plan fixes it "at the one place", so with the flag off a status pill, the
+  command palette or a to-do card pointing at a root tab now opens the console
+  on that tab instead of switching the workspace to the root scope. That is the
+  intended fix, but it is a change to "exactly today's console". Gate it on the
+  experiment if you want the old switch back with the flag off.
+- **Tonight's Show / any `select()` + `openView("now")` in a narrow window**
+  lands on the roster with the row highlighted, not on its detail (`pane`
+  starts at `list`; only a click, Space or a popover pick opens the detail).
+- **Wide -> narrow unmounts the Now detail pane.** The attach-only view is
+  rebuilt when the window widens again; any unsent text typed into its
+  composer is not kept. Not verified live.
+- **`activeTabCard()` in a split Root** takes the first sign-in card in the
+  window rather than the focused subwindow's (cards are drawn in the shared
+  pane layer, not inside the group); only matters with two simultaneous
+  sign-in cards.
+- **The non-steering chords in `useKeyboard` (close tab, tab / subwindow
+  cycling, around lines 1138-1300) still read the workspace's `activeKey` /
+  layout** while the Root window is up. Read from the code, not run; pre-existing
+  (the old console did the same) and the steering fix did not extend to them.
+- The project station ring's `setActive(null)` stays as I4 left it (question
+  already in I4's Flagged).
+
+### Gates (final review, run by hand: `scripts/gates.sh` selects nothing on a clean tree)
+
+- `npm run build`: passes. `npm test`: **1064 files, 10857 tests** passed (tip
+  before the review 1064 / 10856, +1 regression test).
+- `npm run lint`: 0 errors, 29 advisory warnings (unchanged, none in touched
+  lines). `scripts/brand-check.sh`, `scripts/privacy-check.sh`,
+  `git diff --check develop...HEAD`, `node scripts/untested.mjs check`: clean.
+- No Rust, `package.json` or lockfile in the range (`git diff --stat
+  develop...HEAD -- src-tauri` is empty), so no cargo gate and no `backend:stale`.
+- Not run live (never started the app).
+
+Verdict: ready to merge into `develop`; the Flagged items above are decisions,
+not blockers.
