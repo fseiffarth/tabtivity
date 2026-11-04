@@ -1430,7 +1430,6 @@
   flex-direction: column;
   gap: 3px;
   border: 0;
-  border-top: 2px solid transparent;
   border-radius: var(--radius);
   padding: 6px 10px;
   white-space: nowrap;

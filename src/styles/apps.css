@@ -834,7 +834,8 @@
 
    To add a member: this list, the wash below, the two glass lists in themes.css
    and the blur exemption in projects-tabs.css; strip its own background and
-   border, keep `border-top: 2px solid transparent` for the rail's room and a
+   border, keep `border-top: 2px solid transparent` for the rail's room (none for
+   a rail-less member, below) and a
    radius token, and make sure it forms a stacking context (fixed, or absolute
    WITH a z-index), or the `z-index: -1` wash paints behind its own background. */
 .project-dialog,
@@ -866,6 +867,16 @@
 .stats-dialog,
 .file-delete-dialog {
   --surface-rail: 3px;
+}
+
+/* Messages (hints, the terminal's notice cards, toasts) and hover cards carry
+   no rail: on a small card the 2px accent strip read as a fat violet top bar
+   (user, 2026-11-03). Fill and wash stay; at 0 the wash's inset is 0 too, and
+   their own rules hold no `border-top` for the rail's room. */
+.project-pill-popup,
+.project-switch-toast,
+.hint-bubble {
+  --surface-rail: 0px;
 }
 
 /* Accent wash as a `::before` overlay, NOT folded into `background` — the glass

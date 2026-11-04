@@ -1766,7 +1766,6 @@
   z-index: 500;
   padding: 10px 20px;
   border: 0;
-  border-top: 2px solid transparent;
   border-radius: var(--radius);
   box-shadow: var(--shadow-2);
   font-size: var(--text-md);

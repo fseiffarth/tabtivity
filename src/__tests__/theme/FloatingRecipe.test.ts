@@ -58,6 +58,13 @@ describe("the floating recipe", () => {
     expect(css).toMatch(new RegExp(`:root\\[data-blurred\\] \\.${member}\\s*[,{]`));
   });
 
+  // On a small card the accent rail read as a fat violet top bar: messages and
+  // hover cards carry none, and hold no transparent border for its room either.
+  it.each(["project-pill-popup", "project-switch-toast", "hint-bubble"])("%s carries no top rail", (member) => {
+    expect(selectorsOf("--surface-rail: 0px")).toContain(`.${member}`);
+    expect(css).not.toMatch(new RegExp(`(^|[\\s,}])\\.${member}\\s*\\{[^}]*border-top:`));
+  });
+
   it("never clips with a clip-path, which would take the shadow", () => {
     for (const member of MEMBERS) {
       expect(css).not.toMatch(new RegExp(`\\.${member}\\s*\\{[^}]*clip-path`));

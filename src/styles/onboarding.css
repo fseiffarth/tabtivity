@@ -332,7 +332,6 @@
   padding: 10px var(--space-3);
   border-radius: var(--radius);
   border: 0;
-  border-top: 2px solid transparent;
   box-shadow: var(--shadow-2);
   color: var(--text-primary);
   font-size: var(--text-md);
