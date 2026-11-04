@@ -143,6 +143,18 @@ describe("steering with the Root view up", () => {
     expect(heard).not.toHaveBeenCalled();
   });
 
+  it("in a split Root, the active tab element is the focused subwindow's, not the first one's", () => {
+    const rect = { x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON: () => ({}) };
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(rect as DOMRect);
+    document.body.innerHTML =
+      '<div class="modal-backdrop root-overlay-backdrop root-console-backdrop"><div class="root-overlay">' +
+      '<div class="tab-bar"><div class="tab-strip root-view-strip"><div class="tab root-view-tab active" id="view"></div></div></div>' +
+      '<div class="subwindow root-overlay-group"><div class="tab-bar"><div class="tab-strip"><div class="tab active" id="first">r1</div></div></div></div>' +
+      '<div class="subwindow root-overlay-group focused"><div class="tab-bar"><div class="tab-strip"><div class="tab active" id="second">r2</div></div></div></div>' +
+      "</div></div>";
+    expect(activeTabElement()?.id).toBe("second");
+  });
+
   it("a jump to a project's tab steps the window aside, so the workspace is walked again", () => {
     useActivityStore.setState({ attentionByTab: { "p:w2": "decision" } });
     render(<Harness />);

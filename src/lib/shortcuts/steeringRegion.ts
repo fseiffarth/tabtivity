@@ -229,12 +229,19 @@ export function openContextMenu(el: HTMLElement): void {
  *  walks the Root view (`steeringScope`), the one in Root's strip. */
 export function activeTabElement(): HTMLElement | null {
   if (steeringInRoot()) {
-    const all = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        ".root-console-backdrop .root-overlay-group.focused .tab.active, .root-console-backdrop .tab-strip .tab.active:not(.root-view-tab)",
-      ),
+    const within = (selector: string) =>
+      Array.from(document.querySelectorAll<HTMLElement>(selector));
+    // A split layout draws a strip per subwindow (inside `.root-overlay-group`):
+    // the focused one's active tab. Unsplit, the one strip sits in the window's
+    // bar, outside any group. (A single selector for both would also match
+    // every other subwindow's active tab, and the first in the document wins.)
+    const inFocusedGroup = within(".root-console-backdrop .root-overlay-group.focused .tab.active").find(shown);
+    if (inFocusedGroup) return inFocusedGroup;
+    return (
+      within(".root-console-backdrop .tab-strip .tab.active:not(.root-view-tab)").find(
+        (el) => shown(el) && !el.closest(".root-overlay-group"),
+      ) ?? null
     );
-    return all.find(shown) ?? null;
   }
   const all = Array.from(document.querySelectorAll<HTMLElement>(".subwindow.focused .tab.active"));
   return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
