@@ -932,6 +932,9 @@ export interface Settings {
   /** How often the user pressed each hint's Read button, by hint id; every read
    *  halves the hint's chance of showing again (`lib/hintChance.ts`). */
   hints_read?: Record<string, number>;
+  /** When each hint last came up (ms epoch), by hint id, so hints take turns
+   *  instead of every start opening on the same ones (`pickHint`). */
+  hints_shown?: Record<string, number>;
   /** Master switch for the contextual hint system; default ON when unset. */
   hints_enabled?: boolean;
   /** True once the guided "Take a tour" walkthrough has been completed or

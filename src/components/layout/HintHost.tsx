@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
 import { useSettingsStore } from "../../stores/settings";
-import { hintDrawn, useHintsStore } from "../../stores/hints";
+import { hintDrawn, hintsShownAt, useHintsStore } from "../../stores/hints";
 import { useTabsStore } from "../../stores/tabs";
 import { useTourStore } from "../../stores/tour";
 import {
@@ -37,7 +37,8 @@ const GAP_MS = 12_000;
 // The feature catalogue (`FEATURE_HINTS`, ~100 tips) is paced much harder: a few
 // per sitting, far apart, each only while its control is on screen. Anchors
 // appear without any store change (a viewer opens, a pane is shown), so the
-// host also looks again on a slow tick.
+// host also looks again on a slow tick. A hint coming back for another turn is
+// paced the same, whichever tier it is (`isPacedHint`).
 const FEATURE_CAP = 3;
 const FEATURE_GAP_MS = 10 * 60_000;
 const TICK_MS = 5_000;
@@ -130,7 +131,7 @@ export function HintHost() {
     const allowFeature = () =>
       useHintsStore.getState().featureShown < FEATURE_CAP &&
       Date.now() - useHintsStore.getState().lastClosedAt >= FEATURE_GAP_MS;
-    const opts = () => ({ anchorOnScreen, allowFeature: allowFeature(), drawn: hintDrawn });
+    const opts = () => ({ anchorOnScreen, allowFeature: allowFeature(), shownAt: hintsShownAt(), drawn: hintDrawn });
     const candidate = pickHint(ctx, seen, hintsEnabled, opts());
     if (!candidate) return;
     const earliest = Math.max(mountedAt.current + GRACE_MS, lastClosedAt + GAP_MS);

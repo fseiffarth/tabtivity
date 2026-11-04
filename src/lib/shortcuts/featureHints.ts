@@ -9,8 +9,9 @@ import type { TranslationKey } from "../i18n";
  * Each row is data only — the id, the selector of the control the bubble points
  * at, and the side it prefers. The text lives in `i18n/en.ts` under
  * `hint.f.<id>.title` / `hint.f.<id>.body` (other languages fall back to
- * English until translated). Order is rank: earlier rows win when several
- * targets are visible at once.
+ * English until translated). Order is rank: when several targets are visible
+ * at once, earlier rows win among hints that came up equally long ago, so a tip
+ * already shown waits for the others' turns (`pickHint`).
  *
  * The id is persisted in `settings.hints_seen`, so renaming one replays it for
  * everyone. Selectors are classes of live chrome and rot when it is renamed;

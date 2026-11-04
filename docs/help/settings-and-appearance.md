@@ -88,8 +88,10 @@ more). **Show contextual hints** and **Reset hints** control the small tips.
 Each tip has **Turn off hints** (this switch turns them on again), **Skip**
 (closes it for now, its chance unchanged) and **Read**:
 every Read halves that tip's chance of showing again, until **Reset hints**
-brings them all back. On the phone the same buttons sit on each tip card, and
-**This device → Tips** turns tips on again or resets them.
+brings them all back. Tips take turns: whichever way you close one, the next
+one comes up, and it returns only after the others had theirs. On the phone the
+same buttons sit on each tip card, and **This device → Tips** turns tips on
+again or resets them.
 **Feature Guide** is a glossary of the interface.
 
 New features that have not been checked by hand yet wear an **untested** pill;
