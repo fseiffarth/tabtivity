@@ -151,6 +151,16 @@ describe("the merged window", () => {
     expect(bodyMounts).toEqual([]);
   });
 
+  it("the experiment switched off under an open cockpit view leaves a plain console: Ctrl+Shift+R closes it", async () => {
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().openView("usage"));
+    await act(async () => setFlag(false));
+    // The window now shows Root, so the store must say so: the chord on Root closes.
+    expect(useRootOverlayStore.getState().view).toBe("root");
+    act(() => toggleRootConsole());
+    expect(useRootOverlayStore.getState().open).toBe(false);
+  });
+
   it("show() always means Root, and keeps no cockpit view behind", async () => {
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().openView("tonight"));

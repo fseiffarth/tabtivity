@@ -185,6 +185,13 @@ function RootOverlay() {
   const storedView = useRootOverlayStore((s) => s.view);
   // The stored view may be stale (the flag was switched off while it was set).
   const view: RootOverlayView = cockpitOn ? storedView : "root";
+  // ... and the store is made to say what the window shows: the chord, the
+  // Machines / Models Escape guards and every `rootViewShown` reader would
+  // otherwise take an open console for a cockpit view (Ctrl+Shift+R would
+  // "switch to Root" instead of closing it).
+  useEffect(() => {
+    if (!cockpitOn && storedView !== "root") useRootOverlayStore.setState({ view: "root" });
+  }, [cockpitOn, storedView]);
   const boxFilter = useCockpitStore((s) => s.boxFilter);
   const boxes = useBoxesStore((s) => s.boxes);
   // The window's frame — the one hook the header overlays use: moved by the
