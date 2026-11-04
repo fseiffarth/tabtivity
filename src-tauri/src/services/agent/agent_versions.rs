@@ -72,7 +72,7 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
-    // "1.4.12" (1.2.9 through 1.4.11 printed the same bare shape)
+    // "1.5.0" (1.2.9 through 1.4.12 printed the same bare shape)
     ("antigravity", &["--version"]),
     // "Muse Code 1.3.0 (1.3.0-R3057.1)" — only with [`VERSION_ENV`]'s flag.
     ("muse", &["--version"]),
@@ -119,7 +119,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "claude",
-        version: "2.1.317",
+        version: "2.1.318",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
@@ -144,7 +144,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "antigravity",
-        version: "1.4.12",
+        version: "1.5.0",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.317")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.318")).0, DriftState::Match);
         // `muse` has a recipe but no recorded check — the honest answer is
         // "nobody has verified this", not a tick.
         assert_eq!(drift("muse", Some("1.3.0")).0, DriftState::Unverified);
