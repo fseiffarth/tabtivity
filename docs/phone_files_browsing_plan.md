@@ -1,8 +1,15 @@
 # Phone / iPad file browsing — bugs and small improvements plan
 
-> **Status (2026-11-03): batch A committed (`06905950`); batch B (B9, S1, S2)
-> implemented, gates green, not committed; neither run on a phone or iPad.
-> Batch C not started.**
+> **Status (2026-11-03): batch A committed (`06905950`), batch B committed
+> (`791e581e`), batch C implemented and not committed; none run on a phone or
+> iPad. B8 (the iPhone edge-swipe check) is still owed.**
+>
+> Batch C as built: S7b/c went into the backend too — `files::search_in`
+> with a `SearchScope { under, ignored }` (`dir=`, `ignored=1` on
+> `files/search`; the ignored walk skips `files::WALK_SKIP`, shared with the
+> host walk) and `host_files::search_on` starting at a proven `under`. S3's
+> automatic re-list runs on this computer's side only. S6's long-press uses
+> `useTapHolds` (`newTabDefault.ts`), the one tap/hold implementation.
 >
 > Batch B as built: S1 nonce = HMAC-SHA256 under its own HKDF label
 > (`path-token nonce v1`) over length-prefixed raw id + rel; S2 route

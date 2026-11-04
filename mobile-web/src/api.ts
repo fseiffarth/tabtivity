@@ -1571,13 +1571,25 @@ export async function lookUpProjectFile(projectId: string, dir: string | undefin
 export interface ProjectFileHit extends ProjectFileEntry { trail: { token: string; name: string }[] }
 export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean }
 
-/** `GET /api/v1/projects/{id}/files/search?q=<words>` — the project's files
- * and folders whose names hold every word, any case, the closest first. In a
- * git repo what git ignores is not searched. Behind the same switch as the
- * listing. */
-export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileSearch> {
+/** Where a search looks: inside the folder `dir` seals (the whole project
+ * without one), and with `ignored` what git ignores too (this computer's side;
+ * the host's walk has no git listing to leave things out). An older desktop
+ * ignores both. */
+export interface FileSearchScope { dir?: string; ignored?: boolean }
+
+/** `GET /api/v1/projects/{id}/files/search?q=<words>[&dir=<token>][&ignored=1]`
+ * — the project's files and folders whose names hold every word, any case,
+ * the closest first. In a git repo what git ignores is not searched unless
+ * `ignored` asks for it. Behind the same switch as the listing. */
+export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal, side?: FilesSide, scope: FileSearchScope = {}): Promise<ProjectFileSearch> {
   const on = sideQuery(side);
-  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}${on ? `&${on}` : ""}`, { signal }, on ? HOST_SEARCH_TIMEOUT : undefined);
+  const params = [
+    `q=${encodeURIComponent(query)}`,
+    scope.dir ? `dir=${encodeURIComponent(scope.dir)}` : "",
+    scope.ignored && !on ? "ignored=1" : "",
+    on,
+  ].filter(Boolean).join("&");
+  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?${params}`, { signal }, on ? HOST_SEARCH_TIMEOUT : undefined);
 }
 
 /** `POST /api/v1/projects/{id}/files/upload?name=…[&dir=<token>]` — the

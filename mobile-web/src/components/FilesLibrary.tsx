@@ -16,6 +16,7 @@ import { OptionSheet } from "./OptionSheet";
 import { OutboxViewer, type MarkupNewTab, type MarkupTarget } from "./OutboxViewer";
 import { usePhonePicks, type PickedFile } from "./phonePicks";
 import { goBack, useBackLayer } from "../backStack";
+import { useTapHolds } from "../newTabDefault";
 import { useModalFocus } from "../modalFocus";
 
 /** One folder on the way down: its sealed token (none for the project root)
@@ -98,13 +99,13 @@ export function LibraryCover({ projectId, entry, place, thumbs, color, side }: L
  * each folded into its own section. A scaffold file git ignores stays a
  * scaffold file, as on the desktop. Each section is sorted on its own, so the
  * folded ones stay at the end whatever the sort. */
-function sectionsOf(entries: ProjectFileEntry[], atRoot: boolean, view: LibraryView) {
+function sectionsOf(entries: ProjectFileEntry[], atRoot: boolean, view: LibraryView, lang?: string) {
   const scaffold = atRoot ? entries.filter((entry) => STANDARD_PROJECT_FILES.has(entry.name)) : [];
   const rest = atRoot ? entries.filter((entry) => !STANDARD_PROJECT_FILES.has(entry.name)) : entries;
   return {
-    regular: sortEntries(rest.filter((entry) => !entry.ignored), view),
-    scaffold: sortEntries(scaffold, view),
-    ignored: sortEntries(rest.filter((entry) => entry.ignored), view),
+    regular: sortEntries(rest.filter((entry) => !entry.ignored), view, lang),
+    scaffold: sortEntries(scaffold, view, lang),
+    ignored: sortEntries(rest.filter((entry) => entry.ignored), view, lang),
   };
 }
 
@@ -210,8 +211,10 @@ const SEARCH_DEBOUNCE_MS = 250;
 /** The sidecar's bound on a query (`files::MAX_QUERY`, bytes). */
 const MAX_QUERY = 80;
 /** A right swipe starting in this share of the screen's width, from the left
- * edge, goes up one folder (as a tab's Focus view opens the files from it). */
+ * edge, goes up one folder (as a tab's Focus view opens the files from it) —
+ * at most `UP_SWIPE_MAX` px in: a third of an iPad is most of a list. */
 const UP_SWIPE_ZONE = 1 / 3;
+const UP_SWIPE_MAX = 160;
 
 /** Where the library's list was scrolled in each folder it showed, by side
  * and folder (`placeOf`): going up a folder, or opening the library again in
@@ -384,9 +387,14 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const [ignoredOpen, setIgnoredOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<ProjectFileSearch | null>(null);
+  /** The search's chips: inside the folder the library stands in, and what
+   * git ignores too (this computer's side only). */
+  const [searchHere, setSearchHere] = useState(false);
+  const [searchIgnored, setSearchIgnored] = useState(false);
   const [searchFailure, setSearchFailure] = useState<TranslationKey | null>(null);
   const [view, setViewState] = useState<LibraryView>(() => readLibraryView());
   const [sheet, setSheet] = useState<Sheet | null>(null);
+  const press = useTapHolds();
   const searching = query.trim() !== "";
   const [favorites, setFavorites] = useState(() => readFavorites(placeId));
   const [recents, setRecents] = useState(() => readRecents(placeId));
@@ -401,8 +409,12 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   }, [placeId]);
   const searchBox = useRef<HTMLInputElement>(null);
   const [searchFocused, setSearchFocused] = useState(false);
-  /** Recent files stand in for the listing while the empty search box has focus. */
-  const showRecents = searchFocused && !searching;
+  /** Recent files opened by the root's **Recent** link, the box not focused
+   * (so the phone's keyboard stays down). */
+  const [recentsOpen, setRecentsOpen] = useState(false);
+  /** Recent files stand in for the listing while the empty search box has
+   * focus, or while the Recent link holds them open. */
+  const showRecents = (searchFocused || recentsOpen) && !searching;
   /** Favorites and recents found moved or deleted, by place: dimmed. */
   const [stale, setStale] = useState<ReadonlySet<string>>(() => new Set());
   /** Why a favorite or recent could not be looked up, other than its being gone. */
@@ -413,6 +425,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const sharing = useOutboxShare(scope);
   const here = trail[trail.length - 1];
   const atRoot = trail.length === 1;
+  /** The folder a search inside it is about (`searchHere`), as its key. */
+  const searchDir = searchHere ? here.token ?? "" : null;
   const host = useRef<HTMLElement | null>(null);
   /** Bumped to list the folder again (an upload landed or was undone). */
   const [reload, setReload] = useState(0);
@@ -422,7 +436,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   /** Counts the library's moves between folders: an upload's Undo lasts only
    * as long as the visit it was picked in. */
   const [visit, setVisit] = useState(0);
-  useEffect(() => { setVisit((count) => count + 1); }, [here.token]);
+  useEffect(() => {
+    setVisit((count) => count + 1);
+    setRecentsOpen(false);
+  }, [here.token]);
 
   const setView = (patch: Partial<LibraryView>) => {
     const next = { ...view, ...patch };
@@ -508,24 +525,32 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       return;
     }
     const controller = new AbortController();
+    const dir = searchHere ? here.token : undefined;
+    // An older desktop answers the whole project whatever `dir` says: the
+    // hits outside the folder are left out here, by the names above them.
+    const above = searchHere ? trail.slice(1).map((crumb) => crumb.name) : [];
+    const inside = (hit: ProjectFileHit) => hit.trail.length >= above.length && above.every((name, at) => hit.trail[at]?.name === name);
     const timer = window.setTimeout(() => {
-      void searchProjectFiles(projectId, words, controller.signal, side).then(
+      void searchProjectFiles(projectId, words, controller.signal, side, { dir, ignored: searchIgnored }).then(
         (next) => {
           if (controller.signal.aborted) return;
-          setFound(next);
+          setFound(above.length ? { ...next, hits: next.hits.filter(inside) } : next);
           setSearchFailure(null);
         },
         (reason) => { if (!controller.signal.aborted) setSearchFailure(failureKey(reason, "mobile.files.searchError")); },
       );
     }, SEARCH_DEBOUNCE_MS);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [projectId, query, side]);
+    // `here` and the trail are read through `searchDir`: only a search inside
+    // a folder follows the library's moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, query, side, searchDir, searchIgnored]);
 
   useEffect(() => {
     rememberFilesPlace(placeId, trail.flatMap((crumb) => crumb.token ? [{ token: crumb.token, name: crumb.name }] : []));
   }, [placeId, trail]);
 
-  const sections = useMemo(() => sectionsOf(listing?.entries ?? [], atRoot, view), [listing, atRoot, view]);
+  const sections = useMemo(() => sectionsOf(listing?.entries ?? [], atRoot, view, lang), [listing, atRoot, view, lang]);
 
   /** The folder's shown pictures, which the viewer steps through in shown order. */
   const pictures = useMemo(
@@ -544,6 +569,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   useBackLayer(() => {
     if (sheet) setSheet(null);
     else if (searching) setQuery("");
+    else if (recentsOpen) setRecentsOpen(false);
     else up();
   });
 
@@ -558,11 +584,12 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       else if (sheet) setSheet(null);
       else if (searching) setQuery("");
       else if (searchFocused) searchBox.current?.blur();
+      else if (recentsOpen) setRecentsOpen(false);
       else onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fileOpen, sheet, searching, searchFocused, onClose]);
+  }, [fileOpen, sheet, searching, searchFocused, recentsOpen, onClose]);
 
   useEffect(() => {
     // Not while a file is open over the library, nor through a sheet laid
@@ -570,7 +597,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     const node = host.current;
     if (fileOpen || !node) return;
     return installFocusSwipe(node, {
-      onSwipeRight: (start) => { if (start.x <= window.innerWidth * UP_SWIPE_ZONE) up(); },
+      onSwipeRight: (start) => { if (start.x <= Math.min(window.innerWidth * UP_SWIPE_ZONE, UP_SWIPE_MAX)) up(); },
       onSwipeLeft: () => {},
     }, { ignore: ".sheet-backdrop", leftEdge: true });
   }, [fileOpen, up]);
@@ -580,6 +607,12 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
    * keys or screen reader (`inert`), and starts no new cover meanwhile. The
    * focus goes back to what opened the file when it closes. */
   const covered = fileOpen !== null;
+  /** This computer's folder is listed again when the reader comes back to it
+   * — the app shown again, a file closed — so what an agent wrote meanwhile
+   * shows. Rows are replaced in place (tokens are stable), the scroll kept.
+   * The host's side is read over SSH, so only Refresh lists it again. */
+  const relistHere = useRef(() => {});
+  relistHere.current = () => { if (!onHost) relist(); };
   useEffect(() => {
     const node = host.current;
     if (!covered || !node) return;
@@ -591,8 +624,14 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       node.removeAttribute("inert");
       release();
       if (opener?.isConnected) opener.focus({ preventScroll: true });
+      relistHere.current();
     };
   }, [covered]);
+  useEffect(() => {
+    const onShown = () => { if (document.visibilityState === "visible") relistHere.current(); };
+    document.addEventListener("visibilitychange", onShown);
+    return () => document.removeEventListener("visibilitychange", onShown);
+  }, []);
 
   /** The list's scroll, kept per folder (`OFFSETS`): put back once the
    * folder's listing is on screen, and recorded only from then on, so the
@@ -643,6 +682,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   /** The search box is put away: a favorite or recent was opened or shown. */
   const leaveSearch = () => {
     setQuery("");
+    setRecentsOpen(false);
     setSearchFocused(false);
     searchBox.current?.blur();
   };
@@ -739,6 +779,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     else if (hit) openHit(hit);
     else open(entry);
   };
+  /** A tile's or row's own button: a tap opens, a long-press (or a
+   * right-click) opens its item menu, as ▾ / ⋯ do. */
+  const pressOf = (entry: ProjectFileEntry, hit?: ProjectFileHit, saved?: Saved) =>
+    press(() => tap(entry, hit, saved), () => setSheet({ kind: "item", entry, at: atOf(hit, saved), hit, saved }));
   /** A favorite or recent found moved or deleted. */
   const isStale = (saved?: Saved) => saved !== undefined && stale.has(savedPlace(saved.item));
   const itemClass = (base: string, folded: boolean, saved?: Saved) =>
@@ -752,7 +796,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     const ready = sharing.ready === entry.name;
     const above = saved?.item.trail ?? hit?.trail;
     return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("", folded, saved)}>
-      <button onClick={() => tap(entry, hit, saved)} aria-label={openLabel(entry)}>
+      <button {...pressOf(entry, hit, saved)} aria-label={openLabel(entry)}>
         <FileGlyph kind={entry.kind} color={colorOf(entry, atOf(hit, saved))} />
         <span>
           <strong>{entry.name}</strong>
@@ -783,7 +827,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     // A favorite keeps no size or time to key a cover by.
     const thumbs = view.thumbs && saved?.from !== "favorite";
     return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("files-tile", folded, saved)}>
-      <button className="files-tile-open" onClick={() => tap(entry, hit, saved)} aria-label={openLabel(entry)}>
+      <button className="files-tile-open" {...pressOf(entry, hit, saved)} aria-label={openLabel(entry)}>
         <LibraryCover projectId={projectId} entry={entry} place={placeOf(at)} thumbs={thumbs} color={colorOf(entry, at)} side={side} />
         <strong>{entry.name}</strong>
         {above && hitPlace(above)}
@@ -841,6 +885,9 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     const group = (heading: TranslationKey, rows: ReactNode[]) =>
       <div className="notifications-group"><h3>{t(heading)}</h3><ul className="option-list">{rows}</ul></div>;
     return <LibrarySheet className="files-view-sheet" label={t("mobile.files.library.view")} title={t("mobile.files.library.view")} onClose={() => setSheet(null)}>
+        <ul className="option-list">
+          <li><button onClick={() => { setSheet(null); relist(); }}><span><strong>{t("mobile.files.library.refresh")}</strong></span></button></li>
+        </ul>
         {group("mobile.files.library.layout", [
           choice("grid", t("mobile.files.library.grid"), grid, () => setView({ layout: "grid" })),
           choice("list", t("mobile.files.library.list"), !grid, () => setView({ layout: "list" })),
@@ -925,7 +972,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     || isUntested("mobile.files.sort") || isUntested("mobile.files.pathMenu") || isUntested("mobile.files.counts")
     || isUntested("mobile.files.thumbs") || isUntested("mobile.files.favorites") || isUntested("mobile.files.recent")
     || isUntested("mobile.files.colors") || isUntested("mobile.files.share") || isUntested("mobile.files.sections")
-    || isUntested("mobile.files.remember") || isUntested("mobile.files.keepPlace") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
+    || isUntested("mobile.files.remember") || isUntested("mobile.files.keepPlace") || isUntested("mobile.files.pathBar")
+    || isUntested("mobile.files.refresh") || isUntested("mobile.files.longPress") || isUntested("mobile.files.searchScope") || isUntested("mobile.files.wide") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
     || ((onSide !== undefined || onHost) && isUntested("mobile.files.host"));
 
   return <><section ref={host} className="files-library" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")}>
@@ -945,6 +993,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       </button>
     </header>
     <div className="files-library-bar">
+      {trail.length > 1 && <PathBar trail={trail} label={t("mobile.files.trail")} onPick={(index) => setTrail((current) => current.slice(0, index + 1))} />}
       {atRoot && onSide && <div className="terminal-view-switch files-side-switch" role="group" aria-label={t("mobile.files.side.label")}>
         <button className={onHost ? "" : "selected"} aria-pressed={!onHost} onClick={() => onSide("here")}>{t("mobile.files.side.here")}</button>
         <button className={onHost ? "selected" : ""} aria-pressed={onHost} onClick={() => onSide("host")}>{hostLabel || t("mobile.files.side.host")}</button>
@@ -952,6 +1001,17 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       <input ref={searchBox} className="files-search" type="search" value={query} maxLength={MAX_QUERY} enterKeyHint="search" autoFocus={focusSearch}
         placeholder={t("mobile.files.searchPlaceholder")} aria-label={t("mobile.files.search")}
         onChange={(event) => setQuery(event.target.value)} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} />
+      {searching && (!atRoot || !onHost) && <div className="files-search-chips" role="group" aria-label={t("mobile.files.search.scope")}>
+        {!atRoot && <button className={searchHere ? "selected" : ""} aria-pressed={searchHere} onClick={() => setSearchHere(!searchHere)}>
+          {t("mobile.files.search.here", { name: here.name })}
+        </button>}
+        {!onHost && <button className={searchIgnored ? "selected" : ""} aria-pressed={searchIgnored} onClick={() => setSearchIgnored(!searchIgnored)}>
+          {t("mobile.files.search.ignored")}
+        </button>}
+      </div>}
+      {atRoot && !searching && !showRecents && recents.length > 0 && <button className="files-recent-link" onClick={() => setRecentsOpen(true)}>
+        {t("mobile.files.recentShow", { count: recents.length })}
+      </button>}
     </div>
     <div ref={body} className="files-library-body" onScroll={onBodyScroll}>
       {!searching && listing?.uploads && <button className="new-tab-file files-upload" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
@@ -972,7 +1032,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         // Pressing a recent must not take the focus from the search box first,
         // or the list would be gone before the tap lands.
         ? <section className="files-saved" aria-label={t("mobile.files.recent")} onMouseDown={(event) => event.preventDefault()}>
-          <h3>{t("mobile.files.recent")}</h3>
+          <h3>{t("mobile.files.recent")}{recentsOpen && !searchFocused
+            && <button className="files-recent-hide" onClick={() => setRecentsOpen(false)}>{t("mobile.files.recentHide")}</button>}</h3>
           {recents.length === 0
             ? <p className="sheet-note">{t("mobile.files.recentNone")}</p>
             : <ul className={listClass}>{recents.map((recent) => item(savedEntry(recent), false, undefined, { item: recent, from: "recent" }))}</ul>}
@@ -982,7 +1043,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         : !found
           ? <p className="sheet-note">{t("mobile.files.searching")}</p>
           : found.hits.length === 0
-            ? <p className="sheet-note">{t(onHost ? "mobile.files.noHits" : "mobile.files.noHitsHere")}</p>
+            ? <p className="sheet-note">{t(onHost || searchIgnored ? "mobile.files.noHits" : "mobile.files.noHitsHere")}</p>
             : <ul className={listClass} aria-label={t("mobile.files.search")}>
               {found.hits.map((hit) => item(hit, false, hit))}
             </ul>
@@ -999,10 +1060,34 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
               </ul>}
       {showRecents ? null : searching
         ? found?.truncated && <p className="sheet-note">{t("mobile.files.searchTruncated", { count: found.hits.length })}</p>
-        : listing?.truncated && <p className="sheet-note">{t("mobile.files.truncated", { count: listing.entries.length })}</p>}
+        : listing?.truncated && <p className="sheet-note">{t(view.sort === "name" ? "mobile.files.truncated" : "mobile.files.truncatedSorted", { count: listing.entries.length })}</p>}
     </div>
     {sheet && sheetOver(sheet)}
   </section>{viewer}</>;
+}
+
+/** The folders from the project root down to the one shown, as a row under
+ * the head that scrolls sideways and stands at its end: a tap on one goes
+ * there; the last is where the library stands. The path menu (the title)
+ * offers the same. */
+function PathBar({ trail, label, onPick }: { trail: Crumb[]; label: string; onPick: (index: number) => void }) {
+  const bar = useRef<HTMLOListElement>(null);
+  useLayoutEffect(() => {
+    const node = bar.current;
+    if (node) node.scrollLeft = node.scrollWidth;
+  }, [trail]);
+  return <nav className="files-path" aria-label={label}>
+    <ol ref={bar}>
+      {trail.map((crumb, index) => {
+        const last = index === trail.length - 1;
+        return <li key={`${index}/${crumb.name}`}>
+          {last
+            ? <span aria-current="location">{crumb.name}</span>
+            : <button onClick={() => onPick(index)}>{crumb.name}</button>}
+        </li>;
+      })}
+    </ol>
+  </nav>;
 }
 
 /** The library's own sheets (the view menu, a folder's colours): the shared

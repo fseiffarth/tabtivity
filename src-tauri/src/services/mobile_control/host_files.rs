@@ -55,7 +55,7 @@ const MAX_FOLDERS: usize = 500;
 const SEARCH_DEADLINE: Duration = Duration::from_secs(10);
 /// Folders a search does not walk into: what a project's `.gitignore` keeps
 /// out of the local search, which cannot run git on the host.
-const SEARCH_SKIP: &[&str] = &["node_modules", "target", "__pycache__", ".venv", "venv", ".cache", ".tox", ".mypy_cache", ".pytest_cache"];
+const SEARCH_SKIP: &[&str] = files::WALK_SKIP;
 /// How long a `ssh -G` answer is used: one that found a socket, one that did not.
 const RESOLVE_KEEP: Duration = Duration::from_secs(5 * 60);
 const RESOLVE_RETRY: Duration = Duration::from_secs(30);
@@ -204,9 +204,9 @@ impl HostFiles {
     }
 
     /// Names below the remote root that hold every word ([`search_on`]).
-    pub async fn search(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, query: String, key: Vec<u8>, raw_id: String) -> Result<Found, FilesError> {
+    pub async fn search(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, query: String, under: String, key: Vec<u8>, raw_id: String) -> Result<Found, FilesError> {
         let root = root_of(spec).ok_or(FilesError::Unavailable)?.to_string();
-        self.with_session(spec, known, |session| async move { search_on(&session.sftp, &root, &query, &key, &raw_id).await }).await
+        self.with_session(spec, known, |session| async move { search_on(&session.sftp, &root, &query, &under, &key, &raw_id).await }).await
     }
 
     /// One file or folder as its folder would row it ([`entry_on`]).
@@ -509,17 +509,22 @@ fn trail_of(rel: &str, host_key: &[u8], raw_id: &str) -> Result<Vec<Crumb>, File
 }
 
 /// Names below the remote root that hold every word of `query`, by a bounded
-/// breadth-first walk (no links, no hidden names, not into [`SEARCH_SKIP`]).
-pub async fn search_on(sftp: &Sftp, root: &str, query: &str, host_key: &[u8], raw_id: &str) -> Result<Found, FilesError> {
+/// breadth-first walk (no links, no hidden names, not into [`SEARCH_SKIP`])
+/// that starts at the folder `under` (the root when empty), proven first.
+pub async fn search_on(sftp: &Sftp, root: &str, query: &str, under: &str, host_key: &[u8], raw_id: &str) -> Result<Found, FilesError> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     if words.is_empty() {
         return Ok(Found { hits: Vec::new(), truncated: false });
     }
     let mut fs = sftp.fs();
     let root = canonical_root(&mut fs, root).await?;
+    // A folder to search inside is walked into only once proven link-free.
+    if !under.is_empty() {
+        proven(&mut fs, &root, under).await?;
+    }
     let started = Instant::now();
     let mut candidates = Vec::new();
-    let mut folders = VecDeque::from([String::new()]);
+    let mut folders = VecDeque::from([under.to_string()]);
     let mut read = 0usize;
     let mut cut = false;
     while let Some(rel) = folders.pop_front() {

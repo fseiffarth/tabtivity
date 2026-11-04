@@ -861,12 +861,19 @@ fn git_paths(root: &Path) -> Option<(Vec<String>, bool)> {
     (!paths.is_empty()).then_some((paths, cut))
 }
 
-/// Every folder and file below the root, breadth first, the way the drawer
-/// would list them (no links, no hidden names), until [`MAX_SCANNED`]. The
-/// `bool` is whether it stopped there.
-fn walked_paths(root: &Path) -> Result<(Vec<(String, bool)>, bool), FilesError> {
+/// Folders a walk that includes what git ignores never goes into: build
+/// caches and installed packages that would eat [`MAX_SCANNED`] before the
+/// generated files worth finding (`build/`, `out/`, `dist/`) are reached.
+/// The remote side's walk skips the same (`host_files`).
+pub(super) const WALK_SKIP: &[&str] = &["node_modules", "target", "__pycache__", ".venv", "venv", ".cache", ".tox", ".mypy_cache", ".pytest_cache"];
+
+/// Every folder and file below `under` (the root when empty), breadth first,
+/// the way the drawer would list them (no links, no hidden names), not into a
+/// folder named in `skip`, until [`MAX_SCANNED`]. The `bool` is whether it
+/// stopped there.
+fn walked_paths(root: &Path, under: &str, skip: &[&str]) -> Result<(Vec<(String, bool)>, bool), FilesError> {
     let mut found = Vec::new();
-    let mut folders = std::collections::VecDeque::from([String::new()]);
+    let mut folders = std::collections::VecDeque::from([under.to_string()]);
     while let Some(rel) = folders.pop_front() {
         // Gone or swapped for a link since its parent was read: left out.
         let Ok(dir) = ProjectDir::open(root, &rel) else { continue };
@@ -878,7 +885,7 @@ fn walked_paths(root: &Path) -> Result<(Vec<(String, bool)>, bool), FilesError> 
                 return Ok((found, true));
             }
             let path = child(&rel, &name);
-            if is_dir {
+            if is_dir && !skip.contains(&name.as_str()) {
                 folders.push_back(path.clone());
             }
             found.push((path, is_dir));
@@ -914,12 +921,29 @@ fn dir_entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
 /// Each hit is proven again as [`entry`] proves a file, so a path git names
 /// through a link, or one that is hidden, is never answered.
 pub fn search(root: &Path, query: &str, host_key: &[u8], raw_id: &str) -> Result<Found, FilesError> {
+    search_in(root, query, host_key, raw_id, &SearchScope::default())
+}
+
+/// Where a search looks: inside the folder `under` (the whole project when
+/// empty), and with `ignored` what git ignores too — by a walk (not into
+/// [`WALK_SKIP`]) rather than git's listing.
+#[derive(Debug, Default, Clone)]
+pub struct SearchScope {
+    pub under: String,
+    pub ignored: bool,
+}
+
+/// [`search`] within a [`SearchScope`]. A hit is strictly inside `under`; the
+/// folder itself is not one.
+pub fn search_in(root: &Path, query: &str, host_key: &[u8], raw_id: &str, scope: &SearchScope) -> Result<Found, FilesError> {
     canonical_root(root)?;
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    if words.is_empty() {
+    if words.is_empty() || !valid_rel(&scope.under) {
         return Ok(Found { hits: Vec::new(), truncated: false });
     }
-    let (candidates, mut truncated) = match git_paths(root) {
+    let inside = |rel: &str| scope.under.is_empty() || rel.strip_prefix(scope.under.as_str()).is_some_and(|rest| rest.starts_with('/'));
+    let listed = if scope.ignored { None } else { git_paths(root) };
+    let (candidates, mut truncated) = match listed {
         Some((paths, cut)) => {
             let mut seen = HashSet::new();
             let mut candidates = Vec::new();
@@ -940,10 +964,12 @@ pub fn search(root: &Path, query: &str, host_key: &[u8], raw_id: &str) -> Result
             }
             (candidates, cut)
         }
-        None => walked_paths(root)?,
+        None if scope.ignored => walked_paths(root, &scope.under, WALK_SKIP)?,
+        None => walked_paths(root, &scope.under, &[])?,
     };
     let mut matched: Vec<(u8, usize, String, bool)> = candidates
         .into_iter()
+        .filter(|(rel, _)| inside(rel))
         .filter_map(|(rel, is_dir)| {
             let leaf = rel.rsplit('/').next().unwrap_or(&rel);
             let score = rank(leaf, &words)?;
@@ -1537,6 +1563,35 @@ mod tests {
         // A project folder below the repo's top searches only itself.
         let docs = search(&root.join("docs"), "report", KEY, "p1").unwrap();
         assert_eq!(hit_paths(&docs), ["report", "report/report.txt"]);
+    }
+
+    #[test]
+    fn a_search_keeps_inside_a_folder_and_takes_what_git_ignores_on_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git").args(args).current_dir(root).output().unwrap().status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join(".gitignore"), "build/\nnode_modules/\n").unwrap();
+        for folder in ["build", "docs/old", "node_modules/pkg"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            fs::write(root.join(folder).join("paper.pdf"), "x").unwrap();
+        }
+        fs::write(root.join("paper.md"), "x").unwrap();
+        let scoped = |under: &str, ignored: bool| {
+            hit_paths(&search_in(root, "paper", KEY, "p1", &SearchScope { under: under.into(), ignored }).unwrap())
+        };
+        assert_eq!(scoped("", false), ["paper.md", "docs/old/paper.pdf"], "git's listing: build/ and node_modules/ ignored");
+        assert_eq!(scoped("", true), ["paper.md", "build/paper.pdf", "docs/old/paper.pdf"], "the walk: build/ in, node_modules/ never walked");
+        assert_eq!(scoped("docs", false), ["docs/old/paper.pdf"]);
+        assert_eq!(scoped("build", true), ["build/paper.pdf"]);
+        assert!(scoped("build", false).is_empty(), "git lists nothing ignored");
+        // The folder itself is no hit, and a scope that is no project path finds nothing.
+        let docs = search_in(root, "docs", KEY, "p1", &SearchScope { under: "docs".into(), ignored: false }).unwrap();
+        assert!(docs.hits.is_empty());
+        assert!(scoped("../x", true).is_empty());
     }
 
     #[test]

@@ -4044,9 +4044,33 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
-  - [ ] Batch C (phone): B5 truncation note, S3 Refresh, S4 path bar, S5 wide-screen
+  - [x] Batch C (phone): B5 truncation note, S3 Refresh, S4 path bar, S5 wide-screen
     sheets/tiles, S6 44 px targets + long-press, S7 search chips, S8
-    content-visibility, S9 collator language.
+    content-visibility, S9 collator language. (2026-11-03; needs a dev build —
+    the search chips are half backend; ⚠️ never seen on a phone)
+    - [ ] 🖐️ In a subfolder: the folder bar under the head, a tap goes up there.
+      ⋯ → Refresh shows a file an agent just wrote; so does closing a file or
+      coming back to the app. Long-press a tile or row: its menu, no text callout.
+      At the root, Recent files (n) shows recents with the keyboard down.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Search in a subfolder: Only in <folder> keeps hits inside it; Include
+      ignored files finds a PDF under build/ or out/. On an iPad: sheets centred,
+      bigger tiles in landscape; a long folder scrolls smoothly.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
   - [ ] B8: check on an iPhone whether the edge swipe goes up two folders (Safari tab
     and installed PWA) before changing anything.
 

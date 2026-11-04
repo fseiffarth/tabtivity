@@ -7667,11 +7667,14 @@ async fn project_files_entry(
     }
 }
 
-/// `GET /api/v1/projects/{project_id}/files/search?q=<words>` — the project's
-/// files and folders whose names hold every word, each with the sealed trail
-/// of folders above it (`files::search`). Read-only, like the listing; no
-/// path appears in the answer, only the leaf names the drawer would show.
-/// `&on=host` searches the remote side by a bounded walk (`host_files`).
+/// `GET /api/v1/projects/{project_id}/files/search?q=<words>[&dir=<token>][&ignored=1]`
+/// — the project's files and folders whose names hold every word, each with
+/// the sealed trail of folders above it (`files::search_in`). `dir` keeps the
+/// search inside that folder; `ignored=1` searches what git ignores too, by a
+/// bounded walk. Read-only, like the listing; no path appears in the answer,
+/// only the leaf names the drawer would show. `&on=host` searches the remote
+/// side by a bounded walk (`host_files`), inside `dir` likewise; it has no
+/// git listing, so `ignored` changes nothing there.
 async fn project_files_search(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -7691,8 +7694,12 @@ async fn project_files_search(
         if q.len() > files::MAX_QUERY {
             return api_error(StatusCode::BAD_REQUEST, "query_too_long");
         }
+        let under = match host_files_rel(&state, &raw_id, query.get("dir")) {
+            Ok(rel) => rel,
+            Err(error) => return error,
+        };
         let key = state.auth.lock_ok().host_key().to_vec();
-        return match state.host_files.search(&spec, known, q, key, raw_id).await {
+        return match state.host_files.search(&spec, known, q, under, key, raw_id).await {
             Ok(found) => (StatusCode::OK, Json(json!(found))),
             Err(error) => files_error(error),
         };
@@ -7704,9 +7711,14 @@ async fn project_files_search(
     if q.len() > files::MAX_QUERY {
         return api_error(StatusCode::BAD_REQUEST, "query_too_long");
     }
+    let under = match files_rel(&state, &raw_id, query.get("dir")) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let scope = files::SearchScope { under, ignored: query.get("ignored").is_some_and(|on| on == "1") };
     let key = state.auth.lock_ok().host_key().to_vec();
     // A git listing or a walk of the whole tree: off the executor.
-    let found = tokio::task::spawn_blocking(move || files::search(&root, &q, &key, &raw_id))
+    let found = tokio::task::spawn_blocking(move || files::search_in(&root, &q, &key, &raw_id, &scope))
         .await
         .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
     match found {

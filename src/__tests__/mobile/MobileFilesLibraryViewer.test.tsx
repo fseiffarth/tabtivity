@@ -16,7 +16,8 @@ import { FavoritesPage } from "../../../mobile-web/src/components/FavoritesPage"
 import { FilesLibrary, failureKey } from "../../../mobile-web/src/components/FilesLibrary";
 import { OptionSheet } from "../../../mobile-web/src/components/OptionSheet";
 import { OutboxViewer } from "../../../mobile-web/src/components/OutboxViewer";
-import { toggleFavorite } from "../../../mobile-web/src/filesPlace";
+import { filesPlaceId, recordRecent, toggleFavorite } from "../../../mobile-web/src/filesPlace";
+import { DEFAULT_LIBRARY_VIEW, sortEntries, writeLibraryView } from "../../../mobile-web/src/libraryView";
 
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
@@ -265,5 +266,135 @@ describe("Favorites page — groups hold still while names arrive", () => {
     await act(async () => { answers.get(later)?.(later === "p2" ? "Alpha" : "Zeta"); });
     await waitFor(() => expect(screen.getAllByRole("heading", { level: 3 }).map((head) => head.textContent)).toEqual(["Alpha", "Zeta"]));
     expect(order()).toEqual(["paper.pdf", "src"]);
+  });
+});
+
+/** Every URL the stubbed desktop was asked, in order. */
+const asked = () => (globalThis.fetch as unknown as { mock: { calls: [string | URL | Request][] } }).mock.calls.map(([url]) => String(url));
+
+describe("Files library — reaching folders and files", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetBackStackForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("shows the folders down to this one as a bar, and a tap on one goes there", async () => {
+    stubHost("bar");
+    render(<FilesLibrary projectId="bar" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    expect(within(library).queryByRole("navigation", { name: "Folders" })).toBeNull();
+    fireEvent.click(within(library).getByRole("button", { name: "Open the folder src" }));
+    await within(library).findByRole("button", { name: "Open main.rs" });
+    const bar = within(library).getByRole("navigation", { name: "Folders" });
+    expect(bar.querySelector("[aria-current]")?.textContent).toBe("src");
+    fireEvent.click(within(bar).getByRole("button", { name: "Alpha" }));
+    await within(library).findByRole("button", { name: "Open notes.md" });
+  });
+
+  it("lists the folder again on Refresh and when a file opened from it closes", async () => {
+    stubHost("again");
+    render(<FilesLibrary projectId="again" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    const listings = () => asked().filter((url) => url === "/api/v1/projects/again/files").length;
+    expect(listings()).toBe(1);
+
+    fireEvent.click(within(library).getByRole("button", { name: "View options" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "View options" })).getByRole("button", { name: "Refresh this folder" }));
+    await waitFor(() => expect(listings()).toBe(2));
+
+    fireEvent.click(within(library).getByRole("button", { name: "Open notes.md" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(listings()).toBe(3));
+    // The rows stood the whole time: a re-list does not blank the folder.
+    expect(within(library).getByRole("button", { name: "Open notes.md" })).toBeTruthy();
+  });
+
+  it("opens an item's menu on a long-press or a right-click, and the press opens nothing", async () => {
+    stubHost("hold");
+    render(<FilesLibrary projectId="hold" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    const notes = await within(library).findByRole("button", { name: "Open notes.md" });
+    fireEvent.pointerDown(notes, { button: 0, clientX: 10, clientY: 10 });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+    expect(screen.getByRole("dialog", { name: "notes.md" }).querySelector(".option-list")).toBeTruthy();
+    fireEvent.pointerUp(notes);
+    fireEvent.click(notes);
+    expect(screen.queryByRole("dialog", { name: "notes.md" })?.querySelector("pre")).toBeFalsy();
+    fireEvent.click(within(screen.getByRole("dialog", { name: "notes.md" })).getByRole("button", { name: "Close" }));
+
+    fireEvent.contextMenu(within(library).getByRole("button", { name: "Open the folder src" }));
+    expect(screen.getByRole("dialog", { name: "src" })).toBeTruthy();
+  });
+
+  it("shows the recent files from a link at the root, keyboard down, and hides them again", async () => {
+    stubHost("recent");
+    recordRecent(filesPlaceId("recent", "here"), { token: "tok-notes", name: "notes.md", kind: "text/plain; charset=utf-8", size: 8, modified: 1, trail: [] });
+    render(<FilesLibrary projectId="recent" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(library).findByRole("button", { name: "Recent files (1)" }));
+    const recent = within(library).getByRole("region", { name: "Recent" });
+    expect(document.activeElement).not.toBe(within(library).getByRole("searchbox"));
+    expect(within(recent).getByRole("button", { name: "Open notes.md" })).toBeTruthy();
+    fireEvent.click(within(recent).getByRole("button", { name: "Hide" }));
+    expect(within(library).queryByRole("region", { name: "Recent" })).toBeNull();
+  });
+
+  it("says a folder past the cap is sorted only among the first entries by name", async () => {
+    writeLibraryView({ ...DEFAULT_LIBRARY_VIEW, sort: "modified" });
+    vi.stubGlobal("fetch", vi.fn(async () => reply({ ...ROOT, truncated: true })));
+    render(<FilesLibrary projectId="cap" label="Alpha" onClose={() => {}} />);
+    expect(await screen.findByText(/first 2 entries by name, sorted among themselves/)).toBeTruthy();
+  });
+});
+
+describe("Files library — search inside a folder, and what git ignores", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetBackStackForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("asks inside the folder and for ignored files from its chips, and keeps an older desktop's hits inside", async () => {
+    const outside = { token: "tok-o", name: "main.txt", kind: "text/plain; charset=utf-8", size: 1, modified: 1, trail: [] };
+    const inside = { ...SRC.entries[0], trail: [{ token: "tok-src", name: "src" }] };
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === "/api/v1/projects/chips/files") return reply(ROOT);
+      if (url === "/api/v1/projects/chips/files?dir=tok-src") return reply(SRC);
+      // An older desktop: the scope is not heard, the whole project answers.
+      if (url.startsWith("/api/v1/projects/chips/files/search")) return reply({ hits: [outside, inside], truncated: false });
+      return reply({ error: "file_not_found" }, 404);
+    }));
+    render(<FilesLibrary projectId="chips" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(library).findByRole("button", { name: "Open the folder src" }));
+    await within(library).findByRole("button", { name: "Open main.rs" });
+    fireEvent.change(within(library).getByRole("searchbox"), { target: { value: "main" } });
+    await within(library).findByRole("button", { name: "Open main.txt" });
+
+    fireEvent.click(within(library).getByRole("button", { name: "Only in src" }));
+    await waitFor(() => expect(asked()).toContain("/api/v1/projects/chips/files/search?q=main&dir=tok-src"));
+    await waitFor(() => expect(within(library).queryByRole("button", { name: "Open main.txt" })).toBeNull());
+    expect(within(library).getByRole("button", { name: "Open main.rs" })).toBeTruthy();
+
+    fireEvent.click(within(library).getByRole("button", { name: "Include ignored files" }));
+    await waitFor(() => expect(asked()).toContain("/api/v1/projects/chips/files/search?q=main&dir=tok-src&ignored=1"));
+  });
+
+  it("sorts names in the app's language", () => {
+    const entries = ["zeta", "äpfel"].map((name) => ({ token: name, name, kind: "text/plain", size: 1, modified: 1 }));
+    const view = { sort: "name" as const, desc: false, foldersFirst: true };
+    expect(sortEntries(entries, view, "de").map((entry) => entry.name)).toEqual(["äpfel", "zeta"]);
+    expect(sortEntries(entries, view, "sv").map((entry) => entry.name)).toEqual(["zeta", "äpfel"]);
   });
 });

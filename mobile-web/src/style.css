@@ -1459,13 +1459,16 @@ span.files-close { background:transparent; }
    title (the path menu) · ⋯ (the view menu); the body under it scrolls. */
 .files-library { position:fixed; inset:0; z-index:12; display:flex; flex-direction:column; padding:0 env(safe-area-inset-right) 0 env(safe-area-inset-left); background:#171a24; color:#e6e9f2; animation:files-drawer-in .18s ease-out; }
 .files-library-head { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,1fr); align-items:center; gap:4px; min-height:44px; padding:max(14px, calc(8px + env(safe-area-inset-top))) 10px 8px; border-bottom:1px solid #2b3040; }
-.files-library-back { justify-self:start; display:flex; align-items:center; gap:1px; max-width:100%; min-height:36px; padding:4px 8px 4px 0; border:0; border-radius:10px; background:transparent; color:#8fb8ff; font-size:.9rem; }
+.files-library-back { justify-self:start; display:flex; align-items:center; gap:1px; max-width:100%; min-height:44px; padding:4px 8px 4px 0; border:0; border-radius:10px; background:transparent; color:#8fb8ff; font-size:.9rem; }
 .files-library-back span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .files-library-head svg { width:20px; height:20px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .files-library-head h2 { display:flex; justify-content:center; align-items:center; min-width:0; margin:0; font-size:1.02rem; }
 .files-library-title { min-width:0; padding:6px 8px; overflow:hidden; border:0; border-radius:10px; background:transparent; color:inherit; font:inherit; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
 .files-library-head h2 small { flex:0 0 auto; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; }
-.files-library-more { justify-self:end; display:grid; place-items:center; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:#2a2e3e; color:#c8cdda; }
+/* 44 px to tap, the 36 px disc drawn inside it. */
+.files-library-more { position:relative; justify-self:end; display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; border-radius:50%; background:transparent; color:#c8cdda; }
+.files-library-more::before { content:""; position:absolute; inset:4px; border-radius:50%; background:#2a2e3e; }
+.files-library-more svg { position:relative; }
 .files-library-more svg, .option-list .files-more svg { stroke-width:3.2; }
 .files-library-bar { flex:0 0 auto; display:grid; gap:11px; padding:10px 10px 0; }
 .files-library-body { flex:1; display:grid; align-content:start; gap:11px; min-height:0; padding:10px 10px calc(16px + env(safe-area-inset-bottom)); overflow:auto; overscroll-behavior:contain; }
@@ -1487,7 +1490,10 @@ span.files-close { background:transparent; }
 .files-tile-open small { padding:0 2px; overflow:hidden; color:#98a0b4; font-size:.7rem; text-overflow:ellipsis; white-space:nowrap; }
 .files-tile-open small.files-hit-place { color:#8fb8ff; }
 .files-tile.files-folded strong { color:#aeb4c4; font-weight:500; }
-.files-tile-menu { position:absolute; top:5px; right:5px; display:grid; place-items:center; width:30px; height:30px; padding:0; border:0; border-radius:50%; background:rgba(16,19,28,.72); color:#d8e2f5; }
+/* A 44 px hit area in the cover's corner, the 30 px disc drawn inside it. */
+.files-tile-menu { position:absolute; top:-2px; right:-2px; display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; border-radius:50%; background:transparent; color:#d8e2f5; }
+.files-tile-menu::before { content:""; position:absolute; inset:7px; border-radius:50%; background:rgba(16,19,28,.72); }
+.files-tile-menu svg { position:relative; }
 .files-tile-menu svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
 .files-tile-share { justify-self:start; padding:5px 10px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.75rem; }
 .files-grid > .files-section { grid-column:1 / -1; }
@@ -1521,6 +1527,35 @@ span.files-close { background:transparent; }
 .files-library .files-upload strong { font-size:.95rem; }
 .files-library .files-upload small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .files-note { margin:-4px 4px 0; padding:0 2px; font-size:.76rem; }
+/* A long-press opens the item menu, so the phone's own callout and text
+   selection stay off the tile and row buttons. */
+.files-tile-open, .files-list li > button:first-child { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+/* Large folders: rows off screen skip their paint until scrolled near. */
+.files-grid > .files-tile { content-visibility:auto; contain-intrinsic-size:auto 180px; }
+.files-list > li { content-visibility:auto; contain-intrinsic-size:auto 64px; }
+/* The folders down to this one, under the head, scrolled to the end. */
+.files-path ol { display:flex; gap:2px; margin:0 4px; padding:0; overflow-x:auto; list-style:none; scrollbar-width:none; }
+.files-path li { display:flex; flex:0 0 auto; align-items:center; max-width:60vw; }
+.files-path li + li::before { content:"›"; padding:0 3px; color:#5d6478; }
+.files-path button, .files-path span { min-width:0; min-height:32px; padding:4px 8px; overflow:hidden; border:0; border-radius:8px; background:#1e2230; color:#8fb8ff; font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
+.files-path span { background:transparent; color:#d8e2f5; font-weight:600; line-height:24px; }
+/* The search's scope chips: this folder, and what git ignores. */
+.files-search-chips { display:flex; flex-wrap:wrap; gap:6px; margin:-4px 4px 0; }
+.files-search-chips button { min-height:32px; max-width:100%; padding:4px 10px; overflow:hidden; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#c8cdda; font-size:.78rem; text-overflow:ellipsis; white-space:nowrap; }
+.files-search-chips button.selected { border-color:#2f6fec; background:#1d2a44; color:#8fb8ff; }
+.files-recent-link { justify-self:start; min-height:32px; margin:-4px 4px 0; padding:4px 10px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.78rem; }
+.files-saved h3 .files-recent-hide { float:right; padding:0 4px; border:0; background:transparent; color:#8fb8ff; font-size:.76rem; font-weight:600; letter-spacing:0; text-transform:none; }
+/* An iPad or a phone held sideways: sheets stand centred at a readable width
+   (not the files drawer, which comes from the right), tiles grow, rows stop
+   at a readable length. */
+@media (min-width:700px) {
+  .sheet-backdrop:not(.files-drawer-backdrop) > .option-sheet { max-width:560px; margin-inline:auto; border-radius:var(--r-sheet) var(--r-sheet) 0 0; }
+}
+@media (min-width:900px) {
+  .files-library .files-grid { grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); }
+  .files-library .files-strip > .files-tile { flex-basis:124px; }
+  .files-library .files-list { width:100%; max-width:900px; margin-inline:auto; }
+}
 .files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }
 /* A file's ↗ Share sits beside its row, drawn as the outbox tile's Share link. */
 .files-list li { display:flex; flex-wrap:wrap; align-items:stretch; gap:3px; }
