@@ -10887,6 +10887,8 @@ export const enSource = {
   "shortcut.agentTab8": "Open agent 8 of the + menu in the focused pane",
   "shortcut.agentTab9": "Open agent 9 of the + menu in the focused pane",
   "rootConsole.title": "Root console",
+  "rootConsole.view.root": "Root",
+  "rootConsole.viewStrip": "Views",
   "rootConsole.installTabTitle": "Opened for your install — click to stop the pulse",
   "rootConsole.rightsBadge": "⚿ {app} tools",
   "rootConsole.rightsLocalOnly": "Only local-model tabs opened here get {app}'s own tools (MCP): your projects, calendar and to-do board. Cloud agents and a project's agents do not.",

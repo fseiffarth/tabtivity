@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useActivityStore } from "../../stores/activity";
 import { useTabsStore } from "../../stores/tabs";
 import { useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
-import { useCockpitStore } from "../../stores/cockpit";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { cockpitBadge } from "../../lib/cockpit/decisions";
 import { useExperimental } from "../../lib/experimental";
 import { useT } from "../../lib/i18n";
@@ -16,12 +16,14 @@ import { CockpitGlyph } from "./HeaderGlyphs";
  * badge is **derived, never acknowledged** (`cockpitBadge`): Asking +
  * Interrupted + proposals + approvals, read off the stores that already hold
  * them, so it starts no work of its own — no timer, no listener, no backend
- * read. A click opens (or closes) the overlay.
+ * read. A click opens the cockpit (the Now view of the root console's window)
+ * or, when it is up on a cockpit view, closes it.
  */
 export function CockpitIndicator() {
   const t = useT();
   const enabled = useExperimental("cockpit");
-  const open = useCockpitStore((s) => s.overlayOpen);
+  // Up on one of the cockpit's views — Root being up is not the cockpit being up.
+  const open = useRootOverlayStore((s) => s.open && s.view !== "root");
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
   const busyByTab = useActivityStore((s) => s.busyByTab);
   const attentionByTab = useActivityStore((s) => s.attentionByTab);
@@ -43,7 +45,11 @@ export function CockpitIndicator() {
         title={label}
         aria-label={label}
         aria-pressed={open}
-        onClick={() => useCockpitStore.getState().toggleOverlay()}
+        onClick={() => {
+          const overlay = useRootOverlayStore.getState();
+          if (overlay.open && overlay.view !== "root") overlay.close();
+          else overlay.openView("now");
+        }}
       >
         <CockpitGlyph className="cockpit-indicator-icon" />
         {badge.total > 0 && (

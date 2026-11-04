@@ -20,6 +20,7 @@ import { lastUserInputAt, useActivityStore } from "../../stores/activity";
 import { queuePromptForTab, useAgentPromptsStore } from "../../stores/agents/agentPrompts";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useCockpitStore } from "../../stores/cockpit";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { useSettingsStore } from "../../stores/settings";
 import { useAlertsFeed } from "../files/useAlertsFeed";
@@ -187,7 +188,7 @@ export function CockpitTonight() {
                       </>
                     )}
                     {item.kind === "chart" && item.scope && (
-                      <button type="button" className="settings-btn sm" onClick={() => { useCockpitStore.getState().closeOverlay(); void openPromptChartTab(item.scope!); }}>
+                      <button type="button" className="settings-btn sm" onClick={() => { useRootOverlayStore.getState().close(); void openPromptChartTab(item.scope!); }}>
                         {t("cockpit.tonight.openChart")}
                       </button>
                     )}
@@ -195,7 +196,7 @@ export function CockpitTonight() {
                       <button type="button" className="settings-btn sm" onClick={() => {
                           const store = useCockpitStore.getState();
                           store.select(item.ptyId!);
-                          store.setView("now");
+                          useRootOverlayStore.getState().openView("now");
                         }}>
                         {t("cockpit.tonight.show")}
                       </button>

@@ -31,7 +31,6 @@ import {
   type SteeringKeyMap,
 } from "../lib/shortcuts/steeringBindings";
 import { appOverlayStore, frontAppOverlay } from "../lib/shortcuts/appOverlays";
-import { useCockpitStore } from "../stores/cockpit";
 import { experimentalEnabled } from "../lib/experimental";
 import { openProjectDialog } from "../lib/projects/projectDialogEvent";
 import { requestProjectJump } from "../lib/projects/projectJumpEvent";
@@ -684,7 +683,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         // generic overlay one, which walks whatever is on top.
         case "cockpit":
           if (!experimentalEnabled(useSettingsStore.getState().settings, "cockpit")) return;
-          useCockpitStore.getState().openOverlay();
+          useRootOverlayStore.getState().openView("now");
           enterRegion("overlay");
           return;
         case "sidePanel":

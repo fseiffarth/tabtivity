@@ -40,7 +40,6 @@ import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { useSettingsStore } from "../../stores/settings";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
-import { useCockpitStore } from "../../stores/cockpit";
 import { useDragStore } from "../../stores/drag/drag";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
@@ -1284,7 +1283,7 @@ function PaneStandDown({ rect }: { rect: Rect }) {
       style={{ display: "flex", left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
     >
       <span>{t("cockpit.standDown")}</span>
-      <button type="button" className="settings-btn sm" onClick={() => useCockpitStore.getState().closeOverlay()}>
+      <button type="button" className="settings-btn sm" onClick={() => useRootOverlayStore.getState().close()}>
         {t("cockpit.showHere")}
       </button>
       <UntestedTag id="cockpit.standDown" />

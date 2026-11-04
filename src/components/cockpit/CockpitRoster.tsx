@@ -13,6 +13,7 @@ import { aiIsOff } from "../../lib/aiSwitch";
 import { useSettingsStore } from "../../stores/settings";
 import { useBoxesStore } from "../../stores/boxes";
 import { useCockpitStore, type CockpitRosterMode, type CockpitStateFilter } from "../../stores/cockpit";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { CONTINUE_PROMPT } from "../tabs/TabLocalityBadges";
 import { tabColorCss } from "../../lib/theme/tabColors";
 
@@ -56,7 +57,7 @@ const SORT_LABEL: Record<string, TranslationKey> = {
 export function jumpToRow(ptyId: string) {
   const at = ptyId.indexOf(":");
   jumpToTab(ptyId.slice(0, at), ptyId.slice(at + 1));
-  useCockpitStore.getState().closeOverlay();
+  useRootOverlayStore.getState().close();
 }
 
 /** ▶ Continue an interrupted row — the tab strip's action, AI switch respected. */

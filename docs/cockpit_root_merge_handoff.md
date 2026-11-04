@@ -35,7 +35,7 @@ section per A-step. Baseline before the first edit (develop `b3abe5ba`):
 
 ### A2 Split (plan M1)
 
-- sha: see `git log --grep "split the root console"`.
+- sha: `deb1ea23`.
 - `layout/RootOverlay.tsx` (~290 lines) = `RootOverlayHost` + the shell
   (`RootOverlay`: backdrop, frame, bar, controls, Escape, `useRootMcpRights`,
   `loadAgentDrafts` on mount). `layout/RootView.tsx` (new) = everything else:
@@ -68,3 +68,98 @@ section per A-step. Baseline before the first edit (develop `b3abe5ba`):
 - Tests: existing suites untouched except the earlier A1 edits; +2 in
   `RootOverlay.test` (strip/badge/toggle in the bar; Escape defers to the +
   menu).
+
+### A3 One surface (plan M2)
+
+- sha: the commit whose subject ends `(one surface)`; `git log --oneline | head -3`.
+- `lib/cockpit/views.ts` (new): `CockpitView`, `COCKPIT_VIEWS`; `stores/cockpit`
+  re-exports them and lost `overlayOpen/view/openOverlay/closeOverlay/
+  toggleOverlay/setView` (`showScope` no longer sets a view). `lastClosedAt`
+  stays there.
+- `stores/rootOverlay`: `view: "root" | CockpitView` (`RootOverlayView`),
+  `openView(view)` (`"root"` = `show()`; a cockpit view never hydrates root),
+  `rootViewShown(state)` (`open && view === "root"`), `show()` forces Root,
+  `close()` keeps `view`. **`toggleRootConsole` already encodes decision 4**
+  (closed -> Root, other view -> Root, Root -> close) so the intermediate commit
+  is coherent; A5 only needs the `useKeyboard` side.
+- Shell (`RootOverlay.tsx`): view strip `role="tablist"` (`.tab` strip, roving
+  Left/Right focus, Enter/Space choose) + divider + Root tab (star), only with
+  the `cockpit` experiment; effective view is `root` with the flag off;
+  `CockpitViewBody` is `React.lazy` inside `Suspense`; box filter on cockpit
+  views only; window label/aria `cockpit.title` (flag on) or `rootConsole.title`;
+  flag on = `app-overlay-backdrop` + `.root-overlay-wide` (shared overlay size);
+  one Escape rule (defers to `.root-overlay-region`, `.cockpit-detail-pane`,
+  `busyRef`, `framing`, `defaultPrevented`).
+- `lastClosedAt` is stamped by a store subscription in `RootOverlayHost` (open
+  -> closed while the previous view was not Root), not an unmount cleanup:
+  StrictMode's simulated unmount would have stamped on open, and the
+  subscription catches every close path.
+- Deleted `cockpit/CockpitOverlay.tsx` and `LazyCockpitOverlayHost`; CSS:
+  `.cockpit-overlay` removed from both `mail-todo.css` lists, new
+  `.root-overlay-wide`, view-strip rules in `subwindows.css`.
+- Keys (all five dictionaries): `rootConsole.view.root`, `rootConsole.viewStrip`
+  (aria label). Register row `rootConsole.viewStrip`.
+- **Mechanical rewiring beyond the plan's A3 file list** (the build would not
+  pass otherwise; semantics stay A5/A6): `closeOverlay()` callers ->
+  `rootOverlay.close()` (`CockpitRoster.jumpToRow`, `CockpitRail`,
+  `CockpitProjects.openProject`, `CockpitTonight`, `CenterPanel` Show here);
+  `openOverlay()` -> `openView("now")` (`useKeyboard` U, `BoxScopeChip`);
+  `CockpitIndicator` reads/toggles `rootOverlay` (`view !== "root"`);
+  `CockpitProjects` Agents button and `CockpitTonight` autoContinue call
+  `openView("now")`; Machines/Models Escape guards use `rootViewShown` (else,
+  with Usage up, `open` would swallow their Escape).
+- **Still A5/A6 work:** `jumpToRow` for a root row (`show(key)`, no `close()`),
+  `tabJump.ts`, `CockpitDetailPane`'s `inConsole` mode (reads `rootOverlay.open`,
+  so with Now up every root row currently shows the "console is open" note),
+  `OverlayAgentColumn`/`sourceJump`/`openTexWorkspace`/`CenterPanel` `open` ->
+  `rootViewShown` swaps, `AssistantView`.
+- Intermediate-state notes for I2: with the flag on, Root's sole-group strip
+  portals into the strip slot right after the Root tab in the title bar (no
+  sub-bar yet); the Root tab has no lamp yet. The `rootOverlay.1` /
+  `rootOverlay.viewers` pills only render on Root.
+- Gates: brand, whitespace, lint, build, vitest (changed set) pass; full vitest
+  1059 files, 10788 tests (baseline 10775 + 13: A1 +4, A2 +2, A3 +7). One
+  full-run failure, `FocusRing` (bare `var(--accent)` outline in my new
+  `.root-view-tab:focus-visible`), fixed to `--focus-ring`; theme suite rerun green.
+- Tests: `CockpitShell.test` is now the merged shell test (10 cases + the
+  indicator); `CockpitNow/ProjectsView/StandDown` use `rootOverlay` for open/
+  view.
+
+## Flagged for user
+
+- **Machines overlay under the window (pre-existing, not new).** The Machines
+  overlay (AppShell, mounted before the root host) and the Usage view's "Open
+  machines" button: both are `.modal-backdrop` at one z-index, DOM order decides,
+  so Machines opened from Usage lands UNDER the window, exactly as it did under
+  the old cockpit overlay (also mounted later). The plan's "check the door still
+  shows on top" does not hold today. Fixing it means either raising Machines
+  above the root host (then a terminal sign-in opened from Machines lands under
+  it) or having the Usage door step the window aside; not decided here.
+
+## Next (I2: A4 Root view chrome + A9 icon rail)
+
+- Start from `RootView.tsx` / `RootBarSlots` (see A2). The sub-bar is a second
+  host of the same three slots: a row under the title bar (flag on, unsplit
+  Root only) containing a strip slot, a rights slot and a files slot, passed to
+  `RootView` instead of the title bar's. The shell currently renders the strip
+  slot right after the view strip in the title bar; move that slot into the
+  sub-bar and keep the rights/files slots wherever the sub-bar wants them
+  (`rights`/`files` currently live in the title bar's control cluster).
+  `setControlsStyle` reserves width on the title bar's cluster; the sub-bar
+  would own its own equivalent. The split layout keeps per-group strips and
+  drops the sub-bar (existing behaviour of `stripFor`).
+- The Root tab (`viewTab("root", ...)` in the shell) is where the lamp goes.
+  Reuse the tab strip's lamp classes (`attentionStateClass`/`busyStateClass`,
+  `TabStatusMark`); read `stores/activity` for `ROOT_SCOPE` only.
+- Empty card ("Start <agent> in Root"): `rootConsole.emptyTitle/emptyHint`
+  live in `RootView`'s `tabs.length === 0` branch.
+- Register rows to add: `rootConsole.subBar`, `rootConsole.emptyStart`
+  (`rootConsole.viewStrip` already exists); keys `cockpit.view.rootAsking`,
+  `rootConsole.emptyStart`, all five dictionaries.
+- Hook tests that mock `TabPane`/`NewTabMenu` (`__tests__/root/RootOverlay.test`)
+  show how to render the host; the flag is `useSettingsStore.setState({
+  settings: { cockpit: true, experimental_explicit: true } })`.
+- Filemap rows (`docs/filemap_frontend.md`) for `RootView.tsx`,
+  `lib/window/floatingFrame.ts`, `lib/cockpit/views.ts` and the deleted
+  `CockpitOverlay.tsx` are not yet updated (plan: A8).
+- Unused after A1: dictionary keys `rootConsole.moveHint/resizeHint/fill/restore`.

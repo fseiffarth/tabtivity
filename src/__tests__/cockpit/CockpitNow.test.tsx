@@ -17,6 +17,7 @@ vi.mock("../../lib/shortcuts/tabJump", () => ({ jumpToTab: vi.fn(), openPromptCh
 import { CockpitNow } from "../../components/cockpit/CockpitNow";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import { useCockpitStore } from "../../stores/cockpit";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useActivityStore } from "../../stores/activity";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
@@ -46,7 +47,8 @@ beforeEach(() => {
   useAgentModelsStore.setState({ refresh: vi.fn(() => Promise.resolve()), refreshScreen: vi.fn(() => Promise.resolve()) });
   useRootReviewStore.setState({ proposals: [], imports: [] });
   useOverlayAgentStore.setState({ scopeShownKeys: new Set() });
-  useCockpitStore.setState({ overlayOpen: true, view: "now", selected: null, stateFilter: "all", query: "", rosterMode: "flat", boxFilter: null, scopeFilter: null });
+  useRootOverlayStore.setState({ open: true, view: "now" });
+  useCockpitStore.setState({ selected: null, stateFilter: "all", query: "", rosterMode: "flat", boxFilter: null, scopeFilter: null });
 });
 afterEach(() => {
   cleanup();
@@ -92,7 +94,7 @@ describe("CockpitNow", () => {
     expect(useCockpitStore.getState().selected).toBe(first);
     fireEvent.keyDown(list, { key: "Enter" });
     expect(jumpToTab).toHaveBeenCalledTimes(1);
-    expect(useCockpitStore.getState().overlayOpen).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
   it("filters by text", async () => {

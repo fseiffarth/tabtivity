@@ -1500,6 +1500,44 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 .root-overlay-slot {
   display: contents;
 }
+/* With the `cockpit` experiment on the window wears the header overlays' size
+   (mail, calendar, to-do, models: ONE size, `mail-todo.css`) and, with
+   `.app-overlay-backdrop`, is centred rather than hung from the top — the
+   cockpit's three-column Now view needs the width, and a window that jumps
+   between views is the thing the header overlays avoid. Off, neither class is
+   there and the console is exactly the size it always was. A move or resize
+   still replaces all of this with an inline `position: fixed` frame. */
+.root-overlay.root-overlay-wide {
+  width: min(1680px, calc(100vw - 24px));
+  height: min(93vh, calc(100vh - 24px));
+  max-height: min(93vh, calc(100vh - 24px));
+}
+/* The view strip (cockpit experiment on): the shipped `.tab` strip, the four
+   cockpit views, a divider, then Root. Roving focus, no motion. */
+.root-view-strip {
+  flex: 0 0 auto;
+  align-items: center;
+}
+.root-view-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 8px 6px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+.root-view-star {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+}
+.root-view-star svg {
+  width: 13px;
+  height: 13px;
+}
+.root-view-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
 /* The ◫ toggle is no longer a direct child of the cluster, so the rule that
    keeps its auto margin from splitting a reserved width (projects-tabs.css)
    is repeated for its slot. */

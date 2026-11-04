@@ -10,6 +10,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { useActivityStore } from "../../stores/activity";
 import { useBoxesStore } from "../../stores/boxes";
 import { useCockpitStore } from "../../stores/cockpit";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useGitDirtyStore, type GitDirtyState } from "../../stores/gitDirty";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { hostStateOf, PRIMARY_HOST, useRemoteStatusStore, type ConnState } from "../../stores/remote/remoteStatus";
@@ -65,7 +66,7 @@ function useTimeToday(ids: readonly string[], now: number): Record<string, numbe
 
 /** Bring a project up and close the cockpit; resolves once switched. */
 async function openProject(id: string): Promise<void> {
-  useCockpitStore.getState().closeOverlay();
+  useRootOverlayStore.getState().close();
   await useProjectsStore.getState().setActive(id);
 }
 
@@ -125,7 +126,7 @@ function Card({ card, now }: { card: ProjectCard; now: number }) {
             >
               {t("cockpit.projects.newAgent")}
             </button>
-            <button type="button" className="settings-btn sm" onClick={() => useCockpitStore.getState().showScope(card.id)}>
+            <button type="button" className="settings-btn sm" onClick={() => { useCockpitStore.getState().showScope(card.id); useRootOverlayStore.getState().openView("now"); }}>
               {t("cockpit.projects.agentsAction")}
             </button>
           </>

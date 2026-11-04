@@ -339,6 +339,7 @@ export const UNTESTED = {
   "overlayApprovals.button": { area: "layout", what: "OverlayApprovals · ✓ Approvals in the mail / calendar / to-do title bars" },
   "rootOverlay.viewers": { area: "layout", what: "RootOverlay · viewers, Files tabs and links opened in the console stay in root" },
   "rootOverlay.1": { area: "layout", what: "RootOverlay · ⚿ Tabtivity tools + ✓ Approvals" },
+  "rootConsole.viewStrip": { area: "layout", what: "Root console window · with the cockpit experiment on, the title bar's view strip Now / Projects / Tonight / Usage │ Root (one window, one frame, one ✓ pill; Ctrl+Shift+R from another view goes to Root; the root tab strip, ⚿ and ◫ appear only in the Root view); with it off the strip is absent and the window is the console as before" },
   "overlayAgent.dock": { area: "layout", what: "OverlayAgentColumn · Ctrl+1–9 in the mail / calendar / to-do overlay docks a root agent beside the app: resizable column, ⚿ badge, ↗ open in the root console, × hide, placeholder while the console is open, Ctrl+N re-shows the same live agent, Escape stays in the agent, events/cards an agent adds fly in" },
   "rootConsole.tabMenu": { area: "layout", what: "RootOverlay · right-clicking a root-console tab opens the main window's tab menu: Rename, Colour, Important/Urgent, to-do card, Duplicate, Close / Close others / left / right, Reopen closed tab; colours and marks show on the console's tabs" },
   "rootConsole.installTabTitle": { area: "layout", what: "RootOverlay · a one-click install's tab pulses in the console strip until clicked" },

@@ -6,6 +6,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import { splitPtyId } from "../../stores/activity";
 import { useCockpitStore } from "../../stores/cockpit";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { GitPushProposalCard } from "../agents/GitPushMcp";
 import { AgentScheduleProposal } from "../agents/AgentScheduleProposal";
 import { RootReviewStrip } from "../layout/RootReviewStrip";
@@ -64,7 +65,7 @@ function TabRow({ row, selected, trailing }: { row: RosterRow; selected: boolean
 export function CockpitRail({ decisions, selected, alerts }: { decisions: Decisions; selected: string | null; alerts: AlertsFeed }) {
   const t = useT();
   const { items } = decisions;
-  const close = () => useCockpitStore.getState().closeOverlay();
+  const close = () => useRootOverlayStore.getState().close();
   return (
     <aside className="cockpit-rail" aria-label={t("cockpit.rail.title")}>
       <div className="cockpit-column-head">

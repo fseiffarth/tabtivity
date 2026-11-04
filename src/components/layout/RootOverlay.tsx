@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useRootOverlayStore, type RootOverlayView } from "../../stores/rootOverlay";
+import { useCockpitStore } from "../../stores/cockpit";
+import { useBoxesStore } from "../../stores/boxes";
+import { useExperimental } from "../../lib/experimental";
+import { COCKPIT_VIEWS, type CockpitView } from "../../lib/cockpit/views";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { storageKey } from "../../lib/brand";
 import { useCalendarStore } from "../../stores/calendar/calendar";
@@ -9,9 +13,10 @@ import { ARRIVAL_MS, useArrivalsStore } from "../../stores/calendar/arrivals";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import { notifyCalendarWrite } from "../../lib/calendar/calendarWriteHook";
 import type { Calendar, CalendarEvent, CalendarTask } from "../../types";
-import { useT } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { StarIcon } from "./StarIcon";
+import { CockpitGlyph } from "../header/HeaderGlyphs";
 import { OverlayApprovals } from "./OverlayApprovals";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { useMailStore } from "../../stores/mail";
@@ -19,6 +24,19 @@ import { useRootMcpRights } from "./RootRightsBadge";
 import { usePoll } from "../../lib/usePoll";
 import { CloseIcon } from "../common/icons/Icon";
 import { RootView, type RootBarSlots } from "./RootView";
+
+// The cockpit's views are reached only with the `cockpit` experiment on, so
+// their graph stays out of the startup chunk and only the shown one mounts.
+const CockpitViewBody = lazy(() =>
+  import("../cockpit/CockpitViews").then((m) => ({ default: m.CockpitViewBody })),
+);
+
+const VIEW_LABEL: Record<CockpitView, TranslationKey> = {
+  now: "cockpit.view.now",
+  projects: "cockpit.view.projects",
+  tonight: "cockpit.view.tonight",
+  usage: "cockpit.view.usage",
+};
 
 /** What the backend's `root-mcp-changed` event carries (`services::root_mcp::Change`). */
 type RootMcpChange = (
@@ -49,6 +67,18 @@ type RootMcpChange = (
  */
 export function RootOverlayHost() {
   const open = useRootOverlayStore((s) => s.open);
+  // Tonight's "away since": the moment the window closed off a cockpit view.
+  // Stamped here, on the store's edge, so every door that closes it counts and
+  // a closing Root session (terminals only) does not.
+  useEffect(
+    () =>
+      useRootOverlayStore.subscribe((s, prev) => {
+        if (prev.open && !s.open && prev.view !== "root") {
+          useCockpitStore.setState({ lastClosedAt: Date.now() });
+        }
+      }),
+    [],
+  );
   useTauriListener(() => {
     const refresh = () => { void useRootReviewStore.getState().refresh(); };
     return listen<number>("root-mcp-review-changed", refresh).then((stop) => {
@@ -139,15 +169,24 @@ export function RootOverlayHost() {
 }
 
 /**
- * The console's window: backdrop, the shared floating frame (move, eight grips,
- * fill), the title bar with its slots, the ✓ Approvals pill, and the one Escape
- * rule. What is inside — the root scope's layout, panes, drag, the + menu, the
- * file column — is `RootView`, which portals the strip, the ⚿ badge and the ◫
- * toggle into the bar's slots.
+ * The window: backdrop, the shared floating frame (move, eight grips, fill), the
+ * title bar with its slots, the ✓ Approvals pill, and the one Escape rule. It
+ * shows ONE of five views (`rootOverlay.view`): the cockpit's Now / Projects /
+ * Tonight / Usage, or Root — the root console proper, `RootView`, which portals
+ * its strip, ⚿ badge and ◫ toggle into the bar's slots. Only the shown view is
+ * mounted. Without the `cockpit` experiment the strip of views is absent, the
+ * effective view is Root whatever the store holds, and the window is today's
+ * console in every pixel.
  */
 function RootOverlay() {
   const t = useT();
   const close = useRootOverlayStore((s) => s.close);
+  const cockpitOn = useExperimental("cockpit");
+  const storedView = useRootOverlayStore((s) => s.view);
+  // The stored view may be stale (the flag was switched off while it was set).
+  const view: RootOverlayView = cockpitOn ? storedView : "root";
+  const boxFilter = useCockpitStore((s) => s.boxFilter);
+  const boxes = useBoxesStore((s) => s.boxes);
   // The window's frame — the one hook the header overlays use: moved by the
   // title bar, eight grips, double-click / ⤢ fills. Remembered per machine
   // (`rootConsoleFrame`, localStorage) and re-clamped against the window it
@@ -171,9 +210,9 @@ function RootOverlay() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      // Escape inside a pane is the pane's (an agent TUI's cancel key); the
-      // toggle chord closes from there.
-      if (e.target instanceof Element && e.target.closest(".root-overlay-region")) return;
+      // Escape inside a pane is the pane's (an agent TUI's cancel key; the
+      // cockpit's detail pane hosts one too); the toggle chord closes from there.
+      if (e.target instanceof Element && e.target.closest(".root-overlay-region, .cockpit-detail-pane")) return;
       // A menu, dialog or drag of the view goes first, then a gesture of ours,
       // then the proposals panel (the portal's own handler, on the document,
       // marks it handled) — closing the console under an open panel would take
@@ -195,21 +234,56 @@ function RootOverlay() {
     onBarDoubleClick: barProps.onDoubleClick,
     setControlsStyle,
   };
+  const pick = (id: RootOverlayView) => useRootOverlayStore.getState().openView(id);
+  const onTabKeys = (id: RootOverlayView) => (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      pick(id);
+      return;
+    }
+    // Roving focus: the arrows walk the tabs (Enter / Space choose).
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const tabs = Array.from(
+      e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
+    );
+    const at = tabs.indexOf(e.currentTarget);
+    const next = tabs[(at + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+    if (next) {
+      e.preventDefault();
+      next.focus();
+    }
+  };
+  const viewTab = (id: RootOverlayView, children: React.ReactNode, extra = "") => (
+    <div
+      key={id}
+      role="tab"
+      tabIndex={view === id ? 0 : -1}
+      aria-selected={view === id}
+      className={`tab root-view-tab${extra}${view === id ? " active" : ""}`}
+      data-root-view={id}
+      onMouseDown={(e) => {
+        if (e.button === 0) pick(id);
+      }}
+      onKeyDown={onTabKeys(id)}
+    >
+      {children}
+    </div>
+  );
 
   return (
     <div
-      className="modal-backdrop root-overlay-backdrop"
+      className={`modal-backdrop root-overlay-backdrop${cockpitOn ? " app-overlay-backdrop" : ""}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}
     >
       <div
         ref={frameRef}
-        className={`root-overlay subwindow focused ${frameClass}`}
+        className={`root-overlay subwindow focused ${frameClass}${cockpitOn ? " root-overlay-wide" : ""}`}
         style={frameStyle}
         role="dialog"
         aria-modal="true"
-        aria-label={t("rootConsole.title")}
+        aria-label={t(cockpitOn ? "cockpit.title" : "rootConsole.title")}
       >
         {/* Resize grips, one per edge and corner (withheld while the console
             fills the window — there is nothing to drag them into). */}
@@ -219,24 +293,63 @@ function RootOverlay() {
             dialog, and this one holds terminals. A press on a tab or a control
             keeps its own meaning — see `useFloatingFrame`'s BAR_NO_DRAG. */}
         <div {...barRest} className={`tab-bar root-overlay-bar ${barRest.className}`}>
-          <div className="root-overlay-mark" title={moveHint}>
-            <StarIcon />
-          </div>
+          {cockpitOn ? (
+            <div className="root-overlay-mark app-overlay-mark" title={moveHint}>
+              <CockpitGlyph className="cockpit-overlay-glyph" />
+              <span className="app-overlay-label">{t("cockpit.title")}</span>
+              <UntestedTag id="cockpit.title" />
+            </div>
+          ) : (
+            <div className="root-overlay-mark" title={moveHint}>
+              <StarIcon />
+            </div>
+          )}
+          {cockpitOn && (
+            <>
+              <div className="tab-strip root-view-strip" role="tablist" aria-label={t("rootConsole.viewStrip")}>
+                {COCKPIT_VIEWS.map((id) =>
+                  viewTab(id, <span className="tab-label">{t(VIEW_LABEL[id])}</span>, " cockpit-view-tab"),
+                )}
+                <span className="root-view-divider" role="presentation" />
+                {viewTab(
+                  "root",
+                  <>
+                    <span className="root-view-star"><StarIcon /></span>
+                    <span className="tab-label">{t("rootConsole.view.root")}</span>
+                  </>,
+                  " root-view-tab-root",
+                )}
+              </div>
+              <UntestedTag id="rootConsole.viewStrip" />
+            </>
+          )}
           <div className="root-overlay-slot" ref={setStripEl} />
           <div className="tab-controls root-overlay-controls" style={controlsStyle}>
+            {cockpitOn && view !== "root" && boxes.length > 0 && (
+              <select
+                className="cockpit-box-filter"
+                value={boxFilter ?? ""}
+                aria-label={t("cockpit.boxFilter")}
+                title={t("cockpit.boxFilter")}
+                onChange={(e) => useCockpitStore.getState().setBoxFilter(e.target.value || null)}
+              >
+                <option value="">{t("cockpit.boxFilterAll")}</option>
+                {boxes.map((box) => <option key={box.id} value={box.id}>{box.name}</option>)}
+              </select>
+            )}
             {/* The badge only REPORTS what the tools are — which of them a root
                 tab gets, whether mail is open, whether the review gate is
                 enforced. It used to double as the door to the proposals, so one
                 control answered two questions and the count read as part of the
                 tools' own state; the ✓ button beside it is that door now, and
                 the panel hangs from the button that counts it
-                (`OverlayApprovals`, the same pill the header overlays carry).
-                Switching the tools on and off stays in Settings, where it
-                always was. */}
+                (`OverlayApprovals`, the same pill the header overlays carry — and
+                the one pill of every view). Switching the tools on and off stays
+                in Settings, where it always was. */}
             <span className="root-overlay-slot" ref={setRightsEl} />
-            <UntestedTag id="rootOverlay.1" />
+            {view === "root" && <UntestedTag id="rootOverlay.1" />}
             <OverlayApprovals advisory={rights.reviewAdvisory} />
-            <UntestedTag id="rootOverlay.viewers" />
+            {view === "root" && <UntestedTag id="rootOverlay.viewers" />}
             <span className="root-overlay-slot" ref={setFilesEl} />
             {fillButton}
             <button className="subwindow-hide" title={t("common.close")} onClick={close}>
@@ -244,7 +357,15 @@ function RootOverlay() {
             </button>
           </div>
         </div>
-        <RootView rights={rights} slots={slots} busyRef={busyRef} />
+        {view === "root" ? (
+          <RootView rights={rights} slots={slots} busyRef={busyRef} />
+        ) : (
+          <div className="subwindow-body cockpit-overlay-body">
+            <Suspense fallback={null}>
+              <CockpitViewBody view={view} />
+            </Suspense>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore } from "../../stores/tabs";
 import { useBoxesStore } from "../../stores/boxes";
 import { useCockpitStore } from "../../stores/cockpit";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useActivityStore } from "../../stores/activity";
 import type { ProjectEntry } from "../../types";
 
@@ -26,7 +27,8 @@ beforeEach(() => {
   useTabsStore.setState({ tabsByScope: { loaded: [{ key: "a", label: "a", cmd: "claude", cwd: "/", kind: "agent" }] } });
   useBoxesStore.setState({ boxes: [] });
   useActivityStore.setState({ busyByTab: { "loaded:a": true }, attentionByTab: {}, lastDoneByTab: {}, lastWorkingByTab: {} });
-  useCockpitStore.setState({ overlayOpen: true, view: "projects", boxFilter: null, scopeFilter: null });
+  useRootOverlayStore.setState({ open: true, view: "projects" });
+  useCockpitStore.setState({ boxFilter: null, scopeFilter: null });
 });
 afterEach(() => cleanup());
 
@@ -48,6 +50,7 @@ describe("CockpitProjects", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restore tabs" }));
     expect(activate).toHaveBeenCalledWith("asleep");
     fireEvent.click(screen.getByRole("button", { name: "Agents" }));
-    expect(useCockpitStore.getState()).toMatchObject({ view: "now", scopeFilter: "loaded" });
+    expect(useCockpitStore.getState()).toMatchObject({ scopeFilter: "loaded" });
+    expect(useRootOverlayStore.getState().view).toBe("now");
   });
 });

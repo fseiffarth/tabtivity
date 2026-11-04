@@ -18,7 +18,7 @@ import { MenuShortcut } from "../common/MenuShortcut";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { useExperimental } from "../../lib/experimental";
-import { useCockpitStore } from "../../stores/cockpit";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { BoxColorPicker } from "./BoxColorPicker";
 import { BoxMemberChecklist } from "./BoxMemberChecklist";
 import { useBoxNameCheck, useQuickCreateBox } from "./useQuickCreateBox";
@@ -622,7 +622,7 @@ export function BoxScopeChip({
               <button
                 onClick={() => {
                   dismiss();
-                  useCockpitStore.getState().openOverlay();
+                  useRootOverlayStore.getState().openView("now");
                 }}
               >
                 <span className="box-chip-menu-name">{t("cockpit.openFromBox")}</span>

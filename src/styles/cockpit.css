@@ -1,7 +1,8 @@
-/* cockpit.css — the desktop cockpit overlay (`components/cockpit/`,
-   `docs/desktop_cockpit_plan.md`). The frame, bar and size are the header
-   overlays' own (`mail-todo.css`, `.cockpit-overlay` joins their size rule);
-   this file holds only the views' layout. Rounded corners from the radius
+/* cockpit.css — the desktop cockpit's views (`components/cockpit/`,
+   `docs/desktop_cockpit_plan.md`), shown in the root console's window
+   (`layout/RootOverlay`). The frame and bar are the console's own; with the
+   experiment on its size is the header overlays' (`.root-overlay-wide`,
+   `subwindows.css`); this file holds only the views' layout. Rounded corners from the radius
    tokens, static shadows only, and no motion of its own: rows and the detail
    pane land in one paint, `[data-software-paint]` or not. */
 

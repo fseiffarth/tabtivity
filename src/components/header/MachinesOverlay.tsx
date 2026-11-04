@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
@@ -44,7 +44,7 @@ export function MachinesOverlayFrame({ children }: { children: ReactNode }) {
       // A terminal sign-in opens the root console above this overlay; its
       // Escape is its own. So is a key aimed outside this frame (focus on
       // <body> still counts — a click on the bar drops it there).
-      if (useRootOverlayStore.getState().open) return;
+      if (rootViewShown(useRootOverlayStore.getState())) return;
       const tgt = e.target;
       if (tgt instanceof Node && tgt !== document.body && !frameRef.current?.contains(tgt)) return;
       e.stopPropagation();

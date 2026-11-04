@@ -10621,6 +10621,8 @@ export const dict: Dict = {
   "shortcut.agentTab8": "Apri l’agente 8 del menu + nel riquadro attivo",
   "shortcut.agentTab9": "Apri l’agente 9 del menu + nel riquadro attivo",
   "rootConsole.title": "Console root",
+  "rootConsole.view.root": "Root",
+  "rootConsole.viewStrip": "Viste",
   "rootConsole.installTabTitle": "Aperta per la tua installazione — clicca per fermare la pulsazione",
   "rootConsole.rightsBadge": "⚿ Strumenti di {app}",
   "rootConsole.rightsLocalOnly": "Solo le schede dei modelli locali aperte qui ricevono gli strumenti propri di {app} (MCP): i tuoi progetti, il calendario e la bacheca delle attività. Gli agenti cloud e quelli di un progetto non li ricevono.",

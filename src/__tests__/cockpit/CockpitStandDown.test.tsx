@@ -51,7 +51,6 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { isShownElsewhere, useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useSettingsStore } from "../../stores/settings";
-import { useCockpitStore } from "../../stores/cockpit";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
 import { _clearAsleepPtysForTest } from "../../lib/terminal/sleepingPtys";
@@ -84,7 +83,6 @@ function resetStores() {
   useOverlayAgentStore.setState({ shownKeys: new Set(), assistantShownKeys: new Set(), scopeShownKeys: new Set() });
   useRemoteStatusStore.setState({ byProject: {}, byHost: {} });
   useSettingsStore.setState({ settings: null });
-  useCockpitStore.setState({ overlayOpen: true });
 }
 
 beforeEach(() => {
@@ -161,6 +159,7 @@ describe("CenterPanel stands a project's pane down for the cockpit", () => {
   });
 
   it("Show here closes the cockpit", async () => {
+    useRootOverlayStore.setState({ open: true, view: "now" });
     render(<CenterPanel />);
     await act(async () => {
       useOverlayAgentStore.getState().markShown(drawn.key, P);
@@ -168,7 +167,7 @@ describe("CenterPanel stands a project's pane down for the cockpit", () => {
     await act(async () => {
       (document.querySelector(".center-pane-standdown button") as HTMLButtonElement).click();
     });
-    expect(useCockpitStore.getState().overlayOpen).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
   it("draws no placeholder for a tab of a scope not on screen", async () => {

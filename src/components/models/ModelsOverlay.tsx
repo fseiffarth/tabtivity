@@ -6,7 +6,7 @@ import {
   type ModelsOverlaySection,
 } from "../../stores/modelsOverlay";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { useSettingsStore } from "../../stores/settings";
 import { saverInterval, useQuiesce } from "../../stores/power";
 import { AGENT_REGISTRY_CHANGED_EVENT } from "../../lib/agents/agentRegistry";
@@ -152,7 +152,7 @@ function ModelsOverlay() {
       // install was started from. Likewise any key aimed outside this frame
       // (focus on <body> still counts as ours — a click on the bar drops it
       // there).
-      if (useRootOverlayStore.getState().open) return;
+      if (rootViewShown(useRootOverlayStore.getState())) return;
       const tgt = e.target;
       if (tgt instanceof Node && tgt !== document.body && !frameRef.current?.contains(tgt)) return;
       e.stopPropagation();

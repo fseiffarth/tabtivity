@@ -5,6 +5,7 @@ import { ROOT_SCOPE, hydrateScopeFromDisk, useTabsStore, type TabEntry } from ".
 import { boxScopeId, useBoxesStore } from "./boxes";
 import { useProjectsStore } from "./projects";
 import { BOX_SCOPE_PREFIX } from "../lib/terminal/ptyId";
+import type { CockpitView } from "../lib/cockpit/views";
 import { resolveLocalMirror, resolveProjectDirectory } from "../types";
 
 /**
@@ -38,11 +39,22 @@ import { resolveLocalMirror, resolveProjectDirectory } from "../types";
  * (`rootConsoleFrame`), never `settings.json` — it is where a window sits on one
  * desk, not a preference worth syncing.
  */
+/** What the shared window shows: the root console itself, or one of the
+ *  cockpit's four views (`lib/cockpit/views`). */
+export type RootOverlayView = "root" | CockpitView;
+
 interface RootOverlayState {
   open: boolean;
-  /** Open the console; with a `key`, bring that root tab to the front of its
-   *  subwindow. Which tab each subwindow shows is the root LAYOUT's, so it is
-   *  the same answer the scope persists. */
+  /** The view the window shows (or opens on next). Session-only: a relaunch
+   *  starts on Root, and the cockpit's doors name their view when they open.
+   *  Without the `cockpit` experiment the shell shows Root whatever this holds. */
+  view: RootOverlayView;
+  /** Open the window on `view`. `"root"` is `show()`; a cockpit view never
+   *  restores the root scope (opening it must not bring root's agents up). */
+  openView: (view: RootOverlayView) => void;
+  /** Open the console on Root; with a `key`, bring that root tab to the front
+   *  of its subwindow. Which tab each subwindow shows is the root LAYOUT's, so
+   *  it is the same answer the scope persists. Always means Root. */
   show: (key?: string) => void;
   close: () => void;
   /** Root tabs a one-click install opened (`runInstallInTab`), keyed by tab
@@ -57,11 +69,17 @@ interface RootOverlayState {
 
 export const useRootOverlayStore = create<RootOverlayState>((set) => ({
   open: false,
+  view: "root",
   show: (key) => {
     void ensureRootScopeHydrated();
     if (key) useTabsStore.getState().revealTabInScope(ROOT_SCOPE, key);
-    set({ open: true });
+    set({ open: true, view: "root" });
   },
+  openView: (view) => {
+    if (view === "root") useRootOverlayStore.getState().show();
+    else set({ open: true, view });
+  },
+  // `view` stays: the next plain open of a cockpit view is the caller's choice.
   close: () => set({ open: false }),
   installTabs: {},
   markInstallTab: (key) => set((s) => ({ installTabs: { ...s.installTabs, [key]: true } })),
@@ -74,9 +92,17 @@ export const useRootOverlayStore = create<RootOverlayState>((set) => ({
     }),
 }));
 
+/** Is the root layout itself on screen — the window is up AND on Root? The
+ *  question "is root's layout drawn" (as opposed to "is the window up", `open`). */
+export function rootViewShown(s: Pick<RootOverlayState, "open" | "view">): boolean {
+  return s.open && s.view === "root";
+}
+
+/** Ctrl+Shift+R: closed -> Root; up on another view -> switch to Root; on
+ *  Root -> close. */
 export function toggleRootConsole(): void {
   const s = useRootOverlayStore.getState();
-  if (s.open) s.close();
+  if (rootViewShown(s)) s.close();
   else s.show();
 }
 

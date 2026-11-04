@@ -112,7 +112,6 @@ import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../store
 import { useTimerStore } from "../../stores/timer";
 import { useMailStore } from "../../stores/mail";
 import { useTodoStore } from "../../stores/todo";
-import { useCockpitStore } from "../../stores/cockpit";
 import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
@@ -168,23 +167,6 @@ function LazyMailOverlayHost() {
   return (
     <Suspense fallback={null}>
       <MailOverlayHost />
-    </Suspense>
-  );
-}
-
-// The cockpit, the same bargain: reached only from its header button, its
-// steering key and the box chip, so its graph stays out of the startup chunk
-// and nothing of it runs until the store says open.
-const CockpitOverlayHost = lazy(() =>
-  import("../cockpit/CockpitOverlay").then((m) => ({ default: m.CockpitOverlayHost })),
-);
-
-function LazyCockpitOverlayHost() {
-  const open = useCockpitStore((s) => s.overlayOpen);
-  if (!open) return null;
-  return (
-    <Suspense fallback={null}>
-      <CockpitOverlayHost />
     </Suspense>
   );
 }
@@ -1638,16 +1620,15 @@ export function AppShell() {
           nothing makes them mutually exclusive, so DOM order is the tie-break
           and the surface opened most recently should be the one on top. */}
       <LazyTodoOverlayHost />
-      {/* The cockpit (`docs/desktop_cockpit_plan.md`), after the three app
-          overlays so it wins the z-order tie (DOM order) when opened over one. */}
-      <LazyCockpitOverlayHost />
       {/* The Models & agents overlay — a click on the header's processor-chip
           button (its hover dropdown stays), and the home of the machine-level
           Skills Library. At the shell for the family's reason (it covers the
           window and must survive a project switch), after the three above
           because it is opened from a header button that sits over them, and
           before the root console so a one-click install started from one of
-          its tabs opens the console on top of it. */}
+          its tabs opens the console on top of it. (The cockpit's views are the
+          console's: they sit above this overlay too, so the Usage view's door
+          to the Machines overlay is one to check.) */}
       <LazyModelsOverlayHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root
@@ -1655,7 +1636,9 @@ export function AppShell() {
           both open their tab in it. After the overlay family and the settings
           surfaces in DOM order, so it lands on top of the dialog that started
           the install or the login. Its host also persists the root scope and merges the rows a
-          root agent wrote through Tabtivity's MCP tools — both while closed. */}
+          root agent wrote through Tabtivity's MCP tools — both while closed. It
+          is also the cockpit's window (`docs/cockpit_root_merge_plan.md`): the
+          cockpit's four views are views of this one surface. */}
       <RootOverlayHost />
       <AssistantScopeHost />
       {/* The shortcut cheat sheet (F1, `?` in steering mode, or the ⚙ menu) —

@@ -494,7 +494,6 @@ svg.alerts-toggle-icon {
 .mail-overlay,
 .calendar-overlay,
 .todo-overlay,
-.cockpit-overlay,
 .models-overlay,
 .machines-overlay {
   width: min(1680px, calc(100vw - 24px));
@@ -521,7 +520,6 @@ svg.alerts-toggle-icon {
 .mail-overlay-body,
 .calendar-overlay-body,
 .todo-overlay-body,
-.cockpit-overlay-body,
 .models-overlay-body,
 .machines-overlay-body {
   position: relative;
