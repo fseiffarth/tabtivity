@@ -2535,6 +2535,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         probeChanges={visible && readerTopBar && changesOffered(readerAgent) && !readerOnHost}
         onChangesKnown={setChangesKnown}
         onShowChat={showReaderChat}
+        onOpenUrl={(url) => {
+          void confirmLinkRef.current(url).then((ok) => {
+            if (ok) return invoke("open_external_url", { url });
+          }).catch(() => {});
+        }}
         navigationSlot={readerNavigationSlot}
         actionSlot={readerActionSlot}
       />

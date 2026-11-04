@@ -57,7 +57,7 @@ import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
-import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
+import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
 import { pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
@@ -392,6 +392,9 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
  * once looked up keeps its answer, so a shown bubble never gains or loses a
  * link afterwards. */
 const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(new Map());
+const NO_PATH_LINKS: ReadonlyMap<string, FileEntry | null> = new Map();
+/** The chat's web links are dressed like its file links (`linkPathsInHtml`). */
+const WEB_LINKS = { webLinks: true } as const;
 
 /** One answer as formatted text (`answerHtml`, the phone's: formatting only,
  * nothing in it opens or loads), its file paths made links and the pictures
@@ -400,7 +403,7 @@ const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(ne
  * above it. */
 const AnswerText = memo(function AnswerText({ text }: { text: string }) {
   const links = useContext(PathLinksContext);
-  const html = useMemo(() => linkPathsInHtml(answerHtml(text), links), [text, links]);
+  const html = useMemo(() => linkPathsInHtml(answerHtml(text), links, WEB_LINKS), [text, links]);
   return (
     <>
       <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />
@@ -415,7 +418,8 @@ const AnswerText = memo(function AnswerText({ text }: { text: string }) {
  * the record, and its bubble must not restyle when that arrives. */
 const PromptText = memo(function PromptText({ text, unlinked = false }: { text: string; unlinked?: boolean }) {
   const links = useContext(PathLinksContext);
-  const html = useMemo(() => (unlinked ? promptHtml(text) : linkPathsInHtml(promptHtml(text), links)), [text, links, unlinked]);
+  // Web links need no lookup, so even a prompt still sending has them dressed.
+  const html = useMemo(() => linkPathsInHtml(promptHtml(text), unlinked ? NO_PATH_LINKS : links, WEB_LINKS), [text, links, unlinked]);
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
@@ -1046,7 +1050,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * open as the session's do; nothing live — the screen's dialogs, the working
  * row, sending prompts — is drawn under it, since none of that is its.
  */
-export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, probeChanges = false, onChangesKnown, onShowChat, navigationSlot, actionSlot }: {
+export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, probeChanges = false, onChangesKnown, onShowChat, onOpenUrl, navigationSlot, actionSlot }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
   ptyId: string;
@@ -1068,6 +1072,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   onChangesKnown?: (has: boolean) => void;
   /** Select this pane's Chat tab — leaving Diffs, or the terminal. */
   onShowChat?: () => void;
+  /** Open a web link clicked in the chat — after asking (`TerminalView`'s
+   * link confirmation). Without it, web links are only drawn. */
+  onOpenUrl?: (url: string) => void;
   navigationSlot?: HTMLElement | null;
   actionSlot?: HTMLElement | null;
 }) {
@@ -1380,13 +1387,31 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow, fromTab: tabKey },
     );
   };
+  // A web link (`dressWebLink`) never opens straight away: `onOpenUrl` asks
+  // first, naming the address, as a link the terminal printed does.
+  const openWebAt = (target: EventTarget | null): boolean => {
+    const el = onOpenUrl && target instanceof Element ? target.closest<HTMLElement>(".web-link[data-href]") : null;
+    const url = el ? chatLinkUrl(el.getAttribute("data-href")) : null;
+    if (!url) return false;
+    setPathHover(null);
+    onOpenUrl?.(url);
+    return true;
+  };
   const onPathClick = (event: ReactMouseEvent) => {
+    if (openWebAt(event.target)) {
+      event.preventDefault();
+      return;
+    }
     const el = pathLinkAt(event.target);
     if (!el) return;
     event.preventDefault();
     openPathAt(el, event.ctrlKey || event.metaKey);
   };
   const onPathKey = (event: KeyboardEvent) => {
+    if (event.key === "Enter" && openWebAt(event.target)) {
+      event.preventDefault();
+      return;
+    }
     const el = event.key === "Enter" ? pathLinkAt(event.target) : null;
     if (!el) return;
     event.preventDefault();

@@ -2528,7 +2528,227 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 }
 /* A file path in the chat (`linkPathsInHtml`): the Markdown viewer's
    `a.file-link`, which has no href and so needs the pointer said. */
-.terminal-reader-md a.file-link { cursor: var(--cur-pointer, pointer); }
+.terminal-reader-md a.file-link,
+.terminal-reader-md .md-link[data-path-link] { cursor: var(--cur-pointer, pointer); }
+/* Chat file links stand out as links, not as code (`linkPathsInHtml`):
+   inside a sentence a solid accent underline, the folder greyed and an ↗
+   after; a path on a line of its own a file chip — type icon, the name
+   first, the folder after it in grey (CSS `order`; the DOM keeps the path's
+   own order, so a copy copies it as written). Icons are masks, so they take
+   the text colour. Nothing animates (`[data-software-paint]`). */
+.terminal-reader-md {
+  --file-link-icon-open: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17L17 7'/%3E%3Cpath d='M8 7h9v9'/%3E%3C/svg%3E");
+  --file-link-icon-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='3'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='M21 15l-5-5L5 21'/%3E%3C/svg%3E");
+  --file-link-icon-code: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 18l6-6-6-6'/%3E%3Cpath d='M8 6l-6 6 6 6'/%3E%3C/svg%3E");
+  --file-link-icon-doc: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z'/%3E%3Cpath d='M14 3v6h6M8 13h8M8 17h5'/%3E%3C/svg%3E");
+  --file-link-icon-file: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z'/%3E%3Cpath d='M14 3v6h6'/%3E%3C/svg%3E");
+  --file-link-icon-folder: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
+}
+.markdown-body.terminal-reader-md code.file-link-host {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+/* A Markdown link to a file (`[the report](out/report.pdf)`, a labelled
+   `.md-link[data-path-link]`) takes the in-sentence look too. */
+.markdown-body.terminal-reader-md a.file-link:not(.md-link),
+.markdown-body.terminal-reader-md .md-link[data-path-link] {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  border-radius: 4px;
+}
+.markdown-body.terminal-reader-md a.file-link:not(.md-link):hover,
+.markdown-body.terminal-reader-md .md-link[data-path-link]:hover {
+  text-decoration-thickness: 2.5px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.terminal-reader-md a.file-link .file-link-dir { color: var(--text-secondary); }
+.terminal-reader-md a.file-link .file-link-line { color: var(--text-secondary); }
+.terminal-reader-md a.file-link:not(.md-link)::after,
+.terminal-reader-md .md-link[data-path-link]::after {
+  content: "";
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-left: 0.2em;
+  vertical-align: -0.05em;
+  background: currentColor;
+  -webkit-mask: var(--file-link-icon-open) center / contain no-repeat;
+  mask: var(--file-link-icon-open) center / contain no-repeat;
+}
+.markdown-body.terminal-reader-md a.file-link.file-link--chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 1px 0;
+  padding: 2px 10px 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font-sans, inherit);
+  font-size: 0.9em;
+  line-height: 1.5;
+  text-decoration: none;
+  vertical-align: middle;
+}
+.markdown-body.terminal-reader-md a.file-link.file-link--chip:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-main));
+  border-color: var(--accent);
+}
+.terminal-reader-md a.file-link--chip::before {
+  content: "";
+  flex: none;
+  order: 0;
+  width: 1.05em;
+  height: 1.05em;
+  background: var(--accent);
+  -webkit-mask: var(--file-link-icon-file) center / contain no-repeat;
+  mask: var(--file-link-icon-file) center / contain no-repeat;
+}
+.terminal-reader-md a.file-link--chip[data-kind="image"]::before { -webkit-mask-image: var(--file-link-icon-image); mask-image: var(--file-link-icon-image); }
+.terminal-reader-md a.file-link--chip[data-kind="code"]::before { -webkit-mask-image: var(--file-link-icon-code); mask-image: var(--file-link-icon-code); }
+.terminal-reader-md a.file-link--chip[data-kind="doc"]::before { -webkit-mask-image: var(--file-link-icon-doc); mask-image: var(--file-link-icon-doc); }
+.terminal-reader-md a.file-link--chip[data-kind="folder"]::before { -webkit-mask-image: var(--file-link-icon-folder); mask-image: var(--file-link-icon-folder); }
+.terminal-reader-md a.file-link--chip .file-link-name { order: 1; font-weight: 600; white-space: nowrap; }
+.terminal-reader-md a.file-link--chip .file-link-line { order: 1; white-space: nowrap; }
+.terminal-reader-md a.file-link--chip .file-link-dir {
+  order: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92em;
+}
+.terminal-reader-md a.file-link.file-link--chip::after {
+  order: 3;
+  flex: none;
+  margin-left: 0;
+  visibility: hidden;
+  background: var(--accent);
+}
+.terminal-reader-md a.file-link.file-link--chip:hover::after,
+.terminal-reader-md a.file-link.file-link--chip:focus-visible::after { visibility: visible; }
+/* A web link in the chat (`dressWebLink`), drawn like a file link: inside a
+   sentence the accent underline, the scheme and path greyed so the host
+   stands out, and a leave-the-app arrow after; on a line of its own a chip —
+   globe, then the host and path (or the label, its host greyed after it).
+   Opening always asks first (`onOpenUrl`). Nothing animates. */
+.terminal-reader-md {
+  --web-link-icon-out: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 4h6v6'/%3E%3Cpath d='M20 4l-9 9'/%3E%3Cpath d='M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5'/%3E%3C/svg%3E");
+  --web-link-icon-globe: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18'/%3E%3Cpath d='M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z'/%3E%3C/svg%3E");
+}
+.markdown-body.terminal-reader-md .web-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+  cursor: var(--cur-pointer, pointer);
+}
+.markdown-body.terminal-reader-md .web-link:hover {
+  text-decoration-thickness: 2.5px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.terminal-reader-md .web-link .web-link-scheme,
+.terminal-reader-md .web-link .web-link-path { color: var(--text-secondary); }
+.terminal-reader-md .web-link::after {
+  content: "";
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-left: 0.2em;
+  vertical-align: -0.05em;
+  background: currentColor;
+  -webkit-mask: var(--web-link-icon-out) center / contain no-repeat;
+  mask: var(--web-link-icon-out) center / contain no-repeat;
+}
+.markdown-body.terminal-reader-md .web-link.web-link--chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 1px 0;
+  padding: 2px 10px 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font-sans, inherit);
+  font-size: 0.9em;
+  line-height: 1.5;
+  text-decoration: none;
+  vertical-align: middle;
+  overflow-wrap: normal;
+}
+.markdown-body.terminal-reader-md .web-link.web-link--chip:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-main));
+  border-color: var(--accent);
+}
+.terminal-reader-md .web-link--chip::before {
+  content: "";
+  flex: none;
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 6px;
+  background: var(--accent);
+  -webkit-mask: var(--web-link-icon-globe) center / contain no-repeat;
+  mask: var(--web-link-icon-globe) center / contain no-repeat;
+}
+/* The scheme leaves the chip's look but not its text: a copy still copies
+   the address whole. */
+.terminal-reader-md .web-link--chip .web-link-scheme {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.terminal-reader-md .web-link--chip .web-link-host { flex: none; font-weight: 600; white-space: nowrap; }
+.terminal-reader-md .web-link--chip .web-link-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92em;
+}
+.terminal-reader-md .web-link.web-link--chip::after {
+  flex: none;
+  margin-left: 6px;
+  visibility: hidden;
+  background: var(--accent);
+}
+.terminal-reader-md .web-link.web-link--chip:hover::after,
+.terminal-reader-md .web-link.web-link--chip:focus-visible::after { visibility: visible; }
+/* A labelled chip: the label in full weight, the host it goes to greyed
+   after it in place of the arrow. */
+.terminal-reader-md .web-link.web-link--chip[data-host] { font-weight: 600; }
+.terminal-reader-md .web-link.web-link--chip[data-host]::after {
+  content: attr(data-host);
+  flex: 0 1 auto;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  visibility: visible;
+  background: none;
+  -webkit-mask: none;
+  mask: none;
+  color: var(--text-secondary);
+  font-size: 0.92em;
+  font-weight: 400;
+}
 /* A task list's box (`answerMarkdown` emits an empty `.md-task`): drawn, not a
    typed ☑/☐, which a font fallback could hand to the colour-emoji font. */
 .terminal-reader-md .md-task {

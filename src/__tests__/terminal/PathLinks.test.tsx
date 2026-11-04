@@ -156,8 +156,86 @@ describe("chat markup", () => {
     expect(box.textContent).toBe("Read docs/plan.md:12, x.md and docs/plan.md");
   });
 
+  it("splits a link into folder, name and line, its text unchanged", () => {
+    const links = new Map([["src/lib/a.ts", true]]);
+    const box = document.createElement("div");
+    box.innerHTML = linkPathsInHtml("<p>See src/lib/a.ts:12 for it.</p>", links);
+    const a = box.querySelector("a.file-link")!;
+    expect([...a.children].map((el) => [el.className, el.textContent])).toEqual([
+      ["file-link-dir", "src/lib/"],
+      ["file-link-name", "a.ts"],
+      ["file-link-line", ":12"],
+    ]);
+    expect(a.getAttribute("data-kind")).toBe("code");
+    expect(a.classList.contains("file-link--chip")).toBe(false);
+    expect(box.textContent).toBe("See src/lib/a.ts:12 for it.");
+  });
+
+  it("draws a path that is a line of its own as a chip, and drops its code box", () => {
+    const links = new Map<string, unknown>([["out/fig.png", true], ["src/docs", { is_dir: true }], ["a.md", true]]);
+    const box = document.createElement("div");
+    box.innerHTML = linkPathsInHtml(
+      "<ul><li><code>out/fig.png</code></li><li>src/docs:</li><li><code>a.md</code> is the plan</li></ul>",
+      links,
+    );
+    const [fig, docs, plan] = box.querySelectorAll("a.file-link");
+    expect(fig.classList.contains("file-link--chip")).toBe(true);
+    expect(fig.getAttribute("data-kind")).toBe("image");
+    expect(fig.parentElement!.classList.contains("file-link-host")).toBe(true);
+    expect(docs.classList.contains("file-link--chip")).toBe(true);
+    expect(docs.getAttribute("data-kind")).toBe("folder");
+    expect(plan.classList.contains("file-link--chip")).toBe(false);
+    expect(plan.parentElement!.classList.contains("file-link-host")).toBe(true);
+  });
+
+  it("never draws a chip inside a code block", () => {
+    const box = document.createElement("div");
+    box.innerHTML = linkPathsInHtml("<pre><code>a/b.md</code></pre>", new Map([["a/b.md", true]]));
+    const a = box.querySelector("a.file-link")!;
+    expect(a.classList.contains("file-link--chip")).toBe(false);
+    expect(a.parentElement!.classList.contains("file-link-host")).toBe(false);
+  });
+
   it("returns the markup untouched when nothing is found", () => {
     expect(linkPathsInHtml("<p>a/b.md</p>", new Map())).toBe("<p>a/b.md</p>");
+  });
+
+  it("dresses web links only when asked, splitting an address that is its own text", () => {
+    const html = '<p>See <span class="md-link" data-href="https://example.com/docs/a?b=1">https://example.com/docs/a?b=1</span> for it.</p>';
+    expect(linkPathsInHtml(html, new Map())).toBe(html);
+    const box = document.createElement("div");
+    box.innerHTML = linkPathsInHtml(html, new Map(), { webLinks: true });
+    const link = box.querySelector(".md-link")!;
+    expect(link.classList.contains("web-link")).toBe(true);
+    expect(link.classList.contains("web-link--chip")).toBe(false);
+    expect(link.getAttribute("title")).toBe("https://example.com/docs/a?b=1");
+    expect([...link.children].map((el) => [el.className, el.textContent])).toEqual([
+      ["web-link-scheme", "https://"],
+      ["web-link-host", "example.com"],
+      ["web-link-path", "/docs/a?b=1"],
+    ]);
+    expect(box.textContent).toBe("See https://example.com/docs/a?b=1 for it.");
+  });
+
+  it("draws a web link on a line of its own as a chip, a labelled one with its host", () => {
+    const box = document.createElement("div");
+    box.innerHTML = linkPathsInHtml(
+      '<ul><li><span class="md-link" data-href="https://www.example.org/x">the guide</span></li>' +
+        '<li><span class="md-link" data-href="https://example.org/">https://example.org/</span>.</li>' +
+        '<li>Read <span class="md-link" data-href="https://example.org/">this</span> first</li></ul>' +
+        '<pre><code><span class="md-link" data-href="https://example.org/">x</span></code></pre>',
+      new Map(),
+      { webLinks: true },
+    );
+    const [guide, bare, inline, code] = box.querySelectorAll(".md-link");
+    expect(guide.classList.contains("web-link--chip")).toBe(true);
+    expect(guide.getAttribute("data-host")).toBe("example.org");
+    expect(guide.textContent).toBe("the guide");
+    expect(bare.classList.contains("web-link--chip")).toBe(true);
+    expect(bare.hasAttribute("data-host")).toBe(false);
+    expect(inline.classList.contains("web-link--chip")).toBe(false);
+    expect(inline.getAttribute("data-host")).toBe("example.org");
+    expect(code.classList.contains("web-link")).toBe(false);
   });
 });
 
@@ -278,9 +356,8 @@ describe("the Reader's path links", () => {
 
   it("draws an answer with its existing paths already linked, and a click opens the file", async () => {
     render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
-    const link = await screen.findByText("docs/plan.md");
-    expect(link.tagName).toBe("A");
-    expect(link.className).toBe("file-link");
+    const link = await screen.findByText((_, el) => el?.tagName === "A" && el.textContent === "docs/plan.md");
+    expect(link.classList.contains("file-link")).toBe(true);
     expect(screen.getByText(/nope\.md/).tagName).not.toBe("A");
     expect(invoke).toHaveBeenCalledWith("resolve_text_paths", { bases: ["/p"], candidates: ["docs/plan.md", "nope.md"] });
     fireEvent.mouseOver(link);
@@ -294,13 +371,36 @@ describe("the Reader's path links", () => {
 
   it("opens the file in a new subwindow on Ctrl+click", async () => {
     render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused />);
-    const link = await screen.findByText("docs/plan.md");
+    const link = await screen.findByText((_, el) => el?.tagName === "A" && el.textContent === "docs/plan.md");
     fireEvent.mouseOver(link);
     expect(document.body.querySelector(".link-open-hint")?.textContent).toContain("Ctrl+click: in a new subwindow");
     await act(async () => { fireEvent.click(link, { ctrlKey: true }); });
     expect(openFileEntry).toHaveBeenCalledWith(expect.objectContaining({
       entry: expect.objectContaining({ path: "/p/docs/plan.md" }), newSubwindow: true,
     }));
+  });
+
+  it("opens a web link only through onOpenUrl, on click or Enter", async () => {
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args?: unknown) =>
+      command === "agent_tab_transcript"
+        ? Promise.resolve({
+          available: true,
+          version: "v1",
+          truncated: false,
+          entries: [{ kind: "answer", text: "The docs: [guide](https://example.com/guide) and docs/plan.md", at: "2026-10-06T08:00:00Z" }],
+        })
+        : base(command, args));
+    const onOpenUrl = vi.fn();
+    render(<TerminalReaderView host={host} ptyId="p:agent-1" scope="p" tabKey="agent-1" cwd="/p" visible focused onOpenUrl={onOpenUrl} />);
+    const link = await screen.findByText("guide");
+    expect(link.classList.contains("web-link")).toBe(true);
+    await act(async () => { fireEvent.click(link); });
+    expect(onOpenUrl).toHaveBeenCalledWith("https://example.com/guide");
+    fireEvent.keyDown(link, { key: "Enter" });
+    expect(onOpenUrl).toHaveBeenCalledTimes(2);
+    expect(openFileEntry).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("open_external_url", expect.anything());
   });
 
   it("asks nothing for a remote project's chat", async () => {
