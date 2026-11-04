@@ -6,7 +6,7 @@ import { resolveProjectDirectory } from "../../types";
 import { ASSISTANT_SCOPE } from "../assistant";
 import { showAssistant } from "../../stores/assistantView";
 import { isDetachedWindow } from "../../stores/detachedContext";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootOverlay";
 
 /**
  * Show the tab a surface is pointing at: make it the visible tab of its
@@ -72,23 +72,29 @@ function bringUpScope(scope: string): Promise<void> {
  * the scope is brought up first and the tab added only once it is. In a popout
  * the store owns no layout; the switch is forwarded and the tab is not added,
  * the same half-honoured jump `jumpToTab` settles for.
+ *
+ * Root's chart is a root tab like any other, so it opens in the Root view of
+ * the window (its tab added to root's own layout, `show(key)`) and the active
+ * scope stays as it was — root is no place to switch to.
  */
 export async function openPromptChartTab(scope: string): Promise<void> {
-  // Root's own Prompt chart tab still goes through `bringUpScope`, which
-  // switches the workspace to the root scope: a separate, pre-existing case
-  // that `jumpToTab`'s root rule does not cover.
+  const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
+  const spec = {
+    label: translateNow("promptChart.heading"),
+    cmd: PROMPTCHART_TAB_CMD,
+    // Empty resolves to ~/tabtivity/root on the backend, as the root shell's does.
+    cwd: project ? resolveProjectDirectory(project) : "",
+    kind: "promptchart" as const,
+  };
+  if (scope === ROOT_SCOPE && !isDetachedWindow()) {
+    await ensureRootScopeHydrated();
+    const prior = (useTabsStore.getState().tabsByScope[ROOT_SCOPE] ?? []).find((tab) => tab.kind === "promptchart");
+    const tab = prior ?? useTabsStore.getState().addTabToScope(ROOT_SCOPE, spec);
+    useRootOverlayStore.getState().show(tab.key);
+    return;
+  }
   await bringUpScope(scope);
   const tabs = useTabsStore.getState();
   if (tabs.scope !== scope) return;
-  const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
-  tabs.ensureTab(
-    {
-      label: translateNow("promptChart.heading"),
-      cmd: PROMPTCHART_TAB_CMD,
-      // Empty resolves to ~/tabtivity/root on the backend, as the root shell's does.
-      cwd: project ? resolveProjectDirectory(project) : "",
-      kind: "promptchart",
-    },
-    (tab) => tab.kind === "promptchart",
-  );
+  tabs.ensureTab(spec, (tab) => tab.kind === "promptchart");
 }

@@ -103,11 +103,6 @@ describe("jumpToTab", () => {
     }
   });
 
-  it("names the root scope as the null project for its Prompt chart tab (a separate case)", async () => {
-    useTabsStore.setState({ scope: "p1" });
-    await openPromptChartTab("root");
-    expect(projectSetActive).toHaveBeenCalledWith(null);
-  });
 
   it("brings a box up through the boxes store, never the project switcher", () => {
     revealTabInScope.mockReturnValue(true);
@@ -143,12 +138,48 @@ describe("openPromptChartTab", () => {
     expect(matches({ kind: "shell" })).toBe(false);
   });
 
-  it("gives the root chart an empty cwd for the backend to resolve", async () => {
-    useTabsStore.setState({ scope: "root" });
-    useProjectsStore.setState({ activeId: null });
+  it("opens root's chart in the Root view and never switches the workspace to root", async () => {
+    const added: Array<{ cwd: string; kind: string }> = [];
+    const addTabToScope = vi.fn((_scope: string, spec: { cwd: string; kind: string }) => {
+      added.push(spec);
+      return { key: "pc-1", label: "", cmd: "", cwd: spec.cwd, kind: "promptchart" } as never;
+    });
+    useTabsStore.setState({ scope: "p1", addTabToScope, tabsByScope: { p1: [], root: [] } });
+    useRootOverlayStore.setState({ open: false, view: "now" });
     await openPromptChartTab("root");
     expect(projectSetActive).not.toHaveBeenCalled();
-    expect(ensureTab.mock.calls[0][0]).toMatchObject({ cwd: "", kind: "promptchart" });
+    expect(useTabsStore.getState().scope).toBe("p1");
+    expect(useProjectsStore.getState().activeId).toBe("p1");
+    // Added to root's own layout (empty cwd for the backend to resolve) ...
+    expect(addTabToScope).toHaveBeenCalledWith("root", expect.objectContaining({ cwd: "", kind: "promptchart" }));
+    expect(ensureTab).not.toHaveBeenCalled();
+    // ... and shown in the Root view of the window, in front.
+    expect(revealTabInScope).toHaveBeenCalledWith("root", "pc-1");
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "root" });
+  });
+
+  it("focuses root's chart when it already has one instead of adding a second", async () => {
+    const addTabToScope = vi.fn();
+    useTabsStore.setState({
+      scope: "p1",
+      addTabToScope,
+      tabsByScope: { p1: [], root: [{ key: "pc-7", label: "", cmd: PROMPTCHART_TAB_CMD, cwd: "", kind: "promptchart" }] },
+    });
+    await openPromptChartTab("root");
+    expect(addTabToScope).not.toHaveBeenCalled();
+    expect(revealTabInScope).toHaveBeenCalledWith("root", "pc-7");
+    expect(projectSetActive).not.toHaveBeenCalled();
+  });
+
+  it("in a popout root's chart takes the old forwarded path", async () => {
+    const off = installDetachedWindowContext({ label: "w", scope: "root", groupId: "g" } as never);
+    try {
+      useTabsStore.setState({ scope: "p1" });
+      await openPromptChartTab("root");
+      expect(projectSetActive).toHaveBeenCalledWith(null);
+    } finally {
+      off();
+    }
   });
 
   it("adds nothing when the switch did not land this store on the scope (popout)", async () => {
