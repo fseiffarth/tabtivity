@@ -3451,6 +3451,7 @@ export const enSource = {
   "settings.searchAlias.zoom": "font size, scale, bigger, smaller, text size",
   "settings.searchAlias.clock": "time, date, 24-hour",
   "settings.searchAlias.voice": "speech, dictation, dictate, microphone, mic, whisper, talk",
+  "settings.searchAlias.cockpit": "overview, dashboard, all projects, every agent, waiting, decisions, approvals",
   "settings.searchAlias.vm": "virtual machine, QEMU, KVM, libvirt",
   "settings.searchAlias.mobile": "phone, smartphone, PWA, Tailscale, remote access",
   "settings.searchAlias.energySaver": "battery, power, laptop",

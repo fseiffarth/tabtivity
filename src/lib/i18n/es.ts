@@ -3403,6 +3403,7 @@ export const dict: Dict = {
   "settings.searchAlias.zoom": "tamaño de letra, escala, más grande, más pequeño, tamaño del texto",
   "settings.searchAlias.clock": "hora, fecha, 24 horas",
   "settings.searchAlias.voice": "voz, dictado, dictar, micrófono, mic, whisper, hablar",
+  "settings.searchAlias.cockpit": "resumen, panel, todos los proyectos, cada agente, esperando, decisiones, aprobaciones",
   "settings.searchAlias.vm": "máquina virtual, QEMU, KVM, libvirt",
   "settings.searchAlias.mobile": "móvil, teléfono, smartphone, PWA, Tailscale, acceso remoto",
   "settings.searchAlias.energySaver": "batería, energía, portátil",
