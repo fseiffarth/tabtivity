@@ -107,6 +107,25 @@ describe("CockpitNow", () => {
     expect(useRootOverlayStore.getState().open).toBe(true);
   });
 
+  it("a root agent is an ordinary row with the star Root chip; Space draws it, its button says Open in Root", async () => {
+    useTabsStore.setState({ tabsByScope: { ...useTabsStore.getState().tabsByScope, root: [agent("r", "rooty")] } });
+    render(<CockpitNow />);
+    await act(async () => {});
+    const row = document.querySelector('[data-pty="root:r"]')!;
+    const chip = row.querySelector(".cockpit-chip.root")!;
+    expect(chip.textContent).toContain("Root");
+    expect(chip.querySelector("svg")).toBeTruthy();
+    // A project row has the plain chip.
+    expect(document.querySelector('[data-pty="p2:b"] .cockpit-chip.root')).toBeNull();
+    useCockpitStore.getState().select("root:r");
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: " " });
+    await act(async () => {});
+    expect(screen.getByTestId("attached-r")).toBeTruthy();
+    expect(useOverlayAgentStore.getState().shownKeys.has("r")).toBe(true);
+    expect(screen.getByText("Open in Root")).toBeTruthy();
+    expect(screen.queryByText("Jump to tab")).toBeNull();
+  });
+
   it("filters by text", async () => {
     render(<CockpitNow />);
     await act(async () => {});

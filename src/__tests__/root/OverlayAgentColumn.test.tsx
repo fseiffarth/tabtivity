@@ -134,6 +134,16 @@ describe("OverlayAgentColumn", () => {
     expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(false);
   });
 
+  it("keeps drawing while the window is up on a cockpit view: only the Root view stands the column down", async () => {
+    await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} />);
+    act(() => useRootOverlayStore.setState({ open: true, view: "now" }));
+    expect(screen.getByTestId("pane")).toBeTruthy();
+    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);
+    act(() => useRootOverlayStore.setState({ view: "root" }));
+    expect(screen.queryByTestId("pane")).toBeNull();
+    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(false);
+  });
+
   it("shows a placeholder, and stops claiming the key, while the root console is open", async () => {
     await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} />);
     expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ROOT_SCOPE, orderedTabKeys, useTabsStore, type TabEntry } from "../../stores/tabs";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { clampOverlayAgentWidth, useOverlayAgentStore } from "../../stores/overlayAgent";
 import type { SteeringApp } from "../../lib/shortcuts/steeringRegion";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
@@ -77,8 +77,9 @@ export function OverlayAgentColumn({
   onDismissHint,
 }: Props) {
   const t = useT();
-  // Only the root scope has a console to stand down for.
-  const consoleOpen = useRootOverlayStore((s) => s.open) && scope === ROOT_SCOPE;
+  // Only the root scope has a console to stand down for, and only while its
+  // layout is what the window shows (the cockpit's views draw no root layout).
+  const consoleOpen = useRootOverlayStore((s) => rootViewShown(s)) && scope === ROOT_SCOPE;
   const open = useOverlayAgentStore((s) => s.docks[app].open);
   const tab = open ? dockedTab : null;
   const storedWidth = useOverlayAgentStore((s) => s.width);

@@ -38,7 +38,7 @@ import {
 import { dividerFraction } from "../../stores/tabs/layoutTree";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { useSettingsStore } from "../../stores/settings";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useDragStore } from "../../stores/drag/drag";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
@@ -90,7 +90,13 @@ function CenterPanelImpl() {
   const scope = useTabsStore((s) => s.scope);
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
   const windowFocused = useWindowFocused();
+  // The window is up (any view): root's slot stands down and the keyboard is
+  // the window's. Not "root is drawn": see `rootDrawn`.
   const rootConsoleOpen = useRootOverlayStore((st) => st.open);
+  // The window shows root's layout (the Root view). Only then is every root
+  // terminal drawn elsewhere; on Now or Projects just the tabs in
+  // `overlayAgentShown` are, so the sleeping rest stays asleep.
+  const rootDrawn = useRootOverlayStore((st) => rootViewShown(st));
   // Root tab keys an app overlay's docked agent column is drawing right now
   // (`OverlayAgentColumn`); their copy here stands down, like the root console.
   const overlayAgentShown = useOverlayAgentStore((st) => st.shownKeys);
@@ -1231,7 +1237,7 @@ function CenterPanelImpl() {
                 // The root console / a docked agent column draws this PTY:
                 // its owning pane here stays mounted (§5.3, terminal kinds).
                 drawnElsewhere={
-                  (scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))) ||
+                  (scopeKey === ROOT_SCOPE && (rootDrawn || overlayAgentShown.has(tab.key))) ||
                   (scopeKey === ASSISTANT_SCOPE && assistantShown.has(tab.key)) ||
                   shownAway
                 }

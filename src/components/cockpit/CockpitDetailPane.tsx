@@ -6,10 +6,16 @@ import { useProjectsStore } from "../../stores/projects";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { ROOT_SCOPE, allGroups, useTabsStore, type TabEntry } from "../../stores/tabs";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useOverlayAgentStore } from "../../stores/overlayAgent";
+import { useCalendarStore } from "../../stores/calendar/calendar";
+import { useMailStore } from "../../stores/mail";
+import { useSettingsStore } from "../../stores/settings";
+import { useTodoStore } from "../../stores/todo";
+import { steeringAppEnabled, type SteeringApp } from "../../lib/shortcuts/steeringRegion";
+import { UntestedTag } from "../common/UntestedTag";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { paneRemoteHost } from "../../lib/tabs/remoteHold";
-import { useT } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import { resolveProjectDirectory } from "../../types";
 import { AttachedAgentPane } from "../layout/AttachedAgentPane";
 
@@ -26,7 +32,37 @@ export function popoutLabelOf(
 }
 
 /** What the detail pane can do for a tab. */
-export type CockpitDetailMode = "attach" | "popout" | "console" | "held" | "missing";
+export type CockpitDetailMode = "attach" | "popout" | "docked" | "held" | "missing";
+
+/** The app overlays that can dock a root agent beside them, with the name the
+ *  "Shown in the … overlay" line gives each. */
+const DOCK_APPS: { app: SteeringApp; name: TranslationKey }[] = [
+  { app: "mail", name: "mail.overlayTitle" },
+  { app: "calendar", name: "calendar.overlayTitle" },
+  { app: "todo", name: "todo.overlayTitle" },
+];
+
+/**
+ * The app overlay whose docked agent column draws root tab `key` right now, or
+ * null. The column (`OverlayAgentColumn`) mounts only while its overlay is open
+ * with the dock open on that key, and it marks the key shown while it draws it;
+ * this pane must then draw nothing, or two attached views would fight over one
+ * PTY's size (and the first to unmount would take the other's mark with it).
+ */
+export function useDockedApp(scope: string, key: string): SteeringApp | null {
+  const docks = useOverlayAgentStore((s) => s.docks);
+  const mailOpen = useMailStore((s) => s.overlayOpen);
+  const calendarOpen = useCalendarStore((s) => s.overlayOpen);
+  const todoOpen = useTodoStore((s) => s.overlayOpen);
+  const settings = useSettingsStore((s) => s.settings);
+  if (scope !== ROOT_SCOPE) return null;
+  const up: Record<SteeringApp, boolean> = { mail: mailOpen, calendar: calendarOpen, todo: todoOpen };
+  return (
+    DOCK_APPS.find(
+      ({ app }) => up[app] && steeringAppEnabled(app, settings) && docks[app].open && docks[app].key === key,
+    )?.app ?? null
+  );
+}
 
 /**
  * The cockpit's detail pane mechanics (`docs/desktop_cockpit_plan.md`, Detail
@@ -40,24 +76,27 @@ export type CockpitDetailMode = "attach" | "popout" | "console" | "held" | "miss
  * effect cleanup takes its key out of the set) before the new one mounts: a
  * key is never held by two views.
  *
- * Three tabs are not attached, each said in one line instead:
+ * A root tab is attached like any other (root's `shownKeys`); the Root view is
+ * never mounted while this pane is (one shown view at a time), so the console
+ * and this pane never draw one PTY together. Four tabs are not attached, each
+ * said in one line instead:
  *  - **popout-owned**: a popout window draws it; a second view here would
  *    fight it for the PTY's size. "Open in its window" raises that window.
  *  - **held**: its remote host's pool is down, so its owner never spawned a
  *    PTY to attach to. "Connect first" opens the connect hub.
- *  - **console**: a root tab while the root console is up, which draws the
- *    whole root scope itself.
+ *  - **docked**: a root tab an open mail / calendar / to-do overlay shows in
+ *    its docked agent column: that view owns the PTY, this one says where.
  *  - **missing**: the tab closed (or its scope is not loaded).
  * A **sleeping** owner needs nothing here: being drawn elsewhere wakes it
  * (`isSleepableTerminalTab`'s `drawnElsewhere`), as it does for root's.
  */
 export function cockpitDetailMode(
   tab: TabEntry | undefined,
-  { popout, held, inConsole }: { popout: string | null; held: boolean; inConsole: boolean },
+  { popout, held, docked }: { popout: string | null; held: boolean; docked: SteeringApp | null },
 ): CockpitDetailMode {
   if (!tab) return "missing";
   if (popout) return "popout";
-  if (inConsole) return "console";
+  if (docked) return "docked";
   if (held) return "held";
   return "attach";
 }
@@ -72,8 +111,8 @@ export function CockpitDetailPane({ ptyId, focused }: { ptyId: string; focused: 
   const hostSsh = useRemoteStatusStore((s) => s.byHost[scope]);
   const boxDir = useBoxesStore((s) => boxFolderOfScope(scope, s.boxes));
   const held = !!tab && paneRemoteHost(tab, project, projectSsh, hostSsh).held;
-  const inConsole = useRootOverlayStore((s) => s.open) && scope === ROOT_SCOPE;
-  const mode = scope === ASSISTANT_SCOPE ? "missing" : cockpitDetailMode(tab, { popout, held, inConsole });
+  const docked = useDockedApp(scope, key);
+  const mode = scope === ASSISTANT_SCOPE ? "missing" : cockpitDetailMode(tab, { popout, held, docked });
 
   if (mode === "missing" || !tab) {
     return <div className="cockpit-detail-pane cockpit-detail-note">{t("cockpit.detail.gone")}</div>;
@@ -92,8 +131,14 @@ export function CockpitDetailPane({ ptyId, focused }: { ptyId: string; focused: 
       </div>
     );
   }
-  if (mode === "console") {
-    return <div className="cockpit-detail-pane cockpit-detail-note">{t("cockpit.detail.inConsole")}</div>;
+  if (mode === "docked" && docked) {
+    const label = DOCK_APPS.find((d) => d.app === docked)!.name;
+    return (
+      <div className="cockpit-detail-pane cockpit-detail-note">
+        <span>{t("cockpit.detail.docked", { name: t(label) })}</span>
+        <UntestedTag id="rootConsole.rootRow" />
+      </div>
+    );
   }
   if (mode === "held") {
     return (

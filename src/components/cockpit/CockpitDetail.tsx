@@ -8,7 +8,8 @@ import { useAgentModelsStore } from "../../stores/agents/agentModels";
 import { ArrowUpRightIcon } from "../common/icons/Icon";
 import { CockpitDetailPane } from "./CockpitDetailPane";
 import { formatClock } from "./cockpitFormat";
-import { jumpToRow } from "./CockpitRoster";
+import { jumpToRow, ScopeChip } from "./CockpitRoster";
+import { UntestedTag } from "../common/UntestedTag";
 
 const NO_PROMPTS: readonly { text: string }[] = [];
 
@@ -37,17 +38,20 @@ export function CockpitDetail({ row, focused, now }: { row: RosterRow | undefine
       </section>
     );
   }
+  const jumpKey = row.scope.kind === "root" ? "cockpit.detail.openInRoot" : "cockpit.detail.jump";
   return (
     <section className="cockpit-detail" aria-label={t("cockpit.detail.title", { tab: row.tab.label })}>
       <div className="cockpit-column-head cockpit-detail-head">
         <span className="cockpit-detail-name">
-          <span className="cockpit-chip">{row.scope.name}</span> {row.tab.label}
+          <ScopeChip scope={row.scope} /> {row.tab.label}
         </span>
         <span className="cockpit-meta">
           {[row.facts.model, row.host].filter(Boolean).join(" · ")}
         </span>
-        <button type="button" className="settings-btn sm" onClick={() => jumpToRow(row.ptyId)} title={t("cockpit.detail.jump")}>
-          <ArrowUpRightIcon /> {t("cockpit.detail.jump")}
+        {/* A root tab has no pane behind the window: Enter opens it in the Root view. */}
+        {row.scope.kind === "root" && <UntestedTag id="rootConsole.rootRow" />}
+        <button type="button" className="settings-btn sm" onClick={() => jumpToRow(row.ptyId)} title={t(jumpKey)}>
+          <ArrowUpRightIcon /> {t(jumpKey)}
         </button>
       </div>
       <CockpitDetailPane key={row.ptyId} ptyId={row.ptyId} focused={focused} />

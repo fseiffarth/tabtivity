@@ -1,6 +1,6 @@
 import { emit, listen } from "@tauri-apps/api/event";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../../stores/tabs";
-import { useRootOverlayStore } from "../../../stores/rootOverlay";
+import { rootViewShown, useRootOverlayStore } from "../../../stores/rootOverlay";
 import { useEditorJumpStore, hasMountedEditor } from "../../../stores/viewers/editorJump";
 import { parseDetachedParam } from "../../../stores/detached";
 import { basename, dirname } from "../../../lib/paths";
@@ -27,11 +27,11 @@ interface SourceJumpEnvelope {
 function tabKeyForPath(path: string): string | undefined {
   const store = useTabsStore.getState();
   const holds = (t: TabEntry) => t.kind === "embed" && t.embedPath === path;
-  // The root console's tabs are on screen too while it floats; a PDF there
+  // The root console's tabs are on screen too while its Root view is up; a PDF there
   // anchors its source into the console, not into the project underneath.
   return (
     store.tabs.find(holds)?.key ??
-    (useRootOverlayStore.getState().open
+    (rootViewShown(useRootOverlayStore.getState())
       ? store.tabsByScope[ROOT_SCOPE]?.find(holds)?.key
       : undefined)
   );

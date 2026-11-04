@@ -16,6 +16,7 @@ import { useCockpitStore, type CockpitRosterMode, type CockpitStateFilter } from
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { ROOT_SCOPE } from "../../stores/tabs";
+import { StarIcon } from "../layout/StarIcon";
 import { CONTINUE_PROMPT } from "../tabs/TabLocalityBadges";
 import { tabColorCss } from "../../lib/theme/tabColors";
 
@@ -71,6 +72,16 @@ export function continueRow(row: RosterRow) {
   void sendSteeringPrompt(row.tab, CONTINUE_PROMPT).catch(() => {});
 }
 
+/** The scope's chip in a roster row / the detail head: its name; the root
+ *  scope's wears the Root star (its agents are ordinary rows, marked as root's). */
+export function ScopeChip({ scope }: { scope: RosterRow["scope"] }) {
+  return (
+    <span className={`cockpit-chip${scope.kind === "root" ? " root" : ""}`}>
+      {scope.kind === "root" && <StarIcon />} {scope.name}
+    </span>
+  );
+}
+
 function Row({ row, selected, now }: { row: RosterRow; selected: boolean; now: number }) {
   const t = useT();
   const { facts } = row;
@@ -91,7 +102,7 @@ function Row({ row, selected, now }: { row: RosterRow; selected: boolean; now: n
           <Mark />
         </span>
         <span className="cockpit-roster-tab">{row.tab.label}</span>
-        <span className="cockpit-chip">{row.scope.name}</span>
+        <ScopeChip scope={row.scope} />
         {facts.model && <span className="cockpit-meta">{facts.model}</span>}
         {facts.plan && <small className="agent-mode-mark plan">{t("tabBar.modePlan")}</small>}
         {facts.goal && <small className="agent-mode-mark goal">{t("tabBar.modeGoal")}</small>}
