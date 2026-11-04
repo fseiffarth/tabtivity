@@ -84,22 +84,23 @@ describe("desktop conversation toolbar", () => {
     useProjectsStore.setState({ projects: [] });
   });
 
-  it("keeps the draft and Commit available across Chat, Diffs and Terminal", async () => {
+  it("keeps the draft across Chat, Diffs and Terminal; Clear and Commit sit in the composer", async () => {
     render(<Pane host={host} />);
     await screen.findByText("hello");
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const commit = screen.getByRole("button", { name: /^Commit/ });
+    expect(commit.closest(".terminal-reader-composer")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clear" }).closest(".terminal-reader-composer")).not.toBeNull();
+    expect(host.querySelector(".reader-topbar-actions .terminal-reader-chip")).toBeNull();
+    fireEvent.click(commit);
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /Split into commits/ })));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ key: "a" }), COMMIT_PROMPTS.split);
     fireEvent.change(box, { target: { value: "keep this draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Diffs" }));
     await screen.findByText("No file changes in this conversation yet.");
     expect(screen.queryByRole("textbox")).toBeNull();
-    const commit = screen.getByRole("button", { name: /^Commit/ });
-    expect(commit.closest(".reader-topbar-actions")).not.toBeNull();
-    fireEvent.click(commit);
-    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /Split into commits/ })));
-    expect(send).toHaveBeenCalledWith(expect.objectContaining({ key: "a" }), COMMIT_PROMPTS.split);
     fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
     expect(screen.getByRole("tab", { name: "Terminal" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("button", { name: /^Commit/ })).toBeTruthy();
     await act(async () => fireEvent.click(screen.getByRole("tab", { name: "Chat" })));
     expect(screen.getByRole("textbox")).toBe(box);
     expect(box.value).toBe("keep this draft");

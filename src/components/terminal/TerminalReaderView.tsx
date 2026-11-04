@@ -573,6 +573,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   suggestion: string;
   /** The facts row's end, where the chip row goes; in the text box without it. */
   chipSlot: HTMLElement | null;
+  /** The top bar's right end: a send error shows there while the composer is hidden. */
   actionSlot?: HTMLElement | null;
   voiceLoop: ReaderVoiceLoop;
   onEscape: () => void;
@@ -1036,7 +1037,6 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     onPrefix={togglePrefix}
     onClear={clearChat}
     onCommit={assistantChat ? undefined : commit}
-    actionSlot={actionSlot}
     extra={voice.button ? voiceLoop.chips : null}
   />;
   return <>
