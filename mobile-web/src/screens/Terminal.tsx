@@ -1764,7 +1764,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   };
   // Manage CLIs' startup defaults for this CLI, under the model sheet's rows.
   const launchDefaults = tab.kind === "agent" && !tab.local_model && !tab.assistant_launch && !tab.on_host
-    ? <LaunchDefaultsFold tabId={tab.id} />
+    ? <LaunchDefaultsFold tabId={tab.id} modelNames={(modelPreview ?? listedStep)?.options.map((option) => option.label.replace(/\s*\(current\)\s*$/iu, "").replace(/\s*[✔✓]\s*$/u, "").trim().toLowerCase())} />
     : undefined;
   const sheetUp = modelSheet || assistantSheet || modeSheet || effortSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
