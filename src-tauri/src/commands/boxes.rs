@@ -544,6 +544,12 @@ pub struct BoxPatch {
     /// Take this project out of the members (the box survives, even empty).
     #[serde(default)]
     pub remove_member: Option<String>,
+    /// Reorder the members: the ids named here (and still members) take, in this
+    /// order, the slots the named ids hold now. A member the caller did not know
+    /// of (added meanwhile by another window) keeps its slot, so a reorder never
+    /// drops or moves anyone it did not name. Applied after the adds and removals.
+    #[serde(default)]
+    pub order: Option<Vec<String>>,
     /// The picked colour, `#rrggbb`; `""` clears it (the hashed colour).
     #[serde(default)]
     pub color: Option<String>,
@@ -602,6 +608,9 @@ fn apply_box_patch(target: &mut ProjectBox, patch: BoxPatch) -> Result<(), Strin
     if let Some(ids) = patch.remove_members {
         target.member_ids.retain(|m| !ids.contains(m));
     }
+    if let Some(order) = patch.order {
+        reorder_members(&mut target.member_ids, &order);
+    }
     if let Some(color) = patch.color {
         match clean_box_color(&color)? {
             Some(color) => {
@@ -623,6 +632,23 @@ fn apply_box_patch(target: &mut ProjectBox, patch: BoxPatch) -> Result<(), Strin
         None => {}
     }
     Ok(())
+}
+
+/// Put the members named in `order` into that order, in the slots those same
+/// ids hold now; every other member stays where it is. Names that are not
+/// members, and repeats, are ignored.
+fn reorder_members(members: &mut [String], order: &[String]) {
+    let mut named: Vec<&String> = Vec::new();
+    for id in order {
+        if members.contains(id) && !named.contains(&id) {
+            named.push(id);
+        }
+    }
+    let slots: Vec<usize> = (0..members.len()).filter(|&i| named.contains(&&members[i])).collect();
+    let picked: Vec<String> = named.into_iter().cloned().collect();
+    for (slot, id) in slots.into_iter().zip(picked) {
+        members[slot] = id;
+    }
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -952,6 +978,35 @@ mod tests {
     }
 
     #[test]
+    fn an_order_patch_reorders_the_named_members_and_keeps_a_concurrent_one() {
+        // The side panel knew p1..p3; another window added "late" meanwhile. The
+        // reorder names only what it knew, so "late" survives where it was.
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1", "p2", "p3", "late"])]);
+        let a = patch_box_at(&path, "a", BoxPatch { order: Some(vec!["p3".into(), "p1".into(), "p2".into()]), ..Default::default() }).unwrap();
+        assert_eq!(a.member_ids, ["p3", "p1", "p2", "late"]);
+        assert_eq!(a.rev, 1, "a reorder is one write");
+        // An unknown id and a repeat are ignored; a member in the middle keeps its slot.
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1", "late", "p2"])]);
+        let patch = BoxPatch { order: Some(vec!["p2".into(), "gone".into(), "p1".into(), "p2".into()]), ..Default::default() };
+        assert_eq!(patch_box_at(&path, "a", patch).unwrap().member_ids, ["p2", "late", "p1"]);
+        // The same order again changes nothing and moves no revision.
+        let same = BoxPatch { order: Some(vec!["p2".into(), "p1".into()]), ..Default::default() };
+        assert_eq!(patch_box_at(&path, "a", same).unwrap().rev, 1);
+    }
+
+    #[test]
+    fn an_order_patch_comes_after_the_adds_and_removals() {
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1", "p2"])]);
+        let patch = BoxPatch {
+            add_members: Some(vec!["p3".into()]),
+            remove_members: Some(vec!["p1".into()]),
+            order: Some(vec!["p3".into(), "p1".into(), "p2".into()]),
+            ..Default::default()
+        };
+        assert_eq!(patch_box_at(&path, "a", patch).unwrap().member_ids, ["p3", "p2"]);
+    }
+
+    #[test]
     fn the_singular_fields_drop_a_reserved_id_too_and_remove_wins_in_one_patch() {
         let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1"])]);
         let a = patch_box_at(&path, "a", BoxPatch { add_member: Some("root".into()), ..Default::default() }).unwrap();
@@ -963,9 +1018,10 @@ mod tests {
     #[test]
     fn the_patch_takes_the_new_camel_case_fields_and_still_refuses_unknown_ones() {
         let patch: BoxPatch = serde_json::from_value(serde_json::json!({
-            "name": "N", "addMembers": ["a"], "removeMembers": ["b"], "addMember": "c",
+            "name": "N", "addMembers": ["a"], "removeMembers": ["b"], "addMember": "c", "order": ["a"],
         }))
         .unwrap();
+        assert_eq!(patch.order.as_deref(), Some(&["a".to_string()][..]));
         assert_eq!((patch.name.as_deref(), patch.add_members.as_ref().map(Vec::len), patch.remove_members.as_ref().map(Vec::len)), (Some("N"), Some(1), Some(1)));
         assert!(serde_json::from_value::<BoxPatch>(serde_json::json!({ "add_members": ["a"] })).is_err());
         assert!(serde_json::from_value::<BoxPatch>(serde_json::json!({ "nope": 1 })).is_err());

@@ -676,14 +676,14 @@ function useMemberReorder(
     const next = [...memberOrder];
     next.splice(from, 1);
     next.splice(to, 0, id);
-    // Rewrite only the slots the VIEW can address. A box may hold member ids
-    // this panel shows no root for (a project that is gone, or one whose folder
-    // doesn't resolve); they keep their positions in `member_ids` instead of
-    // being reshuffled — or dropped — by a gesture that never named them.
-    const shown = new Set(memberOrder);
-    let i = 0;
-    const memberIds = activeBox.member_ids.map((mid) => (shown.has(mid) ? next[i++] : mid));
-    void useBoxesStore.getState().setBoxMembers(activeBox.id, memberIds);
+    // Name only the members the VIEW shows a root for, in their new order: the
+    // backend puts them into the slots they hold and leaves every other member
+    // (a project that is gone, one whose folder doesn't resolve, one added
+    // meanwhile by another window) exactly where it is.
+    useBoxesStore
+      .getState()
+      .reorderBoxMembers(activeBox.id, next)
+      .catch((error) => useProjectsStore.setState({ switchToast: error instanceof Error ? error.message : String(error) }));
   };
 
   return (rootId: string): RootReorder => ({

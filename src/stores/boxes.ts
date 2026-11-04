@@ -98,8 +98,12 @@ interface BoxesStore {
   addToBox: (projectId: string, boxId: string) => Promise<void>;
   /** Remove a project from ONE box. No silent dissolve — a 1/0-member box survives. */
   removeFromBox: (projectId: string, boxId: string) => Promise<void>;
-  /** Set a box's full member list (the box editor's Save). */
-  setBoxMembers: (boxId: string, memberIds: string[]) => Promise<void>;
+  /** Reorder a box's members (the side panel's drag): one `patch_box` with an
+   *  `order`, which puts the named ids into that order in the slots they hold and
+   *  leaves every other member where it is, so a project added meanwhile is never
+   *  lost. A backend from before `order` refuses it; the reorder then falls back
+   *  to the whole list (`set_box_members`), the old behaviour. */
+  reorderBoxMembers: (boxId: string, order: string[]) => Promise<void>;
   /** Switch the box's Tabtivity Mobile reach (#31aa) — the box twin of
    *  `projects.setProjectMobileAccess`. Enabling resolves the box folder on
    *  the backend, so the returned record carries `folder` too. `devices` is
@@ -113,11 +117,10 @@ interface BoxesStore {
   /** Hide the box's pill from the header row (it stays in the scope chip's
    *  list), or show it again. */
   setBoxPillHidden: (boxId: string, hidden: boolean) => Promise<void>;
-  /** Multi-select commit: put `ids` into a new box (`name`) or append to `boxId`. */
-  boxProjects: (
-    ids: string[],
-    target: { name?: string; boxId?: string },
-  ) => Promise<ProjectBox | null>;
+  /** Multi-select commit (Alt-drag): put `ids` into a NEW box named `target.name`.
+   *  Adding to an existing box goes through `addToBox` / `saveBox`, never a
+   *  whole-list write. */
+  boxProjects: (ids: string[], target: { name?: string }) => Promise<ProjectBox | null>;
   /** Open a box: restore closed members' tabs (box-local — persisted status
    *  untouched), ensure the box folder exists, and activate the box's
    *  persisted scope. */
@@ -271,6 +274,16 @@ export function defaultBoxName(boxes: readonly ProjectBox[], label: (n: number) 
     const candidate = label(n);
     if (!taken.has(candidate.toLowerCase())) return candidate;
   }
+}
+
+/** The member list after a reorder by `order`: the named members (that are
+ *  members, once each) take, in that order, the slots the named ids hold; every
+ *  other member keeps its slot. The backend's `order` rule, for an older backend. */
+export function reorderedMembers(members: string[], order: string[]): string[] {
+  const named: string[] = [];
+  for (const id of order) if (members.includes(id) && !named.includes(id)) named.push(id);
+  let i = 0;
+  return members.map((id) => (named.includes(id) && i < named.length ? named[i++] : id));
 }
 
 /** Whether an invoke failure is a backend from before `patch_box` took `name` /
@@ -447,8 +460,19 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
     await refreshDocsFor(get().boxes, [boxId]);
   },
 
-  setBoxMembers: async (boxId, memberIds) => {
-    const updated = await invoke<ProjectBox>("set_box_members", { boxId, memberIds });
+  reorderBoxMembers: async (boxId, order) => {
+    let updated: ProjectBox;
+    try {
+      updated = await invoke<ProjectBox>("patch_box", { boxId, patch: { order } });
+    } catch (error) {
+      if (!isUnknownFieldRefusal(error)) throw error;
+      // The older backend: the same slot-wise reorder, written as the whole list
+      // (it can still lose a member added meanwhile; only until the restart).
+      const held = get().boxes.find((b) => b.id === boxId);
+      if (!held) throw error;
+      const memberIds = reorderedMembers(held.member_ids, order);
+      updated = await invoke<ProjectBox>("set_box_members", { boxId, memberIds });
+    }
     set((state) => ({
       boxes: state.boxes.map((b) => (b.id === boxId ? updated : b)),
     }));
@@ -495,15 +519,7 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
   },
 
   boxProjects: async (ids, target) => {
-    // Multi-select commit: a NEW box named `target.name` holding `ids`, or an
-    // APPEND of `ids` to the existing `target.boxId` (deduplicated, additive).
-    if (target.boxId) {
-      const box = get().boxes.find((b) => b.id === target.boxId);
-      if (!box) return null;
-      const merged = [...box.member_ids, ...ids.filter((id) => !box.member_ids.includes(id))];
-      await get().setBoxMembers(box.id, merged);
-      return get().boxes.find((b) => b.id === box.id) ?? null;
-    }
+    // Multi-select commit: a NEW box named `target.name` holding `ids`.
     const box = await get().createBoxQuick({ name: target.name ?? "", memberIds: ids });
     return get().boxes.find((b) => b.id === box.id) ?? null;
   },

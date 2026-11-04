@@ -16,6 +16,17 @@ const { mockInvoke } = vi.hoisted(() => ({
   // does — the store puts the reply straight back into `boxes`.
   mockInvoke: vi.fn((cmd: string, args?: Record<string, unknown>) => {
     if (cmd === "git_repo_root") return Promise.resolve(null);
+    if (cmd === "patch_box") {
+      // The test only looks at what was ASKED (an `order` patch, not a list);
+      // the reply echoes the order as the stored members.
+      return Promise.resolve({
+        id: args?.boxId,
+        name: args?.boxId,
+        member_ids: (args?.patch as { order?: string[] })?.order ?? [],
+        position: 10,
+        folder: `/b/${args?.boxId}`,
+      });
+    }
     if (cmd === "set_box_members") {
       return Promise.resolve({
         id: args?.boxId,
@@ -278,10 +289,11 @@ describe("box member reorder", () => {
       fireEvent.pointerUp(p1Grip, { clientY: 230, pointerId: 1 });
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("set_box_members", {
+    expect(mockInvoke).toHaveBeenCalledWith("patch_box", {
       boxId: "boxA",
-      memberIds: ["p2", "p3", "p1"],
+      patch: { order: ["p2", "p3", "p1"] },
     });
+    expect(mockInvoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
   });
 
   it("cancelling the drag writes nothing", async () => {
@@ -295,7 +307,7 @@ describe("box member reorder", () => {
       fireEvent.pointerCancel(p1Grip, { clientY: 230, pointerId: 1 });
     });
 
-    expect(mockInvoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
+    expect(mockInvoke).not.toHaveBeenCalledWith("patch_box", expect.anything());
   });
 
   it("nudges a member with the keyboard, so the reorder is not pointer-only", async () => {
@@ -306,9 +318,9 @@ describe("box member reorder", () => {
       fireEvent.keyDown(p2Grip, { key: "ArrowUp" });
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("set_box_members", {
+    expect(mockInvoke).toHaveBeenCalledWith("patch_box", {
       boxId: "boxA",
-      memberIds: ["p2", "p1", "p3"],
+      patch: { order: ["p2", "p1", "p3"] },
     });
   });
 
@@ -325,11 +337,11 @@ describe("box member reorder", () => {
       fireEvent.pointerUp(p1Grip, { clientY: 230, pointerId: 1 });
     });
 
-    // The three visible ids are rewritten into their new order; "ghost" keeps
-    // the slot it held.
-    expect(mockInvoke).toHaveBeenCalledWith("set_box_members", {
+    // Only the three visible ids are named, in their new order: "ghost" is not
+    // in the request, so the backend leaves it in the slot it holds.
+    expect(mockInvoke).toHaveBeenCalledWith("patch_box", {
       boxId: "boxA",
-      memberIds: ["p2", "ghost", "p3", "p1"],
+      patch: { order: ["p2", "p3", "p1"] },
     });
   });
 });
