@@ -429,11 +429,11 @@ async function pdfCover(blob: Blob, signal: AbortSignal): Promise<Blob | null> {
 
 /** Fetch, draw and store one cover; `null` when there is none to show. A
  * cover stopped by `signal` is not recorded at all: the next visit tries it. */
-async function makeCover(projectId: string, entry: ProjectFileEntry, source: "image" | "pdf", key: string, signal: AbortSignal, side?: FilesSide): Promise<Blob | null> {
+async function makeCover(projectId: string, entry: ProjectFileEntry, source: "image" | "pdf", key: string, signal: AbortSignal, side?: FilesSide, fileUrl?: string): Promise<Blob | null> {
   if (unfetched.has(key)) return null;
   let blob: Blob;
   try {
-    const url = viewerFileUrl({ files: projectId, ...(side === "host" ? { on: "host" as const } : {}) }, { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token });
+    const url = fileUrl ?? viewerFileUrl({ files: projectId, ...(side === "host" ? { on: "host" as const } : {}) }, { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token });
     const response = await fetch(url, { credentials: "same-origin", signal });
     if (!response.ok) throw new Error("fetch");
     blob = await response.blob();
@@ -481,9 +481,10 @@ function capable(): boolean {
  * The cover for a tile whose cover element is `cover`: the picture's URL once
  * there is one — from the cache, or made while the tile is on screen. `null`
  * while there is none, for a kind without covers, with `enabled` off (the
- * view menu's Thumbnails), and where the browser cannot.
+ * view menu's Thumbnails), and where the browser cannot. `fileUrl` lets chat
+ * cards use their inbox/outbox route; their place must distinguish that scope.
  */
-export function useThumb(cover: RefObject<Element | null>, projectId: string, entry: ProjectFileEntry, place: string, enabled: boolean, side?: FilesSide): string | null {
+export function useThumb(cover: RefObject<Element | null>, projectId: string, entry: ProjectFileEntry, place: string, enabled: boolean, side?: FilesSide, fileUrl?: string): string | null {
   const [shown, setShown] = useState<{ key: string; url: string } | null>(null);
   const source = enabled ? thumbSource(entry) : null;
   // The remote side's covers are the same project's (forgotten with it), in
@@ -512,7 +513,7 @@ export function useThumb(cover: RefObject<Element | null>, projectId: string, en
       if (gone || !started || mine !== visit) return;
       if (cached instanceof Blob) { show(cached); return; }
       if (cached !== null) return;
-      const run = queue.run((signal) => makeCover(projectId, entry, source, key, signal, side));
+      const run = queue.run((signal) => makeCover(projectId, entry, source, key, signal, side, fileUrl));
       job = run;
       const made = await run.done;
       if (made) show(made);
@@ -540,7 +541,7 @@ export function useThumb(cover: RefObject<Element | null>, projectId: string, en
     };
     // `entry`'s fields are in `key`; its token only fetches.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cover, key, source, projectId]);
+  }, [cover, key, source, projectId, fileUrl]);
 
   return shown && shown.key === key ? shown.url : null;
 }

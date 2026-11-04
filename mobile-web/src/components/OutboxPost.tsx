@@ -1,3 +1,4 @@
+import { PdfFileCover } from "./PdfFileCover";
 import { useState } from "react";
 
 import { useT } from "../../../src/lib/i18n";
@@ -62,7 +63,7 @@ export function OutboxPost({ scope, post, onOpen, onSettle }: {
     </div>}
     {others.map((file) => {
       const card = <>
-        <span aria-hidden="true">{file.kind === "application/pdf" ? "PDF" : file.kind.startsWith("text/") ? "≡" : "↓"}</span>
+        {file.kind === "application/pdf" ? <PdfFileCover scope={scope} file={file} /> : <span aria-hidden="true">{file.kind.startsWith("text/") ? "≡" : "↓"}</span>}
         <strong>{sentName(file)}</strong>
         <small>{formatBytes(file.size)}</small>
       </>;

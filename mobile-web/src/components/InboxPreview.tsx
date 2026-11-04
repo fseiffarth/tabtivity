@@ -1,9 +1,10 @@
+import { PdfFileCover } from "./PdfFileCover";
 import { useState, type ReactNode } from "react";
 import { CloseIcon } from "../glyphs";
 
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
-import { inboxFileUrl, sentName, type OutboxFile } from "../api";
+import { inboxFileUrl, sentName, type OutboxFile, type ViewerScope } from "../api";
 import { formatBytes } from "../../../src/lib/formatBytes";
 
 /** Picture tiles an album shows before the last one reads "+N" (as `OutboxPost`). */
@@ -33,6 +34,7 @@ export const viewableFile = (file: OutboxFile) => file.kind.startsWith("image/")
  * folder itself, so its pictures may still be on their way (`picture` is
  * `null`), and a file its viewers cannot show is a plain card. */
 export interface InboxSource {
+  scope?: ViewerScope;
   /** Where `file`'s picture loads from; `null` while it is being fetched. */
   picture(file: OutboxFile): string | null;
   /** Whether a tap opens `file` in a viewer (`onOpen`). */
@@ -44,6 +46,7 @@ export interface InboxSource {
 /** The phone's source: `tabId`'s inbox over the sidecar's route. */
 export function phoneInboxSource(tabId: string): InboxSource {
   return {
+    scope: { inbox: tabId },
     picture: (file) => inboxFileUrl(tabId, file.name),
     openable: viewableFile,
     download: (file) => inboxFileUrl(tabId, file.name, true),
@@ -111,7 +114,7 @@ export function InboxAlbum({ tabId, source, tag, leaves, files, onOpen, onSettle
         </span>;
       }
       const card = <>
-        <span aria-hidden="true">{fileBadge(file.kind)}</span>
+        {file.kind === "application/pdf" && from.scope ? <PdfFileCover scope={from.scope} file={file} /> : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
         <strong>{sentName(file)}</strong>
         <small>{formatBytes(file.size)}</small>
       </>;

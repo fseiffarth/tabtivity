@@ -1,3 +1,4 @@
+import { PdfFileCover } from "./PdfFileCover";
 import { useState } from "react";
 import { ArrowUpRightIcon, TrashIcon } from "../../../src/components/common/icons/Icon";
 
@@ -70,7 +71,7 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
       const content = <>
         {isImage
           ? <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" />
-          : <span aria-hidden="true">{file.kind === "application/pdf" ? "PDF" : file.kind.startsWith("text/") ? "≡" : "↓"}</span>}
+          : file.kind === "application/pdf" ? <PdfFileCover scope={scope} file={file} /> : <span aria-hidden="true">{file.kind.startsWith("text/") ? "≡" : "↓"}</span>}
         <strong>{sentName(file)}</strong>
         <span>{meta}</span>
       </>;

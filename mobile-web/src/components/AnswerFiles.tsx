@@ -34,6 +34,7 @@ export function AnswerAlbum({ text, files }: { text: string; files: AnswerFiles 
   const { project, named, sent, open, settle } = files;
   const leaves = useMemo(() => answerLeaves(text, named, sent), [text, named, sent]);
   const source = useMemo<InboxSource>(() => ({
+    scope: { files: project },
     picture: (file) => viewerFileUrl({ files: project }, file),
     openable: viewableFile,
     download: (file) => viewerFileUrl({ files: project }, file, true),
