@@ -633,9 +633,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           linkOpenTimer = setTimeout(() => {
             linkOpenTimer = null;
             const ctx = pathLinkContextRef.current;
-            const scope = splitPtyId(id)?.scope ?? ROOT_SCOPE;
+            const owner = splitPtyId(id);
             openPathLink(entry, at, {
-              scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current, newSubwindow,
+              scope: owner?.scope ?? ROOT_SCOPE, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled,
+              t: tRef.current, newSubwindow, fromTab: owner?.key,
             });
           }, LINK_OPEN_DELAY_MS);
         },

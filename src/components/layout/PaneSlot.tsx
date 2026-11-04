@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { TabPane } from "../tabs/TabPane";
 import { SleepingPane } from "./SleepingPane";
+import { LinkBackButton } from "../tabs/LinkBackButton";
 import {
   isSleepableTab,
   isSleepableTerminalTab,
@@ -269,6 +270,8 @@ function PaneSlotImpl({
         tmuxSession={tmuxSession}
         hostPinned={hostPinned}
       />
+      {/* A file tab an agent's file link opened: Back to that agent tab. */}
+      {tab.kind === "embed" && <LinkBackButton scope={scopeKey} tabKey={tab.key} />}
     </PaneSleepHoldContext.Provider>
   );
 }

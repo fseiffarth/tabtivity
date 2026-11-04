@@ -1377,7 +1377,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     openPathLink(
       entry,
       { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined },
-      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow },
+      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow, fromTab: tabKey },
     );
   };
   const onPathClick = (event: ReactMouseEvent) => {
@@ -1559,7 +1559,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const openInboxRef = useRef<(entry: FileEntry) => void>(() => undefined);
   openInboxRef.current = (entry) => {
     const ctx = pathContextRef.current;
-    openPathLink(entry, {}, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t });
+    openPathLink(entry, {}, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, fromTab: tabKey });
   };
   const openInboxEntry = useCallback((entry: FileEntry) => openInboxRef.current(entry), []);
   const settleInbox = useCallback(() => {
