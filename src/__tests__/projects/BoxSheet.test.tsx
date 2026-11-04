@@ -258,6 +258,9 @@ describe("member list", () => {
     });
     const [[, args]] = mockInvoke.mock.calls.filter(([cmd]) => cmd === "patch_box");
     expect((args as { patch: unknown }).patch).toEqual({ addMembers: ["p1"], removeMembers: ["p2"] });
+    // Closed stays closed: membership is the only thing the save touched.
+    expect(useProjectsStore.getState().projects.map((p) => p.status)).toEqual(["inactive", "inactive"]);
+    expect(mockInvoke.mock.calls.map(([cmd]) => cmd as string).filter((cmd) => /project/i.test(cmd))).toEqual([]);
   });
 
   it("badges a row by container, VM and remote, and shows the other boxes' swatches", async () => {
