@@ -125,6 +125,51 @@ section per A-step. Baseline before the first edit (develop `b3abe5ba`):
   indicator); `CockpitNow/ProjectsView/StandDown` use `rootOverlay` for open/
   view.
 
+## Review of I1 (A1-A3, range `develop..8b9c293c`)
+
+Read the whole diff against the plan; compared the old `RootOverlay` body with
+`RootView` (normalised diff: a pure move apart from the seams the A2 notes name).
+Checked: the `rootConsoleFrame` row (old store and `useFloatingFrame` read and
+write the same `{frame, filled}`, same clamp; the cockpit store held no
+persisted state, `cockpitOverlayFrame` has no other reader); the shell's Escape
+(`busyRef` is read synchronously, so a native Escape that also closes the `+`
+menu still defers, as the old closure did), `framing`, `defaultPrevented`,
+`BAR_NO_DRAG` + `.root-overlay-rights` (the portal does not bubble to the bar,
+the strip slot forwards press/double-click, the ⚿/◫ portals need none: both are
+no-drag); no child selector on `.tab-bar` breaks under the `display: contents`
+slots; `.root-overlay.dragging` is gone from CSS and JS alike; the ✓ panel needs
+no `TabScopeContext`; the cockpit body still gets `.subwindow-body` + the
+`.cockpit-overlay-body` rule after the `mail-todo.css` list entries went;
+`CenterPanel` only lost an import and swapped `closeOverlay`; lazy mount (the
+body is `React.lazy`, no listener/timer outside the host's own); i18n keys in
+all five dictionaries; register row present; no animation added; the moved frame
+tests are all in `FloatingFrame.test.ts`.
+
+### Fixed
+
+- `a1f63d22` **Experiment switched off under an open cockpit view.** The shell
+  showed Root (effective view) but the store kept e.g. `view: "usage"`, so
+  `rootViewShown` was false: Ctrl+Shift+R "switched to Root" instead of closing
+  the console, and the Machines/Models Escape guards misread it. Flag off must
+  be today's console; an effect in the shell now writes `view: "root"` back.
+  Regression test in `CockpitShell.test` (failed before the fix).
+
+### Not bugs, noted
+
+- Flag off, the console bar now carries one extra `UntestedTag` pill
+  (`overlayApprovals.button`, after the ✓). Cosmetic and a dev marker; I1 chose
+  it knowingly. See Flagged.
+
+### Gates / tests
+
+- Full `npm test`: **1059 files, 10788 tests** passed (same as I1's claim; the
+  `FocusRing` fix holds), plus 1 new test from the fix = 10789 at the tip.
+- `npm run build`, `npm run lint` (0 errors, 29 advisory warnings, none in
+  touched lines), `scripts/brand-check.sh`, `git diff --check`: clean. No Rust
+  touched, so no cargo gate; `scripts/gates.sh` on the clean tree selects none,
+  the gates above were run by hand.
+- Not run live (never started the app).
+
 ## Flagged for user
 
 - **Machines overlay under the window (pre-existing, not new).** The Machines
@@ -135,6 +180,16 @@ section per A-step. Baseline before the first edit (develop `b3abe5ba`):
   shows on top" does not hold today. Fixing it means either raising Machines
   above the root host (then a terminal sign-in opened from Machines lands under
   it) or having the Usage door step the window aside; not decided here.
+
+- **Extra pill in the flag-off console (review of I1).** `OverlayApprovals`
+  brings its own `overlayApprovals.button` UntestedTag after the ✓, so the
+  experiment-off console shows one more "untested" pill than today. Decision 2
+  says "exactly today's console"; the pill disappears once that row is stamped
+  tested. Drop it for the console (a prop) or keep it?
+- **Escape inside the Machines overlay opened from Usage.** With Machines under
+  the window (above), both the window's and Machines' window-level Escape
+  handlers fire on one key and both close. Pre-existing (the old cockpit
+  overlay did the same); falls out if Machines is raised above the host.
 
 ## Next (I2: A4 Root view chrome + A9 icon rail)
 
