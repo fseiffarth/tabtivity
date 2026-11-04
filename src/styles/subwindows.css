@@ -2269,15 +2269,25 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   display: flex;
   flex-direction: column;
 }
+/* The scroller is a plain block and the column inside it the flex box. WebKitGTK
+   hit-tests a *scrolled* flex container as if it were not scrolled: measured in
+   an offscreen WebKit2GTK 4.1 view (2026-11-03), a press in the empty space
+   beside the newest bubble resolved to a caret in the second turn, far above —
+   so a drag begun there selected (and Ctrl+C copied) most of the conversation.
+   With the scroll on a block, the same points land in the bubbles on screen. */
 .terminal-reader-list {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+  user-select: text;
+}
+.terminal-reader-turns {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  box-sizing: border-box;
+  min-height: 100%;
   padding: 14px 18px;
-  overflow-y: auto;
-  user-select: text;
 }
 /* Bubbles tint from the theme's ink and accent rather than `--bg-elevated`
    and `--border-subtle`: dark and light give those the page's own colour, so
@@ -2304,13 +2314,13 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   background: color-mix(in srgb, var(--accent) 24%, var(--bg-main));
   border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
 }
-.terminal-reader-list > .terminal-reader-turn.user:not(:first-child) {
+.terminal-reader-turns > .terminal-reader-turn.user:not(:first-child) {
   margin-top: 14px;
 }
-.terminal-reader-list > .terminal-reader-turn.user + .terminal-reader-turn.user {
+.terminal-reader-turns > .terminal-reader-turn.user + .terminal-reader-turn.user {
   margin-top: 0;
 }
-.terminal-reader-list > .terminal-reader-command + .terminal-reader-turn.user {
+.terminal-reader-turns > .terminal-reader-command + .terminal-reader-turn.user {
   margin-top: 0;
 }
 .terminal-reader-turn.user .terminal-reader-time {

@@ -2143,6 +2143,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           onMouseOver={onPathOver}
           onMouseOut={onPathOut}
         >
+          {/* The column inside the scroller, never the scroller itself: see
+              `.terminal-reader-turns` (a scrolled flex box mis-hit-tests). */}
+          <div className="terminal-reader-turns">
           {levelTruncated && (
             <button
               type="button"
@@ -2277,6 +2280,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             // open when a shell before it returns.
             <RunningShellLine key={`${shell.at ?? ""}:${shell.command}:${runningShells.slice(0, index).filter((other) => other.at === shell.at && other.command === shell.command).length}`} shell={shell} />
           ))}
+          </div>
         </div>
         </ReaderAnswerFilesContext.Provider>
         </ReaderInboxContext.Provider>
