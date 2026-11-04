@@ -3051,6 +3051,9 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   background: var(--bg-subtle);
 }
 .terminal-changes-body > .terminal-changes-list { min-width: 0; }
+/* The Files tab: the picked file's viewer beside the list. */
+.terminal-files-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.terminal-files-viewer > .file-viewer { flex: 1 1 auto; min-height: 0; }
 .terminal-changes-view { margin-left: auto; }
 .terminal-changes-split { min-width: 500px; }
 .terminal-changes-split-heading, .terminal-changes-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -3522,9 +3525,6 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
 .reader-topbar .terminal-reader-subagent-index { position: relative; padding: 0; border: none; background: none; }
 .reader-topbar .terminal-reader-subagent-list { position: absolute; top: calc(100% + 6px); left: 0; width: min(420px, 80vw); margin: 0; padding: 6px; color: var(--text-primary); background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--radius); z-index: 2; }
-.reader-toolbar-dropdown .dropdown-trigger { font-size: var(--text-sm); border-color: transparent; background: none; }
-.reader-toolbar-dropdown .dropdown-menu { width: max-content; max-width: min(420px, 80vw); color: var(--text-primary); }
-.reader-toolbar-dropdown .dropdown-menu button { white-space: normal; overflow-wrap: anywhere; }
 .reader-toolbar-error { max-width: 260px; color: var(--danger); font-size: var(--text-sm); }
 .terminal-reader[hidden] { display: none; }
 .terminal-reader-chip-actions { display: inline-flex; align-items: center; gap: 6px; position: relative; }

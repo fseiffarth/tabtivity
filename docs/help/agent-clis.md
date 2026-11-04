@@ -234,6 +234,12 @@ open Claude tab, and new Claude tabs open the same way, while Codex and
 OpenCode tabs keep their own choice. Agents without a chat view keep their
 terminal.
 
+Beside Chat and Terminal, **Files** lists the files the conversation names
+(files its answers mention, pictures and PDFs it shows, files your phone
+sent), newest first, and shows the one you pick in its viewer. Clicking a
+file in the chat opens it there instead of in a new tab. To open it as a tab
+anyway, click ↗ above the viewer, or Ctrl+click the file.
+
 ## Switch all AI off
 
 The power button (⏻) in the side panel header switches all of Tabtivity's AI

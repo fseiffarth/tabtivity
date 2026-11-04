@@ -2332,26 +2332,31 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
   const readerTopBar = readerAvailable && !readerAlways;
-  /** This pane's Diffs tab: the pane's own, unlike the Chat/Terminal choice
-   * (per CLI) — a full-pane view must not take over every pane of the CLI,
-   * nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
-  const [changesPicked, setChangesPicked] = useState(false);
+  /** This pane's Diffs or Files tab: the pane's own, unlike the Chat/Terminal
+   * choice (per CLI) — a full-pane view must not take over every pane of the
+   * CLI, nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
+  const [panelPicked, setPanelPicked] = useState<"changes" | "files" | null>(null);
   /** The conversation on screen changed a file (`TerminalReaderView`'s probe):
    * until it did, the Diffs tab is greyed out. */
   const [changesKnown, setChangesKnown] = useState(false);
   // Diffs reads the conversation's files here, which a host tab's are not.
-  const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent) && !readerOnHost;
-  const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || changesOn);
+  const changesOn = panelPicked === "changes" && readerTopBar && changesOffered(readerAgent) && !readerOnHost;
+  /** The conversation on screen names a file (`TerminalReaderView`'s list):
+   * until it does, the Files tab is greyed out. */
+  const [filesKnown, setFilesKnown] = useState(false);
+  const filesOn = panelPicked === "files" && readerTopBar;
+  const panelOn = changesOn || filesOn;
+  const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || panelOn);
   const [readerNavigationSlot, setReaderNavigationSlot] = useState<HTMLSpanElement | null>(null);
   const [readerActionSlot, setReaderActionSlot] = useState<HTMLSpanElement | null>(null);
   const setReader = (on: boolean) => {
-    setChangesPicked(false);
+    setPanelPicked(null);
     useAgentReaderStore.getState().set(readerAgent, on);
     if (!on) setTimeout(() => termRef.current?.focus(), 0);
   };
-  /** Leave Diffs (or the terminal) for this pane's chat. */
+  /** Leave Diffs, Files (or the terminal) for this pane's chat. */
   const showReaderChat = () => {
-    setChangesPicked(false);
+    setPanelPicked(null);
     if (!readerPreferred) useAgentReaderStore.getState().set(readerAgent, true);
   };
 
@@ -2487,9 +2492,9 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         foreground={terminalTheme(colorScheme).foreground ?? "inherit"}
         onReturnFocus={() => {
           // Over the chat the keys go back to its text box, not the terminal under it.
-          const box = readerOn && !changesOn ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
+          const box = readerOn && !panelOn ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
           if (box) box.focus();
-          else if (changesOn) host?.querySelector<HTMLElement>(".terminal-changes")?.focus();
+          else if (panelOn) host?.querySelector<HTMLElement>(".terminal-changes")?.focus();
           else termRef.current?.focus();
         }}
         chatShown={readerOn}
@@ -2501,7 +2506,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           onToggle: () => setReader(!readerOn),
           changes: changesOffered(readerAgent) && !readerOnHost ? { open: changesOn, empty: !changesKnown, onToggle: () => {
             if (changesOn) showReaderChat();
-            else setChangesPicked(true);
+            else setPanelPicked("changes");
+          } } : undefined,
+          files: readerTopBar ? { open: filesOn, empty: !filesKnown, onToggle: () => {
+            if (filesOn) showReaderChat();
+            else setPanelPicked("files");
           } } : undefined,
           cwd,
           onHost: readerOnHost,
@@ -2529,12 +2538,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         cwd={cwd}
         localOnly={localOnly}
         visible={visible && readerOn}
-        focused={focused && readerOn && !changesOn}
+        focused={focused && readerOn && !panelOn}
         shown={readerOn}
         changesOpen={changesOn}
+        filesOpen={filesOn}
         probeChanges={visible && readerTopBar && changesOffered(readerAgent) && !readerOnHost}
         onChangesKnown={setChangesKnown}
         onShowChat={showReaderChat}
+        onShowFiles={readerTopBar ? () => setPanelPicked("files") : undefined}
+        onFilesKnown={setFilesKnown}
         onOpenUrl={(url) => {
           void confirmLinkRef.current(url).then((ok) => {
             if (ok) return invoke("open_external_url", { url });

@@ -45,12 +45,14 @@ import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges } from "./TerminalReaderChanges";
-import { ReaderToolbarNavigation, type ReaderToolbarFile } from "./ReaderToolbarNavigation";
+import { TerminalReaderFiles, type ReaderFile } from "./TerminalReaderFiles";
+import { inboxLeaves } from "../../../mobile-web/src/terminal/inboxRefs";
+import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
 import { UntestedTag } from "../common/UntestedTag";
 import { ReaderAnswerAlbum, ReaderAnswerFilesContext, useReaderAnswerFiles } from "./ReaderAnswerFiles";
-import { ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
+import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
@@ -1050,7 +1052,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * open as the session's do; nothing live — the screen's dialogs, the working
  * row, sending prompts — is drawn under it, since none of that is its.
  */
-export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, probeChanges = false, onChangesKnown, onShowChat, onOpenUrl, navigationSlot, actionSlot }: {
+export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, filesOpen = false, probeChanges = false, onChangesKnown, onShowChat, onShowFiles, onFilesKnown, onOpenUrl, navigationSlot, actionSlot }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
   ptyId: string;
@@ -1070,8 +1072,18 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * Diffs tab to grey out when it has nothing to show. */
   probeChanges?: boolean;
   onChangesKnown?: (has: boolean) => void;
-  /** Select this pane's Chat tab — leaving Diffs, or the terminal. */
+  /** Select this pane's Chat tab — leaving Diffs, Files, or the terminal. */
   onShowChat?: () => void;
+  /** This pane's Files tab is selected: the conversation's named files, one
+   * in its viewer. The chat stays mounted under it, hidden. */
+  filesOpen?: boolean;
+  /** Select this pane's Files tab. Given only where the pane has one (its top
+   * bar): a click on a file in the chat then shows it there instead of in a
+   * viewer tab. */
+  onShowFiles?: () => void;
+  /** Whether the conversation on screen names any file, for the Files tab to
+   * grey out when it has nothing to show. */
+  onFilesKnown?: (has: boolean) => void;
   /** Open a web link clicked in the chat — after asking (`TerminalView`'s
    * link confirmation). Without it, web links are only drawn. */
   onOpenUrl?: (url: string) => void;
@@ -1360,6 +1372,14 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [pathLinks, setPathLinks] = useState<ReadonlyMap<string, FileEntry | null>>(() => new Map());
   const pathLinksRef = useRef(pathLinks);
   const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+  /** The file the Files tab shows: the last one clicked in the chat or picked there. */
+  const [filePicked, setFilePicked] = useState<FileEntry | null>(null);
+  /** Show a file in the Files tab, at the line a link named. */
+  const showInFiles = (entry: FileEntry, at: { line?: number; column?: number } = {}) => {
+    setFilePicked(entry);
+    onShowFiles?.();
+    if (at.line) useEditorJumpStore.getState().requestJump(entry.path, at.line, at.column ?? 0);
+  };
   const learnPaths = useCallback(async (entries: readonly { text: string }[]) => {
     const ask = unknownPaths(entries.map((entry) => entry.text), pathLinksRef.current);
     if (!ask.length) return;
@@ -1381,11 +1401,13 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     if (!entry) return;
     const ctx = pathContextRef.current;
     setPathHover(null);
-    openPathLink(
-      entry,
-      { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined },
-      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow, fromTab: tabKey },
-    );
+    const at = { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined };
+    // A file opens in the Files tab; a folder, or Ctrl+click, still as a tab.
+    if (onShowFiles && !newSubwindow && !entry.is_dir) {
+      showInFiles(entry, at);
+      return;
+    }
+    openPathLink(entry, at, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow, fromTab: tabKey });
   };
   // A web link (`dressWebLink`) never opens straight away: `onOpenUrl` asks
   // first, naming the address, as a link the terminal printed does.
@@ -1583,8 +1605,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const promptTexts = useMemo(() => turns.filter((turn) => turn.kind === "prompt").map((turn) => turn.text), [turns]);
   const openInboxRef = useRef<(entry: FileEntry) => void>(() => undefined);
   openInboxRef.current = (entry) => {
+    if (onShowFiles && !entry.is_dir) {
+      showInFiles(entry);
+      return;
+    }
+    openFileAsTab(entry, false);
+  };
+  /** A file as its viewer tab (Files' ↗, Ctrl+click: a new subwindow). */
+  const openFileAsTab = (entry: FileEntry, newSubwindow: boolean) => {
     const ctx = pathContextRef.current;
-    openPathLink(entry, {}, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, fromTab: tabKey });
+    openPathLink(entry, {}, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow, fromTab: tabKey });
   };
   const openInboxEntry = useCallback((entry: FileEntry) => openInboxRef.current(entry), []);
   const settleInbox = useCallback(() => {
@@ -2020,32 +2050,43 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     label: t("terminal.reader.workspaces", { count: workflowRuns.length }), region: t("terminal.reader.workspacesRegion"),
     untestedId: "terminal.reader.topbar", open: workflowListOpen, setOpen: setWorkflowListOpen, listId: workflowListId,
   }) : null;
-  // Scanned once per conversation or link change, not on every live-screen
-  // render (each settled write of the pane re-renders the Reader).
-  const toolbarFiles = useMemo(() => {
-    if (!navigationSlot) return [];
-    const found = new Map<string, ReaderToolbarFile>();
-    for (const entry of levelEntries) for (const candidate of findPathCandidates(entry.text)) {
-      const file = pathLinks.get(candidate.path);
-      if (file && !file.is_dir) found.set(file.path, {
-        path: file.path, label: relativePathWithin(tabDir, file.path) || file.path,
-        open: () => openInboxEntry(file),
-      });
-    }
-    if (readerInbox) for (const file of readerInbox.files.values()) if (file) {
-      const path = `inbox:${file.name}`;
-      if (![...found.values()].some((entry) => entry.path.endsWith(file.name))) {
-        found.set(path, { path, label: file.name, open: () => readerInbox.open(file) });
+  // The Files tab's list, newest mention first. Scanned once per conversation
+  // or link change, not on every live-screen render (each settled write of
+  // the pane re-renders the Reader).
+  const filesOffered = !!onShowFiles;
+  const readerFiles = useMemo(() => {
+    if (!filesOffered) return [];
+    const found = new Map<string, ReaderFile>();
+    const add = (entry: FileEntry) => {
+      if (!found.has(entry.path)) found.set(entry.path, { entry, label: relativePathWithin(tabDir, entry.path) || entry.path });
+    };
+    for (let index = levelEntries.length - 1; index >= 0; index -= 1) {
+      const text = levelEntries[index].text;
+      const named: FileEntry[] = [];
+      for (const candidate of findPathCandidates(text)) {
+        const file = pathLinks.get(candidate.path);
+        if (file && !file.is_dir) named.push(file);
       }
+      if (readerInbox) for (const leaf of inboxLeaves(text)) {
+        const file = readerInbox.files.get(leaf);
+        if (file) named.push(inboxEntry(pathContext.projectDir, file));
+      }
+      // Within one message, first mention first.
+      for (const entry of named) add(entry);
     }
     return [...found.values()];
-  }, [navigationSlot, levelEntries, pathLinks, tabDir, openInboxEntry, readerInbox]);
+  }, [filesOffered, levelEntries, pathLinks, tabDir, readerInbox, pathContext.projectDir]);
+  const onFilesKnownRef = useRef(onFilesKnown);
+  onFilesKnownRef.current = onFilesKnown;
+  const hasFiles = readerFiles.length > 0;
+  useEffect(() => { onFilesKnownRef.current?.(hasFiles); }, [hasFiles]);
+  const shownFile = filePicked ?? readerFiles[0]?.entry ?? null;
 
   return createPortal(<>
     <div
       ref={regionRef}
       className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}`}
-      hidden={!shown || changesOpen}
+      hidden={!shown || changesOpen || filesOpen}
       role="region"
       aria-label={t("terminal.reader.title")}
       tabIndex={browsed ? -1 : undefined}
@@ -2296,7 +2337,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         history={history}
         queued={queuedPrompts}
         focused={focused}
-        visible={visible && shown && !changesOpen}
+        visible={visible && shown && !changesOpen && !filesOpen}
         acceptInserts={visible && shown}
         onReveal={onShowChat}
         steering={steering}
@@ -2316,7 +2357,6 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     {navigationSlot && shown && createPortal(<>
       {subagentsMenu}
       {workspacesMenu}
-      <ReaderToolbarNavigation files={toolbarFiles} />
     </>, navigationSlot)}
     {changesOpen && shown && tab && (
       <TerminalReaderChanges
@@ -2328,6 +2368,20 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         subagentTitle={openStep ? openStep.task || openStep.role : undefined}
         chat={chatId}
         chatTitle={browsed?.chat.title}
+        onClose={() => onShowChat?.()}
+      />
+    )}
+    {filesOpen && shown && (
+      <TerminalReaderFiles
+        files={readerFiles}
+        picked={shownFile}
+        projectId={projectId}
+        disabled={pathContext.disabled}
+        visible={visible}
+        scopeNote={openStep ? t("terminal.changes.subagent", { name: openStep.task || openStep.role || "" })
+          : browsed ? t("terminal.changes.chat", { name: browsed.chat.title ?? "" }) : undefined}
+        onPick={setFilePicked}
+        onOpenTab={openFileAsTab}
         onClose={() => onShowChat?.()}
       />
     )}

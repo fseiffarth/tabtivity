@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn(() => Promise.resolve()) }));
 vi.mock("../../lib/shortcuts/steeringAgent", () => ({ sendSteeringPrompt: (...args: unknown[]) => send(...args), clearAgentTab: vi.fn(() => Promise.resolve(true)) }));
 vi.mock("../../lib/files/openFileEntry", () => ({ openFileEntry: (...args: unknown[]) => openFile(...args) }));
+vi.mock("../../components/embed/FileViewerPane", () => ({ FileViewerPane: ({ path }: { path: string }) => <div data-testid="file-viewer">{path}</div> }));
 
 import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStrip";
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";
@@ -31,16 +32,22 @@ function Pane({ host }: { host: HTMLElement }) {
   const [navigationSlot, setNavigationSlot] = useState<HTMLSpanElement | null>(null);
   const [actionSlot, setActionSlot] = useState<HTMLSpanElement | null>(null);
   const open = useAgentReaderStore((state) => state.byAgent.claude ?? true);
-  const [changes, setChanges] = useState(false);
-  const showChat = () => { setChanges(false); useAgentReaderStore.getState().set("claude", true); };
+  const [panel, setPanel] = useState<"changes" | "files" | null>(null);
+  const [filesKnown, setFilesKnown] = useState(false);
+  const changes = panel === "changes";
+  const files = panel === "files";
+  const on = open || panel !== null;
+  const showChat = () => { setPanel(null); useAgentReaderStore.getState().set("claude", true); };
   return <>
     <TerminalPromptStrip ptyId="p:a" scope="p" tabKey="a" background="#000" foreground="#fff"
       onReturnFocus={() => {}} topBar chatShown={open}
       navigationSlot={setNavigationSlot} actionSlot={setActionSlot}
-      reader={{ open: open || changes, onToggle: () => { setChanges(false); useAgentReaderStore.getState().set("claude", !(open || changes)); }, cwd: tab.cwd,
-        changes: { open: changes, onToggle: () => (changes ? showChat() : setChanges(true)) } }} />
+      reader={{ open: on, onToggle: () => { setPanel(null); useAgentReaderStore.getState().set("claude", !on); }, cwd: tab.cwd,
+        changes: { open: changes, onToggle: () => (changes ? showChat() : setPanel("changes")) },
+        files: { open: files, empty: !filesKnown, onToggle: () => (files ? showChat() : setPanel("files")) } }} />
     <TerminalReaderView host={host} ptyId="p:a" scope="p" tabKey="a" cwd={tab.cwd}
-      visible={open || changes} focused={open && !changes} shown={open || changes} changesOpen={changes} onShowChat={showChat}
+      visible={on} focused={open && !panel} shown={on} changesOpen={changes} filesOpen={files} onShowChat={showChat}
+      onShowFiles={() => setPanel("files")} onFilesKnown={setFilesKnown}
       navigationSlot={navigationSlot} actionSlot={actionSlot} />
   </>;
 }
@@ -102,7 +109,8 @@ describe("desktop conversation toolbar", () => {
   it("omits resource menus when this conversation has none", async () => {
     render(<Pane host={host} />);
     await screen.findByText("hello");
-    expect(screen.queryByRole("button", { name: /Subagents|Workspaces|Files \(/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Subagents|Workspaces/ })).toBeNull();
+    expect((screen.getByRole("tab", { name: /^Files/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("returns to Chat when a prompt or dropped file is inserted while reviewing Diffs", async () => {
@@ -116,15 +124,40 @@ describe("desktop conversation toolbar", () => {
     expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
   });
 
-  it("opens the conversation's existing files from the top bar", async () => {
+  it("lists the conversation's files in the Files tab with the picked one in its viewer", async () => {
     entries.push({ kind: "answer", text: "Updated src/result.ts", at: "2026-10-25T09:01:00Z" });
     render(<Pane host={host} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Files (1)" }));
-    fireEvent.click(screen.getByRole("option", { name: "src/result.ts" }));
+    const filesTab = screen.getByRole("tab", { name: /^Files/ }) as HTMLButtonElement;
+    await waitFor(() => expect(filesTab.disabled).toBe(false));
+    fireEvent.click(filesTab);
+    const option = within(screen.getByRole("listbox", { name: "Files this conversation names" })).getByRole("option", { name: "src/result.ts" });
+    // Nothing picked yet: the newest file is shown.
+    expect(option.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("file-viewer").textContent).toBe("/project/src/result.ts");
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(openFile).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /^Open in a tab/ }));
     expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ entry: expect.objectContaining({ path: "/project/src/result.ts" }) }));
-    // Terminal reads no conversation: its menus would go stale, so they go.
-    fireEvent.click(screen.getByRole("tab", { name: "Terminal" }));
-    expect(screen.queryByRole("button", { name: "Files (1)" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+    expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector(".terminal-files")).toBeNull();
+  });
+
+  it("shows a file clicked in the chat in the Files tab; Ctrl+click still opens a tab", async () => {
+    entries.push({ kind: "answer", text: "Updated src/result.ts", at: "2026-10-25T09:01:00Z" });
+    render(<Pane host={host} />);
+    const link = await waitFor(() => {
+      const found = host.querySelector<HTMLElement>('[data-path-link="src/result.ts"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    fireEvent.click(link, { ctrlKey: true });
+    expect(openFile).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(link);
+    expect(openFile).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tab", { name: /^Files/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("file-viewer").textContent).toBe("/project/src/result.ts");
   });
 
   it("lists the conversation's workflow runs as Workspaces, apart from its subagents", async () => {
