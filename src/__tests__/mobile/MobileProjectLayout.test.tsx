@@ -80,21 +80,17 @@ describe("Mobile project screen — layout", () => {
 
   it("says a hold of ＋ reaches the other agents, until it is held or dismissed", async () => {
     serve([agent("a", "claude 1")], { agents: [{ id: "claude", label: "Claude", modes: [], default: true }] });
-    const early = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
-    // The screen's tips share one spot, one card at a time: the ☰ one leads,
-    // and closing it with Read leaves the spot empty for the visit.
-    expect(await screen.findByText(/Tap ☰ to open/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Read" }));
-    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
-    early.unmount();
-    // One tip per half hour on the phone: let it pass.
-    writeTipShownAt(Date.now() - 30 * 60_000);
+    // The screen's tips share one spot, one card at a time: the hold one leads
+    // while a tap starts one agent.
     const first = render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     expect(await screen.findByText(/Tapping ＋ opens Claude; hold ＋ to start a different agent/)).toBeTruthy();
     fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
     expect(screen.queryByText(/hold ＋ to start a different agent/)).toBeNull();
-    // Held once, it is gone; the next tip — the cards' ⋯ — waits out the half hour.
-    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
+    // Held once, it is gone for good; the unseen ☰ tip takes the spot without
+    // a half hour, and Read leaves the spot empty for the visit.
+    const menuTip = (await screen.findByText(/Tap ☰ to open/)).closest("aside")!;
+    fireEvent.click(within(menuTip as HTMLElement).getByRole("button", { name: "Read" }));
+    expect(screen.queryByText(/Tap ☰ to open/)).toBeNull();
     first.unmount();
     writeTipShownAt(Date.now() - 30 * 60_000);
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);

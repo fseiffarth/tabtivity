@@ -236,6 +236,12 @@ fn store_at(
 /// (`create_file` is `O_EXCL`). Returns the name written. A file whose write
 /// fails is removed again. `base` is a [`safe_name`] (stamped or not).
 pub(super) fn create_unique(dir: &ProjectDir, base: &str, bytes: &[u8]) -> std::io::Result<String> {
+    create_unique_with(dir, base, |file| file.write_all(bytes))
+}
+
+/// [`create_unique`], the new file's bytes written by `fill` (a streamed
+/// copy); a file `fill` fails on is removed again.
+pub(super) fn create_unique_with(dir: &ProjectDir, base: &str, mut fill: impl FnMut(&mut std::fs::File) -> std::io::Result<()>) -> std::io::Result<String> {
     // `safe_name` bounds characters; one file name holds 255 bytes (Linux,
     // `files::plain_segment`). Cut the stem at a character so a stamp, the
     // extension and a `-1000` suffix still fit. A dotted tail too long to
@@ -262,7 +268,7 @@ pub(super) fn create_unique(dir: &ProjectDir, base: &str, bytes: &[u8]) -> std::
         };
         match dir.create_file(&name) {
             Ok(mut file) => {
-                if let Err(error) = file.write_all(bytes).and_then(|()| file.flush()) {
+                if let Err(error) = fill(&mut file).and_then(|()| file.flush()) {
                     drop(file);
                     let _ = dir.remove_file(&name);
                     return Err(error);

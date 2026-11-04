@@ -27,6 +27,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::XChaCha20Poly1305;
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 
@@ -71,6 +72,9 @@ pub enum FilesError {
     /// The remote side (`host_files`): the desktop holds no connection to
     /// the project's host the phone could ride.
     HostOffline,
+    /// A local call ran past its deadline (`deadline::LOCAL_DEADLINE`): a
+    /// folder on a stalled mount, most likely.
+    TimedOut,
     Io(String),
 }
 
@@ -82,6 +86,7 @@ impl FilesError {
             FilesError::NotFound => "file_not_found",
             FilesError::TooLarge => "file_too_large",
             FilesError::HostOffline => "host_offline",
+            FilesError::TimedOut => "timeout",
             FilesError::Io(_) => "read_failed",
         }
     }
@@ -163,14 +168,41 @@ fn token_key_with(salt: &str, host_key: &[u8]) -> [u8; 32] {
     key
 }
 
-/// Seals a project-relative path for the phone. Fails only when the OS has
-/// no randomness for the nonce.
+/// The key a token's nonce is derived with: from the same host key and salt
+/// as [`token_key_with`]'s, under its own label, so it is never the cipher's.
+fn nonce_key_with(salt: &str, host_key: &[u8]) -> [u8; 32] {
+    let mut key: [u8; 32] = std::array::from_fn(|_| 0);
+    Hkdf::<Sha256>::new(Some(salt.as_bytes()), host_key)
+        .expand(b"path-token nonce v1", &mut key)
+        .expect("32 bytes is a valid HKDF-SHA256 length");
+    key
+}
+
+/// A token's nonce, made from what it seals rather than drawn at random
+/// (synthetic IV): the same path of the same project (`raw_id`, the AAD) under
+/// the same host key always seals to the same token, so the phone can key a
+/// cover, a favorite or a cached answer by it. All a repeat tells is "the same
+/// path", which the phone was shown anyway; the nonce never repeats for two
+/// different messages, which is what XChaCha20-Poly1305 needs.
+fn synthetic_nonce(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> [u8; NONCE_LEN] {
+    let mut mac = Hmac::<Sha256>::new_from_slice(&nonce_key_with(salt, host_key)).expect("HMAC accepts all key sizes");
+    // Length-prefixed, so no (raw_id, rel) pair runs into another.
+    mac.update(&(raw_id.len() as u64).to_be_bytes());
+    mac.update(raw_id.as_bytes());
+    mac.update(rel.as_bytes());
+    let digest = mac.finalize().into_bytes();
+    std::array::from_fn(|at| digest[at])
+}
+
+/// Seals a project-relative path for the phone: the same path always gives
+/// the same token ([`synthetic_nonce`]). The `Result` is kept for callers;
+/// sealing no longer fails.
 pub fn seal(host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesError> {
     seal_with(crate::brand::MOBILE_FILES_SALT, host_key, raw_id, rel)
 }
 
 fn seal_with(salt: &str, host_key: &[u8], raw_id: &str, rel: &str) -> Result<String, FilesError> {
-    let nonce = super::auth::random_bytes::<NONCE_LEN>().map_err(FilesError::Io)?;
+    let nonce = synthetic_nonce(salt, host_key, raw_id, rel);
     let cipher = XChaCha20Poly1305::new((&token_key_with(salt, host_key)).into());
     let sealed = cipher
         .encrypt((&nonce).into(), Payload { msg: rel.as_bytes(), aad: raw_id.as_bytes() })
@@ -327,15 +359,22 @@ impl ProjectDir {
     /// (`mkdirat` never follows a link at it). Open it with [`Self::lookup_dir`],
     /// which refuses a link standing there.
     pub(crate) fn create_dir(&self, name: &str) -> std::io::Result<()> {
+        match self.create_new_dir(name) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            made => made,
+        }
+    }
+
+    /// A new folder `name` here, or `AlreadyExists` when anything already
+    /// has that name — the phone's **New folder**, which must know it made it.
+    pub(crate) fn create_new_dir(&self, name: &str) -> std::io::Result<()> {
         use std::os::fd::AsRawFd;
         let c_name = segment_cstr(name)?;
         // SAFETY: a live directory descriptor and a NUL-terminated name.
         if unsafe { libc::mkdirat(self.0.as_raw_fd(), c_name.as_ptr(), 0o777) } == 0 {
-            return Ok(());
-        }
-        match std::io::Error::last_os_error() {
-            error if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-            error => Err(error),
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
         }
     }
 
@@ -713,10 +752,21 @@ pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false, items: None })
 }
 
-/// One file's bytes and media type. Text longer than `MAX_OUTBOX_FILE` is
-/// answered with its head — a long log is still worth its first pages; any
-/// other kind that large is `TooLarge`.
-pub fn read(root: &Path, rel: &str) -> Result<(Vec<u8>, &'static str), FilesError> {
+/// One file opened to be served to the phone (`serve::from_file`): the
+/// descriptor just proven, rewound; its metadata; its kind; and how many of
+/// its bytes may be served — all of them, except a text longer than
+/// `MAX_OUTBOX_FILE`, which is served as its head.
+pub struct Served {
+    pub file: fs::File,
+    pub meta: fs::Metadata,
+    pub kind: &'static str,
+    pub len: u64,
+}
+
+/// The file `rel` names, opened from the root one checked name at a time
+/// with no link on the way, typed by its head ([`Served`]). No size cap: the
+/// body is streamed from this descriptor, never read whole.
+pub fn open_served(root: &Path, rel: &str) -> Result<Served, FilesError> {
     if rel.is_empty() || !valid_rel(rel) {
         return Err(FilesError::NotFound);
     }
@@ -725,11 +775,20 @@ pub fn read(root: &Path, rel: &str) -> Result<(Vec<u8>, &'static str), FilesErro
     let Some((mut file, meta, kind)) = dir.open_file(name).and_then(|(file, meta)| outbox::sniff_opened(file, meta)) else {
         return Err(FilesError::NotFound);
     };
+    // Keep the descriptor just proven: never reopen a replaceable leaf.
+    file.rewind().map_err(|e| FilesError::Io(e.to_string()))?;
+    let len = if kind.starts_with("text/") { meta.len().min(MAX_OUTBOX_FILE) } else { meta.len() };
+    Ok(Served { file, meta, kind, len })
+}
+
+/// One file's bytes and media type, read whole (Mark up's sources). Text
+/// longer than `MAX_OUTBOX_FILE` is answered with its head — a long log is
+/// still worth its first pages; any other kind that large is `TooLarge`.
+pub fn read(root: &Path, rel: &str) -> Result<(Vec<u8>, &'static str), FilesError> {
+    let Served { file, meta, kind, .. } = open_served(root, rel)?;
     if meta.len() > MAX_OUTBOX_FILE && !kind.starts_with("text/") {
         return Err(FilesError::TooLarge);
     }
-    // Keep the descriptor just proven: never reopen a replaceable leaf.
-    file.rewind().map_err(|e| FilesError::Io(e.to_string()))?;
     let mut bytes = Vec::with_capacity(meta.len().min(MAX_OUTBOX_FILE) as usize);
     file.take(MAX_OUTBOX_FILE)
         .read_to_end(&mut bytes)
@@ -833,12 +892,19 @@ fn git_paths(root: &Path) -> Option<(Vec<String>, bool)> {
     (!paths.is_empty()).then_some((paths, cut))
 }
 
-/// Every folder and file below the root, breadth first, the way the drawer
-/// would list them (no links, no hidden names), until [`MAX_SCANNED`]. The
-/// `bool` is whether it stopped there.
-fn walked_paths(root: &Path) -> Result<(Vec<(String, bool)>, bool), FilesError> {
+/// Folders a walk that includes what git ignores never goes into: build
+/// caches and installed packages that would eat [`MAX_SCANNED`] before the
+/// generated files worth finding (`build/`, `out/`, `dist/`) are reached.
+/// The remote side's walk skips the same (`host_files`).
+pub(super) const WALK_SKIP: &[&str] = &["node_modules", "target", "__pycache__", ".venv", "venv", ".cache", ".tox", ".mypy_cache", ".pytest_cache"];
+
+/// Every folder and file below `under` (the root when empty), breadth first,
+/// the way the drawer would list them (no links, no hidden names), not into a
+/// folder named in `skip`, until [`MAX_SCANNED`]. The `bool` is whether it
+/// stopped there.
+pub(super) fn walked_paths(root: &Path, under: &str, skip: &[&str]) -> Result<(Vec<(String, bool)>, bool), FilesError> {
     let mut found = Vec::new();
-    let mut folders = std::collections::VecDeque::from([String::new()]);
+    let mut folders = std::collections::VecDeque::from([under.to_string()]);
     while let Some(rel) = folders.pop_front() {
         // Gone or swapped for a link since its parent was read: left out.
         let Ok(dir) = ProjectDir::open(root, &rel) else { continue };
@@ -850,13 +916,21 @@ fn walked_paths(root: &Path) -> Result<(Vec<(String, bool)>, bool), FilesError> 
                 return Ok((found, true));
             }
             let path = child(&rel, &name);
-            if is_dir {
+            if is_dir && !skip.contains(&name.as_str()) {
                 folders.push_back(path.clone());
             }
             found.push((path, is_dir));
         }
     }
     Ok((found, false))
+}
+
+/// The file or folder `rel` names, as its folder's listing would row it
+/// (never `ignored`, no item count): what the phone's favorites, recents and
+/// Reload look up instead of listing the whole folder again. `None` for
+/// anything [`entry`] and [`dir_entry`] would not answer.
+pub fn lookup(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<Entry> {
+    entry(root, rel, host_key, raw_id).or_else(|| dir_entry(root, rel, host_key, raw_id))
 }
 
 /// A folder of the project as its parent's listing would row it.
@@ -878,12 +952,29 @@ fn dir_entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
 /// Each hit is proven again as [`entry`] proves a file, so a path git names
 /// through a link, or one that is hidden, is never answered.
 pub fn search(root: &Path, query: &str, host_key: &[u8], raw_id: &str) -> Result<Found, FilesError> {
+    search_in(root, query, host_key, raw_id, &SearchScope::default())
+}
+
+/// Where a search looks: inside the folder `under` (the whole project when
+/// empty), and with `ignored` what git ignores too — by a walk (not into
+/// [`WALK_SKIP`]) rather than git's listing.
+#[derive(Debug, Default, Clone)]
+pub struct SearchScope {
+    pub under: String,
+    pub ignored: bool,
+}
+
+/// [`search`] within a [`SearchScope`]. A hit is strictly inside `under`; the
+/// folder itself is not one.
+pub fn search_in(root: &Path, query: &str, host_key: &[u8], raw_id: &str, scope: &SearchScope) -> Result<Found, FilesError> {
     canonical_root(root)?;
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    if words.is_empty() {
+    if words.is_empty() || !valid_rel(&scope.under) {
         return Ok(Found { hits: Vec::new(), truncated: false });
     }
-    let (candidates, mut truncated) = match git_paths(root) {
+    let inside = |rel: &str| scope.under.is_empty() || rel.strip_prefix(scope.under.as_str()).is_some_and(|rest| rest.starts_with('/'));
+    let listed = if scope.ignored { None } else { git_paths(root) };
+    let (candidates, mut truncated) = match listed {
         Some((paths, cut)) => {
             let mut seen = HashSet::new();
             let mut candidates = Vec::new();
@@ -904,10 +995,12 @@ pub fn search(root: &Path, query: &str, host_key: &[u8], raw_id: &str) -> Result
             }
             (candidates, cut)
         }
-        None => walked_paths(root)?,
+        None if scope.ignored => walked_paths(root, &scope.under, WALK_SKIP)?,
+        None => walked_paths(root, &scope.under, &[])?,
     };
     let mut matched: Vec<(u8, usize, String, bool)> = candidates
         .into_iter()
+        .filter(|(rel, _)| inside(rel))
         .filter_map(|(rel, is_dir)| {
             let leaf = rel.rsplit('/').next().unwrap_or(&rel);
             let score = rank(leaf, &words)?;
@@ -987,13 +1080,39 @@ mod tests {
     }
 
     #[test]
+    fn lookup_rows_one_file_or_folder_as_the_listing_does() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs/deep")).unwrap();
+        std::fs::write(dir.path().join("docs/a.txt"), "hello").unwrap();
+        std::fs::write(dir.path().join("docs/.env.local"), "x").unwrap();
+        let listed = list(dir.path(), "docs", KEY, "p1").unwrap();
+        for row in &listed.entries {
+            let found = lookup(dir.path(), &child("docs", &row.name), KEY, "p1").unwrap();
+            assert_eq!((&found.token, &found.name, found.kind, found.size), (&row.token, &row.name, row.kind, row.size));
+        }
+        assert_eq!(lookup(dir.path(), "docs/.env.local", KEY, "p1"), None, "hidden");
+        assert_eq!(lookup(dir.path(), "docs/gone.txt", KEY, "p1"), None);
+        assert_eq!(lookup(dir.path(), "", KEY, "p1"), None, "the root has no row");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join("docs/a.txt"), dir.path().join("docs/link.txt")).unwrap();
+            assert_eq!(lookup(dir.path(), "docs/link.txt", KEY, "p1"), None, "never through a link");
+        }
+    }
+
+    #[test]
     fn a_token_opens_only_for_its_own_project_and_host() {
         let token = seal(KEY, "p1", "src/main.rs").unwrap();
         assert_eq!(unseal(KEY, "p1", &token).as_deref(), Some("src/main.rs"));
         assert_eq!(unseal(KEY, "p2", &token), None, "replayed against another project");
         assert_eq!(unseal(b"another-host-key", "p1", &token), None);
         assert!(!token.contains("main"), "the path is not readable in the token");
-        assert_ne!(seal(KEY, "p1", "src/main.rs").unwrap(), token, "a fresh nonce per seal");
+        assert_eq!(seal(KEY, "p1", "src/main.rs").unwrap(), token, "the same path seals to the same token");
+        assert_ne!(seal(KEY, "p1", "src/main.r").unwrap(), token, "another path, another token");
+        assert_ne!(seal(KEY, "p2", "src/main.rs").unwrap(), token, "another project, another token");
+        assert_ne!(seal(b"another-host-key", "p1", "src/main.rs").unwrap(), token, "another host, another token");
+        // The length prefix keeps (raw_id, rel) pairs apart that would run together.
+        assert_ne!(synthetic_nonce("s", KEY, "p1", "2/a"), synthetic_nonce("s", KEY, "p12", "/a"));
         let mut forged = Base64UrlUnpadded::decode_vec(&token).unwrap();
         *forged.last_mut().unwrap() ^= 1;
         assert_eq!(unseal(KEY, "p1", &Base64UrlUnpadded::encode_string(&forged)), None);
@@ -1475,6 +1594,35 @@ mod tests {
         // A project folder below the repo's top searches only itself.
         let docs = search(&root.join("docs"), "report", KEY, "p1").unwrap();
         assert_eq!(hit_paths(&docs), ["report", "report/report.txt"]);
+    }
+
+    #[test]
+    fn a_search_keeps_inside_a_folder_and_takes_what_git_ignores_on_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git").args(args).current_dir(root).output().unwrap().status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join(".gitignore"), "build/\nnode_modules/\n").unwrap();
+        for folder in ["build", "docs/old", "node_modules/pkg"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            fs::write(root.join(folder).join("paper.pdf"), "x").unwrap();
+        }
+        fs::write(root.join("paper.md"), "x").unwrap();
+        let scoped = |under: &str, ignored: bool| {
+            hit_paths(&search_in(root, "paper", KEY, "p1", &SearchScope { under: under.into(), ignored }).unwrap())
+        };
+        assert_eq!(scoped("", false), ["paper.md", "docs/old/paper.pdf"], "git's listing: build/ and node_modules/ ignored");
+        assert_eq!(scoped("", true), ["paper.md", "build/paper.pdf", "docs/old/paper.pdf"], "the walk: build/ in, node_modules/ never walked");
+        assert_eq!(scoped("docs", false), ["docs/old/paper.pdf"]);
+        assert_eq!(scoped("build", true), ["build/paper.pdf"]);
+        assert!(scoped("build", false).is_empty(), "git lists nothing ignored");
+        // The folder itself is no hit, and a scope that is no project path finds nothing.
+        let docs = search_in(root, "docs", KEY, "p1", &SearchScope { under: "docs".into(), ignored: false }).unwrap();
+        assert!(docs.hits.is_empty());
+        assert!(scoped("../x", true).is_empty());
     }
 
     #[test]

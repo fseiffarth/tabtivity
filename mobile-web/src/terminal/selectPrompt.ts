@@ -54,10 +54,12 @@ export interface SelectPrompt {
    * with a model list and then a reasoning-level list for the model picked —
    * and the heading is what says which step is on screen. */
   title?: string;
-  /** Rows the dialog has but is not drawing. Claude Code shows only as many
-   * rows as its pane has room for — three at 24 lines — scrolls that window
-   * with the highlight and says `… +2 models` under it, so the rows on screen
-   * are a slice: `options` then need not start at 1. */
+  /** Rows the dialog has but is not drawing, above and below the rows on
+   * screen. Claude Code shows only as many rows as its pane has room for —
+   * three at 24 lines — scrolls that window with the highlight and says
+   * `… +8 models` under it, so the rows on screen are a slice: `options` then
+   * need not start at 1. Its note counts only the rows *below* the window
+   * (2.1.317: rows 3–5 of 13 say `+8`); the rows above it are added here. */
   hidden?: number;
   /** Index, in the lines read, of the dialog's first row. What sits above it
    * is what the rows answer — the question and whatever the agent printed to
@@ -590,7 +592,7 @@ export function readSelectPrompt(
         title,
         start: candidate.start,
         ...readContext(lines, candidate.start),
-        ...(candidate.hidden ? { hidden: candidate.hidden } : {}),
+        ...(candidate.hidden ? { hidden: candidate.hidden + candidate.options[0].number - 1 } : {}),
       };
     }
   }
@@ -865,6 +867,21 @@ export function readCodexHooksPage(lines: readonly SelectLineLike[], agentLabel?
   if (!/codex/iu.test(agentLabel ?? "")) return null;
   let footer = lines.length - 1;
   while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+  // A hook's detail page offers trust for its config path rather than
+  // the overview's trust-all action. Only accept Codex's own footer and a
+  // hook heading; prose mentioning these keys is never an approval prompt.
+  const detail = footer >= 0 ? /^\s*t (trust (?:this )?path)\s*·\s*esc (back|close)\s*$/iu.exec(lines[footer].text) : null;
+  if (detail) {
+    const heading = lines.findIndex((line) => /^\s*(?:Hooks?|(?:SessionStart|PreToolUse|PostToolUse|Stop)\b.*)\s*$/u.test(line.text));
+    if (heading < 0 || footer - heading > DIALOG_LINES) return null;
+    return {
+      options: [
+        { index: 0, number: 1, label: detail[1], keys: ["t"] },
+        { index: 1, number: 2, label: detail[2], keys: ["\u001b"] },
+      ],
+      current: 0, title: lines[heading].text.trim(), start: footer, question: heading, context: heading,
+    };
+  }
   const keys = footer >= 0 ? CODEX_HOOKS_FOOTER.exec(lines[footer].text) : null;
   if (!keys) return null;
   let heading = -1;
@@ -899,8 +916,12 @@ export function selectSignature(prompt: SelectPrompt): string {
 
 /** Whether the list on screen is a slice of `step` — the same heading, and
  * every row they both hold carries the same label — rather than the next step
- * of a multi-step dialog drawn in the same place. */
-export function sameSelectStep(step: SelectStep, prompt: SelectPrompt): boolean {
+ * of a multi-step dialog drawn in the same place.
+ *
+ * `walking`: only arrow keys went since `step` was read, and arrows move a
+ * highlight without leaving the list, so a slice sharing no row with it is
+ * still the same list — the window just moved further than one frame shows. */
+export function sameSelectStep(step: SelectStep, prompt: SelectPrompt, walking = false): boolean {
   if ((step.title ?? "") !== (prompt.title ?? "")) return false;
   const known = new Map(step.options.map((option) => [option.number, option.label]));
   let shared = 0;
@@ -910,15 +931,15 @@ export function sameSelectStep(step: SelectStep, prompt: SelectPrompt): boolean 
     if (label !== option.label) return false;
     shared += 1;
   }
-  return shared > 0;
+  return shared > 0 || walking;
 }
 
 /** `step` with the rows `prompt` adds — or, when the list on screen is not a
  * slice of it (`sameSelectStep`), the step `prompt` starts. Returns `step`
  * itself when the screen shows nothing it did not hold, so a caller keeping it
  * in state does not re-render on every repaint. */
-export function mergeSelectRows(step: SelectStep | null, prompt: SelectPrompt): SelectStep {
-  if (!step || !sameSelectStep(step, prompt)) {
+export function mergeSelectRows(step: SelectStep | null, prompt: SelectPrompt, walking = false): SelectStep {
+  if (!step || !sameSelectStep(step, prompt, walking)) {
     return { title: prompt.title, options: prompt.options.map((option, index) => ({ ...option, index })) };
   }
   const rows = new Map(step.options.map((option) => [option.number, option]));
@@ -951,24 +972,25 @@ export function missingSelectRow(step: SelectStep, prompt: SelectPrompt): number
   return undefined;
 }
 
-/** Where to walk the highlight to reveal what `step` has not seen, half a
- * window at a time rather than one row per round trip — Cursor draws
- * thirty-nine models in a ten-row window, and a row-by-row reveal held the
- * sheet for most of a minute.
+/** Where to walk the highlight to reveal what `step` has not seen: all the
+ * way to the farthest unseen row on one side, in one run of arrows — the rows
+ * between are drawn on the way. Walked half a window per round trip instead,
+ * Claude Code's three-row window (2.1.317, thirteen models) took a dozen
+ * trips across the phone's link before the sheet listed every model.
  *
- * Half, not whole: the frame the walk lands on must still show a row the step
- * already holds, whether the window scrolls just far enough to keep the
- * highlight in view or centres it. A frame sharing no row with the step is
- * read as the next step of a multi-step dialog (`sameSelectStep`), and what
- * was revealed so far would be thrown away. */
+ * Above the window first, then below it. The frames the walk lands on need
+ * not share a row with `step`: the caller merges them as one list while it
+ * walks (`mergeSelectRows`'s `walking`). A row a coalesced frame skipped is
+ * still unseen afterwards, and the next walk goes back for it. */
 export function revealSelectRow(step: SelectStep, prompt: SelectPrompt): number | undefined {
   const missing = missingSelectRow(step, prompt);
   if (missing === undefined) return undefined;
-  const size = prompt.options.length;
   const first = prompt.options[0].number;
-  if (missing < first) return Math.max(missing, first + 1 - Math.ceil(size / 2));
-  const total = size + (prompt.hidden ?? 0);
-  return Math.min(total, Math.max(missing, missing - 1 + Math.floor(size / 2)));
+  if (missing < first) return missing;
+  const seen = new Set(step.options.map((option) => option.number));
+  const total = Math.max(prompt.options[prompt.options.length - 1].number, prompt.options.length + (prompt.hidden ?? 0));
+  for (let number = total; number > missing; number -= 1) if (!seen.has(number)) return number;
+  return missing;
 }
 
 /** The keystrokes that move a dialog's highlight from `current` to `target` and

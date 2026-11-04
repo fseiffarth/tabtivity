@@ -23,7 +23,7 @@
 use std::{
     collections::HashMap,
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, SystemTime},
@@ -51,6 +51,14 @@ const CAP_WINDOW: u64 = 24 * 60 * 60;
 const KEEP_LOG: u64 = 7 * 24 * 60 * 60;
 /// Characters kept of the phone's device label.
 const MAX_PHONE: usize = 64;
+/// The largest file one upload takes: the body is staged on disk as it
+/// arrives (`stage_body`), never held whole in memory. One such file is the
+/// project's whole day ([`MAX_UPLOADS_PER_DAY`]).
+pub const MAX_UPLOAD_FILE: u64 = MAX_UPLOADS_PER_DAY;
+/// Where bodies are staged, inside the sidecar's private state folder.
+const STAGING_DIR: &str = "upload-staging";
+/// How long the phone may take back a folder it made (`remove_made_folder`).
+const FOLDER_UNDO: Duration = Duration::from_secs(60 * 60);
 
 /// Serializes the sidecar's log writes (cap check, file creation, append,
 /// compaction): two uploads at once must not both pass the cap.
@@ -119,8 +127,11 @@ pub enum UploadError {
     Refused,
     /// The body had no bytes.
     Empty,
-    /// The body exceeds `inbox::MAX_INBOX_FILE`.
+    /// The body exceeds [`MAX_UPLOAD_FILE`] (`inbox::MAX_INBOX_FILE` for a
+    /// body handed over whole).
     TooLarge,
+    /// **New folder**: the name is taken.
+    Exists,
     /// The project already took [`MAX_UPLOADS_PER_DAY`] in the last 24 h.
     Full,
     /// The project root is gone.
@@ -141,9 +152,96 @@ impl UploadError {
             UploadError::Full => "uploads_full",
             UploadError::Unavailable => "project_unavailable",
             UploadError::NotFound => "file_not_found",
+            UploadError::Exists => "already_exists",
             UploadError::Io(_) => "write_failed",
         }
     }
+}
+
+/// An upload's body, staged in the sidecar's private folder while it
+/// arrives: its size and SHA-256 are known before anything touches the
+/// project. Dropped, the staged file is removed.
+pub struct Staged {
+    path: PathBuf,
+    size: u64,
+    sha256: String,
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// How old a staging file must be before a new upload removes it: one left
+/// by a sidecar that stopped mid-upload. No upload takes this long.
+const STAGING_STALE: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Removes staging files older than [`STAGING_STALE`] (a stopped sidecar's).
+fn sweep_staging(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .ok()
+            .filter(|meta| meta.is_file())
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > STAGING_STALE);
+        if old {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Streams `body` into a new private staging file, hashing as it goes, and
+/// stops at [`MAX_UPLOAD_FILE`] (`TooLarge`) or an empty body (`Empty`). A
+/// body cut off mid-way is an `Io` error; nothing is left behind.
+pub async fn stage_body(state_dir: &Path, body: axum::body::Body) -> Result<Staged, UploadError> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let dir = state_dir.join(CONTROL_DIR).join(STAGING_DIR);
+    let (file, path) = {
+        let dir = dir.clone();
+        tokio::task::spawn_blocking(move || -> Result<(fs::File, PathBuf), UploadError> {
+            super::store::ensure_private_dir(&dir).map_err(UploadError::Io)?;
+            sweep_staging(&dir);
+            let leaf = super::auth::random_bytes::<16>()
+                .map(|bytes| Base64UrlUnpadded::encode_string(&bytes))
+                .map_err(UploadError::Io)?;
+            let path = dir.join(leaf);
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+            }
+            let file = options.open(&path).map_err(|error| UploadError::Io(error.to_string()))?;
+            Ok((file, path))
+        })
+        .await
+        .map_err(|error| UploadError::Io(error.to_string()))??
+    };
+    let mut staged = Staged { path, size: 0, sha256: String::new() };
+    let mut file = tokio::fs::File::from_std(file);
+    let mut hasher = Sha256::new();
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| UploadError::Io(error.to_string()))?;
+        staged.size = staged.size.saturating_add(chunk.len() as u64);
+        if staged.size > MAX_UPLOAD_FILE {
+            return Err(UploadError::TooLarge);
+        }
+        hasher.update(&chunk);
+        file.write_all(&chunk).await.map_err(|error| UploadError::Io(error.to_string()))?;
+    }
+    file.flush().await.map_err(|error| UploadError::Io(error.to_string()))?;
+    if staged.size == 0 {
+        return Err(UploadError::Empty);
+    }
+    staged.sha256 = crate::digest::hex(&hasher.finalize());
+    Ok(staged)
 }
 
 fn log_path(state_dir: &Path) -> PathBuf {
@@ -244,6 +342,54 @@ fn store_at(
     if bytes.len() > MAX_INBOX_FILE {
         return Err(UploadError::TooLarge);
     }
+    let body = Written { size: bytes.len() as u64, sha256: crate::digest::sha256_hex(bytes) };
+    store_with(state_dir, root, raw_id, rel_dir, raw_name, &body, phone, now, |file| file.write_all(bytes))
+}
+
+/// [`store`] of a body [`stage_body`] staged: copied from the staging file
+/// into the project in one streamed pass.
+pub fn store_staged(
+    state_dir: &Path,
+    root: &Path,
+    raw_id: &str,
+    rel_dir: &str,
+    raw_name: &str,
+    staged: &Staged,
+    phone: Option<&str>,
+) -> Result<Landed, UploadError> {
+    let mut source = fs::File::open(&staged.path).map_err(|error| UploadError::Io(error.to_string()))?;
+    let body = Written { size: staged.size, sha256: staged.sha256.clone() };
+    store_with(state_dir, root, raw_id, rel_dir, raw_name, &body, phone, crate::clock::now_secs(), |file| {
+        source.rewind()?;
+        let copied = std::io::copy(&mut (&mut source).take(staged.size), file)?;
+        if copied == staged.size { Ok(()) } else { Err(std::io::Error::other("the staged upload changed")) }
+    })
+}
+
+/// What the log records of a body: its length and hash.
+struct Written {
+    size: u64,
+    sha256: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_with(
+    state_dir: &Path,
+    root: &Path,
+    raw_id: &str,
+    rel_dir: &str,
+    raw_name: &str,
+    body: &Written,
+    phone: Option<&str>,
+    now: u64,
+    fill: impl FnMut(&mut fs::File) -> std::io::Result<()>,
+) -> Result<Landed, UploadError> {
+    if body.size == 0 {
+        return Err(UploadError::Empty);
+    }
+    if body.size > MAX_UPLOAD_FILE {
+        return Err(UploadError::TooLarge);
+    }
     if !accepts(rel_dir) {
         return Err(UploadError::Refused);
     }
@@ -261,21 +407,21 @@ fn store_at(
         .iter()
         .filter(|record| record.project == raw_id && record.at.saturating_add(CAP_WINDOW) > now)
         .fold(0u64, |total, record| total.saturating_add(record.size));
-    if written.saturating_add(bytes.len() as u64) > MAX_UPLOADS_PER_DAY {
+    if written.saturating_add(body.size) > MAX_UPLOADS_PER_DAY {
         return Err(UploadError::Full);
     }
     let id = super::auth::random_bytes::<16>()
         .map(|bytes| Base64UrlUnpadded::encode_string(&bytes))
         .map_err(UploadError::Io)?;
-    let name = inbox::create_unique(&dir, &inbox::safe_name(raw_name), bytes)
+    let name = inbox::create_unique_with(&dir, &inbox::safe_name(raw_name), fill)
         .map_err(|error| UploadError::Io(error.to_string()))?;
     let rel = if rel_dir.is_empty() { name.clone() } else { format!("{rel_dir}/{name}") };
     let record = Record {
         id: id.clone(),
         project: raw_id.to_string(),
         rel: rel.clone(),
-        size: bytes.len() as u64,
-        sha256: crate::digest::sha256_hex(bytes),
+        size: body.size,
+        sha256: body.sha256.clone(),
         at: now,
         phone: phone.map(|phone| phone.chars().take(MAX_PHONE).collect()),
     };
@@ -411,6 +557,61 @@ fn recent_at(
     // Only what this call saw: the cache never outgrows the log's window.
     *seen = Some(next);
     Ok(out)
+}
+
+/// The folders the phone made (**New folder**) and when, by project raw id
+/// and path: only these may be taken back, and only while empty.
+static MADE: Mutex<Option<HashMap<(String, String), std::time::Instant>>> = Mutex::new(None);
+
+/// **New folder**: makes the folder `raw_name` (sanitized as an upload's
+/// name, never a dot name) inside `rel_dir`, which must take uploads
+/// ([`accepts`]). Add-only: a taken name is `Exists`, nothing is replaced.
+/// Answers the new folder's project-relative path.
+pub fn make_folder(root: &Path, raw_id: &str, rel_dir: &str, raw_name: &str) -> Result<String, UploadError> {
+    if !accepts(rel_dir) {
+        return Err(UploadError::Refused);
+    }
+    let name = inbox::safe_name(raw_name);
+    if name.is_empty() || name.starts_with('.') || !files::valid_segment(&name) {
+        return Err(UploadError::Refused);
+    }
+    let dir = ProjectDir::open(root, rel_dir).map_err(|error| match error {
+        FilesError::Unavailable => UploadError::Unavailable,
+        _ => UploadError::Refused,
+    })?;
+    dir.create_new_dir(&name).map_err(|error| match error.kind() {
+        std::io::ErrorKind::AlreadyExists => UploadError::Exists,
+        _ => UploadError::Io(error.to_string()),
+    })?;
+    let rel = files::child(rel_dir, &name);
+    let mut made = MADE.lock_ok();
+    let made = made.get_or_insert_with(HashMap::new);
+    made.retain(|_, at| at.elapsed() < FOLDER_UNDO);
+    made.insert((raw_id.to_string(), rel.clone()), std::time::Instant::now());
+    Ok(rel)
+}
+
+/// Takes back a folder [`make_folder`] made within [`FOLDER_UNDO`] — only
+/// while it is still empty. Anything else is `NotFound`: the phone deletes
+/// nothing it did not just make.
+pub fn remove_made_folder(root: &Path, raw_id: &str, rel: &str) -> Result<(), UploadError> {
+    let key = (raw_id.to_string(), rel.to_string());
+    let fresh = MADE.lock_ok().as_ref().and_then(|made| made.get(&key)).is_some_and(|at| at.elapsed() < FOLDER_UNDO);
+    if !fresh {
+        return Err(UploadError::NotFound);
+    }
+    let Some((dir, leaf)) = held_parent(root, rel) else {
+        return Err(UploadError::NotFound);
+    };
+    // `rmdir` refuses a folder that is not empty: nothing in it is lost.
+    dir.remove_empty_dir(leaf).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => UploadError::NotFound,
+        _ => UploadError::Refused,
+    })?;
+    if let Some(made) = MADE.lock_ok().as_mut() {
+        made.remove(&key);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

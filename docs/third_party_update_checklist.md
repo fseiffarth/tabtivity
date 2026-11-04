@@ -429,6 +429,42 @@ Claude's `/fast` — different thing.
   `/command` sent from the Chat or phone with such a character in it. Fast mode on Opus 4.8 is deprecated and ends 2026-11-30, returning an
   error rather than falling back; `api_prices` keeps pricing past usage and
   needs nothing. The binary grew from 298 to 328 MB.
+  Re-checked against 2.1.317 (2026-11-03, live, from a scratch directory,
+  both `*_TAB_UID` names unset, beside a 2.1.316 run of the same dump: keys
+  identical on all 19 payloads, `session_id` equal to the `--session-id`
+  passed, the hook's `sed` extractions matching `jq` on all 23 payloads
+  counting the TUI run's, the resume start's four cost fields included; `-p
+  --resume` of a `plan` session still reports the default; `/usage` three
+  meters, `resolveResetAt` placing every reset; `--help` byte-identical;
+  notification-type and cold-resume dialog strings and the bundle's model ids
+  unchanged). The transcript gains one record type, `session-owner`
+  (`accountUuid`, `organizationUuid`, `sessionId`), now its first line and
+  repeated each turn; every reader here gates on `type`, so none takes it for
+  a turn — but a moved or exported transcript now carries the account's ids.
+  The TUI pass with `--name` reads as 2.1.316's: `readReaderLive` gives the
+  title and four options at 120, 60 and 42 columns, the lamp lights,
+  `Notification` / `permission_prompt` fired; a finished turn may draw a
+  right-aligned `◐ medium · /effort` row, which no parser reads. New in the
+  bundle: a file-send consent dialog (server flag `tengu_misty_crown`) that
+  withholds Yes in a terminal too short to show the file list ("This terminal
+  is too short. Make it taller to choose Yes, or choose No."); a Bash prompt
+  in a 60×12 pane still offers all four options. A phone tab hitting that
+  dialog would show only No — the screen's truth, not a parser fault. The
+  account-email check before web/shell calls is a tool check feeding the
+  usual prompt; the Read tool's dropped "unchanged since last read" stub was
+  read nowhere here. The binary grew from 328 to 331 MB.
+  Re-checked against 2.1.318 (2026-11-04, live, the same harness beside
+  2.1.317's run: keys identical on all 19 payloads, `session_id` equal to
+  the `--session-id` passed, the hook's `sed` extractions matching `jq` on
+  all 23 payloads counting the TUI run's; `-p --resume` of a `plan` session
+  still reports the default (`auto` here); transcript record types unchanged; `--help`
+  byte-identical; notification-type, cold-resume dialog strings and the
+  bundle's 27 model ids unchanged). The TUI pass reads as 2.1.317's at 120,
+  60 and 42 columns: title, four options, the lamp, `Notification` /
+  `permission_prompt`. `/usage` gains one top-level key,
+  `credential_expires_at` (an ISO time); nothing reads the envelope's keys
+  but `result`, whose three meters parse and place as before. The binary
+  grew from 331 to 338 MB.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
@@ -1021,7 +1057,7 @@ test, then the real `install.sh` with the same `HOME`: it must not print
 `Downloading Codex CLI`. Verified 2026-10-30 against 0.166.0.
 
 Version probes (`agent_versions::VERSION_ARGV`) exist for Antigravity
-(`agy --version` → `1.4.12`, the same bare shape as 1.2.9) and Muse (`muse --version` →
+(`agy --version` → `1.5.0`, the same bare shape as 1.2.9) and Muse (`muse --version` →
 `Muse Code 1.3.0 (1.3.0-R3057.1)`) as well. Muse's launcher script starts a
 background self-update on any invocation once its interval has passed, so its
 probe sets `MUSE_NO_AUTO_UPDATE=1` (`VERSION_ENV`); a launcher that renames
@@ -1426,7 +1462,23 @@ read-only directory unchanged; `--continue`, the second `--continue`'s notice,
 binary embeds stop at 1.4.11 and no changelog is published, so these runs are
 all that is known of 1.4.12. `implicit/<id>.pb` appeared in one run's home only:
 it is opaque, its id is not the conversation's, and a home from 2026-10-23 has
-one too, so it is not new, and `agent_history` does not export it. That run signs in with no
+one too, so it is not new, and `agent_history` does not export it.
+1.5.0 on 2026-11-04, the same setup beside the 1.4.12 the updater left as
+`agy.<ns>.old`: every frame at 80×24 and 42×24 (first run, idle footer,
+`/model`, both gauges, Enter, `/effort`, three streamed turns, mid-turn) the
+same as 1.4.12's but the version and one bold run in a wrapped path; the
+sign-in menu, Google Cloud submenu and link pages differ only in `state` and
+`code_challenge`. Fed through `@xterm/headless` and the real parsers, both
+versions give the same output: `readAntigravityPicker` five rows, the
+gauges' stops, `readSignIn` the 654-character link whole at 80×24 and
+refused cut at 42×24, `readSignInPage` + `readPagedSignIn` rebuilding it with
+no holes. `agy models`, `--version` (still bare) and `agy update`'s exit 1
+from a read-only directory unchanged; `--continue`, the second
+`--continue`'s notice, `--conversation <id>`, `--model` and `--effort` work
+as before. `--help` gains `--remote-agent` (conversations on remote agents)
+and an `acp` subcommand (an Agent Client Protocol stdio server); Tabtivity
+passes neither. The embedded notes stop at 1.4.12, so nothing more is known
+of 1.5.0. That run signs in with no
 account: a private `HOME`, `"modelProvider": "gemini"` in
 `~/.gemini/antigravity-cli/settings.json`, a dummy `GEMINI_API_KEY` and
 `GOOGLE_GEMINI_BASE_URL` at a dead local port — the UI draws fully, turns
@@ -1477,7 +1529,8 @@ listed the conversation for the Resume menu with its first and last prompts,
 as an example binary (a `src-tauri/examples` file calling
 `app_lib::services::google_chat`). 1.4.12 (2026-10-31) the same, beside 1.4.11:
 schemas and row counts identical, six entries off three turns, the conversation
-listed.
+listed. 1.5.0 (2026-11-04) the same, beside 1.4.12 (the example built in a
+throwaway worktree and then deleted).
 
 Vibe and Copilot are full-screen (alternate-screen) TUIs, as plain `opencode`
 is; the phone's Focus view cannot read them — a release that changes that is an

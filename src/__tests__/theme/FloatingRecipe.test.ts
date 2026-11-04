@@ -36,20 +36,33 @@ describe("the floating recipe", () => {
     expect(wash).toContain(`.${member}::before`);
   });
 
+  // One token reaches every member: the recipe reads --float-fill, and the
+  // glass pair sets it on the theme, so no member can miss the glass fill.
   it("every member takes the glass fill in both glass themes", () => {
-    const glassRules = [...css.matchAll(/([^{}]+)\{\s*--surface-fill: var\(--glass-elevated\)/g)]
-      .map((m) => m[1])
-      .join(",");
-    for (const member of MEMBERS) {
-      expect(glassRules).toContain(`[data-theme="fancy_dark"] .${member}`);
-      expect(glassRules).toContain(`[data-theme="light_lavender"] .${member}`);
-    }
+    expect(css).toMatch(/--surface-fill: var\(--float-fill, var\(--bg-elevated\)\);\s*--surface-rail: 2px/);
+    expect(css).toMatch(
+      /\[data-theme="fancy_dark"\],\s*\[data-theme="light_lavender"\]\s*\{[^}]*--float-fill: var\(--glass-elevated\)/,
+    );
+    expect(css).not.toMatch(/--surface-fill: var\(--glass-elevated\)/);
   });
 
   it("no member paints a background of its own over the recipe", () => {
     for (const member of MEMBERS) {
       expect(css).not.toMatch(new RegExp(`(^|[\\s,}])\\.${member}\\s*\\{(?![^}]*--surface-fill)[^}]*\\bbackground(-color)?:`));
     }
+  });
+
+  // Paused at its first frame by the blurred-window rule, an entry from
+  // `opacity: 0` would leave the surface invisible until focus returns.
+  it.each(["project-switch-toast", "hint-bubble"])("%s keeps its entry running in a blurred window", (member) => {
+    expect(css).toMatch(new RegExp(`:root\\[data-blurred\\] \\.${member}\\s*[,{]`));
+  });
+
+  // On a small card the accent rail read as a fat violet top bar: messages and
+  // hover cards carry none, and hold no transparent border for its room either.
+  it.each(["project-pill-popup", "project-switch-toast", "hint-bubble"])("%s carries no top rail", (member) => {
+    expect(selectorsOf("--surface-rail: 0px")).toContain(`.${member}`);
+    expect(css).not.toMatch(new RegExp(`(^|[\\s,}])\\.${member}\\s*\\{[^}]*border-top:`));
   });
 
   it("never clips with a clip-path, which would take the shadow", () => {

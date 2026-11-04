@@ -9,6 +9,7 @@ import { closeTabWithConfirm } from "../lib/remote/closeRemoteTab";
 import { reopenClosedAgentTab } from "../stores/agents/closedAgentTabs";
 import { useProjectsStore } from "../stores/projects";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../stores/boxes";
+import { useBoxSliceStore } from "../stores/boxSlice";
 import { useSettingsStore, stepZoom } from "../stores/settings";
 import { useSubwindowNavStore } from "../stores/subwindowNav";
 import {
@@ -30,6 +31,8 @@ import {
   type SteeringKeyMap,
 } from "../lib/shortcuts/steeringBindings";
 import { appOverlayStore, frontAppOverlay } from "../lib/shortcuts/appOverlays";
+import { useCockpitStore } from "../stores/cockpit";
+import { experimentalEnabled } from "../lib/experimental";
 import { openProjectDialog } from "../lib/projects/projectDialogEvent";
 import { requestProjectJump } from "../lib/projects/projectJumpEvent";
 import { sidePanelViewKey, sidePanelViewPatch } from "../lib/projects/sidePanelView";
@@ -677,6 +680,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         case "todo":
           openApp(action);
           return;
+        // The cockpit: not one of the three walked apps, so the region is the
+        // generic overlay one, which walks whatever is on top.
+        case "cockpit":
+          if (!experimentalEnabled(useSettingsStore.getState().settings, "cockpit")) return;
+          useCockpitStore.getState().openOverlay();
+          enterRegion("overlay");
+          return;
         case "sidePanel":
           openSidePanel();
           return;
@@ -958,7 +968,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       if (!steering.active) return;
       const target = e.target instanceof Element ? e.target : null;
       // The legend's own fold button is steering's, not a place to go.
-      if (!target || target.closest(".steering-legend, .steering-legend-fab")) return;
+      if (!target || target.closest(".steering-bar")) return;
       cancelPlace();
       const region = steering.level === "region" ? steering.region : null;
       const root = region ? regionRoot(region) : null;
@@ -1446,23 +1456,39 @@ function stepSidePanelView(delta: 1 | -1) {
  *
  * The ring itself lives in `stores/keyboardSteering.projectStations` — the
  * steering digits and pill badges number the same list, so the three surfaces
- * can never disagree about which project is station N.
+ * can never disagree about which project is station N. While a box slice is
+ * selected that list is the slice's visible pills (members, inactive ones
+ * included), so the chord walks what the strip shows; unsliced it skips the
+ * projects hidden from the All-projects row (`barHidden`). From a box's own scope
+ * (no project in the ring is current) the first step lands on the first / last
+ * visible pill.
  */
 function cycleProject(delta: 1 | -1): Promise<void> | null {
   const ps = useProjectsStore.getState();
   const stations = projectStations();
   if (stations.length < 2) return null;
   const idx = stations.indexOf(ps.activeId);
-  const next = stations[(idx + delta + stations.length) % stations.length];
+  const next =
+    idx < 0 && stations.length > 1
+      ? stations[delta > 0 ? 1 : stations.length - 1]
+      : stations[(idx + delta + stations.length) % stations.length];
   return next !== ps.activeId ? ps.setActive(next) : null;
 }
 
 /**
- * Walk the boxes in row order — the order their pills stand in beside the
- * scope chip — and open the next / previous one (`openBox`, which moves the
- * tab scope into the box; the switcher follows the scope into the slice).
- * From outside any box the first step lands on the first box (walking back:
- * the last), so the chord is also the way INTO the boxes from a project.
+ * Walk the box ring and step to the next / previous stop. The ring is
+ * `[the project you came from, box1 … boxN]` (boxes in row order — the order
+ * their pills stand in beside the scope chip): the step past the last box
+ * returns to that project and unslices (`leaveBox`, which hands the scope back
+ * to where the unsliced strip last stood), so one chord is a full round trip;
+ * walking back mirrors it. From outside any box the first step lands on the
+ * first box (back: the last), so the chord is also the way INTO the boxes.
+ * Boxes open through `openBox`, which moves the tab scope into the box (the
+ * switcher follows the scope into the slice).
+ *
+ * "Inside box X" is the scope `box:X`, or — visiting one of its members with
+ * the slice still selected — the slice's box, so the chord keeps its place in
+ * the ring while you hop between a box's projects.
  */
 export function cycleBox(delta: 1 | -1) {
   const store = useBoxesStore.getState();
@@ -1471,11 +1497,11 @@ export function cycleBox(delta: 1 | -1) {
   const scope = useTabsStore.getState().scope;
   const current = scope.startsWith(BOX_SCOPE_PREFIX)
     ? scope.slice(BOX_SCOPE_PREFIX.length)
-    : null;
-  const idx = current ? boxes.findIndex((b) => b.id === current) : -1;
-  const next =
-    idx < 0
-      ? boxes[delta > 0 ? 0 : boxes.length - 1]
-      : boxes[(idx + delta + boxes.length) % boxes.length];
-  if (next.id !== current) void store.openBox(next.id);
+    : useBoxSliceStore.getState().sliceBoxId;
+  // Stop 0 is the project you came from; box i is stop i + 1.
+  const at = current ? boxes.findIndex((b) => b.id === current) + 1 : 0;
+  const stops = boxes.length + 1;
+  const nextStop = (at + delta + stops) % stops;
+  if (nextStop === 0) void useBoxSliceStore.getState().leaveBox();
+  else void store.openBox(boxes[nextStop - 1].id);
 }

@@ -141,6 +141,16 @@ export function CommentIcon(p: IconProps) {
   );
 }
 
+/** A speech bubble with ＋ — a new conversation (the old one kept). */
+export function NewChatIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M4.5 6A1.5 1.5 0 016 4.5h12A1.5 1.5 0 0119.5 6v9a1.5 1.5 0 01-1.5 1.5h-8l-4 3.5v-3.5A1.5 1.5 0 014.5 15z" />
+      <path d="M12 7.5v6M9 10.5h6" />
+    </Frame>
+  );
+}
+
 /** A push pin — keep docked / pinned. */
 export function PinIcon(p: IconProps) {
   return (
@@ -888,6 +898,24 @@ export function GridIcon(p: IconProps) {
       <rect x="13" y="4" width="7" height="7" rx="1" />
       <rect x="4" y="13" width="7" height="7" rx="1" />
       <rect x="13" y="13" width="7" height="7" rx="1" />
+    </Frame>
+  );
+}
+
+/** ☰ with bullets — a list of rows (the phone Home's list layout). */
+export function ListIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+    </Frame>
+  );
+}
+
+/** ☆ — a starred place (the phone's Favorites). */
+export function StarIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z" />
     </Frame>
   );
 }

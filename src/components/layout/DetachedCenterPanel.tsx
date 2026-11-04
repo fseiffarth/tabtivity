@@ -55,6 +55,7 @@ import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { usePaneRects } from "./usePaneRects";
 import { useDividerDrag } from "./useDividerDrag";
 import { TabHoverCard } from "../tabs/TabHoverCard";
+import { TabMemberChip, memberTableOf, tabMemberInfo } from "../tabs/TabMemberChip";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { WindowControls } from "../header/WindowControls";
 import { DragGhost, SplitPreviewOverlay } from "./CenterPanel";
@@ -105,7 +106,7 @@ import {
 import { dividerFraction } from "../../stores/tabs/layoutTree";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
-import { detachedNewTabCwd, type DetachedRemoteInfo } from "../../stores/detached";
+import { detachedNewTabCwd, detachedNewTabTarget, type DetachedRemoteInfo } from "../../stores/detached";
 import {
   TabAgentModeMarks,
   TabSourceBadge,
@@ -126,7 +127,9 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
-import { ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
+import { BoxSwatch, ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
+import { boxScopeId } from "../../stores/boxes";
+import { boxColor } from "../../lib/theme/boxColor";
 
 
 interface Props {
@@ -292,6 +295,13 @@ export function DetachedCenterPanel({
   const hostPinned = isHostPinned(remoteInfo?.project);
   const primaryHost = remoteInfo?.primaryHost;
   const computeHosts = remoteInfo?.computeHosts;
+  // A box's member table for the tabs' member chips, from the seed (the popout
+  // is inert to the boxes and projects stores; a member added later shows no chip
+  // here until a reseed).
+  const memberTable = useMemo(
+    () => memberTableOf(scope, remoteInfo?.box ? [remoteInfo.box] : [], remoteInfo?.boxMembers ?? []),
+    [scope, remoteInfo?.box, remoteInfo?.boxMembers],
+  );
   // One bar element per group, so a per-tab drag can hit-test the bar it's over.
   const barRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   // One body element per group, for resolving an edge-split drop target.
@@ -1552,6 +1562,7 @@ export function DetachedCenterPanel({
                 >
                   <TabStatusMark stateClass={stateClass} />
                   <span className="tab-label">{tab.label}</span>
+                  <TabMemberChip info={tabMemberInfo(tab, memberTable)} label={tab.label} />
                   <TabMarkBadge tab={tab} inPopout />
                   <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
                   <TabContinueButton tab={tab} stateClass={stateClass} />
@@ -1840,6 +1851,10 @@ export function DetachedCenterPanel({
     (firstGroup ? tabs.find((t) => t.key === firstGroup.activeKey)?.label : undefined) ??
     "Subwindow";
 
+  // The box this window shows (the one-time seed carries its record), for the
+  // titlebar mark.
+  const titleBox = remoteInfo?.box && scope === boxScopeId(remoteInfo.box.id) ? remoteInfo.box : null;
+
   return (
     <FileDropContext.Provider value={fileDrop}>
     <div className={`detached-center center-panel${windowDragging ? " moving" : ""}`}>
@@ -1881,6 +1896,17 @@ export function DetachedCenterPanel({
         </span>
         {/* Plain text, not a control, so the title moves the window like the rest
             of the strip; a right-click names it. */}
+        {titleBox && (
+          <span
+            className="detached-titlebar-box"
+            style={{ "--box-mark": boxColor(titleBox) } as React.CSSProperties}
+            title={t("detachedTabs.boxMarkTitle", { name: titleBox.name })}
+          >
+            <BoxSwatch className="detached-titlebar-box-swatch" color={boxColor(titleBox)} />
+            <span className="detached-titlebar-box-name">{titleBox.name}</span>
+            <UntestedTag id="detachedTabs.boxMark" />
+          </span>
+        )}
         {windowName && (
           <span className="detached-titlebar-name" title={windowName}>{windowName}</span>
         )}
@@ -1951,19 +1977,24 @@ export function DetachedCenterPanel({
       {dropActive && <div className="detached-drop-target" />}
       {/* #42: the "+" add-tab menu for the group that opened it. cwd is the
           main window's own new-tab folder (`detachedNewTabCwd`), not the active
-          tab's — a viewer tab's cwd is its file's folder. */}
+          tab's — a viewer tab's cwd is its file's folder. In a box popout it is
+          the active tab's member root (`detachedNewTabTarget`, which the menu's
+          first line names), the box folder for an empty group. */}
       {addMenu &&
         (() => {
           const g = findGroup(tree, addMenu.groupId);
           if (!g) return null;
-          const cwd = detachedNewTabCwd(scope, remoteInfo, [
+          const groupCwds = [
             byKey.get(g.activeKey ?? g.tabKeys[0] ?? "")?.cwd,
             ...g.tabKeys.map((k) => byKey.get(k)?.cwd),
-          ]);
+          ];
+          const cwd = detachedNewTabCwd(scope, remoteInfo, groupCwds);
           return (
             <NewTabMenu
               scope={scope}
               projectCwd={cwd}
+              target={detachedNewTabTarget(scope, remoteInfo, groupCwds)}
+              boxSeed={remoteInfo?.box ? { box: remoteInfo.box, members: remoteInfo.boxMembers ?? [] } : undefined}
               // The detached window is inert to the projects store, so there's no
               // project name to auto-name an agent session with — skip it.
               projectName=""
@@ -2177,6 +2208,7 @@ export function DetachedCenterPanel({
             hostPinned={hostPinned}
             primaryHost={primaryHost}
             computeHosts={computeHosts}
+            memberTable={memberTable}
             anchorX={hoverTab.x}
             anchorY={hoverTab.y}
           />

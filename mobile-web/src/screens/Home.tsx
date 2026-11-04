@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import { api, type ActivityTab, type MobileAlerts, type ProjectRow, type TabPlace, type AgentCounts as AgentCountsRow } from "../api";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
@@ -23,6 +23,7 @@ import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
 import { CliOverviewSection } from "./CliOverviewSheet";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
+import { listScrollKey, useRestoreListScroll } from "../listScroll";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
 import { customMarkupPrompts, MarkupInstructionSheet, markupInstructionSummary } from "../components/MarkupInstructionSheet";
@@ -34,7 +35,9 @@ import { BRAND } from "../../../src/lib/brand";
 import { NeedsYou } from "../components/NeedsYou";
 import { firstGrapheme } from "../components/TabCard";
 import { AssistantIcon } from "../../../src/components/common/icons/Icon";
-import { DiamondIcon, GripIcon, PlusIcon, SearchIcon } from "../glyphs";
+import { ChevronLeftIcon, ChevronRightIcon, DiamondIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, PlusIcon, SearchIcon, StarIcon } from "../glyphs";
+import { OptionSheet } from "../components/OptionSheet";
+import type { IconProps } from "../../../src/components/common/icons/Icon";
 import { FavoritesPage } from "../components/FavoritesPage";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
@@ -81,7 +84,16 @@ function projectTile(project: ProjectRow): string {
  * no project list either: the files and folders starred across all projects
  * (`FavoritesPage`). */
 type HomeView = "active" | "agents" | "favorites" | "search";
-const HOME_VIEWS: [HomeView, TranslationKey][] = [["active", "mobile.home.viewActive"], ["agents", "mobile.home.viewAgents"], ["favorites", "mobile.home.viewFavorites"], ["search", "mobile.home.viewSearch"]];
+
+/** How the project list is drawn: one row per project, two tiles a line, or
+ * each box folding its member projects under it (the rest below). Remembered
+ * on this phone; `projectsGrid` predates the box layout and still says grid. */
+type HomeLayout = "list" | "grid" | "boxes";
+const readLayout = (): HomeLayout => (readFlag("projectsBoxes") ? "boxes" : readFlag("projectsGrid") ? "grid" : "list");
+const HOME_LAYOUTS: [HomeLayout, TranslationKey, ComponentType<IconProps>][] = [["list", "mobile.home.listLayout", ListIcon], ["grid", "mobile.home.gridLayout", GridIcon], ["boxes", "mobile.home.boxLayout", HexagonIcon]];
+/** Each view but Active, as its page title: the header's 🔍 and ☆ and the
+ *  agent tiles lead into them, and ‹ (or the phone's back) comes home. */
+const SUBVIEW_TITLE: Record<Exclude<HomeView, "active">, TranslationKey> = { agents: "mobile.home.agentsTitle", favorites: "mobile.home.viewFavorites", search: "mobile.home.viewSearch" };
 
 export function Home({ open, openTab, tabby, todo, mail }: {
   open: (id: string) => void;
@@ -92,6 +104,21 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   mail: () => void;
 }) {
   const [view, setView] = useState<HomeView>(() => (readFlag("projectsAgents") ? "agents" : "active"));
+  const [layout, setLayout] = useState<HomeLayout>(readLayout);
+  const chooseLayout = (next: HomeLayout) => {
+    setLayout(next);
+    writeFlag("projectsGrid", next === "grid");
+    writeFlag("projectsBoxes", next === "boxes");
+  };
+  /** The boxes folded shut in the box layout, this phone's own. */
+  const [foldedBoxes, setFoldedBoxes] = useState<string[]>(() => readOrder("homeFoldedBoxes"));
+  /** The layout button's sheet: list, grid or boxes. */
+  const [layoutSheet, setLayoutSheet] = useState(false);
+  const toggleBox = (id: string) => {
+    const next = foldedBoxes.includes(id) ? foldedBoxes.filter((box) => box !== id) : [id, ...foldedBoxes];
+    setFoldedBoxes(next);
+    writeOrder("homeFoldedBoxes", next);
+  };
   const t = useT();
   /** The language the phone speaks and listens in (`speechLang.ts`). It is
    * reachable from inside a session too, under the Reader's menu, but it is
@@ -134,10 +161,17 @@ export function Home({ open, openTab, tabby, todo, mail }: {
    * it while the Mobile switch for it is on, so that list says whether it is
    * gone; a search result that misses it says nothing either way. */
   const [assistantId, setAssistantId] = useState<string | null>(null);
+  /** The root console's row, when this phone may reach it. It is no project:
+   * the header's logo opens it, so the list never draws it. Like the
+   * assistant, only the active list says whether it is gone. */
+  const [rootRow, setRootRow] = useState<ProjectRow | null>(null);
   /** Whether any list has come back yet. Until it has, an empty `rows` is
    * "still loading", not "nothing here" — and a first open with no active
    * project drew nothing at all under the heading, which read as broken. */
   const [loaded, setLoaded] = useState(false);
+  // The Agents view's rows come from their own, later answer: that list puts
+  // the offset back itself once they are in (`Activity`).
+  useRestoreListScroll(listScrollKey(null), loaded && view !== "agents");
   /** Null while the list is loading fine; otherwise why it is not. */
   const [offline, setOffline] = useState<UnavailableReason | null>(null);
   /** Bumped to load the list again without a change of view or query: the
@@ -158,6 +192,8 @@ export function Home({ open, openTab, tabby, todo, mail }: {
     setView(next);
     writeFlag("projectsAgents", next === "agents");
   };
+  /** A view other than Active is one step in: the phone's back comes home. */
+  useBackLayer(() => choose("active"), view !== "active");
   useEffect(() => {
     // The agents mode reads its own list; leaving this poll running behind it
     // would be a catalog load per tick for a list nothing is showing.
@@ -172,8 +208,11 @@ export function Home({ open, openTab, tabby, todo, mail }: {
           for (const project of body.projects) rememberScopeKind(project.id, project.kind);
           const assistant = body.projects.find((project) => project.kind === "assistant");
           if (assistant || view === "active") setAssistantId(assistant?.id ?? null);
-          // Tabby is reached through the FAB, not listed as a project.
-          setRows(body.projects.filter((project) => project.kind !== "assistant")); setOffline(null); setLoaded(true);
+          const root = body.projects.find((project) => project.kind === "root");
+          if (root || view === "active") setRootRow(root ?? null);
+          // Tabby is reached through the FAB and root through the logo, not
+          // listed as projects.
+          setRows(body.projects.filter((project) => project.kind !== "assistant" && project.kind !== "root")); setOffline(null); setLoaded(true);
         })
         .catch((error: unknown) => { if (!controller.signal.aborted) setOffline(classifyUnavailable(error)); });
     }, view === "search" ? 180 : 0);
@@ -209,8 +248,22 @@ export function Home({ open, openTab, tabby, todo, mail }: {
    * an answer to a query, and the best match belongs at the top of it. */
   const listed = view === "search" ? rows : arrangeProjects(rows, (project) => project.id, order);
   const firstCounted = listed.find((project) => project.agents)?.id;
-  /** One row cannot be rearranged, and neither can a search result. */
-  const canReorder = view === "active" && listed.length > 1;
+  /** One row cannot be rearranged, and neither can a search result — nor the
+   *  box layout, where a project can stand under more than one box. */
+  const canReorder = view === "active" && layout !== "boxes" && listed.length > 1;
+  /** The box layout's groups: each box row with the listed projects it names
+   *  (`members`, already narrowed by the host to what this phone may see), in
+   *  the box's order, and every other row below. An older host sends no
+   *  members, so its boxes fold nothing and every project stays loose. */
+  const boxGroups = layout === "boxes" ? (() => {
+    const byId = new Map(listed.map((project) => [project.id, project]));
+    const groups = listed.filter((project) => project.kind === "box").map((box) => ({
+      box,
+      members: (box.members ?? []).map((id) => byId.get(id)).filter((project): project is ProjectRow => !!project && (project.kind ?? "project") === "project"),
+    }));
+    const boxed = new Set(groups.flatMap((group) => group.members.map((project) => project.id)));
+    return { groups, loose: listed.filter((project) => project.kind !== "box" && !boxed.has(project.id)) };
+  })() : null;
   /** Move one project beside another and remember it. Nothing is sent anywhere:
    *  the order is this phone's, so the drop is done the moment it is stored —
    *  there is no round trip to reconcile with and no way for it to be refused. */
@@ -235,45 +288,55 @@ export function Home({ open, openTab, tabby, todo, mail }: {
     if (tab.agent_status === "done") setSeen(markDoneSeen(tab.id, tab.done_at));
     openTab(projectId, tab);
   };
-  /** What the Agents switch's badge counts: the tabs asking something across
-   *  the projects the list last loaded — no poll of its own. */
-  const asking = rows.reduce((sum, project) => sum + (project.agents?.question ?? 0), 0);
+  /** One project row's opener — tile, name and caption, agent counts, open
+   *  tabs — the same in every layout. `caption` replaces the scope line (a
+   *  box head says how many projects it holds). */
+  const projectCard = (project: ProjectRow, caption?: string) => <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{caption ?? scopeCaption(project)}</small></span><span className="card-trailing"><span className="home-agent-counts">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}</span><span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z" /><path d="M3 10h18" /></svg><span>{project.live_sessions}</span></span></span></button>;
+  const rootWaiting = rootRow?.pending_reviews ?? 0;
+  const rootLabel = rootRow ? `${t("mobile.home.openRoot")}${rootWaiting > 0 ? ` · ${t("mobile.home.awaitingApproval", { count: rootWaiting })}` : ""}` : "";
   const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
+  const LayoutGlyph = HOME_LAYOUTS.find(([id]) => id === layout)?.[2] ?? ListIcon;
+  /** One button for the three layouts, drawn as the one in use; its sheet
+   *  holds the choice. Active and Search share it. */
+  const layoutButton = <button className="home-layout-button" aria-haspopup="dialog" aria-expanded={layoutSheet} aria-label={t("mobile.home.layout")} title={t("mobile.home.layout")} onClick={() => setLayoutSheet(true)}>
+    <LayoutGlyph size="22px" />
+    {isUntested("mobile.home.projectGrid") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+    {isUntested("mobile.home.boxLayout") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+  </button>;
   return <main className={assistantId ? "screen home-screen has-fab" : "screen home-screen"}>
     {/* A slim bar: the mark and name, the link's lamp — worded only when the
         link is down, where it is news — and the gear for this phone's own
         settings. The global views live in the tab bar at the bottom. */}
     <header className="home-header">
-      <div className="home-brand" aria-label={BRAND.display}>
-        <span className="home-logo-frame" aria-hidden="true"><AppMark className="home-logo" /></span>
-        <strong>{BRAND.display}</strong>
-      </div>
+      {/* The root console is no project row: when this phone may reach it, the
+          mark and name open it, with a dot while its agents' proposals wait
+          at the desk. Otherwise the brand is only a label. */}
+      {rootRow
+        ? <button className="home-brand home-brand-root" aria-label={rootLabel} title={rootLabel} onClick={() => open(rootRow.id)}>
+          <span className="home-logo-frame" aria-hidden="true"><AppMark className="home-logo" />{rootWaiting > 0 && <span className="home-brand-dot" />}</span>
+          <strong>{BRAND.display}</strong>
+          {isUntested("mobile.home.rootLogo") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+        </button>
+        : <div className="home-brand" aria-label={BRAND.display}>
+          <span className="home-logo-frame" aria-hidden="true"><AppMark className="home-logo" /></span>
+          <strong>{BRAND.display}</strong>
+        </div>}
       {offline
         ? <span className="home-offline" role="img" aria-label={connection}><span className="lamp off" aria-hidden="true" /><span aria-hidden="true">{connection}</span></span>
         : <span className="lamp" role="img" aria-label={connection} title={connection} />}
+      {/* The views that are no project list: a tap goes in, a second (or ‹)
+          comes back. Agents is reached through Needs you's tiles. */}
+      <button className="home-head-button" aria-pressed={view === "search"} aria-label={t("mobile.home.viewSearch")} title={t("mobile.home.viewSearch")} onClick={() => choose(view === "search" ? "active" : "search")}><SearchIcon size="22px" /></button>
+      <button className="home-head-button" aria-pressed={view === "favorites"} aria-label={t("mobile.home.viewFavorites")} title={t("mobile.home.viewFavorites")} onClick={() => choose(view === "favorites" ? "active" : "favorites")}><StarIcon size="22px" />{isUntested("mobile.home.headerViews") && <span className="untested">{t("mobile.newTab.untested")}</span>}</button>
       <button className="home-settings" aria-haspopup="dialog" aria-expanded={deviceSheet} aria-label={t("mobile.home.thisDevice")} title={t("mobile.home.thisDevice")} onClick={() => { setTipsAreOff(tipsOff()); setDeviceSheet(true); }}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
       </button>
     </header>
-    <div className="projects-row">
-      <h1>{view === "agents" ? t("mobile.home.agentsTitle") : view === "favorites" ? t("mobile.home.viewFavorites") : t("mobile.home.projectsTitle")}</h1>
-      {view !== "agents" && view !== "favorites" && <button
-        className="primary new-tab"
-        onClick={() => setNewProject(true)}
-        aria-haspopup="dialog"
-        aria-expanded={newProject}
-        aria-label={t("mobile.newProject.title")}
-        title={t("mobile.newProject.title")}
-      ><PlusIcon size="1em" /></button>}
-    </div>
-    {/* One segmented track. The Agents segment carries how many tabs are
-        asking something; its name stays the view's. */}
-    <nav className="home-switch">{HOME_VIEWS.map(([id, label]) => <button
-      key={id}
-      className={view === id ? "selected" : ""}
-      aria-pressed={view === id}
-      onClick={() => choose(id)}
-    >{t(label)}{id === "agents" && asking > 0 && <span className="home-switch-badge" aria-hidden="true">{asking}</span>}</button>)}</nav>
+    {view !== "active" && <div className="home-subview-head">
+      <button className="home-back" onClick={() => choose("active")} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="22px" /></button>
+      <h1>{t(SUBVIEW_TITLE[view])}</h1>
+      {view === "search" && layoutButton}
+    </div>}
     {view === "agents" && <Activity open={openAgentTab} onConnection={setOffline} />}
     {view === "favorites" && <FavoritesPage />}
     {view !== "agents" && view !== "favorites" && <>
@@ -285,9 +348,18 @@ export function Home({ open, openTab, tabby, todo, mail }: {
         {isUntested("mobile.home.recover") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       </p>}
       {view === "active" && <NeedsYou alerts={alerts} onAlerts={setAlerts} seen={seen} open={openAgentTab} todo={todo} mail={mail} showAgents={() => choose("agents")} />}
-      {/* Its own head only under Needs you (CSS): with nothing above it, the
-          page title already says what this list is. */}
-      {view === "active" && listed.length > 0 && <h2 className="home-section-head home-projects-head">{t("mobile.home.projectsTitle")}</h2>}
+      {view === "active" && <div className="projects-row">
+        <h1>{t("mobile.home.projectsTitle")}</h1>
+        {layoutButton}
+        <button
+          className="primary new-tab"
+          onClick={() => setNewProject(true)}
+          aria-haspopup="dialog"
+          aria-expanded={newProject}
+          aria-label={t("mobile.newProject.title")}
+          title={t("mobile.newProject.title")}
+        ><PlusIcon size="1em" /></button>
+      </div>}
       {!loaded && !offline && <ListSkeleton label={t("mobile.home.loading")} />}
       {loaded && rows.length === 0 && <div className="home-empty">
         <span className="home-empty-glyph" aria-hidden="true">{view === "search" ? <SearchIcon size="1em" /> : <DiamondIcon size="1em" />}</span>
@@ -303,13 +375,13 @@ export function Home({ open, openTab, tabby, todo, mail }: {
           two must not be one gesture). A box row says it is one where a
           project row says its status: a "Paper" box beside a "Paper" project
           must be tellable apart. */}
-      {listed.length > 0 && <section className="cards home-projects">{listed.map((project, index) => <div
+      {listed.length > 0 && !boxGroups && <section className={`cards home-projects${layout === "grid" ? " home-projects-grid" : ""}`}>{listed.map((project, index) => <div
         className={`tab-card one-row home-project-card${drag.rowClass(project.id)}`}
         key={project.id}
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
-          <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{scopeCaption(project)}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          {projectCard(project)}
           {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"
@@ -318,6 +390,33 @@ export function Home({ open, openTab, tabby, todo, mail }: {
             {...drag.gripProps(project.id)}
           ><GripIcon size="1em" /></button>}
         </div>
+      </div>)}</section>}
+      {/* The box layout: each box one inset group, its head the box's own row
+          (opens the box) with a fold beside it, its members below; the
+          projects in no box after the last one, as the list draws them. */}
+      {boxGroups && boxGroups.groups.map(({ box, members }) => {
+        const folded = foldedBoxes.includes(box.id);
+        return <section className="cards home-projects home-box" key={box.id}>
+          <div className="tab-card one-row home-project-card home-box-head">
+            <div className="tab-card-head">
+              {projectCard(box, t("mobile.home.boxMembers", { count: members.length }))}
+              {members.length > 0 && <button
+                className="tab-card-grip home-box-fold"
+                aria-expanded={!folded}
+                aria-label={t(folded ? "mobile.home.boxUnfold" : "mobile.home.boxFold", { label: box.label })}
+                title={t(folded ? "mobile.home.boxUnfold" : "mobile.home.boxFold", { label: box.label })}
+                onClick={() => toggleBox(box.id)}
+              ><ChevronRightIcon size="1em" /></button>}
+            </div>
+          </div>
+          {!folded && members.map((project) => <div className="tab-card one-row home-project-card home-box-member" key={project.id}>
+            <div className="tab-card-head">{projectCard(project)}</div>
+          </div>)}
+        </section>;
+      })}
+      {boxGroups && view === "active" && rows.length > 0 && boxGroups.groups.length === 0 && <p className="home-box-none">{t("mobile.home.noBoxes")}</p>}
+      {boxGroups && boxGroups.loose.length > 0 && <section className="cards home-projects">{boxGroups.loose.map((project) => <div className="tab-card one-row home-project-card" key={project.id}>
+        <div className="tab-card-head">{projectCard(project)}</div>
       </div>)}</section>}
       {canReorder && !hintGone && <p className="home-hint">
         <span><GripHint text={t("mobile.home.reorderHint")} />{isUntested("mobile.home.hintDismiss") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
@@ -380,6 +479,14 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       aria-label={t("assistant.button")}
       title={t("assistant.button")}
     ><AssistantIcon className="fab-chat-icon" size={28} />{isUntested("mobile.home.assistantFab") && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
+    {layoutSheet && <OptionSheet
+      title={t("mobile.home.layout")}
+      options={HOME_LAYOUTS.map(([id, label]) => ({ key: id, label: t(label), current: layout === id }))}
+      waiting=""
+      busy={false}
+      onPick={(key) => { chooseLayout(key as HomeLayout); setLayoutSheet(false); }}
+      onClose={() => setLayoutSheet(false)}
+    />}
     {newProject && <NewProjectSheet onClose={() => setNewProject(false)} onCreated={(project) => { setNewProject(false); open(project.id); }} />}
     {languageSheet && <LanguageSheet onClose={() => setLanguageSheet(false)} />}
     {themeSheet && <ThemeSheet chosen={theme} onChoose={setTheme} onClose={() => setThemeSheet(false)} />}

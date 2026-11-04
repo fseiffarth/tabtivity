@@ -74,6 +74,26 @@ describe("Mobile home — project list states", () => {
     expect(screen.getByLabelText("Open tabs: 1").textContent).toBe("1");
   });
 
+  it("keeps root out of the list: the logo opens it, with a note while proposals wait", async () => {
+    const open = vi.fn();
+    answer([
+      { id: "root", label: "Root", status: "active", kind: "root", live_sessions: 1, pending_reviews: 2 },
+      { id: "p1", label: "Alpha", status: "active", live_sessions: 1 },
+    ]);
+    render(<Home tabby={() => {}} open={open} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    expect(screen.queryByText("Root")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open the root console · 2 awaiting approval at the desk" }));
+    expect(open).toHaveBeenCalledWith("root");
+  });
+
+  it("has no door to root on a phone that is not ticked for it", async () => {
+    answer([{ id: "p1", label: "Alpha", status: "active", live_sessions: 1 }]);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Alpha");
+    expect(screen.queryByRole("button", { name: /root console/i })).toBeNull();
+  });
+
   it("explains an empty active list and points at search", async () => {
     answer([]);
     render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
@@ -112,7 +132,7 @@ describe("Mobile home — project list states", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
 
     // The agents mode replaces the project list, not the phone's own settings.
-    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Working/ }));
     fireEvent.click(screen.getByRole("button", { name: "This device" }));
     await waitFor(() => expect(within(screen.getByRole("dialog", { name: "This device" })).getByRole("button", { name: /Voice language/ }).textContent).toContain("Deutsch"));
   });
@@ -147,5 +167,54 @@ describe("Mobile home — project list states", () => {
     expect(await screen.findByText(/Showing the last list this session loaded/)).toBeTruthy();
     expect(screen.getByText("Alpha")).toBeTruthy();
     expect(screen.queryByText(/No project/)).toBeNull();
+  });
+});
+
+describe("Mobile home — box layout", () => {
+  const rows = [
+    { id: "p1", label: "Alpha", status: "active", live_sessions: 1 },
+    { id: "p2", label: "Beta", status: "active", live_sessions: 0 },
+    { id: "b1", label: "Paper", status: "active", kind: "box", live_sessions: 0, members: ["p2", "gone"] },
+  ];
+
+  it("folds a box's listed members under it, keeps the rest loose, and remembers it", async () => {
+    answer(rows);
+    const open = vi.fn();
+    render(<Home tabby={() => {}} open={open} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Paper");
+    // One button beside the title; its sheet holds the three layouts.
+    fireEvent.click(screen.getByRole("button", { name: "Project list layout" }));
+    const sheet = screen.getByRole("dialog", { name: "Project list layout" });
+    expect(within(sheet).getByRole("button", { name: "List layout" }).getAttribute("aria-current")).toBe("true");
+    fireEvent.click(within(sheet).getByRole("button", { name: "Boxes layout" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    const box = screen.getByText("Paper").closest("section")!;
+    expect(within(box).getByText("Beta")).toBeTruthy();
+    expect(within(box).queryByText("Alpha")).toBeNull();
+    expect(within(box).getByText(/members: 1/)).toBeTruthy();
+    expect(screen.getByText("Alpha").closest("section")).not.toBe(box);
+    expect(screen.getAllByText("Beta")).toHaveLength(1);
+
+    fireEvent.click(within(box).getByRole("button", { name: "Fold Paper" }));
+    expect(within(box).queryByText("Beta")).toBeNull();
+    fireEvent.click(within(box).getByText("Paper"));
+    expect(open).toHaveBeenCalledWith("b1");
+
+    cleanup();
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    await screen.findByText("Paper");
+    fireEvent.click(screen.getByRole("button", { name: "Project list layout" }));
+    expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Boxes layout" }).getAttribute("aria-current")).toBe("true");
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /close/i }));
+    expect(screen.getByRole("button", { name: "Unfold Paper" }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("says where to turn a box on when none is on this phone", async () => {
+    localStorage.setItem(`${storageKey("mobile.")}projectsBoxes`, "1");
+    answer(rows.slice(0, 2));
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    expect(await screen.findByText(/No box is on this phone/)).toBeTruthy();
+    expect(screen.getByText("Alpha")).toBeTruthy();
   });
 });

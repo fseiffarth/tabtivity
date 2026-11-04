@@ -335,9 +335,85 @@ pub fn save_boxes(boxes: BoxesList) -> Result<BoxesList, String> {
     save_boxes_at(&boxes_path(), &boxes)
 }
 
+/// The longest box name, in characters.
+pub(crate) const MAX_BOX_NAME_CHARS: usize = 80;
+
+/// The name a box may be given: trimmed, not empty, at most
+/// [`MAX_BOX_NAME_CHARS`] characters, no control characters, and not the name of
+/// any *other* box in `boxes` (compared case-insensitively; `own_id` is the box
+/// being renamed, which may keep its name's spelling). Import joins boxes by
+/// name and the folder is derived from it, so a name must pick out one box.
+///
+/// Only ever applied to a name that is being *written* and differs from the
+/// stored one: a legacy empty or duplicate name on disk is read as it is and
+/// never blocks an unrelated save.
+pub(crate) fn clean_box_name(name: &str, boxes: &BoxesList, own_id: Option<&str>) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a box needs a name".into());
+    }
+    if name.chars().count() > MAX_BOX_NAME_CHARS {
+        return Err(format!("a box name is at most {MAX_BOX_NAME_CHARS} characters"));
+    }
+    if name.chars().any(char::is_control) {
+        return Err("a box name cannot contain control characters".into());
+    }
+    let folded = name.to_lowercase();
+    if boxes
+        .iter()
+        .filter(|b| Some(b.id.as_str()) != own_id)
+        .any(|b| b.name.trim().to_lowercase() == folded)
+    {
+        return Err(format!("a box named \"{name}\" already exists"));
+    }
+    Ok(name.to_string())
+}
+
+/// A box colour as stored: `#rrggbb`, lower-cased; `None` for the empty string
+/// (no picked colour: the one hashed from the id). Shared by the colour patch
+/// and `create_box`.
+fn clean_box_color(color: &str) -> Result<Option<String>, String> {
+    let color = color.trim().to_ascii_lowercase();
+    if color.is_empty() {
+        Ok(None)
+    } else if color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(Some(color))
+    } else {
+        Err(format!("not a box colour: {color:?} (#rrggbb)"))
+    }
+}
+
+/// `ids` as box members: in order, without repeats, blanks or ids of a scope the
+/// app keeps for itself (`storage::is_reserved_scope`). An id no project has
+/// needs no check here: `boxes_as_seen` reconciles on read.
+fn member_ids_of(ids: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for id in ids {
+        if id.trim().is_empty() || storage::is_reserved_scope(&id) || out.contains(&id) {
+            continue;
+        }
+        out.push(id);
+    }
+    out
+}
+
+/// A new box named `name`, holding `member_ids` and wearing `color` (`#rrggbb`)
+/// when given. The name is validated ([`clean_box_name`]) against the boxes as
+/// the file holds them, under the file's lock.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn create_box(name: String) -> Result<ProjectBox, String> {
-    let mut boxes = read_boxes()?;
+pub fn create_box(name: String, member_ids: Option<Vec<String>>, color: Option<String>) -> Result<ProjectBox, String> {
+    create_box_at(&boxes_path(), &name, member_ids, color.as_deref())
+}
+
+fn create_box_at(path: &Path, name: &str, member_ids: Option<Vec<String>>, color: Option<&str>) -> Result<ProjectBox, String> {
+    let _lock = storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
+    let current = read_boxes_at(path)?;
+    let name = clean_box_name(name, &current, None)?;
+    let color = match color {
+        Some(c) => clean_box_color(c)?,
+        None => None,
+    };
+    let mut boxes = current.clone();
     // Guard against time-based `uuid_v4` collisions for back-to-back creation.
     let existing: HashSet<String> = boxes.iter().map(|b| b.id.clone()).collect();
     let mut id = uuid_v4();
@@ -345,11 +421,11 @@ pub fn create_box(name: String) -> Result<ProjectBox, String> {
         id = uuid_v4();
     }
     let position = next_box_position(&boxes);
-    let new_box = ProjectBox {
+    let mut new_box = ProjectBox {
         rev: 0,
         id,
         name,
-        member_ids: vec![],
+        member_ids: member_ids_of(member_ids.unwrap_or_default()),
         position,
         folder: None,
         relations: vec![],
@@ -357,23 +433,27 @@ pub fn create_box(name: String) -> Result<ProjectBox, String> {
         app_mobile_devices: None,
         extra: Default::default(),
     };
+    if let Some(color) = color {
+        new_box.extra.insert("color".to_string(), Value::String(color));
+    }
     let id = new_box.id.clone();
     boxes.push(new_box);
-    write_boxes_answering(&boxes, &id)
+    write_boxes_stamped(path, &current, &boxes)?
+        .into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| format!("box '{id}' not found"))
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn rename_box(box_id: String, name: String) -> Result<ProjectBox, String> {
-    let mut boxes = read_boxes()?;
-    let target = boxes
-        .iter_mut()
-        .find(|b| b.id == box_id)
-        .ok_or_else(|| format!("box '{box_id}' not found"))?;
+    rename_box_at(&boxes_path(), &box_id, &name)
+}
+
+fn rename_box_at(path: &Path, box_id: &str, name: &str) -> Result<ProjectBox, String> {
     // Rename updates only the box record. Once a `folder` is resolved (on first
     // open) it stays authoritative; a later rename does not move it (documented
     // limitation — "rename + move folder" is a Phase 4 nicety).
-    target.name = name;
-    write_boxes_answering(&boxes, &box_id)
+    patch_box_at(path, box_id, BoxPatch { name: Some(name.to_string()), ..Default::default() })
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -445,12 +525,31 @@ pub(crate) fn box_names_for(project_id: &str) -> Vec<String> {
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BoxPatch {
+    /// The box's new name. Validated ([`clean_box_name`]) only when it differs
+    /// from the stored one, so a legacy empty or duplicate name never blocks an
+    /// unrelated save.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Add these projects to the members (additive; nobody already in twice).
+    /// Ids of a reserved scope are dropped.
+    #[serde(default)]
+    pub add_members: Option<Vec<String>>,
+    /// Take these projects out of the members. Applied after every add, so an
+    /// id named in both ends up out.
+    #[serde(default)]
+    pub remove_members: Option<Vec<String>>,
     /// Add this project to the members (additive; nothing if already in).
     #[serde(default)]
     pub add_member: Option<String>,
     /// Take this project out of the members (the box survives, even empty).
     #[serde(default)]
     pub remove_member: Option<String>,
+    /// Reorder the members: the ids named here (and still members) take, in this
+    /// order, the slots the named ids hold now. A member the caller did not know
+    /// of (added meanwhile by another window) keeps its slot, so a reorder never
+    /// drops or moves anyone it did not name. Applied after the adds and removals.
+    #[serde(default)]
+    pub order: Option<Vec<String>>,
     /// The picked colour, `#rrggbb`; `""` clears it (the hashed colour).
     #[serde(default)]
     pub color: Option<String>,
@@ -468,15 +567,25 @@ pub fn patch_box(box_id: String, patch: BoxPatch) -> Result<ProjectBox, String> 
     patch_box_at(&boxes_path(), &box_id, patch)
 }
 
-fn patch_box_at(path: &Path, box_id: &str, patch: BoxPatch) -> Result<ProjectBox, String> {
+fn patch_box_at(path: &Path, box_id: &str, mut patch: BoxPatch) -> Result<ProjectBox, String> {
     let _lock = storage::FileLock::exclusive(path).map_err(|e| e.to_string())?;
     let current = read_boxes_at(path)?;
     let mut next = current.clone();
-    let target = next
-        .iter_mut()
-        .find(|b| b.id == box_id)
+    let idx = next
+        .iter()
+        .position(|b| b.id == box_id)
         .ok_or_else(|| format!("box '{box_id}' not found"))?;
-    apply_box_patch(target, patch)?;
+    // The uniqueness rule needs the other boxes, so it is checked here, where
+    // `next` is at hand, and not in the pure `apply_box_patch`.
+    let name = match patch.name.take() {
+        Some(raw) if raw != next[idx].name => Some(clean_box_name(&raw, &next, Some(box_id))?),
+        _ => None,
+    };
+    apply_box_patch(&mut next[idx], patch)?;
+    if let Some(name) = name {
+        next[idx].name = name;
+    }
+    // One write for the name and the members: `rev` moves once.
     write_boxes_stamped(path, &current, &next)?;
     read_boxes_at(path)?
         .into_iter()
@@ -484,9 +593,11 @@ fn patch_box_at(path: &Path, box_id: &str, patch: BoxPatch) -> Result<ProjectBox
         .ok_or_else(|| format!("box '{box_id}' not found"))
 }
 
-/// [`patch_box`]'s edit on one box. Pure.
+/// [`patch_box`]'s edit on one box, but for its name (which needs the other
+/// boxes: see `patch_box_at`). Pure.
 fn apply_box_patch(target: &mut ProjectBox, patch: BoxPatch) -> Result<(), String> {
-    if let Some(id) = patch.add_member {
+    let adds = member_ids_of(patch.add_member.into_iter().chain(patch.add_members.into_iter().flatten()));
+    for id in adds {
         if !target.member_ids.contains(&id) {
             target.member_ids.push(id);
         }
@@ -494,14 +605,20 @@ fn apply_box_patch(target: &mut ProjectBox, patch: BoxPatch) -> Result<(), Strin
     if let Some(id) = patch.remove_member {
         target.member_ids.retain(|m| *m != id);
     }
+    if let Some(ids) = patch.remove_members {
+        target.member_ids.retain(|m| !ids.contains(m));
+    }
+    if let Some(order) = patch.order {
+        reorder_members(&mut target.member_ids, &order);
+    }
     if let Some(color) = patch.color {
-        let color = color.trim().to_ascii_lowercase();
-        if color.is_empty() {
-            target.extra.remove("color");
-        } else if color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit()) {
-            target.extra.insert("color".to_string(), Value::String(color));
-        } else {
-            return Err(format!("not a box colour: {color:?} (#rrggbb)"));
+        match clean_box_color(&color)? {
+            Some(color) => {
+                target.extra.insert("color".to_string(), Value::String(color));
+            }
+            None => {
+                target.extra.remove("color");
+            }
         }
     }
     match patch.hide_pill {
@@ -515,6 +632,23 @@ fn apply_box_patch(target: &mut ProjectBox, patch: BoxPatch) -> Result<(), Strin
         None => {}
     }
     Ok(())
+}
+
+/// Put the members named in `order` into that order, in the slots those same
+/// ids hold now; every other member stays where it is. Names that are not
+/// members, and repeats, are ignored.
+fn reorder_members(members: &mut [String], order: &[String]) {
+    let mut named: Vec<&String> = Vec::new();
+    for id in order {
+        if members.contains(id) && !named.contains(&id) {
+            named.push(id);
+        }
+    }
+    let slots: Vec<usize> = (0..members.len()).filter(|&i| named.contains(&&members[i])).collect();
+    let picked: Vec<String> = named.into_iter().cloned().collect();
+    for (slot, id) in slots.into_iter().zip(picked) {
+        members[slot] = id;
+    }
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -726,6 +860,171 @@ mod tests {
         assert!(patch_box_at(&path, "nope", BoxPatch::default()).is_err());
         let all: BoxesList = storage::read_json(&path).unwrap();
         assert_eq!(all[1].member_ids, ["p9"], "the other box is untouched");
+    }
+
+    fn named(id: &str, name: &str, members: &[&str]) -> ProjectBox {
+        ProjectBox { name: name.to_string(), ..mk_box(id, members) }
+    }
+
+    fn file_with(boxes: &BoxesList) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("boxes.json");
+        storage::write_json_atomic(&path, boxes).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn a_box_name_is_trimmed_non_empty_short_plain_and_unique_ignoring_case() {
+        let others = vec![named("a", "Thesis", &[]), named("b", "  Lab  ", &[])];
+        assert_eq!(clean_box_name("  Paper ", &others, None).unwrap(), "Paper");
+        assert!(clean_box_name("", &others, None).is_err());
+        assert!(clean_box_name("   \t ", &others, None).is_err());
+        assert!(clean_box_name(&"x".repeat(MAX_BOX_NAME_CHARS + 1), &others, None).is_err());
+        assert!(clean_box_name(&"x".repeat(MAX_BOX_NAME_CHARS), &others, None).is_ok());
+        assert!(clean_box_name("two\nlines", &others, None).is_err());
+        assert!(clean_box_name("bell\u{7}", &others, None).is_err());
+        // Unique case-insensitively, and against the stored name's trimmed form.
+        assert!(clean_box_name("thesis", &others, None).is_err());
+        assert!(clean_box_name("THESIS ", &others, None).is_err());
+        assert!(clean_box_name("lab", &others, None).is_err());
+        // A box may respell its own name; the length counts characters, not bytes.
+        assert_eq!(clean_box_name("THESIS", &others, Some("a")).unwrap(), "THESIS");
+        assert!(clean_box_name(&"\u{e9}".repeat(MAX_BOX_NAME_CHARS), &others, None).is_ok());
+    }
+
+    #[test]
+    fn create_box_validates_the_name_and_takes_members_and_colour() {
+        let (_dir, path) = file_with(&vec![named("a", "Thesis", &[])]);
+        assert!(create_box_at(&path, "thesis", None, None).is_err());
+        assert!(create_box_at(&path, "  ", None, None).is_err());
+        assert!(create_box_at(&path, "Paper", None, Some("blue")).is_err());
+        assert_eq!(read_boxes_at(&path).unwrap().len(), 1, "a refusal writes nothing");
+
+        let ids = |v: &[&str]| Some(v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let b = create_box_at(&path, " Paper ", ids(&["p1", "root", "p2", "p1", "Assistant", " ", "p3"]), Some("#A0B1C2")).unwrap();
+        assert_eq!(b.name, "Paper");
+        assert_eq!(b.member_ids, ["p1", "p2", "p3"], "ordered, without repeats and reserved scope ids");
+        assert_eq!(b.extra["color"].as_str(), Some("#a0b1c2"));
+        assert_eq!(b.rev, 1, "a new box starts at the first stamped revision");
+        assert!(b.position > 0);
+
+        // The old call shape (name only) still makes an empty, uncoloured box.
+        let plain = create_box_at(&path, "Plain", None, None).unwrap();
+        assert!(plain.member_ids.is_empty() && !plain.extra.contains_key("color"));
+        assert!(create_box_at(&path, "Plain", None, None).is_err(), "now taken");
+        assert_eq!(read_boxes_at(&path).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn rename_validates_only_a_changed_name_and_a_legacy_duplicate_does_not_block() {
+        // Hand-written legacy state: two boxes named alike, one with no name.
+        let (_dir, path) = file_with(&vec![named("a", "New Box", &["p"]), named("b", "New Box", &[]), named("c", "", &[])]);
+        // Unrelated edits to the legacy boxes go through.
+        let b = patch_box_at(&path, "b", BoxPatch { color: Some("#112233".into()), add_member: Some("p9".into()), ..Default::default() }).unwrap();
+        assert_eq!((b.name.as_str(), b.member_ids.as_slice()), ("New Box", ["p9".to_string()].as_slice()));
+        let c = patch_box_at(&path, "c", BoxPatch { add_members: Some(vec!["p1".into()]), ..Default::default() }).unwrap();
+        assert_eq!((c.name.as_str(), c.member_ids.len()), ("", 1));
+        // Writing the name a box already holds is not a rename.
+        assert_eq!(rename_box_at(&path, "a", "New Box").unwrap().name, "New Box");
+        assert_eq!(patch_box_at(&path, "c", BoxPatch { name: Some(String::new()), ..Default::default() }).unwrap().name, "");
+        // A real rename is checked: b still holds that name, so respelling it is a clash.
+        assert!(rename_box_at(&path, "a", "new box ").is_err());
+        assert_eq!(rename_box_at(&path, "a", "Alpha").unwrap().name, "Alpha");
+        assert_eq!(rename_box_at(&path, "b", "New Box").unwrap().name, "New Box", "now b is the only one");
+    }
+
+    #[test]
+    fn renaming_to_another_boxs_name_is_refused_and_nothing_is_written() {
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &[]), named("b", "Beta", &[])]);
+        let before = std::fs::read(&path).unwrap();
+        assert!(rename_box_at(&path, "a", "beta").is_err());
+        assert!(rename_box_at(&path, "a", "  ").is_err());
+        assert!(rename_box_at(&path, "nope", "Gamma").is_err());
+        assert!(patch_box_at(&path, "a", BoxPatch { name: Some("BETA".into()), add_members: Some(vec!["p".into()]), ..Default::default() }).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before, "a refused patch is all-or-nothing");
+        let a = rename_box_at(&path, "a", "  Gamma  ").unwrap();
+        assert_eq!(a.name, "Gamma");
+        assert_eq!(rename_box_at(&path, "a", "GAMMA").unwrap().name, "GAMMA", "respelling its own name");
+    }
+
+    #[test]
+    fn one_patch_with_a_name_and_members_moves_the_revision_once() {
+        let (_dir, path) = file_with(&vec![ProjectBox { rev: 4, ..named("a", "Alpha", &["p1", "p2"]) }, named("b", "Beta", &[])]);
+        let patch = BoxPatch {
+            name: Some("Alpha 2".into()),
+            add_members: Some(vec!["p3".into(), "p1".into(), "root".into(), "p4".into()]),
+            remove_members: Some(vec!["p2".into(), "zz".into()]),
+            ..Default::default()
+        };
+        let a = patch_box_at(&path, "a", patch).unwrap();
+        assert_eq!(a.rev, 5, "name and members are one write");
+        assert_eq!(a.name, "Alpha 2");
+        assert_eq!(a.member_ids, ["p1", "p3", "p4"], "reserved id dropped, repeat ignored, removal applied");
+        let all = read_boxes_at(&path).unwrap();
+        assert_eq!((all[1].rev, all[1].name.as_str()), (0, "Beta"), "the other box is untouched");
+        // Nothing changed: the revision stays.
+        let again = patch_box_at(&path, "a", BoxPatch { add_members: Some(vec!["p3".into()]), name: Some("Alpha 2".into()), ..Default::default() }).unwrap();
+        assert_eq!(again.rev, 5);
+    }
+
+    #[test]
+    fn a_member_can_be_added_while_another_window_added_one_meanwhile() {
+        // The point of the diffed save: it names only what it changed, so a
+        // member the file gained since the editor loaded survives.
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1"])]);
+        patch_box_at(&path, "a", BoxPatch { add_member: Some("late".into()), ..Default::default() }).unwrap();
+        let a = patch_box_at(&path, "a", BoxPatch { add_members: Some(vec!["p2".into()]), remove_members: Some(vec!["p1".into()]), ..Default::default() }).unwrap();
+        assert_eq!(a.member_ids, ["late", "p2"]);
+    }
+
+    #[test]
+    fn an_order_patch_reorders_the_named_members_and_keeps_a_concurrent_one() {
+        // The side panel knew p1..p3; another window added "late" meanwhile. The
+        // reorder names only what it knew, so "late" survives where it was.
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1", "p2", "p3", "late"])]);
+        let a = patch_box_at(&path, "a", BoxPatch { order: Some(vec!["p3".into(), "p1".into(), "p2".into()]), ..Default::default() }).unwrap();
+        assert_eq!(a.member_ids, ["p3", "p1", "p2", "late"]);
+        assert_eq!(a.rev, 1, "a reorder is one write");
+        // An unknown id and a repeat are ignored; a member in the middle keeps its slot.
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1", "late", "p2"])]);
+        let patch = BoxPatch { order: Some(vec!["p2".into(), "gone".into(), "p1".into(), "p2".into()]), ..Default::default() };
+        assert_eq!(patch_box_at(&path, "a", patch).unwrap().member_ids, ["p2", "late", "p1"]);
+        // The same order again changes nothing and moves no revision.
+        let same = BoxPatch { order: Some(vec!["p2".into(), "p1".into()]), ..Default::default() };
+        assert_eq!(patch_box_at(&path, "a", same).unwrap().rev, 1);
+    }
+
+    #[test]
+    fn an_order_patch_comes_after_the_adds_and_removals() {
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1", "p2"])]);
+        let patch = BoxPatch {
+            add_members: Some(vec!["p3".into()]),
+            remove_members: Some(vec!["p1".into()]),
+            order: Some(vec!["p3".into(), "p1".into(), "p2".into()]),
+            ..Default::default()
+        };
+        assert_eq!(patch_box_at(&path, "a", patch).unwrap().member_ids, ["p3", "p2"]);
+    }
+
+    #[test]
+    fn the_singular_fields_drop_a_reserved_id_too_and_remove_wins_in_one_patch() {
+        let (_dir, path) = file_with(&vec![named("a", "Alpha", &["p1"])]);
+        let a = patch_box_at(&path, "a", BoxPatch { add_member: Some("root".into()), ..Default::default() }).unwrap();
+        assert_eq!(a.member_ids, ["p1"]);
+        let both = BoxPatch { add_members: Some(vec!["p5".into()]), remove_members: Some(vec!["p5".into(), "p1".into()]), ..Default::default() };
+        assert!(patch_box_at(&path, "a", both).unwrap().member_ids.is_empty());
+    }
+
+    #[test]
+    fn the_patch_takes_the_new_camel_case_fields_and_still_refuses_unknown_ones() {
+        let patch: BoxPatch = serde_json::from_value(serde_json::json!({
+            "name": "N", "addMembers": ["a"], "removeMembers": ["b"], "addMember": "c", "order": ["a"],
+        }))
+        .unwrap();
+        assert_eq!(patch.order.as_deref(), Some(&["a".to_string()][..]));
+        assert_eq!((patch.name.as_deref(), patch.add_members.as_ref().map(Vec::len), patch.remove_members.as_ref().map(Vec::len)), (Some("N"), Some(1), Some(1)));
+        assert!(serde_json::from_value::<BoxPatch>(serde_json::json!({ "add_members": ["a"] })).is_err());
+        assert!(serde_json::from_value::<BoxPatch>(serde_json::json!({ "nope": 1 })).is_err());
     }
 
     fn mk_box(id: &str, members: &[&str]) -> ProjectBox {

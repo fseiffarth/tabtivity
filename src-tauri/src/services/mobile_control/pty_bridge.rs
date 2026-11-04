@@ -215,11 +215,13 @@ fn queue_hint_shown(screen: &str, hint: &QueueHint) -> bool {
     })
 }
 
-/// The two one-shots the bridge runs beside the attach.
+/// The one-shots the bridge runs beside the attach.
 #[derive(Debug, Clone, Copy)]
 enum Probe {
     Capture,
     WindowSize,
+    /// `ssh_exec::TMUX_VT100_DIM`, before the attach's first redraw.
+    KeepDim,
 }
 
 impl AttachTarget {
@@ -242,10 +244,12 @@ impl AttachTarget {
         match (self, probe) {
             (Self::Local { name }, Probe::Capture) => Ok(tmux_capture_command(name)),
             (Self::Local { name }, Probe::WindowSize) => Ok(tmux_window_size_command(name)),
+            (Self::Local { .. }, Probe::KeepDim) => Ok(tmux_keep_dim_command()),
             (Self::Host { name, ssh }, probe) => {
                 let script = match probe {
                     Probe::Capture => crate::services::ssh_exec::host_tmux_capture_command(name, MOBILE_SCROLLBACK_LINES),
                     Probe::WindowSize => crate::services::ssh_exec::host_tmux_window_size_command(name),
+                    Probe::KeepDim => Some(crate::services::ssh_exec::host_tmux_keep_dim_command()),
                 }
                 .ok_or("invalid tmux session name")?;
                 let args = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, false, &script)?;
@@ -400,6 +404,16 @@ fn tmux_window_size_command(tmux_name: &str) -> Command {
         tmux_name,
         "#{window_width}x#{window_height}",
     ]);
+    command
+}
+
+/// Teach this tmux server that a `vt100` client can take dim text
+/// (`ssh_exec::TMUX_VT100_DIM`). A one-shot, not a step of the attach: a tmux
+/// that refuses it still attaches.
+fn tmux_keep_dim_command() -> Command {
+    let (option, value) = crate::services::ssh_exec::TMUX_VT100_DIM;
+    let mut command = crate::services::tmux_local::tmux_command();
+    command.args(["set-option", "-s", option, value]);
     command
 }
 
@@ -943,10 +957,13 @@ pub async fn attach(
     // lines in xterm's normal scrollback buffer above the live screen. The
     // geometry probe rides along in the same blocking hop.
     let probe_target = target.clone();
-    let (history, initial_window) =
-        tokio::task::spawn_blocking(move || (captured_scrollback(&probe_target), window_size(&probe_target)))
-            .await
-            .unwrap_or_default();
+    let (history, initial_window) = tokio::task::spawn_blocking(move || {
+        // Whatever it answers: the phone only reads less without it.
+        let _ = probe_target.run(Probe::KeepDim);
+        (captured_scrollback(&probe_target), window_size(&probe_target))
+    })
+    .await
+    .unwrap_or_default();
     // Open at the real window size so the very first redraw is already correctly
     // shaped, instead of a guaranteed mis-sized 24x80 frame on every attach.
     let (open_cols, open_rows) = initial_window.unwrap_or((80, 24));
@@ -1352,6 +1369,7 @@ mod tests {
         for (probe, script) in [
             (Probe::Capture, crate::services::ssh_exec::host_tmux_capture_command(name, MOBILE_SCROLLBACK_LINES).unwrap()),
             (Probe::WindowSize, crate::services::ssh_exec::host_tmux_window_size_command(name).unwrap()),
+            (Probe::KeepDim, crate::services::ssh_exec::host_tmux_keep_dim_command()),
         ] {
             let command = target.probe_command(probe).expect("one-shot");
             let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -1754,6 +1772,48 @@ mod tests {
         assert!(!queue_hint_shown("   ■⬝⬝⬝⬝⬝⬝⬝ esc interrupt     ↓ 1 shell  ctrl+p commands", &opencode));
         // The key named in prose, with no count after it.
         assert!(!queue_hint_shown("the panel opens with · ctrl+x q here", &opencode));
+    }
+
+    /// The attach client against the real tmux (run with `--ignored`): `vt100`
+    /// has no `dim`, so without the override tmux strips SGR 2 from what the
+    /// phone receives, and Claude's prompt suggestion, which only its dimness
+    /// tells from a typed draft, could never be read there.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "runs the real tmux"]
+    fn the_attach_client_receives_dim_text() {
+        use portable_pty::{native_pty_system, PtySize};
+        use std::io::Read;
+        let name = format!("keep-dim-test-{}", std::process::id());
+        let tmux = |args: &[&str]| crate::services::tmux_local::tmux_command().args(args).output().expect("tmux runs");
+        tmux(&["new-session", "-d", "-s", &name, "-x", "40", "-y", "6", "printf '\\033[2mfaint\\033[0m'; sleep 20"]);
+        let target = super::AttachTarget::Local { name: name.clone() };
+        assert!(target.run(super::Probe::KeepDim).is_some_and(|out| out.status.success()));
+
+        let pair = native_pty_system().openpty(PtySize { rows: 6, cols: 40, pixel_width: 0, pixel_height: 0 }).expect("pty");
+        let mut child = pair.slave.spawn_command(target.attach_command().expect("attach")).expect("attach runs");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let (sender, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = [0; 4096];
+            while let Ok(read) = reader.read(&mut bytes) {
+                if read == 0 || sender.send(bytes[..read].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut seen = Vec::new();
+        while !seen.windows(5).any(|window| window == b"faint") {
+            let Ok(bytes) = received.recv_timeout(std::time::Duration::from_secs(5)) else { break };
+            seen.extend(bytes);
+        }
+        let _ = child.kill();
+        tmux(&["kill-session", "-t", &format!("={name}")]);
+        let shown = String::from_utf8_lossy(&seen);
+        // Set and not reset by the text: tmux may move the cursor in between.
+        let before = shown.split("faint").next().unwrap_or_default();
+        assert!(before.rsplit("\u{1b}[m").next().is_some_and(|run| run.contains("\u{1b}[2m")), "{shown:?}");
     }
 
     /// The local check and press against the real tmux (run with

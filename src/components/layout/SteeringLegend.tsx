@@ -1,55 +1,25 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useKeyboardSteeringStore, type SteeringHandoff } from "../../stores/keyboardSteering";
 import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { voiceInputOffered } from "../../lib/voice/desktopVoice";
-import {
-  STEERING_GROUPS,
-  modifierLabel,
-  steeringKeysFor,
-  steeringRowLabel,
-  type SteeringKeyDef,
-} from "../../lib/shortcuts/shortcuts";
-import {
-  steeringKeyLabel,
-  steeringKeys,
-  steeringRowKeys,
-  steeringSlotKey,
-  type SteeringKeyMap,
-} from "../../lib/shortcuts/steeringBindings";
+import { STEERING_GROUPS, modifierLabel, steeringKeysFor, type SteeringGroup } from "../../lib/shortcuts/shortcuts";
+import { steeringKeyLabel, steeringKeys, steeringSlotKey, type SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
 import { newTabSlotLabels } from "../../lib/shortcuts/newTabChord";
 import { activeTabCard, steeringAppEnabled } from "../../lib/shortcuts/steeringRegion";
 import { statusTabs } from "../../lib/shortcuts/statusJump";
 import { steeringAgentOffer } from "../../lib/shortcuts/steeringAgent";
 import { steeringConfirmButton } from "../../lib/shortcuts/steeringConfirm";
+import { anchorOf, barModel, ladder, type BarItem, type CapAnchor, type Rung } from "../../lib/shortcuts/steeringBar";
+import { measureCaps, samePlacements, type CapPlacements } from "../../lib/shortcuts/steeringCaps";
 import { useActivityStore } from "../../stores/activity";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { documentScroller } from "../../lib/shortcuts/documentScroll";
-import { KeyboardIcon, MicIcon } from "../common/icons/Icon";
-import { HUB_BOTTOM, HUB_R, orbitLayout, type Orbit } from "../../lib/shortcuts/steeringOrbit";
-
-const REGION_LABEL: Record<string, TranslationKey> = {
-  side: "steering.region.side",
-  mail: "steering.mail.label",
-  calendar: "steering.calendar.label",
-  todo: "steering.todo.label",
-  addTab: "steering.newTabMenu.label",
-  settings: "steering.settings.label",
-  header: "steering.region.header",
-  card: "steering.region.card",
-  overlay: "steering.region.overlay",
-};
-
-const LEVEL_LABEL: Record<string, TranslationKey> = {
-  projects: "steering.level.projects",
-  panes: "steering.level.panes",
-  tabs: "steering.level.tabs",
-  scroll: "steering.level.scroll",
-};
+import { ChevronRightIcon, KeyboardIcon, MicIcon } from "../common/icons/Icon";
 
 /** What the box steering lent the keyboard to answers — its own keys, fixed,
  *  so not steering bindings — and Esc, which brings steering back. */
@@ -72,52 +42,57 @@ const HANDOFF: Record<SteeringHandoff, { where: TranslationKey; keys: [string, T
 };
 const HANDOFF_BACK_KEY = "Esc";
 
+const NO_KEYS: ReturnType<typeof steeringKeysFor> = [];
+const TOK_BY_GROUP = new Map(STEERING_GROUPS.map((g) => [g.id, g.tok]));
+const tokFor = (g: SteeringGroup) => TOK_BY_GROUP.get(g) ?? "tok-comment";
+
 /**
- * The legend shown while keyboard steering mode is
- * active — the visible half of the mode's contract (every key is swallowed, so
- * the user must be able to see what the keys do and how to get out). It names
- * the level steering is on and lists only that level's keys, boxed by
- * `STEERING_GROUPS` in the editor's token colours
- * (`steeringKeysFor` over `STEERING_KEYS`, the same table the cheat-sheet/lesson
- * surfaces use), so the legend can never list a key the handler doesn't act on.
- * Inside a pane the agent digits collapse to one "1–N CLIs" entry — N is how
- * many agents the focused pane's own 1–9 open (`newTabSlotLabels`), their
- * names on hover. Every key shown is the user's steering binding
- * (`steeringRowLabel`, `steeringSlotKey`).
+ * The bar shown while keyboard steering mode is active — the visible half of
+ * the mode's contract (every key is swallowed, so the user must be able to see
+ * what the keys do and how to get out). Two parts, both read from the one
+ * table the cheat sheet uses (`steeringKeysFor` over `STEERING_KEYS`) in the
+ * user's own bindings (`steeringRowKeys`, `steeringSlotKey`), so it can never
+ * list a key the handler doesn't act on:
  *
- * Laid out as a hub at the bottom centre — the hexagonal steering badge — with one
- * hexagon per box in a low arch along the bottom edge, each on its own spoke
- * from the hub (`OrbitLegend`).
+ *  - a 28 px bar docked under the panes: the badge (a click folds it), the
+ *    ladder Projects › Subwindows › Tabs › Inside with the lit rung being where
+ *    the arrows act, the level's move keys, the status jumps with their counts,
+ *    and at the right end the keys that leave the mode. It takes its height out
+ *    of the window (`html[data-steer-bar]`), so it never covers the prompt line.
+ *  - every other key as a small cap in its group's `.tok-*` colour, pinned to
+ *    the control it fires (N O 1–N + above the + button, W on the steered tab,
+ *    I L G K on the prompt strip, M C T , on the header, B P on the rail …;
+ *    `steeringBar.anchorOf`, `steeringCaps`). A key whose control is not on
+ *    screen stays in the bar.
  *
- * Mounted once in `AppShell` (the FocusFrameOverlay/host pattern) and
- * portalled to `document.body` so no pane clips it; `pointer-events: none` —
- * steering is a keyboard mode, the legend is display only. Steering's H folds
- * the blobs away, leaving the hub alone (`legendHidden`, remembered per machine),
- * which keeps saying the mode is on; the hub alone takes a click, to fold or unfold.
+ * Folded (steering's H, remembered per machine) the bar keeps the badge, the
+ * ladder and the way out. While steering has lent the keyboard to a box — the
+ * project jump, the prompt box, a surface's search field (`handedTo`) — the mode
+ * is off but the bar stays with a hollow badge, the box as its lit rung, that
+ * box's keys and Esc back, folded or not: the way back is the one thing it must
+ * not hide. With hands-free on, the badge wears a mic: steering takes the Chat's
+ * composer and its Hands-free chip off screen while the loop goes on listening.
  *
- * While steering has lent the keyboard to a box — the project jump, the
- * prompt box, a surface's search field (`handedTo`) — the mode is off but the
- * legend stays, down to that box's keys and Esc back to steering, folded or
- * not: the way back is the one thing it must not hide.
- *
- * Steering takes the Chat's composer and so its Hands-free chip off screen
- * while the loop goes on listening, so the hub wears a mic on its rim for as
- * long as hands-free is on — folded and lent too.
+ * Mounted once in `AppShell` (the FocusFrameOverlay/host pattern), portalled to
+ * `document.body` so no pane clips it. Nothing here animates or blurs.
  */
 export function SteeringLegend() {
   const t = useT();
   const active = useKeyboardSteeringStore((s) => s.active);
   const level = useKeyboardSteeringStore((s) => s.level);
   const region = useKeyboardSteeringStore((s) => s.region);
+  const regionReturn = useKeyboardSteeringStore((s) => s.regionReturn);
   const legendHidden = useKeyboardSteeringStore((s) => s.legendHidden);
   const toggleLegend = useKeyboardSteeringStore((s) => s.toggleLegend);
   const handedTo = useKeyboardSteeringStore((s) => s.handedTo);
+  const handoffReturn = useKeyboardSteeringStore((s) => s.handoffReturn);
   const multiPane = useTabsStore((s) => allGroups(s.layout).length >= 2);
   const popouts = useTabsStore((s) => (s.detachedGroupsByScope[s.scope]?.length ?? 0) > 0);
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
   const mail = useSettingsStore((s) => steeringAppEnabled("mail", s.settings));
   const calendar = useSettingsStore((s) => steeringAppEnabled("calendar", s.settings));
   const todo = useSettingsStore((s) => steeringAppEnabled("todo", s.settings));
+  const cockpit = useExperimental("cockpit");
   const busyByTab = useActivityStore((s) => s.busyByTab);
   const attentionByTab = useActivityStore((s) => s.attentionByTab);
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
@@ -127,9 +102,9 @@ export function SteeringLegend() {
   const handsFreeFlag = useExperimental("voice_hands_free");
   const handsFreeChip = useSettingsStore((s) => s.settings?.voice_hands_free_on ?? false);
   const handsFree = handsFreeFlag && handsFreeChip && voiceInputOffered();
-  const label = t("terminal.reader.voice.handsFree");
+  const micLabel = t("terminal.reader.voice.handsFree");
   const mic = handsFree && (
-    <span className="steering-legend-mic" role="img" aria-label={label} title={label}>
+    <span className="steering-bar-mic" role="img" aria-label={micLabel} title={micLabel}>
       <MicIcon size={11} />
     </span>
   );
@@ -158,6 +133,18 @@ export function SteeringLegend() {
     };
   }, [active, level, region]);
 
+  // The bar takes its height out of the window while it is up
+  // (`html[data-steer-bar] .app-shell`), lent to a box or not.
+  const barUp = active || !!handedTo;
+  useEffect(() => {
+    if (!barUp) return;
+    const root = document.documentElement;
+    root.dataset.steerBar = "";
+    return () => {
+      delete root.dataset.steerBar;
+    };
+  }, [barUp]);
+
   // Steering is a keyboard mode, so the mouse pointer hides while it is on
   // (`data-steer-pointer` on <html>). Moving the mouse brings it back; the
   // next steering key hides it again. Only real movement counts: the engine
@@ -185,242 +172,229 @@ export function SteeringLegend() {
     };
   }, [active]);
 
-  if (!active && handedTo) {
-    const box = HANDOFF[handedTo];
-    const keyItem = ([key, label]: [string, TranslationKey]) => (
-      <span className="steering-legend-item" key={label}>
-        <kbd>{key}</kbd>
-        <span className="steering-legend-label">{t(label)}</span>
+  const terminal = !!activeTab && !!terminalFor(`${tabScope}:${activeTab.key}`);
+  const folded = active && legendHidden;
+  const statusCount = (kind: "decision" | "working" | "done") => statusTabs(kind, busyByTab, attentionByTab, tabsByScope).length;
+  // Read live at render: the bar redraws on every steering key.
+  const keys =
+    active && !folded
+      ? steeringKeysFor({
+          level,
+          sideRegion: region === "side",
+          settingsRegion: region === "settings",
+          headerRegion: region === "header",
+          overlayRegion: region === "overlay",
+          steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
+          tabCard: inPane && !!activeTabCard(),
+          multiPane,
+          apps: { mail, calendar, todo, cockpit },
+          agent: steeringAgentOffer(activeTab),
+          terminal,
+          // Only where ↓ could step into it.
+          document: !terminal && !!activeTab && (inPane || level === "scroll") && !!documentScroller(tabScope, activeTab.key),
+          popouts,
+          statusCounts: {
+            decision: statusCount("decision"),
+            working: statusCount("working"),
+            done: statusCount("done"),
+          },
+        })
+      : NO_KEYS;
+  const wanted = [...new Set(keys.map(anchorOf).filter((a): a is CapAnchor => a !== null))];
+  const placed = useCapPlacements(wanted, `${level}|${region}|${tabScope}|${activeTab?.key}|${focusedGroupId}`);
+
+  if (!barUp) return null;
+
+  const legendKey = steeringKeys("legend", steerKeys)[0];
+  const legendCap = legendKey ? steeringKeyLabel(legendKey) : "—";
+  const exitKey = steeringKeys("exit", steerKeys)[0];
+  const exitCap = exitKey ? steeringKeyLabel(exitKey) : "—";
+
+  const cap = (key: string, tok: string, i: number, count?: true) => (
+    <span className={`steering-cap ${tok}${count ? " count" : ""}`} key={`${key}-${i}`}>
+      <span className="steering-cap-k">{key}</span>
+    </span>
+  );
+  const item = (it: BarItem) => (
+    <span
+      className="steering-bar-item"
+      key={it.id}
+      title={it.title ?? (it.descKey ? t(it.descKey, { modifier: modifierLabel() }) : undefined)}
+    >
+      <span className="steering-bar-caps">{it.caps.map((c, i) => cap(c, tokFor(it.group), i))}</span>
+      <span className="steering-bar-label">{t(it.labelKey)}</span>
+      {it.status && cap(String(statusCount(it.status)), tokFor(it.group), 0, true)}
+    </span>
+  );
+  const rungs = (list: Rung[]) =>
+    list.map((r, i) => (
+      <span className="steering-bar-rung-wrap" key={r.id}>
+        {i > 0 && (
+          <span className="steering-bar-sep" aria-hidden="true">
+            <ChevronRightIcon size={12} />
+          </span>
+        )}
+        <span className={`steering-rung${r.lit ? " lit" : ""}${r.lent ? " lent" : ""}`} aria-current={r.lit ? "step" : undefined}>
+          {t(r.labelKey)}
+        </span>
       </span>
-    );
-    const blobs: OrbitBlob[] = [
-      ...(box.keys.length > 0 ? [{ id: "box", tok: "tok-type", items: box.keys.map(keyItem) }] : []),
-      { id: "back", tok: "tok-comment", items: [keyItem([HANDOFF_BACK_KEY, "steering.handoff.back"])] },
-    ];
-    // Steering is off while lent, so the hub is a plain badge, not the fold toggle.
-    const hub = (
-      <span className="steering-legend-hub">
+    ));
+
+  let badge: ReactNode;
+  let ladderEl: ReactNode;
+  let keyItems: ReactNode[] = [];
+  let tailItems: ReactNode[] = [];
+  let caps: ReactNode = null;
+
+  if (!active && handedTo) {
+    // Steering is off while lent, so the badge is a plain, hollow mark — not
+    // the fold toggle.
+    const box = HANDOFF[handedTo];
+    badge = (
+      <span className="steering-bar-badge hollow">
         <KeyboardIcon size={16} />
         {mic}
       </span>
     );
-    return createPortal(
-      <OrbitLegend label={t("steering.legendTitle")} where={t(box.where)} hub={hub} blobs={blobs} />,
-      document.body,
+    ladderEl = (
+      <div className="steering-bar-ladder">
+        {rungs(
+          ladder({
+            level: handoffReturn.level,
+            region: handoffReturn.region,
+            regionReturn: handoffReturn.regionReturn,
+            document: !terminal,
+            lent: box.where,
+          }),
+        )}
+      </div>
     );
-  }
-  if (!active) return null;
-  const legendKey = steeringRowKeys(["legend"], steerKeys);
-  if (legendHidden) {
-    // Folded (H): a hexagonal badge at the bottom centre still says steering is on; H
-    // again — or a click — unfolds the key list. The exit key sits on the other
-    // rim as a bare glyph, so the way out stays in sight.
-    const exitKey = steeringKeys("exit", steerKeys)[0];
-    return createPortal(
-      <div className="steering-legend-fab" role="status" aria-label={t("steering.legendTitle")}>
-        <UntestedTag id="steering.legendToggle" />
-        <button
-          type="button"
-          className="steering-legend-fab-button"
-          // The focus stays where steering left it (a terminal, usually).
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={toggleLegend}
-          title={t("steering.fab.title", { key: legendKey })}
-        >
-          <KeyboardIcon size={16} />
-          <kbd>{legendKey}</kbd>
-          {exitKey && (
-            <kbd className="steering-legend-fab-exit" title={t("steering.exit.label")}>
-              {keyGlyph(exitKey)}
-            </kbd>
-          )}
-          {mic}
-        </button>
-      </div>,
-      document.body,
+    const split = (k: string) => k.split(/[+ ]/);
+    keyItems = box.keys.map(([k, label]) => (
+      <span className="steering-bar-item" key={label}>
+        <span className="steering-bar-caps">{split(k).map((c, i) => cap(c, "tok-type", i))}</span>
+        <span className="steering-bar-label">{t(label)}</span>
+      </span>
+    ));
+    tailItems = [
+      <span className="steering-bar-item" key="back">
+        <span className="steering-bar-caps">{cap(HANDOFF_BACK_KEY, "tok-comment", 0)}</span>
+        <span className="steering-bar-label">{t("steering.handoff.back")}</span>
+      </span>,
+    ];
+  } else {
+    badge = (
+      <button
+        type="button"
+        className="steering-bar-badge"
+        // The focus stays where steering left it (a terminal, usually).
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={toggleLegend}
+        title={t(folded ? "steering.fab.title" : "steering.hub.title", { key: legendCap })}
+      >
+        <KeyboardIcon size={16} />
+        {mic}
+      </button>
     );
-  }
-  const count = (kind: "decision" | "working" | "done") =>
-    statusTabs(kind, busyByTab, attentionByTab, tabsByScope).length;
-  const statusCounts = { decision: count("decision"), working: count("working"), done: count("done") };
-  const terminal = !!activeTab && !!terminalFor(`${tabScope}:${activeTab.key}`);
-  const keys = steeringKeysFor({
-    level,
-    sideRegion: region === "side",
-    settingsRegion: region === "settings",
-    headerRegion: region === "header",
-    overlayRegion: region === "overlay",
-    steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
-    // Read at render: the legend redraws on every steering key.
-    tabCard: inPane && !!activeTabCard(),
-    multiPane,
-    apps: { mail, calendar, todo },
-    agent: steeringAgentOffer(activeTab),
-    terminal,
-    // Read at render too; only where ↓ could step into it.
-    document: !terminal && !!activeTab && (inPane || level === "scroll") && !!documentScroller(tabScope, activeTab.key),
-    popouts,
-    statusCounts,
-  });
-  const where =
-    level === "region"
-      ? region
-        ? REGION_LABEL[region]
-        : null
-      : level === "scroll" && !terminal
-        ? "steering.level.scrollDocument"
-        : LEVEL_LABEL[level];
-
-  const item = (k: SteeringKeyDef) => {
-    if (k.agentSlots) {
-      const slots = agents.flatMap((label, i) => {
+    ladderEl = (
+      <div className="steering-bar-ladder">
+        {rungs(ladder({ level, region, regionReturn, document: !terminal }))}
+      </div>
+    );
+    if (folded) {
+      tailItems = [
+        <span className="steering-bar-item" key="show">
+          <span className="steering-bar-caps">{cap(legendCap, "tok-comment", 0)}</span>
+          <span className="steering-bar-label">{t("steering.bar.show")}</span>
+        </span>,
+        <span className="steering-bar-item" key="exit">
+          <span className="steering-bar-caps">{cap(exitCap, "tok-comment", 0)}</span>
+          <span className="steering-bar-label">{t("steering.exit.label")}</span>
+        </span>,
+      ];
+    } else {
+      const agentSlots = agents.flatMap((label, i) => {
         // An unbound slot has no key to press, so it is not counted.
         const key = label ? steeringSlotKey(i + 1, steerKeys) : null;
-        return key ? [{ key, label }] : [];
+        return key && label ? [{ key, label }] : [];
       });
-      if (slots.length > 0) {
-        return (
-          <span className="steering-legend-item" key="agent-slots" title={slots.map((a) => `${a.key} ${a.label}`).join(" · ")}>
-            <kbd>{slotRange(slots.map((a) => a.key))}</kbd>
-            <span className="steering-legend-label">{t("steering.newAgent.clis")}</span>
-          </span>
-        );
-      }
+      const placedSet = new Set(Object.keys(placed) as CapAnchor[]);
+      const model = barModel(keys, level, placedSet, steerKeys, agentSlots, tokFor);
+      // The leave keys read at the right end; the rest follow the ladder.
+      const grouped = (it: BarItem) => it.group === "mode" || it.leave;
+      keyItems = model.items.filter((it) => !grouped(it)).map(item);
+      const tail = model.items.filter(grouped);
+      tailItems = tail.flatMap((it, i) => [
+        ...(it.leave && !tail[i - 1]?.leave ? [<span className="steering-bar-vr" key={`vr-${it.id}`} aria-hidden="true" />] : []),
+        item(it),
+      ]);
+      const rowsAt = [...model.caps.entries()].flatMap(([anchor, list]) => {
+        const at = placed[anchor];
+        if (!at) return [];
+        return [
+          <span className={`steering-cap-row ${at.align}`} style={{ left: at.x, top: at.y }} key={anchor} data-anchor={anchor}>
+            {list.flatMap((r) => r.caps.map((c, i) => cap(c.key, c.tok, i)))}
+          </span>,
+        ];
+      });
+      caps = rowsAt.length > 0 ? <div className="steering-caps" aria-hidden="true">{rowsAt}</div> : null;
     }
-    return (
-      <span className="steering-legend-item" key={`${k.actions.join(",")}|${k.labelKey}`} title={t(k.descKey, { modifier: modifierLabel() })}>
-        <kbd>{steeringRowLabel(k, steerKeys)}</kbd>
-        <span className="steering-legend-label">{t(k.labelKey)}</span>
-        {k.status && <span className="steering-legend-count">{statusCounts[k.status]}</span>}
-      </span>
-    );
-  };
+  }
 
-  // The keys in hexagons by what they are for, each hexagon in one editor token
-  // colour (the colour, not a printed name, tells them apart); the hub, not a
-  // title, says the mode is on.
-  const blobs = STEERING_GROUPS.flatMap((g): OrbitBlob[] => {
-    const rows = keys.filter((k) => k.group === g.id);
-    return rows.length === 0 ? [] : [{ id: g.id, tok: g.tok, label: t(g.labelKey), items: rows.map(item) }];
-  });
-  const hub = (
-    <button
-      type="button"
-      className="steering-legend-hub"
-      // The focus stays where steering left it (a terminal, usually).
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={toggleLegend}
-      title={t("steering.hub.title", { key: legendKey })}
-    >
-      <KeyboardIcon size={16} />
-      <kbd>{legendKey}</kbd>
-      {mic}
-    </button>
-  );
   return createPortal(
-    <OrbitLegend label={t("steering.legendTitle")} where={where ? t(where) : null} hub={hub} blobs={blobs} />,
+    <>
+      <div className={`steering-bar${folded ? " folded" : ""}`} role="status" aria-label={t("steering.legendTitle")}>
+        {badge}
+        {ladderEl}
+        <UntestedTag id="steering.bar" />
+        <div className="steering-bar-keys">{keyItems}</div>
+        <div className="steering-bar-tail">{tailItems}</div>
+      </div>
+      {caps}
+    </>,
     document.body,
   );
 }
 
-interface OrbitBlob {
-  id: string;
-  /** The editor token class that colours the hexagon and its spoke. */
-  tok: string;
-  label?: string;
-  items: ReactNode[];
-}
-
 /**
- * The hub with one hexagon per key box in a row along the bottom, each on a
- * spoke in its own colour. The hexagons are sized from their rendered key lists, so the
- * first paint measures them hidden and the next places them.
+ * Where the controls the caps are pinned to are right now. Measured after every
+ * commit (the bar redraws on each steering key and level change), when the
+ * window resizes or anything scrolls (a tab strip, the panel), and once more
+ * shortly after a change so a panel that is still sliding open is caught where
+ * it comes to rest. Only a changed placement sets state, so it settles; no
+ * timer loops.
  */
-function OrbitLegend({ label, where, hub, blobs }: { label: string; where: string | null; hub: ReactNode; blobs: OrbitBlob[] }) {
-  const lists = useRef(new Map<string, HTMLElement>());
-  const [orbit, setOrbit] = useState<Orbit | null>(null);
-  const [, setViewport] = useState(0);
-
-  useEffect(() => {
-    const onResize = () => setViewport((n) => n + 1);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+function useCapPlacements(wanted: CapAnchor[], settleKey: string): CapPlacements {
+  const [placed, setPlaced] = useState<CapPlacements>({});
+  const ids = useRef(wanted);
+  ids.current = wanted;
+  const measure = useCallback(() => {
+    const next = measureCaps(ids.current);
+    setPlaced((prev) => (samePlacements(prev, next) ? prev : next));
   }, []);
-
-  // `blobs` is fresh on every render — the legend redraws on each steering
-  // key, and a level change swaps the keys — so this measures every time.
-  // Only a changed layout sets state, so it settles.
   useLayoutEffect(() => {
-    const sizes = blobs.map((b) => {
-      const el = lists.current.get(b.id);
-      // offset*, not the bounding box: the fan's own scale must not feed back.
-      return { w: el?.offsetWidth ?? 0, h: el?.offsetHeight ?? 0 };
-    });
-    const next = orbitLayout(sizes, window.innerWidth, window.innerHeight);
-    setOrbit((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
-  }, [blobs]);
-
-  return (
-    <div
-      className="steering-legend steering-legend-orbit"
-      role="status"
-      aria-label={label}
-      style={{
-        bottom: orbit?.bottom ?? HUB_BOTTOM + HUB_R,
-        transform: `scale(${orbit?.scale ?? 1})`,
-      }}
-    >
-      {blobs.map((b, i) => {
-        const c = orbit?.hexes.length === blobs.length ? orbit.hexes[i] : null;
-        return (
-          <span
-            key={`spoke-${b.id}`}
-            className={`steering-legend-spoke ${b.tok}`}
-            style={c ? { width: c.r, transform: `rotate(${-c.phi}rad)` } : { visibility: "hidden" }}
-          />
-        );
-      })}
-      {blobs.map((b, i) => {
-        const c = orbit?.hexes.length === blobs.length ? orbit.hexes[i] : null;
-        return (
-          <div
-            key={b.id}
-            className={`steering-legend-group ${b.tok}`}
-            data-group={b.id}
-            aria-label={b.label}
-            style={
-              c
-                ? { width: c.w, height: c.h, left: c.x - c.w / 2, top: -c.y - c.h / 2 }
-                : { visibility: "hidden" }
-            }
-          >
-            <span
-              className="steering-legend-group-keys"
-              ref={(el) => {
-                if (el) lists.current.set(b.id, el);
-                else lists.current.delete(b.id);
-              }}
-            >
-              {b.items}
-            </span>
-          </div>
-        );
-      })}
-      {hub}
-      {where && <span className="steering-legend-where">{where}</span>}
-    </div>
-  );
-}
-
-/** A key as a symbol, never a word: Space and Esc get their glyphs. */
-function keyGlyph(key: string): string {
-  if (key === " ") return "␣";
-  if (key === "Escape") return "⎋";
-  return steeringKeyLabel(key);
-}
-
-/** "1–N" when the slots are the default digits 1..N, else the keys in order. */
-function slotRange(keys: string[]): string {
-  if (keys.every((k, i) => k === String(i + 1))) return keys.length === 1 ? "1" : `1–${keys.length}`;
-  return keys.join(" ");
+    measure();
+  });
+  const wantedKey = wanted.join(",");
+  useEffect(() => {
+    if (!wantedKey) return;
+    let frame = 0;
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    window.addEventListener("resize", later);
+    window.addEventListener("scroll", later, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", later);
+      window.removeEventListener("scroll", later, true);
+    };
+  }, [wantedKey, measure]);
+  useEffect(() => {
+    if (!wantedKey) return;
+    const timer = window.setTimeout(measure, 260);
+    return () => window.clearTimeout(timer);
+  }, [wantedKey, settleKey, measure]);
+  return placed;
 }

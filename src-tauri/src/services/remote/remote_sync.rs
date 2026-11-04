@@ -798,6 +798,26 @@ pub fn local_new_candidates(
     out
 }
 
+/// The lockstep-owned files the manifest holds no record of: tracked files that
+/// arrived after pairing seeded the manifest (a new commit on either side).
+/// `sync_status` reports them green like the manifest'd tracked files, because
+/// with no row at all the tree read them as "not synced" and offered a byte-push
+/// that `drop_lockstep_tracked` then had to withhold — a ⬆ whose dialog could only
+/// be cancelled. Whether they reached the peer is lockstep's to say (the Git
+/// view), not byte-sync's. `tracked` is empty when lockstep is off. Sorted and
+/// capped like [`local_new_candidates`]; a file past the cap keeps the old
+/// rowless look, and the push dialog says why it has nothing to send.
+pub fn lockstep_unrecorded(manifest: &Manifest, tracked: &HashSet<String>, cap: usize) -> Vec<String> {
+    let mut out: Vec<String> = tracked
+        .iter()
+        .filter(|rel| !rel.is_empty() && !manifest.contains_key(*rel))
+        .cloned()
+        .collect();
+    out.sort();
+    out.truncate(cap);
+    out
+}
+
 /// The host-side counterpart of [`local_new_candidates`]: of the files an
 /// explicit host scan found, the ones the host holds alone — no manifest entry
 /// and no mirror copy (`in_mirror`; a file on both sides with no record is

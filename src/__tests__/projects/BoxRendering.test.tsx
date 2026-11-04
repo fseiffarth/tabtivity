@@ -13,7 +13,7 @@
  * `PageStrip.test.tsx`/`DragDropSplit.test.tsx` take for their pointer drags.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act, fireEvent } from "@testing-library/react";
+import { render, act, fireEvent, cleanup, screen, within } from "@testing-library/react";
 import type { ProjectBox, ProjectEntry } from "../../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(null) }));
@@ -23,8 +23,12 @@ vi.mock("../../lib/window/startWindowDrag", () => ({ startWindowDrag }));
 
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useProjectsStore } from "../../stores/projects";
-import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
+import { BOX_SCOPE_PREFIX, BoxNameError, useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
+import { useBoxEditorStore } from "../../stores/boxEditor";
+import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
+import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useTabsStore } from "../../stores/tabs";
 import { useActivityStore } from "../../stores/activity";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
@@ -118,6 +122,11 @@ function boxPillNames(container: HTMLElement): string[] {
   );
 }
 
+/** The `+N` on the logo's caret: the boxes without a pill (null when none). */
+function caretCount(container: HTMLElement): HTMLElement | null {
+  return container.querySelector(".box-chip-caret-btn .box-chip-overflow");
+}
+
 /** Open the chip's dropdown (hovering its caret opens it — a click on the
  *  logo is "All projects") and hand back its portaled menu. */
 async function openChipMenu(container: HTMLElement): Promise<HTMLElement> {
@@ -139,7 +148,11 @@ function menuRow(menu: HTMLElement, text: string): HTMLElement {
 const realSetActive = useProjectsStore.getState().setActive;
 
 beforeEach(() => {
+  resetBoxSlice();
+  // The header's shared hover-menu id outlives a test's unmount.
+  useHeaderHoverMenuStore.getState().close("box-scope-chip");
   usePillDragStore.getState().end();
+  useKeyboardSteeringStore.getState().exit();
   useProjectsStore.setState({
     projects: [],
     activeId: null,
@@ -150,10 +163,10 @@ beforeEach(() => {
   useTabsStore.setState({ scope: "root" });
 });
 
-async function renderSwitcher() {
+async function renderSwitcher(widthTier: 0 | 1 | 2 | 3 = 0) {
   let container!: HTMLElement;
   await act(async () => {
-    ({ container } = render(<ProjectSwitcher open={true} />));
+    ({ container } = render(<ProjectSwitcher open={true} widthTier={widthTier} />));
   });
   return container;
 }
@@ -498,7 +511,7 @@ describe("box chip rendering (slice model)", () => {
     expect(boxPillNames(container)).toEqual(["boxA", "boxB"]);
   });
 
-  it("caps the row at MAX_BOX_PILLS, counts the rest on the chip, and always seats the selected box", async () => {
+  it("caps the row at MAX_BOX_PILLS, counts the rest on the caret, and always seats the selected box", async () => {
     const many = Array.from({ length: MAX_BOX_PILLS + 2 }, (_, i) =>
       box(`box${i}`, [], i + 1),
     );
@@ -507,7 +520,9 @@ describe("box chip rendering (slice model)", () => {
 
     const container = await renderSwitcher();
     expect(boxPillNames(container)).toEqual(many.slice(0, MAX_BOX_PILLS).map((b) => b.name));
-    expect(chip(container)!.textContent).toContain("+2");
+    // The count rides the logo's caret, the list's one trigger.
+    expect(caretCount(container)!.textContent).toBe("+2");
+    expect(container.querySelector(".box-fold-pill")).toBeNull();
 
     // Picking an overflow box from the dropdown seats it in the last slot —
     // the box being looked at is never the one without a pill.
@@ -535,9 +550,9 @@ describe("box chip rendering (slice model)", () => {
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
 
     const container = await renderSwitcher();
-    // A hidden box has no pill, but the chip still counts it and lists it.
+    // A hidden box has no pill, but the caret still counts it and the list has it.
     expect(boxPillNames(container)).toEqual(["boxA"]);
-    expect(chip(container)!.textContent).toContain("+1");
+    expect(caretCount(container)!.textContent).toBe("+1");
 
     const menu = await openChipMenu(container);
     const pins = [...menu.querySelectorAll<HTMLElement>(".box-chip-menu-pin")];
@@ -692,7 +707,9 @@ describe("box chip rendering (slice model)", () => {
     const ctx = document.querySelector(".context-menu") as HTMLElement;
     expect(ctx).toBeTruthy();
     expect(ctx.textContent).toContain("Rename");
-    expect(ctx.textContent).toContain("Delete box");
+    // One name for the action everywhere: it dissolves the grouping, nothing else.
+    expect(ctx.textContent).toContain("Dissolve box…");
+    expect(ctx.textContent).not.toContain("Delete box");
   });
 
   it("a slice never hides the project in scope, member or not", async () => {
@@ -845,9 +862,14 @@ describe("box chip rendering (slice model)", () => {
   });
 
   it("alt-dropping a pill onto another boxes the two via boxProjects", async () => {
-    const boxProjects = vi.fn().mockResolvedValue(box("newBox", ["p2", "p1"]));
+    const created = box("newBox", ["p2", "p1"]);
+    const boxProjects = vi.fn(async () => {
+      useBoxesStore.setState({ boxes: [created] });
+      return created;
+    });
     const reorderProjects = vi.fn().mockResolvedValue(undefined);
-    useBoxesStore.setState({ boxes: [], boxProjects });
+    useBoxEditorStore.getState().stopRename();
+    useBoxesStore.setState({ boxes: [], boxProjects, openBox: vi.fn(async () => {}) });
     useProjectsStore.setState({
       projects: [proj("p1", 10), proj("p2", 20)],
       activeId: null,
@@ -867,8 +889,38 @@ describe("box chip rendering (slice model)", () => {
       pointer("pointerup", 120, 10, window, { altKey: true });
     });
 
-    expect(boxProjects).toHaveBeenCalledWith(["p2", "p1"], { name: "New Box" });
+    expect(boxProjects).toHaveBeenCalledWith(["p2", "p1"], { name: "Box 1" });
     expect(reorderProjects).not.toHaveBeenCalled();
+    // The gesture has no name prompt, so the new box's pill goes straight into
+    // inline rename (and the box is entered, so that pill stands on the row).
+    expect(useBoxEditorStore.getState().renamingId).toBe("newBox");
+    expect(useBoxSliceStore.getState().sliceBoxId).toBe("newBox");
+  });
+
+  it("an alt-drop the backend refuses by name says why instead of failing silently", async () => {
+    const boxProjects = vi.fn().mockRejectedValue(new BoxNameError("taken"));
+    useBoxesStore.setState({ boxes: [], boxProjects });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+      switchToast: null,
+      reorderProjects: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const container = await renderSwitcher();
+    const p1Pill = findPill(container, "p1");
+    const p2Pill = findPill(container, "p2");
+    layOut(p1Pill, { left: 0, right: 50, top: 0, bottom: 40 });
+    layOut(p2Pill, { left: 100, right: 150, top: 0, bottom: 40 });
+
+    await act(async () => {
+      pointer("pointerdown", 10, 10, p1Pill);
+      pointer("pointermove", 120, 10, window, { altKey: true });
+      pointer("pointerup", 120, 10, window, { altKey: true });
+    });
+
+    expect(useProjectsStore.getState().switchToast).toBe("A box with that name already exists.");
   });
 
   it("a plain (no-alt) drop onto a pill still reorders, not box", async () => {
@@ -1057,5 +1109,652 @@ describe("box chip status bars", () => {
     expect(rowBars[0].className).toContain("finished");
     // A box with nothing running draws no strip at all.
     expect(rowB.querySelector(".pill-status-bars")).toBeNull();
+  });
+});
+
+/** The ✕ on the selected box pill. */
+function leaveButton(container: HTMLElement): HTMLElement | null {
+  return container.querySelector(".box-pill-leave");
+}
+
+describe("header access: the way out of a box (AS2a)", () => {
+  function seedTwoBoxes(setActive = vi.fn()) {
+    useBoxesStore.setState({
+      boxes: [box("boxA", ["p1"], 5), box("boxB", ["p2"], 6)],
+      openBox: vi.fn(openBoxScope),
+    });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20), proj("p3", 30)],
+      activeId: "p3",
+      loaded: true,
+      setActive,
+    });
+  }
+
+  it("wears an always-visible ✕ on the selected pill only", async () => {
+    seedTwoBoxes();
+    const container = await renderSwitcher();
+    // Nothing selected: no ✕ anywhere.
+    expect(leaveButton(container)).toBeNull();
+
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    const pills = [...container.querySelectorAll(".box-scope-pill")];
+    expect(pills[0].querySelector(".box-pill-leave")).toBeTruthy();
+    expect(pills[1].querySelector(".box-pill-leave")).toBeNull();
+    expect(container.querySelectorAll(".box-pill-leave")).toHaveLength(1);
+    expect(leaveButton(container)!.getAttribute("title")).toBe("Show all projects (leave “boxA”)");
+  });
+
+  it("the ✕ clears the slice and hands the scope back to the project the strip was on", async () => {
+    const setActive = vi.fn(async (id: string | null) => {
+      useTabsStore.setState({ scope: id ?? "root" });
+    });
+    seedTwoBoxes(setActive);
+    useTabsStore.setState({ scope: "p3" });
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    expect(pillNames(container)).toEqual(["p1"]);
+
+    await act(async () => {
+      fireEvent.click(leaveButton(container)!);
+    });
+    expect(setActive).toHaveBeenCalledWith("p3");
+    expect(useTabsStore.getState().scope).toBe("p3");
+    expect(pillNames(container).sort()).toEqual(["p1", "p2", "p3"]);
+    expect(container.querySelector(".box-scope-pill.is-selected")).toBeNull();
+    expect(leaveButton(container)).toBeNull();
+    // Entering the box did not route through the pill's own click: the ✕ is not "select".
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+  });
+
+  it("the ✕ stays while a member is being visited, and clears just the slice there", async () => {
+    const setActive = vi.fn(async (id: string | null) => {
+      useTabsStore.setState({ scope: id ?? "root" });
+    });
+    seedTwoBoxes(setActive);
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    await act(async () => {
+      fireEvent.click(findPill(container, "p1").querySelector(".pill-main") as HTMLElement);
+    });
+    expect(useTabsStore.getState().scope).toBe("p1");
+    expect(leaveButton(container)).toBeTruthy();
+    setActive.mockClear();
+
+    await act(async () => {
+      fireEvent.click(leaveButton(container)!);
+    });
+    // Strip and tabs already agree: no second runtime switch, the strip is whole again.
+    expect(setActive).not.toHaveBeenCalled();
+    expect(pillNames(container).sort()).toEqual(["p1", "p2", "p3"]);
+  });
+
+  it("tints the strip in the box colour while a slice is selected, and not otherwise", async () => {
+    seedTwoBoxes();
+    const container = await renderSwitcher();
+    const region = container.querySelector(".project-pills-region") as HTMLElement;
+    expect(region.className).not.toContain("is-sliced");
+
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxB"));
+    });
+    expect(region.className).toContain("is-sliced");
+    expect(region.style.getPropertyValue("--slice-color")).toBe(boxColor({ id: "boxB" }));
+
+    await act(async () => {
+      fireEvent.click(leaveButton(container)!);
+    });
+    expect(region.className).not.toContain("is-sliced");
+    expect(region.style.getPropertyValue("--slice-color")).toBe("");
+  });
+
+  it("marks the scope box with a ✓ and the sliced box in bold — two marks for two states", async () => {
+    seedTwoBoxes(
+      vi.fn(async (id: string | null) => {
+        useTabsStore.setState({ scope: id ?? "root" });
+      }),
+    );
+    const container = await renderSwitcher();
+    let menu = await openChipMenu(container);
+    expect(menu.querySelector(".box-chip-menu-scope")).toBeNull();
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+
+    // In the box: scope AND slice on the same row.
+    menu = await openChipMenu(container);
+    const rowA = menuRow(menu, "boxA");
+    expect(rowA.className).toContain("is-slice");
+    expect(rowA.className).toContain("is-scope");
+    expect(rowA.querySelector(".box-chip-menu-scope")).toBeTruthy();
+    expect(menuRow(menu, "boxB").className).not.toContain("is-slice");
+    expect(menu.querySelectorAll(".box-chip-menu-scope")).toHaveLength(1);
+
+    // Visiting a member: the slice stays (bold), the scope has left (no ✓).
+    await act(async () => {
+      fireEvent.click(findPill(container, "p1").querySelector(".pill-main") as HTMLElement);
+    });
+    menu = await openChipMenu(container);
+    const visiting = menuRow(menu, "boxA");
+    expect(visiting.className).toContain("is-slice");
+    expect(visiting.className).not.toContain("is-scope");
+    expect(menu.querySelector(".box-chip-menu-scope")).toBeNull();
+  });
+});
+
+describe("header access: the caret opens on click as well as on hover (AS2a)", () => {
+  function seed() {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], openBox: vi.fn(openBoxScope) });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+  }
+
+  it("a click pins the list open past the pointer leaving; a second click closes it", async () => {
+    seed();
+    const container = await renderSwitcher();
+    const caret = container.querySelector(".box-chip-caret-btn") as HTMLElement;
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+
+    // Keyboard/touch path: no hover at all, a click alone opens it.
+    await act(async () => {
+      fireEvent.click(caret);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    expect(caret.getAttribute("aria-expanded")).toBe("true");
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.mouseLeave(caret);
+        vi.advanceTimersByTime(3000);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await act(async () => {
+      fireEvent.click(caret);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+  });
+
+  it("a hover-opened list still folds away on leaving, and a click on it keeps it", async () => {
+    seed();
+    const container = await renderSwitcher();
+    const caret = container.querySelector(".box-chip-caret-btn") as HTMLElement;
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.mouseEnter(caret);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+      await act(async () => {
+        fireEvent.mouseLeave(caret);
+        vi.advanceTimersByTime(3000);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeNull();
+
+      // Hover, then click: the click keeps what the hover opened (not a toggle shut).
+      await act(async () => {
+        fireEvent.mouseEnter(caret);
+        fireEvent.click(caret);
+      });
+      await act(async () => {
+        fireEvent.mouseLeave(caret);
+        vi.advanceTimersByTime(3000);
+      });
+      expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Escape closes a pinned list", async () => {
+    seed();
+    const container = await renderSwitcher();
+    await act(async () => {
+      fireEvent.click(container.querySelector(".box-chip-caret-btn") as HTMLElement);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeTruthy();
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
+  });
+});
+
+describe("header access: the width-tier pill budget and the caret's count (AS2a)", () => {
+  const eight = () => Array.from({ length: 8 }, (_, i) => box(`box${i}`, [], i + 1));
+
+  function seed(boxes: ProjectBox[]) {
+    useBoxesStore.setState({ boxes, openBox: vi.fn(openBoxScope) });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+  }
+
+  it("holds 6 pills on tiers 0 and 1, 3 on tier 2 and only the selected box on tier 3", async () => {
+    for (const [tier, expected] of [
+      [0, 6],
+      [1, 6],
+      [2, 3],
+      [3, 0],
+    ] as const) {
+      seed(eight());
+      const container = await renderSwitcher(tier);
+      expect(boxPillNames(container)).toHaveLength(expected);
+      // The rest are counted on the logo's caret (`▾ +N`, bare N with no pill).
+      expect(caretCount(container)!.textContent).toBe(expected === 0 ? "8" : `+${8 - expected}`);
+      cleanup();
+      resetBoxSlice();
+    }
+  });
+
+  it("keeps the selected box on the row at every tier, in its own place", async () => {
+    seed(eight());
+    useBoxesStore.setState({ boxes: eight() });
+    const container = await renderSwitcher(3);
+    // Select box5 through the list.
+    await act(async () => {
+      fireEvent.click(container.querySelector(".box-chip-caret-btn") as HTMLElement);
+    });
+    await act(async () => {
+      fireEvent.click(menuRow(document.querySelector(".box-chip-menu") as HTMLElement, "box5"));
+    });
+    expect(boxPillNames(container)).toEqual(["box5"]);
+    expect(leaveButton(container)).toBeTruthy();
+    expect(caretCount(container)!.textContent).toBe("+7");
+  });
+
+  it("shows no count when every box has its pill", async () => {
+    seed([box("boxA", [], 1), box("boxB", [], 2)]);
+    const container = await renderSwitcher(2);
+    expect(boxPillNames(container)).toEqual(["boxA", "boxB"]);
+    expect(caretCount(container)).toBeNull();
+  });
+
+  it("opens the one list under the logo, whatever overflows: no second trigger on the row", async () => {
+    seed(eight());
+    const container = await renderSwitcher(2);
+    expect(container.querySelector(".box-fold-pill")).toBeNull();
+    expect(container.querySelectorAll(".box-chip-caret-btn")).toHaveLength(1);
+    const caret = container.querySelector(".box-chip-caret-btn") as HTMLElement;
+    layOut(chip(container)!, { left: 12, right: 60, top: 0, bottom: 40 });
+
+    await act(async () => {
+      fireEvent.mouseEnter(caret);
+    });
+    const menu = document.querySelector(".box-chip-menu") as HTMLElement;
+    expect(menu).toBeTruthy();
+    expect(menu.style.left).toBe("12px");
+    expect(caret.getAttribute("aria-expanded")).toBe("true");
+    // Every box, shown or not.
+    expect(menu.querySelectorAll(".box-chip-menu-row")).toHaveLength(8);
+    cleanup();
+  });
+});
+
+describe("member pill swatches open their box", () => {
+  const dot = (container: HTMLElement, name: string) =>
+    findPill(container, name).querySelector(".project-pill-boxdot") as HTMLElement;
+
+  it("a click on a single-box member's swatch opens that box, and does not activate the project", async () => {
+    const openBox = vi.fn().mockImplementation(openBoxScope);
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], openBox });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+      setActive,
+    });
+    const container = await renderSwitcher();
+
+    await act(async () => {
+      fireEvent.click(dot(container, "p1"));
+    });
+    expect(openBox).toHaveBeenCalledWith("boxA");
+    expect(setActive).not.toHaveBeenCalled();
+    // The slice follows: the strip now shows the box's members only.
+    expect(useBoxSliceStore.getState().sliceBoxId).toBe("boxA");
+    expect(pillNames(container)).toEqual(["p1"]);
+  });
+
+  it("the press on the swatch does not start a pill drag", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], openBox: vi.fn() });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+    });
+    const container = await renderSwitcher();
+    const target = dot(container, "p1");
+    layOut(findPill(container, "p1"), { left: 0, right: 80, top: 0, bottom: 24 });
+    pointer("pointerdown", 40, 12, target);
+    pointer("pointermove", 120, 12, window);
+    expect(usePillDragStore.getState().drag).toBeNull();
+  });
+
+  it("a member of several boxes gets a list of them, and a pick opens that box", async () => {
+    const openBox = vi.fn().mockImplementation(openBoxScope);
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({
+      boxes: [box("boxA", ["p1"], 5), box("boxB", ["p1"], 6), box("boxC", ["p2"], 7)],
+      openBox,
+    });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p2", 20)],
+      activeId: null,
+      loaded: true,
+      setActive,
+    });
+    const container = await renderSwitcher();
+
+    await act(async () => {
+      fireEvent.click(dot(container, "p1"));
+    });
+    expect(openBox).not.toHaveBeenCalled();
+    const menu = document.querySelector(".project-pill-box-menu") as HTMLElement;
+    expect(menu).toBeTruthy();
+    // Only this project's boxes, each with its swatch in the box colour.
+    const rows = [...menu.querySelectorAll("button")];
+    expect(rows.map((b) => b.textContent)).toEqual(["boxA", "boxB"]);
+    expect(rows.every((b) => b.querySelector(".context-menu-box-swatch"))).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(rows[1]);
+    });
+    expect(openBox).toHaveBeenCalledWith("boxB");
+    expect(setActive).not.toHaveBeenCalled();
+    expect(document.querySelector(".project-pill-box-menu")).toBeNull();
+  });
+
+  it("the hit area is a padded button-role span, not the bare 10 px swatch", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const el = dot(container, "p1");
+    expect(el.getAttribute("role")).toBe("button");
+    expect(el.classList.contains("is-link")).toBe(true);
+    expect(el.getAttribute("title")).toContain("boxA");
+  });
+
+  it("the station badges number the sliced pills, inactive members included", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p3"])] });
+    useProjectsStore.setState({
+      projects: [
+        proj("p1", 10),
+        { ...proj("p2", 20) },
+        { ...proj("p3", 30), status: "inactive" },
+      ],
+      activeId: null,
+      loaded: true,
+    });
+    useBoxSliceStore.setState({ sliceBoxId: "boxA" });
+    const container = await renderSwitcher();
+    act(() => {
+      useKeyboardSteeringStore.getState().enter();
+      useKeyboardSteeringStore.getState().setLevel("projects");
+    });
+    const badge = (name: string) =>
+      findPill(container, name).querySelector(".steering-station-chip")?.textContent;
+    expect(pillNames(container)).toEqual(["p1", "p3"]);
+    expect(badge("p1")).toBe("2");
+    expect(badge("p3")).toBe("3");
+  });
+});
+
+describe("box pill menu — shared checklist, dissolve, rename check (AS5a)", () => {
+  async function openBoxMenu(container: HTMLElement): Promise<HTMLElement> {
+    await act(async () => {
+      fireEvent.contextMenu(boxPill(container)!);
+    });
+    return document.querySelector(".box-pill-menu") as HTMLElement;
+  }
+  const rowOf = (ctx: HTMLElement, id: string) => ctx.querySelector(`[data-member-id="${id}"]`) as HTMLElement;
+  const menuItem = (text: string) =>
+    [...document.querySelectorAll(".box-pill-menu button")].find((b) => b.textContent?.includes(text)) as HTMLElement;
+
+  beforeEach(() => {
+    useBoxEditorStore.setState({ open: false, boxId: null, renamingId: null });
+  });
+
+  it("lists closed projects with a closed label and adds or removes them like any other", async () => {
+    const addToBox = vi.fn().mockResolvedValue(undefined);
+    const removeFromBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", ["old"])], addToBox, removeFromBox });
+    useProjectsStore.setState({
+      projects: [
+        proj("p1", 10),
+        { ...proj("old", 20), status: "inactive" },
+        { ...proj("shelf", 30), status: "inactive" },
+      ],
+      activeId: null,
+      loaded: true,
+    });
+    const container = await renderSwitcher();
+    const ctx = await openBoxMenu(container);
+    // Members first (the closed member too), then the rest — closed ones among them.
+    expect([...ctx.querySelectorAll("[data-member-id]")].map((r) => r.getAttribute("data-member-id"))).toEqual([
+      "old",
+      "p1",
+      "shelf",
+    ]);
+    expect(rowOf(ctx, "old").textContent).toContain("closed");
+    expect(rowOf(ctx, "shelf").textContent).toContain("closed");
+    expect(rowOf(ctx, "p1").textContent).not.toContain("closed");
+
+    await act(async () => {
+      fireEvent.click(rowOf(ctx, "shelf"));
+    });
+    expect(addToBox).toHaveBeenCalledWith("shelf", "boxA");
+    await act(async () => {
+      fireEvent.click(rowOf(ctx, "old"));
+    });
+    expect(removeFromBox).toHaveBeenCalledWith("old", "boxA");
+    expect(document.querySelector(".box-pill-menu")).toBe(ctx);
+  });
+
+  it("never caps the rows, filters past 8 and keeps a ticked row where it is", async () => {
+    const projects = Array.from({ length: 15 }, (_, i) => proj(`proj${String(i).padStart(2, "0")}`, i));
+    useBoxesStore.setState({ boxes: [box("boxA", ["proj03"])] });
+    useProjectsStore.setState({ projects, activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const ctx = await openBoxMenu(container);
+    const ids = () => [...ctx.querySelectorAll("[data-member-id]")].map((r) => r.getAttribute("data-member-id"));
+    expect(ids()).toHaveLength(15);
+    expect(ids()[0]).toBe("proj03");
+    expect(ctx.querySelector(".box-member-list")).toBeTruthy();
+    expect(ctx.textContent).not.toContain("More projects under");
+
+    const before = ids();
+    await act(async () => {
+      useBoxesStore.setState({ boxes: [box("boxA", ["proj03", "proj07"])] });
+    });
+    expect(ids()).toEqual(before);
+
+    const filter = ctx.querySelector(".box-member-filter") as HTMLInputElement;
+    expect(filter).toBeTruthy();
+    fireEvent.change(filter, { target: { value: "proj1" } });
+    expect(ids()).toEqual(["proj10", "proj11", "proj12", "proj13", "proj14"]);
+  });
+
+  it("has no filter on a short list", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", [])] });
+    useProjectsStore.setState({ projects: [proj("p1", 1), proj("p2", 2)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const ctx = await openBoxMenu(container);
+    expect(ctx.querySelector(".box-member-filter")).toBeNull();
+  });
+
+  it("Dissolve box… asks, and from inside the box leaves it before deleting", async () => {
+    // `leaveBox` hands the scope back through `setActive` (the centre panel does
+    // the rest), so "left first" = the slice is clear and `setActive` already ran.
+    const setActive = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ setActive });
+    const seen: { slice: string | null; handedBack: number }[] = [];
+    const deleteBox = vi.fn(async () => {
+      seen.push({ slice: useBoxSliceStore.getState().sliceBoxId, handedBack: setActive.mock.calls.length });
+    });
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], deleteBox, openBox: vi.fn(openBoxScope) });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    expect(useTabsStore.getState().scope).toBe("box:boxA");
+
+    await openBoxMenu(container);
+    await act(async () => {
+      fireEvent.click(menuItem("Dissolve box…"));
+    });
+    expect(deleteBox).not.toHaveBeenCalled();
+    const question = await screen.findByRole("dialog", { name: "Dissolve box" });
+    await act(async () => {
+      fireEvent.click(within(question).getByRole("button", { name: "Dissolve box" }));
+    });
+    expect(deleteBox).toHaveBeenCalledWith("boxA");
+    // By the time the box is deleted the slice is gone and the scope was handed back.
+    expect(seen).toEqual([{ slice: null, handedBack: 1 }]);
+  });
+
+  it("a declined Dissolve changes nothing", async () => {
+    const deleteBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", [])], deleteBox });
+    const container = await renderSwitcher();
+    await openBoxMenu(container);
+    await act(async () => {
+      fireEvent.click(menuItem("Dissolve box…"));
+    });
+    const question = await screen.findByRole("dialog", { name: "Dissolve box" });
+    await act(async () => {
+      fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    });
+    expect(deleteBox).not.toHaveBeenCalled();
+  });
+
+  async function startRenameFromMenu(container: HTMLElement): Promise<HTMLInputElement> {
+    await openBoxMenu(container);
+    await act(async () => {
+      fireEvent.click(menuItem("Rename"));
+    });
+    return container.querySelector(".project-box-rename-input") as HTMLInputElement;
+  }
+
+  it("inline rename: a taken name keeps the field open with the reason on Enter", async () => {
+    const renameBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", []), box("boxB", [], 6)], renameBox });
+    const container = await renderSwitcher();
+    const input = await startRenameFromMenu(container);
+    expect(input.value).toBe("boxA");
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "BOXB" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    // Case-insensitive duplicate: refused, field still there, marked, reason on hover.
+    const still = container.querySelector(".project-box-rename-input") as HTMLInputElement;
+    expect(still).toBeTruthy();
+    expect(still.getAttribute("aria-invalid")).toBe("true");
+    expect(still.title).toBe("A box with that name already exists.");
+    expect(renameBox).not.toHaveBeenCalled();
+
+    // Typing clears the mark; a free name is written.
+    await act(async () => {
+      fireEvent.change(still, { target: { value: "Thesis" } });
+    });
+    expect(still.getAttribute("aria-invalid")).toBeNull();
+    await act(async () => {
+      fireEvent.keyDown(still, { key: "Enter" });
+    });
+    expect(renameBox).toHaveBeenCalledWith("boxA", "Thesis");
+    expect(container.querySelector(".project-box-rename-input")).toBeNull();
+  });
+
+  it("inline rename: an empty name on Enter is refused, Escape backs out", async () => {
+    const renameBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", [])], renameBox });
+    const container = await renderSwitcher();
+    const input = await startRenameFromMenu(container);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "   " } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect((container.querySelector(".project-box-rename-input") as HTMLElement).title).toBe("Give the box a name.");
+    await act(async () => {
+      fireEvent.keyDown(container.querySelector(".project-box-rename-input")!, { key: "Escape" });
+    });
+    expect(container.querySelector(".project-box-rename-input")).toBeNull();
+    expect(renameBox).not.toHaveBeenCalled();
+  });
+
+  it("inline rename: walking away with a taken name drops it and says why", async () => {
+    const renameBox = vi.fn().mockResolvedValue(undefined);
+    useProjectsStore.setState({ switchToast: null });
+    useBoxesStore.setState({ boxes: [box("boxA", []), box("boxB", [], 6)], renameBox });
+    const container = await renderSwitcher();
+    const input = await startRenameFromMenu(container);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "boxB" } });
+      fireEvent.blur(input);
+    });
+    expect(container.querySelector(".project-box-rename-input")).toBeNull();
+    expect(renameBox).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().switchToast).toBe("A box with that name already exists.");
+  });
+
+  it("the box list's New Box row asks for a name and enters the new box", async () => {
+    const created = box("boxNew", [], 1);
+    const createBoxQuick = vi.fn(async () => created);
+    const openBox = vi.fn(async () => {});
+    useBoxesStore.setState({ boxes: [box("boxA", [])], createBoxQuick, openBox });
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "New Box"));
+    });
+    expect(useBoxEditorStore.getState().open).toBe(false);
+    const field = (await screen.findByRole("textbox")) as HTMLInputElement;
+    expect(field.value).toBe("Box 1");
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(createBoxQuick).toHaveBeenCalledWith({ name: "Box 1", memberIds: [] });
+    expect(openBox).toHaveBeenCalledWith("boxNew");
+  });
+
+  it("Edit boxes… opens the box you are in, else the first, and never create mode", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", [], 1), box("boxB", [], 2)], openBox: vi.fn(openBoxScope) });
+    const container = await renderSwitcher();
+    let menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "Edit boxes"));
+    });
+    expect(useBoxEditorStore.getState()).toMatchObject({ open: true, boxId: "boxA" });
+
+    useBoxEditorStore.getState().close();
+    await act(async () => {
+      useBoxSliceStore.setState({ sliceBoxId: "boxB" });
+    });
+    menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "Edit boxes"));
+    });
+    expect(useBoxEditorStore.getState()).toMatchObject({ open: true, boxId: "boxB" });
+  });
+
+  it("with no box there is nothing to edit: the list has no Edit boxes… row", async () => {
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    expect(menuRow(menu, "Edit boxes")).toBeUndefined();
+    expect(menuRow(menu, "New Box")).toBeTruthy();
   });
 });

@@ -3,6 +3,7 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ageLabel } from "../terminal/fileLabels";
 import { lastPromptAt } from "../agentPrompts";
+import { turnDurationOf, type TurnDuration } from "../../../shared/turnDuration";
 
 /** The desktop tab strip's PLAN and GOAL pills (`TabAgentModeMarks`): the
  *  session's own status line reads plan mode, or a `/goal` is running. The
@@ -43,16 +44,15 @@ export function SubagentCount({ tab, onOpen }: { tab: Pick<TabRow, "agent_subage
  *  clock never enters it. Nothing where the end is unknown: an interrupted
  *  turn fires no finish. `end` is when the turn stopped, or the desktop's now
  *  while it runs. */
-export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents">): { ms: number; running: boolean; end: number } | undefined {
-  const start = tab.turn_started_at;
-  if (start === undefined) return undefined;
-  const working = tab.agent_status === "working" || (tab.agent_subagents ?? 0) > 0;
-  const running = working || tab.agent_status === "question";
-  const end = working
-    ? tab.working_at
-    : [tab.done_at, tab.working_at].find((at) => at !== undefined && at >= start);
-  if (end === undefined || end < start) return undefined;
-  return { ms: end - start, running, end };
+export function turnDuration(tab: Pick<TabRow, "agent_status" | "turn_started_at" | "working_at" | "done_at" | "agent_subagents">): TurnDuration | undefined {
+  // The reading is shared with the desktop cockpit (`shared/turnDuration`).
+  return turnDurationOf({
+    status: tab.agent_status,
+    turnStartedAt: tab.turn_started_at,
+    workingAt: tab.working_at,
+    doneAt: tab.done_at,
+    subagents: tab.agent_subagents,
+  });
 }
 
 /** When the tab's last turn ended, as its card says it ("finished 3 h ago"):

@@ -550,8 +550,18 @@
 
 .project-search-wrap {
   position: relative;
-  width: 150px;
+  width: 96px;
   flex-shrink: 0;
+  transition: width var(--transition);
+}
+
+/* Narrow at rest; widens only while the caret is in the field. */
+.project-search-wrap:focus-within {
+  width: 220px;
+}
+
+:root[data-software-paint] .project-search-wrap {
+  transition: none;
 }
 
 /* Rarely used (most projects stay active, so this box sits empty most of the
@@ -832,11 +842,12 @@
    themes can swap the fill under it; a background follows the radius, so the
    rail's ends curve with the corners.
 
-   To add a member: this list, the wash below, the two glass lists in themes.css
-   and the blur exemption in projects-tabs.css; strip its own background and
-   border, keep `border-top: 2px solid transparent` for the rail's room and a
-   radius token, and make sure it forms a stacking context (fixed, or absolute
-   WITH a z-index), or the `z-index: -1` wash paints behind its own background. */
+   To add a member: this list, the wash below and the blur exemption in
+   projects-tabs.css; strip its own background and border, keep `border-top:
+   2px solid transparent` for the rail's room (none for a rail-less member,
+   below) and a radius token, and make sure it forms a stacking context (fixed,
+   or absolute WITH a z-index), or the `z-index: -1` wash paints behind its own
+   background. The glass themes reach every member through --float-fill. */
 .project-dialog,
 .settings-dialog,
 .stats-dialog,
@@ -854,7 +865,7 @@
 .project-pill-popup,
 .project-switch-toast,
 .hint-bubble {
-  --surface-fill: var(--bg-elevated);
+  --surface-fill: var(--float-fill, var(--bg-elevated));
   --surface-rail: 2px;
   background:
     linear-gradient(var(--accent), var(--accent)) 0 0 / 100% var(--surface-rail) no-repeat border-box,
@@ -866,6 +877,16 @@
 .stats-dialog,
 .file-delete-dialog {
   --surface-rail: 3px;
+}
+
+/* Messages (hints, the terminal's notice cards, toasts) and hover cards carry
+   no rail: on a small card the 2px accent strip read as a fat violet top bar
+   (user, 2026-11-03). Fill and wash stay; at 0 the wash's inset is 0 too, and
+   their own rules hold no `border-top` for the rail's room. */
+.project-pill-popup,
+.project-switch-toast,
+.hint-bubble {
+  --surface-rail: 0px;
 }
 
 /* Accent wash as a `::before` overlay, NOT folded into `background` — the glass
@@ -909,7 +930,8 @@
    comes up because the pointer crossed something, over whatever the pane is
    painting, so it lands in one paint rather than fading a blurred shadow frame
    by frame. No fill: a transform left behind would re-anchor anything
-   `position: fixed` inside. base.css zeroes the durations under reduced motion. */
+   `position: fixed` inside. base.css zeroes the durations under reduced motion
+   and on the CPU paint path. */
 @keyframes surface-enter {
   from {
     opacity: 0;
@@ -1309,6 +1331,12 @@
 /* Only the page list scrolls: the search box above it stays pinned at the top of
    the rail (a scrolling nav carried it away with the list). */
 .settings-navigation-links { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* The app-painted thumb (lib/theme/customScrollbar.ts) sits on the container's
+   right edge, which was the buttons' right edge: it drew over every entry. Once
+   the list actually scrolls, reach into the rail's 10px side padding and keep
+   that strip as the gutter, so the thumb runs beside the divider and the
+   buttons stay as wide as the search box above them. */
+.settings-navigation-links[data-app-scrollbar] { margin-right: -10px; padding-right: 10px; }
 /* One topic group: a small-caps title (the section-header voice, one size
    down) over its entries. */
 .settings-navigation-group { display: flex; flex-direction: column; gap: 4px; }
@@ -1745,32 +1773,6 @@
   color: var(--text-muted);
   font-size: var(--text-md);
 }
-.skills-seg-btn {
-  padding: 5px 10px;
-  border: 1px solid var(--control-border);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font-size: var(--text-md);
-  cursor: var(--cur-pointer, pointer);
-}
-.skills-seg-btn + .skills-seg-btn {
-  border-left: none;
-}
-.skills-seg-btn:first-of-type {
-  border-radius: var(--radius) 0 0 var(--radius);
-}
-.skills-seg-btn:last-of-type {
-  border-radius: 0 var(--radius) var(--radius) 0;
-}
-.skills-seg-btn:hover {
-  color: var(--text-primary);
-}
-.skills-seg-btn.on {
-  background: color-mix(in srgb, var(--accent) 18%, var(--control-bg));
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 600;
-}
 .skills-install-note {
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -1920,39 +1922,11 @@
   gap: 2px;
   margin-left: auto;
 }
-.ollama-ghost-btn {
+/* The model rows' small actions are the shared `.btn-quiet`, at meta size. */
+.ollama-model-actions .btn-quiet {
   padding: 3px var(--space-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-secondary);
   font-size: var(--text-sm);
   line-height: 1.4;
-  white-space: nowrap;
-  cursor: var(--cur-pointer, pointer);
-  transition: background var(--transition), color var(--transition);
-}
-.ollama-ghost-btn:hover:not(:disabled) {
-  background: var(--control-hover-bg);
-  color: var(--text-primary);
-}
-.ollama-ghost-btn.danger {
-  color: var(--danger);
-}
-.ollama-ghost-btn.danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger) 12%, var(--control-bg));
-  color: var(--danger);
-}
-.ollama-ghost-btn.primary {
-  color: var(--success);
-  font-weight: 600;
-}
-.ollama-ghost-btn:disabled {
-  opacity: 0.5;
-  cursor: var(--cur-default, default);
-}
-.ollama-ghost-btn:focus-visible {
-  outline: 1px solid var(--focus-ring);
 }
 .ollama-model-autostart {
   display: flex;
@@ -2049,41 +2023,9 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
-.ollama-seg {
-  display: inline-flex;
-  flex-wrap: wrap;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-full);
-  background: var(--control-bg);
-  overflow: hidden;
-}
-.ollama-seg button {
-  padding: 3px 10px;
-  border: none;
-  border-left: 1px solid var(--control-border);
-  background: none;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  line-height: 1.5;
+/* The filter rows are the shared `.seg`; model families arrive lower-case. */
+.ollama-filter-group .seg > button {
   text-transform: capitalize;
-  cursor: var(--cur-pointer, pointer);
-  transition: background var(--transition), color var(--transition);
-}
-.ollama-seg button:first-child {
-  border-left: none;
-}
-.ollama-seg button:hover:not(.active) {
-  background: var(--control-hover-bg);
-  color: var(--text-primary);
-}
-.ollama-seg button.active {
-  background: color-mix(in srgb, var(--accent) 20%, var(--control-bg));
-  color: var(--accent);
-  font-weight: 600;
-}
-.ollama-seg button:focus-visible {
-  outline: 1px solid var(--focus-ring);
-  outline-offset: -2px;
 }
 .ollama-reg-error {
   display: flex;

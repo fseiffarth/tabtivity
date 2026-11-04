@@ -47,24 +47,25 @@
 /* ── Theme: fancy_dark (default) ─────────────────────────────────────── */
 :root,
 [data-theme="fancy_dark"] {
-  --bg-main: #101624;
-  --bg-panel: #16213a;
-  --bg-elevated: #1b2946;
-  --bg-header: linear-gradient(90deg, #101624 0%, #16213a 48%, #241735 100%);
-  /* The header tone as a SOLID, opaque color. --bg-header is a gradient in the
-     "fancy" themes, which makes it unusable wherever a color is required: a
+  --bg-main: #0b121e;
+  --bg-panel: #121927;
+  --bg-elevated: #192231;
+  --bg-header: #121927;
+  /* The header tone as a SOLID, opaque color. --bg-header was a gradient in the
+     "fancy" themes until 2026-11-04 and a Theme Customizer value still may be
+     one, which makes it unusable wherever a color is required: a
      `color-mix(… var(--bg-header))` is then an invalid value and the whole
      declaration drops, leaving the surface TRANSPARENT (a sticky table header
      the body then bleeds through). Any table header / sticky chrome reads this
      instead; every theme declares it as a plain color. */
-  --bg-header-solid: #16213a;
-  --border-color: rgba(94, 220, 255, 0.2);
-  --border-subtle: #22304a;
-  --text-primary: #f4f8ff;
-  --text-secondary: #d8e2f3;
+  --bg-header-solid: #121927;
+  --border-color: #3a4353;
+  --border-subtle: #272e3b;
+  --text-primary: #eef3fb;
+  --text-secondary: #c3cbd9;
   /* Muted still clears ~4.5:1 on every resting surface up to --bg-elevated —
      the light theme's "muted is a tone, not an excuse" rule, applied here. */
-  --text-muted: #8091a9;
+  --text-muted: #969fae;
   --accent: #36c5f0;
   /* Hover/press are DERIVED from --accent by default (see the derived-token
      family below): toward --text-primary, so the direction is right in both
@@ -75,7 +76,7 @@
   --accent-hover: color-mix(in srgb, var(--accent) 84%, var(--text-primary));
   --accent-active: color-mix(in srgb, var(--accent) 70%, var(--text-primary));
   --accent-secondary: #b388ff;
-  --info: #6cb6ff;
+  --info: #a79bff;
   /* ── Agent-status palette ────────────────────────────────────────────────
      THREE states — a tab (or a pill bar, or a hidden-subwindow chip) is either
      working, waiting on an answer, or finished-and-unread — read from TWO
@@ -157,20 +158,22 @@
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace,
     "SF Mono", Menlo, Consolas, monospace;
   /* Scrollbar colors. Defined ONCE on :root but referencing the theme's own
-     --accent / --bg-panel, which are re-declared per theme on this same <html>
-     element — so `var()`'s lazy resolution gives every theme a bluish (accent)
-     thumb on its own panel-colored track without per-theme scrollbar rules. Both
-     are SOLID on purpose: a `transparent` track makes some WebKitGTK builds fall
-     back to the native light GTK scrollbar (white trough + grey slider), and a
-     low-alpha thumb over that washes to grey — the bug this replaces. */
-  --scrollbar-thumb: var(--accent);
-  --scrollbar-thumb-hover: var(--accent-hover);
-  --control-bg: #18243b;
-  --control-hover-bg: #22304a;
-  --control-border: #293852;
+     --text-muted / --bg-panel, which are re-declared per theme on this same
+     <html> element — so `var()`'s lazy resolution gives every theme a neutral
+     thumb without per-theme scrollbar rules. It was the accent until
+     2026-11-04, which drew a full-height accent bar down every scrolled pane.
+     Both are SOLID on purpose (a mix of two solid tokens): a `transparent` track
+     makes some WebKitGTK builds fall back to the native light GTK scrollbar
+     (white trough + grey slider), and a low-alpha thumb over that washes to
+     grey — the bug this replaces. */
+  --scrollbar-thumb: color-mix(in srgb, var(--text-muted) 45%, var(--bg-panel));
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-muted) 80%, var(--bg-panel));
+  --control-bg: #151d2c;
+  --control-hover-bg: #1d2636;
+  --control-border: #3a4353;
   --success: #7ee787;
   --warning: #ffd166;
-  --danger: #ff5c8a;
+  --danger: #ff6b93;
   /* THE PROJECT NAME on a pill. The name is historical — it was a Helix
      signature apricot, and being declared only here it was inherited by every
      theme that did not think to override it, which put one reddish tint over
@@ -192,8 +195,8 @@
      --accent/--bg-elevated, so every theme gets it for free; only the
      achromatic pair and the glass themes redeclare it below.
      --glass-subheader is its translucent counterpart (see the glass section). */
-  --bg-subheader: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
-  --glass-subheader: color-mix(in srgb, var(--accent) 14%, var(--glass-panel));
+  --bg-subheader: var(--bg-elevated);
+  --glass-subheader: var(--glass-panel);
   /* THE SIDE PANEL, as its own three tokens. Each follows the shared token it
      would otherwise read, and none of them is a second name for it: --bg-panel
      is the app's whole secondary-surface tone (a hundred rules — settings
@@ -222,9 +225,9 @@
   --side-panel-border: var(--border-color);
   /* THE TOP FRAME — the app's own title bar (`.app-header`, shell.css), as
      three tokens instead of a look assembled from three shared ones. It is a
-     composite: a fill (a gradient in the fancy themes, a frosted layer in the
-     glass pair), a translucent accent wash laid over it, and the 1px seam that
-     separates the app's chrome from its content. None of that could be moved
+     composite: a fill (solid in every theme since 2026-11-04, the glass pair's
+     own token), a translucent accent wash laid over it (transparent by default
+     now), and the 1px seam that separates the app's chrome from its content. None of that could be moved
      before without moving the accent — and the accent paints half the window.
      A theme redeclares these only where its own header departs from the
      derivation: the achromatic pair and soft_dark drop the wash, the glass
@@ -233,8 +236,8 @@
      accent and deliberately do not follow this group: they are other surfaces
      that happen to start out matching the top bar, not the top bar. */
   --top-frame-bg: var(--bg-header);
-  --top-frame-wash: color-mix(in srgb, var(--accent) 32%, transparent);
-  --top-frame-seam: var(--accent);
+  --top-frame-wash: transparent;
+  --top-frame-seam: color-mix(in srgb, var(--accent) 40%, var(--bg-header-solid));
   --top-frame-text: var(--text-primary);
   --top-frame-text-secondary: var(--text-secondary);
   --top-frame-text-muted: var(--text-muted);
@@ -271,7 +274,7 @@
   --pill-active-bg: color-mix(in srgb, var(--accent) 16%, transparent);
   --pill-active-border: var(--accent);
   --pill-hover-bg: color-mix(in srgb, var(--accent) 12%, transparent);
-  --wm-close: #ff5c8a;
+  --wm-close: #ff6b93;
   --wm-minimize: #ffd166;
   --wm-maximize: #7ee787;
   --activity-0: rgba(255,255,255,0.05);
@@ -288,10 +291,11 @@
   /* Near-opaque: the tab bars and docked file column it fills carry no blur
      (performance plan §3.5), so the fill alone must keep what is behind them
      unreadable. */
-  --glass-panel: rgba(20, 30, 52, 0.9);
+  --glass-panel: rgba(18, 25, 39, 0.92);
   /* Opaque: menus and dialogs float over readable content with no blur. */
-  --glass-elevated: rgb(22, 32, 56);
-  --glass-header: linear-gradient(90deg, rgba(16, 22, 36, 0.55) 0%, rgba(22, 33, 58, 0.55) 48%, rgba(36, 23, 53, 0.55) 100%);
+  --glass-elevated: rgb(33, 42, 59);
+  --glass-header: #121927;
+  --float-fill: var(--bg-elevated);
 }
 
 /* ── The two achromatic themes: `dark` and `light` ─────────────────────────
@@ -505,32 +509,33 @@
 [data-theme="dark"],
 [data-theme="light"] {
   --top-frame-wash: transparent;
+  --top-frame-seam: var(--accent);
 }
 
 /* ── Theme: fancy_light ─────────────────────────────────────────────── */
 [data-theme="fancy_light"] {
-  --bg-main: #f7fbff;
-  --bg-panel: #e8f7ff;
+  --bg-main: #f7f9fc;
+  --bg-panel: #ebf1f7;
   --bg-elevated: #ffffff;
-  --bg-header: linear-gradient(90deg, #f7fbff 0%, #e8f7ff 48%, #f5ecff 100%);
-  --bg-header-solid: #e8f7ff;
+  --bg-header: #ebf1f7;
+  --bg-header-solid: #ebf1f7;
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
   --shadow-2: 0 4px 16px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.08);
   --shadow-3: 0 16px 48px rgba(16, 24, 40, 0.18), 0 4px 12px rgba(16, 24, 40, 0.1);
-  --border-color: rgba(9, 105, 218, 0.28);
-  --border-subtle: #d8e5f0;
-  --text-primary: #1f2937;
-  --text-secondary: #334155;
-  --text-muted: #5f6e84;
+  --border-color: #c1cad3;
+  --border-subtle: #dae0e7;
+  --text-primary: #1c2533;
+  --text-secondary: #3f4955;
+  --text-muted: #5b6470;
   --accent: #0969da;
   /* -hover/-active derive from --accent (base block) — toward the dark
      text-primary, i.e. they darken here, as the old literals did. */
   --accent-secondary: #14b8a6;
-  --info: #0ea5e9;
+  --info: #7a4fd0;
   --logo-color: #000;
   --control-bg: #ffffff;
   --control-hover-bg: #f6f8fa;
-  --control-border: #c9d7e5;
+  --control-border: #c1cad3;
   --success: #1a7f37;
   --warning: #9a6700;
   --danger: #d1242f;
@@ -538,7 +543,7 @@
      onto light paper. It was a brick red (#d6492f) — the one theme where the
      inherited apricot had been darkened for contrast rather than replaced, so
      the project strip read as a row of warnings against blue-tinted chrome. */
-  --helix-orange: #1f2937;
+  --helix-orange: var(--text-primary);
   --pill-bg: transparent;
   /* -active-bg/-active-border derive from --accent (base block); only the
      hover keeps its own hue — the teal secondary, not the blue accent. */
@@ -551,6 +556,8 @@
   --activity-2: #40c463;
   --activity-3: #30a14e;
   --activity-4: #216e39;
+  --bg-subheader: #e3e9f0;
+  --top-frame-seam: color-mix(in srgb, var(--accent) 35%, var(--bg-header-solid));
 }
 
 /* ── Theme: light_lavender ──────────────────────────────────────────── */
@@ -563,20 +570,20 @@
   --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
   --shadow-2: 0 4px 16px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.08);
   --shadow-3: 0 16px 48px rgba(16, 24, 40, 0.18), 0 4px 12px rgba(16, 24, 40, 0.1);
-  --border-color: #ddd6f0;
-  --border-subtle: #ebe7f6;
+  --border-color: #d2cae8;
+  --border-subtle: #e6e1f3;
   --text-primary: #2e2a3d;
-  --text-secondary: #5f5878;
-  --text-muted: #746d8f;
-  --accent: #7c5cdb;
+  --text-secondary: #565072;
+  --text-muted: #6b6486;
+  --accent: #6f4fd3;
   /* -hover/-active derive from --accent (base block) — they darken toward
      the near-black text-primary, matching the old hand-picked pair. */
   --accent-secondary: #9d6ecb;
-  --info: #6d7fd4;
+  --info: #1d7396;
   --logo-color: #000;
   --control-bg: #ffffff;
   --control-hover-bg: #f2effa;
-  --control-border: #ddd6f0;
+  --control-border: #d2cae8;
   --success: #2e7d5b;
   --warning: #9a6700;
   --danger: #d1242f;
@@ -584,12 +591,12 @@
      dark enough to hold on its near-white paper. It lived in apps.css as a
      hardcoded `.project-pill-label` override — the token underneath it still
      said brick red, so the customizer's knob for this label did nothing here. */
-  --helix-orange: #5d3eb8;
+  --helix-orange: var(--text-primary);
   --pill-bg: transparent;
   /* -active-bg derives from --accent (base block). The border stays a soft
      wash rather than the derived solid accent, and hover stays a neutral
      gray — this theme's pills are deliberately quieter than the accent. */
-  --pill-active-border: rgba(124, 92, 219, 0.28);
+  --pill-active-border: color-mix(in srgb, var(--accent) 28%, transparent);
   --pill-hover-bg: rgba(95, 88, 120, 0.08);
   --wm-close: #f85149;
   --wm-minimize: #e3b341;
@@ -604,6 +611,9 @@
   --glass-panel: rgba(242, 239, 250, 0.9);
   --glass-elevated: rgb(248, 246, 253);
   --glass-header: rgba(242, 239, 250, 0.5);
+  --bg-subheader: var(--bg-panel);
+  --glass-subheader: var(--glass-panel);
+  --top-frame-seam: var(--border-subtle);
 }
 
 /* ── Theme: soft_dark ─────────────────────────────────────────────────────
@@ -617,27 +627,34 @@
    exist precisely so a theme can flip the house square style from its own
    block, and this theme's whole point is the current mainstream look. */
 [data-theme="soft_dark"] {
-  --bg-main: #17181c;
-  --bg-panel: #1c1e24;
-  --bg-elevated: #24262e;
-  --bg-header: #1c1e24;
-  --bg-header-solid: #1c1e24;
-  --border-color: #2e3138;
-  --border-subtle: #26282e;
+  --bg-main: #121417;
+  --bg-panel: #1a1c1f;
+  --bg-elevated: #222428;
+  --bg-header: #1a1c1f;
+  --bg-header-solid: #1a1c1f;
+  --border-color: #404248;
+  --border-subtle: #2d2f33;
   --text-primary: #e8eaf0;
-  --text-secondary: #b9bec9;
-  --text-muted: #8b91a0;
+  --text-secondary: #c1c4cb;
+  --text-muted: #989ba3;
   --accent: #6c9bf0;
   --accent-secondary: #9d8cff;
-  --info: #7fb3f5;
+  --info: #b49cf6;
   /* The project name: this theme's own ink, declared rather than inherited.
      Omitting it was how the one theme built to have NO tint ended up with a
      salmon project strip — it fell through to the :root value, which is picked
      for navy chrome. Neutral here for the reason every surface above is. */
   --helix-orange: #e8eaf0;
-  --control-bg: #202329;
-  --control-hover-bg: #282b33;
-  --control-border: #363a43;
+  --control-bg: #1d1f23;
+  --control-hover-bg: #26292e;
+  --control-border: #404248;
+  --success: #7ccf8a;
+  --warning: #e8c06a;
+  --danger: #f07a8c;
+  --wm-close: #f07a8c;
+  --bg-subheader: var(--bg-elevated);
+  --top-frame-seam: var(--border-subtle);
+  --float-fill: #2a2d31;
 }
 
 /* No accent wash over soft_dark's header: a 32% blue band over neutral gray
@@ -695,7 +712,8 @@
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   /* The floating surfaces' enter and exit durations (popovers, hover cards,
      toasts; a dialog takes 4/3 of --motion-enter). base.css zeroes both,
-     --transition and --transition-slow under prefers-reduced-motion. */
+     --transition and --transition-slow under prefers-reduced-motion, and these
+     two on the CPU paint path (`[data-software-paint]`). */
   --motion-enter: 120ms;
   --motion-exit: 80ms;
   /* The keyboard focus ring (base.css). The accent, so the ink themes inherit
@@ -753,6 +771,9 @@
 [data-theme="fancy_dark"],
 [data-theme="light_lavender"] {
   --top-frame-bg: var(--glass-header);
+  /* Every floating surface (the recipe in apps.css) reads this one token, so
+     the glass fill reaches menus and dialogs without a per-class list. */
+  --float-fill: var(--glass-elevated);
 }
 
 [data-theme="fancy_dark"] .app-header,
@@ -794,54 +815,8 @@
    melt into the header bar behind them, showing its exact color. Only text (and
    the active pill's accent frame) distinguishes a pill from the bar. */
 
-[data-theme="fancy_dark"] .project-dialog,
-[data-theme="light_lavender"] .project-dialog,
-[data-theme="fancy_dark"] .settings-dialog,
-[data-theme="light_lavender"] .settings-dialog,
-[data-theme="fancy_dark"] .stats-dialog,
-[data-theme="light_lavender"] .stats-dialog,
-[data-theme="fancy_dark"] .file-delete-dialog,
-[data-theme="light_lavender"] .file-delete-dialog {
-  --surface-fill: var(--glass-elevated);
-  /* Glass fill only — no lit frame. The near-white hairline these surfaces used
-     to wear read as a stray outline rather than a lit edge, so the glass themes
-     now keep the shared --border-color edge and the accent top rail from the
-     base rule, and depth comes from the elevation shadow alone. */
-  box-shadow: var(--shadow-3);
-}
-
-/* Menus take the glass fill; like the dialogs above they carry no frame of
-   their own — only the elevation shadow and the accent rail from the shared
-   surface rule. */
-[data-theme="fancy_dark"] .project-pill-popup,
-[data-theme="light_lavender"] .project-pill-popup,
-[data-theme="fancy_dark"] .project-switch-toast,
-[data-theme="light_lavender"] .project-switch-toast,
-[data-theme="fancy_dark"] .hint-bubble,
-[data-theme="light_lavender"] .hint-bubble,
-[data-theme="fancy_dark"] .context-menu,
-[data-theme="light_lavender"] .context-menu,
-[data-theme="fancy_dark"] .tab-new-menu,
-[data-theme="light_lavender"] .tab-new-menu,
-[data-theme="fancy_dark"] .project-switcher-add-menu,
-[data-theme="light_lavender"] .project-switcher-add-menu,
-[data-theme="fancy_dark"] .box-chip-menu,
-[data-theme="light_lavender"] .box-chip-menu,
-[data-theme="fancy_dark"] .project-search-popover,
-[data-theme="light_lavender"] .project-search-popover,
-[data-theme="fancy_dark"] .file-run-args,
-[data-theme="light_lavender"] .file-run-args,
-[data-theme="fancy_dark"] .file-viewer-run-args,
-[data-theme="light_lavender"] .file-viewer-run-args,
-[data-theme="fancy_dark"] .git-change-tree,
-[data-theme="light_lavender"] .git-change-tree,
-[data-theme="fancy_dark"] .presentation-settings,
-[data-theme="light_lavender"] .presentation-settings,
-[data-theme="fancy_dark"] .cal-alarm-popup,
-[data-theme="light_lavender"] .cal-alarm-popup {
-  --surface-fill: var(--glass-elevated);
-  box-shadow: var(--shadow-2);
-}
+/* Menus and dialogs take the glass fill through --float-fill (the theme rule
+   above); their shadows are the recipe's own. */
 
 /* No ambient color wash behind the chrome (there were two faint radial
    gradients on .app-shell here). WebKitGTK paints in software with DMABUF off,

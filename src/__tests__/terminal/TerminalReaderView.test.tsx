@@ -553,6 +553,29 @@ describe("the Reader's subagents", () => {
     expect(cards.map((card) => !!card.querySelector(".tab-status-mark.done"))).toEqual([true, false, false]);
   });
 
+  it("opens the subagent Claude's terminal is viewing, and stays on the session otherwise", async () => {
+    const rule = "─".repeat(40);
+    const rows = [
+      `${"─".repeat(30)} Find the tests ─`,
+      "❯ Message @Explore…",
+      rule,
+      "  ◯ main",
+      "  ◯ Explore  Find the parser     3s · ↓ 1k tokens",
+      "  ● Explore  Reading the test folder     3s · ↓ 1k tokens",
+    ];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    const view = reader(host);
+    await screen.findByText("Tests sit beside the sources.");
+    expect(invoke).toHaveBeenCalledWith("agent_tab_transcript", expect.objectContaining({ subagent: "sa-2" }));
+    view.unmount();
+    // Back on the session in the terminal: the chat shows the session.
+    rows.splice(0, rows.length, rule, "❯ ", rule, "  ● main", "  ◯ Explore  Find the tests     3s · ↓ 1k tokens");
+    reader(host);
+    await screen.findByText("Both found.");
+    expect(screen.queryByText("Tests sit beside the sources.")).toBeNull();
+  });
+
   it("opens a subagent's own conversation and goes back up", async () => {
     reader(host);
     await openListed("Find the parser");
@@ -703,7 +726,7 @@ describe("the Reader's live rows", () => {
     expect((screen.getByRole("button", { name: /No, and tell Claude/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("walks the question's rows with ↑/↓ from the empty composer, Enter picking the focused one", async () => {
+  it("walks question buttons while the composer stays disabled", async () => {
     term = fakeTerminal([
       "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",
       "Do you want to make this edit to i18n.ts?",
@@ -714,15 +737,9 @@ describe("the Reader's live rows", () => {
     reader(host);
     await screen.findByRole("group", { name: "Waiting for your answer" });
     const box = screen.getByRole("textbox") as HTMLTextAreaElement;
-    // A typed draft keeps ↑/↓ for itself.
-    fireEvent.change(box, { target: { value: "x" } });
-    fireEvent.keyDown(box, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(box);
-    fireEvent.change(box, { target: { value: "" } });
-    // Empty: ↓ lands on the highlighted row, ↓ again on the next.
-    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(box.disabled).toBe(true);
     const first = screen.getByRole("button", { name: /^1\. ?Yes$|^1Yes$/ });
-    expect(document.activeElement).toBe(first);
+    first.focus();
     fireEvent.keyDown(first, { key: "ArrowDown" });
     const second = screen.getByRole("button", { name: /Yes, allow all edits/ });
     expect(document.activeElement).toBe(second);
@@ -733,7 +750,104 @@ describe("the Reader's live rows", () => {
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first, { key: "ArrowUp" });
+    expect(box.disabled).toBe(true);
+  });
+
+  it("preserves a draft while a question blocks input and requires an explicit send afterwards", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    sendSteeringPrompt.mockResolvedValue(undefined);
+    const rows = [
+      "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",
+      "Do you want to make this edit to i18n.ts?",
+      "❯ 1. Yes", "  2. Yes, allow all edits during this session", "  3. No, and tell Claude what to do differently",
+      "", "  esc to cancel",
+    ];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    setReaderDraft("p", "agent-1", "and add a test");
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(box.disabled).toBe(true);
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    // Typed into the pane, the words would answer (or cancel) the question.
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    expect(written).toEqual([]);
+    expect(box.value).toBe("and add a test");
+
+    // Still asking: nothing goes, however long it waits.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    // Answered: the question goes, and after a moment the prompt goes in.
+    await act(async () => { rows.splice(2, rows.length - 2, "⏺ Update(src/lib/i18n.ts)", "> ", "  ? for shortcuts"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+    // Not at once: a question with several steps redraws between them.
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(box.disabled).toBe(false);
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    expect(sendSteeringPrompt).toHaveBeenCalledTimes(1);
+    expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "and add a test");
+  });
+
+  it("takes the keyboard into a new tab's box once its CLI is up, not from a field the user moved to", async () => {
+    // Booting: no status row yet, so the box is disabled and ignores focus().
+    const rows: string[] = [];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    const view = reader(host);
+    await screen.findByText("fix the parser");
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(box.disabled).toBe(true);
+    expect(document.activeElement).not.toBe(box);
+    await act(async () => { rows.splice(0, 0, "> ", "  ? for shortcuts"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(box.disabled).toBe(false);
     expect(document.activeElement).toBe(box);
+
+    // A field elsewhere keeps the keyboard when the box unlocks again.
+    view.unmount();
+    unregisterTerminal("p:agent-1", term);
+    const other = document.createElement("input");
+    document.body.appendChild(other);
+    try {
+      rows.splice(0, rows.length);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      await screen.findByText("fix the parser");
+      other.focus();
+      await act(async () => { rows.splice(0, 0, "> ", "  ? for shortcuts"); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(host.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea")?.disabled).toBe(false);
+      expect(document.activeElement).toBe(other);
+    } finally {
+      other.remove();
+    }
+  });
+
+  it("sends nothing by itself once a waiting prompt was emptied by hand", async () => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
+    sendSteeringPrompt.mockResolvedValue(undefined);
+    const rows = [
+      "> fix the strings", "", "Do you want to make this edit to i18n.ts?",
+      "❯ 1. Yes", "  2. No, and tell Claude what to do differently", "", "  esc to cancel",
+    ];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "first" } });
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+    fireEvent.change(box, { target: { value: "" } });
+    fireEvent.change(box, { target: { value: "second thoughts" } });
+    await act(async () => { rows.splice(2, rows.length - 2, "> ", "  ? for shortcuts"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+    expect(box.value).toBe("second thoughts");
   });
 
   it("answers Claude's \"Type something.\" row with typed words, never with Enter on the empty row", async () => {

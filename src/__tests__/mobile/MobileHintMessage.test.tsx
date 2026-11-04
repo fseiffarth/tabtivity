@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { storageKey } from "../../lib/brand";
 import { HintMessage, HintQueue, resetTips } from "../../../mobile-web/src/components/HintMessage";
-import { readFlag, readHintReads, writeFlag, writeHintReads, writeTipShownAt } from "../../../mobile-web/src/prefs";
+import { readFlag, readHintReads, readHintShown, writeFlag, writeHintReads, writeHintShown, writeTipShownAt } from "../../../mobile-web/src/prefs";
 
 beforeEach(() => {
   localStorage.clear();
@@ -19,6 +20,56 @@ afterEach(() => {
 });
 
 describe("phone hint messages", () => {
+  it("points at a visible control, follows scrolling, and removes the pointer on dismissal", () => {
+    const rect = (top: number) => ({ top, bottom: top + 44, left: 20, right: 100, width: 80, height: 44, x: 20, y: top, toJSON: () => ({}) });
+    let targetTop = 300;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return rect(this.matches(".fab") ? targetTop : 100);
+    });
+    const { container } = render(<main className="screen"><HintMessage hint="agentHold" /><button className="fab">+</button></main>);
+    expect(container.querySelector(".phone-hint-ring")?.getAttribute("y")).toBe("297");
+    targetTop = -60;
+    fireEvent.scroll(window);
+    expect(container.querySelector(".phone-hint-pointer")).toBeNull();
+    targetTop = 400;
+    fireEvent.scroll(window);
+    expect(container.querySelector(".phone-hint-ring")?.getAttribute("y")).toBe("397");
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(container.querySelector(".phone-hint-pointer")).toBeNull();
+  });
+
+  it("points at the control its text names, not a sibling sharing its class", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const left = this.matches('[data-phone-hint="menu"]') ? 300 : 200;
+      const top = this.matches(".drawer-open") ? 10 : 100;
+      return { top, bottom: top + 44, left, right: left + 44, width: 44, height: 44, x: left, y: top, toJSON: () => ({}) };
+    });
+    const { container } = render(<main className="screen">
+      <header><button className="drawer-open">🔍</button><button className="drawer-open" data-phone-hint="menu">☰</button></header>
+      <HintMessage hint="projectFiles" />
+    </main>);
+    expect(container.querySelector(".phone-hint-ring")?.getAttribute("x")).toBe("297");
+  });
+
+  it("tapping the control the tip points at closes it like ×, a tap elsewhere does not", () => {
+    render(<main className="screen">
+      <HintMessage hint="agentHold" />
+      <button className="fab"><span>+</span></button>
+      <button className="other">x</button>
+    </main>);
+    fireEvent.click(screen.getByText("x"));
+    expect(screen.getByRole("complementary", { name: "Tip" })).toBeTruthy();
+    fireEvent.click(screen.getByText("+"));
+    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
+    expect(readHintReads()).toEqual({});
+  });
+
+  it("a gesture tip stays when its target is tapped", () => {
+    render(<main className="screen"><HintMessage hint="chatSwipe" /><div className="readable-output">chat</div></main>);
+    fireEvent.click(screen.getByText("chat"));
+    expect(screen.getByRole("complementary", { name: "Tip" })).toBeTruthy();
+  });
+
   it("closes for one visit and returns after the half hour", () => {
     const first = render(<HintMessage hint="agentHold" floating vars={{ agent: "Claude" }} />);
     expect(screen.getByRole("status").textContent).toBe("Tapping ＋ opens Claude; hold ＋ to start a different agent.");
@@ -108,28 +159,60 @@ describe("phone hint messages", () => {
     expect(screen.getByText(/Swipe right over the chat/)).toBeTruthy();
   });
 
-  it("shows one tip per half hour across screens; the open one comes back until closed", () => {
-    const chat = render(<HintQueue hints={["chatMenu"]} />);
+  it("a tip closed without reading gives way to the next one, and every tip gets its turn", () => {
+    const spot = ["sendHold", "chatMenu", "chatSwipe"] as const;
+    for (const expected of [/Hold the send button/, /Chat ▾/, /Swipe right over the chat/, /Hold the send button/]) {
+      render(<HintQueue hints={spot} />);
+      expect(screen.getByText(expected)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+      cleanup();
+      halfHourLater();
+    }
+  });
+
+  it("the turn survives a reload, and Reset tips starts the order over", () => {
+    writeHintShown({ sendHold: 1_000 });
+    render(<HintQueue hints={["sendHold", "chatMenu"]} />);
     expect(screen.getByText(/Chat ▾/)).toBeTruthy();
-    // Another screen's tip waits while this one holds the half hour.
-    const todo = render(<HintQueue hints={["todoDone"]} />);
-    expect(screen.getAllByRole("complementary", { name: "Tip" })).toHaveLength(1);
-    todo.unmount();
-    chat.unmount();
-    // Left open, it is back on its screen; closed, it waits like the others.
+    expect(readHintShown().chatMenu).toBeGreaterThan(1_000);
+    cleanup();
+    resetTips();
+    expect(readHintShown()).toEqual({});
+    render(<HintQueue hints={["sendHold", "chatMenu"]} />);
+    expect(screen.getByText(/Hold the send button/)).toBeTruthy();
+  });
+
+  it("the card on screen stays put when the turn it took moves it to the back", () => {
+    const spot = ["sendHold", "chatMenu"] as const;
+    const { rerender } = render(<HintQueue hints={spot} />);
+    expect(screen.getByText(/Hold the send button/)).toBeTruthy();
+    rerender(<HintQueue hints={spot} />);
+    expect(screen.getByText(/Hold the send button/)).toBeTruthy();
+  });
+
+  it("a stored time that is not a number reads as never shown", () => {
+    localStorage.setItem(storageKey("mobile.hintShown"), JSON.stringify({ sendHold: "soon", chatMenu: 7 }));
+    expect(readHintShown()).toEqual({ chatMenu: 7 });
+  });
+
+  it("unseen tips on another screen bypass the cooldown; repeats still wait", () => {
     render(<HintQueue hints={["chatMenu"]} />);
-    expect(screen.getByText(/Chat ▾/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
     cleanup();
-    render(<><HintQueue hints={["chatMenu"]} /><HintQueue hints={["todoDone"]} /></>);
+    render(<HintQueue hints={["statusModel"]} />);
+    expect(screen.getByRole("complementary", { name: "Tip" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    cleanup();
+    render(<HintQueue hints={["chatMenu"]} />);
     expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
     cleanup();
     halfHourLater();
-    render(<HintQueue hints={["todoDone"]} />);
-    expect(screen.getAllByRole("complementary", { name: "Tip" })).toHaveLength(1);
+    render(<HintQueue hints={["chatMenu"]} />);
+    expect(screen.getByRole("complementary", { name: "Tip" })).toBeTruthy();
   });
 
   it("the half hour holds across a reload, and a stored time ahead of the clock does not block", () => {
+    writeHintShown({ agentDefault: Date.now() - 60_000 });
     writeTipShownAt(Date.now() - 60_000);
     render(<HintMessage hint="agentDefault" />);
     expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();

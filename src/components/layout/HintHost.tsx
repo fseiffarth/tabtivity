@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectsStore } from "../../stores/projects";
+import { useBoxesStore } from "../../stores/boxes";
 import { useSettingsStore } from "../../stores/settings";
-import { hintDrawn, useHintsStore } from "../../stores/hints";
+import { hintDrawn, hintsShownAt, useHintsStore } from "../../stores/hints";
 import { useTabsStore } from "../../stores/tabs";
 import { useTourStore } from "../../stores/tour";
 import {
@@ -36,7 +37,8 @@ const GAP_MS = 12_000;
 // The feature catalogue (`FEATURE_HINTS`, ~100 tips) is paced much harder: a few
 // per sitting, far apart, each only while its control is on screen. Anchors
 // appear without any store change (a viewer opens, a pane is shown), so the
-// host also looks again on a slow tick.
+// host also looks again on a slow tick. A hint coming back for another turn is
+// paced the same, whichever tier it is (`isPacedHint`).
 const FEATURE_CAP = 3;
 const FEATURE_GAP_MS = 10 * 60_000;
 const TICK_MS = 5_000;
@@ -51,6 +53,9 @@ export function HintHost() {
   const t = useT();
   const projectCount = useProjectsStore((s) => s.projects.length);
   const activeId = useProjectsStore((s) => s.activeId);
+  // Boxes only count once their file has been read, or "no boxes yet" would
+  // hint at a user whose boxes simply have not arrived.
+  const boxCount = useBoxesStore((s) => (s.loaded ? s.boxes.length : undefined));
   const settingsLoaded = useSettingsStore((s) => s.loaded);
   const projectsLoaded = useProjectsStore((s) => s.loaded);
   const seenList = useSettingsStore((s) => s.settings?.hints_seen);
@@ -119,13 +124,14 @@ export function HintHost() {
     const seen = new Set<string>(Array.isArray(seenList) ? (seenList as string[]) : []);
     const ctx: HintCtx = {
       projectCount,
+      boxCount,
       activeId,
       codexHookNeedsTrust: hasCodexTab && codexHookNeedsTrust(codexHook),
     };
     const allowFeature = () =>
       useHintsStore.getState().featureShown < FEATURE_CAP &&
       Date.now() - useHintsStore.getState().lastClosedAt >= FEATURE_GAP_MS;
-    const opts = () => ({ anchorOnScreen, allowFeature: allowFeature(), drawn: hintDrawn });
+    const opts = () => ({ anchorOnScreen, allowFeature: allowFeature(), shownAt: hintsShownAt(), drawn: hintDrawn });
     const candidate = pickHint(ctx, seen, hintsEnabled, opts());
     if (!candidate) return;
     const earliest = Math.max(mountedAt.current + GRACE_MS, lastClosedAt + GAP_MS);
@@ -148,6 +154,7 @@ export function HintHost() {
     hintsEnabled,
     seenList,
     projectCount,
+    boxCount,
     activeId,
     hasCodexTab,
     codexHook,
@@ -197,9 +204,16 @@ export function HintHost() {
   useEffect(() => {
     if (!def?.anchor) return;
     const selector = def.anchor;
+    // Any match counts, not only the first visible one the bubble points at:
+    // a selector like `.tab-bar` hits every subwindow's copy of the control.
     const onClick = (e: MouseEvent) => {
-      const el = firstVisibleAnchor(selector);
-      if (el && e.target instanceof Node && el.contains(e.target)) markSeen(def.id);
+      let el: Element | null = null;
+      try {
+        el = e.target instanceof Element ? e.target.closest(selector) : null;
+      } catch {
+        return;
+      }
+      if (el) markSeen(def.id);
     };
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);

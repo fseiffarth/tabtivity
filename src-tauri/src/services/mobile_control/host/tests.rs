@@ -596,6 +596,41 @@ async fn the_git_overview_answers_projects_only_and_from_its_cache() {
     assert_eq!(json(&body)["error"], "not_a_project");
 }
 
+/// A box row names its members by the ids the list gives them, and only the
+/// members this phone may list itself: a member with Mobile off never
+/// crosses, not even as an id, and the box's own screen carries none.
+#[tokio::test]
+async fn a_box_row_lists_only_the_members_the_phone_may_see() {
+    let host = Fixture::with_box();
+    let cookie = host.pair_device(&signing_key(63)).await.0;
+    let box_row = |body: &str| {
+        json(body)["projects"].as_array().expect("rows").iter().find(|row| row["kind"] == "box").cloned().expect("box row")
+    };
+    let (status, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(box_row(&body)["members"], json!([]), "the member's own switch is off: {body}");
+
+    let path = host.state.config.state_dir.join("projects.json");
+    let mut projects: Value = serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+    projects[0][crate::brand::MOBILE_ACCESS_KEY] = json!(true);
+    projects[0]["status"] = json!("active");
+    std::fs::write(&path, serde_json::to_vec(&projects).expect("bytes")).expect("write");
+    catalog_stale(&host.state);
+
+    let (status, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let rows = json(&body)["projects"].as_array().expect("rows").clone();
+    let member = rows.iter().find(|row| row["kind"] == "project").expect("member row");
+    assert_eq!(box_row(&body)["members"], json!([member["id"]]), "{body}");
+    assert!(member.get("members").is_none(), "a project row has none: {body}");
+    assert!(!body.contains(RAW_PROJECT) && !body.contains(RAW_BOX), "{body}");
+
+    let box_id = box_row(&body)["id"].as_str().expect("box id").to_string();
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{box_id}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert!(json(&body)["project"].get("members").is_none(), "the detail sends none: {body}");
+}
+
 #[tokio::test]
 async fn mutating_routes_refuse_an_unauthenticated_request() {
     let host = Fixture::with_project();
@@ -1798,6 +1833,7 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         // Files drawer and uploads.
         ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
         ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),
+        ("GET", format!("/api/v1/projects/{p}/files/entry?name=a.txt"), Value::Null, &["files_unavailable"]),
         ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
         ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable", "files_off"]),
         ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable", "files_off"]),
@@ -2229,6 +2265,7 @@ async fn a_folder_less_project_is_no_project_to_any_folder_route() {
             ("GET", format!("/api/v1/projects/{p}/git"), Value::Null, &["not_a_project"]),
             ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),
+            ("GET", format!("/api/v1/projects/{p}/files/entry?name=a.txt"), Value::Null, &["files_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
             ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable"]),
             ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable"]),
@@ -4356,10 +4393,94 @@ async fn the_file_browser_is_off_by_default_and_reads_by_sealed_token_only() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{refused} answered: {body}");
         assert_eq!(json(&body)["error"], "file_not_found");
     }
+
+    // One row by its folder's token and its name, as the listing rows it and
+    // under the same token: a file, a folder at the root, nothing hidden,
+    // nothing gone, no path for a name.
+    let (status, _, body) = host.send(get_as(&format!("{base}/entry?dir={src}&name=main.rs"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(json(&body)["entry"], file, "the listing's row, token included");
+    let (status, _, body) = host.send(get_as(&format!("{base}/entry?name=src"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!((json(&body)["entry"]["kind"].as_str(), json(&body)["entry"]["token"].as_str()), (Some("dir"), Some(src.as_str())));
+    for (name, error) in [("gone.rs", "file_not_found"), (".env", "invalid_request"), ("src%2Fmain.rs", "invalid_request"), ("..", "invalid_request")] {
+        let (_, _, body) = host.send(get_as(&format!("{base}/entry?name={name}"), &cookie)).await;
+        assert_eq!(json(&body)["error"], error, "{name}: {body}");
+    }
+    let (_, _, body) = host.send(get_as(&format!("{base}/entry?dir=AAAA&name=main.rs"), &cookie)).await;
+    assert_eq!(json(&body)["error"], "file_not_found", "a forged folder token: {body}");
+    let (_, _, body) = host.send(get_as(&format!("{base}/entry?dir={src}"), &cookie)).await;
+    assert_eq!(json(&body)["error"], "invalid_request", "no name: {body}");
+
     let (status, _, _) = host.send(get_as(&base, "not-a-session")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, _, _) = host.send(get_as("/api/v1/projects/not-a-project/files", &cookie)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// This computer's files stream from the proven descriptor: a film past the
+/// drop boxes' 24 MiB cap answers whole, by one range (206) and by its
+/// validator (304), typed by its bytes; a range past its end is a 416.
+#[tokio::test]
+async fn a_local_film_streams_by_range_and_revalidates_by_its_etag() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(37)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    let base = format!("/api/v1/projects/{project_id}/files");
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+    )
+    .unwrap();
+    let size = outbox::MAX_OUTBOX_FILE + 4096;
+    {
+        use std::io::Write;
+        let mut film = std::fs::File::create(host.root.join("film.mp4")).unwrap();
+        film.write_all(b"\0\0\0\x18ftypisom\0\0\x02\0isomavc1").unwrap();
+        film.set_len(size).unwrap();
+    }
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    let entry = json(&body)["entries"].as_array().unwrap().iter().find(|e| e["name"] == "film.mp4").cloned().expect("film listed");
+    assert_eq!(entry["kind"], "video/mp4");
+    let raw = format!("{base}/raw?f={}", entry["token"].as_str().unwrap());
+
+    let (status, headers, body) = host.send(get_as(&raw, &cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.len() as u64, size, "the whole film, past the drop boxes' cap");
+    assert_eq!(headers[header::CONTENT_TYPE], "video/mp4");
+    assert_eq!(headers[header::ACCEPT_RANGES], "bytes");
+    assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
+    let etag = headers[header::ETAG].to_str().unwrap().to_string();
+
+    let ranged = |range: &str| {
+        let mut request = get_as(&raw, &cookie);
+        request.headers_mut().insert(header::RANGE, range.parse().unwrap());
+        request
+    };
+    let (status, headers, body) = host.send(ranged("bytes=4-11")).await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes 4-11/{size}").as_str());
+    assert_eq!(body, "ftypisom");
+    let (status, headers, _) = host.send(ranged(&format!("bytes={size}-"))).await;
+    assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes */{size}").as_str());
+
+    let mut again = get_as(&raw, &cookie);
+    again.headers_mut().insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+    let (status, _, body) = host.send(again).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+
+    // The file changed under the phone: its old validator no longer matches,
+    // and an If-Range naming it gets the whole, not a piece of the new one.
+    // `write`, not `append`: Windows refuses `set_len` on an append-only handle.
+    std::fs::OpenOptions::new().write(true).open(host.root.join("film.mp4")).unwrap().set_len(size + 1).unwrap();
+    let mut stale = ranged("bytes=0-3");
+    stale.headers_mut().insert(header::IF_RANGE, etag.parse().unwrap());
+    let (status, headers, _) = host.send(stale).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(headers[header::ETAG].to_str().unwrap(), etag);
 }
 
 #[tokio::test]
@@ -4572,7 +4693,7 @@ async fn the_remote_side_of_the_files_rides_the_desktops_master_or_says_host_off
     }
     // The refresher's socket is not there: offline, without `ssh -G` or a dial.
     let local_token = files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "a.txt").unwrap();
-    for uri in [format!("{base}?on=host"), format!("{base}/search?q=notes&on=host")] {
+    for uri in [format!("{base}?on=host"), format!("{base}/search?q=notes&on=host"), format!("{base}/entry?name=a.txt&on=host")] {
         let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
         assert_eq!((status, json(&body)["error"].clone()), (StatusCode::CONFLICT, json!("host_offline")), "{uri}: {body}");
     }
@@ -4773,7 +4894,7 @@ async fn annotate_appends_remarks_to_a_project_pdf_behind_its_own_switch() {
 /// a file past `MAX_CONTROL_MESSAGE` lands, one past `MAX_INBOX_FILE` is
 /// refused before the handler runs.
 #[tokio::test]
-async fn upload_here_takes_a_whole_file_up_to_the_inbox_limit() {
+async fn upload_here_streams_a_file_past_the_inbox_limit_and_refuses_past_its_own() {
     let host = Fixture::with_project();
     let cookie = host.pair_device(&signing_key(39)).await.0;
     let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
@@ -4795,9 +4916,90 @@ async fn upload_here_takes_a_whole_file_up_to_the_inbox_limit() {
     let (status, _, body) = host.send(upload("big.bin", vec![7; MAX_CONTROL_MESSAGE + 1])).await;
     assert_eq!(status, StatusCode::CREATED, "answered: {body}");
     assert_eq!(std::fs::metadata(host.root.join("big.bin")).unwrap().len(), (MAX_CONTROL_MESSAGE + 1) as u64);
-    let (status, ..) = host.send(upload("huge.bin", vec![7; inbox::MAX_INBOX_FILE + 1])).await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert!(!host.root.join("huge.bin").exists());
+    // Past the 24 MiB a whole body is held to, the body is staged on disk
+    // and lands whole.
+    let (status, _, body) = host.send(upload("huge.bin", vec![7; inbox::MAX_INBOX_FILE + 1])).await;
+    assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+    assert_eq!(std::fs::metadata(host.root.join("huge.bin")).unwrap().len(), (inbox::MAX_INBOX_FILE + 1) as u64);
+    // One that says it is past the cap is refused before a byte is staged.
+    let mut declared = upload("past.bin", vec![1]);
+    declared.headers_mut().insert(header::CONTENT_LENGTH, (uploads::MAX_UPLOAD_FILE + 1).to_string().parse().unwrap());
+    let (status, _, body) = host.send(declared).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "answered: {body}");
+    assert!(!host.root.join("past.bin").exists());
+    let (status, ..) = host.send(upload("empty.bin", Vec::new())).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Nothing is left in the staging folder, landed or refused.
+    let staging = host.state.config.state_dir.join("mobile-control").join("upload-staging");
+    assert_eq!(std::fs::read_dir(&staging).map(|dir| dir.count()).unwrap_or(0), 0);
+}
+
+/// **New folder** makes an empty folder in a folder that takes uploads, never
+/// over a name and never a dot one, and takes back only what it made while it
+/// is empty; **Download as zip** streams the folder's files.
+#[tokio::test]
+async fn new_folder_is_add_only_and_a_folder_downloads_as_a_zip() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(41)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(host.root.join("data")).unwrap();
+    std::fs::create_dir_all(host.root.join(".github")).unwrap();
+    std::fs::write(host.root.join("data").join("a.csv"), "x,y\n1,2\n").unwrap();
+    let request = |method: &str, uri: String| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::ORIGIN, ORIGIN)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .body(Body::empty())
+            .expect("request")
+    };
+    let base = format!("/api/v1/projects/{project_id}/files");
+    let (status, _, body) = host.send(request("POST", format!("{base}/folder?name=figures"))).await;
+    assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+    let made = json(&body)["entry"].clone();
+    assert_eq!((made["name"].as_str(), made["kind"].as_str()), (Some("figures"), Some("dir")));
+    assert!(host.root.join("figures").is_dir());
+    for name in ["figures", "data"] {
+        let (_, _, body) = host.send(request("POST", format!("{base}/folder?name={name}"))).await;
+        assert_eq!(json(&body)["error"], "already_exists", "{name}: {body}");
+    }
+    // A dot name is cleaned of its dot; inside a dot folder nothing is made.
+    let (_, _, listed) = host.send(get_as(&base, &cookie)).await;
+    let token_of = |name: &str| json(&listed)["entries"].as_array().unwrap().iter().find(|e| e["name"] == name).unwrap()["token"].as_str().unwrap().to_string();
+    let (_, _, body) = host.send(request("POST", format!("{base}/folder?name=x&dir={}", token_of(".github")))).await;
+    assert_eq!(json(&body)["error"], "upload_refused", "{body}");
+    assert!(!host.root.join(".github").join("x").exists());
+
+    // Undo: not a folder it did not make, not one with something in it.
+    let data = token_of("data");
+    let (status, ..) = host.send(request("DELETE", format!("{base}/folder?f={data}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(host.root.join("data").join("a.csv").exists());
+    let figures = made["token"].as_str().unwrap();
+    std::fs::write(host.root.join("figures").join("plot.png"), "x").unwrap();
+    let (status, ..) = host.send(request("DELETE", format!("{base}/folder?f={figures}"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    std::fs::remove_file(host.root.join("figures").join("plot.png")).unwrap();
+    let (status, ..) = host.send(request("DELETE", format!("{base}/folder?f={figures}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!host.root.join("figures").exists());
+
+    // The folder as a zip, by its token; the remote side has none.
+    let (_, _, body) = host.send(get_as(&format!("{base}/zip?dir={data}&check=1"), &cookie)).await;
+    assert_eq!(json(&body), json!({ "files": 1, "bytes": 8 }));
+    let (status, headers, _) = host.send(get_as(&format!("{base}/zip?dir={data}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/zip");
+    assert!(headers[header::CONTENT_DISPOSITION].to_str().unwrap().contains("data.zip"));
+    let (status, ..) = host.send(get_as(&format!("{base}/zip?dir={data}&on=host"), &cookie)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -5982,6 +6184,7 @@ async fn a_project_open_to_one_phone_is_an_unknown_id_to_the_other() {
             ("GET", format!("/api/v1/projects/{project}/files"), None),
             ("GET", format!("/api/v1/projects/{project}/files/raw?f={token}"), None),
             ("GET", format!("/api/v1/projects/{project}/files/search?q=paper"), None),
+            ("GET", format!("/api/v1/projects/{project}/files/entry?name=paper.pdf"), None),
             ("POST", format!("/api/v1/projects/{project}/files/upload?name=paper.pdf"), None),
             ("DELETE", format!("/api/v1/projects/{project}/files/upload?f={token}"), None),
             ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),

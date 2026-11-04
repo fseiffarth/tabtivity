@@ -3988,6 +3988,194 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 
+- [ ] **31cp — Phone / iPad file browsing: bugs and small items** (2026-11-03;
+  `docs/phone_files_browsing_plan.md`). Phase 3: the user picked L2–L7, L10, L12
+  (batches D–F); L1, L8, L9, L11 stay parked (L1 and L11 reverse decisions 4 and 2
+  of the files-library plan).
+  - [x] Batch A (phone): B1 Esc runs Back (keeps an open markup note), B2 no-preview
+    card, B3 refusal sentences, B4 library stays mounted under the viewer + scroll
+    kept, B6 Favorites order, B7 sheet focus. (2026-11-03, uncommitted; ⚠️ never
+    seen on a phone; `MobileFilesLibraryViewer.test.tsx`)
+    - [ ] 🖐️ iPad with a keyboard: open a PDF from the library, Mark up, type a note,
+      press Esc — the note is kept (as Done would) and the view closes; Esc over a
+      picture closes it; same from the Favorites page and a chat's Files list.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Scroll a long folder, open a file, close it: the list is where it was, no
+      slide-in, covers stay. Go into a folder and back with ‹: the parent is where it
+      was. A .docx/.zip opens to the "cannot show" card with Save; a picture or PDF
+      over 24 MB says it is too large.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ VoiceOver or a keyboard: an item's ⋯ menu takes the focus, Tab stays in
+      it, closing it returns to ⋯; the list behind is not reachable. A sheet opened
+      while typing in a search box keeps the keyboard up. Favorites groups do not
+      jump while project names load.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch B (backend + phone): B9 host read re-checked, S1 stable tokens, S2
+    one-file lookup route with re-list fallback. (2026-11-03, uncommitted; needs a
+    dev build — the route is backend; ⚠️ never seen on a phone)
+    - [ ] 🖐️ A favorite file and a recent open from the library and the Favorites
+      page; a PDF's Mark up → Reload picks up a changed file; a remote project's
+      host-side favorite opens too. Thumbnails of an unchanged folder do not redo.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch C (phone): B5 truncation note, S3 Refresh, S4 path bar, S5 wide-screen
+    sheets/tiles, S6 44 px targets + long-press, S7 search chips, S8
+    content-visibility, S9 collator language. (2026-11-03; needs a dev build —
+    the search chips are half backend; ⚠️ never seen on a phone)
+    - [ ] 🖐️ In a subfolder: the folder bar under the head, a tap goes up there.
+      ⋯ → Refresh shows a file an agent just wrote; so does closing a file or
+      coming back to the app. Long-press a tile or row: its menu, no text callout.
+      At the root, Recent files (n) shows recents with the keyboard down.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Search in a subfolder: Only in <folder> keeps hits inside it; Include
+      ignored files finds a PDF under build/ or out/. On an iPad: sheets centred,
+      bigger tiles in landscape; a long folder scrolls smoothly.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [ ] B8: check on an iPhone whether the edge swipe goes up two folders (Safari tab
+    and installed PWA) before changing anything.
+  - [x] Batch D (backend + phone): L12 a 20 s deadline on local files calls
+    (`deadline.rs`), L2 streamed raw route with one Range, ETag and 304
+    (`serve.rs`; ranges on the remote side and in the drop boxes too), L3 films,
+    sounds, HEIC/AVIF by their bytes and played in the viewer. (2026-11-04,
+    uncommitted; needs a dev build; ⚠️ never seen on a phone)
+    - [ ] 🖐️ From the files library on an iPhone and an Android phone: an mp4/mov
+      plays and seeks at once (also one over 24 MB, and one on a remote project's
+      host side); an mp3/m4a plays; a picture or PDF of 30 MB opens on this
+      computer's side; a HEIC shows on the iPhone and is a Save card on Android;
+      a film sent to the chat plays from the chat.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ A folder on a stalled network mount (e.g. an sshfs with the server gone)
+      answers "timed out" after about 20 s instead of spinning; other folders still open.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch E (phone, iPad): L4 split view (900 px+ landscape: the file beside the
+    folder), L5 keyboard (/ and Cmd-F search, arrows walk items, Cmd-↑/Backspace up,
+    focus and hover styles). (2026-11-04, uncommitted; ⚠️ never seen on an iPad)
+    - [ ] 🖐️ iPad in landscape: open a picture, a PDF and a text from the library — each
+      stands on the right with the folder still usable on the left; another tap swaps
+      it; Back/Esc closes it; Mark up goes full screen; turned upright the file is over
+      the folder again. With a keyboard: /, arrows (grid keeps the column), Enter,
+      Cmd-↑.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch F (backend + phone): L6 drop files from Files/Finder to upload, L7
+    Select files (Share together, ☆ Favorite), L10 New folder (+ Undo while empty),
+    Download as zip, uploads up to 1 GB (staged on disk). Mark up of several files
+    was not built. (2026-11-04, uncommitted; needs a dev build; ⚠️ never seen on a
+    phone)
+    - [ ] 🖐️ iPad: drag two files from the Files app onto a folder with Upload here —
+      outline, both land, Undo works. ⋯ → New folder… makes one; a taken name says so;
+      Undo takes it back. ⋯ → Download this folder as a zip saves a zip that opens;
+      a huge folder says it is too large. Select files → tick three → Share opens the
+      share sheet with all three; ☆ stars them. Upload a 100 MB video: it lands whole.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+- [ ] **31cq — Root off the phone's project list: logo door, per-phone opt-in** (2026-11-04;
+  ✅ code-complete, `the_root_scope_is_off_for_every_phone_until_the_list_names_it`,
+  `MobileHome`, `MobilePairedDeviceAccess`, `MobileRootPhonePicker` tests; ⚠️ never seen
+  on a phone). Needs a dev build (sidecar + PWA). `root_devices` is opt-in: a root switch
+  already on loses root on every phone until phones are ticked.
+  - [ ] 🖐️ Settings → Mobile → Root console on the phone (switch on): the row shows
+    No phones ▾; pick the phone. Its start page then has no root row, and the logo
+    top left opens the root console (back returns). A dot on the logo while root's
+    proposals wait at the desk.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ A second phone not ticked: no logo door, root unreachable (an old link answers
+    project not found). Pairing a new phone leaves it off root. Unticking the phone
+    closes its open root terminal within seconds.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Paired phone's panel in Settings → Mobile: Root console is listed with Disconnect
+    once ticked, and Add project ▾ offers it (greyed while the root switch is off).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [~] **31cm — Send now and Cancel and edit on Codex and OpenCode mini** (2026-11-02;
   ✅ code-complete, `MobileQueuePull.test.ts` and the walks run against the real
   Codex 0.166.0 and OpenCode 2.2.5 on a stub model; ⚠️ never seen in the app).

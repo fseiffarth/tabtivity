@@ -827,6 +827,11 @@ So root is a phone scope, behind a line drawn where the rights actually are:
   `ScopeKind::Root` from `paths::root_work_dir()` and `sessions/root/`. A
   hand-edited *project record* using the id `root` is still refused: it would
   borrow that session directory and walk past the gate below.
+- **Per phone, default none.** `tabtivity_mobile_host.root_devices` names the
+  phones that may open root (`mobile_access.md`); with the switch on and no
+  list no phone does, and one paired later starts off root. On the phone root is
+  no row of the project list: the logo at the top left of the start page opens
+  it (a dot while proposals wait).
 - **The device that drives the agent never approves its proposals.** Approve,
   reject, undo, the session grants and Settings are Tauri commands with no
   phone route. The phone's root row carries `pending_reviews`, a count.

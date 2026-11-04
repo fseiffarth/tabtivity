@@ -86,7 +86,7 @@ beforeEach(() => {
 });
 afterEach(() => cleanup());
 
-describe("box '+' menu — per-member entries (5a)", () => {
+describe("box '+' menu — per-member entries via Start in… (5a, AS3b)", () => {
   async function openMenu() {
     useTabsStore.getState().setScope("box:b1");
     useTabsStore
@@ -102,18 +102,25 @@ describe("box '+' menu — per-member entries (5a)", () => {
     });
     return container;
   }
-
-  it("offers Files/Shell rows per member and lands the shell at the member root", async () => {
-    await openMenu();
-    const items = [...document.querySelectorAll(".tab-new-menu button")];
-    const labels = items.map((el) => el.textContent ?? "");
-    expect(labels.some((l) => l.includes("Files — p1"))).toBe(true);
-    expect(labels.some((l) => l.includes("Shell — p1"))).toBe(true);
-    expect(labels.some((l) => l.includes("Files — p2"))).toBe(true);
-
-    const shellP2 = items.find((el) => el.textContent?.includes("Shell — p2"))!;
+  const labelOf = (el: Element) => el.querySelector(".tab-new-menu-dot")?.nextSibling?.textContent ?? "";
+  /** Open the ▾ "Start in…" list of the row called `row`, return its entries. */
+  async function flyout(row: string) {
+    const rowEl = [...document.querySelectorAll(".tab-new-menu-item")].find((el) => labelOf(el) === row)!;
     await act(async () => {
-      fireEvent.click(shellP2);
+      fireEvent.click(rowEl.parentElement!.querySelector(".tab-new-menu-split-caret")!);
+    });
+    return [...document.querySelectorAll<HTMLButtonElement>(".tab-new-menu-more .tab-new-menu-item")];
+  }
+
+  it("offers Files/Shell fly-out entries per member and lands the shell at the member root", async () => {
+    await openMenu();
+    expect((await flyout("Files")).map(labelOf)).toEqual(
+      expect.arrayContaining(["Files in p1", "Files in p2"]),
+    );
+    const shells = await flyout("Shell");
+    expect(shells.map(labelOf)).toEqual(expect.arrayContaining(["Shell in p1", "Shell in p2"]));
+    await act(async () => {
+      fireEvent.click(shells.find((el) => labelOf(el) === "Shell in p2")!);
     });
     const tabs = useTabsStore.getState().tabsByScope["box:b1"];
     const created = tabs[tabs.length - 1];
@@ -121,13 +128,11 @@ describe("box '+' menu — per-member entries (5a)", () => {
     expect(created.cwd).toBe("/p/p2");
   });
 
-  it("lands a member Files row as a projectfiles tab at the member root", async () => {
+  it("lands a member Files entry as a projectfiles tab at the member root", async () => {
     await openMenu();
-    const filesP1 = [...document.querySelectorAll(".tab-new-menu button")].find((el) =>
-      el.textContent?.includes("Files — p1"),
-    )!;
+    const files = await flyout("Files");
     await act(async () => {
-      fireEvent.click(filesP1);
+      fireEvent.click(files.find((el) => labelOf(el) === "Files in p1")!);
     });
     const tabs = useTabsStore.getState().tabsByScope["box:b1"];
     const created = tabs[tabs.length - 1];

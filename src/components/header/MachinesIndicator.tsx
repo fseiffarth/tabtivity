@@ -151,6 +151,22 @@ const UTIL_POLL_MS = 10_000;
  *  it. It also means a pointer merely crossing the header logs in nowhere. */
 const SWEEP_SETTLE_MS = 150;
 
+/** How long the pointer rests on the header button before the dropdown opens.
+ *  This list is the heaviest thing on the bar (every row, its lamps and
+ *  readings), so a pointer only crossing it on the way to another icon must not
+ *  mount it: with a fast sweep each crossing was a full mount and unmount, the
+ *  window stalled on it, and the close came late enough to read as a hang.
+ *  Focus still opens it at once. */
+const HOVER_INTENT_MS = 100;
+
+/** When each machine's utilization read last started (module level, like
+ *  `probeBrakes`, so the dropdown and the overlay share it). The poll's own
+ *  period is the floor: reopening the menu within `UTIL_POLL_MS` reuses the
+ *  bars it already has instead of logging into every Detailed machine again.
+ *  The slack keeps a tick that fires a little early from skipping a round. */
+const utilLastAt = new Map<string, number>();
+const UTIL_SLACK_MS = 1_000;
+
 /** The open-sweep's two brakes, one pair for both surfaces (the dropdown and
  *  the overlay). In flight: a second open while the first sweep is still
  *  running must not stack a second round trip per host (`stores/remote/hostBusy`'s
@@ -365,6 +381,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   };
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
+  const openTimer = useRef<number | undefined>(undefined);
   // While an import/export panel is up — or a native file dialog is open, which
   // takes the focus and the pointer away from the menu — it must NOT close under
   // the user mid-flow. A ref (read synchronously by the dismiss handlers) rather
@@ -433,15 +450,31 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
 
   const reveal = useCallback(() => {
     window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
     openMenu(MENU_ID);
   }, [openMenu]);
+  /** The pointer's way in (`HOVER_INTENT_MS`). Back in while the list is still
+   *  up (inside the close grace) it simply stays up. */
+  const revealOnRest = useCallback(() => {
+    window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
+    if (useHeaderHoverMenuStore.getState().openId === MENU_ID) return;
+    openTimer.current = window.setTimeout(() => openMenu(MENU_ID), HOVER_INTENT_MS);
+  }, [openMenu]);
   const scheduleClose = useCallback((e?: { clientY: number }) => {
+    window.clearTimeout(openTimer.current);
     window.clearTimeout(closeTimer.current);
     if (keepOpenRef.current || reorderDragRef.current) return;
     closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), headerMenuCloseDelay(e));
   }, [closeMenu]);
 
-  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(closeTimer.current);
+      window.clearTimeout(openTimer.current);
+    },
+    [],
+  );
 
   /** Where the dragged row would land, from the pointer's Y: the number of OTHER
    *  rows whose midpoint the cursor has passed — i.e. an index into the list
@@ -602,7 +635,9 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     setIoMode("idle");
     setIoBusy(false);
     setIoError("");
-    setImportEntries([]);
+    // Same-value writes bail out; a fresh `[]` would not, and this runs on
+    // every close of the hover menu.
+    setImportEntries((prev) => (prev.length ? [] : prev));
     setImportUser("");
     setImportPassword("");
     setImportSave(false);
@@ -765,9 +800,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     const gm = useGlobalMachinesStore.getState();
     const s = useSettingsStore.getState().settings;
     const recheck = useRemoteUsageStore.getState().recheck;
+    const now = Date.now();
     for (const m of gm.machines) {
       if ((gm.status[m.id] ?? "off") !== "connected") continue;
       if (!showsUtilization(s, m) || !mayAutoTouch(s, targetOfSpec(m))) continue;
+      if (now - (utilLastAt.get(m.id) ?? 0) < UTIL_POLL_MS - UTIL_SLACK_MS) continue;
+      utilLastAt.set(m.id, now);
       void recheck(
         { kind: "machine", key: machineKey(m.id), label: m.label || m.host, user: m.user, host: m.host, port: m.port },
         { background: true },
@@ -1682,7 +1720,10 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
 
   // The list itself, shared by both surfaces: the dropdown scrolls it under
   // its pinned title, the overlay lays it out as a page of tiles.
-  const body = (
+  // Built only where it is placed (the open dropdown, the overlay): a closed
+  // header button re-renders on every probe answer, lamp and reading, and must
+  // not build every row each time.
+  const renderBody = () => (
     <>
           {ioMode === "export" ? (
             <div className="vpn-indicator-row menu-form machines-io-panel">
@@ -2615,13 +2656,13 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     </>
   );
 
-  if (isOverlay) return <MachinesOverlayFrame>{body}</MachinesOverlayFrame>;
+  if (isOverlay) return <MachinesOverlayFrame>{renderBody()}</MachinesOverlayFrame>;
 
   return (
     <div
       ref={anchorRef}
       className="global-apps-menu header-status-menu-anchor no-drag"
-      onMouseEnter={reveal}
+      onMouseEnter={revealOnRest}
       onMouseLeave={scheduleClose}
     >
       <button
@@ -2688,7 +2729,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             </button>
           </div>
           <div className="menu-scroll-region">
-            {body}
+            {renderBody()}
           </div>
         </div>
       )}

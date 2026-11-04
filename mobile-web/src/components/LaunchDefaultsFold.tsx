@@ -16,7 +16,7 @@ const REFUSALS: Partial<Record<string, TranslationKey>> = {
  * start on (`GET`/`PUT /tabs/{id}/launch-defaults`). Nothing shows for a tab
  * the host has none for, or a CLI with no verified startup choice.
  */
-export function LaunchDefaultsFold({ tabId }: { tabId: string }) {
+export function LaunchDefaultsFold({ tabId, modelNames = [] }: { tabId: string; modelNames?: string[] }) {
   const t = useT();
   const [loaded, setLoaded] = useState<LaunchDefaults | null>(null);
   const [model, setModel] = useState("");
@@ -36,7 +36,8 @@ export function LaunchDefaultsFold({ tabId }: { tabId: string }) {
   const cap = loaded?.capabilities;
   if (!loaded || !cap || (!cap.model && cap.efforts.length === 0)) return null;
   const { saved } = loaded;
-  const known = loaded.cli ? agentModelsFor(loaded.cli, loaded.models ? { [agentComposerKey(loaded.cli)]: loaded.models } : undefined) : [];
+  const configured = loaded.cli ? agentModelsFor(loaded.cli, loaded.models ? { [agentComposerKey(loaded.cli)]: loaded.models } : undefined) : [];
+  const known = [...new Set([...configured, ...modelNames, ...(model ? [model] : [])])];
   const changed = model.trim() !== saved.model || effort !== saved.effort;
   const save = async (next: { model: string; effort: string }) => {
     setSaving(true);
@@ -57,19 +58,34 @@ export function LaunchDefaultsFold({ tabId }: { tabId: string }) {
   return <details className="new-tab-held launch-defaults">
     <summary>{t("terminal.reader.defaultsTitle", { value })}{isUntested("mobile.model.launchDefaults") && <span className="untested">{t("mobile.focus.untested")}</span>}</summary>
     <p className="sheet-note">{t("terminal.reader.defaultsNote")}</p>
-    {cap.model && <label>{t("agents.defaultModel")}<input value={model} maxLength={256} placeholder={t("agents.defaultsCli")} spellCheck={false} autoCapitalize="none" autoCorrect="off" disabled={saving} onChange={(event) => setModel(event.target.value)} /></label>}
-    {cap.model && known.length > 0 && <select aria-label={t("agents.defaultsKnownModels")} value={known.includes(model) ? model : ""} disabled={saving} onChange={(event) => setModel(event.target.value)}>
-      <option value="" disabled>{t("agents.defaultsKnownModels")}</option>
-      {known.map((name) => <option key={name} value={name}>{name}</option>)}
-    </select>}
-    {cap.efforts.length > 0 && <label>{t("agents.defaultEffort")}<select value={effort} disabled={saving} onChange={(event) => setEffort(event.target.value)}>
-      <option value="">{t("agents.defaultsCli")}</option>
-      {cap.efforts.map((level) => <option key={level} value={level}>{level}</option>)}
-    </select></label>}
+    <div className="launch-defaults-fields">
+      {cap.model && <DefaultsDropdown label={t("agents.defaultModel")} value={model} values={known} disabled={saving} onChange={setModel} custom />}
+      {cap.efforts.length > 0 && <DefaultsDropdown label={t("agents.defaultEffort")} value={effort} values={cap.efforts} disabled={saving} onChange={setEffort} />}
+    </div>
     <div className="launch-defaults-actions">
       <button className="primary" disabled={saving || !changed} onClick={() => void save({ model, effort })}>{t("agents.defaultsSave")}</button>
       <button disabled={saving || (!saved.model && !saved.effort && !model && !effort)} onClick={() => void save({ model: "", effort: "" })}>{t("agents.defaultsReset")}</button>
     </div>
     {error && <p className="sheet-note error" role="alert">{error}</p>}
   </details>;
+}
+
+/** In-sheet choices inherit the phone theme rather than opening an OS picker. */
+function DefaultsDropdown({ label, value, values, disabled, onChange, custom }: {
+  label: string; value: string; values: string[]; disabled: boolean; custom?: boolean; onChange: (value: string) => void;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return <div className="launch-defaults-field">
+    <span>{label}</span>
+    <button className="launch-defaults-trigger" aria-label={label} aria-expanded={open} disabled={disabled} onClick={() => setOpen(!open)}>
+      <span>{value || t("agents.defaultsCli")}</span><span className="view-caret" aria-hidden="true" />
+    </button>
+    {open && custom && <input aria-label={label} value={value} maxLength={256} placeholder={t("agents.defaultsCli")} spellCheck={false} autoCapitalize="none" autoCorrect="off" disabled={disabled} onChange={(event) => onChange(event.target.value)} />}
+    {open && <ul className="option-list launch-defaults-options" aria-label={label}>
+      {["", ...values].map((entry) => <li key={entry}><button className={entry === value ? "current" : ""} aria-current={entry === value || undefined} disabled={disabled} onClick={() => { onChange(entry); setOpen(false); }}>
+        <span>{entry || t("agents.defaultsCli")}</span>
+      </button></li>)}
+    </ul>}
+  </div>;
 }

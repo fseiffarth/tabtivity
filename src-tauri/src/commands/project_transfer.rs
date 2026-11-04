@@ -87,6 +87,8 @@ use crate::tauri_host::Ctx;
 use crate::schema::project::RemoteSpec;
 use crate::services::ssh_exec::shell_quote;
 
+pub mod set;
+
 use super::projects::{
     conflict_message, entry_directory, entry_is_remote, entry_mirror, entry_remote_spec,
     find_project_conflict,
@@ -440,6 +442,10 @@ pub struct ExportProgress {
 #[serde(rename_all = "camelCase")]
 pub struct BundleInfo {
     pub path: String,
+    /// The member inside a project set this describes; `None` for a bundle
+    /// file of its own. Passed back as [`ImportBundleRequest::member`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
     pub format: u32,
     pub app_version: String,
     pub exported_at: String,
@@ -475,6 +481,10 @@ pub struct BundleInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ImportBundleRequest {
     pub bundle_path: String,
+    /// One project inside a project set ([`BundleInfo::member`]); absent for
+    /// a bundle file of its own.
+    #[serde(default)]
+    pub member: Option<String>,
     /// Rename on the way in. Empty/absent keeps the bundle's name.
     #[serde(default)]
     pub name: Option<String>,
@@ -616,7 +626,7 @@ fn mode_of(meta: &fs::Metadata) -> u32 {
 fn walk_tree(
     root: &Path,
     filter: &WalkFilter,
-    exclude: Option<&Path>,
+    exclude: &[PathBuf],
     visit: &mut impl FnMut(&str, Class, TreeItem) -> Result<(), String>,
 ) -> Result<(), String> {
     walk_in(root, "", Class::Plain, filter, exclude, 0, visit)
@@ -627,7 +637,7 @@ fn walk_in(
     rel_prefix: &str,
     class: Class,
     filter: &WalkFilter,
-    exclude: Option<&Path>,
+    exclude: &[PathBuf],
     depth: usize,
     visit: &mut impl FnMut(&str, Class, TreeItem) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -654,7 +664,7 @@ fn walk_in(
     for (os_name, file_type) in &names {
         let name = os_name.to_string_lossy().to_string();
         let path = dir.join(os_name);
-        if exclude.is_some_and(|ex| ex == path) {
+        if exclude.contains(&path) {
             continue;
         }
         let rel = if rel_prefix.is_empty() {
@@ -851,7 +861,7 @@ fn tally(root: &Path) -> Result<SizeTally, String> {
     if !root.is_dir() {
         return Ok(out);
     }
-    walk_tree(root, &WalkFilter::all(), None, &mut |rel, class, item| {
+    walk_tree(root, &WalkFilter::all(), &[], &mut |rel, class, item| {
         match item {
             // The walk is depth-first, so the folder a rebuildable file is
             // under is always the last one opened. Only the outermost of a
@@ -1387,6 +1397,17 @@ pub fn export_project_blocking(
     req: ExportProjectRequest,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<ExportReport, String> {
+    export_project_excluding(req, &[], progress)
+}
+
+/// [`export_project_blocking`], also leaving out `exclude` (absolute paths)
+/// wherever the walk meets them: a project set's own half-written files,
+/// which sit in a project's tree when the set is saved inside one.
+pub(crate) fn export_project_excluding(
+    req: ExportProjectRequest,
+    exclude: &[PathBuf],
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<ExportReport, String> {
     validate_project_id(&req.project_id)?;
     let entry = crate::services::remote::project_entry(&req.project_id)?;
 
@@ -1418,7 +1439,8 @@ pub fn export_project_blocking(
     // race its own output. The walker also skips this exact path, so an export
     // into the project folder still works — this only rejects the nonsense case
     // of overwriting a file the bundle is supposed to contain.
-    let dest_abs = absolutize(&dest);
+    let mut excludes = vec![absolutize(&dest)];
+    excludes.extend(exclude.iter().cloned());
 
     let filter = WalkFilter {
         git: req.include_git,
@@ -1479,7 +1501,7 @@ pub fn export_project_blocking(
                 .count() as u64;
             continue;
         }
-        walk_tree(root, &filter, Some(&dest_abs), &mut |_rel, _class, item| {
+        walk_tree(root, &filter, &excludes, &mut |_rel, _class, item| {
             if matches!(item, TreeItem::File { .. }) {
                 total += 1;
             }
@@ -1564,6 +1586,10 @@ pub fn export_project_blocking(
         .unwrap_or_else(|| PathBuf::from("."));
     let mut staged = tempfile::NamedTempFile::new_in(&stage_parent)
         .map_err(|e| format!("stage bundle in {}: {e}", stage_parent.display()))?;
+    // Staged inside the tree when the bundle is saved into the project: the
+    // walk would otherwise read the file it is writing, which grows as fast
+    // as it is read.
+    excludes.push(absolutize(staged.path()));
 
     let mut written_files: u64 = 0;
     let mut written_bytes: u64 = 0;
@@ -1603,7 +1629,7 @@ pub fn export_project_blocking(
             // runs through it would make the extractor follow it out of the
             // destination. Collected here, written after the loop.
             let mut links: Vec<(String, PathBuf)> = Vec::new();
-            walk_tree(root, &filter, Some(&dest_abs), &mut |rel, _class, item| {
+            walk_tree(root, &filter, &excludes, &mut |rel, _class, item| {
                 let name = format!("{section}/{rel}");
                 match item {
                     TreeItem::Dir => zip
@@ -1956,13 +1982,55 @@ pub async fn export_project(
     .await
 }
 
+/// Write several projects into one project-set file ([`set`]). Here rather
+/// than in `set.rs`: the dispatcher's wrappers are generated from the
+/// top-level command files only.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn export_project_set(
+    ctx: Ctx,
+    req: set::ExportSetRequest,
+) -> Result<set::ExportSetReport, String> {
+    app_core::rt::try_blocking("export", move || {
+        let count = req.project_ids.len();
+        let emit = |index: usize, id: &str, phase: &str, done: u64, total: u64| {
+            ctx.emit(
+                set::SET_PROGRESS_EVENT,
+                set::ExportSetProgress {
+                    index,
+                    count,
+                    project_id: id.to_string(),
+                    phase: phase.to_string(),
+                    done,
+                    total,
+                },
+            );
+        };
+        let result = set::export_project_set_blocking(req, &mut |index, id, done, total| {
+            emit(index, id, "file", done, total)
+        });
+        emit(0, "", "done", 0, 0);
+        result
+    })
+    .await
+}
+
 // ── Import ────────────────────────────────────────────────────────────────
 
-type Bundle = zip::ZipArchive<fs::File>;
+type Bundle = zip::ZipArchive<set::FileWindow>;
 
+#[cfg(test)]
 fn open_bundle(path: &str) -> Result<(Bundle, ExportManifest), String> {
-    let file = fs::File::open(path).map_err(|e| format!("open {path}: {e}"))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("read {path}: {e}"))?;
+    open_bundle_member(path, None)
+}
+
+/// A bundle file, or — `member` set — one project stored inside a project
+/// set ([`set`]), read in place.
+fn open_bundle_member(path: &str, member: Option<&str>) -> Result<(Bundle, ExportManifest), String> {
+    let window = match member {
+        None => set::FileWindow::whole(path)?,
+        Some(member) => set::member_window(path, member)?,
+    };
+    let mut zip = zip::ZipArchive::new(window).map_err(|e| format!("read {path}: {e}"))?;
     // A bundle an older build wrote carries its manifest under the app's old
     // name; such bundles stay importable.
     let manifest_name = crate::services::brand_migration::compat::export_manifest_name(&crate::brand::PAIR, |name| {
@@ -1992,8 +2060,17 @@ pub async fn inspect_project_export(bundle_path: String) -> Result<BundleInfo, S
 }
 
 pub fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo, String> {
-    let (_zip, manifest) = open_bundle(&bundle_path)?;
-    let list = read_projects_list()?;
+    inspect_bundle(bundle_path, None, &read_projects_list()?)
+}
+
+/// [`inspect_project_export_blocking`] for a bundle file or one member of a
+/// project set, against an already-read registry.
+fn inspect_bundle(
+    bundle_path: String,
+    member: Option<String>,
+    list: &crate::schema::projects::ProjectsList,
+) -> Result<BundleInfo, String> {
+    let (_zip, manifest) = open_bundle_member(&bundle_path, member.as_deref())?;
     let id_in_use = list.iter().any(|p| p.id == manifest.entry.id);
 
     // Only a remote bundle carries a site that exists independently of where the
@@ -2005,7 +2082,7 @@ pub fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo
         .extra
         .get("remote")
         .and_then(|v| serde_json::from_value::<crate::schema::project::RemoteSpec>(v.clone()).ok())
-        .and_then(|spec| find_project_conflict(&list, &ProjectSite::Remote { spec: &spec }, None))
+        .and_then(|spec| find_project_conflict(list, &ProjectSite::Remote { spec: &spec }, None))
         .map(|conflict| conflict.name);
 
     let tabs = manifest
@@ -2031,6 +2108,7 @@ pub fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo
 
     Ok(BundleInfo {
         path: bundle_path,
+        member,
         format: manifest.format,
         app_version: manifest.app_version,
         exported_at: manifest.exported_at,
@@ -2060,6 +2138,13 @@ pub fn inspect_project_export_blocking(bundle_path: String) -> Result<BundleInfo
         site_conflict,
         suggested_parent: suggested_parent.to_string_lossy().to_string(),
     })
+}
+
+/// Read a picked file — one project's bundle or a project set — for the
+/// import dialog, unpacking nothing.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn inspect_project_bundle(bundle_path: String) -> Result<set::InspectedBundle, String> {
+    app_core::rt::try_blocking("import", move || set::inspect_project_bundle_blocking(bundle_path)).await
 }
 
 /// A free `<parent>/<leaf>`, suffixing `-2`, `-3`, … rather than merging into a
@@ -2278,7 +2363,7 @@ fn import_agent_history(
 pub fn import_project_export_blocking(
     req: ImportBundleRequest,
 ) -> Result<ImportBundleResult, String> {
-    let (mut zip, manifest) = open_bundle(&req.bundle_path)?;
+    let (mut zip, manifest) = open_bundle_member(&req.bundle_path, req.member.as_deref())?;
     // Validate the registry before a single byte is unpacked: a corrupt
     // projects.json must fail closed rather than leave an orphan tree on disk.
     let list = read_projects_list()?;
@@ -2743,7 +2828,7 @@ mod tests {
             keep: ["dist".to_string()].into_iter().collect(),
         };
         let mut files: Vec<String> = Vec::new();
-        walk_tree(root, &filter, None, &mut |rel, _c, item| {
+        walk_tree(root, &filter, &[], &mut |rel, _c, item| {
             if matches!(item, TreeItem::File { .. }) {
                 files.push(rel.to_string());
             }
@@ -2771,7 +2856,7 @@ mod tests {
         fs::write(deep.join("lost.txt"), b"x").unwrap();
 
         let mut skipped: Vec<(String, Skip)> = Vec::new();
-        walk_tree(root, &WalkFilter::all(), None, &mut |rel, _c, item| {
+        walk_tree(root, &WalkFilter::all(), &[], &mut |rel, _c, item| {
             if let TreeItem::Skipped(reason) = item {
                 skipped.push((rel.to_string(), reason));
             }
@@ -2953,7 +3038,7 @@ mod tests {
 
         let collect = |filter: WalkFilter| {
             let mut out: Vec<String> = Vec::new();
-            walk_tree(root, &filter, None, &mut |rel, _c, item| {
+            walk_tree(root, &filter, &[], &mut |rel, _c, item| {
                 if matches!(item, TreeItem::File { .. }) {
                     out.push(rel.to_string());
                 }
@@ -2988,7 +3073,7 @@ mod tests {
         std::os::unix::fs::symlink("nowhere", root.join("link")).unwrap();
         let mut links = 0;
         let mut files = 0;
-        walk_tree(root, &WalkFilter::all(), None, &mut |_rel, _c, item| {
+        walk_tree(root, &WalkFilter::all(), &[], &mut |_rel, _c, item| {
             match item {
                 TreeItem::Symlink(_) => links += 1,
                 TreeItem::File { .. } => files += 1,
@@ -3061,7 +3146,7 @@ mod tests {
             zip.write_all(b"{}").unwrap();
             zip.finish().unwrap();
         }
-        let mut zip = zip::ZipArchive::new(fs::File::open(&bundle).unwrap()).unwrap();
+        let mut zip = zip::ZipArchive::new(set::FileWindow::whole(bundle.to_str().unwrap()).unwrap()).unwrap();
         let dest = tmp.path().join("out");
         let files = extract_section(&mut zip, SECTION_DIR, &dest).unwrap();
         assert_eq!(files, 1);

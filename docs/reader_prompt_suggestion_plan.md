@@ -45,9 +45,14 @@ cursor 2 27                          ← the cursor sits at the START of the tex
 2. `lib/agents/readerLive.ts` — `ReaderLive.suggestion` filled in the
    no-dialog branch (a dialog replaces the box), compared in `sameReaderLive`.
    The phone's Focus chat reads the same lines (`Terminal.tsx`
-   `promptSuggestion`, Focus view only, idle, no dialog): a "Claude suggests"
-   row in the `/` menu's look over the empty field; a tap fills the field,
-   never sends (2026-10-25, `MobilePromptSuggestion.test.tsx`).
+   `promptSuggestion`, either view, idle, no dialog): the field is filled once
+   per suggestion, never sent, with a "Claude suggests" strip over it
+   (`MobilePromptSuggestion.test.tsx`). The phone's tmux client is `TERM=vt100`,
+   which has no `dim`: tmux strips SGR 2 unless `ssh_exec::TMUX_VT100_DIM` is
+   set, and a suggestion then reads as a typed draft. Found 2026-11-02 from a
+   phone screenshot; re-probed on 2.1.316 (`❯\xa0\e[2mtext`, a typed draft
+   undimmed). `pty_bridge`'s ignored `the_attach_client_receives_dim_text`
+   holds it against the real tmux.
 3. `TerminalReaderView.tsx` — `ReaderComposer` gets `suggestion`; a one-row
    panel in the slash menu's look (`terminal-reader-slash*` classes — copy the
    working sibling, no new CSS) shows it above the box while the composer is

@@ -380,7 +380,7 @@ export const LESSONS: Lesson[] = [
         task: {
           promptKey: "lessons.keyboardSteering.enterModeTask",
           hintKey: "lessons.keyboardSteering.enterModeTaskHint",
-          appear: ".steering-legend, .steering-legend-fab",
+          appear: ".steering-bar",
         },
       },
       {
@@ -1360,6 +1360,20 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.projectBoxes.boxScopeTitle",
         bodyKey: "lessons.projectBoxes.boxScopeBody",
+      },
+      {
+        id: "member-chip",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.projectBoxes.memberChipTitle",
+        bodyKey: "lessons.projectBoxes.memberChipBody",
+      },
+      {
+        id: "side-panel",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.projectBoxes.sidePanelTitle",
+        bodyKey: "lessons.projectBoxes.sidePanelBody",
       },
     ],
   },

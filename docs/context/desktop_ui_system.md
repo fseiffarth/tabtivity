@@ -32,11 +32,36 @@ too (`lib/theme/gitColors.ts`). Literals that stay: scrims (`.modal-backdrop`,
 a PDF page), ink on a fixed status fill (`#1c1300` on amber), calendar category
 colours, the deck presenter on its black stage, and the viewers' interiors.
 
+**The accent budget** (round 2, 2026-11-04, `docs/desktop_ui_round2_plan.md`).
+The accent marks the active pill, tab and view, focus, a selection wash and the
+one primary action. It is not a frame, a label colour, a scrollbar or a
+header wash. Concretely:
+- **Surfaces:** `--bg-main/panel/elevated` step evenly in lightness. A
+  floating surface reads `--float-fill`, which the glass pair point at
+  `--glass-elevated` and soft_dark at its fourth step.
+- **Header:** `--top-frame-wash` is transparent in every theme. The seam is
+  the accent at 35–40% (fancy pair) or `--border-subtle` (light_lavender,
+  soft_dark), and `--bg-subheader` carries no accent mix.
+- **Lines:** `--border-subtle` draws dividers, `--border-color` draws fields
+  and frames. Neither is accent-tinted.
+- **Chips:** type tags, branch and worktree chips, the git action buttons and
+  the reader's chips are neutral (`--bg-subtle`, no frame at rest). A kind or
+  state colour sits on a 6 px lamp, a dot or the glyph.
+- **Counts:** header badges are neutral. Red means fresh mail or an overdue
+  to-do, and amber means an agent asking.
+- **Scrollbar and window controls:** the scrollbar thumb is `--text-muted`
+  over the panel, and the window controls are `--text-secondary` until hovered.
+
 ## Buttons
 
 `.btn-primary` and `.btn-danger` are the CTAs, `.settings-btn` the default,
-`.btn-quiet` the link-weight fourth. New buttons take one of these. The ~90
-older per-feature `*-btn` classes have not been folded in.
+`.btn-quiet` the link-weight fourth: no fill at rest, a hover fill, with
+`.is-danger` (a destructive row action) and `.is-notable` (news, such as an
+update) as modifiers. `.seg` is the one segmented control: a soft track with
+the picked option as a lifted chip, marked by the host's `.active`, `.on` or
+`.selected`. New buttons take one of these. Most older per-feature `*-btn`
+classes are still their own (`docs/desktop_ui_round2_plan.md` says why the
+rest need a sizing pass first).
 
 ## Floating surfaces
 
@@ -62,6 +87,17 @@ opens from `opacity: 0`, so it is exempt from the blurred-window animation pause
 `base.css` holds the one reduced-motion block. It zeroes the tokens, and any
 rule whose stand-in is only "stop" goes in its list. A rule whose stand-in is
 more than that (a static tint, a finished bar) stays beside its animation.
+
+The motion above is for a GPU. On the CPU paint path, Linux's default,
+`lib/window/softwarePaint` sets `data-software-paint` on each window root:
+`base.css` zeroes the same two tokens, and `onboarding.css` stops the hint and
+tour loops on their peak tint and drops their entries. Measured 2026-11-02 on
+WebKitGTK 2.52.6 at 1920x1200, in an offscreen view without the app's DOM (the
+real stylesheets, so a floor rather than the app's cost): a menu open took 49 ms
+of renderer time with the fade and 15 without, a dialog with its backdrop 182 ms
+and 29, at 7.5 frames in 220 ms against 13.5, and a hint's loops held 16–18% of a
+core against 0% for as long as the hint stayed up. A new loop or entry that is not
+tied to work in progress gets a rule under this attribute.
 
 ## Glyphs
 

@@ -1,7 +1,7 @@
 ---
 id: project-transfer
 title: Move, export, archive and repair projects
-keywords: [export, import, move, another computer, transfer, bundle, tabtivityproj, backup, archive, delete, restore, archived projects, close project, rename folder, repair scaffold, scaffold, remove git, migrate]
+keywords: [export, import, move, several projects, multiple projects, export projects, project set, another computer, transfer, bundle, tabtivityproj, backup, archive, delete, restore, archived projects, close project, rename folder, repair scaffold, scaffold, remove git, migrate]
 related: [projects, remote-projects, containers-boxes]
 ---
 
@@ -32,6 +32,21 @@ and repair what Tabtivity set up in it.
 
 A VM project cannot be exported (its files live on the VM's own disk); copy
 them out into a plain project first.
+
+## Carry several projects at once
+
+`+` in the project bar → **Export Projects…** writes one file holding several
+projects. Tick the projects (or **Select all**); each is measured as you tick
+it, and the dialog shows the total. The switches (project files, git history,
+rebuildable folders, open tabs, agent conversations) apply to every ticked
+project. A remote project without a local copy brings its files from the host
+only while it is connected. To leave a single rebuildable folder in, or to pack
+a mirrored remote project from its host, export that project on its own.
+
+On the other computer, **Import Project File** opens this file too: tick the
+projects to import, choose where local projects land (and, for remote ones,
+their working copies), and import. Each project is imported on its own; if one
+fails, the dialog names it and the others still arrive.
 
 ## Import an existing folder instead
 

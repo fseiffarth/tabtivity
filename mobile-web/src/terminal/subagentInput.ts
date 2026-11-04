@@ -157,6 +157,22 @@ export function viewLabel(rows: readonly string[]): string | null {
   return null;
 }
 
+/** The subagent Claude's TUI is viewing — its description by the label over
+ * the box (a row at work may print a summary instead), its type by its row —
+ * or null while the session is viewed, or no agent list says. */
+export function viewedSubagent(rows: readonly string[]): { task: string; role: string } | null {
+  const row = readAgentList(rows)?.find((entry) => entry.viewed);
+  if (!row || row.main) return null;
+  return { task: viewLabel(rows) || row.task, role: row.kind };
+}
+
+/** Whether the subagent `viewed` (`viewedSubagent`) is the one sent to do
+ * `target.task` as a `target.role`. */
+export function isViewedSubagent(viewed: { task: string; role: string }, target: { task: string; role?: string }): boolean {
+  if (!sameTask(viewed.task, target.task)) return false;
+  return !target.role || !viewed.role || viewed.role.endsWith("…") || viewed.role === target.role;
+}
+
 /** The input box idle at the bottom of the screen: its `❯` line between the
  * rules that frame it, a dialog or picker nowhere in place of it. */
 export function inputBoxShown(rows: readonly string[]): boolean {
@@ -210,17 +226,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Sends the driver's message to the subagent `target` names (its description
- * and type, as the transcript's agent entry holds them), then views the
- * session again. Nothing is typed unless that subagent's row is the one
- * viewed. One the agent list no longer holds is opened from `/tasks`.
- */
-export async function sendToSubagent(
-  driver: SubagentDriver,
-  target: { task: string; role?: string },
-  timing: SubagentWalkTiming = TIMING,
-): Promise<SubagentSendResult> {
+/** The walks over Claude's agent list that `sendToSubagent` and
+ * `viewSession` share: every key read back off the screen before the next. */
+function listWalker(driver: Pick<SubagentDriver, "rows" | "key">, timing: SubagentWalkTiming) {
   const list = () => readAgentList(driver.rows());
   const cursorAt = (rows: { cursor: boolean }[] | null) => rows?.findIndex((row) => row.cursor) ?? -1;
   /** Reads the screen with `read` until `done` holds or the wait is over. */
@@ -287,6 +295,52 @@ export async function sendToSubagent(
     if (!(await driver.key(ESCAPE))) return false;
     return cursorAt(await until(list, (next) => cursorAt(next) < 0)) < 0;
   };
+  return { list, cursorAt, until, only, walk, enterList, viewing, view, leaveList };
+}
+
+/**
+ * The session itself viewed again when Claude's TUI was left on a subagent —
+ * by hand in the terminal, or by a walk that could not get back — so words
+ * meant for the session do not go to that subagent instead (the box reads
+ * `Message @<type>…` then, and the session never records them). True when the
+ * session is the one viewed, or no agent list is on screen to say otherwise;
+ * false when the walk back did not land.
+ */
+export async function viewSession(
+  driver: Pick<SubagentDriver, "rows" | "key">,
+  timing: SubagentWalkTiming = TIMING,
+): Promise<boolean> {
+  const { list, view, leaveList } = listWalker(driver, timing);
+  const first = list();
+  if (!first || first[0].viewed) return true;
+  // Only from the box: in a dialog or picker ↓ and Enter would answer it.
+  if (first.every((row) => !row.cursor) && !inputBoxShown(driver.rows())) return false;
+  const main = await view((rows) => rows.findIndex((row) => row.main));
+  const left = await leaveList();
+  // A list gone with the subagent's view leaves the session viewed.
+  const now = list();
+  return main && left && (!now || now[0].viewed);
+}
+
+/** Whether Claude's TUI is viewing a subagent rather than the session, by
+ * its agent list. */
+export function subagentViewed(rows: readonly string[]): boolean {
+  const list = readAgentList(rows);
+  return !!list && !list[0].viewed;
+}
+
+/**
+ * Sends the driver's message to the subagent `target` names (its description
+ * and type, as the transcript's agent entry holds them), then views the
+ * session again. Nothing is typed unless that subagent's row is the one
+ * viewed. One the agent list no longer holds is opened from `/tasks`.
+ */
+export async function sendToSubagent(
+  driver: SubagentDriver,
+  target: { task: string; role?: string },
+  timing: SubagentWalkTiming = TIMING,
+): Promise<SubagentSendResult> {
+  const { list, until, only, walk, enterList, viewing, view, leaveList } = listWalker(driver, timing);
   /** Esc while `/tasks` — its list, or a task's details — is up, which
    * closes it. */
   const closeTasks = async () => {

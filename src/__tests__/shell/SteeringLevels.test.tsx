@@ -420,9 +420,9 @@ describe("steering levels", () => {
     try {
       render(<SteeringLegend />);
       act(() => steering().enter());
-      const items = [...document.querySelectorAll(".steering-legend-item")];
+      const items = [...document.querySelectorAll(".steering-bar-item")];
       const clis = items.find((el) => el.textContent?.includes("CLIs"));
-      expect(clis?.querySelector("kbd")?.textContent).toBe("1–3");
+      expect(clis?.querySelector(".steering-cap")?.textContent).toBe("1–3");
       expect(clis?.getAttribute("title")).toBe("1 Claude · 2 Codex · 3 Gemini");
       expect(items.some((el) => el.textContent?.includes("Codex"))).toBe(false);
     } finally {

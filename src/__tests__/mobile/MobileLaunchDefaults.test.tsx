@@ -43,8 +43,10 @@ describe("Mobile model sheet — launch defaults", () => {
     const { puts } = hostAnswering(CLAUDE);
     render(<LaunchDefaultsFold tabId="t1" />);
     fireEvent.click(await screen.findByText("Default for new tabs: opus · high"));
+    fireEvent.click(screen.getByRole("button", { name: "Default model" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Default model" }), { target: { value: " sonnet " } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Default effort" }), { target: { value: "max" } });
+    fireEvent.click(screen.getByRole("button", { name: "Default effort" }));
+    fireEvent.click(screen.getByRole("button", { name: "max" }));
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
     await screen.findByText("Default for new tabs: sonnet · max");
     fireEvent.click(screen.getByRole("button", { name: "Use CLI defaults" }));
@@ -56,27 +58,28 @@ describe("Mobile model sheet — launch defaults", () => {
     hostAnswering({ ...CLAUDE, saved: { model: "", effort: "" }, cli: "claude", models: null });
     render(<LaunchDefaultsFold tabId="t1" />);
     fireEvent.click(await screen.findByText("Default for new tabs: CLI default"));
-    const names = (box: HTMLElement) => [...box.querySelectorAll("option")].map((option) => option.value).filter(Boolean);
-    const picker = screen.getByRole<HTMLSelectElement>("combobox", { name: "Saved model names" });
-    expect(names(picker)).toEqual(["opus", "sonnet", "haiku", "fable"]);
-    fireEvent.change(picker, { target: { value: "haiku" } });
-    expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Default model" }).value).toBe("haiku");
-    cleanup();
-    hostAnswering({ ...CLAUDE, cli: "claude", models: ["sonnet"] });
-    render(<LaunchDefaultsFold tabId="t1" />);
-    fireEvent.click(await screen.findByText("Default for new tabs: opus · high"));
-    expect(names(screen.getByRole("combobox", { name: "Saved model names" }))).toEqual(["sonnet"]);
-    cleanup();
-    hostAnswering({ ...CLAUDE, cli: "codex", models: null });
-    render(<LaunchDefaultsFold tabId="t1" />);
-    fireEvent.click(await screen.findByText("Default for new tabs: opus · high"));
-    expect(screen.queryByRole("combobox", { name: "Saved model names" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Default model" }));
+    for (const name of ["opus", "sonnet", "haiku", "fable"]) expect(screen.getByRole("button", { name })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "haiku" }));
+    expect(screen.getByRole("button", { name: "Default model" }).textContent).toContain("haiku");
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("offers session model rows when the CLI has no configured names", async () => {
+    const { puts } = hostAnswering({ ...CLAUDE, cli: "codex", saved: { model: "", effort: "" } });
+    render(<LaunchDefaultsFold tabId="t1" modelNames={["gpt-6-sol", "gpt-6-luna"]} />);
+    fireEvent.click(await screen.findByText("Default for new tabs: CLI default"));
+    fireEvent.click(screen.getByRole("button", { name: "Default model" }));
+    fireEvent.click(screen.getByRole("button", { name: "gpt-6-luna" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+    await waitFor(() => expect(puts).toEqual([{ model: "gpt-6-luna", effort: "" }]));
   });
 
   it("names a refusal and keeps the draft", async () => {
     hostAnswering({ ...CLAUDE, saved: { model: "", effort: "" } }, { status: 400, error: "invalid_model" });
     render(<LaunchDefaultsFold tabId="t1" />);
     fireEvent.click(await screen.findByText("Default for new tabs: CLI default"));
+    fireEvent.click(screen.getByRole("button", { name: "Default model" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Default model" }), { target: { value: "x" } });
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
     expect((await screen.findByRole("alert")).textContent).toContain("model ID");

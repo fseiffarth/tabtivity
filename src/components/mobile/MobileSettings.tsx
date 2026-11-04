@@ -14,10 +14,10 @@ import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ConnectToServer } from "../server/ConnectToServer";
-import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "./MobileAccessPicker";
+import { MobileAccessPicker, HOST_REACH_KEY, PhoneReachButton, phoneReachHost } from "./MobileAccessPicker";
 import { projectHostKind } from "../../lib/projectTabHost";
 import type { ProjectEntry } from "../../types";
-import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
+import { usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
 
@@ -169,7 +169,7 @@ export function MobileSettings() {
   // (a revoke or Forget all changes what a list still reaches).
   const { phones: pairedPhones } = usePairedPhones(devices);
   const [phonePicker, setPhonePicker] = useState<
-    { kind: "project" | "box" | "assistant"; id: string; x: number; y: number } | null
+    { kind: "project" | "box" | "assistant" | "root"; id: string; x: number; y: number } | null
   >(null);
   const addDevice = useAddDevice();
   const [error, setError] = useState<string | null>(null);
@@ -369,6 +369,7 @@ export function MobileSettings() {
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
+          root_devices: stored?.root_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -384,10 +385,10 @@ export function MobileSettings() {
   // Same one-click shape as every other install-via-command flow: the command
   // runs in a root terminal tab, watched in the root console floating over
   // Settings — never a scope switch away from the panel.
-  /** The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside
-   *  a row whose access is on: opens the per-phone picker for it. */
+  /** The "All phones ▾" button beside a row whose access is on: opens the
+   *  per-phone picker for it. */
   const phoneScopeButton = (
-    kind: "project" | "box" | "assistant",
+    kind: "project" | "box" | "assistant" | "root",
     id: string,
     name: string,
     enabled: boolean,
@@ -395,20 +396,13 @@ export function MobileSettings() {
   ) => {
     // `null`, not `undefined`: the row keeps its shape while off (ToggleRow).
     if (!enabled) return null;
-    const reach = phoneReach(true, list, pairedPhones);
     return (
-      <button
-        type="button"
-        className={`settings-btn sm${reach.kind === "none" ? " warning" : ""}`}
-        aria-haspopup="menu"
-        title={t("mobile.phones.buttonTitle", { name })}
-        onClick={(event) => {
-          const r = event.currentTarget.getBoundingClientRect();
-          setPhonePicker({ kind, id, x: r.left, y: r.bottom + 2 });
-        }}
-      >
-        {phoneReachLabel(reach, t)} ▾
-      </button>
+      <PhoneReachButton
+        name={name}
+        list={list}
+        phones={pairedPhones}
+        onOpen={(r) => setPhonePicker({ kind, id, x: r.left, y: r.bottom + 2 })}
+      />
     );
   };
 
@@ -421,6 +415,18 @@ export function MobileSettings() {
         ...(stored ?? { enabled: false }),
         assistant_access: enabled ? undefined : false,
         assistant_devices: enabled ? (list ?? undefined) : undefined,
+      },
+    });
+  };
+
+  /** Root's reach, from its picker: the phones that may open the root console
+   * (none is the default — a phone paired later starts off it). An empty list
+   * is stored as no list. One whole-block write, like `setMailGate`. */
+  const setRootReach = async (list: string[] | null) => {
+    await updateSettings({
+      [MOBILE_HOST_KEY]: {
+        ...(stored ?? { enabled: false }),
+        root_devices: list && list.length > 0 ? list : undefined,
       },
     });
   };
@@ -475,6 +481,7 @@ export function MobileSettings() {
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
+          root_devices: stored?.root_devices,
         },
       });
     } catch (reason) {
@@ -519,6 +526,7 @@ export function MobileSettings() {
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
+          root_devices: stored?.root_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
@@ -723,6 +731,7 @@ export function MobileSettings() {
         checked={stored?.root_access ?? false}
         disabled={busy}
         onChange={(event) => void setMailGate("root_access", event.target.checked)}
+        aside={phoneScopeButton("root", "root", t("mobile.rootAccess"), stored?.root_access === true, stored?.root_devices ?? [])}
       />
       {stored?.root_access && rootGateClosed && (
         <div className="project-dialog-error">{t("mobile.rootAccessClosed")}</div>
@@ -837,7 +846,18 @@ export function MobileSettings() {
           onClose={() => setPhonePicker(null)}
         />
       )}
-      {phonePicker && phonePicker.kind !== "assistant" && (() => {
+      {phonePicker && phonePicker.kind === "root" && (
+        <MobileAccessPicker
+          x={phonePicker.x}
+          y={phonePicker.y}
+          kind="root"
+          enabled={stored?.root_access === true}
+          devices={stored?.root_devices ?? []}
+          onApply={(_enabled, list) => setRootReach(list)}
+          onClose={() => setPhonePicker(null)}
+        />
+      )}
+      {phonePicker && (phonePicker.kind === "project" || phonePicker.kind === "box") && (() => {
         const target = phonePicker.kind === "project"
           ? projects.find((p) => p.id === phonePicker.id)
           : boxes.find((b) => b.id === phonePicker.id);

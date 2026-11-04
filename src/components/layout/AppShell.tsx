@@ -19,6 +19,7 @@ import { noteAgentSessionStart, noteAgentTurn, notePtyOutput, startActivityTicks
 import { onAnyTerminalOutput } from "../../lib/terminal/terminalBus";
 import { noteActivityDigests, type ActivityDigest } from "../../lib/terminal/activityDigests";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
+import { noteAutoNameRoll, startAutoTabNames } from "../../stores/agents/autoTabNames";
 import { useAgentResumeCostStore, type ResumeCost } from "../../stores/agents/agentResumeCost";
 import type { AgentTurnState } from "../../stores/activity";
 import {
@@ -28,6 +29,7 @@ import {
   startFocusTracking,
 } from "../../stores/power";
 import { applyFastModeAttribute, useFastMode } from "../../lib/agents/fastMode";
+import { useSoftwarePaintAttribute } from "../../lib/window/softwarePaint";
 import { useOllamaAutoloadOnLaunch } from "../../stores/agents/ollamaAutoload";
 import { useRendererWatchdog } from "../../lib/window/rendererWatchdog";
 import { livePanelToggleLabel } from "../../lib/shortcuts/shortcutHint";
@@ -110,6 +112,7 @@ import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../store
 import { useTimerStore } from "../../stores/timer";
 import { useMailStore } from "../../stores/mail";
 import { useTodoStore } from "../../stores/todo";
+import { useCockpitStore } from "../../stores/cockpit";
 import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
@@ -165,6 +168,23 @@ function LazyMailOverlayHost() {
   return (
     <Suspense fallback={null}>
       <MailOverlayHost />
+    </Suspense>
+  );
+}
+
+// The cockpit, the same bargain: reached only from its header button, its
+// steering key and the box chip, so its graph stays out of the startup chunk
+// and nothing of it runs until the store says open.
+const CockpitOverlayHost = lazy(() =>
+  import("../cockpit/CockpitOverlay").then((m) => ({ default: m.CockpitOverlayHost })),
+);
+
+function LazyCockpitOverlayHost() {
+  const open = useCockpitStore((s) => s.overlayOpen);
+  if (!open) return null;
+  return (
+    <Suspense fallback={null}>
+      <CockpitOverlayHost />
     </Suspense>
   );
 }
@@ -993,9 +1013,12 @@ export function AppShell() {
         useAgentClearUndoStore.getState().noteRoll(ev.payload.id, ev.payload.source);
         useAgentResumeCostStore.getState().noteRoll(ev.payload.id, ev.payload.source, ev.payload.resume);
         noteAgentSessionStart(ev.payload.id, ev.payload.source);
+        noteAutoNameRoll(ev.payload.id, ev.payload.source);
       }),
     );
-    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); };
+    // Agent tabs take the name of their first prompt (Settings → Agents).
+    const stopAutoNames = startAutoTabNames();
+    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); stopAutoNames(); };
   }, []);
 
   // The running-task indicators recompute on demand — a chunk, a keystroke, a
@@ -1027,6 +1050,10 @@ export function AppShell() {
   // battery reading, so it is its own attribute rather than a third writer of
   // `data-energy-saver`.
   useEffect(() => applyFastModeAttribute(fastMode), [fastMode]);
+
+  // The paint path (`[data-software-paint]`): on the CPU, surfaces land in one
+  // paint and hints hold still.
+  useSoftwarePaintAttribute();
 
   useEffect(() => {
     if (projectsLoaded) {
@@ -1611,6 +1638,9 @@ export function AppShell() {
           nothing makes them mutually exclusive, so DOM order is the tie-break
           and the surface opened most recently should be the one on top. */}
       <LazyTodoOverlayHost />
+      {/* The cockpit (`docs/desktop_cockpit_plan.md`), after the three app
+          overlays so it wins the z-order tie (DOM order) when opened over one. */}
+      <LazyCockpitOverlayHost />
       {/* The Models & agents overlay — a click on the header's processor-chip
           button (its hover dropdown stays), and the home of the machine-level
           Skills Library. At the shell for the family's reason (it covers the

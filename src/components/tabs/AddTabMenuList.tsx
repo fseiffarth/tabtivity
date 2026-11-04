@@ -43,7 +43,22 @@ export interface AddMenuEntry {
   machineEntries?: AddMenuEntry[];
   /** The ▾ button's tooltip and the machine fly-out's heading. */
   machineTitle?: string;
+  /** On an entry of a `machineEntries` list: a typed search also lists this
+   *  entry on its own (flat, in its row's group), matched on its full `label`
+   *  ("Claude in api") — a box member is found by typing its name without
+   *  opening the ▾. Off for a remote project's machine names ("Local"). */
+  searchable?: boolean;
   onPick: () => void;
+}
+
+/** The line above the search box naming where a plain pick starts (a box's
+ *  "New tab in api"): a mark in the member's (round) or box's (square) colour. */
+export interface AddMenuHeading {
+  text: string;
+  color: string;
+  /** The whole box rather than one member: a rounded square, not a dot. */
+  box?: boolean;
+  untested?: UntestedId;
 }
 
 /** A fly-out beside the menu: its heading, rows and the control it hangs off. */
@@ -127,7 +142,7 @@ function flyoutRow(e: AddMenuEntry) {
  * pointer fires enter events, which would drag the cursor back and make ↓
  * appear to stick.
  */
-export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
+export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; heading?: AddMenuHeading }) {
   const t = useT();
   const [query, setQuery] = useState("");
   const [moreMenu, setMoreMenu] = useState<Flyout | null>(null);
@@ -196,7 +211,13 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
           hint: undefined,
           entries: g.label.toLowerCase().includes(q)
             ? g.entries
-            : g.entries.filter((e) => e.label.toLowerCase().includes(q)),
+            : g.entries.flatMap((e) => [
+                ...(e.label.toLowerCase().includes(q) ? [e] : []),
+                // A row's `searchable` fly-out entries are results of their own.
+                ...(e.machineEntries ?? []).filter(
+                  (m) => m.searchable && m.label.toLowerCase().includes(q),
+                ),
+              ]),
         }))
         .filter((g) => g.entries.length > 0)
     : groups.map((g) => {
@@ -342,6 +363,17 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
 
   return (
     <>
+      {heading && (
+        <div className="tab-new-menu-target">
+          <span
+            className={`tab-member-mark${heading.box ? " box" : ""}`}
+            style={{ background: heading.color }}
+            aria-hidden="true"
+          />
+          <span className="tab-new-menu-target-text">{heading.text}</span>
+          {heading.untested && <UntestedTag id={heading.untested} />}
+        </div>
+      )}
       <input
         ref={searchRef}
         className="tab-new-menu-search"

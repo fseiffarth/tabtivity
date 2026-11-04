@@ -171,6 +171,28 @@ struct SavedTab {
     /// scope is resolved ([`assistant_chat`]).
     #[serde(default)]
     assistant: Option<Value>,
+    /// The label Tabtivity gave an agent tab and the name its first prompt
+    /// gave it (`src/lib/agents/autoTabName.ts`): see [`public_label_of`].
+    /// Loose, so an odd shape never drops the file.
+    #[serde(default)]
+    auto_label: Option<Value>,
+    #[serde(default)]
+    task_name: Option<Value>,
+}
+
+/// The name the phone shows for a tab: the name its first prompt gave an
+/// agent tab while the tab still carries the label Tabtivity gave it, else
+/// its label. The desktop keeps the label on the tab and shows the task name
+/// only on hover; the phone names the tab by it.
+fn public_label_of(tab: &SavedTab) -> String {
+    let auto_label = tab.auto_label.as_ref().and_then(Value::as_str);
+    let task = tab
+        .task_name
+        .as_ref()
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && auto_label == Some(tab.label.as_str()));
+    task.unwrap_or(&tab.label).chars().take(120).collect()
 }
 
 /// [`ResolvedTab::since`] off the saved record: its stamped launch moment,
@@ -244,6 +266,13 @@ pub struct PublicProject {
     /// readings the activity list uses. Absent when none is in any of the three.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agents: Option<AgentCounts>,
+    /// A box row only: its member projects' row ids, in the box's order — the
+    /// same opaque ids the list gives those projects, so the phone's box layout
+    /// can fold them under the box. Built from every member here and narrowed
+    /// per request (`host::projects`) to the rows this phone may list: a member
+    /// without its own Mobile switch never crosses, not even as an id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<String>>,
 }
 
 /// A project row's agent tabs by state, for the phone's project list.
@@ -615,6 +644,8 @@ struct ScopeSource {
     /// The project lives only on its host ([`host_pinned`]): a VM, or a
     /// remote-only project, which has no mirror and runs nothing here.
     pinned: bool,
+    /// A box's member project ids, raw, in the box's order; empty otherwise.
+    member_ids: Vec<String>,
 }
 
 /// A remote project's hosts as its `projects.json` record names them — never
@@ -965,6 +996,23 @@ fn root_open(state_dir: &Path, env: &RootEnv) -> bool {
         Some("destructive" | "off")
     );
     staged && (env.fenced)()
+}
+
+/// The phones that may open the root console, `[MOBILE_HOST_KEY].root_devices`.
+/// Unlike a project's or the assistant's list this one is **opt-in**: absent,
+/// empty, malformed or unreadable is no phone, so a phone paired later is off
+/// root until the user ticks it. Narrows [`root_open`], never opens it.
+pub fn root_devices(state_dir: &Path) -> Vec<String> {
+    fs::read(state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|settings| {
+            settings
+                .get(crate::brand::MOBILE_HOST_KEY)
+                .and_then(|host| host.get("root_devices"))
+                .map(crate::schema::projects::mobile_device_list)
+        })
+        .unwrap_or_default()
 }
 
 /// The assistant scope's own id, as the desktop's tab store and bridge spell it.
@@ -1604,14 +1652,15 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             status: "active".into(),
             kind: ScopeKind::Root,
             roots: vec![root.dir.clone()],
-            // Root has its own switch and gate; per-phone root is out of
-            // scope (docs/done/mobile_device_scoped_access_plan.md).
-            devices: None,
+            // Root has its own switch and gate, and a per-phone list that is
+            // opt-in: a phone is off root until the user names it.
+            devices: Some(root_devices(state_dir)),
             host: ProjectHost::Local,
             cwd_alias: None,
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: Vec::new(),
         });
     }
     if assistant_open(state_dir) {
@@ -1632,6 +1681,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: Vec::new(),
         });
     }
     for project in &projects {
@@ -1669,6 +1719,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: host == ProjectHost::Container && container_shells(project),
             hosts: ProjectHosts::of(project),
             pinned: host_pinned(project),
+            member_ids: Vec::new(),
         });
     }
     for b in &boxes {
@@ -1712,6 +1763,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             shells_in_container: false,
             hosts: None,
             pinned: false,
+            member_ids: b.member_ids.clone(),
         });
     }
     Ok(sources)
@@ -1902,6 +1954,7 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             pending_reviews: None,
             git: None,
             agents: None,
+            members: None,
         },
         raw_id: "raw-p".into(),
         root: PathBuf::from("/"),
@@ -2099,7 +2152,7 @@ fn resolve_scope(
         };
         let public = PublicTab {
             id: key_id(host_key, "tab", &[&source.raw_id, tmux]),
-            label: tab.label.chars().take(120).collect(),
+            label: public_label_of(&tab),
             kind: kind.to_string(),
             agent_label: agent.then(|| agent_label_of(&tab)),
             agent_status: None,
@@ -2178,6 +2231,8 @@ fn resolve_scope(
             .then(|| crate::services::root_mcp_review::pending_count(state_dir)),
         git: None,
         agents: None,
+        members: (source.kind == ScopeKind::Box)
+            .then(|| source.member_ids.iter().map(|id| key_id(host_key, "project", &[id])).collect()),
     };
     Some(ResolvedProject {
         public,

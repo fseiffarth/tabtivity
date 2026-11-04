@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { goBack } from "../backStack";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
 import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon, UndoIcon, WindowIcon } from "../glyphs";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, listProjectFiles, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, readFlag, writeChoice, writeFlag, type MobileFlag } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -22,6 +23,7 @@ import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActions, t
 import { OptionSheet } from "../components/OptionSheet";
 import { HintQueue, type HintKey } from "../components/HintMessage";
 import { lastWorkedAt } from "../components/AgentModeMarks";
+import { listScrollKey, useRestoreListScroll } from "../listScroll";
 import { draftPreview } from "../agentPrompts";
 import { readDrafts } from "../drafts";
 import { clearCardDrag, installCardSwipe } from "../terminal/cardSwipe";
@@ -148,6 +150,7 @@ function cardViewerFile(file: FileTab, outbox: readonly OutboxFile[]): OutboxFil
 export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack }) => void }) {
   const t = useT();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
+  useRestoreListScroll(listScrollKey(id), detail !== null);
   const [creating, setCreating] = useState(false);
   const [activating, setActivating] = useState(false);
   const [error, setError] = useState("");
@@ -198,13 +201,12 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     setFileTabOpen(null);
     return onFileTabs(() => setFileTabs(readFileTabs(id)));
   }, [id]);
-  /** Mark up's Reload on a card's PDF: its folder listed again for the file's
-   * fresh token, size and time, which the card keeps too. */
+  /** Mark up's Reload on a card's PDF: the file looked up again in its folder
+   * for its fresh token, size and time, which the card keeps too. */
   const refreshFileTabRow = useCallback(async (file: OutboxFile): Promise<OutboxFile | null> => {
     const tab = fileTabOpen;
     if (!tab || tab.from === "outbox") return null;
-    const fresh = await listProjectFiles(id, tab.folder);
-    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    const entry = await lookUpFileRow(id, tab.folder, file.name);
     if (!entry) return null;
     refreshFileTab(id, { ...tab, token: entry.token, kind: entry.kind, size: entry.size, modified: entry.modified });
     return asViewerFile(entry);
@@ -364,6 +366,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   }, [detail?.tabs]);
   const tabs = useMemo(() => sortAgentTabs(detail?.tabs ?? [], sort, (tab) => ({
     decision: tab.agent_status === "question",
+    ready: tab.agent_status === "done",
     working: tab.agent_status === "working",
     drafted: tab.id in drafts,
     workingAt: tab.working_at,
@@ -425,10 +428,11 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   }, [id, assistantScope]);
   useEffect(() => {
     if (!fileOpen && !galleryOpen) return;
-    // The viewer opens over the gallery, so Escape closes the top one first.
+    // The viewer opens over the gallery, so Escape closes the top one first —
+    // the viewer as Back does, so a markup view's Done keeps its open note.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (fileOpen) setFileOpen(null);
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      if (fileOpen) goBack();
       else setGalleryOpen(false);
     };
     window.addEventListener("keydown", onKey);
@@ -678,8 +682,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const showHoldHint = !!quickTarget && !hintsGone.hold;
   /** The screen's tips, each its own card, one at a time at the top. */
   const tips: HintKey[] = [
-    ...(drawerOffered ? ["projectFiles" as const] : []),
     ...(showHoldHint ? ["agentHold" as const] : []),
+    ...(drawerOffered ? ["projectFiles" as const] : []),
     ...(tabs.length > 0 ? ["tabCard" as const] : []),
   ];
   return <main className="screen project-screen" ref={screenRef}>
@@ -719,6 +723,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         ><SearchIcon size="1em" /></button>}
         {drawerOffered && <button
           className="drawer-open"
+          data-phone-hint="menu"
           onClick={() => setDrawerOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={drawerOpen}

@@ -571,9 +571,10 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                 {projectDir ? (
                   <div className="skills-seg" role="radiogroup" aria-label={t("skillsLibrary.installTo")}>
                     <span className="skills-seg-label">{t("skillsLibrary.installTo")}</span>
+                    <span className="seg">
                     <button
                       type="button"
-                      className={`skills-seg-btn${scope === "project" ? " on" : ""}`}
+                      className={scope === "project" ? "on" : undefined}
                       role="radio"
                       aria-checked={scope === "project"}
                       title={t("skillsLibrary.scopeProjectNote")}
@@ -583,7 +584,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                     </button>
                     <button
                       type="button"
-                      className={`skills-seg-btn${scope === "personal" ? " on" : ""}`}
+                      className={scope === "personal" ? "on" : undefined}
                       role="radio"
                       aria-checked={scope === "personal"}
                       title={t("skillsLibrary.scopePersonalNote")}
@@ -591,6 +592,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                     >
                       {t("skillsLibrary.scopePersonal")}
                     </button>
+                    </span>
                   </div>
                 ) : (
                   <span className="skills-seg-label">{t("skillsLibrary.scopePersonalOnly")}</span>

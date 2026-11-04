@@ -24,9 +24,7 @@ const NEXT_STEP_WAIT_MS = 700;
  * opening: a frame split across reads is not the list. */
 const KEEP_SETTLE_MS = 500;
 
-/** The levels Claude Code's `/effort` takes (2.1.288); the session lowers one
- * its model does not support and says so. `auto` hands it back to the model. */
-export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
+export { CLAUDE_EFFORTS } from "../../shared/claudeEfforts";
 
 export type SessionPickerCommand = "/model" | "/permissions";
 

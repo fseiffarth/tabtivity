@@ -2,8 +2,11 @@
 //! CLI updates" — the agent twin of the local-model update check.
 //!
 //! [`crate::services::agent_versions`] answers what is *installed* and never
-//! reaches the network; this module answers what is *out there*, and only when
-//! the user clicks. One GET per checked CLI, to the registry its vendor
+//! reaches the network; this module answers what is *out there*: when the user
+//! clicks, and once a day for each installed CLI on its own
+//! (`commands::agents::start_daily_update_check`, [`due_agents`]), so the
+//! Models & agents menu and a new tab of the CLI can say a release is out.
+//! One GET per checked CLI, to the registry its vendor
 //! publishes to: npm, PyPI, a GitHub release, or the vendor's own release
 //! manifest. No token, no account, no
 //! machine detail — the request names the app (GitHub refuses one without a
@@ -317,9 +320,15 @@ pub struct Checked {
     pub checked_at: u64,
 }
 
-/// `<state_dir>/agent_latest.json`, keyed by registry `id`. Deleting it costs
-/// one click per card.
+/// `<state_dir>/agent_latest.json`, keyed by registry `id` — and by
+/// [`OLLAMA_KEY`] for Ollama's own release. Deleting it costs one click per
+/// card.
 pub type Store = HashMap<String, Checked>;
+
+/// The store key of Ollama's own newest release (`commands::ollama`), which the
+/// daily check asks about beside the CLIs'. No agent in the registry has this
+/// `id`, and nothing iterates the store, so it never reads as a CLI row.
+pub const OLLAMA_KEY: &str = "ollama";
 
 pub fn store_path() -> PathBuf {
     crate::storage::state_dir().join("agent_latest.json")
@@ -356,6 +365,34 @@ pub fn remember_in(path: &Path, agent_id: &str, found: Option<Result<String, Str
 
 pub fn remember(agent_id: &str, found: Option<Result<String, String>>) -> Checked {
     remember_in(&store_path(), agent_id, found)
+}
+
+/// How old a CLI's last check may get before the daily check asks again.
+pub const DAILY_EVERY_SECS: u64 = 24 * 60 * 60;
+
+/// The installed CLIs the daily check should ask about now: each one with a
+/// known registry whose last check — a click or an earlier daily run, failed
+/// or not — is `every` seconds old or was never made. A failed check counts as
+/// a check, so a registry that is down is asked once a day, not every tick.
+pub fn due_agents<'a>(
+    store: &Store,
+    installed: impl IntoIterator<Item = &'a str>,
+    now: u64,
+    every: u64,
+) -> Vec<&'a str> {
+    installed
+        .into_iter()
+        .filter(|id| source_for(id).is_some())
+        .filter(|id| is_due(store, id, now, every))
+        .collect()
+}
+
+/// Whether `key`'s last check — failed or not — is `every` seconds old or was
+/// never made.
+pub fn is_due(store: &Store, key: &str, now: u64, every: u64) -> bool {
+    store
+        .get(key)
+        .is_none_or(|checked| now.saturating_sub(checked.checked_at) >= every)
 }
 
 /// One installed CLI against its newest published release.
@@ -582,6 +619,39 @@ mod tests {
         assert!(load_in(&path).is_empty());
         let checked = remember_in(&path, "codex", Some(Ok("0.170.0".to_string())));
         assert_eq!(checked.latest.as_deref(), Some("0.170.0"));
+    }
+
+    #[test]
+    fn the_daily_check_asks_only_about_installed_cli_checked_over_a_day_ago() {
+        let mut store = Store::new();
+        let day = DAILY_EVERY_SECS;
+        let now = 10 * day;
+        store.insert("claude".into(), Checked { latest: Some("2.1.0".into()), error: None, checked_at: now - 60 });
+        store.insert("codex".into(), Checked { latest: Some("0.1.0".into()), error: None, checked_at: now - day });
+        // A failed check still counts: the next ask is a day later, not a tick later.
+        store.insert(
+            "gemini".into(),
+            Checked { latest: None, error: Some("down".into()), checked_at: now - 120 },
+        );
+        let installed = ["claude", "codex", "gemini", "aider", "no-such-cli"];
+        assert_eq!(due_agents(&store, installed, now, day), vec!["codex", "aider"]);
+        assert!(due_agents(&Store::new(), ["no-such-cli"], now, day).is_empty(), "no registry, nothing to ask");
+        // A clock set back is never "overdue".
+        assert!(due_agents(&store, ["claude"], 0, day).is_empty());
+    }
+
+    #[test]
+    fn ollama_is_due_daily_beside_the_clis() {
+        let day = DAILY_EVERY_SECS;
+        let now = 10 * day;
+        let mut store = Store::new();
+        assert!(is_due(&store, OLLAMA_KEY, now, day), "never checked");
+        store.insert(OLLAMA_KEY.into(), Checked { latest: Some("0.35.1".into()), error: None, checked_at: now - 60 });
+        assert!(!is_due(&store, OLLAMA_KEY, now, day));
+        assert!(is_due(&store, OLLAMA_KEY, now + day, day));
+        // Its key is no registry agent's, so it is never asked about as a CLI.
+        assert!(source_for(OLLAMA_KEY).is_none());
+        assert!(due_agents(&Store::new(), [OLLAMA_KEY], now, day).is_empty());
     }
 
     #[test]

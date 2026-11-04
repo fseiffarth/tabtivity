@@ -220,6 +220,11 @@ export interface Settings {
      * an empty list, none. Narrows `assistant_access`, never opens it. Carried
      * by every writer of this block, like `assistant_access`. */
     assistant_devices?: string[];
+    /** The paired phones that may open the root console (device ids). Unlike
+     * every other list this one is opt-in: absent or empty is no phone, so a
+     * phone paired later starts off root. Narrows `root_access`, never opens
+     * it. Carried by every writer of this block, like `assistant_devices`. */
+    root_devices?: string[];
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
@@ -241,6 +246,11 @@ export interface Settings {
   /** Top-bar item ids in the order the user dragged them (`lib/headerPins`).
    * An id that is absent keeps its built-in place after the listed ones. */
   header_order?: string[];
+  /** Project ids kept off the "All projects" strip (`lib/projects/barHidden`).
+   *  Still open, still in their boxes' slices and in search. */
+  bar_hidden_projects?: string[];
+  /** Box ids whose members are kept off the "All projects" strip. */
+  bar_hidden_boxes?: string[];
   /** Default printer per network, keyed by `networkKey()` in
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */
@@ -541,6 +551,12 @@ export interface Settings {
    *  first, then menu order (`agentShortcutSlots`); keys it lacks follow the
    *  ones it names. Round-trips through the backend settings `extra`. */
   agent_order?: string[];
+  /** Explicit opt-in: skip confirmation on future CLI usage-limit handoffs. */
+  agent_limit_auto_handoff?: boolean;
+  /** New agent tabs take the name of their first prompt (`lib/agents/autoTabName`).
+   *  Unset = on; only an explicit `false` turns it off. Round-trips through the
+   *  backend settings `extra`. */
+  agent_tab_auto_name?: boolean;
   /** The scheduled agent warm-up (Manage CLIs → Scheduled warm-up): at each
    *  configured local time, one short message is sent to that agent (in its
    *  one-shot print mode), so its usage window starts *then* rather than
@@ -677,6 +693,8 @@ export interface Settings {
   voice_hands_free_on?: boolean;
   /** EXPERIMENTAL: the Chat's hands-free loop (`ReaderVoice`). */
   voice_hands_free?: boolean;
+  /** EXPERIMENTAL: the desktop cockpit overlay (`docs/desktop_cockpit_plan.md`). */
+  cockpit?: boolean;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */
@@ -930,6 +948,9 @@ export interface Settings {
   /** How often the user pressed each hint's Read button, by hint id; every read
    *  halves the hint's chance of showing again (`lib/hintChance.ts`). */
   hints_read?: Record<string, number>;
+  /** When each hint last came up (ms epoch), by hint id, so hints take turns
+   *  instead of every start opening on the same ones (`pickHint`). */
+  hints_shown?: Record<string, number>;
   /** Master switch for the contextual hint system; default ON when unset. */
   hints_enabled?: boolean;
   /** True once the guided "Take a tour" walkthrough has been completed or
@@ -1537,6 +1558,9 @@ export interface ExportProgress {
 /** `inspect_project_export` — a bundle's manifest, read without unpacking. */
 export interface BundleInfo {
   path: string;
+  /** The member inside a project set this describes (pass it back as the
+   *  import request's `member`); absent for a bundle file of its own. */
+  member?: string;
   format: number;
   appVersion: string;
   exportedAt: string;
@@ -1601,6 +1625,55 @@ export interface UnpairOutcome {
   /** The move out failed; the folder is still at `keptAt`. */
   moveError?: string | null;
 }
+
+/** One project's outcome in `export_project_set`. */
+export interface ExportSetMember {
+  projectId: string;
+  name: string;
+  /** Its export report; `path` is the entry name inside the set. */
+  report?: ExportReport;
+  /** Why it is not in the set (the others still are). */
+  error?: string;
+}
+
+/** `export_project_set`'s answer. */
+export interface ExportSetReport {
+  path: string;
+  bytes: number;
+  members: ExportSetMember[];
+}
+
+/** `project-export-set` progress event payload. */
+export interface ExportSetProgress {
+  index: number;
+  count: number;
+  projectId: string;
+  phase: "file" | "done";
+  done: number;
+  total: number;
+}
+
+/** One member of a project set as `inspect_project_bundle` read it. */
+export interface SetMemberInfo {
+  member: string;
+  info?: BundleInfo;
+  error?: string;
+}
+
+/** A project set, read without unpacking. */
+export interface SetInfo {
+  path: string;
+  appVersion: string;
+  exportedAt: string;
+  members: SetMemberInfo[];
+  suggestedParent: string;
+  suggestedMirrorParent: string;
+}
+
+/** `inspect_project_bundle` — a picked file is one project or a set. */
+export type InspectedBundle =
+  | { kind: "project"; info: BundleInfo }
+  | { kind: "set"; set: SetInfo };
 
 /** `import_project_export`'s answer. */
 export interface ImportBundleResult {

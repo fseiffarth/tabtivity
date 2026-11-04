@@ -7,6 +7,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { InternalViewer } from "../lib/viewers/fileUtils";
 import { forgetPty } from "../lib/agents/promptCount";
 import { forgetTypedLine } from "../lib/agents/typedClear";
+import { autoLabelOnClear, holdsAutoLabel, withAutoLabel } from "../lib/agents/autoTabName";
 import { forgetPromptTrail } from "./agents/promptTrail";
 import { BOX_SCOPE_PREFIX, ROOT_SCOPE, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
@@ -364,6 +365,9 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     stack: t.stack,
     mark: t.mark,
     todoId: t.todoId,
+    autoLabel: t.autoLabel,
+    autoNamed: t.autoNamed || undefined,
+    taskName: t.taskName,
     hostSession: t.hostSession || undefined,
     apiKey: t.apiKey,
     localLaunch: t.localLaunch,
@@ -473,6 +477,16 @@ interface TabsStore {
   // loud. Falls through to `renameTab` when they are the same, keeping the
   // detached-popout forwarding path intact.
   renameTabInScope: (scope: string, key: string, label: string) => void;
+  /** Name an agent tab of `scope` by its task (`stores/agents/autoTabNames`):
+   *  only while it still holds the label Tabtivity gave it, checked inside the
+   *  write, so a rename the user made in between always wins. Sets
+   *  `taskName` to `label` and `autoNamed` true; the tab's own label stays
+   *  its CLI's name (the desktop shows the task only on hover). */
+  autoNameTabInScope: (scope: string, key: string, label: string) => void;
+  /** After a `/clear`, arm an unarmed agent tab of `scope` for a name from the
+   *  new conversation (`autoLabelOnClear`, checked inside the write). Returns
+   *  whether the tab now holds its automatic label. */
+  armAutoLabelInScope: (scope: string, key: string) => boolean;
   // Paint one tab of the ACTIVE scope with a palette colour, or clear it with
   // `undefined` (see TabEntry.color). Forwards to the main window from a popout
   // exactly as `renameTab` does.
@@ -959,6 +973,9 @@ interface TabsStore {
     localFile: string;
     requestHash: string;
     spec: Omit<TabEntry, "key">;
+    /** An already-open tab of the scope that takes the request instead of a
+     *  new one (an agent nothing has been asked of yet). */
+    reuse?: (tabs: readonly TabEntry[]) => TabEntry | undefined;
   }) => Promise<TabEntry>;
   // Persist an explicit scope's tabs+layout (incl. its detached groups) to its
   // project.json. `saveLayout` is the current-scope convenience over this; the
@@ -1344,7 +1361,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const key = nextKey(tab.kind);
     // Spread first so a stray `key` on the payload can't shadow the minted one.
     const entry: TabEntry = {
-      ...withTmuxSession(withRunHostDefault(scope, tab), scope),
+      ...withTmuxSession(withRunHostDefault(scope, withAutoLabel(scope, tab)), scope),
       key,
       scope,
       launchedAt: Date.now(),
@@ -1396,7 +1413,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // up to a flush interval ago: merge what is still staged (§3.1).
     const spec = duplicateSpec({ ...source, viewerState: savedViewerState(source) });
     const entry: TabEntry = {
-      ...withTmuxSession(withRunHostDefault(owner, { ...spec, ...overrides }), owner),
+      ...withTmuxSession(withRunHostDefault(owner, withAutoLabel(owner, { ...spec, ...overrides })), owner),
       key: nextKeyValue,
       launchedAt: Date.now(),
     };
@@ -1467,6 +1484,38 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         s.focusedGroupByScope[scope] ?? null,
       );
     });
+  },
+
+  autoNameTabInScope: (scope, key, label) => {
+    const nextLabel = label.trim();
+    if (!nextLabel) return;
+    set((s) => {
+      const tabs = s.tabsByScope[scope];
+      const tab = tabs?.find((t) => t.key === key);
+      if (!tabs || !tab || !holdsAutoLabel(tab)) return {};
+      if (tab.taskName === nextLabel && tab.autoNamed) return {};
+      const named = tabs.map((t) => (t.key === key ? { ...t, taskName: nextLabel, autoNamed: true } : t));
+      return writeScope(s, scope, named, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
+    });
+  },
+
+  armAutoLabelInScope: (scope, key) => {
+    let armed = false;
+    set((s) => {
+      const tabs = s.tabsByScope[scope];
+      const tab = tabs?.find((t) => t.key === key);
+      if (!tabs || !tab) return {};
+      if (holdsAutoLabel(tab)) {
+        armed = true;
+        return {};
+      }
+      const autoLabel = autoLabelOnClear(scope, tab);
+      if (autoLabel === undefined) return {};
+      armed = true;
+      const next = tabs.map((t) => (t.key === key ? { ...t, autoLabel } : t));
+      return writeScope(s, scope, next, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
+    });
+    return armed;
   },
 
   setTabColor: (key, color) => {
@@ -3839,7 +3888,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
-  hydrateThenCreateInScope: async ({ scope, cwd, localFile, requestHash, spec }) => {
+  hydrateThenCreateInScope: async ({ scope, cwd, localFile, requestHash, spec, reuse }) => {
     // A failed backend read propagates (rejecting the request): swallowing it
     // and creating the tab anyway would let `persistScopeStrict` below OVERWRITE
     // the saved layout with just this one tab. `createEmptyScope` marks a scope
@@ -3850,7 +3899,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const existing = get().tabsByScope[scope]?.find(
       (tab) => tab.mobileRequestHash === requestHash,
     );
-    const created = existing ?? get().addTabToScope(scope, { ...spec, mobileRequestHash: requestHash });
+    const created =
+      existing ??
+      reuse?.(get().tabsByScope[scope] ?? []) ??
+      get().addTabToScope(scope, { ...spec, mobileRequestHash: requestHash });
     await get().persistScopeStrict(scope, localFile);
     return created;
   },

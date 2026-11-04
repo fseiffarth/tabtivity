@@ -161,34 +161,9 @@
 .activity-today  { stroke: var(--accent); stroke-width: 1.5; }
 
 /* ── Activity year selector ──────────────────────────────────────────── */
+/* The year picker is the shared `.seg` (settings-chrome.css). */
 .activity-years {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
   margin-bottom: 8px;
-}
-
-.activity-year-btn {
-  padding: 2px var(--space-2);
-  border: 1px solid var(--control-border);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  cursor: var(--cur-pointer, pointer);
-  border-radius: var(--radius-sm);
-  transition: background var(--transition), border-color var(--transition), color var(--transition);
-}
-
-.activity-year-btn:hover {
-  background: var(--control-hover-bg);
-  border-color: var(--text-muted);
-  color: var(--text-primary);
-}
-
-.activity-year-btn.selected {
-  background: var(--pill-active-bg);
-  border-color: var(--pill-active-border);
-  color: var(--text-primary);
 }
 
 .activity-legend {
@@ -1174,6 +1149,31 @@
   min-height: 26px;
   padding: var(--space-1) 10px;
 }
+/* The CLI's stored release check beside its name (`agent_latest`, asked
+   daily): muted when current or unchecked, the success colour when a newer
+   release is out — then a button into Manage CLIs, where the update runs. */
+.local-model-agent-update {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.local-model-agent-update.is-new {
+  color: var(--success);
+  font-weight: 600;
+  cursor: var(--cur-pointer, pointer);
+}
+.local-model-agent-update.is-new:hover {
+  text-decoration: underline;
+}
+.local-model-agent-checked {
+  padding: 0 10px var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
 
 /* In-flight downloads shown at the top of the brain menu. */
 .local-model-downloads {
@@ -1766,7 +1766,6 @@
   z-index: 500;
   padding: 10px 20px;
   border: 0;
-  border-top: 2px solid transparent;
   border-radius: var(--radius);
   box-shadow: var(--shadow-2);
   font-size: var(--text-md);
@@ -2057,7 +2056,8 @@ html[data-header-drag] * {
   .header-center { gap: 3px; }
   .header-right { gap: 3px; padding-inline: 6px; }
   .project-switcher { gap: 2px; padding-right: 3px; }
-  .project-search-wrap { width: 128px; }
+  .project-search-wrap { width: 88px; }
+  .project-search-wrap:focus-within { width: 200px; }
   .header-right-gap { width: 2px; }
 }
 
@@ -2065,7 +2065,8 @@ html[data-header-drag] * {
   .header-right { gap: 2px; padding-inline: var(--space-1); }
   .header-right-gap { width: 1px; }
   .project-switcher-separator { margin-inline: 1px; }
-  .project-search-wrap { width: 108px; }
+  .project-search-wrap { width: 76px; }
+  .project-search-wrap:focus-within { width: 180px; }
 }
 .vpn-indicator-btn:hover .vpn-indicator-label,
 .vpn-indicator-btn[aria-expanded="true"] .vpn-indicator-label,
@@ -2983,6 +2984,12 @@ html[data-header-drag] * {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* A box row's colour mark (`BoxSwatch`) before its name. */
+.command-palette-box-swatch {
+  width: 12px;
+  height: 11px;
 }
 
 .command-palette-detail {

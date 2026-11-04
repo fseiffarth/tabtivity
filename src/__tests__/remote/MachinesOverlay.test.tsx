@@ -146,7 +146,13 @@ describe("Machines overlay", () => {
   it("opens from the header button's click and from the dropdown's door", () => {
     render(<MachinesIndicator />);
     const button = screen.getByRole("button", { name: /Global machines — click/ });
+    vi.useFakeTimers();
     fireEvent.mouseEnter(button.parentElement!);
+    // A pointer that rests on the button (`HOVER_INTENT_MS`), not one passing by.
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    vi.useRealTimers();
     expect(useHeaderHoverMenuStore.getState().openId).toBe("machines");
     fireEvent.click(button);
     expect(useMachinesOverlayStore.getState().open).toBe(true);

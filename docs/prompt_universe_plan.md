@@ -2,6 +2,10 @@
 
 Status: **plan only.** Nothing here is implemented.
 
+**2026-11-03:** the overlay, store and header button (Step 3) are superseded by
+`docs/desktop_cockpit_plan.md`. The sphere (Steps 1–2) becomes that cockpit's
+later phase C7, fed by its `lib/cockpit/` data layer.
+
 ## Why
 
 The prompt chart (`src/components/agents/PromptChart.tsx`, #262) answers "what

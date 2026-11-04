@@ -65,7 +65,7 @@ import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, RefreshIcon
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { storageKey } from "../../lib/brand";
-import type { GitStatusMap, MoveTargetAttrs, RowActions } from "./fileTreeTypes";
+import type { GitStatusMap, MoveTargetAttrs, RowActions, SharedTreeSearch } from "./fileTreeTypes";
 import { beginNativeFileDrag, startEntryPointerDrag } from "./fileTreeDrag";
 import { useFileTreeFsWatch, useFileTreeListingState, useFileTreeMountLoad } from "./useFileTreeListing";
 import { useFileTreeEmbedCaps, useFileTreeMountProbes, useFileTreeSearch, useFileTreeTooltip } from "./useFileTreeChrome";
@@ -190,6 +190,9 @@ interface Props {
    *  use, e.g. a bare `<FileTree>` in a test). */
   searchOpen?: boolean;
   onSearchOpenChange?: (open: boolean) => void;
+  /** The host's own search (the box side panel's one shared field): the tree
+   *  draws no search box of its own and lists this query's results instead. */
+  sharedSearch?: SharedTreeSearch;
   /** Bumped by the host's ↻ to force a re-list. A counter, not a boolean: two
    *  refreshes in a row must both land. */
   refreshNonce?: number;
@@ -589,6 +592,7 @@ export function FileTree({
   active = true,
   searchOpen: searchOpenProp,
   onSearchOpenChange,
+  sharedSearch,
   refreshNonce,
 }: Props) {
   const t = useT();
@@ -1059,6 +1063,7 @@ export function FileTree({
   // every search result (both name and content hits).
   function revealPath(rel: string, isDir: boolean) {
     setSearch("");
+    sharedSearch?.onSettled();
     if (isDir) {
       load(rel);
       return;
@@ -2369,7 +2374,7 @@ export function FileTree({
   // host-pinned project, whose backends search the host (only while connected:
   // `remoteBlocked` returned above).
   const canSearch = !remoteListing || hostPinned;
-  const searching = canSearch && searchOpen && search.trim().length > 0;
+  const searching = canSearch && (sharedSearch ? sharedSearch.query.trim().length > 0 : searchOpen && search.trim().length > 0);
   // Folder the search is confined to: the browsed folder by default, the whole
   // project when "root" is chosen (or when already at the root).
   const searchScope = searchRoot ? "" : relPath;
@@ -2566,7 +2571,7 @@ export function FileTree({
       {/* Closed under a host that owns the chrome, there is nothing left to
           draw — that is the row the move to the toolbar buys back. A bare tree
           still renders the row, because its own toggle lives in it. */}
-      {canSearch && (searchOpen || !hostOwnsSearchChrome) && (
+      {canSearch && !sharedSearch && (searchOpen || !hostOwnsSearchChrome) && (
         <div className={`file-tree-search${searchOpen ? "" : " file-tree-search--collapsed"}`}>
           <div className="file-tree-search-row">
             {/* The one control that survives the fold. It sits where the input
@@ -2877,10 +2882,10 @@ export function FileTree({
         <FileTreeSearch
           projectDir={projectDir}
           projectId={projectId}
-          query={search}
-          mode={searchMode}
-          caseSensitive={searchCase}
-          scopeRel={searchScope}
+          query={sharedSearch ? sharedSearch.query : search}
+          mode={sharedSearch ? sharedSearch.mode : searchMode}
+          caseSensitive={sharedSearch ? sharedSearch.caseSensitive : searchCase}
+          scopeRel={sharedSearch ? "" : searchScope}
           hostPinned={hostPinned}
           onReveal={revealPath}
         />

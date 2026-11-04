@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dialogFooterShown, freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
+import { dialogFooterShown, freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, revealSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
 import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
@@ -832,7 +832,8 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     "   ❯ 3. Fable ✔                Fable 5.1 · Most capable for your hardest and",
     "                               longest-running tasks",
     "   ↓ 4. Sonnet                 Sonnet 5 · Efficient for routine tasks",
-    "      … +2 models",
+    // The note counts only the rows below the window (measured on 2.1.317).
+    "      … +1 models",
   );
 
   it("reads a windowed picker's slice and how many rows it hides", () => {
@@ -848,6 +849,47 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(middle?.hidden).toBe(2);
     expect(middle?.options.map((option) => option.number)).toEqual([2, 3, 4]);
     expect(middle?.current).toBe(1);
+  });
+
+  it("counts the rows above a window with the ones its note says are below", () => {
+    // Claude Code 2.1.317 in an 80×24 pane: thirteen models, three drawn.
+    const frame = (rows: string[], below?: number) => lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new",
+      "",
+      ...rows,
+      ...(below ? [`      … +${below} models`] : []),
+      "",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    );
+    const opened = readSelectPrompt(frame([
+      "   ↑ 3.  Fable 5.1              For your toughest challenges",
+      "     4.  Sonnet 5.5             Most efficient for simpler tasks",
+      "   ❯ 5.  Haiku 5.5 ✔            Fastest for quick answers",
+    ], 8), "Claude")!;
+    expect(opened.hidden).toBe(10);
+    let step = mergeSelectRows(null, opened);
+    // Up to the first row in one run, then down to the last.
+    expect(revealSelectRow(step, opened)).toBe(1);
+    const top = readSelectPrompt(frame([
+      "   ❯ 1.  Default (recommended)  Sonnet 5.5 · Efficient for routine tasks",
+      "     2.  Opus 5.5               For complex work and everyday tasks",
+      "   ↓ 3.  Fable 5.1              For your toughest challenges",
+    ], 10), "Claude")!;
+    step = mergeSelectRows(step, top, true);
+    expect(revealSelectRow(step, top)).toBe(13);
+    // The walk's frames came across the link coalesced: this one shares no
+    // row with the step, and mid-walk it is still the same list.
+    const bottom = readSelectPrompt(frame([
+      "   ↑ 11. Opus 4.7               Best for everyday, complex tasks",
+      "     12. Opus 4.6               Best for everyday, complex tasks",
+      "   ❯ 13. Sonnet 4.6             Efficient for routine tasks",
+    ]), "Claude")!;
+    expect(sameSelectStep(step, bottom)).toBe(false);
+    step = mergeSelectRows(step, bottom, true);
+    expect(step.options.map((option) => option.number)).toEqual([1, 2, 3, 4, 5, 11, 12, 13]);
+    // What the coalesced frames skipped is fetched by the next run.
+    expect(revealSelectRow(step, bottom)).toBe(6);
   });
 
   it("still refuses a run that starts past 1 without a window's marks", () => {

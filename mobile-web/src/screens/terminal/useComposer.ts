@@ -21,7 +21,7 @@ import { type TerminalControl } from "../../terminal/protocol";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../terminal/openCodeMini";
 import { agentFamily, agentInputWrites, bracketsAgentMessage } from "../../terminal/composer";
 import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../../terminal/commitPrompts";
-import { sendToSubagent, type SubagentSendFailure } from "../../terminal/subagentInput";
+import { sendToSubagent, subagentViewed, viewSession, type SubagentSendFailure } from "../../terminal/subagentInput";
 import { finishSendNow, pullQueuedPrompts, queueFamily, queuedHintShown, takenPrompts } from "../../terminal/queuePull";
 import { inWorkflow, type SubagentStep } from "../../terminal/subagents";
 import {
@@ -415,7 +415,15 @@ export function useComposerSend({
    * point — the markup view's Submit keeps its layer otherwise. */
   /** `interrupt`: the Send button's hold — a working agent is stopped and the
    * words go in at once instead of waiting for its next idle point. */
-  const submitText = (text: string, fromComposer: boolean, interrupt: boolean): boolean => {
+  /** The pane's screen, or nothing while xterm has none to read. */
+  const readableScreen = (): string[] => {
+    try {
+      return screenRows.current();
+    } catch {
+      return [];
+    }
+  };
+  const submitText = (text: string, fromComposer: boolean, interrupt: boolean, sessionViewed = false): boolean => {
     if (editing && fromComposer) {
       submitEdit(editing, text);
       return true;
@@ -445,6 +453,20 @@ export function useComposerSend({
       sendToOpenSubagent(text, subagentTarget, fromComposer);
       return true;
     }
+    // Claude's TUI left on a subagent (viewed in Terminal mode) takes what is
+    // typed into that subagent's box, and the session never records it: the
+    // session is viewed again first, then the words go as they would have.
+    if (!sessionViewed && agentFamily(tab.agent_label ?? tab.label) === "claude" && subagentViewed(readableScreen())) {
+      if (subagentSending) return false;
+      setSubagentNote("");
+      setSubagentSending(true);
+      void viewSession({ rows: readableScreen, key: async (key) => type(key) }, SUBAGENT_WALK).then((back) => {
+        if (!back) setSubagentNote("mobile.subagent.viewed");
+        else submitTextRef.current(text, fromComposer, interrupt, true);
+      }).finally(() => setSubagentSending(false));
+      return true;
+    }
+    setSubagentNote("");
     const id = slash ? undefined : ++pendingId.current;
     // A chat of the assistant scope has no held-prompt binding: its words go straight to the CLI.
     if (id !== undefined && agentAtWork && !interrupt && !bare) {
@@ -484,6 +506,8 @@ export function useComposerSend({
     endDictation();
     return true;
   };
+  const submitTextRef = useRef(submitText);
+  submitTextRef.current = submitText;
   /** The composer's words go with the files that landed for them; while one
    * is still on its way nothing goes, so no reference is left behind. */
   const submitDraft = (text = draft, fromComposer = true, interrupt = false): boolean => {
@@ -858,6 +882,8 @@ export function useComposerSend({
    * once — no confirm dialog. The draft is left alone. A Codex that is working
    * would refuse it, so the button says so here instead. */
   const clearConversation = () => {
+    // One already waits behind the turn: a second would clear the new chat too.
+    if (clearQueued) return;
     if (codexBusy()) {
       setClearRefused(true);
       return;

@@ -921,6 +921,14 @@ export function AgentsPanel({
       <SettingsHeader title={t("nav.agents.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
       <p className="settings-help agents-lead">{t("agents.lead")}</p>
+      <label className="settings-help"><input type="checkbox" checked={settings?.agent_limit_auto_handoff === true}
+        onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_limit_auto_handoff: event.target.checked })} />
+        {t("terminal.limitHandoff.automatic")} <UntestedTag id="terminal.limitHandoff" />
+      </label>
+      <label className="settings-help"><input type="checkbox" checked={settings?.agent_tab_auto_name !== false}
+        onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_tab_auto_name: event.target.checked })} />
+        {t("agents.autoTabName")} <UntestedTag id="agents.autoTabName" />
+      </label>
       {node.status && !node.status.npm && (
         <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
       )}

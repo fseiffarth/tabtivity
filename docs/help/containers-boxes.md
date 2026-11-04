@@ -51,21 +51,63 @@ hidden. See `agent-clis`.
 
 ## Project boxes
 
-A box temporarily groups related projects, for side-by-side work across them.
-A project can be in several boxes; deleting a box never deletes its projects.
+A box groups related projects for work across them. A project can be in
+several boxes, and a box never takes a project away: dissolving one only ends
+the grouping. Each box has a colour, and every surface that names the box wears
+it.
 
-1. Click `+` beside the pills → **New Box**. The ▣ chip beside the ✦ root
-   button lists boxes.
-2. Add projects: drag a pill onto a box pill (or onto a row of the ▣ list),
-   Alt-drag one pill onto another to box the two, or Ctrl-click several pills
-   → **Box these…**.
-3. Click a box pill to open the **box scope**: its own tabs, a file view with
-   every member, and a box folder under `~/tabtivity/boxes/<name>/` whose
-   `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` link each member (Tabtivity edits only the
-   marked block in them). The `+` menu offers per-member Files, Shell and
-   Claude rows.
-4. Right-click a box pill for Open, Rename, Edit box, Members or Delete.
-   Ctrl+Shift+PageDown/PageUp cycles boxes.
+**Make one.** Click `+` beside the pills → **New Box**, or the dashed **+ Box**
+pill that stands beside the ✦ root button until you have a box, or press
+Ctrl+K → **New box…**. Type a name (it is pre-filled "Box 1", and must be
+non-empty and not used by another box) and press Enter: the box exists and you
+are already inside it.
+
+**Fill it.** Drag a project pill onto a box pill (or onto its row in the ▣
+list), Alt-drag one pill onto another to box the two, or Ctrl-click several
+pills → **Box these…**. The box pill's menu → **Members** and a project pill's
+menu → **Boxes** are the same checklist: it stays open while you tick, lists
+closed projects too (marked "closed"), scrolls, and gains a filter field past
+eight rows. Inside a box, a member pill's menu has a row that removes it, named
+after the project and the box.
+
+**Enter and leave.** Click a box pill to enter it: the strip narrows to the
+box's projects and takes the box's colour, and the selected pill shows a ✕.
+The ✕, **All projects** in the ▣ list, and the first row of the header search
+all leave again, back to the project you were on. In the list a ✓ marks the
+box you are in and bold marks the box the strip shows. On a narrow window the
+pills fold into the logo's list, and its ▾ counts them as **▾ +N**. Ctrl+Shift+PageDown/PageUp
+walk home → each box → back to the project you came from. Clicking a coloured
+swatch on a project's pill opens that box.
+
+**Inside a box.**
+- Tabs run in the box's own scope: a box folder under
+  `~/tabtivity/boxes/<name>/` whose `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` link
+  each member (Tabtivity edits only the marked block in them).
+- A tab opened in a member wears a small dot in that project's colour after its
+  label (a square for the whole box). Hover it for the member.
+- A plain `+` (and Ctrl+Shift+N, Ctrl+Shift+M, Ctrl+1-9) starts a tab in the
+  active tab's project, and the menu header says which. Hover **Agents**,
+  **Shell** or **Files** for **Start in…** to choose another project or the
+  whole box.
+- The side panel is an accordion: one section per project, one open at a time.
+  Each header shows the project's colour dot, a dot when its git state needs
+  attention, and its agent count. Which sections you fold is remembered per box.
+  The `⋯` on a header offers Files/Git, the file manager, project settings and
+  **Open as tab**; the search field above the sections searches the open
+  project; drag a header's grip to reorder the projects.
+- The box pill's status bars count the agents of the box and of its member
+  projects.
+
+**Find and manage.** Focusing the header search lists your boxes (and, inside a
+box, **All projects** first); typing a member's name finds its box too.
+Ctrl+K has a **Boxes** group, **New box…**, **Show all projects** (inside a
+box) and **Add (current project) to (box)**. Right-click a box pill for Open, Rename,
+**Edit box…** (the box sheet: name, colour, projects, folder, phone access, and
+**Dissolve box…**), Members, **Hide its projects from All projects** (the box's
+own row still shows them) or **Dissolve box…**. A popout window that shows a
+box carries its name and colour in the title bar. With four or more projects
+and no box, a hint points at the **+ Box** pill; the lesson "Group projects
+into a box" (Help → Lessons) walks through all of this.
 
 Box tabs run locally and uncontained, even when a member uses a container or
-VM; the box editor warns about that.
+VM; the box sheet warns about that.

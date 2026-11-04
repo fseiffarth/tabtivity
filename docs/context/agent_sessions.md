@@ -320,5 +320,9 @@ every place a log can be has to be probed:
   `/proc/<pid>/environ` carries the tab's `TAB_UID` names the session the CLI
   is on now, so a `/clear`, a self-relaunch under a fresh id and a tab moved
   from here (it runs on its local run's id) are followed. With no running CLI
-  to ask, the locally recorded live id's file, then the launch id's. A host
+  to ask, the locally recorded live id's file, then the launch id's. Its
+  subagents open too: the session's `subagents/` folder is copied beside the
+  local copy — every `.meta.json` with each read (what gives a spawn's card
+  its handle), a subagent's own file or a `Workflow` run's journal only when
+  it is opened — and emptied when the copied session changes. A host
   tab of any other CLI has no chat.

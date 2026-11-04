@@ -1,8 +1,10 @@
+import { PdfFileCover } from "./PdfFileCover";
 import { useState } from "react";
 import { ArrowUpRightIcon, TrashIcon } from "../../../src/components/common/icons/Icon";
 
 import { useT } from "../../../src/lib/i18n";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
+import { fileBadge, viewableFile } from "./InboxPreview";
 import { shareAs, useOutboxShare } from "../outboxShare";
 import { ageLabel } from "../terminal/fileLabels";
 import { formatBytes } from "../../../src/lib/formatBytes";
@@ -64,13 +66,13 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
   return <div className="outbox-gallery-grid">
     {files.map((file) => {
       const isImage = file.kind.startsWith("image/");
-      const download = !isImage && !file.kind.startsWith("text/") && file.kind !== "application/pdf";
+      const download = !viewableFile(file);
       const label = t("mobile.outbox.open", { name: sentName(file) });
       const meta = `${ageLabel(Math.max(0, now - file.modified))} · ${formatBytes(file.size)}`;
       const content = <>
         {isImage
           ? <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" />
-          : <span aria-hidden="true">{file.kind === "application/pdf" ? "PDF" : file.kind.startsWith("text/") ? "≡" : "↓"}</span>}
+          : file.kind === "application/pdf" ? <PdfFileCover scope={scope} file={file} /> : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
         <strong>{sentName(file)}</strong>
         <span>{meta}</span>
       </>;

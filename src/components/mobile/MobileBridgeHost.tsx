@@ -26,11 +26,12 @@ import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootO
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
 import { useSettingsStore } from "../../stores/settings";
 import { calendarColor, useCalendarStore, visibleCalendarIds } from "../../stores/calendar/calendar";
-import { agentTabState, agentTurnStartedAt, lastTabReadAt, noteUserInput, useActivityStore } from "../../stores/activity";
-import { agentTabModelTag, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
+import { agentTabState, noteUserInput, useActivityStore } from "../../stores/activity";
+import { useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
+import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
 import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
 import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
@@ -90,7 +91,7 @@ import { useAlertsFeed, type AlertsFeed } from "../files/useAlertsFeed";
 import { agentTurnEdges, type AgentTurnEdge, type MobileAgentState } from "../../lib/mobileAgentTurns";
 import { freshGitDot, gitDotRows, type MobileGitDot, type MobileGitStateRow } from "../../lib/mobileGitDots";
 import { divergedCount, divergedDiff, divergedList, divergedPreview, divergedResolve, type MobileDivergedFile, type MobileSyncOp, type MobileSyncPreview } from "../../lib/mobileDiverged";
-import { mobileSubagentCount } from "../../lib/mobileSubagents";
+import { agentRosterFacts, agentRosterState, isRosterAgentKind, type AgentRosterFacts } from "../../lib/agents/agentRoster";
 import {
   desktopTimeZone,
   localOccurrenceKey,
@@ -571,30 +572,11 @@ function agentStatuses(projectId?: string): AgentTabStatus[] {
   return scope ? projectAgentStatuses(scope.id) : [];
 }
 
-/**
- * What the phone is told one agent tab is doing.
- *
- * The first four answers are the desktop's own lamps, unchanged — `interrupted`
- * (the user cut the turn off) included, which that store holds even on the
- * viewed tab, until the next turn. The fifth is
- * the one this window cannot read off `attentionByTab`: that flag means UNREAD
- * output and is deliberately never raised for the tab under the user's eyes —
- * but "under the user's eyes" here is only "it is the visible tab of its group",
- * which an unattended desktop satisfies all night. A phone asking "did anything
- * finish?" would then be told no, forever, about precisely the tab its owner
- * left open. So a finished turn nobody has *arrived at* since (`lastTabReadAt`,
- * moved by a tab switch here or by the phone opening the tab) is reported as
- * done on its own evidence.
- */
+/** What the phone is told one agent tab is doing: the shared roster's
+ * reading (`lib/agents/agentRoster`), so the phone and the desktop cockpit
+ * give one tab one answer. */
 function mobileAgentState(ptyId: string): MobileAgentState {
-  const live = agentTabState(ptyId);
-  if (live !== "idle") return live;
-  const activity = useActivityStore.getState();
-  if (activity.attentionByTab[ptyId] === "interrupted") return "interrupted";
-  if (activity.attentionByTab[ptyId] === "done") return "done";
-  const doneAt = activity.lastDoneByTab[ptyId];
-  if (doneAt !== undefined && doneAt > (lastTabReadAt(ptyId) ?? 0)) return "done";
-  return "idle";
+  return agentRosterState(ptyId);
 }
 
 /**
@@ -630,83 +612,46 @@ function agentTurnSnapshot(): Map<string, MobileAgentState> {
  * of output does not walk every tab of every scope per chunk. */
 const AGENT_TURN_SETTLE_MS = 500;
 
-/** The model tag a phone card shows for `tab`, with both of its sources asked
- * to re-read for the next poll. */
-function mobileModelTag(projectId: string, tab: TabEntry): string | undefined {
-  const models = useAgentModelsStore.getState();
-  void models.refresh(projectId, tab);
-  void models.refreshScreen(projectId, tab);
-  return agentTabModelTag(projectId, tab, models.byTab, models.screenByTab);
+/** An agent tab as the phone counts one (`isRosterAgentKind`). */
+function isAgentKind(kind: TabEntry["kind"]): boolean {
+  return isRosterAgentKind(kind);
 }
 
-/** The PLAN / GOAL marks the desktop's tab strip shows for a tab
- * (`TabAgentModeMarks`), onto a phone row — only the ones that are on. Read
- * after `mobileModelTag`, whose screen re-read refreshes them too. */
-function withModeMarks<Row extends { plan?: boolean; goal?: boolean }>(row: Row, ptyId: string): Row {
-  const marks = tabModeMarks(useAgentModelsStore.getState(), ptyId);
-  if (marks?.plan) row.plan = true;
-  if (marks?.goal) row.goal = true;
+/** The wire timing fields of a tab's shared roster facts. */
+function withTimings<Row extends AgentTabTiming>(row: Row, facts: AgentRosterFacts): Row {
+  if (facts.model) row.model = facts.model;
+  if (facts.plan) row.plan = true;
+  if (facts.goal) row.goal = true;
+  if (facts.subagents) row.subagents = facts.subagents;
+  if (facts.workingAt !== undefined) row.working_at = facts.workingAt;
+  if (facts.doneAt !== undefined) row.done_at = facts.doneAt;
+  if (facts.turnStartedAt !== undefined) row.turn_started_at = facts.turnStartedAt;
   return row;
 }
 
-/** An agent tab as the phone counts one: a local-model tab is one too — the
- * catalog lists it as `agent` (`services::mobile_control::discovery`). */
-function isAgentKind(kind: TabEntry["kind"]): boolean {
-  return kind === "agent" || kind === "local_agent";
-}
-
 function projectAgentStatuses(projectId: string): AgentTabStatus[] {
-  const activity = useActivityStore.getState();
   return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
-    const ptyId = `${projectId}:${tab.key}`;
-    const state = mobileAgentState(ptyId);
-    if (state === "idle") return [];
-    const status: AgentTabStatus["status"] = state;
+    if (mobileAgentState(`${projectId}:${tab.key}`) === "idle") return [];
     // The phone sorts by these and tags the row with the model; the answer is
-    // whatever the desktop knows at this poll (the model store throttles its
-    // own re-reads), so the phone can be one poll behind, never wrong. The
-    // model is read off the live tmux pane first (`agentTabModelTag`).
-    const row: AgentTabStatus = { tmux_session: tab.tmuxSession, status };
-    const model = mobileModelTag(projectId, tab);
-    if (model) row.model = model;
-    withModeMarks(row, ptyId);
-    const subagents = mobileSubagentCount(projectId, tab);
-    if (subagents) row.subagents = subagents;
-    // Subagents at work past the Stop keep the turn going (`turnDuration`).
-    const workingAt = status === "working" || subagents ? Date.now() : activity.lastWorkingByTab[ptyId];
-    if (workingAt !== undefined) row.working_at = workingAt;
-    const doneAt = activity.lastDoneByTab[ptyId];
-    if (doneAt !== undefined) row.done_at = doneAt;
-    const turnStartedAt = agentTurnStartedAt(ptyId);
-    if (turnStartedAt !== undefined) row.turn_started_at = turnStartedAt;
-    return [row];
+    // whatever the desktop knows at this poll, so the phone can be one poll
+    // behind, never wrong.
+    const facts = agentRosterFacts(projectId, tab, Date.now());
+    if (facts.state === "idle") return [];
+    return [withTimings<AgentTabStatus>({ tmux_session: tab.tmuxSession, status: facts.state }, facts)];
   });
 }
 
 /** Timings of the agent tabs `projectAgentStatuses` leaves out (a quiet or
  * already-read tab), so the phone's "last working" sort keeps a read turn in
  * its place among the finished ones instead of dropping it to its tab-bar spot
- * — and their model, so a quiet card is tagged like a busy one. */
+ * — and their model, so a quiet card is tagged like a busy one. A background
+ * subagent works on after the turn is over. */
 function projectAgentTimings(projectId: string): AgentTabTiming[] {
-  const activity = useActivityStore.getState();
   return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
-    const ptyId = `${projectId}:${tab.key}`;
-    if (mobileAgentState(ptyId) !== "idle") return [];
-    const row: AgentTabTiming = { tmux_session: tab.tmuxSession };
-    const model = mobileModelTag(projectId, tab);
-    if (model) row.model = model;
-    withModeMarks(row, ptyId);
-    // A background subagent works on after the turn is over.
-    const subagents = mobileSubagentCount(projectId, tab);
-    if (subagents) row.subagents = subagents;
-    const workingAt = subagents ? Date.now() : activity.lastWorkingByTab[ptyId];
-    if (workingAt !== undefined) row.working_at = workingAt;
-    const doneAt = activity.lastDoneByTab[ptyId];
-    if (doneAt !== undefined) row.done_at = doneAt;
-    const turnStartedAt = agentTurnStartedAt(ptyId);
-    if (turnStartedAt !== undefined) row.turn_started_at = turnStartedAt;
+    if (mobileAgentState(`${projectId}:${tab.key}`) !== "idle") return [];
+    const row = withTimings<AgentTabTiming>({ tmux_session: tab.tmuxSession }, agentRosterFacts(projectId, tab, Date.now()));
     return row.model === undefined && !row.plan && !row.goal && !row.subagents && row.working_at === undefined && row.done_at === undefined && row.turn_started_at === undefined ? [] : [row];
   });
 }
@@ -1051,6 +996,9 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
       localFile: scope.localFile,
       requestHash,
       spec,
+      // An agent nothing has been asked of yet takes the phone's ＋ as the
+      // desktop's does — when the phone can attach it (a saved tmux session).
+      reuse: (tabs) => findEmptyAgentTab(scope.id, tabs.filter((tab) => tab.tmuxSession), spec),
     });
   } catch (error) {
     return { status: "error", code: "persist_failed", message: String(error) };

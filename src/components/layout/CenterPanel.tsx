@@ -40,6 +40,7 @@ import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { useSettingsStore } from "../../stores/settings";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
+import { useCockpitStore } from "../../stores/cockpit";
 import { useDragStore } from "../../stores/drag/drag";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
@@ -97,6 +98,9 @@ function CenterPanelImpl() {
   // The same for Tabby chat keys (assistant scope): the overlay draws them
   // attach-only; this panel never shows that scope at all (below).
   const assistantShown = useOverlayAgentStore((st) => st.assistantShownKeys);
+  // Every other scope's tabs an attach-only view draws (the cockpit's detail
+  // pane), by PTY id: their owner stands down too, with a placeholder.
+  const scopeShown = useOverlayAgentStore((st) => st.scopeShownKeys);
   // A restored Tabby chat spawns its CLI only once it was shown or made
   // (`startAssistantChat`); until then it has no pane here at all.
   const assistantStarted = useOverlayAgentStore((st) => st.assistantStartedKeys);
@@ -1065,6 +1069,8 @@ function CenterPanelImpl() {
   // fullscreened group's pane is sized to the whole panel and all others hidden.
   const fsActive = fullscreenGroupId != null && groupRects[fullscreenGroupId] != null;
   const panelRect = panelRef.current?.getBoundingClientRect();
+  // Filled by the pane layer's map below: the stand-down placeholders.
+  const standDowns: { id: string; rect: Rect }[] = [];
   const fullRect: Rect | undefined = panelRect
     ? { left: 0, top: 0, width: panelRect.width, height: panelRect.height }
     : undefined;
@@ -1137,7 +1143,7 @@ function CenterPanelImpl() {
           const isCurrentScope = scopeKey === scope && scopeKey !== ASSISTANT_SCOPE;
           const groupId = isCurrentScope ? groupOfKey.get(tab.key) : undefined;
           // While a group is fullscreen, only that group's active pane shows.
-          const visible =
+          const slotShown =
             isCurrentScope &&
             // The root console shows the root scope's tabs itself (attach-only
             // views of these panes), and an app overlay's docked agent column
@@ -1151,6 +1157,11 @@ function CenterPanelImpl() {
             groupId != null &&
             activeKeyOfGroup.get(groupId) === tab.key &&
             (!fsActive || groupId === fullscreenGroupId);
+          // A project's or box's tab the cockpit's detail pane draws stands
+          // its owner down the same way, one visible view per PTY; unlike
+          // root's, its slot is not left blank (below).
+          const shownAway = scopeShown.has(`${scopeKey}:${tab.key}`);
+          const visible = slotShown && !shownAway;
           // The fullscreened group's pane is stretched over the whole panel; all
           // others keep their measured rect (but are hidden by `visible` above).
           const rect =
@@ -1176,6 +1187,7 @@ function CenterPanelImpl() {
           const paneBox = scopeKey.startsWith(BOX_SCOPE_PREFIX)
             ? boxes.find((b) => `${BOX_SCOPE_PREFIX}${b.id}` === scopeKey)
             : undefined;
+          if (slotShown && shownAway && rect) standDowns.push({ id: `${scopeKey}/${tab.key}`, rect });
           return (
             <div
               key={`${scopeKey}/${tab.key}`}
@@ -1221,12 +1233,18 @@ function CenterPanelImpl() {
                 // its owning pane here stays mounted (§5.3, terminal kinds).
                 drawnElsewhere={
                   (scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))) ||
-                  (scopeKey === ASSISTANT_SCOPE && assistantShown.has(tab.key))
+                  (scopeKey === ASSISTANT_SCOPE && assistantShown.has(tab.key)) ||
+                  shownAway
                 }
               />
             </div>
           );
         })}
+        {/* The slots whose tab the cockpit draws: one line saying where it
+            went, so a project on screen behind the overlay is not a blank. */}
+        {standDowns.map(({ id, rect }) => (
+          <PaneStandDown key={`standdown-${id}`} rect={rect} />
+        ))}
       </div>
 
       {/* Split preview: darkens the half (or whole, for center) a drop would
@@ -1249,6 +1267,27 @@ function CenterPanelImpl() {
 
       {/* One-shot send-off when a tab/subwindow is dropped out to its own window. */}
       <DetachFlourish />
+    </div>
+  );
+}
+
+/**
+ * The slot of a tab another view draws — the cockpit's detail pane — while its
+ * project is on screen: one line saying so, and Show here, which closes the
+ * cockpit and with it that view, so the owner takes the PTY back.
+ */
+function PaneStandDown({ rect }: { rect: Rect }) {
+  const t = useT();
+  return (
+    <div
+      className="center-pane center-pane-standdown"
+      style={{ display: "flex", left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
+    >
+      <span>{t("cockpit.standDown")}</span>
+      <button type="button" className="settings-btn sm" onClick={() => useCockpitStore.getState().closeOverlay()}>
+        {t("cockpit.showHere")}
+      </button>
+      <UntestedTag id="cockpit.standDown" />
     </div>
   );
 }

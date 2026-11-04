@@ -1152,15 +1152,18 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
   return (
     <div className="git-history">
       {dialogs}
-      <div className="git-worktree-context" title={t("gitHistory.selectedWorktree", { name: selectedWorktree?.path ?? projectDir })}>
-        <span>{t("gitHistory.selectedWorktree", { name: basename(selectedWorktree?.path ?? projectDir) })}</span>
-        {remote && <span>{t(wtSite === "host" ? "gitHistory.worktreeSiteHost" : "gitHistory.worktreeSiteMirror")}</span>}
-        <UntestedTag id="gitHistory.worktreeSelection" />
-      </div>
+      {/* One row: the branch and the worktree it is checked out in share the
+          toolbar (the worktree had a row of its own above it until 2026-11-04). */}
       <div className="git-history-toolbar">
-        <span className="git-history-branch" title={t("gitHistory.currentBranchTitle")}>
+        <span
+          className="git-history-branch"
+          title={`${t("gitHistory.currentBranchTitle")}\n${t("gitHistory.selectedWorktree", { name: selectedWorktree?.path ?? projectDir })}`}
+        >
           ⎇ {current ?? t("gitHistory.detached")}
+          <span className="git-history-worktree">{basename(selectedWorktree?.path ?? projectDir)}</span>
+          {remote && <span className="git-history-worktree">{t(wtSite === "host" ? "gitHistory.worktreeSiteHost" : "gitHistory.worktreeSiteMirror")}</span>}
         </span>
+        <UntestedTag id="gitHistory.worktreeSelection" />
         <button
           className={`toolbar-btn git-history-mode${graphMode ? " active" : ""}`}
           onClick={toggleGraphMode}

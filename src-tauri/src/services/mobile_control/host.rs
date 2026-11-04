@@ -34,9 +34,11 @@ use super::{
     chat_changes,
     chat_uncommitted,
     config::{verify_tailscale_serve, HostConfig},
+    deadline,
     diverged,
     discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
+    files_zip,
     git_overview,
     headless,
     host_files,
@@ -58,6 +60,7 @@ use super::{
     pty_bridge::{self, TerminalRegistry},
     remarks,
     scheduler,
+    serve,
     uploads,
     push::{AgentTabRef, PushPrefs},
     sign_in,
@@ -971,10 +974,22 @@ async fn projects(
     } else {
         HashMap::new()
     };
+    // A box row's members, narrowed to the projects this phone's catalog
+    // lists (its own switch and device list): the phone folds those under
+    // the box and never learns that any other member exists.
+    let listable = catalog_snapshot
+        .projects
+        .iter()
+        .filter(|p| p.public.kind == ScopeKind::Project)
+        .map(|p| p.public.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
     let mut rows = listed
         .into_iter()
         .map(|p| {
             let mut public = p.public.clone();
+            if let Some(members) = public.members.as_mut() {
+                members.retain(|id| listable.contains(id.as_str()));
+            }
             if is_git_project(p) {
                 public.git = git.get(&p.raw_id).copied();
             }
@@ -1226,6 +1241,9 @@ async fn project(
         _ => (false, vec![], vec![], vec![], vec![], vec![], vec![], None, None),
     };
     let mut public = project.public.clone();
+    // Only the list folds members under a box, and only there are they
+    // narrowed to what this phone may see: the detail sends none.
+    public.members = None;
     if is_git_project(project) {
         public.git = git.as_deref().and_then(git_dot);
     }
@@ -6546,7 +6564,7 @@ async fn outbox_file(
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
-    outbox_bytes(root, name, &query).await
+    outbox_bytes(root, name, &query, &headers).await
 }
 
 /// `GET /api/v1/projects/{project_id}/outbox/{name}` — the same bytes by the
@@ -6566,7 +6584,7 @@ async fn project_outbox_file(
         Ok(root) => root,
         Err(error) => return error.into_response(),
     };
-    outbox_bytes(root, name, &query).await
+    outbox_bytes(root, name, &query, &headers).await
 }
 
 /// `DELETE /api/v1/tabs/{tab_id}/outbox/{name}` — drop one of the files the
@@ -6690,7 +6708,7 @@ async fn outbox_removal(root: PathBuf, name: String) -> (StatusCode, Json<serde_
     }
 }
 
-async fn outbox_bytes(root: PathBuf, name: String, query: &HashMap<String, String>) -> Response<Body> {
+async fn outbox_bytes(root: PathBuf, name: String, query: &HashMap<String, String>, headers: &HeaderMap) -> Response<Body> {
     if !outbox::valid_name(&name) {
         return api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
     }
@@ -6700,36 +6718,40 @@ async fn outbox_bytes(root: PathBuf, name: String, query: &HashMap<String, Strin
     let read = tokio::task::spawn_blocking(move || outbox::read(&root, &name))
         .await
         .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
-    let mut response = file_response(read, &filename, download);
+    let mut response = file_response(read, &filename, download, headers);
     // A leaf can be rewritten under its name, so only a read the phone named
     // by its version (`?v=<modified>-<size>`, `outboxFileUrl`) may be kept:
     // without it the chat's album, the viewer and its Share each pulled the
     // whole picture down the link again, side by side.
-    if response.status() == StatusCode::OK && !download && query.contains_key("v") {
+    if kept_answer(response.status()) && !download && query.contains_key("v") {
         response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(INBOX_FILE_CACHE));
     }
     response
 }
 
 /// A drop-box read as the phone gets it: typed by the bytes, inline unless it
-/// is bytes the phone cannot show or a download was asked for.
+/// is bytes the phone cannot show or a download was asked for; one range of
+/// it when asked (`serve::from_bytes`), so a short film in the chat plays on
+/// iOS.
 fn file_response(
     read: Result<(Vec<u8>, &'static str), outbox::OutboxError>,
     filename: &str,
     download: bool,
+    headers: &HeaderMap,
 ) -> Response<Body> {
     match read {
-        Ok((bytes, kind)) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, kind)
-            .header(header::CONTENT_LENGTH, bytes.len())
-            .header(header::CONTENT_DISPOSITION, if kind == "application/octet-stream" || download { format!("attachment; filename=\"{filename}\"") } else { "inline".into() })
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| {
-                api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response()
-            }),
+        Ok((bytes, kind)) => {
+            let disposition = if kind == "application/octet-stream" || download { format!("attachment; filename=\"{filename}\"") } else { "inline".into() };
+            serve::from_bytes(headers, bytes, &serve::Head { kind, disposition, etag: None })
+        }
         Err(error) => outbox_error(error).into_response(),
     }
+}
+
+/// Whether a file answer is one a cache policy applies to: the whole, or a
+/// range of it.
+fn kept_answer(status: StatusCode) -> bool {
+    status == StatusCode::OK || status == StatusCode::PARTIAL_CONTENT
 }
 
 /// `GET /api/v1/tabs/{tab_id}/inbox?names=a,b` — what the phone sent into this
@@ -6791,11 +6813,11 @@ async fn inbox_file(
     let read = tokio::task::spawn_blocking(move || inbox::read(&root, &name))
         .await
         .unwrap_or_else(|error| Err(outbox::OutboxError::Io(error.to_string())));
-    let mut response = file_response(read, &filename, download);
+    let mut response = file_response(read, &filename, download, &headers);
     // A leaf carries its arrival stamp and is never rewritten, so the phone
     // may keep its picture: without this every API answer is `no-store` and
     // each remount of the chat pulled the whole original down the link again.
-    if response.status() == StatusCode::OK && !download {
+    if kept_answer(response.status()) && !download {
         response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(INBOX_FILE_CACHE));
     }
     response
@@ -7522,6 +7544,7 @@ fn files_error(error: files::FilesError) -> (StatusCode, Json<serde_json::Value>
             files::FilesError::Unavailable | files::FilesError::HostOffline => StatusCode::CONFLICT,
             files::FilesError::NotFound => StatusCode::NOT_FOUND,
             files::FilesError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            files::FilesError::TimedOut => StatusCode::GATEWAY_TIMEOUT,
             files::FilesError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         },
         error.code(),
@@ -7593,10 +7616,9 @@ async fn project_files_list(
     };
     let key = state.auth.lock_ok().host_key().to_vec();
     let accepts = uploads::accepts(&rel);
-    // A directory walk that opens every kept file to type it: off the executor.
-    let listed = tokio::task::spawn_blocking(move || files::list(&root, &rel, &key, &raw_id))
-        .await
-        .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
+    // A directory walk that opens every kept file to type it: off the
+    // executor, under the local deadline (a stalled mount answers `timeout`).
+    let listed = deadline::local(move || files::list(&root, &rel, &key, &raw_id)).await;
     match listed {
         Ok(listing) => {
             let mut answer = json!(listing);
@@ -7608,11 +7630,74 @@ async fn project_files_list(
     }
 }
 
-/// `GET /api/v1/projects/{project_id}/files/search?q=<words>` — the project's
-/// files and folders whose names hold every word, each with the sealed trail
-/// of folders above it (`files::search`). Read-only, like the listing; no
-/// path appears in the answer, only the leaf names the drawer would show.
-/// `&on=host` searches the remote side by a bounded walk (`host_files`).
+/// `GET /api/v1/projects/{project_id}/files/entry?name=<leaf>[&dir=<token>]` —
+/// one file or folder of the folder `dir` seals (none: the root), as its
+/// listing would row it (`files::lookup`): `{ "entry": … }`, or
+/// `file_not_found` when it is no longer there. What the phone's favorites,
+/// recents and Mark up's Reload ask instead of listing the whole folder again.
+/// `name` is one leaf the browser would list; nothing else is accepted.
+/// `&on=host` asks the remote side (`host_files::entry_on`).
+async fn project_files_entry(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    // The scope first, as every files route answers it: a name is judged
+    // only where the files are open.
+    let name = query.get("name").filter(|name| files::valid_segment(name)).cloned();
+    if on_host_side(&query) {
+        let (spec, known, raw_id) = match host_files_scope(&state, &phone, &project_id) {
+            Ok(scope) => scope,
+            Err(error) => return error,
+        };
+        let Some(name) = name else {
+            return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+        };
+        let dir = match host_files_rel(&state, &raw_id, query.get("dir")) {
+            Ok(rel) => rel,
+            Err(error) => return error,
+        };
+        let key = state.auth.lock_ok().host_key().to_vec();
+        return match state.host_files.entry(&spec, known, files::child(&dir, &name), key, raw_id).await {
+            Ok(entry) => (StatusCode::OK, Json(json!({ "entry": entry }))),
+            Err(error) => files_error(error),
+        };
+    }
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let Some(name) = name else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let dir = match files_rel(&state, &raw_id, query.get("dir")) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let rel = files::child(&dir, &name);
+    // Opens and sniffs one file: off the executor, as a listing is.
+    let found = deadline::local(move || Ok(files::lookup(&root, &rel, &key, &raw_id))).await;
+    match found {
+        Ok(Some(entry)) => (StatusCode::OK, Json(json!({ "entry": entry }))),
+        Err(files::FilesError::TimedOut) => files_error(files::FilesError::TimedOut),
+        Ok(None) | Err(_) => api_error(StatusCode::NOT_FOUND, "file_not_found"),
+    }
+}
+
+/// `GET /api/v1/projects/{project_id}/files/search?q=<words>[&dir=<token>][&ignored=1]`
+/// — the project's files and folders whose names hold every word, each with
+/// the sealed trail of folders above it (`files::search_in`). `dir` keeps the
+/// search inside that folder; `ignored=1` searches what git ignores too, by a
+/// bounded walk. Read-only, like the listing; no path appears in the answer,
+/// only the leaf names the drawer would show. `&on=host` searches the remote
+/// side by a bounded walk (`host_files`), inside `dir` likewise; it has no
+/// git listing, so `ignored` changes nothing there.
 async fn project_files_search(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -7632,8 +7717,12 @@ async fn project_files_search(
         if q.len() > files::MAX_QUERY {
             return api_error(StatusCode::BAD_REQUEST, "query_too_long");
         }
+        let under = match host_files_rel(&state, &raw_id, query.get("dir")) {
+            Ok(rel) => rel,
+            Err(error) => return error,
+        };
         let key = state.auth.lock_ok().host_key().to_vec();
-        return match state.host_files.search(&spec, known, q, key, raw_id).await {
+        return match state.host_files.search(&spec, known, q, under, key, raw_id).await {
             Ok(found) => (StatusCode::OK, Json(json!(found))),
             Err(error) => files_error(error),
         };
@@ -7645,11 +7734,15 @@ async fn project_files_search(
     if q.len() > files::MAX_QUERY {
         return api_error(StatusCode::BAD_REQUEST, "query_too_long");
     }
+    let under = match files_rel(&state, &raw_id, query.get("dir")) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let scope = files::SearchScope { under, ignored: query.get("ignored").is_some_and(|on| on == "1") };
     let key = state.auth.lock_ok().host_key().to_vec();
-    // A git listing or a walk of the whole tree: off the executor.
-    let found = tokio::task::spawn_blocking(move || files::search(&root, &q, &key, &raw_id))
-        .await
-        .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
+    // A git listing or a walk of the whole tree: off the executor, under the
+    // local deadline.
+    let found = deadline::local(move || files::search_in(&root, &q, &key, &raw_id, &scope)).await;
     match found {
         Ok(found) => (StatusCode::OK, Json(json!(found))),
         Err(error) => files_error(error),
@@ -7659,8 +7752,14 @@ async fn project_files_search(
 /// `GET /api/v1/projects/{project_id}/files/raw?f=<token>[&download=1]` — one
 /// file's bytes, typed by its head as the outbox types them (active formats are
 /// inert text), for the same viewer. Read-only; the browser's one write is
-/// `project_files_upload`, which only adds new files. `&on=host` reads a
-/// remote-side token's file from the host (`host_files`).
+/// `project_files_upload`, which only adds new files.
+///
+/// This computer's side streams the file from the descriptor it proved, with
+/// no size cap (a text is served as its first `MAX_OUTBOX_FILE` bytes), and
+/// answers one `Range` (206), `If-None-Match` (304) and `If-Range` against a
+/// strong `ETag` (`serve`). `&on=host` reads a remote-side token's file from
+/// the host (`host_files`): a range there is read on its own, at most
+/// `MAX_OUTBOX_FILE` per answer; the whole file keeps that cap.
 async fn project_files_raw(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -7673,7 +7772,11 @@ async fn project_files_raw(
         Err(error) => return error.into_response(),
     };
     let no_token = || api_error(StatusCode::NOT_FOUND, "file_not_found").into_response();
-    let read = if on_host_side(&query) {
+    let download = query.get("download").is_some_and(|v| v == "1");
+    let disposition = |kind: &str, leaf: &str| {
+        if kind == "application/octet-stream" || download { attachment_disposition(leaf) } else { "inline".into() }
+    };
+    if on_host_side(&query) {
         let (spec, known, raw_id) = match host_files_scope(&state, &phone, &project_id) {
             Ok(scope) => scope,
             Err(error) => return error.into_response(),
@@ -7684,42 +7787,47 @@ async fn project_files_raw(
             Err(error) => return error.into_response(),
         };
         let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
-        (leaf, state.host_files.read(&spec, known, rel).await)
-    } else {
-        let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
-            Ok(scope) => scope,
-            Err(error) => return error.into_response(),
+        // No validator on this side, so an `If-Range` always asks for the whole.
+        let range = headers
+            .get(header::RANGE)
+            .filter(|_| !headers.contains_key(header::IF_RANGE))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let read = match range {
+            Some(range) => state.host_files.read_range(&spec, known, rel, range).await,
+            None => state.host_files.read(&spec, known, rel).await.map(|(bytes, kind)| host_files::HostRead::Whole(bytes, kind)),
         };
-        let Some(token) = query.get("f") else { return no_token() };
-        let rel = match files_rel(&state, &raw_id, Some(token)) {
-            Ok(rel) => rel,
-            Err(error) => return error.into_response(),
+        return match read {
+            Ok(host_files::HostRead::Whole(bytes, kind)) => {
+                serve::from_bytes(&headers, bytes, &serve::Head { kind, disposition: disposition(kind, &leaf), etag: None })
+            }
+            Ok(host_files::HostRead::Part { bytes, kind, start, total }) => {
+                serve::from_part(bytes, start, total, &serve::Head { kind, disposition: disposition(kind, &leaf), etag: None })
+            }
+            Ok(host_files::HostRead::Unsatisfiable { kind, total }) => {
+                serve::out_of_range(total, &serve::Head { kind, disposition: disposition(kind, &leaf), etag: None })
+            }
+            Err(error) => files_error(error).into_response(),
         };
-        let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
-        let read = tokio::task::spawn_blocking(move || files::read(&root, &rel))
-            .await
-            .unwrap_or_else(|error| Err(files::FilesError::Io(error.to_string())));
-        (leaf, read)
+    }
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error.into_response(),
     };
-    let (leaf, read) = read;
-    let download = query.get("download").is_some_and(|v| v == "1");
-    match read {
-        Ok((bytes, kind)) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, kind)
-            .header(header::CONTENT_LENGTH, bytes.len())
-            .header(
-                header::CONTENT_DISPOSITION,
-                if kind == "application/octet-stream" || download {
-                    attachment_disposition(&leaf)
-                } else {
-                    "inline".into()
-                },
-            )
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| {
-                api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response()
-            }),
+    let Some(token) = query.get("f") else { return no_token() };
+    let rel = match files_rel(&state, &raw_id, Some(token)) {
+        Ok(rel) => rel,
+        Err(error) => return error.into_response(),
+    };
+    let leaf = rel.rsplit('/').next().unwrap_or_default().to_string();
+    // Only the open and the type sniff wait on the disk here; the body then
+    // streams from the descriptor proven by that open.
+    match deadline::local(move || files::open_served(&root, &rel)).await {
+        Ok(served) => {
+            let etag = serve::etag(&served.meta);
+            let head = serve::Head { kind: served.kind, disposition: disposition(served.kind, &leaf), etag: Some(&etag) };
+            serve::from_file(&headers, served.file, served.len, &head).await
+        }
         Err(error) => files_error(error).into_response(),
     }
 }
@@ -7743,6 +7851,7 @@ fn upload_error(error: uploads::UploadError) -> (StatusCode, Json<serde_json::Va
             uploads::UploadError::Refused => StatusCode::FORBIDDEN,
             uploads::UploadError::Empty => StatusCode::BAD_REQUEST,
             uploads::UploadError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            uploads::UploadError::Exists => StatusCode::CONFLICT,
             uploads::UploadError::Full => StatusCode::INSUFFICIENT_STORAGE,
             uploads::UploadError::Unavailable => StatusCode::CONFLICT,
             uploads::UploadError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -7782,7 +7891,7 @@ async fn project_files_upload(
     headers: HeaderMap,
     Path(project_id): Path<String>,
     Query(query): Query<UploadQuery>,
-    body: Bytes,
+    body: Body,
 ) -> impl IntoResponse {
     let (phone, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
         Ok(scope) => scope,
@@ -7792,6 +7901,24 @@ async fn project_files_upload(
         Ok(rel) => rel,
         Err(error) => return error,
     };
+    // Refused before a byte is staged: a folder that takes none, or a body
+    // that says it is past the cap.
+    if !uploads::accepts(&rel_dir) {
+        return upload_error(uploads::UploadError::Refused);
+    }
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > uploads::MAX_UPLOAD_FILE) {
+        return upload_error(uploads::UploadError::TooLarge);
+    }
+    // Staged in the sidecar's private folder as it arrives, hashed on the
+    // way: never held whole in memory.
+    let staged = match uploads::stage_body(&state.config.state_dir, body).await {
+        Ok(staged) => staged,
+        Err(error) => return upload_error(error),
+    };
     // The device label for the desktop's notice, and the key the answer's
     // row is sealed with.
     let (label, key) = {
@@ -7800,10 +7927,10 @@ async fn project_files_upload(
         (label, auth.host_key().to_vec())
     };
     let state_dir = state.config.state_dir.clone();
-    // Up to MAX_INBOX_FILE bytes written and hashed under the sidecar-wide
-    // log lock: off the connection executor.
+    // The staged body copied into the project under the sidecar-wide log
+    // lock: off the connection executor. The staging file goes with `staged`.
     let landed = tokio::task::spawn_blocking(move || {
-        uploads::store(&state_dir, &root, &raw_id, &rel_dir, &query.name, &body, label.as_deref())
+        uploads::store_staged(&state_dir, &root, &raw_id, &rel_dir, &query.name, &staged, label.as_deref())
             .map(|landed| files::entry(&root, &landed.rel, &key, &raw_id))
     })
     .await
@@ -7813,6 +7940,125 @@ async fn project_files_upload(
         Ok(None) => upload_error(uploads::UploadError::NotFound),
         Err(error) => upload_error(error),
     }
+}
+
+/// `POST /api/v1/projects/{project_id}/files/folder?name=<name>[&dir=<token>]`
+/// — the library's **New folder**: an empty folder under the phone's name in
+/// the folder it stands in, behind the upload guards (session, exact origin,
+/// both switches) and the same rules (no dot folder, no dot name). Add-only:
+/// a taken name is `already_exists`. Answers the folder's listing row.
+async fn project_files_folder(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<UploadQuery>,
+) -> impl IntoResponse {
+    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let rel_dir = match files_rel(&state, &raw_id, query.dir.as_ref()) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let made = tokio::task::spawn_blocking(move || {
+        uploads::make_folder(&root, &raw_id, &rel_dir, &query.name).map(|rel| files::lookup(&root, &rel, &key, &raw_id))
+    })
+    .await
+    .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));
+    match made {
+        Ok(Some(entry)) => (StatusCode::CREATED, Json(json!({ "entry": entry }))),
+        Ok(None) => upload_error(uploads::UploadError::NotFound),
+        Err(error) => upload_error(error),
+    }
+}
+
+/// `DELETE /api/v1/projects/{project_id}/files/folder?f=<token>` — **Undo** of
+/// a **New folder**: only a folder the phone made within the hour, and only
+/// while it is still empty (`uploads::remove_made_folder`).
+async fn project_files_folder_undo(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let Some(token) = query.get("f") else {
+        return upload_error(uploads::UploadError::NotFound);
+    };
+    let rel = match files_rel(&state, &raw_id, Some(token)) {
+        Ok(rel) => rel,
+        Err(error) => return error,
+    };
+    let removed = tokio::task::spawn_blocking(move || uploads::remove_made_folder(&root, &raw_id, &rel))
+        .await
+        .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));
+    match removed {
+        Ok(()) => (StatusCode::OK, Json(json!({ "removed": true }))),
+        Err(error) => upload_error(error),
+    }
+}
+
+/// `GET /api/v1/projects/{project_id}/files/zip[?dir=<token>][&check=1]` —
+/// **Download as zip**: the folder's files as a stored zip, streamed
+/// (`files_zip`). This computer's side only; past `files_zip::MAX_ZIP_FILES`
+/// files or `MAX_ZIP_BYTES` bytes it is `folder_too_large`, before anything
+/// is sent. `check=1` answers only `{ files, bytes }` (or the refusal), so the
+/// phone can say so before it hands the browser a download.
+async fn project_files_zip(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Path(project_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response<Body> {
+    let phone = match authenticate_or_ticket(&headers, &state, &uri) {
+        Ok(phone) => phone,
+        Err(error) => return error.into_response(),
+    };
+    if on_host_side(&query) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request").into_response();
+    }
+    let (root, raw_id) = match files_scope(&state, &phone, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error.into_response(),
+    };
+    let rel = match files_rel(&state, &raw_id, query.get("dir")) {
+        Ok(rel) => rel,
+        Err(error) => return error.into_response(),
+    };
+    let leaf = if rel.is_empty() { "files".to_string() } else { rel.rsplit('/').next().unwrap_or("files").to_string() };
+    let planned = {
+        let (root, rel) = (root.clone(), rel.clone());
+        deadline::local(move || files_zip::plan(&root, &rel)).await
+    };
+    let planned = match planned {
+        Ok(planned) => planned,
+        Err(files::FilesError::TooLarge) => return api_error(StatusCode::PAYLOAD_TOO_LARGE, "folder_too_large").into_response(),
+        Err(error) => return files_error(error).into_response(),
+    };
+    if query.get("check").is_some_and(|on| on == "1") {
+        return (StatusCode::OK, Json(json!({ "files": planned.count(), "bytes": planned.bytes }))).into_response();
+    }
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
+    tokio::task::spawn_blocking(move || {
+        let writer = files_zip::ChannelWriter::new(sender.clone());
+        if let Err(error) = files_zip::write(&root, &planned, writer) {
+            // The phone gone is no error worth a send; anything else cuts the body.
+            let _ = sender.blocking_send(Err(error));
+        }
+    });
+    let stream = futures_util::stream::poll_fn(move |context| receiver.poll_recv(context));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(header::CONTENT_DISPOSITION, attachment_disposition(&format!("{leaf}.zip")))
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed").into_response())
 }
 
 /// The largest remarks body: a page's worth of highlights and notes is a few
@@ -8155,11 +8401,18 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/projects/{project_id}/files", get(project_files_list))
         .route("/api/v1/projects/{project_id}/files/raw", get(project_files_raw))
         .route("/api/v1/projects/{project_id}/files/search", get(project_files_search))
+        .route("/api/v1/projects/{project_id}/files/entry", get(project_files_entry))
         .route(
             "/api/v1/projects/{project_id}/files/upload",
-            delete(project_files_upload_undo)
-                .merge(post(project_files_upload).layer(DefaultBodyLimit::max(inbox::MAX_INBOX_FILE))),
+            // The body is a stream the handler stages and caps itself
+            // (`uploads::MAX_UPLOAD_FILE`); no extractor buffers it.
+            delete(project_files_upload_undo).merge(post(project_files_upload)),
         )
+        .route(
+            "/api/v1/projects/{project_id}/files/folder",
+            delete(project_files_folder_undo).merge(post(project_files_folder).layer(DefaultBodyLimit::max(1024))),
+        )
+        .route("/api/v1/projects/{project_id}/files/zip", get(project_files_zip))
         .route(
             "/api/v1/projects/{project_id}/files/remarks",
             post(project_files_remarks).layer(DefaultBodyLimit::max(REMARKS_BODY)),

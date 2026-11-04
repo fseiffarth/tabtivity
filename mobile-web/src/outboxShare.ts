@@ -123,3 +123,54 @@ export function useOutboxShare(scope: ViewerScope) {
 
   return { share, prepare, busy, ready, failed };
 }
+
+/** The most bytes several files are shared with at once: each is fetched
+ * whole into the phone's memory first. */
+export const MAX_SHARE_MANY = 48 * 1024 * 1024;
+
+/** Sharing several files at once (the files library's selection): the first
+ * tap fetches them all; the share sheet comes up then, or — when the phone
+ * found the tap gone stale meanwhile — on the next tap, which the button
+ * asks for (`ready`). */
+export function useShareMany(scope: ViewerScope) {
+  const [state, setState] = useState<{ key: string; phase: "fetching" | "ready" | "failed"; files?: File[] } | null>(null);
+  const keyOf = (files: readonly OutboxFile[]) => files.map((file) => `${file.ref ?? file.name}@${file.modified}`).join("\n");
+
+  const share = useCallback(async (files: readonly OutboxFile[]) => {
+    const key = keyOf(files);
+    const send = async (prepared: File[], waited: boolean) => {
+      try {
+        await navigator.share({ files: prepared });
+        setState(null);
+      } catch (error) {
+        const name = error instanceof DOMException ? error.name : "";
+        if (name === "AbortError") setState(null);
+        else if (name === "NotAllowedError" && waited) setState({ key, phase: "ready", files: prepared });
+        else setState({ key, phase: "failed" });
+      }
+    };
+    if (state?.key === key && state.phase === "ready" && state.files) return send(state.files, false);
+    const kinds = files.map(shareAs);
+    if (kinds.some((as) => as === null)) {
+      setState({ key, phase: "failed" });
+      return;
+    }
+    setState({ key, phase: "fetching" });
+    try {
+      const prepared = await Promise.all(files.map(async (file, index) => {
+        const as = kinds[index]!;
+        const response = await fetch(viewerFileUrl(scope, file));
+        if (!response.ok) throw new Error("read_failed");
+        return new File([await response.blob()], as.name, { type: as.type });
+      }));
+      if (!navigator.canShare({ files: prepared })) throw new Error("refused");
+      await send(prepared, true);
+    } catch {
+      setState({ key, phase: "failed" });
+    }
+  }, [scope, state]);
+
+  /** Where sharing `files` stands: fetching, held for a second tap, failed. */
+  const phaseOf = (files: readonly OutboxFile[]) => state?.key === keyOf(files) ? state.phase : null;
+  return { share, phaseOf };
+}

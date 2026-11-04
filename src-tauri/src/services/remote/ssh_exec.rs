@@ -1160,6 +1160,22 @@ fn host_sh(body: &str) -> String {
     format!("exec sh -c '{body}'")
 }
 
+/// The `terminal-overrides` entry that lets a `vt100` client have dim text. The
+/// phone's attach is one (`pty_bridge::tmux_attach_command`, for its lack of
+/// `smcup`), and vt100's terminfo has no `dim`, so tmux strips SGR 2 from the
+/// client's stream while the pane keeps it. The phone's terminal and its
+/// parsers then see dim rows as ordinary text. A fixed slot, so every attach
+/// sets the same entry rather than growing the array; server-wide, in memory
+/// only, and it matches no client but a `vt100` one.
+pub const TMUX_VT100_DIM: (&str, &str) = ("terminal-overrides[77]", r"vt100:dim=\E[2m");
+
+/// [`TMUX_VT100_DIM`] on a host's tmux. Plain `tmux`, like the attach; `sh`'s
+/// double quotes keep the backslash for tmux.
+pub fn host_tmux_keep_dim_command() -> String {
+    let (option, value) = TMUX_VT100_DIM;
+    host_sh(&format!("tmux set-option -s \"{option}\" \"{value}\""))
+}
+
 /// The host-side attach the phone's PTY runs through [`host_mux_args`]: plain
 /// `tmux` in a `sh` of the remote's non-login `$SHELL -c`, the way the desktop's
 /// wrap started the session ([`remote_command`]), so the same binary and server

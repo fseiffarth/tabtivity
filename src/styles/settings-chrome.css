@@ -3345,19 +3345,43 @@ label.settings-toggle-card-row {
   border: 1px solid var(--danger);
 }
 
-/* The fourth button: no fill and no border, for a link-weight action beside
-   real ones. `.settings-btn` is the default, `.btn-primary`/`.btn-danger` the CTAs. */
+/* The fourth button: no fill and no border at rest, for a link-weight action
+   beside real ones; a soft fill under the pointer. `.settings-btn` is the
+   default, `.btn-primary`/`.btn-danger` the CTAs. Modifiers: `.is-danger` for
+   a destructive quiet action (delete in a row), `.is-notable` for one that has
+   news (an update waiting). */
 .btn-quiet {
   padding: var(--space-1) var(--space-2);
   border: 0;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-secondary);
+  white-space: nowrap;
   cursor: var(--cur-pointer, pointer);
-  transition: color var(--transition);
+  transition: color var(--transition), background var(--transition);
 }
 
 .btn-quiet:hover:not(:disabled) {
   color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.btn-quiet:disabled {
+  opacity: 0.5;
+  cursor: var(--cur-default, default);
+}
+
+.btn-quiet.is-danger,
+.btn-quiet.is-danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+.btn-quiet.is-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.btn-quiet.is-notable {
+  color: var(--success);
+  font-weight: 600;
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -3381,6 +3405,48 @@ label.settings-toggle-card-row {
 .btn-primary:disabled,
 .btn-danger:disabled {
   opacity: 0.55;
+  cursor: var(--cur-default, default);
+}
+
+/* The one segmented control (round 2, 2026-11-04): a soft track, the picked
+   option a lifted chip in ink. It replaced four per-feature looks (skills
+   scope, Ollama filters, stats period, activity years). The picked state is
+   whichever marker its host already sets: `.active`, `.on` or `.selected`.
+   The track wraps, so a long run (years, filters) stays inside its column. */
+.seg {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+}
+.seg > button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: 500;
+  cursor: var(--cur-pointer, pointer);
+  transition: background var(--transition), color var(--transition);
+}
+.seg > button:hover:not(:disabled):not(:is(.active, .on, .selected)) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.seg > button:is(.active, .on, .selected) {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-1);
+}
+.seg > button:disabled {
+  opacity: 0.45;
   cursor: var(--cur-default, default);
 }
 

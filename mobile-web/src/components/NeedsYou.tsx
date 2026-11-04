@@ -3,7 +3,7 @@ import type { IconProps } from "../../../src/components/common/icons/Icon";
 import { lastPrompt } from "../agentPrompts";
 import { getActivity, holdPrompt, resolveAlert, wasApplied, type ActivityTab, type MobileAlertItem, type MobileAlerts } from "../api";
 import { describeFailure } from "../connection";
-import { CheckIcon, PlayMark, SECTION_ICON } from "../glyphs";
+import { CheckIcon, PlayMark, QuestionIcon, SECTION_ICON } from "../glyphs";
 import { ageLabel } from "../terminal/fileLabels";
 import { useVisiblePoll } from "../visiblePoll";
 import { isUnseenDone, type SeenDone } from "../seenDone";
@@ -68,11 +68,15 @@ function since(tab: ActivityTab): number | undefined {
  * Home's Needs you: what is waiting on the reader, above the projects, in one
  * group — agent tabs asking something or cut off, finished tabs not opened on
  * this phone yet (`seenDone.ts`), then the desktop's mail, to-do and calendar
- * alerts. Three rows, then "Show all" opens the rest in place; tabs still at
- * work are one summary row that switches to the Agents view.
+ * alerts. Three rows, then "Show all" opens the rest in place.
  *
- * Nothing at all is drawn until there is something to show — not a heading
- * over an empty box, and not a second "loading" beside the project list's.
+ * Above it, always, three tiles count the agent tabs waiting on the reader,
+ * at work and finished unseen; each opens the Agents view, which has no
+ * other door on Home. Their numbers wait for the first answer.
+ *
+ * The group itself is not drawn until there is something to show — not a
+ * heading over an empty box, and not a second "loading" beside the project
+ * list's.
  * The agent rows are the Agents view's own list (`getActivity`), polled on its
  * cadence only while this view is mounted and the page is shown.
  */
@@ -231,15 +235,29 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
       };
     }),
   ];
-  if (rows.length === 0 && working === 0 && !error) return null;
   const shown = expanded ? rows : rows.slice(0, CAP);
-  return <section className="home-needs" aria-labelledby="home-needs-heading">
+  const tiles: { key: string; count: number; label: TranslationKey; glyph: ReactNode }[] = [
+    { key: "waiting", count: asking.length, label: "mobile.home.glanceWaiting", glyph: <QuestionIcon size="1em" /> },
+    { key: "working", count: working, label: "mobile.home.glanceWorking", glyph: <PlayMark /> },
+    { key: "done", count: finished.length, label: "mobile.home.glanceDone", glyph: <CheckIcon size="1em" /> },
+  ];
+  const glance = <nav className="home-glance" aria-label={t("mobile.home.glance")}>
+    {tiles.map((tile) => <button key={tile.key} className={`home-glance-tile ${tile.key}${tile.count > 0 ? " lit" : ""}`} aria-label={tabs ? t("mobile.home.glanceCount", { label: t(tile.label), count: tile.count }) : t(tile.label)} onClick={showAgents}>
+      <span className="home-glance-top">
+        <strong>{tabs ? tile.count : ""}</strong>
+        <span className="home-glance-glyph" aria-hidden="true">{tile.glyph}</span>
+      </span>
+      <span className="home-glance-label">{t(tile.label)}</span>
+    </button>)}
+    {isUntested("mobile.home.glance") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+  </nav>;
+  if (rows.length === 0 && !error) return glance;
+  return <>{glance}<section className="home-needs" aria-labelledby="home-needs-heading">
     <h2 className="home-section-head" id="home-needs-heading">{t("mobile.home.needsYou")}{isUntested("mobile.home.needsYou") && <span className="untested">{t("mobile.newTab.untested")}</span>}</h2>
     {error && <p className="mobile-alerts-error" role="alert">{error}</p>}
     <div className="home-group">
       {shown.map((row) => <div className="home-group-row" key={row.key}>{row.node}</div>)}
       {rows.length > shown.length && <button className="home-group-more" onClick={() => setExpanded(true)}>{t("mobile.home.needsShowAll", { count: rows.length })}</button>}
-      {working > 0 && <button className="home-group-more" onClick={showAgents}><span aria-hidden="true" className="home-group-more-glyph"><PlayMark /></span>{t("mobile.home.needsWorking", { count: working })}</button>}
     </div>
-  </section>;
+  </section></>;
 }
