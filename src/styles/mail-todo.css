@@ -173,8 +173,11 @@ svg.alerts-toggle-icon {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
-  background: var(--danger);
-  color: var(--accent-contrast);
+  /* A plain count is neutral (2026-11-04: five red dots read as five alarms).
+     Red is for news that needs you — fresh mail, an overdue to-do — and amber
+     for an agent asking (below). */
+  background: color-mix(in srgb, var(--text-primary) 16%, var(--bg-header-solid));
+  color: var(--text-primary);
   font-size: var(--text-xs);
   font-weight: 700;
   line-height: 1;
@@ -187,9 +190,19 @@ svg.alerts-toggle-icon {
    separates the dot from the icon it sits on, which is what reads as "this just
    changed" without introducing a second count to reconcile against the first. */
 .mail-indicator-badge.fresh {
-  /* `--bg-header-solid`, never `--bg-header`: the latter is a gradient in the
-     fancy themes, and a gradient in a box-shadow drops the whole declaration. */
+  /* `--bg-header-solid`, never `--bg-header`: the latter may be a gradient (a
+     Customizer value), and a gradient in a box-shadow drops the declaration. */
   box-shadow: 0 0 0 2px var(--bg-header-solid);
+}
+.mail-indicator-badge.fresh,
+.todo-indicator-badge.overdue {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+/* An agent waiting on an answer: the decision colour of the tab strokes. */
+.cockpit-indicator-badge.asking {
+  background: var(--status-decision);
+  color: #1c1300;
 }
 
 /* "The last check failed" is not "you have mail", so it does not wear mail's

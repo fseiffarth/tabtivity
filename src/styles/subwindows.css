@@ -2268,9 +2268,12 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   min-height: 100%;
   padding: 14px 18px;
 }
-/* Bubbles tint from the theme's ink and accent rather than `--bg-elevated`
-   and `--border-subtle`: dark and light give those the page's own colour, so
-   an answer sank into the chat. The chat sits a shade off the page, each
+/* An answer is a card: `--bg-elevated` with a `--border-subtle` rim on the
+   chat's slightly shaded ground; a prompt is a soft accent wash without a rim
+   (2026-11-04: a grey-filled, rimmed answer beside an accent-rimmed prompt read
+   heavier than the words). The plain dark/light pair keep the ink tint below,
+   since they give `--bg-elevated` the page's own colour and an answer would
+   sink into the chat. The chat sits a shade off the page, each
    bubble a shade further with a visible rim; the mobile Focus chat's tail
    corners say whose it is, and a prompt opens its exchange with more air
    above it than the bubbles inside one. Static shadow token only. */
@@ -2278,7 +2281,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   position: relative;
   max-width: min(760px, 82%);
   padding: var(--space-2) var(--space-3) 18px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius);
   box-shadow: var(--shadow-1);
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -2290,8 +2293,8 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 .terminal-reader-turn.user {
   align-self: flex-end;
   border-bottom-right-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 24%, var(--bg-main));
-  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-main));
+  border: 1px solid transparent;
 }
 .terminal-reader-turns > .terminal-reader-turn.user:not(:first-child) {
   margin-top: 14px;
@@ -2426,19 +2429,18 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-turn.agent {
   align-self: flex-start;
   border-bottom-left-radius: 4px;
-  background: color-mix(in srgb, var(--text-primary) 9%, var(--bg-main));
-  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
 }
 .terminal-reader-turn.agent.plan {
   border-color: var(--accent-secondary);
 }
-/* Plain Dark / Plain Light / Light Lavender / System (follow OS — marked by
+/* Plain Dark / Plain Light / System (follow OS — marked by
    `data-theme-pick`, since it paints as Fancy Dark or Fancy Light) give the
    bubbles their own ink and rim and no shadow; the corners are the base rule's
    (they were octagons until 2026-11-02). */
 [data-theme="dark"] .terminal-reader-turn,
 [data-theme="light"] .terminal-reader-turn,
-[data-theme="light_lavender"] .terminal-reader-turn,
 [data-theme-pick="system"] .terminal-reader-turn {
   border: 1px solid var(--turn-rim);
   box-shadow: none;
@@ -2446,21 +2448,18 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 }
 [data-theme="dark"] .terminal-reader-turn.user,
 [data-theme="light"] .terminal-reader-turn.user,
-[data-theme="light_lavender"] .terminal-reader-turn.user,
 [data-theme-pick="system"] .terminal-reader-turn.user {
   --turn-fill: color-mix(in srgb, var(--accent) 24%, var(--bg-main));
   --turn-rim: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 [data-theme="dark"] .terminal-reader-turn.agent,
 [data-theme="light"] .terminal-reader-turn.agent,
-[data-theme="light_lavender"] .terminal-reader-turn.agent,
 [data-theme-pick="system"] .terminal-reader-turn.agent {
   --turn-fill: color-mix(in srgb, var(--text-primary) 9%, var(--bg-main));
   --turn-rim: color-mix(in srgb, var(--text-primary) 18%, transparent);
 }
 [data-theme="dark"] .terminal-reader-turn.agent.plan,
 [data-theme="light"] .terminal-reader-turn.agent.plan,
-[data-theme="light_lavender"] .terminal-reader-turn.agent.plan,
 [data-theme-pick="system"] .terminal-reader-turn.agent.plan {
   --turn-rim: var(--accent-secondary);
 }
@@ -3271,14 +3270,16 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   display: flex;
   gap: 6px;
 }
+/* Flat chips (2026-11-04): a soft fill, no outline, the button radius. */
 .terminal-reader-chip {
-  padding: 2px 10px;
+  padding: 2px 8px;
   font: inherit;
   font-size: var(--text-sm);
+  font-weight: 500;
   color: var(--text-secondary);
-  background: none;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
+  background: var(--bg-subtle);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   cursor: var(--cur-pointer, pointer);
 }
 .terminal-reader-chip:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
@@ -3346,11 +3347,13 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border-color);
-  border-radius: 15px;
+  border-radius: var(--radius);
 }
+/* Focus is the accent edge plus a soft static ring (no blur, never animated). */
 .terminal-reader-composer textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 /* The untested pill of Claude's suggestion, dimmed in the empty box as its
    placeholder: top right, clear of Send and the mic. */
@@ -3506,8 +3509,9 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-topbar-navigation { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .reader-topbar-actions { display: inline-flex; margin-left: auto; }
 .reader-view-tabs { display: inline-flex; align-items: center; flex: none; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--bg-subtle); }
-.reader-view-tabs > button { padding: 5px 11px; font: inherit; color: var(--text-secondary); border: none; border-radius: var(--radius); background: transparent; cursor: var(--cur-pointer, pointer); }
-.reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--accent); }
+/* One segmented control: the picked view is a lifted chip in ink, not accent. */
+.reader-view-tabs > button { padding: 4px 10px; font: inherit; font-weight: 500; color: var(--text-secondary); border: none; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
+.reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--text-primary); box-shadow: var(--shadow-1); }
 .reader-view-tabs > button:disabled { opacity: 0.45; cursor: var(--cur-not-allowed, not-allowed); }
 .reader-topbar .prompt-strip-reader { border-color: transparent; border-radius: var(--radius); }
 .reader-topbar .prompt-strip-panel { top: calc(100% + 6px); bottom: auto; height: min(560px, 65vh); max-height: 65vh; }
@@ -3518,7 +3522,8 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader[hidden] { display: none; }
 .terminal-reader-chip-actions { display: inline-flex; align-items: center; gap: 6px; position: relative; }
 .reader-topbar-actions .terminal-reader-chip { border-color: transparent; border-radius: var(--radius); }
-.reader-topbar-actions .terminal-reader-chip[aria-haspopup="menu"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, var(--border-color)); background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel)); }
+/* Commit is the default button, not an accent pill. */
+.reader-topbar-actions .terminal-reader-chip[aria-haspopup="menu"] { color: var(--text-primary); border-color: var(--border-color); background: var(--bg-subtle); }
 .reader-topbar-actions .terminal-reader-commit-menu { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; z-index: 3; }
 .terminal-reader.card-composer .terminal-reader-composer { border-top: none; padding: var(--space-2) 18px 18px; }
 .terminal-reader.card-composer .terminal-reader-input textarea { padding: var(--space-3) 72px 42px 14px; min-height: 108px; }
@@ -3662,7 +3667,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   gap: 14px;
   min-height: 28px;
   padding: 6px 14px 2px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
   color: var(--text-muted);
   white-space: nowrap;
@@ -3724,11 +3729,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-primary);
   background: var(--bg-hover);
 }
-/* Statusline actions have a visible edge before hover, including usage meters.
-   Keep plain facts unboxed and preserve the row's existing hit areas. */
+/* Statusline actions show they are buttons before hover, including usage
+   meters: a soft fill, the frame only under the pointer (2026-11-04: ten
+   framed chips in a row read as one undifferentiated band). Plain facts stay
+   unboxed and the row's hit areas are unchanged. */
 .terminal-reader-facts :is(.terminal-reader-fact-model, .terminal-reader-limit):not(:disabled) {
-  background: var(--bg-hover);
-  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  background: var(--bg-subtle);
   text-decoration: none;
 }
 .terminal-reader-facts :is(.terminal-reader-fact-model, .terminal-reader-limit):not(:disabled):is(:hover, [aria-expanded="true"]) {

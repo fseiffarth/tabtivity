@@ -36,14 +36,14 @@ describe("the floating recipe", () => {
     expect(wash).toContain(`.${member}::before`);
   });
 
+  // One token reaches every member: the recipe reads --float-fill, and the
+  // glass pair sets it on the theme, so no member can miss the glass fill.
   it("every member takes the glass fill in both glass themes", () => {
-    const glassRules = [...css.matchAll(/([^{}]+)\{\s*--surface-fill: var\(--glass-elevated\)/g)]
-      .map((m) => m[1])
-      .join(",");
-    for (const member of MEMBERS) {
-      expect(glassRules).toContain(`[data-theme="fancy_dark"] .${member}`);
-      expect(glassRules).toContain(`[data-theme="light_lavender"] .${member}`);
-    }
+    expect(css).toMatch(/--surface-fill: var\(--float-fill, var\(--bg-elevated\)\);\s*--surface-rail: 2px/);
+    expect(css).toMatch(
+      /\[data-theme="fancy_dark"\],\s*\[data-theme="light_lavender"\]\s*\{[^}]*--float-fill: var\(--glass-elevated\)/,
+    );
+    expect(css).not.toMatch(/--surface-fill: var\(--glass-elevated\)/);
   });
 
   it("no member paints a background of its own over the recipe", () => {

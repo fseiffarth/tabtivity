@@ -127,8 +127,9 @@ select option {
    overlay works over any of them with no per-theme branching. The translucency
    lives in the token (32% accent by default) rather than in an `opacity` here,
    so one hex with an alpha channel from the Theme Customizer can set both the
-   hue and how far it carries; the themes that want no wash set it to
-   `transparent`. Negative z-index keeps it under the header's own
+   hue and how far it carries. Every built-in theme leaves it `transparent`
+   since 2026-11-04 (a calm header, the accent kept for state); the overlay
+   stays for a Customizer wash. Negative z-index keeps it under the header's own
    (unpositioned, normal-flow) children within .app-header's own stacking
    context. */
 .app-header::before {
@@ -206,6 +207,10 @@ select option {
      is drawn by the ::before/::after bars below, which have fixed pixel sizes
      and so are untouched by it. */
   font-size: 0;
+  /* The glyph's ink: secondary text at rest, so the four controls read as
+     chrome rather than as three traffic lights; each takes its own colour
+     (--wm-*) only under the pointer, close turning red. */
+  --wm-ink: var(--text-secondary);
   transition: background-color var(--transition), border-color var(--transition),
     transform var(--transition);
 }
@@ -215,15 +220,18 @@ select option {
 .vpn-prompt-close:active,
 .dialog-close-btn:active { transform: scale(0.92); }
 .wm-minimize:hover {
+  --wm-ink: var(--wm-minimize);
   background: color-mix(in srgb, var(--wm-minimize) 20%, transparent);
   border-color: color-mix(in srgb, var(--wm-minimize) 45%, transparent);
 }
 .wm-maximize:hover {
+  --wm-ink: var(--wm-maximize);
   background: color-mix(in srgb, var(--wm-maximize) 20%, transparent);
   border-color: color-mix(in srgb, var(--wm-maximize) 45%, transparent);
 }
 .wm-fullscreen:hover,
 .wm-fullscreen[aria-pressed="true"] {
+  --wm-ink: var(--wm-maximize);
   background: color-mix(in srgb, var(--wm-maximize) 20%, transparent);
   border-color: color-mix(in srgb, var(--wm-maximize) 45%, transparent);
 }
@@ -231,6 +239,7 @@ select option {
 .vpn-indicator-close:hover,
 .vpn-prompt-close:hover,
 .dialog-close-btn:hover {
+  --wm-ink: var(--wm-close);
   background: color-mix(in srgb, var(--wm-close) 26%, transparent);
   border-color: color-mix(in srgb, var(--wm-close) 55%, transparent);
 }
@@ -241,7 +250,7 @@ select option {
   width: 10px;
   height: 2px;
   border-radius: 1px;
-  background: var(--wm-minimize);
+  background: var(--wm-ink);
 }
 
 /* Maximize glyph: a small window outline. */
@@ -250,12 +259,12 @@ select option {
   width: 9px;
   height: 9px;
   border-radius: 2px;
-  border: 1.5px solid var(--wm-maximize);
+  border: 1.5px solid var(--wm-ink);
 }
 
 /* Fullscreen glyph: four corner brackets, drawn as eight short bars. */
 .wm-fullscreen::before {
-  --wm-fs-c: linear-gradient(var(--wm-maximize), var(--wm-maximize));
+  --wm-fs-c: linear-gradient(var(--wm-ink), var(--wm-ink));
   content: "";
   width: 11px;
   height: 11px;
@@ -281,7 +290,7 @@ select option {
   width: 12px;
   height: 2px;
   border-radius: 1px;
-  background: var(--wm-close);
+  background: var(--wm-ink);
 }
 .wm-close::before,
 .vpn-indicator-close::before,

@@ -1576,7 +1576,8 @@ export function ProjectFilesView({
         )}
         {/* Static project type tags (git / provider / SSH / scaffold). These are
             labels only — no interactivity — so they deliberately look nothing
-            like the source switch below. */}
+            like the source switch below: a neutral chip whose kind colour is
+            only its lamp (`--tag-color`). */}
         {!activeBox && typeTags.length > 0 && (
           <span className="side-panel-type-tags">
             {typeTags.map((tag) => {
@@ -1593,11 +1594,9 @@ export function ProjectFilesView({
                       : tag.title
                   }
                   style={{
-                    color: tag.color,
-                    borderColor: tag.color,
-                    background: `${tag.color}22`,
+                    "--tag-color": tag.color,
                     cursor: isSsh ? "context-menu" : undefined,
-                  }}
+                  } as React.CSSProperties}
                   onContextMenu={
                     isSsh
                       ? (e) => {

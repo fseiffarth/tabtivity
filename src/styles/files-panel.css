@@ -852,11 +852,13 @@
 
 /* Selected-state for the generic small toolbar button (view-switcher rows like
    Files/Git/Search/Apps, and every other `.toolbar-btn` toggle) — previously
-   unstyled, so `aria-pressed`/`.active` carried no visible marker at all. */
+   unstyled, so `aria-pressed`/`.active` carried no visible marker at all.
+   The wash alone marks it; the label stays ink (an accent label inside an
+   accent frame was one more purple outline in the panel, 2026-11-04). */
 .toolbar-btn.active {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-primary);
+  border-color: transparent;
+  background: var(--pill-active-bg);
 }
 
 /* The dense toolbar button — the side panel's row, the Files (Project) tab's,
@@ -1188,15 +1190,16 @@
 }
 
 .git-action-btn {
-  /* Per-action accent; each button overrides --git-btn-accent below so its
-     colour matches the status dot it carries (red=add, yellow=commit,
-     green=push). Defaults to the theme accent for the confirm/back buttons.
-     Geometry matches `.toolbar-btn` in the view switcher two rows up (10px
-     text, 1px 6px padding, 20px tall) so the panel has one button size. */
+  /* A neutral button; the action's colour (red=add, yellow=commit,
+     green=push) lives on the status dot it carries and on the glyph. Until
+     2026-11-04 the whole button was tinted and framed in it, so the bar was
+     three coloured outlines in caps. --git-btn-accent stays the per-action
+     hook. Geometry matches `.toolbar-btn` in the view switcher two rows up
+     (20px tall) so the panel has one button size. */
   --git-btn-accent: var(--accent);
-  background: color-mix(in srgb, var(--git-btn-accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--git-btn-accent) 55%, transparent);
-  color: var(--git-btn-accent);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
   border-radius: var(--radius-sm);
   cursor: var(--cur-pointer, pointer);
   padding: 1px 6px;
@@ -1214,8 +1217,10 @@
 }
 
 .git-action-btn:hover {
-  background: color-mix(in srgb, var(--git-btn-accent) 26%, transparent);
-  border-color: var(--git-btn-accent);
+  background: var(--bg-hover);
+}
+.git-action-btn .git-btn-glyph {
+  color: var(--git-btn-accent);
 }
 
 .git-action-btn:disabled {
@@ -1249,10 +1254,10 @@
 
 .git-action-toggle {
   --git-btn-accent: var(--accent);
-  background: color-mix(in srgb, var(--git-btn-accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--git-btn-accent) 55%, transparent);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
   border-left: none;
-  color: var(--git-btn-accent);
+  color: var(--text-secondary);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   cursor: var(--cur-pointer, pointer);
   padding: 0 5px;
@@ -1266,8 +1271,8 @@
 }
 
 .git-action-toggle:hover {
-  background: color-mix(in srgb, var(--git-btn-accent) 26%, transparent);
-  border-color: var(--git-btn-accent);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .git-action-toggle:disabled {
@@ -1277,14 +1282,11 @@
 
 /* The label is always shown now (not hover-only) so each action reads clearly
    without pointing at it; the leading glyph stays as a quick visual marker.
-   Typography matches the app's other small colored tags/chips (type tags,
-   the Local/Remote switch): uppercase, bold, letter-spaced. */
+   Sentence case, like every other button (caps until 2026-11-04). */
 .git-btn-label {
   display: inline;
   font-size: var(--text-sm);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -1408,11 +1410,20 @@
 
 .git-history-branch {
   flex: 1;
+  min-width: 0;
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The worktree (and, remote, which copy) after the branch, in meta ink. */
+.git-history-worktree {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.git-history-worktree::before {
+  content: " · ";
 }
 
 .git-history-mode {
@@ -1429,14 +1440,18 @@
   border-bottom: 1px solid var(--border-color);
 }
 
+/* Branch and worktree chips are one neutral chip: no frame at rest, a hover
+   fill, and the current one marked by the accent wash alone (2026-11-04: an
+   accent frame on every chip and row read as purple outlines all down the
+   panel). The dashed kinds below keep a frame, since the dash is what they say. */
 .git-branch-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   background: transparent;
-  border: 1px solid var(--border-color);
+  border: 1px solid transparent;
   color: var(--text-primary);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-sm);
   padding: 1px var(--space-2);
   font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
@@ -1454,25 +1469,26 @@
 }
 
 .git-branch-pill:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent-hover);
+  background: var(--bg-hover);
 }
 
 .git-branch-pill.current {
-  border-color: var(--accent);
   background: var(--pill-active-bg);
-  color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 500;
   cursor: var(--cur-default, default);
 }
 
 .git-branch-pill.remote {
   opacity: 0.7;
   border-style: dashed;
+  border-color: var(--border-color);
 }
 
 /* Folds the remote-tracking pills away; same dashed look, but not dimmed. */
 .git-branch-pill.git-branch-remote-toggle {
   border-style: dashed;
+  border-color: var(--border-color);
   color: var(--text-secondary);
 }
 
@@ -1582,20 +1598,6 @@
   padding: 1px 5px;
 }
 
-.git-worktree-context {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: var(--space-1) 6px;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-.git-worktree-context > span:first-child {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .git-branch-worktree {
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -1605,7 +1607,7 @@
   border-bottom: none;
 }
 .git-worktree-pill {
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   gap: 6px;
 }
 .git-worktree-select {
@@ -1639,6 +1641,7 @@
    and the parser used to discard it, so a dead entry listed as healthy. */
 .git-worktree-pill.prunable {
   border-style: dashed;
+  border-color: var(--border-color);
   color: var(--text-muted);
 }
 

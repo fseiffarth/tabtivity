@@ -4587,7 +4587,7 @@ export const enSource = {
   "common.rename": "Rename",
   "common.connect": "Connect",
   "common.next": "Next",
-  "projectSearch.placeholder": "Search projects and boxes...",
+  "projectSearch.placeholder": "Search…",
   "projectSearch.label": "Search projects and boxes",
   "projectSearch.resultsLabel": "Project and box results",
   "projectSearch.selectedResult": "Selected: {name}",

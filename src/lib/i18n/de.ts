@@ -4409,7 +4409,7 @@ export const dict: Dict = {
   "common.rename": "Umbenennen",
   "common.connect": "Verbinden",
   "common.next": "Weiter",
-  "projectSearch.placeholder": "Projekte und Boxen durchsuchen...",
+  "projectSearch.placeholder": "Suchen…",
   "projectSearch.label": "Projekte und Boxen durchsuchen",
   "projectSearch.resultsLabel": "Projekt- und Boxergebnisse",
   "projectSearch.selectedResult": "Ausgewählt: {name}",

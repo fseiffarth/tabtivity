@@ -842,12 +842,12 @@
    themes can swap the fill under it; a background follows the radius, so the
    rail's ends curve with the corners.
 
-   To add a member: this list, the wash below, the two glass lists in themes.css
-   and the blur exemption in projects-tabs.css; strip its own background and
-   border, keep `border-top: 2px solid transparent` for the rail's room (none for
-   a rail-less member, below) and a
-   radius token, and make sure it forms a stacking context (fixed, or absolute
-   WITH a z-index), or the `z-index: -1` wash paints behind its own background. */
+   To add a member: this list, the wash below and the blur exemption in
+   projects-tabs.css; strip its own background and border, keep `border-top:
+   2px solid transparent` for the rail's room (none for a rail-less member,
+   below) and a radius token, and make sure it forms a stacking context (fixed,
+   or absolute WITH a z-index), or the `z-index: -1` wash paints behind its own
+   background. The glass themes reach every member through --float-fill. */
 .project-dialog,
 .settings-dialog,
 .stats-dialog,
@@ -865,7 +865,7 @@
 .project-pill-popup,
 .project-switch-toast,
 .hint-bubble {
-  --surface-fill: var(--bg-elevated);
+  --surface-fill: var(--float-fill, var(--bg-elevated));
   --surface-rail: 2px;
   background:
     linear-gradient(var(--accent), var(--accent)) 0 0 / 100% var(--surface-rail) no-repeat border-box,

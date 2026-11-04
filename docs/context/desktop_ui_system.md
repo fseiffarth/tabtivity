@@ -32,6 +32,26 @@ too (`lib/theme/gitColors.ts`). Literals that stay: scrims (`.modal-backdrop`,
 a PDF page), ink on a fixed status fill (`#1c1300` on amber), calendar category
 colours, the deck presenter on its black stage, and the viewers' interiors.
 
+**The accent budget** (round 2, 2026-11-04, `docs/desktop_ui_round2_plan.md`).
+The accent marks the active pill, tab and view, focus, a selection wash and the
+one primary action. It is not a frame, a label colour, a scrollbar or a
+header wash. Concretely:
+- **Surfaces:** `--bg-main/panel/elevated` step evenly in lightness. A
+  floating surface reads `--float-fill`, which the glass pair point at
+  `--glass-elevated` and soft_dark at its fourth step.
+- **Header:** `--top-frame-wash` is transparent in every theme. The seam is
+  the accent at 35–40% (fancy pair) or `--border-subtle` (light_lavender,
+  soft_dark), and `--bg-subheader` carries no accent mix.
+- **Lines:** `--border-subtle` draws dividers, `--border-color` draws fields
+  and frames. Neither is accent-tinted.
+- **Chips:** type tags, branch and worktree chips, the git action buttons and
+  the reader's chips are neutral (`--bg-subtle`, no frame at rest). A kind or
+  state colour sits on a 6 px lamp, a dot or the glyph.
+- **Counts:** header badges are neutral. Red means fresh mail or an overdue
+  to-do, and amber means an agent asking.
+- **Scrollbar and window controls:** the scrollbar thumb is `--text-muted`
+  over the panel, and the window controls are `--text-secondary` until hovered.
+
 ## Buttons
 
 `.btn-primary` and `.btn-danger` are the CTAs, `.settings-btn` the default,

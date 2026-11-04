@@ -1490,16 +1490,30 @@
   margin-left: 8px;
 }
 
+/* A project type tag (git, a provider, SSH…): one neutral chip, its kind's
+   colour (`--tag-color`, set inline) only on the lamp. Until 2026-11-04 each
+   tag was an outline in its own colour, so two tags side by side were a green
+   and a purple frame competing with the accent. */
 .pill-popup-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: var(--text-sm);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 500;
   line-height: 1;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: var(--radius-full);
-  border: 1px solid currentColor;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
   white-space: nowrap;
+}
+.pill-popup-tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--tag-color, var(--text-muted));
 }
 
 .pill-popup-status {

@@ -4389,7 +4389,7 @@ export const dict: Dict = {
   "common.rename": "Rinomina",
   "common.connect": "Connetti",
   "common.next": "Avanti",
-  "projectSearch.placeholder": "Cerca progetti e box...",
+  "projectSearch.placeholder": "Cerca…",
   "projectSearch.label": "Cerca progetti e box",
   "projectSearch.resultsLabel": "Risultati di progetti e box",
   "projectSearch.selectedResult": "Selezionato: {name}",
