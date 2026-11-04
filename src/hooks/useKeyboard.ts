@@ -4,7 +4,8 @@ import { PLATFORM } from "../lib/window/dragPlatform";
 import { IS_MAC } from "../lib/platform";
 import { toggleWindowFullscreen } from "../lib/window/fullscreenMode";
 import { probeSuperKeyOwnership } from "../lib/shortcuts/superKey";
-import { allGroups, findGroup, useTabsStore } from "../stores/tabs";
+import { ROOT_SCOPE, allGroups, findGroup, useTabsStore } from "../stores/tabs";
+import { steeringInRoot, steeringTabs } from "../lib/shortcuts/steeringScope";
 import { closeTabWithConfirm } from "../lib/remote/closeRemoteTab";
 import { reopenClosedAgentTab } from "../stores/agents/closedAgentTabs";
 import { useProjectsStore } from "../stores/projects";
@@ -496,10 +497,14 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     function steerPanes(e: KeyboardEvent, action: SteeringAction | null, level: "panes" | "tabs" | "scroll") {
       const steering = useKeyboardSteeringStore.getState();
       const tabs = useTabsStore.getState();
-      const ids = allGroups(tabs.layout).map((g) => g.id);
+      // The tabs steering walks: the workspace's, or Root's while the Root view
+      // is up (`steeringScope`) — every group action below goes to that scope.
+      const walked = steeringTabs();
+      const { scope, layout, inRoot } = walked;
+      const ids = allGroups(layout).map((g) => g.id);
       const walksPanes = level === "panes" && ids.length >= 2;
-      const focused = tabs.focusedGroupId;
-      const group = focused ? findGroup(tabs.layout, focused) : null;
+      const focused = walked.focusedGroupId;
+      const group = focused ? findGroup(layout, focused) : null;
 
       // Inside the active tab's terminal (its ↓): ←/→ scroll it half a screen
       // back / forward (Shift: a whole one), ↓ back to its live end, ↑ out to
@@ -540,7 +545,9 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // behind it does nothing.
       const slot = steeringSlot(action);
       if (slot !== null) {
-        requestNewTab({ kind: "agent", slot: slot - 1 }, BESIDE_ACTIVE);
+        // The new-tab keys belong to the workspace's tab bars; a tab opened
+        // from here would land under the Root window, out of sight.
+        if (!inRoot) requestNewTab({ kind: "agent", slot: slot - 1 }, BESIDE_ACTIVE);
         return;
       }
       switch (action) {
@@ -569,7 +576,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           // A fullscreen subwindow hides the others: it moves along with the
           // focus, or the focus would land on one nobody can see.
           const carryFullscreen = (id: string) => {
-            if (tabs.fullscreenGroupId && tabs.fullscreenGroupId !== id) tabs.toggleFullscreen(id);
+            if (!inRoot && tabs.fullscreenGroupId && tabs.fullscreenGroupId !== id) tabs.toggleFullscreen(id);
           };
           // Shift on the tabs level walks the subwindows too, without the
           // round trip up to the panes level and back down.
@@ -577,7 +584,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
             // Document order, wrapping, committed at once via focusGroup (no
             // Shift-preview: the badges re-anchor each step).
             const next = neighbour(focused);
-            tabs.focusGroup(next);
+            tabs.focusGroupInScope(scope, next);
             carryFullscreen(next);
           } else if (group) {
             const len = group.tabKeys.length;
@@ -588,29 +595,29 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
               // the next (previous) subwindow's first (last) tab, so every tab
               // is a run of ←/→ away; the last tab of all wraps to the first.
               const next = neighbour(group.id);
-              const nextGroup = findGroup(tabs.layout, next);
+              const nextGroup = findGroup(layout, next);
               const key = nextGroup?.tabKeys[fwd ? 0 : nextGroup.tabKeys.length - 1];
-              if (key) tabs.setGroupActive(next, key);
-              else tabs.focusGroup(next);
+              if (key) tabs.setGroupActiveInScope(scope, next, key);
+              else tabs.focusGroupInScope(scope, next);
               carryFullscreen(next);
             } else if (len > 1) {
-              tabs.setGroupActive(group.id, group.tabKeys[(step + len) % len]);
+              tabs.setGroupActiveInScope(scope, group.id, group.tabKeys[(step + len) % len]);
             }
           }
           return;
         }
         case "newTabMenu":
           // The whole + menu, walked with the region cursor.
-          if (requestNewTab({ kind: "menu" }, BESIDE_ACTIVE)) enterRegion("addTab");
+          if (!inRoot && requestNewTab({ kind: "menu" }, BESIDE_ACTIVE)) enterRegion("addTab");
           return;
         case "newShell":
-          requestNewTab({ kind: "shell" }, BESIDE_ACTIVE);
+          if (!inRoot) requestNewTab({ kind: "shell" }, BESIDE_ACTIVE);
           return;
         case "newMonitor":
-          requestNewTab({ kind: "monitor" }, BESIDE_ACTIVE);
+          if (!inRoot) requestNewTab({ kind: "monitor" }, BESIDE_ACTIVE);
           return;
         case "files": // toggle the focused subwindow's docked file viewer
-          if (focused && group) tabs.setGroupFiles(focused, !group.filesOpen);
+          if (focused && group) tabs.setGroupFilesInScope(scope, focused, !group.filesOpen);
           return;
         // Asked first (`steeringConfirm`): the box comes up as the overlay
         // region, the Confirm key closes, Esc keeps the tab.
@@ -668,6 +675,10 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           e.shiftKey ? -1 : 1,
         );
         if (target) {
+          // Up on Root, a project's tab is not shown by a jump the window
+          // covers: it steps aside (as the cockpit's Enter does), and the tab
+          // levels are the workspace's again.
+          if (target.scope !== ROOT_SCOPE && steeringInRoot()) useRootOverlayStore.getState().close();
           jumpToTab(target.scope, target.key);
           useKeyboardSteeringStore.getState().setLevel("tabs");
         }

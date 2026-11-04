@@ -320,7 +320,7 @@ function RootOverlay() {
 
   return (
     <div
-      className={`modal-backdrop root-overlay-backdrop${cockpitOn ? " app-overlay-backdrop" : ""}`}
+      className={`modal-backdrop root-overlay-backdrop root-console-backdrop${cockpitOn ? " app-overlay-backdrop" : ""}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}

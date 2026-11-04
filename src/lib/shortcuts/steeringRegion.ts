@@ -20,6 +20,7 @@ import { experimentalEnabled } from "../experimental";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import type { FilesPanelView, Settings } from "../../types";
 import type { SteeringRegion } from "../../stores/keyboardSteering";
+import { steeringInRoot } from "./steeringScope";
 
 const CURSOR_CLASS = "steer-cursor";
 
@@ -108,20 +109,25 @@ const LAYER =
 const HEADER_POPUP =
   ".app-header [role='menu'], .app-header .tab-new-menu, .app-header .project-switcher-add-menu";
 
-function lastShown(selector: string): HTMLElement | null {
+function lastShown(selector: string, skip?: (el: HTMLElement) => boolean): HTMLElement | null {
   const all = document.querySelectorAll<HTMLElement>(selector);
   for (let i = all.length - 1; i >= 0; i--) {
-    if (shown(all[i]) && !all[i].closest(".steering-legend")) return all[i];
+    if (shown(all[i]) && !all[i].closest(".steering-legend") && !skip?.(all[i])) return all[i];
   }
   return null;
 }
+
+/** The root window itself, while steering's tab levels belong to its Root view
+ *  (`steeringScope`): that window is the place being steered, not a layer over
+ *  it, so it is not walked as an overlay (a menu or dialog over it still is). */
+const rootWindow = (el: HTMLElement) => steeringInRoot() && !!el.closest(".root-console-backdrop");
 
 /** The floating surface on top, or null when the window is bare. Last in the
  *  document wins: a portal opens at the end of <body>, a dialog raised from
  *  inside another sits inside it, and among equal z-indexes the later one
  *  paints on top. */
 export function topLayer(): HTMLElement | null {
-  return lastShown(LAYER) ?? lastShown(HEADER_POPUP);
+  return lastShown(LAYER, rootWindow) ?? lastShown(HEADER_POPUP);
 }
 
 /** The region that walks `layer`: the surfaces with a region of their own
@@ -218,9 +224,18 @@ export function openContextMenu(el: HTMLElement): void {
   );
 }
 
-/** The workspace's active tab, as its tab bar draws it — not a header app's
- *  or the root console's (they share the subwindow frame). */
+/** The active tab, as its tab bar draws it: the workspace's — not a header app's
+ *  or the root console's (they share the subwindow frame) — or, while steering
+ *  walks the Root view (`steeringScope`), the one in Root's strip. */
 export function activeTabElement(): HTMLElement | null {
+  if (steeringInRoot()) {
+    const all = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".root-console-backdrop .root-overlay-group.focused .tab.active, .root-console-backdrop .tab-strip .tab.active:not(.root-view-tab)",
+      ),
+    );
+    return all.find(shown) ?? null;
+  }
   const all = Array.from(document.querySelectorAll<HTMLElement>(".subwindow.focused .tab.active"));
   return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
 }
@@ -229,6 +244,9 @@ export function activeTabElement(): HTMLElement | null {
  *  link, a CLI update notice (`TerminalSignInCard` and its siblings, all in
  *  its frame); only the active tab's pane is on screen. */
 export function activeTabCard(): HTMLElement | null {
+  if (steeringInRoot()) {
+    return Array.from(document.querySelectorAll<HTMLElement>(".root-console-backdrop .terminal-sign-in")).find(shown) ?? null;
+  }
   const all = Array.from(document.querySelectorAll<HTMLElement>(".subwindow.focused .terminal-sign-in"));
   return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
 }

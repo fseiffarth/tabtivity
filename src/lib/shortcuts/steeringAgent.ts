@@ -33,8 +33,9 @@ import { noteInputFrom } from "../agents/inputFrom";
 import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel } from "../../stores/agents/agentModels";
 import { noteTypedClear } from "../../stores/agents/agentClearUndo";
-import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import type { TabEntry } from "../../stores/tabs";
 import type { SteeringBaseLevel } from "../../stores/keyboardSteering";
+import { steeringTabsActive } from "./steeringScope";
 
 /** What the Clear key types. */
 const NEW_CONVERSATION_COMMAND = "/clear";
@@ -61,11 +62,10 @@ export function steeringAgentOffer(tab: TabEntry | null | undefined): SteeringAg
   return { clear: true, plan: prefixes.includes("/plan"), goal: prefixes.includes("/goal"), prompt: true };
 }
 
-/** The active tab of the active scope — the one the focused pane shows. */
+/** The active tab of the focused pane steering walks — the workspace's, or Root's
+ *  while the Root view is up (`steeringScope`). */
 export function steeringActiveTab(): { scope: string; tab: TabEntry } | null {
-  const s = useTabsStore.getState();
-  const tab = s.activeKey ? s.tabs.find((t) => t.key === s.activeKey) : undefined;
-  return tab ? { scope: s.scope, tab } : null;
+  return steeringTabsActive();
 }
 
 /**
