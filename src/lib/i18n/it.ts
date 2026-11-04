@@ -354,7 +354,7 @@ export const dict: Dict = {
   "mobile.hints.todoMove": "Le frecce di una scheda la spostano su, giù o in un'altra colonna.",
   "mobile.hints.todoFilter": "La ricerca e i due filtri restringono la bacheca a un progetto o a un tag.",
   "mobile.hints.todoColumns": "Tocca il nome di una colonna per comprimerla. ✎ ‹ › × accanto la rinominano, spostano o eliminano.",
-  "mobile.hints.todoAdd": "＋ accanto al nome di una colonna aggiunge una scheda a quella colonna.",
+  "mobile.hints.todoAdd": "Il ＋ rotondo in basso aggiunge una scheda; scegli la sua colonna nella scheda.",
   "mobile.hints.mailBack": "Scorri verso destra per tornare indietro: da un messaggio alla sua cartella, da una cartella agli account.",
   "mobile.hints.mailPickers": "In cima a una cartella i due selettori cambiano account o cartella; ↻ scarica la posta nuova.",
   "mobile.hints.mailWrite": "Apri un messaggio per leggerlo. Dove il desktop consente a questo telefono di scrivere posta, il messaggio offre anche Segna come letto, ★ Aggiungi stella e una breve risposta.",

@@ -401,7 +401,7 @@ export const enSource = {
   "mobile.hints.todoMove": "The arrows on a card move it up, down or into another column.",
   "mobile.hints.todoFilter": "Search and the two filters narrow the board to a project or a tag.",
   "mobile.hints.todoColumns": "Tap a column's name to fold it. ✎ ‹ › × beside it rename, move or delete the column.",
-  "mobile.hints.todoAdd": "＋ beside a column's name adds a card to that column.",
+  "mobile.hints.todoAdd": "The round ＋ at the bottom adds a card; pick its column in the card.",
   "mobile.hints.mailBack": "Swipe right to step back: from a message to its folder, from a folder to the accounts.",
   "mobile.hints.mailPickers": "At the top of a folder the two pickers switch the account or the folder; ↻ fetches new mail.",
   "mobile.hints.mailWrite": "Open a message to read it. Where the desktop lets this phone write mail, the message also offers Mark read, ★ Star and a short reply.",

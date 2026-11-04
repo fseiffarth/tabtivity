@@ -46,13 +46,13 @@ export type HintKey = keyof typeof HINTS;
 
 /** Select controls locally so a background screen cannot receive the pointer. */
 const TARGETS: Partial<Record<HintKey, string>> = {
-  agentHold: ".fab", agentDefault: ".new-tab-default", projectFiles: ".drawer-open",
+  agentHold: ".fab", agentDefault: ".new-tab-default", projectFiles: '[data-phone-hint="menu"]',
   composerAttach: ".composer-add", composerKeys: ".composer-keys",
   composerPlanGoal: ".composer-segment", composerClear: ".composer-tool",
   composerCommit: ".composer-commit", composerMic: ".composer-dictate",
   tabCard: ".tab-card-more", sentFiles: ".terminal-gallery", markup: ".terminal-gallery",
   mailBack: ".back", mailPickers: ".mail-mobile-switch", mailWrite: ".mail-mobile-reply textarea",
-  sendHold: ".send-icon", chatMenu: ".view-pill", chatSwipe: ".transcript-screen",
+  sendHold: ".send-icon", chatMenu: ".view-pill", chatSwipe: ".readable-output",
   statusLamp: ".fact-action:has(.fact-lamp)",
   statusModel: '[data-phone-hint="model"]', statusMode: '[data-phone-hint="mode"]',
   statusWorktree: ".fact-worktree, .fact-branch",
@@ -60,10 +60,13 @@ const TARGETS: Partial<Record<HintKey, string>> = {
   todoMove: ".todo-mobile-actions > select", todoFilter: ".todo-mobile-filters",
   todoColumns: ".todo-column-fold", todoAdd: ".todo-fab",
   calendarViews: '.mobile-calendar-actions[role="group"]', calendarDays: ".mobile-calendar-day",
-  calendarEvents: ".mobile-calendar-actions > button:first-child",
-  calendarCalendars: ".mobile-calendar-actions > button:nth-child(2)",
-  calendarReminders: ".mobile-calendar-actions > button:nth-child(3)",
+  calendarEvents: ".mobile-calendar-event",
+  calendarCalendars: ".mobile-calendar-actions:not([role]) > button:nth-child(2)",
+  calendarReminders: ".mobile-calendar-actions:not([role]) > button:nth-child(3)",
 };
+
+/** Tips about a gesture on their target, not a tap: a tap there keeps them. */
+const TAP_KEEPS_TIP: ReadonlySet<HintKey> = new Set(["chatSwipe"]);
 
 type Pointer = { x: number; y: number; width: number; height: number; fromX: number; fromY: number; toX: number; toY: number };
 
@@ -182,7 +185,8 @@ export function resetTips(): void {
 /** × and Skip close for this visit; Read closes too and halves the tip's chance of
  * coming back; Turn off tips silences every tip on this phone until This
  * device → Tips turns them on again, which the card then says in place of the
- * tip. No timer: the reader gets time to read and dismiss the message. Showing
+ * tip. Tapping the control the tip points at closes it like ×. No timer: the
+ * reader gets time to read and dismiss the message. Showing
  * a tip starts the repeat cooldown; unseen tips on other screens can still show. */
 export function HintMessage({ hint, floating = false, vars, onClose }: { hint: HintKey; floating?: boolean; vars?: Record<string, string>; onClose?: () => void }) {
   const t = useT();
@@ -193,8 +197,23 @@ export function HintMessage({ hint, floating = false, vars, onClose }: { hint: H
     claimTip(hint);
     return "tip";
   });
-  if (view === "hidden") return null;
   const close = () => { releaseTip(hint); setView("hidden"); onClose?.(); };
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  // Tapping the control the tip points at closes it like ×: the tip did its job.
+  useEffect(() => {
+    const selector = TARGETS[hint];
+    if (view !== "tip" || !selector || TAP_KEEPS_TIP.has(hint)) return;
+    const root = card.current?.closest(".screen, .sheet") ?? card.current?.parentElement;
+    if (!root) return;
+    const onClick = (e: MouseEvent) => {
+      const el = e.target instanceof Element ? e.target.closest(selector) : null;
+      if (el && root.contains(el)) closeRef.current();
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, [hint, view]);
+  if (view === "hidden") return null;
   return <aside ref={card} className={`hint-message${floating ? " hint-message-floating" : ""}`} aria-label={t("mobile.hints.title")}>
     {view === "tip" && <HintPointer card={card} hint={hint} />}
     <div className="hint-message-head">

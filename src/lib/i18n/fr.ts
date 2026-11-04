@@ -354,7 +354,7 @@ export const dict: Dict = {
   "mobile.hints.todoMove": "Les flèches d'une carte la déplacent vers le haut, le bas ou dans une autre colonne.",
   "mobile.hints.todoFilter": "La recherche et les deux filtres réduisent le tableau à un projet ou un tag.",
   "mobile.hints.todoColumns": "Touchez le nom d'une colonne pour la replier. ✎ ‹ › × à côté la renomment, la déplacent ou la suppriment.",
-  "mobile.hints.todoAdd": "＋ à côté du nom d'une colonne ajoute une carte à cette colonne.",
+  "mobile.hints.todoAdd": "Le ＋ rond en bas ajoute une carte ; choisissez sa colonne dans la carte.",
   "mobile.hints.mailBack": "Balayez vers la droite pour revenir en arrière : d'un message à son dossier, d'un dossier aux comptes.",
   "mobile.hints.mailPickers": "En haut d'un dossier, les deux sélecteurs changent de compte ou de dossier ; ↻ récupère le nouveau courrier.",
   "mobile.hints.mailWrite": "Ouvrez un message pour le lire. Là où le bureau autorise ce téléphone à écrire du courrier, le message propose aussi Marquer comme lu, ★ Ajouter une étoile et une courte réponse.",

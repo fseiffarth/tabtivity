@@ -38,6 +38,38 @@ describe("phone hint messages", () => {
     expect(container.querySelector(".phone-hint-pointer")).toBeNull();
   });
 
+  it("points at the control its text names, not a sibling sharing its class", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const left = this.matches('[data-phone-hint="menu"]') ? 300 : 200;
+      const top = this.matches(".drawer-open") ? 10 : 100;
+      return { top, bottom: top + 44, left, right: left + 44, width: 44, height: 44, x: left, y: top, toJSON: () => ({}) };
+    });
+    const { container } = render(<main className="screen">
+      <header><button className="drawer-open">🔍</button><button className="drawer-open" data-phone-hint="menu">☰</button></header>
+      <HintMessage hint="projectFiles" />
+    </main>);
+    expect(container.querySelector(".phone-hint-ring")?.getAttribute("x")).toBe("297");
+  });
+
+  it("tapping the control the tip points at closes it like ×, a tap elsewhere does not", () => {
+    render(<main className="screen">
+      <HintMessage hint="agentHold" />
+      <button className="fab"><span>+</span></button>
+      <button className="other">x</button>
+    </main>);
+    fireEvent.click(screen.getByText("x"));
+    expect(screen.getByRole("complementary", { name: "Tip" })).toBeTruthy();
+    fireEvent.click(screen.getByText("+"));
+    expect(screen.queryByRole("complementary", { name: "Tip" })).toBeNull();
+    expect(readHintReads()).toEqual({});
+  });
+
+  it("a gesture tip stays when its target is tapped", () => {
+    render(<main className="screen"><HintMessage hint="chatSwipe" /><div className="readable-output">chat</div></main>);
+    fireEvent.click(screen.getByText("chat"));
+    expect(screen.getByRole("complementary", { name: "Tip" })).toBeTruthy();
+  });
+
   it("closes for one visit and returns after the half hour", () => {
     const first = render(<HintMessage hint="agentHold" floating vars={{ agent: "Claude" }} />);
     expect(screen.getByRole("status").textContent).toBe("Tapping ＋ opens Claude; hold ＋ to start a different agent.");

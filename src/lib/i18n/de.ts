@@ -354,7 +354,7 @@ export const dict: Dict = {
   "mobile.hints.todoMove": "Die Pfeile auf einer Karte schieben sie nach oben, unten oder in eine andere Spalte.",
   "mobile.hints.todoFilter": "Suche und die beiden Filter grenzen das Board auf ein Projekt oder ein Tag ein.",
   "mobile.hints.todoColumns": "Tippe auf den Namen einer Spalte, um sie einzuklappen. ✎ ‹ › × daneben benennen sie um, verschieben oder löschen sie.",
-  "mobile.hints.todoAdd": "＋ neben dem Namen einer Spalte fügt dieser Spalte eine Karte hinzu.",
+  "mobile.hints.todoAdd": "Das runde ＋ unten fügt eine Karte hinzu; ihre Spalte wählst du in der Karte.",
   "mobile.hints.mailBack": "Wische nach rechts, um einen Schritt zurückzugehen: von einer Nachricht zu ihrem Ordner, von einem Ordner zu den Konten.",
   "mobile.hints.mailPickers": "Oben in einem Ordner wechseln die beiden Auswahlen Konto oder Ordner; ↻ holt neue Mails.",
   "mobile.hints.mailWrite": "Öffne eine Nachricht, um sie zu lesen. Wo der Desktop diesem Telefon das Schreiben erlaubt, bietet die Nachricht auch Als gelesen markieren, ★ Stern und eine kurze Antwort.",
