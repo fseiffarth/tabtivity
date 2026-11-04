@@ -1112,7 +1112,8 @@ mod tests {
         assert_ne!(seal(KEY, "p2", "src/main.rs").unwrap(), token, "another project, another token");
         assert_ne!(seal(b"another-host-key", "p1", "src/main.rs").unwrap(), token, "another host, another token");
         // The length prefix keeps (raw_id, rel) pairs apart that would run together.
-        assert_ne!(synthetic_nonce("s", KEY, "p1", "2/a"), synthetic_nonce("s", KEY, "p12", "/a"));
+        let salt = crate::brand::MOBILE_FILES_SALT;
+        assert_ne!(synthetic_nonce(salt, KEY, "p1", "2/a"), synthetic_nonce(salt, KEY, "p12", "/a"));
         let mut forged = Base64UrlUnpadded::decode_vec(&token).unwrap();
         *forged.last_mut().unwrap() ^= 1;
         assert_eq!(unseal(KEY, "p1", &Base64UrlUnpadded::encode_string(&forged)), None);
