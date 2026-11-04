@@ -150,6 +150,29 @@ describe("diffed save", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("shows a member added meanwhile as ticked, and unticking it removes it", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"], { name: "Thesis" })] });
+    useProjectsStore.setState({
+      projects: [proj("p1", 10), proj("p3", 30)],
+      activeId: null,
+      loaded: true,
+    });
+    answerPatches(() => useBoxesStore.getState().boxes);
+    const { dialog } = await openSheet("boxA");
+    await act(async () => {
+      useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p3"], { name: "Thesis" })] });
+    });
+    const p3 = rowOf(dialog, "p3").querySelector("input") as HTMLInputElement;
+    expect(p3.checked).toBe(true);
+    expect(dialog.querySelector(".box-editor-count")?.textContent).toContain("2");
+    fireEvent.click(p3);
+    await act(async () => {
+      fireEvent.click(button(dialog, "Save"));
+    });
+    const [[, args]] = mockInvoke.mock.calls.filter(([cmd]) => cmd === "patch_box");
+    expect(args).toEqual({ boxId: "boxA", patch: { removeMembers: ["p3"] } });
+  });
+
   it("carries the new name and colour in the same patch, and nothing for an untouched name", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", ["p1"], { name: "Thesis" })] });
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });

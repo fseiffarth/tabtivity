@@ -32,10 +32,11 @@ import { projectHostKind } from "../../lib/projectTabHost";
  * (`useQuickCreateBox`), never here: no target dropdown, no create mode, so a
  * half-made draft can never be swapped away by a click on another box.
  *
- * Save is ONE diffed `saveBox` against the snapshot taken when the sheet opened
- * (name, colour, members added and removed), not the whole member list: a project
- * another window, the phone or an import added meanwhile survives. The phone row
- * is the Settings → Mobile switch and acts at once, as that one does.
+ * Save is ONE diffed `saveBox` (name, colour, and the members the user ticked or
+ * unticked, taken against the box as it is when Save is pressed), not the whole
+ * member list: a project another window, the phone or an import added meanwhile
+ * survives, and shows as a member (it can be unticked). The phone row is the
+ * Settings → Mobile switch and acts at once, as that one does.
  *
  * Dissolving is the ONLY way a box disappears (no silent one-member dissolve), an
  * explicit, confirmed action; the confirm states what is kept — the box folder
@@ -121,7 +122,15 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
   const [loaded] = useState<Loaded>(() => loadedOf(box));
   const [name, setName] = useState(loaded.name);
   const [color, setColor] = useState(loaded.color);
-  const [checked, setChecked] = useState<string[]>(loaded.members);
+  // The user's own ticks, by project id. Everything not ticked or unticked here
+  // follows the box as it is NOW, so a project added meanwhile reads as a member
+  // (and can be unticked), and the diff below is taken against the live list.
+  const [edits, setEdits] = useState<Record<string, boolean>>({});
+  const checked = useMemo(() => {
+    const now = new Set(box.member_ids.filter((id) => edits[id] !== false));
+    for (const [id, on] of Object.entries(edits)) if (on) now.add(id);
+    return [...now];
+  }, [box.member_ids, edits]);
   const [filter, setFilter] = useState("");
   const [saving, setSaving] = useState(false);
   // The per-phone picker's anchor while it is open (Escape closes it first).
@@ -167,14 +176,13 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
     .map((kind) => ({ kind, list: namesOf(kind) }))
     .filter((line) => line.list);
 
-  const toggle = (id: string) =>
-    setChecked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const toggle = (id: string) => setEdits((prev) => ({ ...prev, [id]: !checked.includes(id) }));
 
   const save = async () => {
     if (saving || nameProblem) return;
     setSaving(true);
     try {
-      const diff: BoxDraftDiff = diffBoxMembers(loaded.members, checked);
+      const diff: BoxDraftDiff = diffBoxMembers(box.member_ids, checked);
       if (renamed) diff.name = trimmed;
       if (recoloured) diff.color = color;
       await saveBox(box.id, diff);
