@@ -204,9 +204,16 @@ export function HintHost() {
   useEffect(() => {
     if (!def?.anchor) return;
     const selector = def.anchor;
+    // Any match counts, not only the first visible one the bubble points at:
+    // a selector like `.tab-bar` hits every subwindow's copy of the control.
     const onClick = (e: MouseEvent) => {
-      const el = firstVisibleAnchor(selector);
-      if (el && e.target instanceof Node && el.contains(e.target)) markSeen(def.id);
+      let el: Element | null = null;
+      try {
+        el = e.target instanceof Element ? e.target.closest(selector) : null;
+      } catch {
+        return;
+      }
+      if (el) markSeen(def.id);
     };
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
