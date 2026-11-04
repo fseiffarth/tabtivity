@@ -2081,7 +2081,8 @@ html[data-header-drag] * {
   .header-center { gap: 3px; }
   .header-right { gap: 3px; padding-inline: 6px; }
   .project-switcher { gap: 2px; padding-right: 3px; }
-  .project-search-wrap { width: 128px; }
+  .project-search-wrap { width: 88px; }
+  .project-search-wrap:focus-within { width: 200px; }
   .header-right-gap { width: 2px; }
 }
 
@@ -2089,7 +2090,8 @@ html[data-header-drag] * {
   .header-right { gap: 2px; padding-inline: var(--space-1); }
   .header-right-gap { width: 1px; }
   .project-switcher-separator { margin-inline: 1px; }
-  .project-search-wrap { width: 108px; }
+  .project-search-wrap { width: 76px; }
+  .project-search-wrap:focus-within { width: 180px; }
 }
 .vpn-indicator-btn:hover .vpn-indicator-label,
 .vpn-indicator-btn[aria-expanded="true"] .vpn-indicator-label,

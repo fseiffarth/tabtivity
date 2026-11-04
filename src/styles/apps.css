@@ -550,8 +550,18 @@
 
 .project-search-wrap {
   position: relative;
-  width: 150px;
+  width: 96px;
   flex-shrink: 0;
+  transition: width var(--transition);
+}
+
+/* Narrow at rest; widens only while the caret is in the field. */
+.project-search-wrap:focus-within {
+  width: 220px;
+}
+
+:root[data-software-paint] .project-search-wrap {
+  transition: none;
 }
 
 /* Rarely used (most projects stay active, so this box sits empty most of the
