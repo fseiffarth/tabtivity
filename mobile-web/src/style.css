@@ -412,11 +412,13 @@ small { color:#9498aa; }
 .home-project-card .card > span:nth-child(2) { display:grid; flex:1 1 auto; gap:2px; min-width:0; }
 .home-project-card .card strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-headline); font-weight:650; letter-spacing:-.01em; }
 .home-project-card .card small { font-size:var(--fs-foot); }
-.home-project-card .tab-card-grip { width:var(--hit); color:#6f7488; }
-.home-project-card .card-trailing { gap:6px; }
+.home-project-card .tab-card-grip { flex:0 0 var(--hit); width:var(--hit); color:#6f7488; }
+.home-project-card .card-trailing { display:grid; grid-template-columns:52px 48px; gap:6px; }
+.home-project-card .card-trailing > .home-agent-counts { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:4px; min-width:0; }
 .home-project-card .agent-status.home-agent-count { padding:4px 7px; font-variant-numeric:tabular-nums; }
-.home-project-card .count { display:inline-flex; align-items:center; gap:5px; min-width:0; padding:0 0 0 4px; background:none; color:var(--ink-muted); font-size:var(--fs-sub); font-variant-numeric:tabular-nums; }
-.home-project-card .count::before { content:""; width:11px; height:9px; border:1.5px solid currentColor; border-radius:2px; }
+.home-project-card .card-trailing > .count { display:flex; flex-wrap:nowrap; white-space:nowrap; justify-content:flex-end; align-items:center; gap:5px; min-width:0; padding:0 0 0 4px; background:none; color:var(--ink-muted); font-size:var(--fs-sub); font-variant-numeric:tabular-nums; }
+.home-project-card .count > svg { flex:0 0 auto; }
+.home-project-card .count > span { display:block; min-width:2ch; text-align:right; }
 .home-hint,.project-hint { display:flex; align-items:center; gap:var(--sp-1); margin:6px 0 0 var(--sp-1); color:var(--ink-muted); font-size:var(--fs-foot); line-height:1.35; }
 .home-hint > span,.project-hint > span { flex:1 1 auto; min-width:0; }
 .project-host-note { display:flex; align-items:flex-start; gap:var(--sp-1); }
@@ -2181,3 +2183,33 @@ ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) 
 @media (prefers-reduced-motion:reduce) {
   .sheet-backdrop,.option-sheet,.screen,.terminal-screen,.list-skeleton > i { animation:none; }
 }
+
+/* Phone tips point to the visible control; all decorations pass taps through. */
+.phone-hint-pointer { position:fixed; inset:0; width:100%; height:100%; z-index:9; pointer-events:none; overflow:visible; color:#baabff; }
+.phone-hint-pointer path,.phone-hint-ring { fill:none; stroke:currentColor; stroke-width:2; }
+.phone-hint-pointer circle { fill:currentColor; }
+.phone-hint-ring { animation:phone-hint-pulse 1.8s ease-in-out 3; }
+@keyframes phone-hint-pulse { 50% { opacity:.35; } }
+@media (prefers-reduced-motion:reduce) { .phone-hint-ring { animation:none; } }
+[data-software-paint] .phone-hint-ring { animation:none; }
+
+/* PDF cards use the library's bounded first-page covers. */
+.pdf-file-cover { position:relative; display:grid; place-items:center; overflow:hidden; background:#0f131c; }
+.pdf-file-cover img { display:block; width:100%; height:100%; object-fit:contain; min-height:0; }
+.pdf-file-cover small { position:absolute; bottom:0; left:0; right:0; background:#161927; text-align:center; font-size:.6rem; }
+.outbox-post-file > .pdf-file-cover { width:72px; height:104px; border-radius:5px; }
+.outbox-file > .pdf-file-cover { width:100%; aspect-ratio:3 / 4; }
+
+/* Home's optional project tiles retain the opener and a separate drag grip. */
+.projects-row h1 { margin-right:auto; }
+.home-layout-toggle { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:2px; min-width:var(--hit); min-height:var(--hit); padding:6px; }
+.home-layout-toggle[aria-pressed="true"] { background:#2e2b48; color:#bcb0ff; }
+.home-screen > .home-projects.home-projects-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; background:transparent; }
+.home-projects-grid > .tab-card { border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); }
+.home-projects-grid .tab-card-head { position:relative; height:100%; }
+.home-projects-grid .card { flex-direction:column; align-items:flex-start; gap:10px; padding:14px; }
+.home-projects-grid .card > span:nth-child(2) { flex:1 1 auto; width:100%; }
+.home-projects-grid .card strong { white-space:normal; overflow-wrap:anywhere; }
+.home-projects-grid .card-trailing { flex-wrap:wrap; }
+.home-projects-grid .tab-card-grip { position:absolute; top:0; right:0; height:var(--hit); }
+.home-projects-grid .tab-card-head > .untested { position:absolute; top:40px; right:4px; }

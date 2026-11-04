@@ -93,6 +93,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   mail: () => void;
 }) {
   const [view, setView] = useState<HomeView>(() => (readFlag("projectsAgents") ? "agents" : "active"));
+  const [projectsGrid, setProjectsGrid] = useState(() => readFlag("projectsGrid"));
   const t = useT();
   /** The language the phone speaks and listens in (`speechLang.ts`). It is
    * reachable from inside a session too, under the Reader's menu, but it is
@@ -260,6 +261,15 @@ export function Home({ open, openTab, tabby, todo, mail }: {
     <div className="projects-row">
       <h1>{view === "agents" ? t("mobile.home.agentsTitle") : view === "favorites" ? t("mobile.home.viewFavorites") : t("mobile.home.projectsTitle")}</h1>
       {view !== "agents" && view !== "favorites" && <button
+        className="home-layout-toggle"
+        aria-label={t("mobile.home.gridLayout")}
+        aria-pressed={projectsGrid}
+        onClick={() => { const next = !projectsGrid; setProjectsGrid(next); writeFlag("projectsGrid", next); }}
+      >
+        <span aria-hidden="true">▦</span>
+        {isUntested("mobile.home.projectGrid") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+      </button>}
+      {view !== "agents" && view !== "favorites" && <button
         className="primary new-tab"
         onClick={() => setNewProject(true)}
         aria-haspopup="dialog"
@@ -305,13 +315,13 @@ export function Home({ open, openTab, tabby, todo, mail }: {
           two must not be one gesture). A box row says it is one where a
           project row says its status: a "Paper" box beside a "Paper" project
           must be tellable apart. */}
-      {listed.length > 0 && <section className="cards home-projects">{listed.map((project, index) => <div
+      {listed.length > 0 && <section className={`cards home-projects${projectsGrid ? " home-projects-grid" : ""}`}>{listed.map((project, index) => <div
         className={`tab-card one-row home-project-card${drag.rowClass(project.id)}`}
         key={project.id}
         ref={drag.rowRef(project.id)}
       >
         <div className="tab-card-head">
-          <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{scopeCaption(project)}</small></span><span className="card-trailing">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}<span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}>{project.live_sessions}</span></span></button>
+          <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{scopeCaption(project)}</small></span><span className="card-trailing"><span className="home-agent-counts">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}</span><span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z" /><path d="M3 10h18" /></svg><span>{project.live_sessions}</span></span></span></button>
           {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"

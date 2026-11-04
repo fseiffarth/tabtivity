@@ -164,6 +164,7 @@ export const enSource = {
   "mobile.failure.divergedUnavailable": "This project has no local copy to compare.",
   "mobile.projectSync": "Phone may resolve diverged files",
   "mobile.projectSyncHelp": "In the phone's Diverged list: take the host's or the local copy of a file, upload new files and complete a deletion. Each asks first, as on the desktop, and then overwrites or deletes that copy. Needs Project files, and the desktop must be open and connected to the host.",
+  "mobile.home.gridLayout": "Grid layout",
   "mobile.gitSheet.menu": "Git",
   "mobile.gitSheet.title": "Git · {label}",
   "mobile.gitSheet.loading": "Reading git…",
