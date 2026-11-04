@@ -1,3 +1,4 @@
+import { TerminalLimitHandoff } from "./TerminalLimitHandoff";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
@@ -2595,6 +2596,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
     )}
+    {agentPane && !attachOnly && !signIn && !signInDone && <TerminalLimitHandoff ptyId={id} visible={visible} cwd={cwd} />}
     {agentPane && !attachOnly && !signIn && !signInDone && host && (
       <TerminalDeadPaneCard host={host} ptyId={id} visible={visible} />
     )}

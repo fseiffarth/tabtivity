@@ -546,6 +546,8 @@ export interface Settings {
    *  first, then menu order (`agentShortcutSlots`); keys it lacks follow the
    *  ones it names. Round-trips through the backend settings `extra`. */
   agent_order?: string[];
+  /** Explicit opt-in: skip confirmation on future CLI usage-limit handoffs. */
+  agent_limit_auto_handoff?: boolean;
   /** The scheduled agent warm-up (Manage CLIs → Scheduled warm-up): at each
    *  configured local time, one short message is sent to that agent (in its
    *  one-shot print mode), so its usage window starts *then* rather than

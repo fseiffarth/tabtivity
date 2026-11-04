@@ -31,6 +31,7 @@ export type UntestedEntry = {
 
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
+  "terminal.limitHandoff": { area: "agents", what: "Explicit CLI limit notice offers the next installed CLI in saved order; approval sends recent conversation into a new tab; Never ask again persists automatic handoff" },
   "tabBar.nameSubwindow": { area: "tabs", what: "Right-click the empty part of a subwindow's tab bar → Name this subwindow…: the name shows beside the grip, survives a restart, hiding and restoring, and popping out and docking back; an empty name removes it" },
   "detachedTabs.nameWindow": { area: "tabs", what: "Right-click a popout's title bar → Name this window…: the name shows in the title bar and as the OS window title (taskbar, Alt+Tab) and survives a restart; a popped-out named subwindow keeps its name as the window's; in a split popout a pane's own bar names that pane" },
   "agents.launchDefaults": { area: "agents", what: "Manage CLIs → each installed CLI → Default model and effort: saved per CLI, applied to new desktop/phone sessions across projects and root; explicit choices, resumes and local-model tabs keep their settings; reset restores CLI defaults" },
