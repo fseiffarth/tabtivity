@@ -94,7 +94,15 @@ Consequences worth knowing before touching the code:
   and `removeMembers`, never the member list, because a whole-list write erased
   a member added meanwhile. The frontend tolerates a backend that predates the
   fields (`unknown field` → singular calls), since `src/` hot-reloads and
-  `src-tauri/` does not.
+  `src-tauri/` does not. The side panel's drag reorder is the same: a
+  `patch_box` `order` names the members the panel shows and the backend puts
+  them into the slots they hold, so a member it never saw (added by another
+  window, or one with no folder) neither moves nor vanishes. `set_box_members`
+  (the whole list) is only the fallback for a backend without `order`.
+- **Taking access back is never gated.** The phone row of the box sheet needs
+  tmux and persistent sessions to switch ON, and `set_box_mobile_access` checks
+  neither when switching OFF; so a box whose access is already on keeps its
+  switch when those preconditions fail, with a line saying it cannot work.
 - **Discovery is part of the feature.** With no box, a dashed ghost pill stands
   where box pills would; Ctrl+K and the header search list boxes; a feature
   hint (≥ 4 projects, 0 boxes) points at the ghost pill. A box that is only

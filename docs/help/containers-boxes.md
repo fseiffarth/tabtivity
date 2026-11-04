@@ -92,6 +92,9 @@ swatch on a project's pill opens that box.
 - The side panel is an accordion: one section per project, one open at a time.
   Each header shows the project's colour dot, a dot when its git state needs
   attention, and its agent count. Which sections you fold is remembered per box.
+  The `⋯` on a header offers Files/Git, the file manager, project settings and
+  **Open as tab**; the search field above the sections searches the open
+  project; drag a header's grip to reorder the projects.
 - The box pill's status bars count the agents of the box and of its member
   projects.
 
@@ -99,7 +102,7 @@ swatch on a project's pill opens that box.
 box, **All projects** first); typing a member's name finds its box too.
 Ctrl+K has a **Boxes** group, **New box…**, **Show all projects** (inside a
 box) and **Add (current project) to (box)**. Right-click a box pill for Open, Rename,
-**Edit box…** (the box sheet: name, colour, folder, phone access, and
+**Edit box…** (the box sheet: name, colour, projects, folder, phone access, and
 **Dissolve box…**), Members or **Dissolve box…**. A popout window that shows a
 box carries its name and colour in the title bar. With four or more projects
 and no box, a hint points at the **+ Box** pill; the lesson "Group projects

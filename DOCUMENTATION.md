@@ -1173,8 +1173,9 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
 `stores/boxes.ts`, `stores/boxSlice.ts`, `commands/boxes.rs`;
 `docs/context/project_boxes.md` holds the design rationale). Backend commands:
 `get_boxes`, `save_boxes`, `create_box`, `rename_box`, `patch_box`,
-`delete_box`, `set_box_members`, `ensure_box_folder`,
-`refresh_box_agent_docs`.
+`delete_box`, `set_box_members` (a whole-list write, kept for an older running
+frontend and as the fallback when the backend lacks `patch_box`'s `order`),
+`ensure_box_folder`, `refresh_box_agent_docs`.
 
 - **Data model (N:M).** Boxes live in their own `~/.local/share/tabtivity/boxes.json`
   (`Vec<ProjectBox>` = `{id, name, member_ids, position, folder?, relations}`)
@@ -1222,8 +1223,10 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
   boxes): closed projects included and labelled, scrolls, filter field past 8
   rows, each toggle one singular `patch_box` add/remove (optimistic, reverted
   on failure). Saves from the box sheet go through `saveBox`, a diffed
-  `patch_box` (`name`, `addMembers`, `removeMembers`), never the whole list, so
-  a member added meanwhile survives; against an older running backend both
+  `patch_box` (`name`, `addMembers`, `removeMembers`, `color`), never the whole
+  list, so a member added meanwhile survives (the side panel's drag reorder is
+  likewise a `patch_box` `order`: the named members take the slots they hold,
+  any other member keeps its slot); against an older running backend both
   `saveBox` and `createBoxQuick` fall back to the singular calls. Other
   gestures: Ctrl/Cmd-click multi-select → "Box these (N)…", drag-and-drop
   (plain or Alt drop on any box pill, or on a row of the chip's list, which
@@ -1231,6 +1234,20 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
   box of the two, entered and put into inline rename). While a box slice is
   selected the switcher's "+" lists non-members to add, and each member pill's
   menu has an explicit "Remove … from …" row beside the ✕.
+- **The box sheet** (`BoxEditorDialog.tsx`, "Edit box…"): one box — name
+  (checked as you type, only when changed), colour, the member list (closed
+  projects too; badges closed / container / VM / remote and the swatches of the
+  other boxes holding the project; a filter field), one trust line per kind of
+  member that runs outside its container or VM or needs a connection, the
+  folder with Open, the phone-access switch and the **Dissolve box…** footer.
+  There is no create mode: boxes are born through the name prompt. Save is one
+  `saveBox` diff against what the sheet opened with. The phone row is the
+  Settings → Mobile switch (acts at once, keeps the box's per-phone list); with
+  no tmux (Windows) or persistent local sessions off it is replaced by a line
+  saying why, except for a box whose access is already on, which keeps its
+  switch so the access can always be revoked. An empty box shows "No projects
+  yet" + **Add projects…** (`BoxEmptyLine`, in the strip and the side panel; the
+  button is left out in a popout, which has no sheet host).
 - **Finding boxes.** Focusing the header search (`ProjectSearch.tsx`) with
   nothing typed lists the boxes (coloured `BoxSwatch`, member names), with "All
   projects" first while a box is sliced; a query matches a box by its name or a
@@ -1276,7 +1293,11 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
   from `tab.cwd`, nothing stored), in the main strip and the popout's. The side
   panel is an accordion (`ProjectFilesPane.tsx`, `stores/boxAccordion.ts`): one
   member expanded, headers with colour dot, git dot and agent count; the
-  collapse state is per-viewer `localStorage` keyed by box id. The
+  collapse state is per-viewer `localStorage` keyed by box id. A `⋯` on a member
+  header (`BoxMemberMenu.tsx`) offers Files/Git, Remote/Local, the file manager,
+  project settings and **Open as tab** (a `projectfiles` tab at the member's
+  root); the toolbar's search is one shared field above the sections that
+  searches the expanded member (`sharedSearch` on `FileTree`). The
   spawn gate (`pty_spawn`) and file confinement (`compute_allowed_roots`)
   accept the box folder ∪ member roots ∪ remote members' mirrors, and fail
   closed on an unknown box. Local shells in a box scope get tmux persistence

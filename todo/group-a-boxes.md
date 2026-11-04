@@ -473,13 +473,19 @@
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
     - [ ] 🖐️ Manual test — **The box sheet (Edit box…).** Edit box…
-      opens one box (the box you are in, else the first): name, colour,
-      badges for container/VM and remote members, folder, the
-      phone-access row and a Dissolve footer. Save sends only the
-      difference: add a member from a pill menu while the sheet is open,
-      then Save a rename: the new member is still there. A refused name
-      stays on the sheet with its reason. *(Described from the plan:
-      check this box once the sheet has landed.)*
+      opens one box (the box you are in, else the first): name (checked as
+      you type), colour, the member list (closed projects too, badges
+      for closed/container/VM/remote and the swatches of the other boxes
+      holding the project, a filter field), one trust line per kind of
+      member that runs outside its container/VM or needs a connection,
+      the folder with Open, the phone-access switch and a Dissolve box…
+      footer. Save sends only the difference: add a member from a pill
+      menu while the sheet is open, then Save a rename: the new member is
+      still there. A refused name stays on the sheet with its reason.
+      Switch phone access on, turn persistent local sessions off in
+      Settings and reopen the sheet: the switch is still there (access
+      can always be switched off) with a line saying it is on but cannot
+      work; with the box's access off the line says it needs them.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)
@@ -540,8 +546,15 @@
       staged, unpushed or broken; none for remote members), and the
       agent count. Folding is remembered per box across a restart. Drag
       a file over a folded section for about ⅔ s: it opens, and dropping
-      moves the file there. *(Described from the plan: check this box
-      once the accordion's menu and search have landed.)*
+      moves the file there. The ⋯ on a header opens a menu (Files/Git,
+      Remote/Local, open folder, project settings, Open as tab: a files
+      tab with the git bar at that member's root). The toolbar 🔍 opens
+      one search field above the sections that searches the expanded
+      member (disabled on a remote member's Remote side). Drag a header's
+      grip to reorder the members; add a project from the box pill menu
+      in the meantime and reorder again: the new member is still there.
+      An empty box shows "No projects yet" with an Add projects… button
+      that opens the box sheet (no button in a popout).
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)
