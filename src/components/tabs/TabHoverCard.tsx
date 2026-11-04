@@ -16,6 +16,10 @@ import {
 } from "../../stores/tabs/tabLocation";
 import { lastPtyOutputAt, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
+import { useAgentModelsStore } from "../../stores/agents/agentModels";
+import { agentRosterFacts, type AgentRosterState } from "../../lib/agents/agentRoster";
+import { turnDurationOf } from "../../../shared/turnDuration";
+import { turnLabel } from "../cockpit/cockpitFormat";
 import { useFileSourcesStore } from "../../stores/viewers/fileSources";
 import type { InternalViewer } from "../../lib/viewers/fileUtils";
 import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
@@ -91,6 +95,15 @@ const knownFeatures = new Map<string, AgentTabFeatures | null>();
 export function _clearKnownFeaturesForTest(): void {
   knownFeatures.clear();
 }
+
+/** An agent tab's state in the cockpit roster's words, so the card and the
+ *  roster name one tab's state alike. Idle has none: the quiet-time line says it. */
+const AGENT_STATE_KEY: Record<Exclude<AgentRosterState, "idle">, TranslationKey> = {
+  working: "cockpit.state.working",
+  question: "cockpit.state.asking",
+  interrupted: "cockpit.state.interrupted",
+  done: "cockpit.state.done",
+};
 
 /** Names past this many collapse into "+N more". */
 const MAX_SHOWN_NAMES = 6;
@@ -179,11 +192,18 @@ export function TabHoverCard({
   primaryHost,
   computeHosts,
   memberTable,
+  scopeName,
+  hint,
   anchorX,
   anchorY,
 }: {
   tab: TabEntry;
   scope: string;
+  /** The scope's own name, for a card opened away from that scope's tab strip
+   *  where nothing else says which project or box the tab is in. */
+  scopeName?: string;
+  /** A closing line naming what a click on the hovered control does. */
+  hint?: string;
   isRemote?: boolean;
   hostPinned?: boolean;
   primaryHost?: string;
@@ -223,6 +243,39 @@ export function TabHoverCard({
   }, []);
 
   const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
+
+  // An agent tab's turn — state, how long, model, last prompt — read the way
+  // the cockpit roster reads it (`agentRosterFacts`), so the two never give
+  // one tab two answers. Read in render; these subscriptions are what re-render
+  // the card when a reading changes under it (the 10 s tick ages the times).
+  useActivityStore((s) => s.attentionByTab[ptyId]);
+  useActivityStore((s) => s.lastDoneByTab[ptyId]);
+  useAgentModelsStore((s) => s.byTab[ptyId]);
+  useAgentModelsStore((s) => s.screenByTab[ptyId]);
+  const lastPrompt = useAgentModelsStore((s) => (isAgent ? s.promptByTab[ptyId] : undefined));
+  // Ask the model store to re-read once per hover (it throttles its own reads):
+  // a tab no list has polled would otherwise show no model or prompt.
+  useEffect(() => {
+    if (!isAgent) return;
+    const models = useAgentModelsStore.getState();
+    void models.refresh(scope, tab);
+    void models.refreshScreen(scope, tab);
+  }, [isAgent, scope, tab]);
+  const facts = isAgent ? agentRosterFacts(scope, tab, now, { reread: false }) : null;
+  const turnText = facts
+    ? turnLabel(
+        turnDurationOf({
+          status: facts.state,
+          turnStartedAt: facts.turnStartedAt,
+          workingAt: facts.workingAt,
+          doneAt: facts.doneAt,
+          subagents: facts.subagents,
+        }),
+        facts.doneAt,
+        now,
+        t,
+      )
+    : "";
 
   // What the agent was handed — sandbox, MCP servers, skills, API key — asked
   // once per hover; a tab this window's backend did not spawn answers null and
@@ -270,6 +323,7 @@ export function TabHoverCard({
       kindBits.push(named ? t("tabHoverCard.onHost", { name: named }) : t("tabHoverCard.onHostSsh"));
     }
   }
+  if (scopeName) kindBits.push(scopeName);
   if (tab.kind === "embed" && fileSource === "remote") {
     kindBits.push(t("tabHoverCard.remoteNative"));
   } else if (tab.kind === "embed" && fileSource === "local") {
@@ -280,11 +334,32 @@ export function TabHoverCard({
   // once it produced output this session (a window that never saw the PTY —
   // e.g. a fresh popout — has nothing truthful to say, so it says nothing).
   const lastOut = isPtyTabKind(tab.kind) ? lastPtyOutputAt(ptyId) : undefined;
-  const activity = busy
+  const plainActivity = busy
     ? t("tabHoverCard.working")
     : lastOut !== undefined
       ? t("tabHoverCard.quietFor", { duration: formatQuiet(now - lastOut) })
       : null;
+  // An agent says what its turn is doing and how long it ran ("Working · 4m so
+  // far", "Finished · took 12m · finished 2 minutes ago"); a quiet one whose
+  // last turn is known says that instead of a second "quiet for".
+  const agentState = facts && facts.state !== "idle" ? t(AGENT_STATE_KEY[facts.state]) : null;
+  const activity =
+    [
+      agentState ?? (turnText ? null : plainActivity),
+      turnText,
+      facts?.subagents ? t("tabHoverCard.subagentsAtWork", { count: facts.subagents }) : null,
+    ]
+      .filter(Boolean)
+      .join(" · ") || null;
+  const activityTone = facts
+    ? facts.state === "working"
+      ? " working"
+      : facts.state === "question"
+        ? " asking"
+        : ""
+    : busy
+      ? " working"
+      : "";
 
   // Whether the conversation survives an app restart — a real behavioral split
   // between agents (see RESUMABLE_AGENTS) that nothing else surfaces.
@@ -351,7 +426,7 @@ export function TabHoverCard({
       top = Math.max(MARGIN, anchorY - height - GAP);
     }
     setPos({ left, top });
-  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input, features, memberInfo?.kind, memberInfo?.name]);
+  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input, features, memberInfo?.kind, memberInfo?.name, facts?.model, lastPrompt, hint]);
 
   return createPortal(
     <div
@@ -396,7 +471,24 @@ export function TabHoverCard({
       {activity && (
         <span className="pill-popup-path-row">
           <span className="pill-popup-path-label">{t("tabHoverCard.activityLabel")}</span>
-          <span className={`tab-popup-meta${busy ? " working" : ""}`}>{activity}</span>
+          <span className={`tab-popup-meta${activityTone}`}>{activity}</span>
+        </span>
+      )}
+      {facts?.model && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabHoverCard.modelLabel")} <UntestedTag id="tabHoverCard.agentTurn" />
+          </span>
+          <span className="tab-popup-meta">{facts.model}</span>
+        </span>
+      )}
+      {lastPrompt && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabHoverCard.lastPromptLabel")}
+            {!facts?.model && <> <UntestedTag id="tabHoverCard.agentTurn" /></>}
+          </span>
+          <span className="tab-popup-prompt">{lastPrompt}</span>
         </span>
       )}
       {restart && (
@@ -446,6 +538,7 @@ export function TabHoverCard({
           <span className="pill-popup-path">{tab.sessionId}</span>
         </span>
       )}
+      {hint && <span className="tab-popup-kind">{hint}</span>}
     </div>,
     document.body,
   );

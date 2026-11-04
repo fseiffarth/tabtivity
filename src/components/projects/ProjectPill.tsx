@@ -1545,6 +1545,9 @@ export function ProjectPill({
     if (!pillRef.current) return;
     void hover.open(pillRef.current.getBoundingClientRect());
   };
+  // A status bar opens its tab's own card: the project card steps aside while
+  // it is up and comes back when the pointer is on the pill again.
+  const handleBarHover = (on: boolean) => (on ? hover.close() : handleMouseEnter());
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -2872,7 +2875,7 @@ export function ProjectPill({
             <CloseIcon />
           </button>
         )}
-        <PillStatusBars scope={project.id} />
+        <PillStatusBars scope={project.id} onBarHover={handleBarHover} />
       </div>
     </>
   );

@@ -1613,6 +1613,24 @@
 .tab-popup-meta.working {
   color: var(--success);
 }
+/* An agent waiting on you: the status bars' own decision colour. */
+.tab-popup-meta.asking {
+  color: var(--status-decision);
+}
+
+/* An agent's last prompt: wrapped prose, three lines at most — the card says
+   what the turn is about, the tab itself holds the whole prompt. */
+.tab-popup-prompt {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
 
 /* The hover card's MCP row: a server the CLI starts, one switched off. */
 .tab-popup-mcp.on {

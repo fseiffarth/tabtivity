@@ -4,6 +4,7 @@ import { relativeToNow } from "../../lib/agents/agentSchedule";
 import { formatTime } from "../../lib/calendar/calendarTime";
 import { readUse24h } from "../../lib/timeFormat";
 import type { RosterRow } from "../../lib/cockpit/roster";
+import type { TurnDuration } from "../../../shared/turnDuration";
 
 type T = ReturnType<typeof useT>;
 
@@ -31,8 +32,13 @@ export function formatAgo(ms: number, now: number): string {
 /** The roster's turn reading: "4m so far" while a turn runs, "took 12m ·
  *  finished 2 hours ago" once it is over; nothing without a reading. */
 export function rosterTurnLabel(row: RosterRow, now: number, t: T): string {
-  const turn = row.turn;
-  if (!turn) return row.facts.doneAt !== undefined ? t("mobile.project.turnFinished", { ago: formatAgo(row.facts.doneAt, now) }) : "";
+  return turnLabel(row.turn, row.facts.doneAt, now, t);
+}
+
+/** {@link rosterTurnLabel} from the bare readings — what the tab hover card
+ *  prints for an agent tab, so it and the roster say one thing. */
+export function turnLabel(turn: TurnDuration | undefined, doneAt: number | undefined, now: number, t: T): string {
+  if (!turn) return doneAt !== undefined ? t("mobile.project.turnFinished", { ago: formatAgo(doneAt, now) }) : "";
   const duration = formatTurn(turn.ms, t);
   if (turn.running) return t("mobile.project.turnRunning", { duration });
   return `${t("mobile.project.turnTook", { duration })} · ${t("mobile.project.turnFinished", { ago: formatAgo(turn.end, now) })}`;
