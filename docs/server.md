@@ -4,7 +4,7 @@ The front door for everything about the server version: where it stands,
 what the user decided, what is open, and which document holds the detail.
 Read this first; keep it current when a decision or an open point changes.
 
-## Status (2026-10-11)
+## Status (2026-11-03)
 
 - **Built, reviewed, unmerged, never run live.** Branch `hosted`
   (`.claude/worktrees/hosted`), `f3efd50b..` — every phase of the plan
@@ -243,5 +243,8 @@ Each step's exact clicks are in its `hosted_handoff.md` section.
 8. Markup questions on a server (#2390), the root, local-model and reader
    lanes (#2391) and the admin's phone Local models (#2392): the TODOs'
    manual tests.
+9. The 2026-11-03 catch-up with `develop`: the phone on a server (#2436,
+   #2437), the browser client (#2443) and agents (#2456) — each TODO's
+   manual test.
 
 An `UntestedTag` is cleared only when the user says that item is tested.
