@@ -3989,8 +3989,9 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on macOS
 
 - [ ] **31cp — Phone / iPad file browsing: bugs and small items** (2026-11-03;
-  plan only, `docs/phone_files_browsing_plan.md`). Phase 3 (L1–L12) waits for the
-  user; L1 and L11 reverse decisions 4 and 2 of the files-library plan.
+  `docs/phone_files_browsing_plan.md`). Phase 3: the user picked L2–L7, L10, L12
+  (batches D–F); L1, L8, L9, L11 stay parked (L1 and L11 reverse decisions 4 and 2
+  of the files-library plan).
   - [x] Batch A (phone): B1 Esc runs Back (keeps an open markup note), B2 no-preview
     card, B3 refusal sentences, B4 library stays mounted under the viewer + scroll
     kept, B6 Favorites order, B7 sheet focus. (2026-11-03, uncommitted; ⚠️ never
@@ -4073,6 +4074,69 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
       - [ ] ❌ Doesn't work on macOS
   - [ ] B8: check on an iPhone whether the edge swipe goes up two folders (Safari tab
     and installed PWA) before changing anything.
+  - [x] Batch D (backend + phone): L12 a 20 s deadline on local files calls
+    (`deadline.rs`), L2 streamed raw route with one Range, ETag and 304
+    (`serve.rs`; ranges on the remote side and in the drop boxes too), L3 films,
+    sounds, HEIC/AVIF by their bytes and played in the viewer. (2026-11-04,
+    uncommitted; needs a dev build; ⚠️ never seen on a phone)
+    - [ ] 🖐️ From the files library on an iPhone and an Android phone: an mp4/mov
+      plays and seeks at once (also one over 24 MB, and one on a remote project's
+      host side); an mp3/m4a plays; a picture or PDF of 30 MB opens on this
+      computer's side; a HEIC shows on the iPhone and is a Save card on Android;
+      a film sent to the chat plays from the chat.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ A folder on a stalled network mount (e.g. an sshfs with the server gone)
+      answers "timed out" after about 20 s instead of spinning; other folders still open.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch E (phone, iPad): L4 split view (900 px+ landscape: the file beside the
+    folder), L5 keyboard (/ and Cmd-F search, arrows walk items, Cmd-↑/Backspace up,
+    focus and hover styles). (2026-11-04, uncommitted; ⚠️ never seen on an iPad)
+    - [ ] 🖐️ iPad in landscape: open a picture, a PDF and a text from the library — each
+      stands on the right with the folder still usable on the left; another tap swaps
+      it; Back/Esc closes it; Mark up goes full screen; turned upright the file is over
+      the folder again. With a keyboard: /, arrows (grid keeps the column), Enter,
+      Cmd-↑.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch F (backend + phone): L6 drop files from Files/Finder to upload, L7
+    Select files (Share together, ☆ Favorite), L10 New folder (+ Undo while empty),
+    Download as zip, uploads up to 1 GB (staged on disk). Mark up of several files
+    was not built. (2026-11-04, uncommitted; needs a dev build; ⚠️ never seen on a
+    phone)
+    - [ ] 🖐️ iPad: drag two files from the Files app onto a folder with Upload here —
+      outline, both land, Undo works. ⋯ → New folder… makes one; a taken name says so;
+      Undo takes it back. ⋯ → Download this folder as a zip saves a zip that opens;
+      a huge folder says it is too large. Select files → tick three → Share opens the
+      share sheet with all three; ☆ stars them. Upload a 100 MB video: it lands whole.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 - [ ] **31cq — Root off the phone's project list: logo door, per-phone opt-in** (2026-11-04;
   ✅ code-complete, `the_root_scope_is_off_for_every_phone_until_the_list_names_it`,
   `MobileHome`, `MobilePairedDeviceAccess`, `MobileRootPhonePicker` tests; ⚠️ never seen

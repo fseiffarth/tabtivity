@@ -72,6 +72,9 @@ pub enum FilesError {
     /// The remote side (`host_files`): the desktop holds no connection to
     /// the project's host the phone could ride.
     HostOffline,
+    /// A local call ran past its deadline (`deadline::LOCAL_DEADLINE`): a
+    /// folder on a stalled mount, most likely.
+    TimedOut,
     Io(String),
 }
 
@@ -83,6 +86,7 @@ impl FilesError {
             FilesError::NotFound => "file_not_found",
             FilesError::TooLarge => "file_too_large",
             FilesError::HostOffline => "host_offline",
+            FilesError::TimedOut => "timeout",
             FilesError::Io(_) => "read_failed",
         }
     }
@@ -355,15 +359,22 @@ impl ProjectDir {
     /// (`mkdirat` never follows a link at it). Open it with [`Self::lookup_dir`],
     /// which refuses a link standing there.
     pub(crate) fn create_dir(&self, name: &str) -> std::io::Result<()> {
+        match self.create_new_dir(name) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            made => made,
+        }
+    }
+
+    /// A new folder `name` here, or `AlreadyExists` when anything already
+    /// has that name — the phone's **New folder**, which must know it made it.
+    pub(crate) fn create_new_dir(&self, name: &str) -> std::io::Result<()> {
         use std::os::fd::AsRawFd;
         let c_name = segment_cstr(name)?;
         // SAFETY: a live directory descriptor and a NUL-terminated name.
         if unsafe { libc::mkdirat(self.0.as_raw_fd(), c_name.as_ptr(), 0o777) } == 0 {
-            return Ok(());
-        }
-        match std::io::Error::last_os_error() {
-            error if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-            error => Err(error),
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
         }
     }
 
@@ -741,10 +752,21 @@ pub fn entry(root: &Path, rel: &str, host_key: &[u8], raw_id: &str) -> Option<En
     Some(Entry { token: seal(host_key, raw_id, rel).ok()?, name: name.to_string(), kind, size: meta.len(), modified, created, ignored: false, items: None })
 }
 
-/// One file's bytes and media type. Text longer than `MAX_OUTBOX_FILE` is
-/// answered with its head — a long log is still worth its first pages; any
-/// other kind that large is `TooLarge`.
-pub fn read(root: &Path, rel: &str) -> Result<(Vec<u8>, &'static str), FilesError> {
+/// One file opened to be served to the phone (`serve::from_file`): the
+/// descriptor just proven, rewound; its metadata; its kind; and how many of
+/// its bytes may be served — all of them, except a text longer than
+/// `MAX_OUTBOX_FILE`, which is served as its head.
+pub struct Served {
+    pub file: fs::File,
+    pub meta: fs::Metadata,
+    pub kind: &'static str,
+    pub len: u64,
+}
+
+/// The file `rel` names, opened from the root one checked name at a time
+/// with no link on the way, typed by its head ([`Served`]). No size cap: the
+/// body is streamed from this descriptor, never read whole.
+pub fn open_served(root: &Path, rel: &str) -> Result<Served, FilesError> {
     if rel.is_empty() || !valid_rel(rel) {
         return Err(FilesError::NotFound);
     }
@@ -753,11 +775,20 @@ pub fn read(root: &Path, rel: &str) -> Result<(Vec<u8>, &'static str), FilesErro
     let Some((mut file, meta, kind)) = dir.open_file(name).and_then(|(file, meta)| outbox::sniff_opened(file, meta)) else {
         return Err(FilesError::NotFound);
     };
+    // Keep the descriptor just proven: never reopen a replaceable leaf.
+    file.rewind().map_err(|e| FilesError::Io(e.to_string()))?;
+    let len = if kind.starts_with("text/") { meta.len().min(MAX_OUTBOX_FILE) } else { meta.len() };
+    Ok(Served { file, meta, kind, len })
+}
+
+/// One file's bytes and media type, read whole (Mark up's sources). Text
+/// longer than `MAX_OUTBOX_FILE` is answered with its head — a long log is
+/// still worth its first pages; any other kind that large is `TooLarge`.
+pub fn read(root: &Path, rel: &str) -> Result<(Vec<u8>, &'static str), FilesError> {
+    let Served { file, meta, kind, .. } = open_served(root, rel)?;
     if meta.len() > MAX_OUTBOX_FILE && !kind.starts_with("text/") {
         return Err(FilesError::TooLarge);
     }
-    // Keep the descriptor just proven: never reopen a replaceable leaf.
-    file.rewind().map_err(|e| FilesError::Io(e.to_string()))?;
     let mut bytes = Vec::with_capacity(meta.len().min(MAX_OUTBOX_FILE) as usize);
     file.take(MAX_OUTBOX_FILE)
         .read_to_end(&mut bytes)
@@ -871,7 +902,7 @@ pub(super) const WALK_SKIP: &[&str] = &["node_modules", "target", "__pycache__",
 /// the way the drawer would list them (no links, no hidden names), not into a
 /// folder named in `skip`, until [`MAX_SCANNED`]. The `bool` is whether it
 /// stopped there.
-fn walked_paths(root: &Path, under: &str, skip: &[&str]) -> Result<(Vec<(String, bool)>, bool), FilesError> {
+pub(super) fn walked_paths(root: &Path, under: &str, skip: &[&str]) -> Result<(Vec<(String, bool)>, bool), FilesError> {
     let mut found = Vec::new();
     let mut folders = std::collections::VecDeque::from([under.to_string()]);
     while let Some(rel) = folders.pop_front() {

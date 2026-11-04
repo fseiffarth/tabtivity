@@ -1,8 +1,21 @@
 # Phone / iPad file browsing — bugs and small improvements plan
 
-> **Status (2026-11-03): batch A committed (`06905950`), batch B committed
-> (`791e581e`), batch C implemented and not committed; none run on a phone or
-> iPad. B8 (the iPhone edge-swipe check) is still owed.**
+> **Status (2026-11-04): batches A (`06905950`), B (`791e581e`) and C
+> (`680f74c8`) committed; D, E and F built, not committed; none run on a phone
+> or iPad. B8 (the iPhone edge-swipe check) is still owed.**
+>
+> D–F as built, where they differ from "Phase 3 as picked":
+> - L10 New folder is not in the uploads ledger (its records are files the
+>   desktop re-hashes). The phone's Undo instead takes back only an empty
+>   folder this sidecar made within the hour (`uploads::MADE`). The
+>   desktop's upload notice does not list folders.
+> - L10 zip: `GET …/files/zip?check=1` answers `{ files, bytes }` first, so
+>   a too-large folder is said on the phone rather than saved as an error
+>   file. Ignored files are included (only `WALK_SKIP` folders are left out).
+> - L7: the bar offers Share (all at once, ≤ 48 MB together), ☆ Favorite
+>   and Done. Mark up of several files one after another was **not built**.
+> - L5: Space and Enter open the focused item (the browser's own button
+>   press); there is no separate preview key.
 >
 > Batch C as built: S7b/c went into the backend too — `files::search_in`
 > with a `SearchScope { under, ignored }` (`dir=`, `ignored=1` on
@@ -361,6 +374,103 @@ Listed so the reviews aren't lost. None is in scope for phases 1–2.
 Delete and lasting share links were weighed and are not planned. A lasting
 link breaks the session model; the short-lived `open-ticket` already covers
 "open elsewhere".
+
+### Phase 3 as picked (2026-11-04)
+
+The user picked L2, L3, L4, L5, L6, L7, L10 and L12. L1, L8, L9 and L11 stay
+parked; L1 and L11 would reverse decisions 4 and 2. Three batches:
+
+| Batch | Items | Side |
+|---|---|---|
+| D | L12, L2, L3 | backend + phone |
+| E | L4, L5 | phone (iPad) |
+| F | L6, L7, L10 | phone; L10's new folder and zip also backend |
+
+**D — serving files.**
+- **L12 — deadline.** Every local blocking files call (list, entry, search,
+  the raw open) goes through one helper in `host.rs` that waits at most
+  `LOCAL_DEADLINE` (20 s). Past it the request answers `timeout` (504), which
+  the phone already words. A stalled thread can't be killed, so the helper
+  counts the calls still running past their deadline. While `MAX_STALLED` (4)
+  are, a new local files call answers `timeout` at once instead of tying up
+  another blocking thread.
+- **L2 — streaming, Range and ETag.**
+  - The local raw route streams from the descriptor it proved (never reopens
+    the leaf), so a non-text file has no size cap. Text keeps its 24 MiB head.
+  - A single `bytes=a-b` / `a-` / `-n` range answers 206 with
+    `Content-Range`; an unsatisfiable one answers 416; several ranges are
+    answered whole (200).
+  - The answer carries `Accept-Ranges: bytes`, a strong `ETag` and
+    `Cache-Control: private, no-cache`. The ETag is built from size, mtime in
+    nanoseconds and the inode where the OS has one. `If-None-Match` answers
+    304. An `If-Range` that doesn't match drops the range.
+  - **Host side (SFTP):** a Range request reads only that range, after a
+    seek, at most 24 MiB per answer (a shorter 206 is legal and media
+    players ask again). A request without Range keeps the 24 MiB cap.
+  - **Outbox and inbox:** they answer Range by slicing their bounded
+    buffer, so a short video in the chat plays on iOS. iOS plays no
+    `<video>` from a server that can't answer Range.
+- **L3 — more types, by magic bytes only.** `outbox::classify` learns:
+  - ISO-BMFF `ftyp` brands: HEIC/HEIF → `image/heic` / `image/heif`;
+    AVIF → `image/avif`; mp4 family → `video/mp4`; `qt` → `video/quicktime`;
+    `M4A`/`M4B` → `audio/mp4`.
+  - EBML with the `webm` doctype → `video/webm`.
+  - `ID3` or an MPEG frame sync → `audio/mpeg`.
+  - `RIFF…WAVE` → `audio/wav`; `OggS` → `audio/ogg`; `fLaC` → `audio/flac`.
+  - Unknown brands stay `application/octet-stream`, so they download.
+    Office files are zips, so they already download only. SVG, HTML and JS
+    stay inert text.
+- **Phone side of D:**
+  - The viewer plays `video/*` in `<video controls playsinline>` and
+    `audio/*` in `<audio controls>`.
+  - An image that won't decode (HEIC on Android) falls back to the
+    no-preview card. HEIC/HEIF can't be marked up.
+  - The view cap becomes `viewCap(side, kind)`: media is never capped (it
+    streams). Images and PDFs are capped at 24 MiB on the host side and
+    at 200 MiB on this computer's side (pdf.js and an `<img>` hold the whole
+    file).
+
+**E — iPad.**
+- **L4 — split view:** at ≥ 900 px wide and landscape, the library shows
+  the folder on the left (about 40 %) and the open file on the right, in the
+  same `OutboxViewer` rendered in place (`inline`), not as an overlay.
+  Opening another file swaps the pane. Back closes the pane first. Below
+  900 px nothing changes.
+- **L5 — keyboard:** active only while no text field, sheet or overlay has
+  focus.
+  - `/` and Cmd/Ctrl-F: search.
+  - Arrow keys: move a highlight over rows or tiles (the grid steps by the
+    column count it measures).
+  - Enter: open. Space: preview in the split pane, or open on narrow screens.
+  - Cmd-↑ or Backspace: up a folder.
+  - `:focus-visible` and `@media (hover:hover)` styles for rows and tiles.
+
+**F — more actions.**
+- **L6 — drag and drop:** dropping files from Files.app or Finder onto the
+  list uploads them into the current folder through the existing upload
+  path, one after another. This side only, and only where **Upload here**
+  is offered (`uploads`). A drop outline shows while dragging.
+- **L7 — multi-select:** a ⋯-sheet "Select" row, or a long-press in select
+  mode, ticks files (not folders).
+  - A bar at the bottom offers Share (Web Share with the files, where the
+    phone can), ☆ Favorite and Mark up. Mark up is offered when every
+    ticked file is a PDF or a markable image, and opens them one after
+    another.
+  - Esc or Back leaves select mode.
+- **L10:**
+  - **New folder:** `POST …/files/folder?dir=&name=`, behind the same
+    switch and origin check as uploads (add-only: refuses a name that
+    exists, a dot name or a dot folder). It is logged in the uploads
+    ledger, so the desktop notice and Undo cover it.
+  - **Folder as zip:** `GET …/files/zip?dir=` streams a stored (not
+    compressed) zip of the folder's files.
+    - The walk follows the listing's rules: no links, no dot or ignored
+      paths, git-ignored files skipped.
+    - Caps: 2 000 files and 1 GiB.
+    - This side only.
+  - **Uploads over 24 MiB:** the upload body streams to the staged file
+    with a 1 GiB cap instead of being buffered. The phone lifts its 24 MiB
+    check for uploads to the files library (not the chat's send).
 
 ---
 

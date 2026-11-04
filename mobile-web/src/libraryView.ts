@@ -58,18 +58,20 @@ export function writeLibraryView(view: LibraryView, storage?: ViewStorage): void
   writeJson(KEY, { layout, sort, desc, foldersFirst, thumbs }, storage);
 }
 
-/** What a tile draws: a folder, a picture, a PDF, a text, or a file. */
-export type Glyph = "dir" | "image" | "pdf" | "text" | "file";
+/** What a tile draws: a folder, a picture, a PDF, a film or sound, a text,
+ * or a file. */
+export type Glyph = "dir" | "image" | "pdf" | "media" | "text" | "file";
 
 export function glyphOf(kind: string): Glyph {
   if (kind === "dir") return "dir";
   if (kind.startsWith("image/")) return "image";
   if (kind === "application/pdf") return "pdf";
+  if (kind.startsWith("video/") || kind.startsWith("audio/")) return "media";
   return kind.startsWith("text/") ? "text" : "file";
 }
 
 /** The order Sort by kind groups in, ascending. */
-const GLYPH_ORDER: Record<Glyph, number> = { dir: 0, pdf: 1, image: 2, text: 3, file: 4 };
+const GLYPH_ORDER: Record<Glyph, number> = { dir: 0, pdf: 1, image: 2, media: 3, text: 4, file: 5 };
 
 /** A name collator per language (the app's, so the order matches what the
  * reader reads); `undefined` is the browser's own. */

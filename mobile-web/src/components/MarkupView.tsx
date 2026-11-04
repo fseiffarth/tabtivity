@@ -375,7 +375,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat, startMarking = false }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat, startMarking = false, paned = false }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -422,6 +422,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** The reader opens marking whatever this phone's "PDFs open in" says — the
    * files library's **Mark up** asked for it. */
   startMarking?: boolean;
+  /** Read beside the files library's folder on a wide screen (`OutboxViewer`'s
+   * `paned`); marking still takes the whole screen. */
+  paned?: boolean;
 }) {
   const t = useT();
   /** The file shown — the host's, until a Reload finds a newer one. */
@@ -2251,7 +2254,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     && <NoteEditor note={note} size={size} width={cssWidth} onChange={editNote} onColor={(next) => setNote((draft) => draft && { ...draft, color: next })}
       onSave={saveNote} onCancel={() => setNote(null)} />;
 
-  return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}${cardShown ? " has-questions" : ""}`} role="dialog" aria-modal="true"
+  // Beside the files library's folder only while reading: marking takes the
+  // whole screen.
+  const besideFolder = paned && !marking;
+  return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}${cardShown ? " has-questions" : ""}${besideFolder ? " paned" : ""}`} role="dialog" aria-modal={!besideFolder}
     aria-label={marking ? t("mobile.markup.title", { name: sentName(file) }) : sentName(file)}>
     <div className="outbox-viewer-head">
       {(reading || !marking) && <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")} disabled={sending !== null}><CloseIcon size="1em" /></button>}

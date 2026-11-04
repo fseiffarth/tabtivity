@@ -10,14 +10,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, MAX_VIEW_FILE } from "../../../mobile-web/src/api";
+import { ApiError, MAX_LOCAL_VIEW, MAX_VIEW_FILE } from "../../../mobile-web/src/api";
 import { resetBackStackForTests } from "../../../mobile-web/src/backStack";
 import { FavoritesPage } from "../../../mobile-web/src/components/FavoritesPage";
 import { FilesLibrary, failureKey } from "../../../mobile-web/src/components/FilesLibrary";
 import { OptionSheet } from "../../../mobile-web/src/components/OptionSheet";
 import { OutboxViewer } from "../../../mobile-web/src/components/OutboxViewer";
 import { filesPlaceId, recordRecent, toggleFavorite } from "../../../mobile-web/src/filesPlace";
-import { DEFAULT_LIBRARY_VIEW, sortEntries, writeLibraryView } from "../../../mobile-web/src/libraryView";
+import { DEFAULT_LIBRARY_VIEW, glyphOf, sortEntries, writeLibraryView } from "../../../mobile-web/src/libraryView";
 
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
@@ -143,6 +143,210 @@ describe("Files library — the list under an open file", () => {
   });
 });
 
+describe("Files library — an iPad's wide screen and keyboard", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetBackStackForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** A screen that is (or is not) wide and held sideways. */
+  const wide = (on: boolean) => vi.stubGlobal("matchMedia", (query: string) =>
+    ({ matches: on && query.includes("min-width: 900px"), media: query, addEventListener: () => {}, removeEventListener: () => {} }));
+
+  it("shows an open file beside the folder, which stays usable and marks it; another tap swaps it", async () => {
+    wide(true);
+    stubHost("split");
+    render(<FilesLibrary projectId="split" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(library).findByRole("button", { name: "Open notes.md" }));
+    const viewer = screen.getByRole("dialog", { name: "notes.md" });
+    expect(library.classList.contains("files-split")).toBe(true);
+    expect(library.hasAttribute("inert")).toBe(false);
+    expect(viewer.classList.contains("paned")).toBe(true);
+    expect(viewer.getAttribute("aria-modal")).toBe("false");
+    expect(within(library).getByRole("button", { name: "Open notes.md" }).getAttribute("aria-current")).toBe("true");
+
+    fireEvent.click(within(library).getByRole("button", { name: "Open the folder src" }));
+    fireEvent.click(await within(library).findByRole("button", { name: "Open main.rs" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "notes.md" })).toBeNull());
+    expect(screen.getByRole("dialog", { name: "main.rs" }).classList.contains("paned")).toBe(true);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "main.rs" })).toBeNull());
+    expect(library.classList.contains("files-split")).toBe(false);
+  });
+
+  it("keeps a file over the folder on a narrow or upright screen", async () => {
+    wide(false);
+    stubHost("narrow");
+    render(<FilesLibrary projectId="narrow" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    fireEvent.click(await within(library).findByRole("button", { name: "Open notes.md" }));
+    expect(screen.getByRole("dialog", { name: "notes.md" }).classList.contains("paned")).toBe(false);
+    expect(library.hasAttribute("inert")).toBe(true);
+  });
+
+  it("walks the items with the arrows, searches on /, and goes up on Backspace but not past the root", async () => {
+    stubHost("keys");
+    const onClose = vi.fn();
+    render(<FilesLibrary projectId="keys" label="Alpha" onClose={onClose} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    const notes = await within(library).findByRole("button", { name: "Open notes.md" });
+    const src = within(library).getByRole("button", { name: "Open the folder src" });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(src);
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(notes);
+    fireEvent.keyDown(window, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(src);
+
+    fireEvent.keyDown(window, { key: "Backspace" });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "/" });
+    expect(document.activeElement).toBe(within(library).getByRole("searchbox", { name: "Search the project's files" }));
+    // Typed into the search box, / and Backspace are the text's.
+    fireEvent.keyDown(document.activeElement!, { key: "Backspace" });
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => (document.activeElement as HTMLElement).blur());
+
+    // The search box's focus showed the recents in the list's place: the
+    // folder row is drawn anew.
+    fireEvent.click(await within(library).findByRole("button", { name: "Open the folder src" }));
+    await within(library).findByRole("button", { name: "Open main.rs" });
+    fireEvent.keyDown(window, { key: "ArrowUp", metaKey: true });
+    await within(library).findByRole("button", { name: "Open notes.md" });
+  });
+});
+
+describe("Files library — drop, new folder, zip and selecting files", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetBackStackForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** A desktop whose root takes uploads, answering the write routes. */
+  function stubWriter(id: string, zip: "ok" | "too_large" = "ok") {
+    const calls: { method: string; url: string }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ method, url });
+      if (url === `/api/v1/projects/${id}/files`) return reply({ ...ROOT, uploads: true });
+      if (url.startsWith(`/api/v1/projects/${id}/files/folder?name=`) && method === "POST") {
+        return reply({ entry: { token: "tok-made", name: "figures", kind: "dir", size: 0, modified: 1_770_000_000 } }, 201);
+      }
+      if (url === `/api/v1/projects/${id}/files/folder?f=tok-made` && method === "DELETE") return reply({ removed: true });
+      if (url.startsWith(`/api/v1/projects/${id}/files/upload?name=`)) {
+        return reply({ file: { token: "tok-up", name: "drop.bin", kind: "application/octet-stream", size: 3, modified: 1_770_000_000 } }, 201);
+      }
+      if (url === `/api/v1/projects/${id}/files/zip?check=1`) {
+        return zip === "ok" ? reply({ files: 2, bytes: 21 }) : reply({ error: "folder_too_large" }, 413);
+      }
+      return reply({ error: "file_not_found" }, 404);
+    }));
+    return calls;
+  }
+
+  const openViewMenu = (library: HTMLElement) => fireEvent.click(within(library).getByRole("button", { name: "View options" }));
+
+  it("ticks files in Select files, stars them, and leaves on Esc without closing the library", async () => {
+    stubHost("pick");
+    const onClose = vi.fn();
+    render(<FilesLibrary projectId="pick" label="Alpha" onClose={onClose} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    openViewMenu(library);
+    fireEvent.click(screen.getByRole("button", { name: "Select files" }));
+    const tick = within(library).getByRole("button", { name: "Select notes.md" });
+    expect(tick.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(tick);
+    expect(tick.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("dialog", { name: "notes.md" })).toBeNull();
+    const bar = within(library).getByRole("toolbar", { name: "Select files" });
+    expect(bar.textContent).toContain("1 selected");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(within(library).queryByRole("toolbar")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    openViewMenu(library);
+    fireEvent.click(screen.getByRole("button", { name: "Select files" }));
+    fireEvent.click(within(library).getByRole("button", { name: "Select notes.md" }));
+    fireEvent.click(within(within(library).getByRole("toolbar")).getByRole("button", { name: "☆ Favorite" }));
+    expect(within(library).queryByRole("toolbar")).toBeNull();
+    expect(within(library).getByRole("region", { name: "Favorites" }).textContent).toContain("notes.md");
+  });
+
+  it("makes a new folder from ⋯ and takes it back with Undo", async () => {
+    const calls = stubWriter("folder");
+    render(<FilesLibrary projectId="folder" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    openViewMenu(library);
+    fireEvent.click(screen.getByRole("button", { name: "New folder…" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Folder name" }), { target: { value: "figures" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await within(library).findByText("New folder made")).toBeTruthy();
+    expect(calls.some((call) => call.method === "POST" && call.url === "/api/v1/projects/folder/files/folder?name=figures")).toBe(true);
+    fireEvent.click(within(library).getByRole("button", { name: "Undo adding figures" }));
+    expect(await within(library).findByText("Folder taken back")).toBeTruthy();
+    expect(calls.some((call) => call.method === "DELETE" && call.url === "/api/v1/projects/folder/files/folder?f=tok-made")).toBe(true);
+  });
+
+  it("downloads the folder as a zip after asking whether it can, and says when it cannot", async () => {
+    stubWriter("zip");
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { clicked.push(`${this.getAttribute("href")} ${this.download}`); });
+    render(<FilesLibrary projectId="zip" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    openViewMenu(library);
+    fireEvent.click(screen.getByRole("button", { name: "Download this folder as a zip" }));
+    await waitFor(() => expect(clicked).toEqual(["/api/v1/projects/zip/files/zip Alpha.zip"]));
+    cleanup();
+
+    stubWriter("big", "too_large");
+    render(<FilesLibrary projectId="big" label="Alpha" onClose={() => {}} />);
+    const again = screen.getByRole("dialog", { name: "Files" });
+    await within(again).findByRole("button", { name: "Open notes.md" });
+    openViewMenu(again);
+    fireEvent.click(screen.getByRole("button", { name: "Download this folder as a zip" }));
+    expect((await within(again).findByRole("alert")).textContent).toContain("too large to download as a zip");
+    expect(clicked).toHaveLength(1);
+  });
+
+  it("uploads files dropped on the list, past the chat's 24 MB and up to 1 GB", async () => {
+    const calls = stubWriter("drop");
+    render(<FilesLibrary projectId="drop" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    const body = library.querySelector<HTMLElement>(".files-library-body")!;
+    const big = new File(["abc"], "drop.bin");
+    Object.defineProperty(big, "size", { value: MAX_VIEW_FILE + 1 });
+    const huge = new File(["abc"], "huge.bin");
+    Object.defineProperty(huge, "size", { value: 1024 * 1024 * 1024 + 1 });
+    fireEvent.dragOver(body, { dataTransfer: { types: ["Files"], files: [] } });
+    expect(body.classList.contains("files-dropping")).toBe(true);
+    fireEvent.drop(body, { dataTransfer: { types: ["Files"], files: [big, huge] } });
+    expect(body.classList.contains("files-dropping")).toBe(false);
+    await waitFor(() => expect(calls.some((call) => call.method === "POST" && call.url.includes("/files/upload?name=drop.bin"))).toBe(true));
+    expect(calls.some((call) => call.url.includes("name=huge.bin"))).toBe(false);
+    expect(within(library).getByText(/larger than 1 GB/)).toBeTruthy();
+  });
+});
+
 describe("Viewer — files the phone cannot draw", () => {
   beforeEach(() => {
     resetBackStackForTests();
@@ -162,14 +366,14 @@ describe("Viewer — files the phone cannot draw", () => {
     expect(within(card!).getByRole("link", { name: "Save" }).getAttribute("href")).toBe("/api/v1/projects/p1/files/raw?f=tok-doc&download=1");
   });
 
-  it("says a picture or PDF past the desktop's cap is too large, with nothing to save, share or mark up", () => {
+  it("says a picture or PDF past a remote host's cap is too large, with nothing to save, share or mark up", () => {
     const fetch = vi.fn(async () => new Response(new Blob(["x"]), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     const markup = { tabId: "t1", projectId: "p1", onSend: () => false as const };
     for (const kind of ["image/png", "application/pdf"]) {
       const name = kind === "image/png" ? "huge.png" : "huge.pdf";
       const file = { name, kind, size: MAX_VIEW_FILE + 1, modified: 1_770_000_000, ref: `tok-${name}` };
-      render(<OutboxViewer scope={{ files: "p1" }} file={file} onClose={() => {}} markup={markup} />);
+      render(<OutboxViewer scope={{ files: "p1", on: "host" }} file={file} onClose={() => {}} markup={markup} />);
       const viewer = screen.getByRole("dialog", { name });
       expect(viewer.querySelector("img")).toBeNull();
       expect(viewer.textContent).toContain("larger than 24 MB");
@@ -179,6 +383,65 @@ describe("Viewer — files the phone cannot draw", () => {
       cleanup();
     }
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("draws a big picture of this computer's, and past what the phone can hold offers Save only", () => {
+    const big = { name: "scan.png", kind: "image/png", size: MAX_VIEW_FILE + 1, modified: 1_770_000_000, ref: "tok-scan" };
+    render(<OutboxViewer scope={{ files: "p1" }} file={big} onClose={() => {}} />);
+    expect(screen.getByRole("dialog", { name: "scan.png" }).querySelector("img")?.getAttribute("src")).toBe("/api/v1/projects/p1/files/raw?f=tok-scan");
+    cleanup();
+    const huge = { ...big, name: "huge.png", size: MAX_LOCAL_VIEW + 1 };
+    render(<OutboxViewer scope={{ files: "p1" }} file={huge} onClose={() => {}} />);
+    const viewer = screen.getByRole("dialog", { name: "huge.png" });
+    expect(viewer.querySelector("img")).toBeNull();
+    expect(viewer.textContent).toContain("larger than 200 MB");
+    expect(within(viewer.querySelector<HTMLElement>(".outbox-no-preview")!).getByRole("link", { name: "Save" }).getAttribute("href"))
+      .toBe("/api/v1/projects/p1/files/raw?f=tok-scan&download=1");
+    expect(within(viewer).queryByRole("button", { name: /^Share/ })).toBeNull();
+  });
+
+  it("plays a film or a sound in the phone's player, whatever its size and side", () => {
+    const film = { name: "talk.mp4", kind: "video/mp4", size: 900 * 1024 * 1024, modified: 1_770_000_000, ref: "tok-talk" };
+    render(<OutboxViewer scope={{ files: "p1", on: "host" }} file={film} onClose={() => {}} />);
+    const video = screen.getByRole("dialog", { name: "talk.mp4" }).querySelector("video");
+    expect(video?.getAttribute("src")).toBe("/api/v1/projects/p1/files/raw?f=tok-talk&on=host");
+    expect(video?.hasAttribute("controls")).toBe(true);
+    expect(video?.getAttribute("preload")).toBe("metadata");
+    cleanup();
+    const sound = { name: "memo.m4a", kind: "audio/mp4", size: 4096, modified: 1_770_000_000, ref: "tok-memo" };
+    render(<OutboxViewer scope={{ files: "p1" }} file={sound} onClose={() => {}} />);
+    expect(screen.getByRole("dialog", { name: "memo.m4a" }).querySelector("audio")?.getAttribute("src")).toBe("/api/v1/projects/p1/files/raw?f=tok-memo");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("names a film the phone cannot play, or a HEIC it cannot decode, on the card with Save", () => {
+    const film = { name: "clip.mov", kind: "video/quicktime", size: 4096, modified: 1_770_000_000, ref: "tok-clip" };
+    render(<OutboxViewer scope={{ files: "p1" }} file={film} onClose={() => {}} />);
+    fireEvent.error(screen.getByRole("dialog", { name: "clip.mov" }).querySelector("video")!);
+    let viewer = screen.getByRole("dialog", { name: "clip.mov" });
+    expect(viewer.querySelector("video")).toBeNull();
+    expect(viewer.querySelector(".outbox-no-preview")?.textContent).toContain("cannot show this kind of file");
+    cleanup();
+    const markup = { tabId: "t1", projectId: "p1", onSend: () => false as const };
+    const photo = { name: "IMG_1.heic", kind: "image/heic", size: 4096, modified: 1_770_000_000, ref: "tok-heic" };
+    render(<OutboxViewer scope={{ files: "p1" }} file={photo} onClose={() => {}} markup={markup} />);
+    viewer = screen.getByRole("dialog", { name: "IMG_1.heic" });
+    expect(within(viewer).queryByRole("button", { name: /Mark up/ })).toBeNull();
+    fireEvent.error(viewer.querySelector("img")!);
+    expect(viewer.querySelector("img")).toBeNull();
+    expect(within(viewer.querySelector<HTMLElement>(".outbox-no-preview")!).getByRole("link", { name: "Save" })).toBeTruthy();
+    expect(within(viewer).queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("gives films and sounds their own tile, sorted after pictures", () => {
+    expect(["video/mp4", "audio/mpeg", "image/heic", "application/octet-stream"].map(glyphOf)).toEqual(["media", "media", "image", "file"]);
+    const view = { ...DEFAULT_LIBRARY_VIEW, sort: "kind" as const, foldersFirst: false };
+    const rows = [
+      { token: "a", name: "a.txt", kind: "text/plain; charset=utf-8", size: 1, modified: 1 },
+      { token: "b", name: "b.mp4", kind: "video/mp4", size: 1, modified: 1 },
+      { token: "c", name: "c.png", kind: "image/png", size: 1, modified: 1 },
+    ];
+    expect(sortEntries(rows, view).map((row) => row.name)).toEqual(["c.png", "b.mp4", "a.txt"]);
   });
 });
 

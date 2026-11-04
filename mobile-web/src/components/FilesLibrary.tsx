@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type FormEvent, type ReactNode } from "react";
 import { CloseIcon } from "../glyphs";
 import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, listProjectFiles, lookUpFileRow, lookUpProjectFile, searchProjectFiles, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
+import { ApiError, MAX_UPLOAD_FILE, checkProjectFolderZip, makeProjectFolder, markablePicture, listProjectFiles, lookUpFileRow, lookUpProjectFile, projectFolderZipUrl, searchProjectFiles, undoProjectFolder, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
 import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
-import { shareAs, useOutboxShare } from "../outboxShare";
+import { MAX_SHARE_MANY, canShareFiles, shareAs, useOutboxShare, useShareMany } from "../outboxShare";
 import { TAB_COLORS, TAB_COLOR_IDS, tabColorCss } from "../../../src/lib/theme/tabColors";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { installFocusSwipe } from "../terminal/focusSwipe";
@@ -18,6 +18,7 @@ import { usePhonePicks, type PickedFile } from "./phonePicks";
 import { goBack, useBackLayer } from "../backStack";
 import { useTapHolds } from "../newTabDefault";
 import { useModalFocus } from "../modalFocus";
+import { useMediaQuery } from "../useMediaQuery";
 
 /** One folder on the way down: its sealed token (none for the project root)
  * and the name the reader tapped. */
@@ -51,6 +52,7 @@ const GLYPHS: Record<Glyph, ReactNode> = {
   dir: <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z" />,
   image: <><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><circle cx="9" cy="10" r="1.6" /><path d="m20.5 15.5-4.5-4.5-9.5 8.5" /></>,
   pdf: <><path d={SHEET} /><path d="M8.5 13.5h7M8.5 17h4.5" /></>,
+  media: <><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="m10 9 5 3-5 3z" /></>,
   text: <><path d={SHEET} /><path d="M8.5 12.5h7M8.5 15.5h7M8.5 18.5h4" /></>,
   file: <path d={SHEET} />,
 };
@@ -189,6 +191,23 @@ const RELIST = new Set(["uploads_off", "files_off", "upload_refused", "file_not_
 
 const codeOf = (reason: unknown) => reason instanceof ApiError ? reason.code : "";
 
+/** Why **New folder** made nothing, by the desktop's code. */
+const FOLDER_FAILURES: Record<string, TranslationKey> = {
+  already_exists: "mobile.files.folder.exists",
+  upload_refused: "mobile.files.folder.refused",
+  uploads_off: "mobile.files.upload.off",
+  files_off: "mobile.files.upload.off",
+  timeout: "mobile.sendToDesktop.timeout",
+  offline: "mobile.sendToDesktop.offline",
+};
+
+/** A folder **New folder** made this visit, for its row and its Undo. */
+interface MadeFolder {
+  entry: ProjectFileEntry;
+  state: "made" | "undoing" | "undone";
+  failure?: string;
+}
+
 /** A pick for **Upload here**: the folder it was picked in (its token, none
  * at the root, and its trail's names for the row), the library's visit to that
  * folder (Undo is offered only while it lasts), and once it landed, the
@@ -215,6 +234,48 @@ const MAX_QUERY = 80;
  * at most `UP_SWIPE_MAX` px in: a third of an iPad is most of a list. */
 const UP_SWIPE_ZONE = 1 / 3;
 const UP_SWIPE_MAX = 160;
+
+/** A wide screen held sideways (an iPad in landscape): an open file stands
+ * beside the folder (`files-split`) rather than over it. */
+const SPLIT_QUERY = "(min-width: 900px) and (orientation: landscape)";
+
+/** The buttons the arrow keys walk, in the order they are drawn: a tile, a
+ * list row, a folded section's divider. */
+const ITEM_BUTTONS = ".files-tile-open, .files-list > li:not(.files-section) > button:first-of-type, .files-section > button";
+
+/** The item the arrow `key` lands on from `current` among `items`: the
+ * nearest one that way on screen — the next row down keeps the column, as a
+ * grid reads. Where nothing is laid out (no sizes), the next or previous one
+ * in order. */
+function itemToward(items: HTMLElement[], current: HTMLElement | null, key: string): HTMLElement | undefined {
+  if (!current || !items.includes(current)) return items[0];
+  const at = items.indexOf(current);
+  const from = current.getBoundingClientRect();
+  if (from.width === 0 && from.height === 0) {
+    const step = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
+    return items[Math.min(items.length - 1, Math.max(0, at + step))];
+  }
+  const middle = (rect: DOMRect) => ({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+  const here = middle(from);
+  let best: { item: HTMLElement; score: number } | undefined;
+  for (const item of items) {
+    if (item === current) continue;
+    const rect = item.getBoundingClientRect();
+    const there = middle(rect);
+    const sameRow = Math.abs(there.y - here.y) < from.height / 2;
+    const ahead = key === "ArrowDown" ? rect.top >= from.bottom - 1
+      : key === "ArrowUp" ? rect.bottom <= from.top + 1
+      : key === "ArrowRight" ? sameRow && rect.left >= from.right - 1
+      : sameRow && rect.right <= from.left + 1;
+    if (!ahead) continue;
+    // Across rows: the nearest row first, then the nearest column in it.
+    const score = key === "ArrowDown" || key === "ArrowUp"
+      ? Math.abs(there.y - here.y) * 10_000 + Math.abs(there.x - here.x)
+      : Math.abs(there.x - here.x);
+    if (!best || score < best.score) best = { item, score };
+  }
+  return best?.item;
+}
 
 /** Where the library's list was scrolled in each folder it showed, by side
  * and folder (`placeOf`): going up a folder, or opening the library again in
@@ -258,7 +319,7 @@ export function noteFileOpened(projectId: string, side: FilesSide, entry: Projec
 /** The sheet over the library, if any: the path menu (the title), the view
  * menu (⋯), one item's menu — with the folder the item was listed in — a
  * folder's colours, or a favorite or recent that no longer opens. */
-type Sheet = { kind: "path" } | { kind: "view" }
+type Sheet = { kind: "path" } | { kind: "view" } | { kind: "folder" }
   | { kind: "item"; entry: ProjectFileEntry; at: Crumb[]; hit?: ProjectFileHit; saved?: Saved }
   | { kind: "color"; place: string; name: string }
   | { kind: "gone"; saved: Saved };
@@ -272,8 +333,9 @@ function savedEntry(item: FilesSaved | FilesRecent): ProjectFileEntry {
   return { token: item.token, name: item.name, kind: item.kind, size: "size" in item ? item.size : 0, modified: "modified" in item ? item.modified : 0 };
 }
 
-/** What the viewer can mark up (`OutboxViewer`): a PDF, or a picture but a GIF. */
-const markable = (kind: string) => kind === "application/pdf" || (kind.startsWith("image/") && kind !== "image/gif");
+/** What the viewer can mark up (`OutboxViewer`): a PDF, or a picture every
+ * phone can draw (not a GIF, not a HEIC, which an Android phone cannot). */
+const markable = (kind: string) => kind === "application/pdf" || markablePicture(kind);
 
 const SORT_LABELS: Record<LibrarySort, TranslationKey> = {
   name: "mobile.files.library.sortName",
@@ -382,6 +444,15 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const [listing, setListing] = useState<ProjectFileListing | null>(null);
   const [failure, setFailure] = useState<TranslationKey | null>(null);
   const [fileOpen, setFileOpen] = useState<OutboxFile | null>(null);
+  /** On a wide screen an open file stands beside the folder (`files-split`):
+   * the list stays live, and another tap swaps the file shown. */
+  const split = useMediaQuery(SPLIT_QUERY);
+  const paned = split && fileOpen !== null;
+  /** A file is open over the library, which stays mounted under it — its
+   * list keeps its place and the covers already made — but takes no focus,
+   * keys or screen reader (`inert`), and starts no new cover meanwhile. The
+   * focus goes back to what opened the file when it closes. */
+  const covered = fileOpen !== null && !split;
   // Both fold shut by default, and stay as set while the library is walked.
   const [scaffoldOpen, setScaffoldOpen] = useState(false);
   const [ignoredOpen, setIgnoredOpen] = useState(false);
@@ -423,6 +494,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const [markOnOpen, setMarkOnOpen] = useState(false);
   const scope = useMemo<ViewerScope>(() => (onHost ? { files: projectId, on: "host" } : { files: projectId }), [projectId, onHost]);
   const sharing = useOutboxShare(scope);
+  const shareMany = useShareMany(scope);
   const here = trail[trail.length - 1];
   const atRoot = trail.length === 1;
   /** The folder a search inside it is about (`searchHere`), as its key. */
@@ -436,10 +508,34 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   /** Counts the library's moves between folders: an upload's Undo lasts only
    * as long as the visit it was picked in. */
   const [visit, setVisit] = useState(0);
+  /** **Select files**: a tap ticks a file of this folder instead of opening
+   * it, and a bar acts on the ticked ones. Left by Done, Back or Esc, and by
+   * going to another folder. */
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<ReadonlyMap<string, ProjectFileEntry>>(new Map());
+  const [madeFolder, setMadeFolder] = useState<MadeFolder | null>(null);
+  /** Files dragged over the list (an iPad's Files app, a Mac's Finder). */
+  const [dropping, setDropping] = useState(false);
+  /** Why **Download as zip** gave nothing, said under the list's head. */
+  const [zipFailure, setZipFailure] = useState<TranslationKey | null>(null);
   useEffect(() => {
     setVisit((count) => count + 1);
     setRecentsOpen(false);
+    setSelecting(false);
+    setPicked(new Map());
+    setMadeFolder(null);
+    setZipFailure(null);
   }, [here.token]);
+  const leaveSelect = () => {
+    setSelecting(false);
+    setPicked(new Map());
+  };
+  const togglePicked = (entry: ProjectFileEntry) => setPicked((current) => {
+    const next = new Map(current);
+    if (next.has(entry.token)) next.delete(entry.token);
+    else next.set(entry.token, entry);
+    return next;
+  });
 
   const setView = (patch: Partial<LibraryView>) => {
     const next = { ...view, ...patch };
@@ -449,8 +545,9 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
 
   const uploads = usePhonePicks<FolderUpload>({
     testId: "project-files-upload-input",
-    tooLarge: t("mobile.sendToDesktop.tooLarge"),
+    tooLarge: t("mobile.files.upload.tooLarge"),
     oneByOne: true,
+    maxSize: MAX_UPLOAD_FILE,
     send: (file, row, settle) => uploadProjectFile(projectId, row.folder, file, row.name).then(
       (entry) => {
         settle({ state: "sent", landed: { token: entry.token, name: entry.name } });
@@ -481,6 +578,68 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       },
     );
   };
+
+  /** **New folder**: made in the folder the library stands in; its row says
+   * so, with an Undo while it is empty and this visit lasts. */
+  const makeFolder = async (name: string): Promise<TranslationKey | null> => {
+    try {
+      const entry = await makeProjectFolder(projectId, here.token, name);
+      setMadeFolder({ entry, state: "made" });
+      relist();
+      return null;
+    } catch (reason) {
+      const code = codeOf(reason);
+      if (RELIST.has(code)) relist();
+      return FOLDER_FAILURES[code] ?? "mobile.files.folder.failed";
+    }
+  };
+  const undoFolder = (made: MadeFolder) => {
+    if (made.state !== "made") return;
+    setMadeFolder({ ...made, state: "undoing", failure: undefined });
+    void undoProjectFolder(projectId, made.entry.token).then(
+      () => {
+        setMadeFolder({ ...made, state: "undone" });
+        relist();
+      },
+      () => setMadeFolder({ ...made, state: "made", failure: t("mobile.files.folder.undoFailed") }),
+    );
+  };
+
+  /** **Download as zip** of the folder `dir` (none: the root), named `name`:
+   * asked first whether it can be zipped, so a refusal is said here rather
+   * than saved as a file. */
+  const downloadZip = (dir: string | undefined, name: string) => {
+    setZipFailure(null);
+    void checkProjectFolderZip(projectId, dir).then(
+      () => {
+        const link = document.createElement("a");
+        link.href = projectFolderZipUrl(projectId, dir);
+        link.download = `${name}.zip`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      },
+      (reason: unknown) => setZipFailure(codeOf(reason) === "folder_too_large" ? "mobile.files.zip.tooLarge" : "mobile.files.zip.failed"),
+    );
+  };
+  /** Files dropped on the list go up as picks do, into this folder. */
+  const canDrop = !onHost && !searching && listing?.uploads === true;
+  const dropHandlers = canDrop ? {
+    onDragOver: (event: ReactDragEvent) => {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setDropping(true);
+    },
+    onDragLeave: (event: ReactDragEvent) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false);
+    },
+    onDrop: (event: ReactDragEvent) => {
+      event.preventDefault();
+      setDropping(false);
+      if (event.dataTransfer.files.length) uploads.add(event.dataTransfer.files, { folder: here.token, place: here.name, visit });
+    },
+  } : {};
 
   useEffect(() => {
     const controller = new AbortController();
@@ -568,6 +727,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   // viewer over the library takes Back itself (`OutboxViewer`).
   useBackLayer(() => {
     if (sheet) setSheet(null);
+    else if (selecting) leaveSelect();
     else if (searching) setQuery("");
     else if (recentsOpen) setRecentsOpen(false);
     else up();
@@ -582,6 +742,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       // keeps the note being typed, and a sheet over the view goes first.
       if (fileOpen) goBack();
       else if (sheet) setSheet(null);
+      else if (selecting) leaveSelect();
       else if (searching) setQuery("");
       else if (searchFocused) searchBox.current?.blur();
       else if (recentsOpen) setRecentsOpen(false);
@@ -589,24 +750,59 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fileOpen, sheet, searching, searchFocused, recentsOpen, onClose]);
+  }, [fileOpen, sheet, selecting, searching, searchFocused, recentsOpen, onClose]);
+
+  useEffect(() => {
+    // A keyboard (an iPad's): / or Cmd/Ctrl-F searches, the arrows walk the
+    // items (Enter or Space opens one, as a tap), Cmd/Ctrl-↑ or Backspace
+    // goes up a folder. Only while the keys are the library's: no sheet, no
+    // file over it, the focus nowhere else (a file beside it keeps its own).
+    if (sheet || covered) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.altKey) return;
+      const node = host.current;
+      const active = document.activeElement;
+      if (!node || (active && active !== document.body && !node.contains(active))) return;
+      const typing = active instanceof HTMLElement
+        && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT");
+      const command = event.metaKey || event.ctrlKey;
+      if ((event.key === "/" && !typing && !command) || (command && event.key.toLowerCase() === "f")) {
+        event.preventDefault();
+        searchBox.current?.focus();
+        searchBox.current?.select();
+        return;
+      }
+      if (typing) return;
+      if ((command && event.key === "ArrowUp") || (event.key === "Backspace" && !command)) {
+        event.preventDefault();
+        if (!atRoot) up();
+        return;
+      }
+      if (command || !["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      const items = Array.from(body.current?.querySelectorAll<HTMLElement>(ITEM_BUTTONS) ?? []);
+      if (items.length === 0) return;
+      event.preventDefault();
+      const next = itemToward(items, active instanceof HTMLElement ? active : null, event.key);
+      if (next) {
+        next.focus();
+        next.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sheet, covered, atRoot, up]);
 
   useEffect(() => {
     // Not while a file is open over the library, nor through a sheet laid
     // over it.
     const node = host.current;
-    if (fileOpen || !node) return;
+    if ((fileOpen && !split) || !node) return;
     return installFocusSwipe(node, {
       onSwipeRight: (start) => { if (start.x <= Math.min(window.innerWidth * UP_SWIPE_ZONE, UP_SWIPE_MAX)) up(); },
       onSwipeLeft: () => {},
     }, { ignore: ".sheet-backdrop", leftEdge: true });
-  }, [fileOpen, up]);
+  }, [fileOpen, split, up]);
 
-  /** A file is open over the library, which stays mounted under it — its
-   * list keeps its place and the covers already made — but takes no focus,
-   * keys or screen reader (`inert`), and starts no new cover meanwhile. The
-   * focus goes back to what opened the file when it closes. */
-  const covered = fileOpen !== null;
   /** This computer's folder is listed again when the reader comes back to it
    * — the app shown again, a file closed — so what an agent wrote meanwhile
    * shows. Rows are replaced in place (tokens are stable), the scroll kept.
@@ -627,6 +823,12 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       relistHere.current();
     };
   }, [covered]);
+  useEffect(() => {
+    // Beside the folder, the list was never covered: closing the file still
+    // lists the folder again, as closing one over it does.
+    if (!paned) return;
+    return () => relistHere.current();
+  }, [paned]);
   useEffect(() => {
     const onShown = () => { if (document.visibilityState === "visible") relistHere.current(); };
     document.addEventListener("visibilitychange", onShown);
@@ -755,12 +957,20 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     if ((markup || showTab) && markable(entry.kind)) {
       actions.push({ key: "markup", label: t("mobile.markup.open"), run: () => saved ? openSaved(saved, true) : open(entry, at, true) });
     }
+    if (entry.kind === "dir" && !onHost && !saved) {
+      actions.push({ key: "zip", label: t("mobile.files.item.zip"), run: () => downloadZip(entry.token, entry.name) });
+    }
+    // Only a file of the folder on screen can be ticked: a search hit or a
+    // saved one may stand elsewhere.
+    if (entry.kind !== "dir" && !hit && !saved) {
+      actions.push({ key: "select", label: t("mobile.files.item.select"), run: () => { setSelecting(true); setPicked(new Map([[entry.token, entry]])); } });
+    }
     return actions;
   };
 
   // The folder trail names the file's layer on the phone; its token cannot.
   const place = placeOf(trail);
-  const viewer = fileOpen && <OutboxViewer key={fileOpen.ref} scope={scope} file={fileOpen} pictures={pictures} startMarking={markOnOpen}
+  const viewer = fileOpen && <OutboxViewer key={fileOpen.ref} scope={scope} file={fileOpen} pictures={pictures} startMarking={markOnOpen} paned={paned}
     onStep={(next) => { setMarkOnOpen(false); setFileOpen(next); }} onClose={() => setFileOpen(null)}
     markup={markup && { ...markup, projectId, place, folder: here.token, refresh }} newTab={showTab && { projectId, place, folder: here.token, refresh, show: showTab, linked }} />;
 
@@ -774,8 +984,11 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const menuButton = (entry: ProjectFileEntry, className: string, glyph: ReactNode, hit?: ProjectFileHit, saved?: Saved) =>
     <button className={className} aria-haspopup="dialog" aria-label={t("mobile.files.item.menu", { name: entry.name })}
       onClick={() => setSheet({ kind: "item", entry, at: atOf(hit, saved), hit, saved })}>{glyph}</button>;
+  /** Whether a tap on `entry` ticks it (**Select files**) rather than opening it. */
+  const ticks = (entry: ProjectFileEntry, hit?: ProjectFileHit, saved?: Saved) => selecting && entry.kind !== "dir" && !hit && !saved;
   const tap = (entry: ProjectFileEntry, hit?: ProjectFileHit, saved?: Saved) => {
-    if (saved) openSaved(saved);
+    if (ticks(entry, hit, saved)) togglePicked(entry);
+    else if (saved) openSaved(saved);
     else if (hit) openHit(hit);
     else open(entry);
   };
@@ -785,8 +998,13 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     press(() => tap(entry, hit, saved), () => setSheet({ kind: "item", entry, at: atOf(hit, saved), hit, saved }));
   /** A favorite or recent found moved or deleted. */
   const isStale = (saved?: Saved) => saved !== undefined && stale.has(savedPlace(saved.item));
-  const itemClass = (base: string, folded: boolean, saved?: Saved) =>
-    [base, folded && "files-folded", isStale(saved) && "files-stale"].filter(Boolean).join(" ") || undefined;
+  /** The file shown beside the folder, marked in the list. */
+  const shownBeside = (entry: ProjectFileEntry) => paned && entry.kind !== "dir" && fileOpen?.ref === entry.token;
+  const itemClass = (base: string, folded: boolean, saved?: Saved, entry?: ProjectFileEntry) =>
+    [base, folded && "files-folded", isStale(saved) && "files-stale", entry && shownBeside(entry) && "files-shown",
+      entry && !saved && picked.has(entry.token) && "files-picked"].filter(Boolean).join(" ") || undefined;
+  /** In **Select files**, a file's button says whether it is ticked. */
+  const pickedState = (entry: ProjectFileEntry, hit?: ProjectFileHit, saved?: Saved) => ticks(entry, hit, saved) ? picked.has(entry.token) : undefined;
 
   /** A list row: its tile, name and times, ↗ Share for a file and ⋯ for the
    * item menu. A search hit, favorite or recent names its folder above the
@@ -795,8 +1013,9 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     const file = entry.kind === "dir" || saved ? null : asViewerFile(entry);
     const ready = sharing.ready === entry.name;
     const above = saved?.item.trail ?? hit?.trail;
-    return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("", folded, saved)}>
-      <button {...pressOf(entry, hit, saved)} aria-label={openLabel(entry)}>
+    return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("", folded, saved, entry)}>
+      <button {...pressOf(entry, hit, saved)} aria-label={ticks(entry, hit, saved) ? t("mobile.files.select.pick", { name: entry.name }) : openLabel(entry)}
+        aria-pressed={pickedState(entry, hit, saved)} aria-current={shownBeside(entry) || undefined}>
         <FileGlyph kind={entry.kind} color={colorOf(entry, atOf(hit, saved))} />
         <span>
           <strong>{entry.name}</strong>
@@ -826,8 +1045,9 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     const above = saved?.item.trail ?? hit?.trail;
     // A favorite keeps no size or time to key a cover by.
     const thumbs = view.thumbs && saved?.from !== "favorite";
-    return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("files-tile", folded, saved)}>
-      <button className="files-tile-open" {...pressOf(entry, hit, saved)} aria-label={openLabel(entry)}>
+    return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("files-tile", folded, saved, entry)}>
+      <button className="files-tile-open" {...pressOf(entry, hit, saved)} aria-label={ticks(entry, hit, saved) ? t("mobile.files.select.pick", { name: entry.name }) : openLabel(entry)}
+        aria-pressed={pickedState(entry, hit, saved)} aria-current={shownBeside(entry) || undefined}>
         <LibraryCover projectId={projectId} entry={entry} place={placeOf(at)} thumbs={thumbs} color={colorOf(entry, at)} side={side} />
         <strong>{entry.name}</strong>
         {above && hitPlace(above)}
@@ -861,6 +1081,47 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     </div>;
   }
 
+  /** The folder **New folder** made: its name, and Undo while that can work. */
+  function folderRow(made: MadeFolder) {
+    const name = made.entry.name;
+    const close = <button onClick={() => setMadeFolder(null)} aria-label={t("mobile.sendToDesktop.dismiss", { name })}>✕</button>;
+    if (made.state === "undone") return <div className="inbox-upload" role="status"><strong>{name}</strong><span>{t("mobile.files.folder.undone")}</span>{close}</div>;
+    return <div className={made.failure ? "inbox-upload error" : "inbox-upload landed"} role="status">
+      <strong>{name}</strong>
+      <span>{made.failure ?? t("mobile.files.folder.made")}</span>
+      {!made.failure && <button disabled={made.state === "undoing"} onClick={() => undoFolder(made)}
+        aria-label={t("mobile.files.upload.undoLabel", { name })}>{t("mobile.files.upload.undo")}</button>}
+      {close}
+    </div>;
+  }
+
+  /** **Select files**' bar: how many are ticked, Share them together (where
+   * the phone shares files and they are small enough to hold), ☆ them, Done. */
+  function selectBar() {
+    const files = [...picked.values()].map(asViewerFile);
+    const total = files.reduce((sum, file) => sum + file.size, 0);
+    const phase = shareMany.phaseOf(files);
+    const shareable = files.length > 0 && canShareFiles() && files.every((file) => shareAs(file) !== null);
+    const favorite = () => {
+      for (const entry of picked.values()) {
+        const item: FilesSaved = { kind: entry.kind, name: entry.name, token: entry.token, trail: crumbsOf(trail) };
+        if (!isFavorite(placeId, item)) toggleFavorite(placeId, item);
+      }
+      leaveSelect();
+    };
+    return <div className="files-select-bar" role="toolbar" aria-label={t("mobile.files.library.select")}>
+      <span role="status">{t("mobile.files.select.count", { count: picked.size })}</span>
+      {phase === "failed" && <span className="error" role="alert">{t("mobile.outbox.shareError")}</span>}
+      {shareable && (total > MAX_SHARE_MANY
+        ? <span className="files-select-note">{t("mobile.files.select.tooBig")}</span>
+        : <button disabled={phase === "fetching"} onClick={() => void shareMany.share(files)}>
+          {t(phase === "ready" ? "mobile.outbox.shareReady" : "mobile.outbox.share")}
+        </button>)}
+      <button disabled={picked.size === 0} onClick={favorite}>{t("mobile.files.select.favorite")}</button>
+      <button onClick={leaveSelect}>{t("mobile.gitSheet.done")}</button>
+    </div>;
+  }
+
   /** A folded section: the desktop tree's divider (across the whole grid),
    * then its entries when open. */
   function section(kind: "scaffold" | "ignored", isOpen: boolean, setOpen: (open: boolean) => void, entries: ProjectFileEntry[]) {
@@ -887,6 +1148,11 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     return <LibrarySheet className="files-view-sheet" label={t("mobile.files.library.view")} title={t("mobile.files.library.view")} onClose={() => setSheet(null)}>
         <ul className="option-list">
           <li><button onClick={() => { setSheet(null); relist(); }}><span><strong>{t("mobile.files.library.refresh")}</strong></span></button></li>
+          {listing && listing.entries.some((entry) => entry.kind !== "dir") && <li><button onClick={() => { setSheet(null); setSelecting(true); }}>
+            <span><strong>{t("mobile.files.library.select")}</strong></span></button></li>}
+          {canDrop && <li><button onClick={() => setSheet({ kind: "folder" })}><span><strong>{t("mobile.files.library.newFolder")}</strong></span></button></li>}
+          {!onHost && <li><button onClick={() => { setSheet(null); downloadZip(here.token, here.token ? here.name : label); }}>
+            <span><strong>{t("mobile.files.library.zip")}</strong></span></button></li>}
         </ul>
         {group("mobile.files.library.layout", [
           choice("grid", t("mobile.files.library.grid"), grid, () => setView({ layout: "grid" })),
@@ -931,6 +1197,11 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
 
   function sheetOver(shown: Sheet) {
     if (shown.kind === "view") return viewSheet();
+    if (shown.kind === "folder") return <NewFolderSheet place={here.name} onClose={() => setSheet(null)} onMake={async (name) => {
+      const failure = await makeFolder(name);
+      if (!failure) setSheet(null);
+      return failure;
+    }} />;
     if (shown.kind === "color") return colorSheet(shown.place, shown.name);
     if (shown.kind === "gone") {
       const { saved } = shown;
@@ -973,10 +1244,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     || isUntested("mobile.files.thumbs") || isUntested("mobile.files.favorites") || isUntested("mobile.files.recent")
     || isUntested("mobile.files.colors") || isUntested("mobile.files.share") || isUntested("mobile.files.sections")
     || isUntested("mobile.files.remember") || isUntested("mobile.files.keepPlace") || isUntested("mobile.files.pathBar")
-    || isUntested("mobile.files.refresh") || isUntested("mobile.files.longPress") || isUntested("mobile.files.searchScope") || isUntested("mobile.files.wide") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
+    || isUntested("mobile.files.refresh") || isUntested("mobile.files.longPress") || isUntested("mobile.files.searchScope") || isUntested("mobile.files.wide") || isUntested("mobile.files.stream") || isUntested("mobile.files.split") || isUntested("mobile.files.keys") || isUntested("mobile.files.drop") || isUntested("mobile.files.newFolder") || isUntested("mobile.files.zip") || isUntested("mobile.files.select") || isUntested("mobile.files.bigUpload") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
     || ((onSide !== undefined || onHost) && isUntested("mobile.files.host"));
 
-  return <><section ref={host} className="files-library" role="dialog" aria-modal="true" aria-label={t("mobile.files.title")}>
+  return <><section ref={host} className={paned ? "files-library files-split" : "files-library"} role="dialog" aria-modal={!paned} aria-label={t("mobile.files.title")}>
     <header className="files-library-head">
       <button className="files-library-back" onClick={up}
         aria-label={parent ? t("mobile.files.library.up", { name: parent.name }) : t("mobile.files.close")}>
@@ -1013,7 +1284,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         {t("mobile.files.recentShow", { count: recents.length })}
       </button>}
     </div>
-    <div ref={body} className="files-library-body" onScroll={onBodyScroll}>
+    <div ref={body} className={`files-library-body${dropping ? " files-dropping" : ""}${selecting ? " files-selecting" : ""}`} onScroll={onBodyScroll} {...dropHandlers}>
+      {dropping && <p className="files-drop-note" role="status">{t("mobile.files.upload.drop", { folder: here.name })}</p>}
+      {zipFailure && <p className="sheet-note error" role="alert">{t(zipFailure)}</p>}
+      {madeFolder && folderRow(madeFolder)}
       {!searching && listing?.uploads && <button className="new-tab-file files-upload" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>
         <span><strong>{t("mobile.files.upload.button")}</strong><small>{t("mobile.files.upload.hint")}</small></span>
@@ -1062,6 +1336,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         ? found?.truncated && <p className="sheet-note">{t("mobile.files.searchTruncated", { count: found.hits.length })}</p>
         : listing?.truncated && <p className="sheet-note">{t(view.sort === "name" ? "mobile.files.truncated" : "mobile.files.truncatedSorted", { count: listing.entries.length })}</p>}
     </div>
+    {selecting && selectBar()}
     {sheet && sheetOver(sheet)}
   </section>{viewer}</>;
 }
@@ -1088,6 +1363,37 @@ function PathBar({ trail, label, onPick }: { trail: Crumb[]; label: string; onPi
       })}
     </ol>
   </nav>;
+}
+
+/** **New folder**: a name, and Create. The desktop's refusal (a taken name,
+ * a dot name) is said here and the sheet stays up for another try. */
+function NewFolderSheet({ place, onClose, onMake }: { place: string; onClose: () => void; onMake: (name: string) => Promise<TranslationKey | null> }) {
+  const t = useT();
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<TranslationKey | null>(null);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const wanted = name.trim();
+    if (!wanted || busy) return;
+    setBusy(true);
+    setFailure(null);
+    void onMake(wanted).then((refused) => {
+      setBusy(false);
+      setFailure(refused);
+    });
+  };
+  return <LibrarySheet className="schedule-sheet files-folder-sheet" label={t("mobile.files.folder.title")} title={t("mobile.files.folder.title")} onClose={onClose}>
+    <p className="sheet-note">{t("mobile.files.folder.note", { folder: place })}</p>
+    <form className="mobile-schedule-form" onSubmit={submit}>
+      <input type="text" value={name} maxLength={120} autoFocus enterKeyHint="done" aria-label={t("mobile.files.folder.name")}
+        placeholder={t("mobile.files.folder.name")} onChange={(event) => setName(event.target.value)} />
+      {failure && <p className="sheet-note error" role="alert">{t(failure)}</p>}
+      <div className="mobile-schedule-actions">
+        <button type="submit" disabled={busy || !name.trim()}>{t("mobile.files.folder.create")}</button>
+      </div>
+    </form>
+  </LibrarySheet>;
 }
 
 /** The library's own sheets (the view menu, a folder's colours): the shared

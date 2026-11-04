@@ -9,7 +9,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_INBOX_FILE } from "../../../mobile-web/src/api";
+import { MAX_UPLOAD_FILE } from "../../../mobile-web/src/api";
 import { FilesLibrary } from "../../../mobile-web/src/components/FilesLibrary";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { storageKey } from "../../../src/lib/brand";
@@ -741,16 +741,16 @@ describe("Mobile project — Upload here", () => {
     ]);
   });
 
-  it("refuses a file past 24 MB before anything is sent", async () => {
+  it("refuses a file past 1 GB before anything is sent (the desktop stages smaller ones)", async () => {
     const fetch = uploadHost(() => new Response(null, { status: 500 }));
     vi.stubGlobal("fetch", fetch);
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const sheet = await openSrc();
     const big = new File(["x"], "movie.mp4");
-    Object.defineProperty(big, "size", { value: MAX_INBOX_FILE + 1 });
+    Object.defineProperty(big, "size", { value: MAX_UPLOAD_FILE + 1 });
     fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
     pick([big]);
-    expect((await within(sheet).findByRole("alert")).textContent).toContain("is larger than 24 MB.");
+    expect((await within(sheet).findByRole("alert")).textContent).toContain("larger than 1 GB");
     expect(posts(fetch)).toEqual([]);
   });
 

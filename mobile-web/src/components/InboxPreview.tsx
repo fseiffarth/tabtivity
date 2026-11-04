@@ -4,7 +4,7 @@ import { CloseIcon } from "../glyphs";
 
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
-import { inboxFileUrl, sentName, type OutboxFile, type ViewerScope } from "../api";
+import { inboxFileUrl, isMedia, sentName, type OutboxFile, type ViewerScope } from "../api";
 import { formatBytes } from "../../../src/lib/formatBytes";
 
 /** Picture tiles an album shows before the last one reads "+N" (as `OutboxPost`). */
@@ -23,11 +23,12 @@ export function leafName(leaf: string): string {
 
 /** The badge a file that is not a picture wears, by what its bytes are. */
 export function fileBadge(kind: string): string {
-  return kind === "application/pdf" ? "PDF" : kind.startsWith("text/") ? "≡" : "↓";
+  return kind === "application/pdf" ? "PDF" : kind.startsWith("text/") ? "≡" : isMedia(kind) ? "▶" : "↓";
 }
 
-/** Whether the viewer can show `file` (else it is a download). */
-export const viewableFile = (file: OutboxFile) => file.kind.startsWith("image/") || file.kind.startsWith("text/") || file.kind === "application/pdf";
+/** Whether the viewer can show `file` (else it is a download): a picture, a
+ * text, a PDF, or a film or sound the phone's player plays. */
+export const viewableFile = (file: OutboxFile) => file.kind.startsWith("image/") || file.kind.startsWith("text/") || file.kind === "application/pdf" || isMedia(file.kind);
 
 /** Where an album gets its bytes and what a tap on a file does. The phone's
  * is its HTTP route; the desktop Chat (`ReaderInbox`) reads the project's

@@ -35,6 +35,8 @@ use tokio::process::Child;
 
 use super::files::{self, Crumb, Entry, FilesError, Found, Hit, Listing, MAX_ENTRIES, MAX_HITS};
 use super::outbox::{self, MAX_OUTBOX_FILE, SNIFF_BYTES};
+use super::serve;
+use tokio::io::AsyncSeekExt;
 use crate::schema::project::RemoteSpec;
 
 /// How long a session nobody used is kept.
@@ -213,6 +215,12 @@ impl HostFiles {
     pub async fn entry(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, rel: String, key: Vec<u8>, raw_id: String) -> Result<Entry, FilesError> {
         let root = root_of(spec).ok_or(FilesError::Unavailable)?.to_string();
         self.with_session(spec, known, |session| async move { entry_on(&session.sftp, &root, &rel, &key, &raw_id).await }).await
+    }
+
+    /// One range of a file, read on its own ([`read_range_on`]).
+    pub async fn read_range(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, rel: String, range: String) -> Result<HostRead, FilesError> {
+        let root = root_of(spec).ok_or(FilesError::Unavailable)?.to_string();
+        self.with_session(spec, known, |session| async move { read_range_on(&session.sftp, &root, &rel, &range).await }).await
     }
 
     /// One file's bytes and media type ([`read_on`]).
@@ -438,6 +446,58 @@ pub async fn read_on(sftp: &Sftp, root: &str, rel: &str) -> Result<(Vec<u8>, &'s
     }
     still_proven(&mut fs, &path).await?;
     Ok((bytes, kind))
+}
+
+/// A remote read as the raw route answers it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HostRead {
+    /// The whole file, bounded as [`read_on`].
+    Whole(Vec<u8>, &'static str),
+    /// `bytes` start at `start` of a `total`-byte file.
+    Part { bytes: Vec<u8>, kind: &'static str, start: u64, total: u64 },
+    Unsatisfiable { kind: &'static str, total: u64 },
+}
+
+/// The one range `range` (a `Range` header's value) asks of the file `rel`
+/// names, read after a seek — at most `MAX_OUTBOX_FILE` bytes per answer
+/// (a shorter 206 is legal; a film's player asks again from where it
+/// stopped). A text is ranged over its first `MAX_OUTBOX_FILE` bytes, as it
+/// is served. A range this cannot use, or a host that sends no size, reads
+/// the whole as [`read_on`] does.
+pub async fn read_range_on(sftp: &Sftp, root: &str, rel: &str, range: &str) -> Result<HostRead, FilesError> {
+    if rel.is_empty() {
+        return Err(FilesError::NotFound);
+    }
+    let mut fs = sftp.fs();
+    let path = proven(&mut fs, root, rel).await?;
+    let mut file = sftp.open(&path).await.map_err(sftp_error)?;
+    let meta = file.metadata().await.map_err(sftp_error)?;
+    if !meta.file_type().is_some_and(|kind| kind.is_file()) {
+        return Err(FilesError::NotFound);
+    }
+    let head = read_up_to(&mut file, SNIFF_BYTES as u64).await?;
+    let kind = outbox::classify(&head);
+    let whole = || async { read_on(sftp, root, rel).await.map(|(bytes, kind)| HostRead::Whole(bytes, kind)) };
+    let Some(size) = meta.len() else { return whole().await };
+    let total = if kind.starts_with("text/") { size.min(MAX_OUTBOX_FILE) } else { size };
+    match serve::parse_range(range, total) {
+        serve::Wanted::Whole => whole().await,
+        serve::Wanted::Unsatisfiable => {
+            still_proven(&mut fs, &path).await?;
+            Ok(HostRead::Unsatisfiable { kind, total })
+        }
+        serve::Wanted::Part { start, end } => {
+            let end = end.min(start + MAX_OUTBOX_FILE - 1);
+            file.seek(std::io::SeekFrom::Start(start)).await.map_err(|error| FilesError::Io(error.to_string()))?;
+            let bytes = read_up_to(&mut file, end - start + 1).await?;
+            still_proven(&mut fs, &path).await?;
+            // The file shrank under the read: nothing of it is where it was.
+            if bytes.is_empty() {
+                return Err(FilesError::NotFound);
+            }
+            Ok(HostRead::Part { bytes, kind, start, total })
+        }
+    }
 }
 
 /// The file or folder `rel` names below the remote root, as its folder's

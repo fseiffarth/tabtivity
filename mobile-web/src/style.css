@@ -1532,6 +1532,7 @@ span.files-close { background:transparent; }
 .files-tile-cover .files-icon-image { background:#1d3329; color:#8ad1a6; }
 .files-tile-cover .files-icon-pdf { background:#3a2226; color:#f28b82; }
 .files-tile-cover .files-icon-text { background:#2a2c3a; color:#c8cdda; }
+.files-tile-cover .files-icon-media { background:#2e2640; color:#c4a8ff; }
 .files-tile-open strong { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; padding:2px 2px 0; font-size:.82rem; font-weight:600; line-height:1.25; overflow-wrap:anywhere; }
 .files-tile-open small { padding:0 2px; overflow:hidden; color:#98a0b4; font-size:.7rem; text-overflow:ellipsis; white-space:nowrap; }
 .files-tile-open small.files-hit-place { color:#8fb8ff; }
@@ -1617,6 +1618,7 @@ span.files-close { background:transparent; }
 .option-list button > span.files-icon-image { background:#1d3329; color:#8ad1a6; }
 .option-list button > span.files-icon-pdf { background:#3a2226; color:#f28b82; }
 .option-list button > span.files-icon-text { background:#2a2c3a; color:#c8cdda; }
+.option-list button > span.files-icon-media { background:#2e2640; color:#c4a8ff; }
 .files-list strong { font-size:.94rem; }
 /* A PDF opened from the drawer, as a card after the tabs: the row's kind tile
    where a tab card has its colour dot, and the folder under the name. */
@@ -1904,6 +1906,33 @@ span.files-close { background:transparent; }
 .outbox-viewer-stage { position:relative; min-height:0; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; }
 .outbox-viewer-stage img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; transform-origin:center; -webkit-user-drag:none; }
 .outbox-viewer-stage.zoomed { cursor:grab; }
+/* An iPad held sideways: the open file stands beside the files library's
+   folder (`files-split`), the folder on the left two fifths. */
+.files-library.files-split { right:60%; border-right:1px solid #2a2e3c; animation:none; }
+.outbox-viewer.paned { left:40%; }
+.files-split .files-shown > button, .files-split .files-shown .files-tile-open { background:#24283a; box-shadow:inset 3px 0 0 #8fb8ff; }
+/* Files dragged over a folder that takes uploads. */
+.files-library-body.files-dropping { outline:2px dashed #8fb8ff; outline-offset:-6px; border-radius:var(--r-md); }
+.files-drop-note { margin:var(--sp-2) var(--sp-3); color:#8fb8ff; font-weight:600; text-align:center; }
+/* Select files: ticked items, and the bar acting on them. */
+.files-library-body.files-selecting { padding-bottom:calc(72px + env(safe-area-inset-bottom)); }
+.files-picked > button, .files-picked .files-tile-open { background:#22304a; box-shadow:inset 0 0 0 2px #8fb8ff; }
+.files-select-bar { position:absolute; left:0; right:0; bottom:0; z-index:2; display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-2); padding:var(--sp-2) var(--sp-3) calc(var(--sp-2) + env(safe-area-inset-bottom)); background:#1d2130; border-top:1px solid #2a2e3c; }
+.files-select-bar > [role="status"] { margin-right:auto; font-weight:600; }
+.files-select-bar > button { min-height:var(--hit); padding:0 var(--sp-3); border-radius:var(--r-sm); }
+.files-select-bar .error { color:#f28b82; }
+.files-select-note { color:var(--ink-muted); font-size:var(--fs-foot); }
+/* A keyboard or a pointer (an iPad's): where the focus is, and what is under
+   the pointer, show on the items. */
+.files-library-body :is(.files-tile-open, .files-list > li > button, .files-section > button):focus-visible { outline:2px solid #8fb8ff; outline-offset:-2px; }
+@media (hover:hover) {
+  .files-library-body :is(.files-tile-open, .files-list > li > button):hover { background:#1f2331; }
+}
+/* A film or a sound: the phone's own player, centred; its controls take
+   the touches the picture stage keeps for pinch and swipe. */
+.outbox-viewer-stage.outbox-media { display:grid; place-items:center; padding:var(--sp-3); touch-action:auto; user-select:auto; -webkit-user-select:auto; }
+.outbox-media video { max-width:100%; max-height:100%; background:#000; border-radius:var(--r-sm); }
+.outbox-media audio { width:min(100%, 480px); }
 .outbox-viewer-status { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); display:grid; justify-items:center; gap:10px; max-width:min(80%,22rem); margin:0; color:#95a6c8; font-size:.85rem; text-align:center; pointer-events:none; }
 .outbox-viewer-status button { pointer-events:auto; }
 .outbox-viewer-stage.zoomed img { will-change:transform; }
