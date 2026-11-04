@@ -8,6 +8,7 @@ import {
   firstPromptTabName,
   isResumeLaunch,
   promptTabName,
+  tabTaskName,
   withAutoLabel,
 } from "../../lib/agents/autoTabName";
 import { _resetAutoTabNamesForTest, noteAutoNameRoll, startAutoTabNames } from "../../stores/agents/autoTabNames";
@@ -68,17 +69,34 @@ describe("withAutoLabel", () => {
   });
 
   it("is dropped by a duplicate and survives a restore, validated", () => {
-    const tab = { ...spec, key: "agent-1", autoLabel: "Task", autoNamed: true } as TabEntry;
+    const tab = { ...spec, key: "agent-1", autoLabel: "Claude", autoNamed: true, taskName: "Task" } as TabEntry;
     const copy = duplicateSpec(tab);
     expect(copy.autoLabel).toBeUndefined();
     expect(copy.autoNamed).toBeUndefined();
+    expect(copy.taskName).toBeUndefined();
     const ctx = { scope: "p1" } as Parameters<typeof restoreSavedTab>[1];
-    const restored = restoreSavedTab({ key: "agent-1", label: "Task", cmd: "claude", cwd: "/p", kind: "agent", autoLabel: "Task", autoNamed: true }, ctx);
-    expect(restored.autoLabel).toBe("Task");
-    expect(restored.autoNamed).toBe(true);
-    const planted = restoreSavedTab({ key: "agent-2", label: "x", cmd: "claude", cwd: "/p", kind: "agent", autoLabel: 5 as never, autoNamed: true }, ctx);
+    const restored = restoreSavedTab({ key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", autoLabel: "Claude", autoNamed: true, taskName: "Task" }, ctx);
+    expect(restored).toMatchObject({ label: "Claude", autoLabel: "Claude", autoNamed: true, taskName: "Task" });
+    const planted = restoreSavedTab({ key: "agent-2", label: "x", cmd: "claude", cwd: "/p", kind: "agent", autoLabel: 5 as never, autoNamed: true, taskName: "t" }, ctx);
     expect(planted.autoLabel).toBeUndefined();
     expect(planted.autoNamed).toBeUndefined();
+    expect(planted.taskName).toBeUndefined();
+  });
+
+  it("moves an earlier build's task label back off the tab", () => {
+    const ctx = { scope: "p1" } as Parameters<typeof restoreSavedTab>[1];
+    const old = restoreSavedTab({ key: "agent-1", label: "Task", cmd: "claude", cwd: "/p", kind: "agent", autoLabel: "Task", autoNamed: true }, ctx);
+    expect(old).toMatchObject({ label: "Claude", autoLabel: "Claude", autoNamed: true, taskName: "Task" });
+    // Renamed by the user since: left alone.
+    const mine = restoreSavedTab({ key: "agent-2", label: "Mine", cmd: "claude", cwd: "/p", kind: "agent", autoLabel: "Task", autoNamed: true }, ctx);
+    expect(mine).toMatchObject({ label: "Mine", autoLabel: "Task" });
+    expect(mine.taskName).toBeUndefined();
+  });
+
+  it("shows the task name only while the tab holds the label it was given", () => {
+    expect(tabTaskName({ label: "Claude", autoLabel: "Claude", taskName: "Task" })).toBe("Task");
+    expect(tabTaskName({ label: "Mine", autoLabel: "Claude", taskName: "Task" })).toBeUndefined();
+    expect(tabTaskName({ label: "Claude", autoLabel: "Claude" })).toBeUndefined();
   });
 });
 
@@ -109,51 +127,85 @@ describe("autoTabNames", () => {
   it("names the tab after its first prompt, once", () => {
     seed();
     read(["Fix the settings scrollbar"]);
-    expect(tab()).toMatchObject({ label: "Fix the settings scrollbar", autoLabel: "Fix the settings scrollbar", autoNamed: true });
+    // The tab keeps its CLI's name; the task is kept apart (phone, hover card).
+    expect(tab()).toMatchObject({ label: "Claude", autoLabel: "Claude", autoNamed: true, taskName: "Fix the settings scrollbar" });
     read(["Fix the settings scrollbar", "now the phone too"]);
-    expect(tab().label).toBe("Fix the settings scrollbar");
+    expect(tab().taskName).toBe("Fix the settings scrollbar");
   });
 
   it("never touches a tab the user renamed", () => {
     seed({ label: "My name" });
     read(["Fix the settings scrollbar"]);
     expect(tab().label).toBe("My name");
+    expect(tab().taskName).toBeUndefined();
   });
 
   it("does nothing for an unarmed tab or with the setting off", () => {
     seed({ autoLabel: undefined });
     read(["Fix it"]);
-    expect(tab().label).toBe("Claude");
+    expect(tab().taskName).toBeUndefined();
     seed();
     useSettingsStore.setState({ settings: { agent_tab_auto_name: false } as Settings });
     read(["Fix it again"]);
-    expect(tab().label).toBe("Claude");
+    expect(tab().taskName).toBeUndefined();
   });
 
   it("waits past a slash command for the task", () => {
     seed();
     read(["/model"]);
-    expect(tab().label).toBe("Claude");
+    expect(tab().taskName).toBeUndefined();
     read(["/model", "Write the docs"]);
-    expect(tab().label).toBe("Write the docs");
+    expect(tab().taskName).toBe("Write the docs");
   });
 
   it("names it again after a /clear, from the new conversation only", () => {
     seed();
     read(["First task"]);
-    expect(tab().label).toBe("First task");
+    expect(tab().taskName).toBe("First task");
     noteAutoNameRoll(PTY, "clear");
     // A read still pointed at the cleared conversation brings nothing new.
     read(["First task"]);
-    expect(tab().label).toBe("First task");
+    expect(tab().taskName).toBe("First task");
     read(["Second task"]);
-    expect(tab().label).toBe("Second task");
+    expect(tab().taskName).toBe("Second task");
+    expect(tab().label).toBe("Claude");
+  });
+
+  it("a /clear arms a resumed tab that still carries its CLI's name", () => {
+    seed({ autoLabel: undefined, args: ["--resume", "abc"] });
+    read(["Old task"]);
+    expect(tab().taskName).toBeUndefined();
+    noteAutoNameRoll(PTY, "clear");
+    expect(tab().autoLabel).toBe("Claude");
+    read(["Old task"]);
+    expect(tab().taskName).toBeUndefined();
+    read(["New task"]);
+    expect(tab()).toMatchObject({ label: "Claude", autoLabel: "Claude", autoNamed: true, taskName: "New task" });
+  });
+
+  it("a /clear leaves an unarmed tab with a name of its own, and Tabby's", () => {
+    seed({ autoLabel: undefined, label: "Mine" });
+    noteAutoNameRoll(PTY, "clear");
+    read(["New task"]);
+    expect(tab().label).toBe("Mine");
+    expect(tab().autoLabel).toBeUndefined();
+    expect(tab().taskName).toBeUndefined();
+    seed({ autoLabel: undefined, assistant: { cli: "claude" } as TabEntry["assistant"] });
+    noteAutoNameRoll(PTY, "clear");
+    expect(tab().autoLabel).toBeUndefined();
+  });
+
+  it("a /clear arms nothing while names are off", () => {
+    useSettingsStore.setState({ settings: { agent_tab_auto_name: false } as Settings });
+    seed({ autoLabel: undefined });
+    noteAutoNameRoll(PTY, "clear");
+    expect(tab().autoLabel).toBeUndefined();
   });
 
   it("a /clear on a renamed tab changes nothing", () => {
-    seed({ label: "Mine", autoLabel: "First task", autoNamed: true });
+    seed({ label: "Mine", autoLabel: "Claude", autoNamed: true, taskName: "First task" });
     noteAutoNameRoll(PTY, "clear");
     read(["Second task"]);
-    expect(tab().label).toBe("Mine");
+    expect(tab()).toMatchObject({ label: "Mine", taskName: "First task" });
   });
 });

@@ -7,7 +7,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { InternalViewer } from "../lib/viewers/fileUtils";
 import { forgetPty } from "../lib/agents/promptCount";
 import { forgetTypedLine } from "../lib/agents/typedClear";
-import { holdsAutoLabel, withAutoLabel } from "../lib/agents/autoTabName";
+import { autoLabelOnClear, holdsAutoLabel, withAutoLabel } from "../lib/agents/autoTabName";
 import { forgetPromptTrail } from "./agents/promptTrail";
 import { BOX_SCOPE_PREFIX, ROOT_SCOPE, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
@@ -367,6 +367,7 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     todoId: t.todoId,
     autoLabel: t.autoLabel,
     autoNamed: t.autoNamed || undefined,
+    taskName: t.taskName,
     hostSession: t.hostSession || undefined,
     apiKey: t.apiKey,
     localLaunch: t.localLaunch,
@@ -478,9 +479,14 @@ interface TabsStore {
   renameTabInScope: (scope: string, key: string, label: string) => void;
   /** Name an agent tab of `scope` by its task (`stores/agents/autoTabNames`):
    *  only while it still holds the label Tabtivity gave it, checked inside the
-   *  write, so a rename the user made in between always wins. Sets the label
-   *  and `autoLabel` to `label`, `autoNamed` true. */
+   *  write, so a rename the user made in between always wins. Sets
+   *  `taskName` to `label` and `autoNamed` true; the tab's own label stays
+   *  its CLI's name (the desktop shows the task only on hover). */
   autoNameTabInScope: (scope: string, key: string, label: string) => void;
+  /** After a `/clear`, arm an unarmed agent tab of `scope` for a name from the
+   *  new conversation (`autoLabelOnClear`, checked inside the write). Returns
+   *  whether the tab now holds its automatic label. */
+  armAutoLabelInScope: (scope: string, key: string) => boolean;
   // Paint one tab of the ACTIVE scope with a palette colour, or clear it with
   // `undefined` (see TabEntry.color). Forwards to the main window from a popout
   // exactly as `renameTab` does.
@@ -1487,10 +1493,29 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const tabs = s.tabsByScope[scope];
       const tab = tabs?.find((t) => t.key === key);
       if (!tabs || !tab || !holdsAutoLabel(tab)) return {};
-      if (tab.label === nextLabel && tab.autoNamed) return {};
-      const named = tabs.map((t) => (t.key === key ? { ...t, label: nextLabel, autoLabel: nextLabel, autoNamed: true } : t));
+      if (tab.taskName === nextLabel && tab.autoNamed) return {};
+      const named = tabs.map((t) => (t.key === key ? { ...t, taskName: nextLabel, autoNamed: true } : t));
       return writeScope(s, scope, named, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
     });
+  },
+
+  armAutoLabelInScope: (scope, key) => {
+    let armed = false;
+    set((s) => {
+      const tabs = s.tabsByScope[scope];
+      const tab = tabs?.find((t) => t.key === key);
+      if (!tabs || !tab) return {};
+      if (holdsAutoLabel(tab)) {
+        armed = true;
+        return {};
+      }
+      const autoLabel = autoLabelOnClear(scope, tab);
+      if (autoLabel === undefined) return {};
+      armed = true;
+      const next = tabs.map((t) => (t.key === key ? { ...t, autoLabel } : t));
+      return writeScope(s, scope, next, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
+    });
+    return armed;
   },
 
   setTabColor: (key, color) => {

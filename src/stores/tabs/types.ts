@@ -362,15 +362,19 @@ export interface TabEntry {
   // by searching for this id. Persisted; dropped by `duplicateSpec` (one card,
   // one tab).
   todoId?: string;
-  // Named by its task (`lib/agents/autoTabName`): the label Tabtivity gave this
-  // agent tab itself — its CLI's name at open, then the name its first prompt
-  // gave it. A prompt renames the tab only while `label === autoLabel`, so a
-  // rename by the user from any route ends it for good. `autoNamed`: the first
-  // prompt already named it (set once, not every turn). Both persisted, so a
-  // relaunch neither renames a named tab again nor forgets an unnamed one;
-  // both dropped by `duplicateSpec` (a copy is its own conversation).
+  // Named by its task (`lib/agents/autoTabName`): `autoLabel` is the label
+  // Tabtivity gave this agent tab itself (its CLI's name at open), and
+  // `taskName` the name its first prompt gave it. The label itself never
+  // changes: the desktop shows the task name only in the tab's hover card,
+  // the phone shows it as the tab's name. It counts only while
+  // `label === autoLabel`, so a rename by the user from any route ends it for
+  // good. `autoNamed`: the first prompt already named it (set once, not every
+  // turn). All persisted, so a relaunch neither renames a named tab again nor
+  // forgets an unnamed one; all dropped by `duplicateSpec` (a copy is its own
+  // conversation).
   autoLabel?: string;
   autoNamed?: boolean;
+  taskName?: string;
   // The root console's **Host session** (`docs/context/agent_authority.md`):
   // this agent tab runs unfenced, with the user's full rights, in Tabtivity's
   // `host` agent home. Only ever set by the console's own "Host session" menu
@@ -687,6 +691,7 @@ export interface SavedTabEntry {
   // Persisted task-name state (see TabEntry.autoLabel).
   autoLabel?: string;
   autoNamed?: boolean;
+  taskName?: string;
   mobileRequestHash?: string;
   // Sign-in tab marker (see TabEntry.signIn); load drops such a tab.
   signIn?: boolean;

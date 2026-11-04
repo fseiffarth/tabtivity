@@ -822,6 +822,8 @@ fn agent_label_names_the_cli_not_the_tab() {
         args: None,
         launched_at: None,
         assistant: None,
+        auto_label: None,
+        task_name: None,
     };
     assert_eq!(agent_label_of(&tab("release review", "claude")), "Claude");
     assert_eq!(agent_label_of(&tab("Codex", "codex")), "Codex");
@@ -2103,4 +2105,25 @@ fn repeat_loads_inside_the_ttl_do_not_touch_the_disk() {
     fs::remove_file(dir.path().join("projects.json")).expect("remove");
     assert!(cache.load(dir.path(), &[7; 32]).is_ok());
     assert!(cache.load_fresh(dir.path(), &[7; 32]).is_ok());
+}
+
+/// The phone names an agent tab by its first prompt while the tab still holds
+/// the label Tabtivity gave it; a tab the user renamed shows that name.
+#[test]
+fn public_label_is_the_task_name_until_renamed() {
+    let tab = |value: serde_json::Value| -> SavedTab { serde_json::from_value(value).expect("saved tab") };
+    let named = tab(serde_json::json!({
+        "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent",
+        "autoLabel": "Claude", "autoNamed": true, "taskName": "Fix the settings scrollbar",
+    }));
+    assert_eq!(public_label_of(&named), "Fix the settings scrollbar");
+    let renamed = tab(serde_json::json!({
+        "label": "Mine", "cmd": "claude", "cwd": "", "kind": "agent",
+        "autoLabel": "Claude", "taskName": "Fix the settings scrollbar",
+    }));
+    assert_eq!(public_label_of(&renamed), "Mine");
+    let unnamed = tab(serde_json::json!({ "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent", "autoLabel": "Claude" }));
+    assert_eq!(public_label_of(&unnamed), "Claude");
+    let odd = tab(serde_json::json!({ "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent", "autoLabel": "Claude", "taskName": 5 }));
+    assert_eq!(public_label_of(&odd), "Claude");
 }

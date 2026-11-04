@@ -22,6 +22,7 @@ import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { describeTabCost, tabCost } from "../../lib/tabCost";
 import { UntestedTag } from "../common/UntestedTag";
+import { tabTaskName } from "../../lib/agents/autoTabName";
 import { DotIcon } from "../common/icons/Icon";
 import { tabMemberInfo, tabMemberTitle, useScopeMemberTable, type MemberTable } from "./TabMemberChip";
 
@@ -202,6 +203,9 @@ export function TabHoverCard({
   const ptyId = `${scope}:${tab.key}`;
   // The agent task summary (terminal title); absent when the tab set none.
   const summary = useAgentTaskStore((s) => s.titleByTab[tab.key]);
+  // The name the tab's first prompt gave it: on the desktop it shows here
+  // only, the tab itself keeps its CLI's name (`lib/agents/autoTabName`).
+  const taskName = tabTaskName(tab);
   // Viewer file-source (remote-native vs local mirror), published by the file
   // viewers on remote projects; absent otherwise.
   const fileSource = useFileSourcesStore((s) => s.byTab[tab.key]);
@@ -370,6 +374,14 @@ export function TabHoverCard({
       </span>
       {summary && <span className="pill-popup-description">{summary}</span>}
       <span className="tab-popup-kind">{kindBits.join(" · ")}</span>
+      {taskName && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabHoverCard.taskLabel")} <UntestedTag id="agents.autoTabName" />
+          </span>
+          <span className="tab-popup-meta">{taskName}</span>
+        </span>
+      )}
       {memberInfo && (
         <span className="pill-popup-path-row">
           <span className="pill-popup-path-label">

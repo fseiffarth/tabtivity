@@ -5,14 +5,17 @@ import { AGENT_CLI_ROWS } from "./agentCliTable";
 /**
  * Agent tabs named by their task: a new agent tab opens as its CLI ("Claude",
  * "Codex") and takes the name of its first prompt once one is recorded
- * (`stores/agents/autoTabNames` does the renaming; this module is its pure
- * half).
+ * (`stores/agents/autoTabNames` does the naming; this module is its pure
+ * half). For now the name shows on the phone only: there it is the tab's name
+ * (`discovery::public_label_of`); the desktop keeps the CLI's name on the tab
+ * and shows the task in its hover card (`tabTaskName`).
  *
- * The tab remembers the label Tabtivity gave it (`TabEntry.autoLabel`). A
- * prompt renames it only while `label === autoLabel`, so a name the user set —
- * on the desktop, the phone, a schedule — breaks the match from any route, and
- * nothing touches that tab again. `autoNamed` says its first prompt already
- * named it: the name is set once, not every turn.
+ * The tab remembers the label Tabtivity gave it (`TabEntry.autoLabel`) and the
+ * task name apart (`TabEntry.taskName`). The task name counts only while
+ * `label === autoLabel`, so a name the user set — on the desktop, the phone, a
+ * schedule — breaks the match from any route, and nothing touches that tab
+ * again. `autoNamed` says its first prompt already named it: the name is set
+ * once, not every turn.
  */
 
 /** The longest name a prompt gives a tab, before the ellipsis. */
@@ -83,11 +86,32 @@ export function isResumeLaunch(args: readonly string[] | undefined): boolean {
  * name there would hide which CLI it runs.
  */
 export function withAutoLabel<T extends Omit<TabEntry, "key">>(scope: string, spec: T): T {
-  if (spec.autoLabel !== undefined) return spec;
-  if (spec.kind !== "agent" || !AGENT_CLI_ROWS.some((row) => row.bin === spec.cmd)) return spec;
-  if (scope === ASSISTANT_SCOPE || spec.signIn || spec.cloud || spec.login || spec.assistant) return spec;
+  if (spec.autoLabel !== undefined || !isNameableAgent(scope, spec)) return spec;
   if (isResumeLaunch(spec.args) || !spec.label.trim()) return spec;
   return { ...spec, autoLabel: spec.label };
+}
+
+type NameableFields = "kind" | "cmd" | "signIn" | "cloud" | "login" | "assistant";
+
+/** A tab whose conversation may name it: a registry CLI's agent tab outside
+ *  Tabby's scope, not a sign-in or cloud tab. */
+function isNameableAgent(scope: string, spec: Pick<TabEntry, NameableFields>): boolean {
+  if (spec.kind !== "agent" || !AGENT_CLI_ROWS.some((row) => row.bin === spec.cmd)) return false;
+  return !(scope === ASSISTANT_SCOPE || spec.signIn || spec.cloud || spec.login || spec.assistant);
+}
+
+/**
+ * The `autoLabel` a `/clear` arms `tab` with, or `undefined`. A `/clear`
+ * starts a new conversation, so a tab that opened unarmed — a resumed
+ * conversation (every restored tab), or one opened before tabs were named —
+ * can be named by the new one's first prompt. Only while its label is still
+ * its CLI's own name: a label that says anything else was given by someone,
+ * and stays.
+ */
+export function autoLabelOnClear(scope: string, tab: Pick<TabEntry, NameableFields | "label" | "autoLabel">): string | undefined {
+  if (tab.autoLabel !== undefined || !isNameableAgent(scope, tab)) return undefined;
+  const cliLabel = AGENT_CLI_ROWS.find((row) => row.bin === tab.cmd)?.label;
+  return cliLabel && tab.label === cliLabel ? cliLabel : undefined;
 }
 
 /** A persisted `autoLabel` as a usable one, or `undefined`. */
@@ -95,8 +119,33 @@ export function normalizeAutoLabel(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= AUTO_LABEL_CAP ? value : undefined;
 }
 
-/** Whether a prompt may still rename `tab`: its label is the one Tabtivity
+/** Whether a prompt may still name `tab`: its label is the one Tabtivity
  *  gave it. */
 export function holdsAutoLabel(tab: Pick<TabEntry, "label" | "autoLabel">): boolean {
   return tab.autoLabel !== undefined && tab.label === tab.autoLabel;
+}
+
+/** The task name `tab` carries, while its label is still Tabtivity's. */
+export function tabTaskName(tab: Pick<TabEntry, "label" | "autoLabel" | "taskName">): string | undefined {
+  return holdsAutoLabel(tab) && tab.taskName ? tab.taskName : undefined;
+}
+
+/**
+ * The task-name state of a saved tab, validated. A tab an earlier build named
+ * wrote the task into its label (`label === autoLabel`, `autoNamed`, no
+ * `taskName`): it comes back with its CLI's name on the tab and the task as
+ * its `taskName`. Where the CLI is not a registry one, the label stays.
+ */
+export function restoredTaskName(
+  t: Pick<TabEntry, "label" | "cmd" | "autoLabel" | "autoNamed" | "taskName">,
+): Partial<Pick<TabEntry, "label" | "autoLabel" | "autoNamed" | "taskName">> {
+  const autoLabel = normalizeAutoLabel(t.autoLabel);
+  if (autoLabel === undefined) return {};
+  const autoNamed = t.autoNamed === true || undefined;
+  const taskName = normalizeAutoLabel(t.taskName);
+  const cliLabel = AGENT_CLI_ROWS.find((row) => row.bin === t.cmd)?.label;
+  if (taskName === undefined && autoNamed && t.label === autoLabel && cliLabel && cliLabel !== autoLabel) {
+    return { label: cliLabel, autoLabel: cliLabel, autoNamed, taskName: autoLabel };
+  }
+  return { autoLabel, autoNamed, taskName };
 }

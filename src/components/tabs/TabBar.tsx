@@ -28,6 +28,7 @@ import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
 import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
+import { tabTaskName } from "../../lib/agents/autoTabName";
 import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { isHostPinned } from "../../lib/projectTabHost";
@@ -242,10 +243,11 @@ function selectOnMount(el: HTMLInputElement | null) {
   if (el) el.select();
 }
 
-/** Fast mode's native tooltip: the label, then a shell's launch lines. */
+/** Fast mode's native tooltip: the label, an agent tab's task name, then a
+ *  shell's launch lines. */
 function fastModeTitle(tab: TabEntry, member?: string): string {
   const { program, input } = shellLaunch(tab);
-  return [tab.label, member, program, input].filter(Boolean).join("\n");
+  return [tab.label, tabTaskName(tab), member, program, input].filter(Boolean).join("\n");
 }
 
 /**

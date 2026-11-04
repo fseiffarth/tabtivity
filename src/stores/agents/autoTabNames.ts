@@ -5,7 +5,7 @@ import { useTabsStore } from "../tabs";
 import { useAgentModelsStore } from "./agentModels";
 
 /**
- * The renaming half of "agent tabs named by their task"
+ * The naming half of "agent tabs named by their task"
  * (`lib/agents/autoTabName`). It reads no transcript of its own: it follows
  * the prompts `agentModels` already reads at every turn's start and end —
  * whatever route a prompt took (typed, the Reader's composer, the phone, a
@@ -14,12 +14,13 @@ import { useAgentModelsStore } from "./agentModels";
  *
  * A `/clear` starts a new conversation in the same tab (`noteAutoNameRoll`):
  * a tab still carrying its automatic name is named again by the first prompt
- * of the new one. The prompts read before the clear are its baseline — a read
+ * of the new one — a resumed or restored tab too, which opened unarmed, while
+ * its label is its CLI's own. The prompts read before the clear are its baseline — a read
  * still pointed at the cleared conversation brings nothing new. In memory
  * only: a relaunch before the next prompt simply keeps the old name.
  *
  * Main window only (`AppShell`): the one heap that owns every tab, popouts'
- * included, so a rename is written once.
+ * included, so a name is written once.
  */
 
 /** Prompts of the conversation a `/clear` ended, per composed PTY id. */
@@ -73,13 +74,14 @@ export function autoNameTab(ptyId: string): void {
 }
 
 /** A tab's session (re)started (`agent-session-roll`): after a `/clear`, a
- *  tab still carrying its automatic name waits for the new conversation's
- *  first prompt. */
+ *  tab still carrying its automatic name — or its CLI's own, when it opened
+ *  unarmed — waits for the new conversation's first prompt. */
 export function noteAutoNameRoll(ptyId: string, source: string): void {
-  if (source !== "clear") return;
+  if (source !== "clear" || !autoNamesOn()) return;
   const parts = splitPtyId(ptyId);
-  const tab = parts && useTabsStore.getState().tabsByScope[parts.scope]?.find((entry) => entry.key === parts.key);
-  if (!tab || !holdsAutoLabel(tab)) return;
+  // A tab that opened unarmed (resumed, restored) is armed by the clear while
+  // its label is still its CLI's name (`autoLabelOnClear`).
+  if (!parts || !useTabsStore.getState().armAutoLabelInScope(parts.scope, parts.key)) return;
   clearedPrompts.set(ptyId, knownPromptKeys(ptyId));
 }
 

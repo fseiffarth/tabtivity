@@ -171,6 +171,28 @@ struct SavedTab {
     /// scope is resolved ([`assistant_chat`]).
     #[serde(default)]
     assistant: Option<Value>,
+    /// The label Tabtivity gave an agent tab and the name its first prompt
+    /// gave it (`src/lib/agents/autoTabName.ts`): see [`public_label_of`].
+    /// Loose, so an odd shape never drops the file.
+    #[serde(default)]
+    auto_label: Option<Value>,
+    #[serde(default)]
+    task_name: Option<Value>,
+}
+
+/// The name the phone shows for a tab: the name its first prompt gave an
+/// agent tab while the tab still carries the label Tabtivity gave it, else
+/// its label. The desktop keeps the label on the tab and shows the task name
+/// only on hover; the phone names the tab by it.
+fn public_label_of(tab: &SavedTab) -> String {
+    let auto_label = tab.auto_label.as_ref().and_then(Value::as_str);
+    let task = tab
+        .task_name
+        .as_ref()
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && auto_label == Some(tab.label.as_str()));
+    task.unwrap_or(&tab.label).chars().take(120).collect()
 }
 
 /// [`ResolvedTab::since`] off the saved record: its stamped launch moment,
@@ -2099,7 +2121,7 @@ fn resolve_scope(
         };
         let public = PublicTab {
             id: key_id(host_key, "tab", &[&source.raw_id, tmux]),
-            label: tab.label.chars().take(120).collect(),
+            label: public_label_of(&tab),
             kind: kind.to_string(),
             agent_label: agent.then(|| agent_label_of(&tab)),
             agent_status: None,
