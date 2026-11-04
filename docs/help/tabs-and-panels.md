@@ -22,6 +22,12 @@ related: [files-and-viewers, root-console, keyboard, scheduled-prompts, project-
      when that experimental feature is on.
 3. The new tab opens focused in that pane.
 
+Starting an agent while a tab of the same agent in the same project has not been
+asked anything yet focuses that empty tab instead of opening a second blank one.
+This covers the + menu, the Ctrl+1–9 chords, Start Here, the prompt chart's
+"New tab" and the phone's ＋. A tab restored from a previous run, or one running
+another folder, machine, model or login, is never taken over.
+
 Only agents whose CLI is installed are listed. Install missing ones from
 Settings → Agents → Manage CLIs (see `agent-clis`).
 

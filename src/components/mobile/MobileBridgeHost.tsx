@@ -31,6 +31,7 @@ import { useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
+import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
 import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
 import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
@@ -995,6 +996,9 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
       localFile: scope.localFile,
       requestHash,
       spec,
+      // An agent nothing has been asked of yet takes the phone's ＋ as the
+      // desktop's does — when the phone can attach it (a saved tmux session).
+      reuse: (tabs) => findEmptyAgentTab(scope.id, tabs.filter((tab) => tab.tmuxSession), spec),
     });
   } catch (error) {
     return { status: "error", code: "persist_failed", message: String(error) };

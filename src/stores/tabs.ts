@@ -967,6 +967,9 @@ interface TabsStore {
     localFile: string;
     requestHash: string;
     spec: Omit<TabEntry, "key">;
+    /** An already-open tab of the scope that takes the request instead of a
+     *  new one (an agent nothing has been asked of yet). */
+    reuse?: (tabs: readonly TabEntry[]) => TabEntry | undefined;
   }) => Promise<TabEntry>;
   // Persist an explicit scope's tabs+layout (incl. its detached groups) to its
   // project.json. `saveLayout` is the current-scope convenience over this; the
@@ -3860,7 +3863,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
-  hydrateThenCreateInScope: async ({ scope, cwd, localFile, requestHash, spec }) => {
+  hydrateThenCreateInScope: async ({ scope, cwd, localFile, requestHash, spec, reuse }) => {
     // A failed backend read propagates (rejecting the request): swallowing it
     // and creating the tab anyway would let `persistScopeStrict` below OVERWRITE
     // the saved layout with just this one tab. `createEmptyScope` marks a scope
@@ -3871,7 +3874,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const existing = get().tabsByScope[scope]?.find(
       (tab) => tab.mobileRequestHash === requestHash,
     );
-    const created = existing ?? get().addTabToScope(scope, { ...spec, mobileRequestHash: requestHash });
+    const created =
+      existing ??
+      reuse?.(get().tabsByScope[scope] ?? []) ??
+      get().addTabToScope(scope, { ...spec, mobileRequestHash: requestHash });
     await get().persistScopeStrict(scope, localFile);
     return created;
   },

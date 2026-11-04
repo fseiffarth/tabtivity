@@ -15,6 +15,7 @@ import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
 import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
+import { notePrompted } from "../../lib/agents/emptyAgentTab";
 import { noteInput } from "../../lib/agents/promptCount";
 import { forgetInputFrom, noteInputFrom } from "../../lib/agents/inputFrom";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
@@ -937,6 +938,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // then ask it.
         markAgentActive(scope, id, sub(METRIC.AGENT_ACTIVE, agentLeaf));
         noteAgentSubmit(id);
+        notePrompted(id);
       } else if (kind === "shell") {
         bumpUsage(scope, METRIC.SHELL_COMMAND);
       }

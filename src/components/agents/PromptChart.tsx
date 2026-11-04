@@ -15,6 +15,7 @@ import {
 import { agentModelsFor, prefaceCommandsFor } from "../../lib/agents/agentPrefaces";
 import { historyTabId } from "../../lib/agents/prompt/adopt";
 import { afterLinkRefusal } from "../../lib/agents/prompt/links";
+import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
 import { agentItemFor, newAgentTabForDraft, promptChartNewTabAgent } from "../../lib/agents/prompt/newTab";
 import { useUse24h } from "../../lib/timeFormat";
 import {
@@ -400,6 +401,13 @@ export function PromptChart({ scope, active, tabs, stateOf }: Props) {
       projectName: project?.name ?? "",
       t,
     });
+    // An agent of this launch nothing has been asked of yet takes the prompt
+    // instead of a second blank tab opening.
+    const store = useTabsStore.getState();
+    const empty = findEmptyAgentTab(scope, store.tabsByScope[scope] ?? [], spec.tab);
+    if (empty?.scheduleTargetId && store.revealTabInScope(scope, empty.key)) {
+      return { tab: empty, preface: spec.preface };
+    }
     return { tab: addTabToScope(scope, spec.tab), preface: spec.preface };
   };
   const sendToNewTab = async (card: PromptChartCard) => {
