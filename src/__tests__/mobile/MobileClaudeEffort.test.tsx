@@ -1,8 +1,10 @@
 /**
- * The phone's Effort chip on a Claude tab: the facts row offers the levels
- * Claude's `/effort` takes, and a tap sends `/effort <level>` — the desktop
- * Reader's effort list, on the phone. Other CLIs set their effort on the
- * model sheet's next step, so they get no chip.
+ * Claude's effort on the phone: no chip of its own, a row of the levels
+ * Claude's `/effort` takes in the model sheet, under the models as the CLI's
+ * own `/model` dialog draws its effort line. A tap closes the sheet (and the
+ * session's dialog) and sends `/effort <level>`; the model chip then carries
+ * the level. Other CLIs set their effort on the model sheet's next step, so
+ * they get no row.
  */
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,9 +75,24 @@ const tabOf = (agent_label: string) => ({
   viewer_busy: false,
 });
 
-const rows = () => Array.from(document.querySelectorAll(".option-list strong"), (row) => row.textContent ?? "");
+const ESC = String.fromCharCode(27);
 
-describe(`${BRAND.display} Mobile — Claude's effort chip`, () => {
+const paint = async (text: string) => {
+  const bytes = new TextEncoder().encode(text);
+  const payload = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(payload).set(bytes);
+  act(() => FakeWebSocket.instances[0].onmessage?.({ data: payload } as MessageEvent));
+  await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 200)); });
+};
+
+const levels = () => Array.from(document.querySelectorAll(".model-effort-levels button"), (button) => button.textContent ?? "");
+const level = (name: string) => {
+  const button = Array.from(document.querySelectorAll(".model-effort-levels button")).find((entry) => entry.textContent === name);
+  if (!button) throw new Error(`no effort level ${name}`);
+  return button;
+};
+
+describe(`${BRAND.display} Mobile — Claude's effort in the model sheet`, () => {
   beforeEach(() => {
     terminalState.lines = [];
     FakeWebSocket.instances = [];
@@ -86,35 +103,68 @@ describe(`${BRAND.display} Mobile — Claude's effort chip`, () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("lists the levels and sends /effort for the one tapped", async () => {
+  it("lists the levels under the models and sends /effort for the one tapped", async () => {
     render(<Terminal tab={tabOf("Claude")} back={() => {}} />);
     await act(async () => {});
+    // No chip of its own any more.
+    expect(screen.queryByRole("button", { name: "Effort" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Effort" }));
-    expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Reasoning effort");
-    expect(rows()).toEqual([
-      "low effort",
-      "medium effort",
-      "high effort",
-      "xhigh effort",
-      "max effort",
-      "auto — the model's default",
-    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    expect(screen.getByRole("region", { name: "Reasoning effort" })).toBeTruthy();
+    expect(levels()).toEqual(["low", "medium", "high", "xhigh", "max", "auto"]);
 
     FakeWebSocket.sent = [];
-    const high = Array.from(document.querySelectorAll(".option-list button"))
-      .find((button) => (button.textContent ?? "").includes("high effort") && !(button.textContent ?? "").includes("xhigh"));
-    fireEvent.click(high as Element);
+    fireEvent.click(level("high"));
+    // The sheet steps aside at once; the command waits for `/model` to settle.
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/effort high", "\r"]);
 
-    // The sheet steps aside and the chip names the level that went in.
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("button", { name: "high effort" })).toBeTruthy();
-  });
+    // The model chip names the level that went in.
+    expect(screen.getByRole("button", { name: "Model · high effort" })).toBeTruthy();
+  }, 10_000);
 
-  it("offers no chip on another CLI, whose effort is a step of its model sheet", async () => {
+  it("closes the session's /model dialog before sending the level", async () => {
+    render(<Terminal tab={tabOf("Claude")} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await paint([
+      "Select Model",
+      "Switch between Claude models. Applies to this session.",
+      "",
+      "  1. Default (recommended)   Opus for up to 50% of usage, then Sonnet",
+      "❯ 2. Opus                    For complex tasks",
+      "",
+      "Esc to cancel",
+    ].join("\n"));
+    expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Select Model");
+
+    FakeWebSocket.sent = [];
+    fireEvent.click(level("max"));
+    const sent = await keysSent(() => FakeWebSocket.sent, 3, 400);
+    expect(sent[0]).toBe(ESC);
+    expect(sent.slice(-2)).toEqual(["/effort max", "\r"]);
+  }, 10_000);
+
+  it("shows a tag's own level once, as the gauge, and swaps it for the one sent", async () => {
+    render(<Terminal tab={{ ...tabOf("Claude"), agent_model: "Opus 5 · medium" }} back={() => {}} />);
+    await act(async () => {});
+    const chip = screen.getByRole("button", { name: "Opus 5 · medium effort" });
+    expect(chip.querySelector(".fact-action-label")?.textContent).toBe("Opus 5");
+    expect(chip.querySelector(".fact-effort")?.textContent).toBe("medium");
+
+    fireEvent.click(chip);
+    expect(level("medium").getAttribute("aria-current")).toBe("true");
+    FakeWebSocket.sent = [];
+    fireEvent.click(level("xhigh"));
+    expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/effort xhigh", "\r"]);
+    expect(screen.getByRole("button", { name: "Opus 5 · xhigh effort" })).toBeTruthy();
+  }, 10_000);
+
+  it("offers no effort row on another CLI, whose effort is a step of its model sheet", async () => {
     render(<Terminal tab={tabOf("Codex")} back={() => {}} />);
     await act(async () => {});
     expect(screen.queryByRole("button", { name: "Effort" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    expect(document.querySelector(".model-effort")).toBeNull();
   });
 });

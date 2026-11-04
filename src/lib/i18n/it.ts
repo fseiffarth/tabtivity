@@ -436,7 +436,6 @@ export const dict: Dict = {
   "mobile.composer.prefixGroup": "Inizia il messaggio con",
   "mobile.facts.modelHint": "Scegli il modello (/model)",
   "mobile.facts.modeHint": "Scegli la modalità dei permessi",
-  "mobile.facts.effortHint": "Scegli l’impegno di ragionamento (/effort)",
   "mobile.facts.modeCycle": "Cambia modalità (Maiusc+Tab)",
   "mobile.keys.interrupt": "Interrompi",
   "mobile.keys.interruptConfirm": "Inviare un’interruzione (Ctrl+C)?",

@@ -483,7 +483,6 @@ export const enSource = {
   "mobile.composer.prefixGroup": "Lead the message with",
   "mobile.facts.modelHint": "Choose the model (/model)",
   "mobile.facts.modeHint": "Choose the permission mode",
-  "mobile.facts.effortHint": "Choose the reasoning effort (/effort)",
   "mobile.facts.modeCycle": "Switch mode (Shift+Tab)",
   "mobile.keys.interrupt": "Interrupt",
   "mobile.keys.interruptConfirm": "Send interrupt (Ctrl+C)?",

@@ -156,6 +156,8 @@ const MODE_SETTLE = 340;
  * so a mode that is genuinely offered is always reached — and a mode that is
  * not ends the walk where it started. */
 const MODE_CYCLE_LIMIT = 6;
+/** A model tag's trailing ` · <level>`, one of Claude's `/effort` levels. */
+const CLAUDE_EFFORT_SUFFIX = new RegExp(` · (${CLAUDE_EFFORTS.join("|")})$`, "u");
 
 /** Why a phone file did not reach the project inbox, by the desktop's code. */
 const UPLOAD_FAILURES: Record<string, TranslationKey> = {
@@ -970,10 +972,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The model the sheet is asking the effort for, once the walk has landed. */
   const [effortStep, setEffortStep] = useState<string | null>(null);
   const [modeSheet, setModeSheet] = useState(false);
-  /** Claude's effort sheet (`/effort <level>`): shown beside the model, as the
-   * desktop Reader's effort chip is. The level just sent stands until the
-   * session's own status or spinner names one. */
-  const [effortSheet, setEffortSheet] = useState(false);
+  /** Claude's effort (`/effort <level>`), a row of levels in the model sheet:
+   * the level just sent stands until the session's own status or spinner
+   * names one. */
   const [effortPicked, setEffortPicked] = useState("");
   /** The ⎇ chip's sheet: where the agent can move (`null` while asked), the
    * id a move is under way to, and what the last ask or move ran into. */
@@ -1252,7 +1253,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setAssistantSheet(false);
     setAssistantModels(null);
     setModeSheet(false);
-    setEffortSheet(false);
     setEffortPicked("");
     setStatusSheet(false);
     setLimits({});
@@ -1672,11 +1672,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       });
   };
   /** Claude takes the level as `/effort <level>`; the other CLIs set it on
-   * their `/model` picker's next step, which the model sheet already walks. */
+   * their `/model` picker's next step, which the model sheet already walks.
+   * The sheet closes first, and with it the session's `/model` dialog: the
+   * command waits behind that Esc as behind a command settling, so it is not
+   * typed into the dialog or read with the Esc as one Alt key. */
   const chooseEffortLevel = (level: string) => {
-    if (!connected || !sendAgentText(`/effort ${level}`)) return;
-    setEffortPicked(level);
-    setEffortSheet(false);
+    if (!connected) return;
+    const dialogUp = !!picker;
+    closeModelSheet();
+    if (dialogUp) commandSentAt.current = Date.now();
+    if (sendAgentText(`/effort ${level}`)) setEffortPicked(level);
   };
   const openModeSheet = () => {
     if (modes.length === 0 && !fixedMode) {
@@ -1766,7 +1771,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const launchDefaults = tab.kind === "agent" && !tab.local_model && !tab.assistant_launch && !tab.on_host
     ? <LaunchDefaultsFold tabId={tab.id} modelNames={(modelPreview ?? listedStep)?.options.map((option) => option.label.replace(/\s*\(current\)\s*$/iu, "").replace(/\s*[✔✓]\s*$/u, "").trim().toLowerCase())} />
     : undefined;
-  const sheetUp = modelSheet || assistantSheet || modeSheet || effortSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
+  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
@@ -2232,11 +2237,28 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * line, then the spinner's `with high effort`), else the level just sent. */
   const effortNow = status?.effort ?? sessionWork?.effort ?? (effortPicked || undefined);
   const effortOffered = tab.kind === "agent" && !tab.local_model && !bare && agentKey === "claude";
-  const effortLevels: SheetOption[] = CLAUDE_EFFORTS.map((level) => ({
-    key: level,
-    label: level === "auto" ? t("terminal.reader.effortAuto") : t("terminal.reader.effort", { effort: level }),
-    current: level === effortNow,
-  }));
+  /** Claude's model chip: the model, then the level as a gauge. The tag's own
+   * ` · <level>` (`statusModelTag`) is taken off, since it may be older than
+   * the level just sent; other CLIs keep the tag as it is. */
+  const effortTagged = effortOffered ? CLAUDE_EFFORT_SUFFIX.exec(modelChip) : null;
+  const chipModel = effortTagged ? modelChip.slice(0, effortTagged.index) : modelChip;
+  const chipEffort = effortOffered ? effortNow ?? effortTagged?.[1] : undefined;
+  /** Claude's levels in the model sheet, under the models as the CLI's own
+   * `/model` dialog draws its effort line: one tap sends `/effort <level>`
+   * and closes the sheet. The model chip carries the level instead of a chip
+   * of its own. */
+  const effortRow = effortOffered && <section className="model-effort" aria-label={t("terminal.reader.effortTitle")}>
+    <h3 className="option-list-group">{t("terminal.reader.effortTitle")}{isUntested("mobile.model.claudeEffort") && <span className="untested">{t("mobile.focus.untested")}</span>}</h3>
+    <div className="model-effort-levels">{CLAUDE_EFFORTS.map((level) => <button
+      key={level}
+      className={level === chipEffort ? "current" : undefined}
+      aria-current={level === chipEffort || undefined}
+      aria-label={level === "auto" ? t("terminal.reader.effortAuto") : t("terminal.reader.effort", { effort: level })}
+      disabled={!connected}
+      onClick={() => chooseEffortLevel(level)}
+    >{level}</button>)}</div>
+    <p className="sheet-note">{t("terminal.reader.effortNote")}</p>
+  </section>;
   const modeOptions: SheetOption[] = modes.map((choice) => ({
     key: choice.value,
     label: choice.label,
@@ -2703,18 +2725,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {!bare && (tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">
         {/* An agent tab's model, mode and status lead the row as tappable facts:
             the composer keeps the whole bar for the draft and its buttons.
-            Status is its lamp alone and effort a gauge plus the level, so the
-            row fits a phone's width; the full words stay their names. */}
+            Status is its lamp alone and the model chip carries the effort as
+            a gauge plus the level (its list is in the model sheet), so the row
+            fits a phone's width; the full words stay their names. */}
         {tab.kind === "agent" && <>
           <button className="fact-action fact-status" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")} aria-label={t("terminal.reader.status.button")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /></button>
           {/* A local-model tab keeps the model it was launched on: the
               driver's list would only offer to move it off. */}
           {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
-            : <button className="fact-action" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
+            : <button className="fact-action" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")} aria-label={chipEffort ? `${chipModel} · ${t("terminal.reader.effort", { effort: chipEffort })}` : undefined}><span className="fact-action-label">{chipModel}</span>{chipEffort && <span className="fact-effort" aria-hidden="true"><MeterIcon size="1em" />{chipEffort}</span>}</button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
-          {effortOffered && <button className="fact-action" disabled={!connected || !!liveQuestion} onClick={() => setEffortSheet(true)} aria-haspopup="dialog" aria-expanded={effortSheet} title={t("mobile.facts.effortHint")} aria-label={effortNow ? t("terminal.reader.effort", { effort: effortNow }) : t("terminal.reader.effortUnknown")}><MeterIcon size="1em" /><span className="fact-action-label">{effortNow ?? t("terminal.reader.effortUnknown")}</span></button>}
-          {effortOffered && isUntested("mobile.facts.effort") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(isUntested("mobile.design.rounded") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
@@ -2850,7 +2871,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           ? "mobile.model.waitingConnection"
           : answered ? "mobile.model.waitingSession" : "terminal.reader.modelWaiting")}
         busy={modelPreview ? heldPick !== null : shownStep != null && (pickerStep == null || reveal != null || effortFor != null)}
-        footer={launchDefaults}
+        footer={<>{effortRow}{launchDefaults}</>}
         onPick={chooseModel}
         onClose={closeModelSheet}
       />}</div>}
@@ -2898,15 +2919,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       busy={switching !== "" || fixedMode}
       onPick={(key) => void applyMode(key)}
       onClose={() => { if (!switching) setModeSheet(false); }}
-    />}
-    {effortSheet && <OptionSheet
-      title={t("terminal.reader.effortTitle")}
-      note={{ text: t("terminal.reader.effortNote") }}
-      options={effortLevels}
-      waiting={t("mobile.model.waitingSession")}
-      busy={false}
-      onPick={chooseEffortLevel}
-      onClose={() => setEffortSheet(false)}
     />}
     {assistantSheet && <OptionSheet
       title={t("terminal.reader.modelTitle")}
