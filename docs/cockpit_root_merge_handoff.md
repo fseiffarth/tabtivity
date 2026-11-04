@@ -191,30 +191,110 @@ tests are all in `FloatingFrame.test.ts`.
   handlers fire on one key and both close. Pre-existing (the old cockpit
   overlay did the same); falls out if Machines is raised above the host.
 
-## Next (I2: A4 Root view chrome + A9 icon rail)
+## I2 (A4 + A9)
 
-- Start from `RootView.tsx` / `RootBarSlots` (see A2). The sub-bar is a second
-  host of the same three slots: a row under the title bar (flag on, unsplit
-  Root only) containing a strip slot, a rights slot and a files slot, passed to
-  `RootView` instead of the title bar's. The shell currently renders the strip
-  slot right after the view strip in the title bar; move that slot into the
-  sub-bar and keep the rights/files slots wherever the sub-bar wants them
-  (`rights`/`files` currently live in the title bar's control cluster).
-  `setControlsStyle` reserves width on the title bar's cluster; the sub-bar
-  would own its own equivalent. The split layout keeps per-group strips and
-  drops the sub-bar (existing behaviour of `stripFor`).
-- The Root tab (`viewTab("root", ...)` in the shell) is where the lamp goes.
-  Reuse the tab strip's lamp classes (`attentionStateClass`/`busyStateClass`,
-  `TabStatusMark`); read `stores/activity` for `ROOT_SCOPE` only.
-- Empty card ("Start <agent> in Root"): `rootConsole.emptyTitle/emptyHint`
-  live in `RootView`'s `tabs.length === 0` branch.
-- Register rows to add: `rootConsole.subBar`, `rootConsole.emptyStart`
-  (`rootConsole.viewStrip` already exists); keys `cockpit.view.rootAsking`,
-  `rootConsole.emptyStart`, all five dictionaries.
-- Hook tests that mock `TabPane`/`NewTabMenu` (`__tests__/root/RootOverlay.test`)
-  show how to render the host; the flag is `useSettingsStore.setState({
-  settings: { cockpit: true, experimental_explicit: true } })`.
-- Filemap rows (`docs/filemap_frontend.md`) for `RootView.tsx`,
-  `lib/window/floatingFrame.ts`, `lib/cockpit/views.ts` and the deleted
-  `CockpitOverlay.tsx` are not yet updated (plan: A8).
+### A4 Root view chrome (plan M3)
+
+- sha: `d29dcad0`.
+- **Sub-bar.** The shell derives `split` from root's layout in the store and
+  `subBar = cockpitOn && view === "root" && !split`. With a sub-bar the three
+  slots (strip, rights, files) are rendered in a second `.tab-bar
+  .root-overlay-bar.root-overlay-subbar` row under the title bar (own
+  `.tab-controls` cluster, which now takes `controlsStyle`, the docked file
+  column's reserved width); without it they stay in the title bar exactly as
+  before. `RootBarSlots` is unchanged; the same callback refs feed whichever
+  host renders. The sub-bar forwards the bar's move/fill handlers.
+  Flag on + split: no sub-bar, the ⚿ badge stays in the title bar.
+- **Root tab lamp.** `lib/cockpit/scopeLamp.ts` (pure: asking = agent tab with
+  a decision that is not working, the header badge's rule; working = busy PTY
+  tab) read by `RootTabLamp` in the shell (own component, so a busy terminal
+  re-renders the tab and not the window). The tab wears the strip's own state
+  classes (`attentionStateClass`/`busyStateClass`), a `TabStatusMark`, and an
+  amber `.root-view-count` (`cockpit.view.rootAsking` as title/aria). A question
+  outranks work. Reads root's tab list and the activity store only.
+- **Start action.** `layout/RootStartAgent.tsx` on the empty card (flag on):
+  `useAddTabMenuData(ROOT_SCOPE)` -> `agentShortcutSlots(...)[0]` ->
+  `buildStaticTabSpec` -> the view's `addTab`; no root-allowed default agent
+  shows the `overlayAgent.rootNotAllowed` hint; nothing while the probe is
+  pending. Mounted only on the empty card, so the agent probe runs only there.
+  Class `.center-placeholder-action` (the empty-state button elsewhere).
+- **Flag-off pill (the reviewer's flag): fixed.** It was a difference introduced
+  on this branch: `OverlayApprovals` brought its own `overlayApprovals.button`
+  tag, which the old console's inline ✓ never had, and A1 had also moved
+  `rootOverlay.1` before the ✓. Now `OverlayApprovals` takes `untested`
+  (default true; the console passes `untested={cockpitOn}`) and `rootOverlay.1`
+  / `rootOverlay.viewers` sit after the ✓ again, so flag off the bar's pills are
+  ⚿, ✓, the two tags, as on develop. Test: `RootViewChrome.test` "carries
+  exactly the pills the console always had" (fails without the prop).
+  Flag on the ✓ keeps its own tag. Known difference left alone: the ⤢ button's
+  title is the shared `floatingFrame.*` hint, not `rootConsole.fill/restore`
+  (A1's choice).
+- Keys (five dictionaries): `rootConsole.emptyStart` ("Start {agent} in Root"),
+  `cockpit.view.rootAsking`. Register rows: `rootConsole.subBar` (its pill sits
+  in the sub-bar's cluster), `rootConsole.emptyStart`.
+- Tests: new `__tests__/root/RootViewChrome.test.tsx` (16): `scopeLamp`, sub-bar
+  placement and file toggle, split drops it, none on a cockpit view, lamp
+  quiet/asking/working/outranks, Start (opens a root agent, hint when not
+  allowed, absent flag off), flag-off bar and pills.
+- Gates: `scripts/gates.sh` (brand, whitespace, lint, build, vitest --changed)
+  green before the commit.
+
+### A9 Needs-you icon rail (plan M8)
+
+- sha: `eaa467ee`.
+- `components/cockpit/useCockpitData.ts`: `useRosterInputs(scopes, now,
+  { refresh })` (false = no model-store reads); new `useDecisionsFor(scopes,
+  extras?)`: rows -> `buildDecisions` with `useDomainReview().waiting` and
+  `useAlertsFeed()`; no `useCockpitNow`, `now` is only the minute. `CockpitNow`
+  is untouched (it still builds its own pipeline).
+- `CockpitRail` gained two optional props: `onPick(row)` (default: select for the
+  detail pane) and `headAction`; `GROUP_LABEL` is exported.
+- `cockpit/CockpitRailIcons.tsx`: the 40 px `<nav>`: expand button, one button per
+  non-empty group (icon + count, `group-asking` amber, `group-interrupted` red);
+  `onMouseDown preventDefault` so a press leaves a terminal's focus alone.
+- `cockpit/RootRail.tsx`: fold in `storageKey("cockpitRootRail")` ("open" /
+  "closed", default collapsed); collapsed = `CockpitRailIcons` over
+  `useDecisionsFor(scopes)`; open = the real `CockpitRail` in
+  `.cockpit-root-rail-full` (280 px) plus the loads that need a read
+  (`usePushRequests`, `useLoadSchedules`, `useScheduleProposals`,
+  `useMarkupAsks`), scrolled to the clicked group. Mounted by `RootView` as the
+  first child of `.subwindow-body` when the flag is on. A picked row: a root row
+  -> `rootOverlay.show(tab.key)` (no close), any other -> `jumpToRow`.
+- Keys: `cockpit.rail.expand`, `cockpit.rail.collapse`. (The plan's
+  `cockpit.rail.collapsed` was not needed.) Register row `cockpit.rootRail`
+  (pill: inside the icon nav, vertical; in the open rail's heading).
+- CSS in `styles/cockpit.css` (end of file): flat, static, no animation.
+- Tests: new `__tests__/cockpit/RootRail.test.tsx` (11).
+- Gotcha: tests that open a cockpit view through the real lazy
+  `CockpitViewBody` time out under a loaded full run; mock
+  `components/cockpit/CockpitViews` (done in both new files).
+
+### Gates / tests (I2)
+
+- `scripts/gates.sh` green before each commit (brand, whitespace, lint 0
+  errors / 29 advisory warnings unchanged, build, vitest --changed). No Rust.
+- Full `npm test` at the A9 tip: **1061 files, 10816 tests** passed (tip before I2:
+  1059 / 10789; +2 files, +27 tests = 16 + 11).
+- Not run live (never started the app).
+
+### Flagged for user (I2)
+
+- **Empty icon rail.** With the experiment on, Root always has the 40 px column
+  (just the expand button when nothing needs you), as the design says
+  ("collapsed by default"). If a permanently empty strip beside the terminals
+  is unwelcome, hide it while `decisions.groups` is empty; not done.
+- **The open rail is 280 px, fixed** (no grip). The Now view's rail resizes
+  (`cockpitRailWidth`); Root's does not.
+
+## Next (I3: A5 entry points + A6 ownership)
+
+- `RootRail.pickRow` special-cases a root row with `show(key)` because
+  `jumpToRow` still closes the window and goes through `bringUpScope` for a
+  root row. After A5 fixes `jumpToRow`/`jumpToTab` for root, `pickRow` can call
+  `jumpToRow(row.ptyId)` alone (the test mocks `CockpitRoster.jumpToRow`).
+- The Root tab lamp and rail read only live stores; keep them out of any A6
+  "who draws the PTY" rule (they draw nothing).
+- Filemap rows (`docs/filemap_frontend.md`) for new files are still A8:
+  `layout/RootStartAgent.tsx`, `cockpit/RootRail.tsx`,
+  `cockpit/CockpitRailIcons.tsx`, `lib/cockpit/scopeLamp.ts` (plus I1's).
 - Unused after A1: dictionary keys `rootConsole.moveHint/resizeHint/fill/restore`.
