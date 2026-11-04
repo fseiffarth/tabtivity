@@ -7,6 +7,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { InternalViewer } from "../lib/viewers/fileUtils";
 import { forgetPty } from "../lib/agents/promptCount";
 import { forgetTypedLine } from "../lib/agents/typedClear";
+import { holdsAutoLabel, withAutoLabel } from "../lib/agents/autoTabName";
 import { forgetPromptTrail } from "./agents/promptTrail";
 import { BOX_SCOPE_PREFIX, ROOT_SCOPE, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
@@ -364,6 +365,8 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     stack: t.stack,
     mark: t.mark,
     todoId: t.todoId,
+    autoLabel: t.autoLabel,
+    autoNamed: t.autoNamed || undefined,
     hostSession: t.hostSession || undefined,
     apiKey: t.apiKey,
     localLaunch: t.localLaunch,
@@ -473,6 +476,11 @@ interface TabsStore {
   // loud. Falls through to `renameTab` when they are the same, keeping the
   // detached-popout forwarding path intact.
   renameTabInScope: (scope: string, key: string, label: string) => void;
+  /** Name an agent tab of `scope` by its task (`stores/agents/autoTabNames`):
+   *  only while it still holds the label Tabtivity gave it, checked inside the
+   *  write, so a rename the user made in between always wins. Sets the label
+   *  and `autoLabel` to `label`, `autoNamed` true. */
+  autoNameTabInScope: (scope: string, key: string, label: string) => void;
   // Paint one tab of the ACTIVE scope with a palette colour, or clear it with
   // `undefined` (see TabEntry.color). Forwards to the main window from a popout
   // exactly as `renameTab` does.
@@ -1344,7 +1352,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const key = nextKey(tab.kind);
     // Spread first so a stray `key` on the payload can't shadow the minted one.
     const entry: TabEntry = {
-      ...withTmuxSession(withRunHostDefault(scope, tab), scope),
+      ...withTmuxSession(withRunHostDefault(scope, withAutoLabel(scope, tab)), scope),
       key,
       scope,
       launchedAt: Date.now(),
@@ -1396,7 +1404,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // up to a flush interval ago: merge what is still staged (§3.1).
     const spec = duplicateSpec({ ...source, viewerState: savedViewerState(source) });
     const entry: TabEntry = {
-      ...withTmuxSession(withRunHostDefault(owner, { ...spec, ...overrides }), owner),
+      ...withTmuxSession(withRunHostDefault(owner, withAutoLabel(owner, { ...spec, ...overrides })), owner),
       key: nextKeyValue,
       launchedAt: Date.now(),
     };
@@ -1466,6 +1474,19 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         s.layoutByScope[scope] ?? null,
         s.focusedGroupByScope[scope] ?? null,
       );
+    });
+  },
+
+  autoNameTabInScope: (scope, key, label) => {
+    const nextLabel = label.trim();
+    if (!nextLabel) return;
+    set((s) => {
+      const tabs = s.tabsByScope[scope];
+      const tab = tabs?.find((t) => t.key === key);
+      if (!tabs || !tab || !holdsAutoLabel(tab)) return {};
+      if (tab.label === nextLabel && tab.autoNamed) return {};
+      const named = tabs.map((t) => (t.key === key ? { ...t, label: nextLabel, autoLabel: nextLabel, autoNamed: true } : t));
+      return writeScope(s, scope, named, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
     });
   },
 

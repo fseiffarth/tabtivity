@@ -42,6 +42,10 @@ Settings → Agents → Manage CLIs (see `agent-clis`).
   pane can have one too; docking keeps the panes' names, not the window's.
 - Right-click a tab for Rename, Duplicate, Close, Close others, and its task.
   Shift+right-click renames inline; double-click also renames.
+- A new agent tab (Claude, Codex, …) opens under its CLI's name and takes the
+  name of its first prompt once you send one — shortened to about 40
+  characters; after `/clear` the next prompt names it again. A tab you renamed
+  yourself keeps your name. Turn it off in Settings → Agents.
 - Group tabs: right-click a tab → New tab group… (or Add to group “…”). A
   group folds into one chip in the bar; hover the chip to list its tabs and
   click one to open it. Right-click the chip to rename, ungroup or close the

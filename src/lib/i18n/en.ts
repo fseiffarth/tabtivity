@@ -1378,6 +1378,7 @@ export const enSource = {
   "errors.timeout": "The other side took too long to answer. Check your network or VPN, then try again.",
   "errors.connectionLost": "The connection dropped midway. Try again; if it keeps happening, check the network.",
   "errors.certificate": "The server's security certificate isn't trusted. Check the address; a self-hosted server needs its certificate trusted first.",
+  "agents.autoTabName": "Name new agent tabs after their first prompt (a tab you renamed keeps its name)",
   "terminal.limitHandoff.automatic": "Automatically continue with the next CLI when a usage limit is reached",
   "terminal.limitHandoff.title": "CLI usage limit reached",
   "terminal.limitHandoff.body": "{agent} has reached its usage limit. Continue with {next} in a new tab? Recent conversation text will be sent to that CLI; the original session stays open.",

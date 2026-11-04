@@ -19,6 +19,7 @@ import { noteAgentSessionStart, noteAgentTurn, notePtyOutput, startActivityTicks
 import { onAnyTerminalOutput } from "../../lib/terminal/terminalBus";
 import { noteActivityDigests, type ActivityDigest } from "../../lib/terminal/activityDigests";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
+import { noteAutoNameRoll, startAutoTabNames } from "../../stores/agents/autoTabNames";
 import { useAgentResumeCostStore, type ResumeCost } from "../../stores/agents/agentResumeCost";
 import type { AgentTurnState } from "../../stores/activity";
 import {
@@ -1012,9 +1013,12 @@ export function AppShell() {
         useAgentClearUndoStore.getState().noteRoll(ev.payload.id, ev.payload.source);
         useAgentResumeCostStore.getState().noteRoll(ev.payload.id, ev.payload.source, ev.payload.resume);
         noteAgentSessionStart(ev.payload.id, ev.payload.source);
+        noteAutoNameRoll(ev.payload.id, ev.payload.source);
       }),
     );
-    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); };
+    // Agent tabs take the name of their first prompt (Settings → Agents).
+    const stopAutoNames = startAutoTabNames();
+    return () => { unlisten(); unlistenDigest(); unlistenTurn(); unlistenRoll(); stopAutoNames(); };
   }, []);
 
   // The running-task indicators recompute on demand — a chunk, a keystroke, a

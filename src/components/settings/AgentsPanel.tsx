@@ -925,6 +925,10 @@ export function AgentsPanel({
         onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_limit_auto_handoff: event.target.checked })} />
         {t("terminal.limitHandoff.automatic")} <UntestedTag id="terminal.limitHandoff" />
       </label>
+      <label className="settings-help"><input type="checkbox" checked={settings?.agent_tab_auto_name !== false}
+        onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_tab_auto_name: event.target.checked })} />
+        {t("agents.autoTabName")} <UntestedTag id="agents.autoTabName" />
+      </label>
       {node.status && !node.status.npm && (
         <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
       )}

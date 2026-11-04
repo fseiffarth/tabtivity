@@ -548,6 +548,10 @@ export interface Settings {
   agent_order?: string[];
   /** Explicit opt-in: skip confirmation on future CLI usage-limit handoffs. */
   agent_limit_auto_handoff?: boolean;
+  /** New agent tabs take the name of their first prompt (`lib/agents/autoTabName`).
+   *  Unset = on; only an explicit `false` turns it off. Round-trips through the
+   *  backend settings `extra`. */
+  agent_tab_auto_name?: boolean;
   /** The scheduled agent warm-up (Manage CLIs → Scheduled warm-up): at each
    *  configured local time, one short message is sent to that agent (in its
    *  one-shot print mode), so its usage window starts *then* rather than
