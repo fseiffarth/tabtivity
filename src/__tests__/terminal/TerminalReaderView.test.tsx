@@ -792,6 +792,41 @@ describe("the Reader's live rows", () => {
     expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "and add a test");
   });
 
+  it("takes the keyboard into a new tab's box once its CLI is up, not from a field the user moved to", async () => {
+    // Booting: no status row yet, so the box is disabled and ignores focus().
+    const rows: string[] = [];
+    term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    const view = reader(host);
+    await screen.findByText("fix the parser");
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(box.disabled).toBe(true);
+    expect(document.activeElement).not.toBe(box);
+    await act(async () => { rows.splice(0, 0, "> ", "  ? for shortcuts"); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(box.disabled).toBe(false);
+    expect(document.activeElement).toBe(box);
+
+    // A field elsewhere keeps the keyboard when the box unlocks again.
+    view.unmount();
+    unregisterTerminal("p:agent-1", term);
+    const other = document.createElement("input");
+    document.body.appendChild(other);
+    try {
+      rows.splice(0, rows.length);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      await screen.findByText("fix the parser");
+      other.focus();
+      await act(async () => { rows.splice(0, 0, "> ", "  ? for shortcuts"); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(host.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea")?.disabled).toBe(false);
+      expect(document.activeElement).toBe(other);
+    } finally {
+      other.remove();
+    }
+  });
+
   it("sends nothing by itself once a waiting prompt was emptied by hand", async () => {
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
     sendSteeringPrompt.mockResolvedValue(undefined);
