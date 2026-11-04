@@ -112,17 +112,27 @@ export function useModelPicker({
    * a tap just answered and the session has not redrawn yet. */
   const pickerStep = picker && answered && sameSelectStep(answered, picker) ? null : picker;
   /** The step as far as it is known: the rows on screen plus those an earlier
-   * slice of the same picker drew. OpenCode's slices are put together by its
-   * own walk (`openCodeWalk`), which already is the whole list. */
+   * slice of the same picker drew — while the reveal walk runs, also a slice
+   * sharing no row with them, since its arrows cannot leave the list. OpenCode's
+   * slices are put together by its own walk (`openCodeWalk`), which already is
+   * the whole list. */
+  const walking = reveal !== null;
   const listedStep = useMemo<SelectStep | null>(
-    () => (!pickerStep ? null : openCode ? pickerStep : mergeSelectRows(knownStep, pickerStep)),
-    [pickerStep, openCode, knownStep],
+    () => (!pickerStep ? null : openCode ? pickerStep : mergeSelectRows(knownStep, pickerStep, walking)),
+    [pickerStep, openCode, knownStep, walking],
   );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (listedStep && !openCode) setKnownStep(listedStep); }, [listedStep, openCode]);
-  /** The remembered rows, listed until the session draws its picker — for
-   * OpenCode until its walk has listed the whole of it. */
-  const modelPreview = modelSheet && !answered && !effortFor && !effortStep && (!listedStep || (openCode && !!picker?.hidden))
+  /** Whether the live list is all there: OpenCode's walk has listed it, or a
+   * windowed picker's reveal walk has nothing left to show. */
+  const listSettled = !!pickerStep && !!listedStep && !reveal && (openCode
+    ? !picker?.hidden
+    : revealStuck.current || revealSelectRow(listedStep, pickerStep) === undefined);
+  /** The remembered rows, listed until the live list is all there — a
+   * windowed picker's first slice is three rows of thirteen, and a sheet
+   * growing row by row under the reader's thumb is no list to pick from. A
+   * tap on one is held for the live list (`heldPick`). */
+  const modelPreview = modelSheet && !answered && !effortFor && !effortStep && !listSettled
     ? rememberedStep
     : null;
   /** The printed number of the row the dialog highlights right now. */
@@ -207,7 +217,7 @@ export function useModelPicker({
     // `deliver` is a fresh closure every render; the walk runs on the frames.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelSheet, openCode, answered, pickerStep, listedStep, pickerAt, reveal]);
-  return { openCodeWalk, picker, pickerStep, listedStep, modelPreview, pickerAt, effortSlider };
+  return { openCodeWalk, picker, pickerStep, listedStep, listSettled, modelPreview, pickerAt, effortSlider };
 }
 
 /** Opens the model sheet and answers it: a tap, a held remembered row, Antigravity's effort. */
@@ -215,8 +225,8 @@ export function useModelPickerAnswers({
   tab, pickModel, bare, connected, liveScreen, modelSheet, setModelSheet, setAnswered, answered,
   setKnownStep, setRememberedStep, rememberedStep, setHeldPick, heldPick, sheetAnswered, keptStep,
   setReveal, reveal, revealStuck, effortFor, setEffortFor, setEffortStep, effortStep, sawPicker,
-  clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, picker, pickerStep,
-  listedStep, modelPreview, pickerAt, effortSlider,
+  clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, pickerStep,
+  listedStep, listSettled, modelPreview, pickerAt, effortSlider,
 }: {
   tab: TabRow;
   pickModel: boolean;
@@ -248,9 +258,9 @@ export function useModelPickerAnswers({
   openCode: boolean;
   antigravity: boolean;
   openCodeWalk: MutableRefObject<OpenCodePickerWalk | null>;
-  picker: SelectPrompt | null;
   pickerStep: SelectPrompt | null;
   listedStep: SelectStep | null;
+  listSettled: boolean;
   modelPreview: SelectStep | null;
   pickerAt: number | undefined;
   effortSlider: AntigravityEffort | null;
@@ -363,11 +373,6 @@ export function useModelPickerAnswers({
   };
   const answerModelNow = useRef(answerModel);
   answerModelNow.current = answerModel;
-  /** Whether the live list is all there: OpenCode's walk has listed it, or a
-   * windowed picker's reveal walk has nothing left to show. */
-  const listSettled = !!pickerStep && !!listedStep && !reveal && (openCode
-    ? !picker?.hidden
-    : revealStuck.current || revealSelectRow(listedStep, pickerStep) === undefined);
   // The opening's model list, kept for the next one once it is all there and
   // has stopped changing (a frame split across reads is not the list), and
   // only before anything was answered in it.

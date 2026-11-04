@@ -63,6 +63,7 @@ import { readFlag, readTerminalView, writeFlag, writeTerminalView, type Terminal
 import { readSpeechLang, speechTag, type SpeechLang } from "../speechLang";
 import { readableText, type ReadableLine } from "../terminal/readableScreen";
 import { type HistoryChunk } from "../terminal/readableHistory";
+import { liveModelPick } from "../terminal/modelRows";
 import { type TerminalControl } from "../terminal/protocol";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { readPromptSuggestion } from "../terminal/promptSuggestion";
@@ -1444,7 +1445,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     </button>;
   };
   const {
-    openCodeWalk, picker, pickerStep, listedStep, modelPreview, pickerAt, effortSlider,
+    openCodeWalk, picker, pickerStep, listedStep, listSettled, modelPreview, pickerAt, effortSlider,
   } = useModelPicker({
     write, viewportRows, liveScreen, modelSheet, setModelSheet, answered, setAnswered, knownStep,
     setKnownStep, rememberedStep, setReveal, reveal, revealStuck, effortFor, effortStep, sawPicker,
@@ -1455,8 +1456,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     tab, pickModel, bare, connected, liveScreen, modelSheet, setModelSheet, setAnswered, answered,
     setKnownStep, setRememberedStep, rememberedStep, setHeldPick, heldPick, sheetAnswered, keptStep,
     setReveal, reveal, revealStuck, effortFor, setEffortFor, setEffortStep, effortStep, sawPicker,
-    clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, picker, pickerStep,
-    listedStep, modelPreview, pickerAt, effortSlider,
+    clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, pickerStep,
+    listedStep, listSettled, modelPreview, pickerAt, effortSlider,
   });
   /** The hidden-link notice's button: the key the CLI hands its link over
    * on, answered by a clipboard copy the terminal above catches. */
@@ -2201,8 +2202,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     ?? tab.agent_model
     ?? t("terminal.reader.model");
   const shownStep = modelPreview ?? listedStep ?? (answered && picker ? answered : null);
-  /** The highlighted row — where it was before a reveal walk moved it. */
-  const shownAt = modelPreview ? undefined : reveal?.origin ?? picker?.options[picker.current]?.number;
+  /** The highlighted row — where it was before a reveal walk moved it; over
+   * the remembered rows, the one with the live row's label. */
+  const liveAt = reveal?.origin ?? picker?.options[picker.current]?.number;
+  const liveLabel = listedStep?.options.find((option) => option.number === liveAt)?.label;
+  const previewAt = modelPreview && liveLabel ? liveModelPick(modelPreview, { label: liveLabel }) : null;
+  const shownAt = modelPreview ? (previewAt === null ? undefined : modelPreview.options[previewAt]?.number) : liveAt;
   const pickerOptionsRaw: SheetOption[] = (shownStep?.options ?? []).map((option) => ({
     key: String(option.number),
     label: option.label,
