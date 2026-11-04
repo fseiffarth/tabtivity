@@ -5,9 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ProjectBox, ProjectEntry } from "../../types";
 import { useProjectsStore } from "../../stores/projects";
 import { diffBoxMembers, useBoxesStore, type BoxDraftDiff } from "../../stores/boxes";
-import { useBoxSliceStore } from "../../stores/boxSlice";
-import { useTabsStore } from "../../stores/tabs";
-import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
+import { dissolveBox } from "../../stores/boxSlice";
 import { useSettingsStore } from "../../stores/settings";
 import { useBoxNameCheck } from "./useQuickCreateBox";
 import { BoxColorSwatches } from "./BoxColorPicker";
@@ -119,7 +117,6 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
   const projects = useProjectsStore((s) => s.projects);
   const boxes = useBoxesStore((s) => s.boxes);
   const saveBox = useBoxesStore((s) => s.saveBox);
-  const deleteBox = useBoxesStore((s) => s.deleteBox);
 
   const [loaded] = useState<Loaded>(() => loadedOf(box));
   const [name, setName] = useState(loaded.name);
@@ -196,12 +193,7 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
     if (!(await confirmAction(dissolveBoxSpec(t, box.name, box.folder)))) return;
     setSaving(true);
     try {
-      // Inside the box (its slice, or its own scope): leave first.
-      const inside =
-        useBoxSliceStore.getState().sliceBoxId === box.id ||
-        useTabsStore.getState().scope === `${BOX_SCOPE_PREFIX}${box.id}`;
-      if (inside) await useBoxSliceStore.getState().leaveBox();
-      await deleteBox(box.id);
+      await dissolveBox(box.id);
       onClose();
     } catch (error) {
       useProjectsStore.setState({ switchToast: messageOf(error) });

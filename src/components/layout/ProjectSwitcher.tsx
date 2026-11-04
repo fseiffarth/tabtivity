@@ -18,7 +18,7 @@ import { useBigFoldersStore } from "../../stores/bigFolders";
 import { useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, defaultBoxName, useBoxMembership, useBoxesStore } from "../../stores/boxes";
 import { useBoxEditorStore } from "../../stores/boxEditor";
-import { stripProjects, useBoxSliceStore } from "../../stores/boxSlice";
+import { dissolveBox, stripProjects, useBoxSliceStore } from "../../stores/boxSlice";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
@@ -87,7 +87,6 @@ export function ProjectSwitcher({
   const reorderProjects = useProjectsStore((s) => s.reorderProjects);
   const boxes = useBoxesStore((s) => s.boxes);
   const renameBox = useBoxesStore((s) => s.renameBox);
-  const deleteBox = useBoxesStore((s) => s.deleteBox);
   const addToBox = useBoxesStore((s) => s.addToBox);
   const removeFromBox = useBoxesStore((s) => s.removeFromBox);
   const boxProjects = useBoxesStore((s) => s.boxProjects);
@@ -656,12 +655,8 @@ export function ProjectSwitcher({
               if (!target) return;
               void confirmAction(dissolveBoxSpec(t, target.name, target.folder)).then(async (ok) => {
                 if (!ok) return;
-                const inside =
-                  useBoxSliceStore.getState().sliceBoxId === boxId ||
-                  useTabsStore.getState().scope === `${BOX_SCOPE_PREFIX}${boxId}`;
                 try {
-                  if (inside) await leaveBox();
-                  await deleteBox(boxId);
+                  await dissolveBox(boxId);
                 } catch (error) {
                   toastFailure(error);
                 }

@@ -120,6 +120,20 @@ export function stripProjects(
   return projects.filter((p) => members.has(p.id) || p.id === scope).sort(byPosition);
 }
 
+/**
+ * Dissolve a box (the delete itself; the confirm is the caller's). A box you
+ * are inside — its slice, or its own `box:<id>` scope — is left first, or the
+ * scope would stay `box:<id>` of a box that is gone. The one body behind the
+ * pill menu's and the sheet's "Dissolve box…". Throws what the write throws.
+ */
+export async function dissolveBox(boxId: string): Promise<void> {
+  const inside =
+    useBoxSliceStore.getState().sliceBoxId === boxId ||
+    useTabsStore.getState().scope === `${BOX_SCOPE_PREFIX}${boxId}`;
+  if (inside) await useBoxSliceStore.getState().leaveBox();
+  await useBoxesStore.getState().deleteBox(boxId);
+}
+
 /** Back to the start (a session's first state). For tests. */
 export function resetBoxSlice(): void {
   useBoxSliceStore.setState({ sliceBoxId: null, lastUnslicedScope: ROOT_SCOPE });
