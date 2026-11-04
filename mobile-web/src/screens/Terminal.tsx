@@ -91,6 +91,7 @@ import { isAntigravityTab } from "../terminal/antigravity";
 import { isCursorTab } from "../terminal/cursorAgent";
 import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../terminal/agentModes";
 import { agentFamily } from "../terminal/composer";
+import { CLAUDE_EFFORTS } from "../../../shared/claudeEfforts";
 import { CommitFiles } from "./CommitFiles";
 import { agentWork } from "../terminal/agentBusy";
 import { chatTurns, isLiveEcho } from "../terminal/chatTurns";
@@ -968,6 +969,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The model the sheet is asking the effort for, once the walk has landed. */
   const [effortStep, setEffortStep] = useState<string | null>(null);
   const [modeSheet, setModeSheet] = useState(false);
+  /** Claude's effort sheet (`/effort <level>`): shown beside the model, as the
+   * desktop Reader's effort chip is. The level just sent stands until the
+   * session's own status or spinner names one. */
+  const [effortSheet, setEffortSheet] = useState(false);
+  const [effortPicked, setEffortPicked] = useState("");
   /** The ⎇ chip's sheet: where the agent can move (`null` while asked), the
    * id a move is under way to, and what the last ask or move ran into. */
   const [worktreeSheet, setWorktreeSheet] = useState(false);
@@ -1245,6 +1251,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setAssistantSheet(false);
     setAssistantModels(null);
     setModeSheet(false);
+    setEffortSheet(false);
+    setEffortPicked("");
     setStatusSheet(false);
     setLimits({});
     setAddSheet(false);
@@ -1662,6 +1670,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           : "mobile.location.unreadable");
       });
   };
+  /** Claude takes the level as `/effort <level>`; the other CLIs set it on
+   * their `/model` picker's next step, which the model sheet already walks. */
+  const chooseEffortLevel = (level: string) => {
+    if (!connected || !sendAgentText(`/effort ${level}`)) return;
+    setEffortPicked(level);
+    setEffortSheet(false);
+  };
   const openModeSheet = () => {
     if (modes.length === 0 && !fixedMode) {
       cycleMode();
@@ -1750,7 +1765,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const launchDefaults = tab.kind === "agent" && !tab.local_model && !tab.assistant_launch && !tab.on_host
     ? <LaunchDefaultsFold tabId={tab.id} />
     : undefined;
-  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
+  const sheetUp = modelSheet || assistantSheet || modeSheet || effortSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
@@ -2206,6 +2221,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     label: stop.label,
     description: stop.description,
     current: index === effortSlider?.current,
+  }));
+  /** What the effort chip names: the session's own reading first (status
+   * line, then the spinner's `with high effort`), else the level just sent. */
+  const effortNow = status?.effort ?? sessionWork?.effort ?? (effortPicked || undefined);
+  const effortOffered = tab.kind === "agent" && !tab.local_model && !bare && agentKey === "claude";
+  const effortLevels: SheetOption[] = CLAUDE_EFFORTS.map((level) => ({
+    key: level,
+    label: level === "auto" ? t("terminal.reader.effortAuto") : t("terminal.reader.effort", { effort: level }),
+    current: level === effortNow,
   }));
   const modeOptions: SheetOption[] = modes.map((choice) => ({
     key: choice.value,
@@ -2679,6 +2703,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             ? <span className="fact-model">{modelChip}</span>
             : <button className="fact-action" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
+          {effortOffered && <button className="fact-action" disabled={!connected || !!liveQuestion} onClick={() => setEffortSheet(true)} aria-haspopup="dialog" aria-expanded={effortSheet} title={t("mobile.facts.effortHint")}><span className="fact-action-label">{effortNow ? t("terminal.reader.effort", { effort: effortNow }) : t("terminal.reader.effortUnknown")}</span></button>}
+          {effortOffered && isUntested("mobile.facts.effort") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(isUntested("mobile.design.rounded") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
@@ -2862,6 +2888,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       busy={switching !== "" || fixedMode}
       onPick={(key) => void applyMode(key)}
       onClose={() => { if (!switching) setModeSheet(false); }}
+    />}
+    {effortSheet && <OptionSheet
+      title={t("terminal.reader.effortTitle")}
+      note={{ text: t("terminal.reader.effortNote") }}
+      options={effortLevels}
+      waiting={t("mobile.model.waitingSession")}
+      busy={false}
+      onPick={chooseEffortLevel}
+      onClose={() => setEffortSheet(false)}
     />}
     {assistantSheet && <OptionSheet
       title={t("terminal.reader.modelTitle")}
