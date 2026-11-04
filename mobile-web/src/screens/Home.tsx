@@ -23,6 +23,7 @@ import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
 import { CliOverviewSection } from "./CliOverviewSheet";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
+import { listScrollKey, useRestoreListScroll } from "../listScroll";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
 import { customMarkupPrompts, MarkupInstructionSheet, markupInstructionSummary } from "../components/MarkupInstructionSheet";
@@ -138,6 +139,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
    * "still loading", not "nothing here" — and a first open with no active
    * project drew nothing at all under the heading, which read as broken. */
   const [loaded, setLoaded] = useState(false);
+  useRestoreListScroll(listScrollKey(null), loaded);
   /** Null while the list is loading fine; otherwise why it is not. */
   const [offline, setOffline] = useState<UnavailableReason | null>(null);
   /** Bumped to load the list again without a change of view or query: the

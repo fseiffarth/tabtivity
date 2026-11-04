@@ -23,6 +23,7 @@ import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActions, t
 import { OptionSheet } from "../components/OptionSheet";
 import { HintQueue, type HintKey } from "../components/HintMessage";
 import { lastWorkedAt } from "../components/AgentModeMarks";
+import { listScrollKey, useRestoreListScroll } from "../listScroll";
 import { draftPreview } from "../agentPrompts";
 import { readDrafts } from "../drafts";
 import { clearCardDrag, installCardSwipe } from "../terminal/cardSwipe";
@@ -149,6 +150,7 @@ function cardViewerFile(file: FileTab, outbox: readonly OutboxFile[]): OutboxFil
 export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack }) => void }) {
   const t = useT();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
+  useRestoreListScroll(listScrollKey(id), detail !== null);
   const [creating, setCreating] = useState(false);
   const [activating, setActivating] = useState(false);
   const [error, setError] = useState("");

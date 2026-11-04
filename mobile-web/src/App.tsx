@@ -23,6 +23,7 @@ import { LockedHomeShell } from "./screens/LockedHomeShell";
 import { Home } from "./screens/Home";
 import { Project } from "./screens/Project";
 import { Terminal } from "./screens/Terminal";
+import { listScrollKey, rememberListScroll } from "./listScroll";
 import { TabbyOpen } from "./screens/TabbyOpen";
 import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
@@ -593,7 +594,12 @@ export function App() {
     else if (tab !== "projects") { setTodoCard(undefined); setTab("projects"); }
     else setProjectView({ kind: "home" });
   }, auth === "paired" && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
-  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
+  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => {
+    // Only from a list on screen: a switch between tabs inside a terminal (or a
+    // Tabby chat opening one) has the terminal's offset, not the list's.
+    if (!terminal && !tabby && tab === "projects") rememberListScroll(listScrollKey(projectView.kind === "project" ? projectView.id : null));
+    setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
+  };
   // A card named by an alert opens on the To-do tab; switching tabs by hand
   // clears it, so returning to the board later does not re-open the editor a
   // reader already closed.
