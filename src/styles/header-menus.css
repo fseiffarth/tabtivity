@@ -1174,6 +1174,31 @@
   min-height: 26px;
   padding: var(--space-1) 10px;
 }
+/* The CLI's stored release check beside its name (`agent_latest`, asked
+   daily): muted when current or unchecked, the success colour when a newer
+   release is out — then a button into Manage CLIs, where the update runs. */
+.local-model-agent-update {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.local-model-agent-update.is-new {
+  color: var(--success);
+  font-weight: 600;
+  cursor: var(--cur-pointer, pointer);
+}
+.local-model-agent-update.is-new:hover {
+  text-decoration: underline;
+}
+.local-model-agent-checked {
+  padding: 0 10px var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
 
 /* In-flight downloads shown at the top of the brain menu. */
 .local-model-downloads {

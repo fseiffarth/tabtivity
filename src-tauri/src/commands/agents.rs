@@ -1744,24 +1744,36 @@ pub async fn agent_versions(
 
 /// Ask installed CLIs' registries for their newest release — each Manage CLIs
 /// card's "Check for update" (`id`), or every installed CLI when `id` is
-/// `None`; the agent twin of `check_ollama_updates`. Only on a click: one
-/// request per CLI that has a known registry, all at once, each settled on its
+/// `None`; the agent twin of `check_ollama_updates`. On a click (and once a
+/// day without one, [`start_daily_update_check`]): one request per CLI that has a known registry, all at once, each settled on its
 /// own so one registry being down costs only its row. The installed versions
 /// are re-read first, so a CLI that updated itself since the last probe is not
 /// offered the update it already has. Each answer is stored for `agent_versions`
 /// to hand back.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn check_agent_updates(id: Option<String>) -> Vec<crate::services::agent_latest::UpdateReport> {
+    check_updates_of(|spec_id| id.as_deref().is_none_or(|id| id == spec_id), true).await
+}
+
+/// Check the registries of the installed CLIs `wanted` picks, all at once, and
+/// store each answer. `refresh` re-probes every installed version first (a
+/// click: the CLI may have updated itself since); the daily check takes the
+/// cached probes, which `agent_versions` re-reads whenever an executable
+/// changed, rather than spawning every CLI once a day in the background.
+async fn check_updates_of(
+    wanted: impl Fn(&str) -> bool,
+    refresh: bool,
+) -> Vec<crate::services::agent_latest::UpdateReport> {
     use crate::services::agent_latest;
 
-    let mut probed: std::collections::HashMap<String, Option<String>> = agent_versions(Some(true))
+    let mut probed: std::collections::HashMap<String, Option<String>> = agent_versions(Some(refresh))
         .await
         .into_iter()
         .map(|report| (report.agent, report.version))
         .collect();
     let mut checks = Vec::new();
     let installed = installed_specs();
-    for (spec, path) in installed.into_iter().filter(|(spec, _)| id.as_deref().is_none_or(|id| id == spec.id)) {
+    for (spec, path) in installed.into_iter().filter(|(spec, _)| wanted(spec.id)) {
         let source = agent_latest::source_for(spec.id);
         let current = agent_latest::current_version(spec.id, &path, probed.remove(spec.id).flatten());
         checks.push(tokio::spawn(async move {
@@ -1782,6 +1794,57 @@ pub async fn check_agent_updates(id: Option<String>) -> Vec<crate::services::age
         reports.push(agent_latest::UpdateReport::new(agent, current, &checked));
     }
     reports
+}
+
+/// The event every window hears after the daily check stored new answers; the
+/// payload is the checked rows (`UpdateReport`), and a window re-reads
+/// `agent_versions` for the whole picture.
+pub const AGENT_UPDATES_CHECKED_EVENT: &str = "agent-updates-checked";
+
+/// How long after launch the first daily check waits, so it never competes
+/// with the window restoring its tabs.
+const DAILY_CHECK_FIRST_DELAY: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// How often the daily check looks for a CLI whose last check is a day old.
+/// Hourly, so a machine that sleeps or an app opened late still checks that day.
+const DAILY_CHECK_TICK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Once a day per installed CLI, the "Check for update" a Manage CLIs card
+/// offers, without the click: shortly after launch and then hourly, every
+/// installed CLI with a known registry whose last check (clicked or not) is a
+/// day old is asked ([`crate::services::agent_latest::due_agents`]). One GET
+/// per due CLI, nothing else leaves the machine; nothing is installed. When
+/// anything was asked, every window hears [`AGENT_UPDATES_CHECKED_EVENT`] and
+/// re-reads the stored answers: the Models & agents menu and a new tab of the
+/// CLI show them.
+pub fn start_daily_update_check(ctx: CoreCtx) {
+    app_core::rt::spawn(async move {
+        tokio::time::sleep(DAILY_CHECK_FIRST_DELAY).await;
+        loop {
+            run_daily_update_check(&ctx).await;
+            tokio::time::sleep(DAILY_CHECK_TICK).await;
+        }
+    });
+}
+
+async fn run_daily_update_check(ctx: &CoreCtx) {
+    use crate::services::agent_latest;
+
+    let installed = installed_specs();
+    let store = agent_latest::load();
+    let due: std::collections::HashSet<&str> = agent_latest::due_agents(
+        &store,
+        installed.iter().map(|(spec, _)| spec.id),
+        crate::clock::now_secs(),
+        agent_latest::DAILY_EVERY_SECS,
+    )
+    .into_iter()
+    .collect();
+    if due.is_empty() {
+        return;
+    }
+    let reports = check_updates_of(|id| due.contains(id), false).await;
+    ctx.emit(AGENT_UPDATES_CHECKED_EVENT, &reports);
 }
 
 /// Stop reminding the user that `agent`'s installed version has moved past what

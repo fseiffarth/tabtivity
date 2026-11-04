@@ -65,6 +65,7 @@ import { ModelsOverlayHost } from "../../components/models/ModelsOverlay";
 import { useTabsStore } from "../../stores/tabs";
 import { localModelTabLabels } from "../../components/models/useModelsHub";
 import { envName } from "../../lib/brand";
+import { resetAgentVersionNotice } from "../../stores/agents/agentVersionNotice";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -73,6 +74,7 @@ let models: Model[] = [];
 let patches: Array<Record<string, unknown>> = [];
 let ollamaInstalled = true;
 let clearAnswer: (model: string) => Promise<unknown> = () => Promise.resolve(null);
+let versionRows: unknown[] = [];
 
 const modelInfo = (m: Model) => ({
   name: m.name,
@@ -97,6 +99,8 @@ function backend() {
           { id: "claude", label: "Claude Code", bin: "claude", installed: true },
           { id: "codex", label: "Codex", bin: "codex", installed: false },
         ]);
+      case "agent_versions":
+        return Promise.resolve(versionRows);
       case "root_mcp_status":
         return Promise.resolve({ wired_clis: ["claude"] });
       case "list_ollama_models_detailed":
@@ -174,6 +178,8 @@ beforeEach(() => {
   patches = [];
   ollamaInstalled = true;
   clearAnswer = () => Promise.resolve(null);
+  versionRows = [];
+  resetAgentVersionNotice();
   useTabsStore.setState({ tabs: [], tabsByScope: {} } as never);
   h.listeners.clear();
   invokeMock.mockReset();
@@ -534,5 +540,47 @@ describe("Clear conversations (gap 33 follow-up)", () => {
     ).toBeTruthy();
     expect(screen.getByText(/A tab of this model started while they were being deleted/)).toBeTruthy();
     expect(screen.queryByText("qwen:7b's conversations were not cleared")).toBeNull();
+  });
+});
+
+describe("LocalModelMenu · daily CLI release check", () => {
+  const row = (update: Record<string, unknown>) => ({
+    agent: "claude",
+    label: "Claude Code",
+    version: "2.1.316",
+    state: "match",
+    stale: [],
+    dismissed: false,
+    update: { agent: "claude", current: "2.1.316", checkable: true, error: null, checkedAt: 1, ...update },
+  });
+
+  it("shows a newer release on the agent's row and opens Manage CLIs from it", async () => {
+    versionRows = [row({ latest: "2.1.320", updateAvailable: true })];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    const offer = await screen.findByRole("button", { name: "→ 2.1.320" });
+    expect(offer.getAttribute("title")).toMatch(/installed 2\.1\.316/);
+    expect(screen.getByText(/New releases checked/)).toBeTruthy();
+    fireEvent.click(offer);
+    expect(useModelsOverlayStore.getState()).toMatchObject({ open: true, view: "agents" });
+  });
+
+  it("says up to date, and re-reads when the daily check announces new answers", async () => {
+    versionRows = [row({ latest: "2.1.316", updateAvailable: false })];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    expect(await screen.findByText("up to date")).toBeTruthy();
+    versionRows = [row({ latest: "2.1.321", updateAvailable: true })];
+    fire("agent-updates-checked", []);
+    expect(await screen.findByRole("button", { name: "→ 2.1.321" })).toBeTruthy();
+  });
+
+  it("shows nothing for a CLI no check has reached", async () => {
+    versionRows = [{ ...row({}), update: null }];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    await waitFor(() => expect(calls("agent_versions").length).toBeGreaterThan(0));
+    expect(screen.queryByText("up to date")).toBeNull();
+    expect(screen.queryByText(/New releases checked/)).toBeNull();
   });
 });

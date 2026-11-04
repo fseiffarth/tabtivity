@@ -1481,6 +1481,10 @@ pub fn run() {
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
             commands::root_mcp::start(core.clone());
+            // Once a day per installed agent CLI, its registry's newest release
+            // (`commands::agents::start_daily_update_check`): the Models & agents
+            // menu and a new tab of the CLI say when one is out.
+            commands::agents::start_daily_update_check(core.clone());
             // The provider API proxy (`services::api_proxy`): loopback, holds
             // the stored API keys so a keyed agent tab gets only a token.
             services::api_proxy::start();

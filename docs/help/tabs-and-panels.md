@@ -119,3 +119,12 @@ model storage, downloads, the catalog) and **Skills**. Click a tile (or use
 the arrow keys and Enter) to open it; **All sections** in the title bar goes
 back. Every entry in the menu opens its section directly; Escape or a click
 outside closes the window.
+
+Once a day, about a minute and a half after start and then whenever a CLI's last check is
+a day old, the app asks each installed CLI's release feed (npm, PyPI, GitHub
+or the vendor's own) for its newest version. Nothing is installed by it. The
+hover menu shows the result beside each agent — *up to date*, *→ 2.1.320*
+(click it to open Agents & CLIs, where **Update to …** runs) or *couldn't
+check* — and says when the releases were last checked. A newly opened tab of
+that CLI shows a card when a newer release is out; **Update…** opens Agents &
+CLIs, × hides that release until the next start.
