@@ -4,6 +4,7 @@ import { useBoxesStore } from "./boxes";
 import { stripProjects, useBoxSliceStore } from "./boxSlice";
 import { useTabsStore } from "./tabs";
 import { storageKey } from "../lib/brand";
+import { barHiddenIdsNow } from "../lib/projects/barHidden";
 
 /**
  * Where in the window steering is pointing. The mode is a small hierarchy the
@@ -199,5 +200,10 @@ export function projectStations(): (string | null)[] {
   const sliceId = useBoxSliceStore.getState().sliceBoxId;
   const box = sliceId ? useBoxesStore.getState().boxes.find((b) => b.id === sliceId) ?? null : null;
   const scope = useTabsStore.getState().scope;
-  return [null, ...stripProjects(useProjectsStore.getState().projects, box, scope).map((p) => p.id)];
+  const { projects, activeId } = useProjectsStore.getState();
+  const strip = stripProjects(projects, box, scope);
+  // A slice ignores the hidden lists (looking into a box is where its hidden
+  // members are found); only the unsliced strip drops them.
+  const hidden = box ? new Set<string>() : barHiddenIdsNow(strip.map((p) => p.id));
+  return [null, ...strip.filter((p) => !hidden.has(p.id) || p.id === scope || p.id === activeId).map((p) => p.id)];
 }

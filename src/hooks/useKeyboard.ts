@@ -1458,7 +1458,8 @@ function stepSidePanelView(delta: 1 | -1) {
  * steering digits and pill badges number the same list, so the three surfaces
  * can never disagree about which project is station N. While a box slice is
  * selected that list is the slice's visible pills (members, inactive ones
- * included), so the chord walks what the strip shows. From a box's own scope
+ * included), so the chord walks what the strip shows; unsliced it skips the
+ * projects hidden from the All-projects row (`barHidden`). From a box's own scope
  * (no project in the ring is current) the first step lands on the first / last
  * visible pill.
  */

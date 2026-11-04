@@ -8,6 +8,7 @@
  * is the project in scope — a strip that hides where you are has lost you.
  */
 import { useMemo } from "react";
+import { useBoxesStore, boxMembership } from "../../stores/boxes";
 import { useSettingsStore } from "../../stores/settings";
 
 const EMPTY: readonly string[] = [];
@@ -37,6 +38,27 @@ export function barHiddenReason(
   if (hidden.projects.has(projectId)) return { kind: "project" };
   const boxId = boxIds?.find((id) => hidden.boxes.has(id));
   return boxId ? { kind: "box", boxId } : null;
+}
+
+/**
+ * The ids the unsliced All-projects strip leaves out right now, read straight
+ * from the stores (no hook) — for the keyboard ring, which must walk the pills
+ * the strip draws (`ProjectSwitcher`'s `barHiddenSplit`). Callers keep the
+ * project in scope (and the active one) in, as the strip does.
+ */
+export function barHiddenIdsNow(projectIds: readonly string[]): Set<string> {
+  const settings = useSettingsStore.getState().settings;
+  const hidden: BarHidden = {
+    projects: new Set(settings?.bar_hidden_projects ?? EMPTY),
+    boxes: new Set(settings?.bar_hidden_boxes ?? EMPTY),
+  };
+  const out = new Set<string>();
+  if (hidden.projects.size === 0 && hidden.boxes.size === 0) return out;
+  const membership = boxMembership(useBoxesStore.getState().boxes);
+  for (const id of projectIds) {
+    if (barHiddenReason(id, membership.get(id), hidden)) out.add(id);
+  }
+  return out;
 }
 
 /** `list` with `id` added or taken out, keeping only ids still in `alive` so
