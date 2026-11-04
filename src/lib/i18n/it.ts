@@ -3153,7 +3153,7 @@ export const dict: Dict = {
   "agentPrompts.nextRun": "prossima {relative}",
   "agentPrompts.nonResumable": "non ripristinabile",
   "agentPrompts.sort.label": "Ordine",
-  "agentPrompts.sort.title": "Ordina le schede agente per cosa guardare dopo \u2014 in attesa di te, poi al lavoro, poi l'ultimo turno concluso \u2014, per quando hanno concluso l'ultimo turno, o come le tiene la barra delle schede.",
+  "agentPrompts.sort.title": "Ordina le schede agente per cosa guardare dopo \u2014 in attesa di te, poi pronte da leggere, poi al lavoro, poi l'ultimo turno concluso \u2014, per quando hanno concluso l'ultimo turno, o come le tiene la barra delle schede.",
   "agentPrompts.sort.lastWorking": "Ultimo lavoro",
   "agentPrompts.sort.lastDone": "Ultimo concluso",
   "agentPrompts.sort.native": "Ordine delle schede",

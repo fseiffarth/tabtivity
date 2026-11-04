@@ -366,6 +366,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   }, [detail?.tabs]);
   const tabs = useMemo(() => sortAgentTabs(detail?.tabs ?? [], sort, (tab) => ({
     decision: tab.agent_status === "question",
+    ready: tab.agent_status === "done",
     working: tab.agent_status === "working",
     drafted: tab.id in drafts,
     workingAt: tab.working_at,
@@ -722,6 +723,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         ><SearchIcon size="1em" /></button>}
         {drawerOffered && <button
           className="drawer-open"
+          data-phone-hint="menu"
           onClick={() => setDrawerOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={drawerOpen}

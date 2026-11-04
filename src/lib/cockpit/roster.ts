@@ -113,11 +113,13 @@ export function rosterCounts(rows: readonly { state: AgentRosterState }[]): Rost
   return counts;
 }
 
-/** A row's sort keys, `shared/agentSort`'s: a question first, then working
- *  (subagents at work count), then by the last finished turn. */
+/** A row's sort keys, `shared/agentSort`'s: a question first, then an unread
+ *  finished turn, then working (subagents at work count), then by the last
+ *  finished turn. */
 function sortKeys(row: RosterRow) {
   return {
     decision: row.state === "question",
+    ready: row.state === "done",
     working: row.state === "working" || (row.facts.subagents ?? 0) > 0,
     workingAt: row.facts.workingAt,
     doneAt: row.turn && !row.turn.running ? row.turn.end : row.facts.doneAt,

@@ -49,7 +49,7 @@ describe("Mobile project screen — first load", () => {
 });
 
 describe("Mobile project screen — tab order", () => {
-  it("lists a question, then working tabs, then the rest by last finished turn", async () => {
+  it("lists a question, then the ready tabs, then working tabs, then the rest by last finished turn", async () => {
     const row = (id: string, extra: Record<string, unknown>) => ({ id, label: id, kind: "agent", available: true, viewer_busy: false, ...extra });
     fetchMock.mockResolvedValue(new Response(JSON.stringify({
       project: { id: "p", label: "Alpha", status: "active", live_sessions: 5 },
@@ -66,7 +66,7 @@ describe("Mobile project screen — tab order", () => {
     const { container } = render(<Project id="p" back={() => {}} terminal={() => {}} />);
     await screen.findByText("asking");
     const order = [...container.querySelectorAll(".tab-card strong")].map((node) => node.textContent);
-    expect(order).toEqual(["asking", "working", "new-done", "old-done", "shell"]);
+    expect(order).toEqual(["asking", "old-done", "working", "new-done", "shell"]);
   });
 });
 

@@ -140,7 +140,9 @@ export function Home({ open, openTab, tabby, todo, mail }: {
    * "still loading", not "nothing here" — and a first open with no active
    * project drew nothing at all under the heading, which read as broken. */
   const [loaded, setLoaded] = useState(false);
-  useRestoreListScroll(listScrollKey(null), loaded);
+  // The Agents view's rows come from their own, later answer: that list puts
+  // the offset back itself once they are in (`Activity`).
+  useRestoreListScroll(listScrollKey(null), loaded && view !== "agents");
   /** Null while the list is loading fine; otherwise why it is not. */
   const [offline, setOffline] = useState<UnavailableReason | null>(null);
   /** Bumped to load the list again without a change of view or query: the

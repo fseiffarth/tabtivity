@@ -3153,7 +3153,7 @@ export const dict: Dict = {
   "agentPrompts.nextRun": "próxima {relative}",
   "agentPrompts.nonResumable": "no reanudable",
   "agentPrompts.sort.label": "Orden",
-  "agentPrompts.sort.title": "Ordenar las pestañas de agente por qué mirar a continuación \u2014 esperando por ti, luego trabajando, luego el turno terminado más reciente \u2014, por cuándo terminaron su último turno, o como las tiene la barra de pestañas.",
+  "agentPrompts.sort.title": "Ordenar las pestañas de agente por qué mirar a continuación \u2014 esperando por ti, luego listas para leer, luego trabajando, luego el turno terminado más reciente \u2014, por cuándo terminaron su último turno, o como las tiene la barra de pestañas.",
   "agentPrompts.sort.lastWorking": "Último trabajo",
   "agentPrompts.sort.lastDone": "Último terminado",
   "agentPrompts.sort.native": "Orden de pestañas",

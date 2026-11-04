@@ -3155,7 +3155,7 @@ export const dict: Dict = {
   "agentPrompts.nextRun": "prochaine {relative}",
   "agentPrompts.nonResumable": "non reprenable",
   "agentPrompts.sort.label": "Tri",
-  "agentPrompts.sort.title": "Classer les onglets d'agent selon ce qu'il faut regarder ensuite \u2014 en attente de vous, puis au travail, puis le dernier tour terminé \u2014, selon leur dernier tour terminé, ou dans l'ordre de la barre d'onglets.",
+  "agentPrompts.sort.title": "Classer les onglets d'agent selon ce qu'il faut regarder ensuite \u2014 en attente de vous, puis prêts à lire, puis au travail, puis le dernier tour terminé \u2014, selon leur dernier tour terminé, ou dans l'ordre de la barre d'onglets.",
   "agentPrompts.sort.lastWorking": "Dernier travail",
   "agentPrompts.sort.lastDone": "Dernier terminé",
   "agentPrompts.sort.native": "Ordre des onglets",

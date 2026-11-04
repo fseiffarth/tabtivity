@@ -28,9 +28,9 @@ const rows = [
 ];
 
 describe("buildRoster", () => {
-  it("sorts a question first, then the working tab, then by the last finished turn", () => {
+  it("sorts a question first, then the ready tab, then the working tab, then by the last finished turn", () => {
     const roster = buildRoster(rows, OPTS);
-    expect(roster.rows.map((r) => r.tab.key)).toEqual(["b", "c", "d", "a", "e"]);
+    expect(roster.rows.map((r) => r.tab.key)).toEqual(["b", "a", "c", "d", "e"]);
   });
 
   it("hides idle tabs under Active and keeps the counts over every row", () => {

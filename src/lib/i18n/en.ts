@@ -3194,7 +3194,7 @@ export const enSource = {
   "agentPrompts.nonResumable": "not resumable",
   // The list's order and the two readings it sorts by (shared/agentSort.ts).
   "agentPrompts.sort.label": "Sort",
-  "agentPrompts.sort.title": "Order the agent tabs by what to look at next \u2014 waiting on you, then working, then the newest finished turn \u2014 by when they last finished a turn, or as the tab bar has them.",
+  "agentPrompts.sort.title": "Order the agent tabs by what to look at next \u2014 waiting on you, then ready to read, then working, then the newest finished turn \u2014 by when they last finished a turn, or as the tab bar has them.",
   "agentPrompts.sort.lastWorking": "Last working",
   "agentPrompts.sort.lastDone": "Last done",
   "agentPrompts.sort.native": "Tab order",

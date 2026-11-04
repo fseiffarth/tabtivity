@@ -117,7 +117,7 @@ describe("Mobile home — agents mode", () => {
     expect(await screen.findByText(/Nothing is working, waiting or done/)).toBeTruthy();
   });
 
-  it("orders by last working by default — asking first, then working, then the newest finished — and tags each row with its model", async () => {
+  it("orders by last working by default — asking first, then the ready ones, then working, then the newest finished — and tags each row with its model", async () => {
     const now = Date.now();
     answerActivity({
       tabs: [
@@ -133,7 +133,7 @@ describe("Mobile home — agents mode", () => {
     await screen.findByText("Busy");
     // The oldest tab of the four leads the list: it is the only one that cannot
     // go on without the reader.
-    expect(rowLabels()).toEqual(["Asking", "Busy", "Finished", "Recent"]);
+    expect(rowLabels()).toEqual(["Asking", "Finished", "Recent", "Busy"]);
     expect(screen.getByText(/opus-4-1/).textContent).toContain("Aurora · opus-4-1 · finished 9 min ago");
     expect(screen.getByText(/gpt-5-codex/).textContent).toContain("working now");
 
