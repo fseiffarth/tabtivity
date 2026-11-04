@@ -3737,6 +3737,23 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-primary);
   background: var(--bg-hover);
 }
+/* Statusline actions have a visible edge before hover, including usage meters.
+   Keep plain facts unboxed and preserve the row's existing hit areas. */
+.terminal-reader-facts :is(.terminal-reader-fact-model, .terminal-reader-limit):not(:disabled) {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+  text-decoration: none;
+}
+.terminal-reader-facts :is(.terminal-reader-fact-model, .terminal-reader-limit):not(:disabled):is(:hover, [aria-expanded="true"]) {
+  box-shadow: inset 0 0 0 1px var(--text-muted);
+}
+.terminal-reader-facts :is(.terminal-reader-fact-model, .terminal-reader-limit):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.terminal-reader-facts .terminal-reader-fact-model:disabled {
+  text-decoration: none;
+}
 /* Plan mode stands out, as the phone's plan chip does. */
 .terminal-reader-fact-model.plan { color: var(--accent); }
 .terminal-reader-fact-model:disabled {
