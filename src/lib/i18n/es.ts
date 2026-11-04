@@ -5447,6 +5447,8 @@ export const dict: Dict = {
   "terminal.reader.pullLeftover": "Sacado de la cola, pero el cuadro de entrada del agente aún conserva parte — vacíalo en el terminal antes de enviar.",
   "terminal.reader.sendFailed": "No enviado — el terminal del agente no acepta entrada. Tu texto sigue aquí.",
   "terminal.reader.sendPickerOpen": "No enviado — hay una lista de modelos o modos abierta en el agente. Elige de ella o ciérrala y vuelve a enviar. Tu texto sigue aquí.",
+  "terminal.reader.waitsForQuestion": "Espera tu respuesta a la pregunta de arriba — se envía en cuanto la respondas.",
+  "terminal.reader.answerQuestionFirst": "No enviado — el agente está haciendo una pregunta. Respóndela primero y vuelve a intentarlo.",
   "terminal.reader.clearBusy": "Codex sigue trabajando y no puede empezar una conversación nueva ahora. Detenlo con Esc y vuelve a enviar.",
   "terminal.reader.question": "Esperando tu respuesta",
   "terminal.reader.moreChoices": "Hay más opciones en el terminal.",

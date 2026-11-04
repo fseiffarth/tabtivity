@@ -89,6 +89,9 @@ import { projectIdOfScope } from "../../lib/terminal/ptyId";
  * was seen working (a prompt queued behind a long turn is recorded only once
  * the CLI takes it up). */
 const PENDING_MS = 60_000;
+/** How long the agent's question must stay gone before a prompt that waited
+ * on it is typed: a question with several steps redraws between them. */
+const QUESTION_GONE_MS = 1_500;
 /** How soon after the pane's output the live screen is read again, and how
  * often regardless (the busy row's timer, a pane not created yet). */
 const LIVE_SETTLE_MS = 250;
@@ -225,7 +228,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
     [answeredTab && "answered", index === focus && "current"].filter(Boolean).join(" ") || undefined;
   return (
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
-      <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /></small>
+      <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /> <UntestedTag id="terminal.reader.trustPath" /></small>
       {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
       {live.tabs.length > 0 && !stepped && (
@@ -541,7 +544,7 @@ interface ReaderVoiceLoop {
   chips: ReactNode;
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef }: {
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, inputBlocked, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -561,6 +564,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   steering: boolean;
   /** A dialog waits on an answer: ↑/↓ in an empty composer walk its rows. */
   questionOpen: boolean;
+  /** Startup and CLI dialogs must finish before composing a message. */
+  inputBlocked: boolean;
   /** Claude's own suggestion for the next message, read off its empty box. */
   suggestion: string;
   /** The facts row's end, where the chip row goes; in the text box without it. */
@@ -580,6 +585,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   useEffect(() => setReaderDraft(scope, tabKey, draft), [scope, tabKey, draft]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
+  /** Send was pressed while the agent asked something: typed into the pane,
+   * the words would be the question's keys — a row picked, or the question
+   * cancelled. They stay in the box until the question has gone. */
+  const [waitingOnQuestion, setWaitingOnQuestion] = useState(false);
   const pulling = useRef(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const revealRef = useRef(onReveal);
@@ -712,7 +721,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     tabKey,
     ptyId,
     visible,
-    disabled: sending,
+    disabled: sending || inputBlocked,
     handsFree: voiceLoop.handsFree,
     reading: voiceLoop.reading,
     questionOpen,
@@ -731,7 +740,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     // The ref, not the state: a spoken send calls this in the same tick the
     // dictated words went into the draft.
     const text = draftRef.current.trim();
-    if (!current || !text || sending) return;
+    if (!current || !text || sending || inputBlocked) return;
     // Any send stops the voice reading the last answer.
     voiceLoop.stopReading();
     // A Tabby chat has no facts row to open the panel in: the CLI answers.
@@ -746,6 +755,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       historyAt.current = null;
       return;
     }
+    if (questionOpen) {
+      setWaitingOnQuestion(true);
+      setSendError("");
+      return;
+    }
+    setWaitingOnQuestion(false);
     setSending(true);
     setSendError("");
     noteInputFrom(ptyId, "desktop");
@@ -790,6 +805,21 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     }
   };
 
+  // The question answered (and no next one up after a moment: a question with
+  // several steps redraws between them), the waiting words go in.
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const holding = waitingOnQuestion && draft.trim() !== "";
+  // Emptied by hand, nothing waits: the next words typed are not sent by themselves.
+  useEffect(() => {
+    if (waitingOnQuestion && !draft.trim()) setWaitingOnQuestion(false);
+  }, [waitingOnQuestion, draft]);
+  useEffect(() => {
+    if (!holding || questionOpen) return;
+    const timer = setTimeout(() => void sendRef.current(), QUESTION_GONE_MS);
+    return () => clearTimeout(timer);
+  }, [holding, questionOpen]);
+
   /** `/clear` into the tab; false, with the reason said, when it did not go in. */
   const startNewConversation = async (current: TabEntry): Promise<boolean> => {
     if (assistantChat && current.assistant) return freshAssistantChat(current);
@@ -828,6 +858,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const runChip = async (action: (current: TabEntry) => Promise<unknown>) => {
     const current = tabRef.current;
     if (!current || sending) return;
+    // Clear and Commit type into the pane too: never into an open question.
+    if (questionOpen) {
+      setSendError(t("terminal.reader.answerQuestionFirst"));
+      return;
+    }
     setSending(true);
     setSendError("");
     try {
@@ -969,7 +1004,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const chips = <ReaderComposerChips
     prefixes={prefixCommands}
     active={draftPrefix(draft, prefixCommands)}
-    disabled={sending}
+    disabled={sending || inputBlocked}
     onPrefix={togglePrefix}
     onClear={clearChat}
     onCommit={assistantChat ? undefined : commit}
@@ -985,6 +1020,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <textarea
           ref={composerRef}
           value={draft}
+          disabled={inputBlocked}
           rows={3}
           placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion })
@@ -1001,7 +1037,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <button
           type="button"
           className="terminal-reader-send"
-          disabled={!draft.trim() || sending}
+          disabled={!draft.trim() || sending || inputBlocked}
           onClick={() => void send()}
           aria-label={t("terminal.reader.send")}
           title={t("terminal.reader.send")}
@@ -1019,6 +1055,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}
       {assistantChat && <UntestedTag id="assistant.clear" />}
     </div>
+    {holding && !sendError && (
+      <div className="terminal-reader-waiting" role="status">
+        {t("terminal.reader.waitsForQuestion")} <UntestedTag id="terminal.reader.waitsForQuestion" />
+      </div>
+    )}
     {sendError && (actionSlot && !visible
       ? createPortal(<span className="reader-toolbar-error" role="alert">{sendError}</span>, actionSlot)
       : <div className="terminal-reader-error" role="alert">{sendError}</div>)}
@@ -2346,6 +2387,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         onReveal={onShowChat}
         steering={steering}
         questionOpen={!!shownLive.question}
+        inputBlocked={!!shownLive.question || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working)}
         suggestion={shownLive.suggestion}
         chipSlot={actionSlot || scope === ASSISTANT_SCOPE ? null : chipSlot}
         actionSlot={actionSlot}

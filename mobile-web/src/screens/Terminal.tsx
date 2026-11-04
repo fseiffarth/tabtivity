@@ -2056,6 +2056,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     [sessionFocus, liveQuestion, liveScreen],
   );
   const sessionBusy = sessionWork !== null;
+  const chatInputBlocked = sessionFocus && (!!liveQuestion || pressHintShown(liveScreen));
   /** What the working row says beside the dots: the elapsed time and the
    * tokens the agent's own spinner prints, in its words. A family that prints
    * neither leaves the line as it was. */
@@ -2719,7 +2720,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           <div className="slash-menu-head">{t("terminal.reader.suggestion")} · {t("mobile.composer.suggestionHint")} {isUntested("mobile.composer.promptSuggestion") && <em>{t("mobile.focus.untested")}</em>}</div>
         </div>}
         <div className="composer-field">
-          <textarea ref={composerInput} value={draft} disabled={!connected} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => setDraft(event.target.value)} onFocus={(event) => { setComposerTyping(true); if (draft && draft === suggestionRef.current.filled) event.currentTarget.select(); }} onBlur={typingStopped} onKeyDown={(event) => {
+          <textarea ref={composerInput} value={draft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => setDraft(event.target.value)} onFocus={(event) => { setComposerTyping(true); if (draft && draft === suggestionRef.current.filled) event.currentTarget.select(); }} onBlur={typingStopped} onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey) return;
             // Enter confirms a candidate inside an IME composition (CJK keyboards,
             // and 229 is what Android keyboards report mid-composition); that
@@ -2766,7 +2767,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
             <span className="composer-spacer" />
           </>}
-          <button className="send-icon" disabled={!connected || (!draft.trim() && !attached) || uploading || editSending} {...(tab.kind === "agent" && !editing ? sendHoldHandlers : {})} onClick={() => {
+          <button className="send-icon" disabled={!connected || chatInputBlocked || (!draft.trim() && !attached) || uploading || editSending} {...(tab.kind === "agent" && !editing ? sendHoldHandlers : {})} onClick={() => {
             if (sendHold.current.fired) {
               sendHold.current.fired = false;
               return;

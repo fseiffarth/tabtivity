@@ -398,6 +398,16 @@ describe("the desktop Reader's live screen", () => {
     expect(answerKeys(hooks, hooks.options[1])).toEqual(["\u001b[B", "\r"]);
   });
 
+  it("offers the hook path trust action without typing a chat prompt", () => {
+    const rows = ["Hooks", "SessionStart", "/tmp/config.toml", "Runs a session hook", "t trust this path · esc back"];
+    const live = readReaderLive(plainBuffer(rows), "Codex", 100);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["trust this path", "back"]);
+    expect(answerKeys(live.question!, live.question!.options[0])).toEqual(["t"]);
+    expect(answerKeys(live.question!, live.question!.options[1])).toEqual(["\u001b"]);
+    expect(live.ask.join(" ")).toContain("/tmp/config.toml");
+    expect(readReaderLive(plainBuffer(rows), "Claude", 100).question).toBeNull();
+  });
+
   it("reads Codex's hooks page, which has no numbered rows, as a card of its footer's answers", () => {
     const live = readReaderLive(plainBuffer(codexHooksPage("  t trust all · enter review · esc close", true)), "Codex", 100);
     const page = live.question!;

@@ -865,6 +865,21 @@ export function readCodexHooksPage(lines: readonly SelectLineLike[], agentLabel?
   if (!/codex/iu.test(agentLabel ?? "")) return null;
   let footer = lines.length - 1;
   while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+  // A hook's detail page offers trust for its config path rather than
+  // the overview's trust-all action. Only accept Codex's own footer and a
+  // hook heading; prose mentioning these keys is never an approval prompt.
+  const detail = footer >= 0 ? /^\s*t (trust (?:this )?path)\s*·\s*esc (back|close)\s*$/iu.exec(lines[footer].text) : null;
+  if (detail) {
+    const heading = lines.findIndex((line) => /^\s*(?:Hooks?|(?:SessionStart|PreToolUse|PostToolUse|Stop)\b.*)\s*$/u.test(line.text));
+    if (heading < 0 || footer - heading > DIALOG_LINES) return null;
+    return {
+      options: [
+        { index: 0, number: 1, label: detail[1], keys: ["t"] },
+        { index: 1, number: 2, label: detail[2], keys: ["\u001b"] },
+      ],
+      current: 0, title: lines[heading].text.trim(), start: footer, question: heading, context: heading,
+    };
+  }
   const keys = footer >= 0 ? CODEX_HOOKS_FOOTER.exec(lines[footer].text) : null;
   if (!keys) return null;
   let heading = -1;

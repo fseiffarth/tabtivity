@@ -3567,6 +3567,14 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--danger);
   background: var(--bg-panel);
 }
+/* A message held in the composer while the agent's question is open. */
+.terminal-reader-waiting {
+  flex: none;
+  padding: 0 14px var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  background: var(--bg-panel);
+}
 /* The composer's `/` menu (`ReaderSlashMenu`), the phone's `.slash-menu`:
    opens upward over the chat like the facts row's picker, anchored to the
    composer; the row ↑/↓ reached is tinted. */
