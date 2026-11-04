@@ -72,8 +72,12 @@ the **Root** chip). See `mail-calendar`.
 
 ## Tabtivity navigation
 
-Press **Shift+Space**. A legend appears at the bottom and the app answers
-single keys, even while a terminal has focus. (Mid-word, with Shift still held
+Press **Shift+Space**. A bar docks under the panes (the level ladder
+Projects › Subwindows › Tabs › Inside, the move keys, the jumps, and the keys
+that leave) and every other key shows as a small coloured cap on the control it
+fires: W on the tab, N O 1–9 + above the + button, I L G K on the prompt line,
+M C T , on the top bar, B P on the side rail. **H** folds the bar down to its
+ladder. The app answers single keys, even while a terminal has focus. (Mid-word, with Shift still held
 from a capital, Shift+Space stays a plain space.) The mode opens on the
 current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 
@@ -107,7 +111,7 @@ it back on the same dialog.
 Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
 rebound in the same settings page under *Inside Tabtivity navigation*, one list per
 level. A letter can mean one thing on the projects level and another inside a
-pane; the legend and the cheat sheet always show the keys you have.
+pane; the bar, the caps and the cheat sheet always show the keys you have.
 
 ## In editors and viewers
 

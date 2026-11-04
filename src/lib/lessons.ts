@@ -380,7 +380,7 @@ export const LESSONS: Lesson[] = [
         task: {
           promptKey: "lessons.keyboardSteering.enterModeTask",
           hintKey: "lessons.keyboardSteering.enterModeTaskHint",
-          appear: ".steering-legend, .steering-legend-fab",
+          appear: ".steering-bar",
         },
       },
       {

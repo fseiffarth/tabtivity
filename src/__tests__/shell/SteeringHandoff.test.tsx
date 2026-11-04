@@ -69,26 +69,30 @@ describe("steering hand-off", () => {
     expect(steering()).toMatchObject({ active: true, level: "region", region: "side", handedTo: null });
   });
 
-  it("keeps the legend up with the box's keys and Esc back, folded or not", () => {
+  it("keeps the bar up with the box's keys and Esc back, folded or not", () => {
     const { container } = render(<SteeringLegend />);
-    expect(document.querySelector(".steering-legend")).toBeNull();
+    expect(document.querySelector(".steering-bar")).toBeNull();
     act(() => {
       steering().enter();
       steering().handOff("prompt");
     });
-    let legend = document.querySelector(".steering-legend");
-    expect(legend?.textContent).toContain(`Back to ${BRAND.display} navigation`);
-    expect(legend?.textContent).toContain("Esc");
-    expect(legend?.textContent).toContain("Send");
+    let bar = document.querySelector(".steering-bar");
+    expect(bar?.textContent).toContain(`Back to ${BRAND.display} navigation`);
+    expect(bar?.textContent).toContain("Esc");
+    expect(bar?.textContent).toContain("Send");
+    // The mark is hollow (steering is off) and the rung names the box.
+    expect(bar?.querySelector(".steering-bar-badge.hollow")).not.toBeNull();
+    expect(bar?.querySelector(".steering-rung.lent")?.textContent).toBe("Prompt");
+    expect([...bar!.querySelectorAll(".steering-rung")].map((r) => r.textContent)).toEqual(["Tabs", "Prompt"]);
     act(() => {
       steering().toggleLegend();
     });
-    legend = document.querySelector(".steering-legend");
-    expect(legend?.textContent).toContain(`Back to ${BRAND.display} navigation`);
+    bar = document.querySelector(".steering-bar");
+    expect(bar?.textContent).toContain(`Back to ${BRAND.display} navigation`);
     act(() => {
       steering().dropHandoff();
     });
-    expect(document.querySelector(".steering-legend")).toBeNull();
+    expect(document.querySelector(".steering-bar")).toBeNull();
     expect(container).toBeTruthy();
   });
 

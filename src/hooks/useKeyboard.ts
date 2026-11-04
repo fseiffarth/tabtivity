@@ -968,7 +968,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       if (!steering.active) return;
       const target = e.target instanceof Element ? e.target : null;
       // The legend's own fold button is steering's, not a place to go.
-      if (!target || target.closest(".steering-legend, .steering-legend-fab")) return;
+      if (!target || target.closest(".steering-bar")) return;
       cancelPlace();
       const region = steering.level === "region" ? steering.region : null;
       const root = region ? regionRoot(region) : null;
