@@ -33,6 +33,7 @@ import type { SortKey } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { UntestedTag } from "../common/UntestedTag";
+import { BoxEmptyLine } from "../projects/BoxEmptyLine";
 import { CloseIcon, FolderIcon, GripIcon, HexagonIcon, MoreIcon, RefreshIcon } from "../common/icons/Icon";
 
 /**
@@ -1126,9 +1127,14 @@ export function ProjectFilesPane({
         </div>
       )}
       <div className="side-panel-scroll" style={{ flex: 1, overflowY: "auto" }}>
+        {mountTree && activeBox && activeBox.member_ids.length === 0 && (
+          <div className="file-tree-empty box-empty-panel"><BoxEmptyLine boxId={activeBox.id} /></div>
+        )}
         {mountTree && activeBox ? (
           boxRoots.length === 0 ? (
-            <div className="file-tree-empty">{t("projectFilesPane.noMemberFolders")}</div>
+            activeBox.member_ids.length > 0 && (
+              <div className="file-tree-empty">{t("projectFilesPane.noMemberFolders")}</div>
+            )
           ) : (
             boxRoots.map((r) => (
               <BoxRootSection

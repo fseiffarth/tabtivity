@@ -14,10 +14,10 @@ import { useDialogs } from "../common/PromptDialogs";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { isServerClient } from "../../lib/transport/linkState";
 import { ConnectToServer } from "../server/ConnectToServer";
-import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "./MobileAccessPicker";
+import { MobileAccessPicker, HOST_REACH_KEY, PhoneReachButton, phoneReachHost } from "./MobileAccessPicker";
 import { projectHostKind } from "../../lib/projectTabHost";
 import type { ProjectEntry } from "../../types";
-import { phoneReach, usePairedPhones, type PairedPhone } from "./usePairedPhones";
+import { usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
 
@@ -384,8 +384,8 @@ export function MobileSettings() {
   // Same one-click shape as every other install-via-command flow: the command
   // runs in a root terminal tab, watched in the root console floating over
   // Settings — never a scope switch away from the panel.
-  /** The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside
-   *  a row whose access is on: opens the per-phone picker for it. */
+  /** The "All phones ▾" button beside a row whose access is on: opens the
+   *  per-phone picker for it. */
   const phoneScopeButton = (
     kind: "project" | "box" | "assistant",
     id: string,
@@ -395,20 +395,13 @@ export function MobileSettings() {
   ) => {
     // `null`, not `undefined`: the row keeps its shape while off (ToggleRow).
     if (!enabled) return null;
-    const reach = phoneReach(true, list, pairedPhones);
     return (
-      <button
-        type="button"
-        className={`settings-btn sm${reach.kind === "none" ? " warning" : ""}`}
-        aria-haspopup="menu"
-        title={t("mobile.phones.buttonTitle", { name })}
-        onClick={(event) => {
-          const r = event.currentTarget.getBoundingClientRect();
-          setPhonePicker({ kind, id, x: r.left, y: r.bottom + 2 });
-        }}
-      >
-        {phoneReachLabel(reach, t)} ▾
-      </button>
+      <PhoneReachButton
+        name={name}
+        list={list}
+        phones={pairedPhones}
+        onOpen={(r) => setPhonePicker({ kind, id, x: r.left, y: r.bottom + 2 })}
+      />
     );
   };
 

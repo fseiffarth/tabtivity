@@ -867,7 +867,9 @@ export const UNTESTED = {
 
   // --- projects — Projects, remotes, boxes, VMs ---------------------
   "bigFolder.thisProject": { area: "projects", what: "BigFolderExcludeDialog · this project" },
-  "boxEditor.title": { area: "projects", what: "BoxEditorDialog · Box editor" },
+  "boxEditor.sheet": { area: "projects", what: "BoxEditorDialog · the box sheet: one box (no target dropdown, no create mode), name with inline check, colour swatches, member list (members first, filter, closed projects too, badges closed/container/VM/remote and the swatches of the other boxes holding a project), trust lines, folder path with Open, Dissolve box… footer (confirm names the folder; leaves the box first when inside it); Save is one diffed save against what the sheet opened with" },
+  "boxEditor.phoneRow": { area: "projects", what: "BoxEditorDialog · Phone row: the Settings → Mobile box switch and its All phones ▾ picker, acting at once with the box's current per-phone list; replaced by a line saying why on Windows or with persistent local sessions off" },
+  "boxEmpty.line": { area: "projects", what: "Slice strip and box side panel · \"No projects yet — Add projects…\" on an empty box; the button opens the box sheet" },
   "boxPill.colorGroup": { area: "projects", what: "BoxColorPicker · Box pill menu Colour row (palette, automatic, custom colour input)", tested: "2026-09-28" },
   "boxChip.onRowLabel": { area: "projects", what: "BoxScopeChip · Dropdown checkboxes choosing which boxes get a pill on the row", tested: "2026-09-28" },
   "boxChip.leaveBox": { area: "projects", what: "Header · the selected box pill's always-visible ✕ (Show all projects: clears the slice and, from inside the box, returns to the project the strip was on) and the project strip tinted in the box's colour while a box is sliced" },

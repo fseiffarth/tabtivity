@@ -46,6 +46,39 @@ export function phoneReachLabel(reach: PhoneReach, t: Translate): string {
   }
 }
 
+/**
+ * The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside a row
+ * whose access is on: the opener of {@link MobileAccessPicker}. One button for
+ * Settings → Mobile's rows and the box sheet's phone row. `list` is the scope's
+ * stored per-phone list (`undefined` = every phone); `phones` the paired ones
+ * (`null` while unknown). `onOpen` gets the button's rect to anchor the picker.
+ */
+export function PhoneReachButton({
+  name,
+  list,
+  phones,
+  onOpen,
+}: {
+  name: string;
+  list: unknown;
+  phones: PairedPhone[] | null;
+  onOpen: (rect: DOMRect) => void;
+}) {
+  const t = useT();
+  const reach = phoneReach(true, list, phones);
+  return (
+    <button
+      type="button"
+      className={`settings-btn sm${reach.kind === "none" ? " warning" : ""}`}
+      aria-haspopup="menu"
+      title={t("mobile.phones.buttonTitle", { name })}
+      onClick={(event) => onOpen(event.currentTarget.getBoundingClientRect())}
+    >
+      {phoneReachLabel(reach, t)} ▾
+    </button>
+  );
+}
+
 /** The paired date of a phone row, in the reader's locale. */
 function pairedOn(phone: PairedPhone): string {
   return new Date(phone.created_at * 1000).toLocaleDateString();

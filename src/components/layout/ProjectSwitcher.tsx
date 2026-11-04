@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
 import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
+import { BoxEmptyLine } from "../projects/BoxEmptyLine";
 import { useBoxNameCheck, useQuickCreateBox } from "../projects/useQuickCreateBox";
 import { useDialogs } from "../common/PromptDialogs";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
@@ -653,7 +654,7 @@ export function ProjectSwitcher({
             onDissolve={(boxId) => {
               const target = boxes.find((b) => b.id === boxId);
               if (!target) return;
-              void confirmAction(dissolveBoxSpec(t, target.name)).then(async (ok) => {
+              void confirmAction(dissolveBoxSpec(t, target.name, target.folder)).then(async (ok) => {
                 if (!ok) return;
                 const inside =
                   useBoxSliceStore.getState().sliceBoxId === boxId ||
@@ -703,6 +704,9 @@ export function ProjectSwitcher({
             onMouseDown={startWindowDrag}
           >
             {!projectsLoaded && <SkeletonRows count={3} className="project-pills-skeleton" />}
+            {projectsLoaded && currentBox && visibleProjects.length === 0 && (
+              <BoxEmptyLine boxId={currentBox.id} className="box-empty-strip" />
+            )}
             {visibleProjects.map((project) => {
               const isCurrentBoxMember = currentBoxMemberIds.has(project.id);
               // The swatches a member pill wears: one per box it is in, in the

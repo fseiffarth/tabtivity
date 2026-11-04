@@ -3,8 +3,8 @@
  * membership checklist: additive rows that stay open and scroll, "New box with
  * ⟨project⟩…" through the quick-create name prompt, "Remove ⟨project⟩ from
  * ⟨box⟩" in a slice), Ctrl/Cmd-click multi-select ("Box these (N)…",
- * Escape/plain-click clears), and the Box editor dialog (save = rename + set
- * members; explicit, confirmed dissolve replacing the old silent one).
+ * Escape/plain-click clears), and the box sheet's explicit, confirmed dissolve
+ * (replacing the old silent one; the rest of the sheet is in BoxSheet.test).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act, fireEvent, screen, within } from "@testing-library/react";
@@ -302,57 +302,7 @@ describe("multi-select (3b)", () => {
   });
 });
 
-describe("box editor dialog (3c)", () => {
-  it("save in EDIT mode renames + sets the member list", async () => {
-    const renameBox = vi.fn().mockResolvedValue(undefined);
-    const setBoxMembers = vi.fn().mockResolvedValue(undefined);
-    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], renameBox, setBoxMembers });
-    useProjectsStore.setState({
-      projects: [proj("p1", 10), proj("p2", 20)],
-      activeId: null,
-      loaded: true,
-    });
-    useBoxEditorStore.getState().openEditor("boxA");
-
-    const onClose = vi.fn();
-    await act(async () => {
-      render(<BoxEditorDialog onClose={onClose} />);
-    });
-    const dialog = document.querySelector(".box-editor")!;
-    const nameInput = dialog.querySelector('input[type="text"]') as HTMLInputElement;
-    fireEvent.change(nameInput, { target: { value: "Renamed" } });
-    // Tick p2 into the member list.
-    const rows = [...dialog.querySelectorAll(".box-editor-member-row")];
-    const p2Row = rows.find((r) => r.textContent?.includes("p2"))!;
-    fireEvent.click(p2Row.querySelector("input")!);
-    const save = [...dialog.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
-    await act(async () => {
-      fireEvent.click(save);
-    });
-    expect(renameBox).toHaveBeenCalledWith("boxA", "Renamed");
-    expect(setBoxMembers).toHaveBeenCalledWith("boxA", ["p1", "p2"]);
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("save in CREATE mode commits via boxProjects with the checked members", async () => {
-    const boxProjects = vi.fn().mockResolvedValue(box("new", ["p1"]));
-    useBoxesStore.setState({ boxes: [], boxProjects });
-    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
-    useBoxEditorStore.getState().openCreate(["p1"]);
-
-    const onClose = vi.fn();
-    await act(async () => {
-      render(<BoxEditorDialog onClose={onClose} />);
-    });
-    const dialog = document.querySelector(".box-editor")!;
-    const save = [...dialog.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
-    await act(async () => {
-      fireEvent.click(save);
-    });
-    expect(boxProjects).toHaveBeenCalledWith(["p1"], { name: "Box 1" });
-    expect(onClose).toHaveBeenCalled();
-  });
-
+describe("box sheet — dissolve (3c)", () => {
   it("dissolve asks for confirmation and states nothing on disk is deleted", async () => {
     const deleteBox = vi.fn().mockResolvedValue(undefined);
     useBoxesStore.setState({ boxes: [box("boxA", ["p1"])], deleteBox });
@@ -440,5 +390,33 @@ describe("ghost + Box pill (AS2a)", () => {
     });
     expect(createBoxQuick).toHaveBeenCalledWith({ name: "Thesis", memberIds: [] });
     expect(openBox).toHaveBeenCalledWith("boxNew");
+  });
+});
+
+describe("empty box in the slice strip (AS5b)", () => {
+  it("shows \"No projects yet\" with Add projects… for an empty sliced box, and the button opens the sheet", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", [])] });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    useBoxSliceStore.setState({ sliceBoxId: "boxA" });
+    const container = await renderSwitcher();
+    const line = container.querySelector(".box-empty-strip") as HTMLElement;
+    expect(line.textContent).toContain("No projects yet");
+    await act(async () => {
+      fireEvent.click(line.querySelector(".box-empty-add")!);
+    });
+    expect(useBoxEditorStore.getState().open).toBe(true);
+    expect(useBoxEditorStore.getState().boxId).toBe("boxA");
+  });
+
+  it("is absent for a box with members and with no slice", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"]), box("boxB", [])] });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    useBoxSliceStore.setState({ sliceBoxId: "boxA" });
+    const container = await renderSwitcher();
+    expect(container.querySelector(".box-empty-strip")).toBeNull();
+    await act(async () => {
+      useBoxSliceStore.setState({ sliceBoxId: null });
+    });
+    expect(container.querySelector(".box-empty-strip")).toBeNull();
   });
 });
