@@ -667,7 +667,13 @@ fn serve(
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     let serves = ctx.is_some();
-    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves, serves_web });
+    #[cfg(test)]
+    let publish = !UNPUBLISHED.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    let publish = true;
+    if publish {
+        root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves, serves_web });
+    }
     let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
     let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
@@ -675,6 +681,13 @@ fn serve(
             eprintln!("[root-mcp] server stopped: {error}");
         }
     }))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's listeners stay off the process's one [`Runtime`] (set once):
+    /// the end-to-end host test asserts the runtime is its own listener's.
+    static UNPUBLISHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[derive(Serialize)]
@@ -1171,6 +1184,8 @@ mod security_tests {
     /// taken port is given up for a free one, which is remembered instead.
     #[tokio::test]
     async fn a_server_listener_rebinds_its_remembered_port_or_moves_off_a_taken_one() {
+        // Single-threaded test runtime: every bind below runs on this thread.
+        UNPUBLISHED.with(|flag| flag.set(true));
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join(TOOLS_PORT_FILE);
         let (_stop, stopped) = tokio::sync::watch::channel(false);
