@@ -1954,13 +1954,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       : null),
     [liveTail, liveScreen, agentLabel],
   );
-  /** Claude Code's prompt suggestion, dimmed in its own empty box, which the
-   * chat hides (`promptSuggestion.ts`). It is put into the field — never sent,
-   * and only once per suggestion — so the reader edits it or sends it as they
-   * would take it with Tab in the CLI. The terminal view shows the CLI's box. */
+  /** Claude Code's prompt suggestion, dimmed in its own empty box
+   * (`promptSuggestion.ts`). It is put into the field in either view — never
+   * sent, and only once per suggestion — so the reader edits it or sends it as
+   * they would take it with Tab in the CLI. `liveQuestion` is the chat's alone;
+   * in the Terminal view a dialog on screen is no box, so it reads as "". */
   const promptSuggestion = useMemo(
-    () => (view === "focus" && tab.kind === "agent" && !liveQuestion && !liveBusy ? readPromptSuggestion(liveScreen, agentLabel) : ""),
-    [view, tab.kind, liveQuestion, liveBusy, liveScreen, agentLabel],
+    () => (tab.kind === "agent" && !liveQuestion && !liveBusy ? readPromptSuggestion(liveScreen, agentLabel) : ""),
+    [tab.kind, liveQuestion, liveBusy, liveScreen, agentLabel],
   );
   const suggestionOffered = promptSuggestion && connected && !subagentTarget && pending.length === 0 && !editing ? promptSuggestion : "";
   useEffect(() => {
