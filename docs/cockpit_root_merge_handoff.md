@@ -387,7 +387,184 @@ tests are all in `FloatingFrame.test.ts`.
 - `openPromptChartTab(ROOT)` still switches the workspace to root
   (`bringUpScope`); the plan keeps it, but it is the same bug class.
 
-## Next (I4: A7 narrow windows + A8 strings, docs, filemap)
+## I4 (A7 + steering fix + prompt chart fix + A8)
+
+### A7 Narrow windows (plan M6)
+
+- sha: `f7b4099a`.
+- **One measure, two readers.** `lib/window/frameBand.ts`: `frameBand(width)`
+  (`narrow` < 820, `mid` 820-1179, `wide` >= 1180; an unmeasured 0 reads `wide`),
+  `useFrameBand(ref)` (ResizeObserver on the frame, `clientWidth`),
+  `FrameBandContext`. The shell (`RootOverlay`) measures its frame, writes
+  `data-band` on it (experiment on only; off, no band, so the console is today's
+  at any width) and provides the band by context around the Root view and the
+  cockpit body. **Deliberate deviation from the plan's wording:** the band is a
+  JS measure + `data-band`, not CSS `@container` rules. Reason: the structural
+  swaps (icon rail instead of rail, roster *or* detail) must unmount the column
+  that is not shown (a hidden detail would attach a terminal), and one source of
+  breakpoints beats the same two numbers in TS and CSS; jsdom can also test the
+  edges (819/820/1179/1180). The CSS follows `.root-overlay[data-band=...]`.
+- Now (`CockpitNow`): `wide` unchanged. `mid`: `CockpitRailIcons` (the Root
+  rail's component) in `.cockpit-now-icons`, roster + detail side by side, detail
+  `min-width: 360px; max-width: 55%`. Clicking an icon opens the real rail in
+  `NeedsYouPopover` (new, `ContextMenuPortal`, `keepBelow`, scrolled to the
+  group). `narrow`: roster *or* detail (`pane` state): a "Needs you N" chip in
+  the heading row (amber while something asks, `aria-expanded`) opens the same
+  popover; a row click (new `CockpitRoster` prop `onOpen`), Space or a popover pick
+  opens the detail, which carries a back bar ("Agents"; Escape on the bar returns,
+  handled so the window does not close; the roster list takes focus back). A
+  popover left open does not outlive the wide band.
+- Shell/CSS (`styles/cockpit.css`, end): narrow drops `.app-overlay-label`
+  (the glyph keeps its `title`), folds the box filter into a 26 px ▾ icon
+  (`.cockpit-box-filter-wrap`: the native select is laid over it at
+  `opacity: 0`, so the platform's own list still opens; the icon tints with a
+  chosen box), stacks Tonight/Usage (the view scrolls, not two short panes).
+  New `ChevronDownIcon`. No animation.
+- Root: `RootRail` returns null under 820 px (no icon rail, loads nothing).
+- Keys `cockpit.narrow.needsYou`, `cockpit.narrow.back` (five dictionaries);
+  register row `cockpit.narrow` (pill on the chip).
+- Tests: `__tests__/cockpit/NarrowWindow.test.tsx` (14): `frameBand` edges; Now at
+  each band (columns, popover pick, master/detail, Space, Escape on the back
+  bar, chip popover, popover closes in `wide`); the shell with a stubbed
+  `clientWidth` + ResizeObserver at 1180/1179/820/819 and back; Now's swap and
+  Root's rail at those edges; no band without the experiment; the box-filter
+  wrapper. The CSS itself needs a layout engine and is not run.
+
+### Steering fix: Root's tabs while the Root view is up
+
+- sha: `d4f7733a`.
+- `lib/shortcuts/steeringScope.ts` (new): `steeringInRoot()` (= `cockpit`
+  experiment on and `rootViewShown`), `steeringTabs()` (scope, layout, focused
+  subwindow of the walked scope; Root's falls back to its first group, as
+  `RootView` draws it), `steeringTabsActive()`.
+- `useKeyboard.steerPanes` reads that instead of the workspace's `layout` /
+  `focusedGroupId`, and every group action goes to the scope
+  (`focusGroupInScope`, `setGroupActiveInScope`, `setGroupFilesInScope`); the
+  workspace-only fullscreen carry is skipped in Root. `steeringActiveTab()` (close,
+  clear, plan, goal, prompt, scroll) returns Root's active tab; `activeTabElement`
+  / `activeTabCard` find Root's strip tab / sign-in card. A status key's jump to a
+  **project's** tab while Root is up closes the window first (as the cockpit's
+  Enter does), so the tab levels are the workspace's again.
+- `steeringRegion.topLayer` skips the root window itself while steering walks
+  Root (`.root-console-backdrop`, a class the root window's backdrop now carries;
+  the mail/calendar/to-do overlays share `.root-overlay-backdrop`, so it could not
+  be that one). Without that, `syncLayer` would take the window for an overlay
+  and move steering to the overlay region right after the key. A menu or dialog
+  over the window is still a layer. Cockpit views (Now...) are still walked as the
+  overlay region (U).
+- The new-tab keys (1-9, N, O, +) are no-ops there: they dispatch to the
+  workspace's tab bars and the tab would open under the window.
+- Keys are unchanged and still rebindable (`steeringBindings`); a test rebinds
+  right/left and walks Root with them. Typing after leaving steering goes to the
+  root terminal because Root's focused group's active tab is the one `RootView`
+  gives `focused`.
+- Tests: `__tests__/cockpit/SteeringInRoot.test.tsx` (9): arrows walk Root and
+  leave the workspace's active tab alone; `q` jumps to a root agent and the next
+  arrow walks Root (the regression); rebound keys; new-tab keys silent; a jump to a
+  project tab closes the window; the window is not a layer (a menu still is);
+  workspace walked when the window is shut / on a cockpit view / experiment off.
+
+### Prompt chart fix
+
+- sha: `f6b7c438`.
+- `openPromptChartTab(ROOT_SCOPE)` (outside a popout) hydrates root, takes root's
+  existing `promptchart` tab or adds one to **root's own layout**
+  (`addTabToScope`), and `show(key)`s it: the Root view, the active scope
+  untouched. A popout keeps the forwarded old path.
+  `TabJump.test`: the old "names the root scope as the null project" case replaced
+  by three (opens in the Root view with scope/project unchanged; focuses an
+  existing chart instead of adding a second; popout path).
+- **Grep for the same class** (`setActive(null)`, `bringUpScope`, switches to the
+  root scope):
+  - `bringUpScope` had exactly two callers, `jumpToTab` (I3) and
+    `openPromptChartTab` (this fix); it now serves only projects, boxes and the
+    popout path.
+  - `ProjectSwitcher.selectRoot` and `MobileBridgeHost.enterScope` already call
+    `show()`; `TodoCard`, `CommandPalette`, `PillStatusBars`, `PillTabMarks`,
+    `AgentSchedulesView`, `PromptChart`, `CockpitRoster/Rail` go through
+    `jumpToTab`.
+  - **Not changed, flagged:** the project **station ring** includes the root
+    scope as station 1 (`stores/keyboardSteering.projectStations()` leads with
+    `null`): steering's projects level (1, ←/→) and the cycle-project chord end in
+    `useProjectsStore.setActive(null)`, which does switch the *workspace* to the
+    root scope. It is a different door (walking the ring, not opening a root tab)
+    and "no project open" is a real state, so I left it; see Flagged.
+  - Reviewed and fine: `usePdfMarkup.showTab`, `TabCostList`, `LinkBackButton`,
+    `openLinked`, `TexWorkspaceView` call the active scope's `setActive(key)` for
+    tabs of the scope they live in; none addresses root from outside.
+
+### A8 Strings, docs, records
+
+- sha: `6c3f46b4`.
+- Dictionaries (five): `settings.cockpit` "Cockpit views" and
+  `settings.cockpitHelp` (views of the root console's window; off = the console
+  alone), `steering.cockpit.desc` (Now view in the root window),
+  `cockpit.standDown` ("Shown in the cockpit's Now view"); **deleted** the four
+  keys unused since A1: `rootConsole.moveHint/resizeHint/fill/restore` (nothing
+  else reads them; the shared `floatingFrame.*` hints replaced them). `cockpit.title`
+  and `cockpit.indicator` keep their text ("Cockpit" is the label with the
+  experiment on). `cockpit.rail.collapsed` was never needed.
+- `lib/untested.ts`: reworded `rootOverlay.1`, `cockpit.title`,
+  `cockpit.indicator`, `settings.cockpit`, `cockpit.standDown`, `cockpit.rootRail`
+  (mid band, hidden under 820 px); added `cockpit.narrow` (A7). No row for the
+  steering change: it has no control to hang a pill on (see its Click-through).
+- Docs: `docs/context/root_console.md` (frame paragraph now `useFloatingFrame` /
+  `floatingFrame.ts`; new "Views: one window, five"), `docs/context/cockpit.md`
+  (the window's views, ownership, narrow windows, entry points, steering);
+  `docs/filemap_frontend.md` (rows: `RootOverlay.tsx`+store, `RootView.tsx`,
+  `RootStartAgent.tsx`, `useFloatingFrame`+`floatingFrame.ts`, `frameBand.ts`,
+  `CockpitViews.tsx`+`views.ts` (replaces the deleted `CockpitOverlay` row),
+  `CockpitDetailPane`, `CockpitNow...`, `RootRail`+`CockpitRailIcons`+`scopeLamp`,
+  `NeedsYouPopover`, `OverlayApprovals`, `CenterPanel`, `statusJump`,
+  `steeringScope`); Status lines of the plan and design (implemented, not live),
+  `desktop_cockpit_plan.md` (C0-C6 built; C7 a sixth view of the window) and
+  `prompt_universe_plan.md`; the design's narrow section notes the band mechanism.
+- `todo/group-l-tabs.md` (end of file): one "Cockpit + root console: one window"
+  item with seven 🖐️ boxes, each with the four `✅ Works on` / `❌ Doesn't work
+  on` pairs (Linux X11, Linux Wayland, Windows, macOS), all unticked.
+
+### Gates / tests (I4)
+
+- `scripts/gates.sh` green before each commit (brand, whitespace, lint 0 errors
+  and no new warnings, build, vitest --changed). No Rust touched, so no cargo
+  gate (`backend:stale` not needed).
+- Full `npm test` at the A8 tip: **1064 files, 10856 tests** passed (I3 tip 1062 /
+  10832: +2 files, +24 tests = 14 `NarrowWindow` + 9 `SteeringInRoot` + 3
+  `TabJump` - 2 replaced).
+- Not run live (never started the app).
+
+### Flagged for user (I4)
+
+- **Steering in Root is experiment-on only.** Off, the console is today's: steering
+  walks it as the overlay region, as before ("exactly today's console"). On, the
+  tab levels are Root's. Say if the flag-off console should follow too.
+- **Root's window chrome is not on steering's tab level.** The view tabs, ✓, ⚿
+  and ✕ are reached with `U` (opens Now and enters the overlay region) or by
+  mouse; ↑ from the tabs level goes up to the workspace's panes/projects as always.
+  A key that walks Root's own chrome would be new.
+- **New-tab keys do nothing in Root** (they would open a tab under the window). A
+  Root-targeting new-tab event would make them work; not built.
+- **A status key to a project's tab closes the Root window** (it would otherwise
+  stay over the tab it jumped to). Pressing it again from the project then walks
+  the workspace.
+- **No Needs-you access in Root under 820 px**, as the design's table says (no
+  icon rail; the header gauge and the Now view remain). A chip in the sub-bar
+  would add it.
+- **The station ring still switches the workspace to the root scope** (steering's
+  projects level 1 and ←/→, the cycle-project chord: `setActive(null)`). Not the
+  same door as opening a root tab, so unchanged; should station 1 open the Root
+  view instead?
+- **Narrow mechanism.** A JS band + `data-band`, not CSS `@container` (see A7).
+- **Box filter at < 820 px** is the native select laid invisibly over a ▾ icon;
+  if WebKitGTK's popup list looks odd under it, replace it with a
+  `ContextMenuPortal` list.
+- **No `UntestedTag` for the steering change** (no control carries it); its
+  Click-through below stands in.
+- Still open from earlier sections: the Machines overlay lands under the window
+  when opened from Usage, the empty icon rail, the fixed 280 px open rail (I1/I2
+  Flagged).
+
+## Next (was: I4, done above)
 
 - A8 owes the filemap rows for I1-I3 new files: `layout/RootStartAgent.tsx`,
   `cockpit/RootRail.tsx`, `cockpit/CockpitRailIcons.tsx`,
@@ -419,3 +596,55 @@ tests are all in `FloatingFrame.test.ts`.
   `layout/RootStartAgent.tsx`, `cockpit/RootRail.tsx`,
   `cockpit/CockpitRailIcons.tsx`, `lib/cockpit/scopeLamp.ts` (plus I1's).
 - Unused after A1: dictionary keys `rootConsole.moveHint/resizeHint/fill/restore`.
+
+## Click-through
+
+For the user, nothing here was run live. Flag = Settings → Experimental → Cockpit
+views. Needs a running window with the frontend built from this branch (`src/`
+only; no `backend:stale`). Root's agents need root restored once (open Root).
+
+**Flag off**
+1. Ctrl+Shift+R: a window with a star mark, your tab strip in the title bar, ⚿,
+   ✓, ◫, ⤢, ✕; no view tabs, no row under the title bar, no icon column, no
+   "Start..." button on an empty card, no Cockpit button in the header. Escape
+   closes it.
+2. Drag the bar, resize a corner, ⤢: the frame is the one you had before.
+3. Shift+Space, then ←/→: steering behaves as before (the window is walked as an
+   overlay).
+
+**Flag on**
+4. Header Cockpit button / steering U / box chip "Open cockpit": the window opens
+   on Now, labelled Cockpit, wide and centred. Click Projects, Tonight, Usage,
+   Root: the window never moves or resizes; ✓ Approvals is the one pill.
+5. Ctrl+Shift+R: from closed it opens Root; on Now it switches to Root; on Root it
+   closes. Root: your strip, ⚿, ◫ sit in a thin sub-bar under the title bar.
+   Split the console: the sub-bar goes.
+6. Root, empty: "Start <agent> in Root" opens the default agent in one click.
+   With a root tab asking, the Root tab wears an amber count; while one works, the
+   ring.
+7. Root's left edge: a 40 px column with icons and counts (amber asking, red
+   interrupted). Click an icon: the full Needs-you rail opens beside the console at
+   that group; ‹ folds it; relaunch keeps the fold. Click in it while typing in a
+   terminal: the terminal keeps the keyboard.
+8. Now: a root agent is a row with a ★ Root chip. Select it, Space/→: the Chat
+   fills the right pane. The head button says "Open in Root": press it (or Enter on
+   the row): Root opens on that tab and the project in the header has not changed.
+   Dock the same agent in Mail (Ctrl+1) and look at Now: "Shown in the Mail overlay."
+9. Projects and Usage do not wake sleeping root terminals (watch their CPU/sleep
+   marks stay).
+10. Narrow: drag the window's left grip until it is about 1000 px wide: Now has the
+    icon column instead of the rail; click an icon: the full rail in a popover; pick
+    a row: it fills the detail on the right. Go below 820 px (also try the minimum
+    window): label gone, ▾ box filter (if you have boxes), Now shows the roster and a
+    "Needs you N" chip. Click a row (or Space): the detail replaces the roster with
+    an "Agents" button; Agents, or Escape while it has focus, goes back. Tonight
+    and Usage stack and scroll. Root has no icon column. Widen again: all returns.
+11. Steering in Root: open Root with two agent tabs, Shift+Space, press Q (next
+    asking agent) or ←/→: the Root strip's active tab changes, the project's tab bar
+    behind does not; Space, then type: the text goes to the root terminal. Rebind
+    "right" in Settings → Keyboard steering and repeat with the new key. Q to a
+    project's tab: the window closes and shows that tab.
+12. Root's Prompt chart: with no project open (root scope in the center) press ⧗
+    Prompt chart in the side panel's Agents view, or Tonight → Open chart on a root
+    item: the Root view opens on the chart tab; a second press focuses it, not a
+    second tab.
