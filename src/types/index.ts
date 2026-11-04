@@ -220,6 +220,11 @@ export interface Settings {
      * an empty list, none. Narrows `assistant_access`, never opens it. Carried
      * by every writer of this block, like `assistant_access`. */
     assistant_devices?: string[];
+    /** The paired phones that may open the root console (device ids). Unlike
+     * every other list this one is opt-in: absent or empty is no phone, so a
+     * phone paired later starts off root. Narrows `root_access`, never opens
+     * it. Carried by every writer of this block, like `assistant_devices`. */
+    root_devices?: string[];
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */

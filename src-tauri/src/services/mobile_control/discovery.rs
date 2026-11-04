@@ -989,6 +989,23 @@ fn root_open(state_dir: &Path, env: &RootEnv) -> bool {
     staged && (env.fenced)()
 }
 
+/// The phones that may open the root console, `[MOBILE_HOST_KEY].root_devices`.
+/// Unlike a project's or the assistant's list this one is **opt-in**: absent,
+/// empty, malformed or unreadable is no phone, so a phone paired later is off
+/// root until the user ticks it. Narrows [`root_open`], never opens it.
+pub fn root_devices(state_dir: &Path) -> Vec<String> {
+    fs::read(state_dir.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|settings| {
+            settings
+                .get(crate::brand::MOBILE_HOST_KEY)
+                .and_then(|host| host.get("root_devices"))
+                .map(crate::schema::projects::mobile_device_list)
+        })
+        .unwrap_or_default()
+}
+
 /// The assistant scope's own id, as the desktop's tab store and bridge spell it.
 const ASSISTANT_SCOPE_ID: &str = crate::storage::ASSISTANT_SCOPE;
 
@@ -1626,9 +1643,9 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             status: "active".into(),
             kind: ScopeKind::Root,
             roots: vec![root.dir.clone()],
-            // Root has its own switch and gate; per-phone root is out of
-            // scope (docs/done/mobile_device_scoped_access_plan.md).
-            devices: None,
+            // Root has its own switch and gate, and a per-phone list that is
+            // opt-in: a phone is off root until the user names it.
+            devices: Some(root_devices(state_dir)),
             host: ProjectHost::Local,
             cwd_alias: None,
             shells_in_container: false,

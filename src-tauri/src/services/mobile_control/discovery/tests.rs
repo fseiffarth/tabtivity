@@ -515,6 +515,50 @@ fn the_assistant_scope_has_a_per_phone_list_absent_is_every_phone_empty_is_none(
     assert_eq!(assistant_devices(dir.path()), Some(Vec::new()));
 }
 
+/// Root's per-phone list is opt-in, unlike every other scope's: with the
+/// switch on and no list, no phone has root — a phone paired later is off it
+/// until the user ticks it. A list names the phones; an empty or malformed
+/// one, or unreadable settings, none. The catalog, the per-phone view and
+/// `ScopeAccess` (what a phone's prompt or schedule faces) agree.
+#[test]
+fn the_root_scope_is_off_for_every_phone_until_the_list_names_it() {
+    let host = crate::brand::MOBILE_HOST_KEY;
+    let reaching = |devices: Option<serde_json::Value>, phone: &str| {
+        let mut block = serde_json::json!({ "enabled": true, "root_access": true });
+        if let Some(devices) = devices {
+            block["root_devices"] = devices;
+        }
+        let dir = assistant_state(Some(serde_json::json!({ "assistant": false, host: block })), vec![]);
+        fs::create_dir_all(dir.path().join("root")).expect("root dir");
+        let env = RootEnv { dir: dir.path().join("root"), fenced: || true };
+        let catalog = Catalog::load_with(dir.path(), &[7; 32], &env, &HashMap::new(), &HostLive::default(), true).expect("catalog");
+        let listed = catalog.projects.iter().any(|p| p.raw_id == "root");
+        let seen = catalog.for_device(phone).projects.iter().any(|p| p.raw_id == "root");
+        let access = ScopeAccess::load_with(dir.path(), &env).expect("access").reaches("root", phone);
+        (listed, seen, access)
+    };
+    // Absent: the scope is there, no phone reaches it.
+    assert_eq!(reaching(None, "d1"), (true, false, Ok(false)));
+    // A list: those phones only.
+    let list = Some(serde_json::json!(["d1", "d2"]));
+    assert_eq!(reaching(list.clone(), "d1"), (true, true, Ok(true)));
+    assert_eq!(reaching(list, "d3"), (true, false, Ok(false)));
+    // Empty, or anything that is not a list of strings: no phone.
+    for none in [serde_json::json!([]), serde_json::json!("d1"), serde_json::json!(["d1", 2]), serde_json::Value::Null] {
+        assert_eq!(reaching(Some(none.clone()), "d1"), (true, false, Ok(false)), "{none}");
+    }
+    // The list narrows the switch; it never opens a closed one.
+    let dir = assistant_state(
+        Some(serde_json::json!({ "assistant": false, host: { "enabled": true, "root_access": false, "root_devices": ["d1"] } })),
+        vec![],
+    );
+    assert!(load_assistant(dir.path()).is_empty());
+    // Unreadable settings are no phone either.
+    let dir = tempfile::tempdir().expect("state dir");
+    fs::write(dir.path().join("settings.json"), b"{").expect("corrupt");
+    assert!(root_devices(dir.path()).is_empty());
+}
+
 /// The chat assistant reaches the phone by its switch and gate alone
 /// (`assistant_open`), as a scope of its own kind rooted in the work
 /// folder: listed before its folder exists (so the phone can start the

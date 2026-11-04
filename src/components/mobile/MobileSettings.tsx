@@ -169,7 +169,7 @@ export function MobileSettings() {
   // (a revoke or Forget all changes what a list still reaches).
   const { phones: pairedPhones } = usePairedPhones(devices);
   const [phonePicker, setPhonePicker] = useState<
-    { kind: "project" | "box" | "assistant"; id: string; x: number; y: number } | null
+    { kind: "project" | "box" | "assistant" | "root"; id: string; x: number; y: number } | null
   >(null);
   const addDevice = useAddDevice();
   const [error, setError] = useState<string | null>(null);
@@ -369,6 +369,7 @@ export function MobileSettings() {
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
+          root_devices: stored?.root_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -387,7 +388,7 @@ export function MobileSettings() {
   /** The "All phones ▾" button beside a row whose access is on: opens the
    *  per-phone picker for it. */
   const phoneScopeButton = (
-    kind: "project" | "box" | "assistant",
+    kind: "project" | "box" | "assistant" | "root",
     id: string,
     name: string,
     enabled: boolean,
@@ -414,6 +415,18 @@ export function MobileSettings() {
         ...(stored ?? { enabled: false }),
         assistant_access: enabled ? undefined : false,
         assistant_devices: enabled ? (list ?? undefined) : undefined,
+      },
+    });
+  };
+
+  /** Root's reach, from its picker: the phones that may open the root console
+   * (none is the default — a phone paired later starts off it). An empty list
+   * is stored as no list. One whole-block write, like `setMailGate`. */
+  const setRootReach = async (list: string[] | null) => {
+    await updateSettings({
+      [MOBILE_HOST_KEY]: {
+        ...(stored ?? { enabled: false }),
+        root_devices: list && list.length > 0 ? list : undefined,
       },
     });
   };
@@ -468,6 +481,7 @@ export function MobileSettings() {
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
+          root_devices: stored?.root_devices,
         },
       });
     } catch (reason) {
@@ -512,6 +526,7 @@ export function MobileSettings() {
           local_models: stored?.local_models,
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
+          root_devices: stored?.root_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
@@ -716,6 +731,7 @@ export function MobileSettings() {
         checked={stored?.root_access ?? false}
         disabled={busy}
         onChange={(event) => void setMailGate("root_access", event.target.checked)}
+        aside={phoneScopeButton("root", "root", t("mobile.rootAccess"), stored?.root_access === true, stored?.root_devices ?? [])}
       />
       {stored?.root_access && rootGateClosed && (
         <div className="project-dialog-error">{t("mobile.rootAccessClosed")}</div>
@@ -830,7 +846,18 @@ export function MobileSettings() {
           onClose={() => setPhonePicker(null)}
         />
       )}
-      {phonePicker && phonePicker.kind !== "assistant" && (() => {
+      {phonePicker && phonePicker.kind === "root" && (
+        <MobileAccessPicker
+          x={phonePicker.x}
+          y={phonePicker.y}
+          kind="root"
+          enabled={stored?.root_access === true}
+          devices={stored?.root_devices ?? []}
+          onApply={(_enabled, list) => setRootReach(list)}
+          onClose={() => setPhonePicker(null)}
+        />
+      )}
+      {phonePicker && (phonePicker.kind === "project" || phonePicker.kind === "box") && (() => {
         const target = phonePicker.kind === "project"
           ? projects.find((p) => p.id === phonePicker.id)
           : boxes.find((b) => b.id === phonePicker.id);

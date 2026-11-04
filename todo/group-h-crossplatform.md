@@ -4073,6 +4073,44 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
       - [ ] ❌ Doesn't work on macOS
   - [ ] B8: check on an iPhone whether the edge swipe goes up two folders (Safari tab
     and installed PWA) before changing anything.
+- [ ] **31cq — Root off the phone's project list: logo door, per-phone opt-in** (2026-11-04;
+  ✅ code-complete, `the_root_scope_is_off_for_every_phone_until_the_list_names_it`,
+  `MobileHome`, `MobilePairedDeviceAccess`, `MobileRootPhonePicker` tests; ⚠️ never seen
+  on a phone). Needs a dev build (sidecar + PWA). `root_devices` is opt-in: a root switch
+  already on loses root on every phone until phones are ticked.
+  - [ ] 🖐️ Settings → Mobile → Root console on the phone (switch on): the row shows
+    No phones ▾; pick the phone. Its start page then has no root row, and the logo
+    top left opens the root console (back returns). A dot on the logo while root's
+    proposals wait at the desk.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ A second phone not ticked: no logo door, root unreachable (an old link answers
+    project not found). Pairing a new phone leaves it off root. Unticking the phone
+    closes its open root terminal within seconds.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Paired phone's panel in Settings → Mobile: Root console is listed with Disconnect
+    once ticked, and Add project ▾ offers it (greyed while the root switch is off).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31cm — Send now and Cancel and edit on Codex and OpenCode mini** (2026-11-02;
   ✅ code-complete, `MobileQueuePull.test.ts` and the walks run against the real
