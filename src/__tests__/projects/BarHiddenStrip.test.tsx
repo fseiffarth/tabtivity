@@ -1,8 +1,8 @@
 /**
  * The "All projects" strip leaves out projects hidden from it — one by one or
  * as a box's members (`lib/projects/barHidden`) — but never the project in
- * scope, and a box's slice ignores the lists. The trailing "N hidden" chip
- * is the way back.
+ * scope, and a box's slice ignores the lists. The logo dropdown's "N hidden"
+ * entry is the way back.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, act, fireEvent } from "@testing-library/react";
@@ -53,6 +53,14 @@ beforeEach(() => {
   });
 });
 
+/** Opens the logo dropdown; returns its "N hidden" entry, if any. */
+async function openDropdown(container: HTMLElement): Promise<HTMLElement | null> {
+  await act(async () => {
+    fireEvent.click(container.querySelector(".box-chip-caret-btn") as HTMLElement);
+  });
+  return document.querySelector<HTMLElement>(".box-chip-menu .bar-hidden-toggle");
+}
+
 async function renderSwitcher() {
   let container!: HTMLElement;
   await act(async () => {
@@ -65,8 +73,10 @@ describe("hiding projects from All projects", () => {
   it("leaves out hidden projects and a hidden box's members, and counts them", async () => {
     const container = await renderSwitcher();
     expect(pillNames(container)).toEqual(["p2"]);
-    const chip = container.querySelector(".bar-hidden-chip") as HTMLElement;
-    expect(chip.textContent).toContain("3 hidden");
+    // No chip on the strip any more: the count is the dropdown's entry.
+    expect(container.querySelector(".bar-hidden-chip")).toBeNull();
+    const entry = await openDropdown(container);
+    expect(entry!.textContent).toContain("3 hidden");
   });
 
   it("keeps the project in scope on the strip", async () => {
@@ -79,15 +89,17 @@ describe("hiding projects from All projects", () => {
     useTabsStore.setState({ scope: `${BOX_SCOPE_PREFIX}boxA` });
     const container = await renderSwitcher();
     expect(pillNames(container)).toEqual(["p3", "p4"]);
-    expect(container.querySelector(".bar-hidden-chip")).toBeNull();
+    expect(await openDropdown(container)).toBeNull();
   });
 
-  it("the chip's menu shows a project, or a box's projects, again", async () => {
+  it("the entry unfolds the list, which shows a project, or a box's projects, again", async () => {
     const container = await renderSwitcher();
+    const entry = (await openDropdown(container))!;
+    expect(document.querySelector(".bar-hidden-list")).toBeNull();
     await act(async () => {
-      fireEvent.click(container.querySelector(".bar-hidden-chip") as HTMLElement);
+      fireEvent.click(entry);
     });
-    const menu = document.querySelector(".bar-hidden-menu") as HTMLElement;
+    const menu = document.querySelector(".box-chip-menu .bar-hidden-list") as HTMLElement;
     const shows = [...menu.querySelectorAll<HTMLElement>(".bar-hidden-show")];
     expect(shows).toHaveLength(2);
     await act(async () => {
@@ -99,6 +111,23 @@ describe("hiding projects from All projects", () => {
     });
     expect(updateSettings).toHaveBeenLastCalledWith({ bar_hidden_boxes: undefined });
     expect(pillNames(container)).toEqual(["p1", "p2", "p3", "p4"]);
-    expect(container.querySelector(".bar-hidden-chip")).toBeNull();
+    // Nothing hidden: the entry goes, the dropdown stays open.
+    expect(document.querySelector(".box-chip-menu")).not.toBeNull();
+    expect(document.querySelector(".bar-hidden-toggle")).toBeNull();
+  });
+
+  it("a name in the list opens that project and closes the dropdown", async () => {
+    const container = await renderSwitcher();
+    const entry = (await openDropdown(container))!;
+    await act(async () => {
+      fireEvent.click(entry);
+    });
+    const name = [...document.querySelectorAll<HTMLElement>(".bar-hidden-list button")].find(
+      (b) => b.textContent === "p4",
+    )!;
+    await act(async () => {
+      fireEvent.click(name);
+    });
+    expect(document.querySelector(".box-chip-menu")).toBeNull();
   });
 });

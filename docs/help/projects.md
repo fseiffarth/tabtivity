@@ -66,8 +66,9 @@ guided SLURM wizard. See `remote-projects`.
 - Right-click a pill → **Hide from All projects** keeps an open project off
   the All projects row; it stays open, in its boxes and in search, and shows
   while it is the project you are in. A box pill's **Hide its projects from
-  All projects** does the same for every member. The **N hidden** chip at the
-  row's end lists them: click a name to open it, the eye to show it again.
+  All projects** does the same for every member. The **N hidden** entry in
+  the logo's ▾ list unfolds them: click a name to open it, the eye to show it
+  again.
 - Drop one pill on another (Alt-drag) to group them into a box. See
   `containers-boxes`.
 

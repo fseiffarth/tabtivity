@@ -75,7 +75,7 @@ box's projects and takes the box's colour, and the selected pill shows a ✕.
 The ✕, **All projects** in the ▣ list, and the first row of the header search
 all leave again, back to the project you were on. In the list a ✓ marks the
 box you are in and bold marks the box the strip shows. On a narrow window the
-pills fold into **▣▾ +N**, which opens the same list. Ctrl+Shift+PageDown/PageUp
+pills fold into the logo's list, and its ▾ counts them as **▾ +N**. Ctrl+Shift+PageDown/PageUp
 walk home → each box → back to the project you came from. Clicking a coloured
 swatch on a project's pill opens that box.
 

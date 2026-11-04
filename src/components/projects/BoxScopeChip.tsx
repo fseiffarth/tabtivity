@@ -24,6 +24,7 @@ import { BoxMemberChecklist } from "./BoxMemberChecklist";
 import { useBoxNameCheck, useQuickCreateBox } from "./useQuickCreateBox";
 import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PlusIcon, SquareIcon } from "../common/icons/Icon";
 import { setBoxBarHidden, useBarHidden } from "../../lib/projects/barHidden";
+import { BarHiddenSection, type BarHiddenSet } from "./BarHiddenList";
 
 /** This chip's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const SCOPE_MENU_ID = "box-scope-chip";
@@ -56,7 +57,7 @@ function BoxStatusBars({
  * How many boxes stand on the row as pills of their own on a wide window.
  * Boxes are few by nature (a handful of joinings, not a project list), so
  * nearly every user sees all of theirs; past the budget the rest stay one click
- * away in the list the fold pill (`▣▾ +N`, right after the shown pills) opens.
+ * away in the list the logo's caret (`▾ +N`) opens.
  * A narrower header gives less (`boxPillBudget`: 6 / 3 / 1 by width tier).
  */
 export const MAX_BOX_PILLS = boxPillBudget(0);
@@ -67,7 +68,7 @@ export const MAX_BOX_PILLS = boxPillBudget(0);
  * always including the selected box, which takes the last slot when it would
  * otherwise be off the row (and stands in its own place), so the box being
  * looked at is never the one without a pill. A budget of 1 is that box alone:
- * with none selected the row holds no pill and the fold pill carries them all.
+ * with none selected the row holds no pill and the caret counts them all.
  */
 export function boxPillsShown(
   ordered: readonly ProjectBox[],
@@ -111,6 +112,9 @@ interface Props {
   onSelectRoot: () => void;
   /** Keyboard-steering station digits, while steering mode is active. */
   rootStation?: number;
+  /** What the "All projects" strip leaves out; the dropdown's "N hidden"
+   *  entry lists it. Unset inside a slice, which ignores the lists. */
+  hidden?: BarHiddenSet;
 }
 
 /**
@@ -129,7 +133,9 @@ interface Props {
  * pill is a standing drop target for "add this project to that box", and its
  * colour is the colour its members wear as a swatch on their own pills — the
  * same box reads the same everywhere. Past the width tier's budget the rest
- * stay in the dropdown and the fold pill (`▣▾ +N`) counts them.
+ * stay in the dropdown and the logo's caret (`▾ +N`) counts them — one
+ * trigger for the one list (the old fold pill after the pills opened the same
+ * list a second time).
  *
  * The selected pill wears an always-visible ✕ ("Show all projects"), so the
  * way out of a box is never a hover menu; with no box at all the row is one
@@ -153,6 +159,7 @@ export function BoxScopeChip({
   rootActive,
   onSelectRoot,
   rootStation,
+  hidden,
 }: Props) {
   const t = useT();
   const barHidden = useBarHidden();
@@ -160,8 +167,8 @@ export function BoxScopeChip({
   // Hover-opened through the SHARED header menu id, like the + menu and the
   // cluster menus beside it: one id means opening another header menu closes
   // this one in the same frame instead of both riding out their own 250 ms
-  // closing grace. Hover and focus reveal the list; a CLICK on the caret (or on
-  // the fold pill) pins it open — it then stays until a second click, a pick,
+  // closing grace. Hover and focus reveal the list; a CLICK on the caret pins
+  // it open — it then stays until a second click, a pick,
   // Escape or a press elsewhere, so it no longer evaporates when the pointer
   // drifts off a 10 px target. The logo itself opens nothing (it is the root
   // console and the window's move handle).
@@ -189,18 +196,13 @@ export function BoxScopeChip({
   // one name prompt; the ghost pill has its own while no box exists.
   const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  // The control the list hangs under: the caret beside the logo, or the fold
-  // pill after the shown box pills.
-  const [anchor, setAnchor] = useState<"chip" | "fold">("chip");
   const chipRef = useRef<HTMLDivElement>(null);
-  const foldRef = useRef<HTMLDivElement>(null);
   const pillsRef = useRef<HTMLDivElement>(null);
   const sprung = useRef(false);
   const pinned = useRef(false);
 
-  const reveal = (from: "chip" | "fold" = "chip") => {
+  const reveal = () => {
     window.clearTimeout(closeTimer.current);
-    setAnchor(from);
     openMenu(SCOPE_MENU_ID);
   };
   const holdOpen = () => window.clearTimeout(closeTimer.current);
@@ -215,12 +217,12 @@ export function BoxScopeChip({
     closeMenu(SCOPE_MENU_ID);
   };
   // A click: closed → open and pinned; hover-opened → pinned; pinned → closed.
-  const toggleFrom = (from: "chip" | "fold") => {
-    if (menuOpen && anchor === from && pinned.current) {
+  const toggle = () => {
+    if (menuOpen && pinned.current) {
       dismiss();
       return;
     }
-    reveal(from);
+    reveal();
     pinned.current = true;
   };
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
@@ -299,8 +301,7 @@ export function BoxScopeChip({
   useEffect(() => {
     if (dragging) {
       if (!menuOpen) sprung.current = true;
-      // Overflow means the fold pill stands on the row: the list opens under it.
-      reveal("fold");
+      reveal();
       return;
     }
     if (!sprung.current) return;
@@ -311,7 +312,7 @@ export function BoxScopeChip({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging]);
 
-  // Keep the dropdown anchored under its control while it is open (the header
+  // Keep the dropdown anchored under the chip while it is open (the header
   // can reflow around it — the pill strip's overflow chevrons appear and vanish).
   useEffect(() => {
     if (!menuOpen) {
@@ -319,7 +320,7 @@ export function BoxScopeChip({
       return;
     }
     const update = () => {
-      const el = (anchor === "fold" ? foldRef.current : null) ?? chipRef.current;
+      const el = chipRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
       setPos({ x: r.left, y: r.bottom });
@@ -331,7 +332,7 @@ export function BoxScopeChip({
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
     };
-  }, [menuOpen, anchor]);
+  }, [menuOpen]);
 
   // A press outside the chip, the box pills and the portaled list, or Escape,
   // closes the list — the hover grace alone can't catch a pointer that jumps
@@ -434,27 +435,39 @@ export function BoxScopeChip({
               it (or Ctrl+Shift+R), not named here. */}
           <LogoIcon className="box-chip-icon" />
         </button>
-        {/* The list's trigger: hover or keyboard focus opens it, a click pins it
-            open (a second click, a pick, Escape or a press elsewhere closes).
-            The count of boxes with no pill stands on the fold pill, past the
-            shown ones, no longer beside the logo. */}
+        {/* The list's ONE trigger: hover or keyboard focus opens it, a click
+            pins it open (a second click, a pick, Escape or a press elsewhere
+            closes). The count of boxes with no pill on the row rides it as
+            `▾ +N` (a bare `N` when no pill is shown at all). */}
         <button
           type="button"
           className="box-chip-caret-btn"
-          title={t("boxChip.pickerTitle")}
+          title={
+            overflow > 0
+              ? `${t("boxChip.pickerTitle")} · ${t("boxChip.moreBoxesTitle", { count: overflow })}`
+              : t("boxChip.pickerTitle")
+          }
           aria-haspopup="menu"
-          aria-expanded={menuOpen && anchor === "chip"}
-          onMouseEnter={() => reveal("chip")}
+          aria-expanded={menuOpen}
+          onMouseEnter={reveal}
           onMouseLeave={scheduleClose}
-          onFocus={() => reveal("chip")}
+          onFocus={reveal}
           onClick={(e) => {
             e.stopPropagation();
-            toggleFrom("chip");
+            toggle();
           }}
         >
           <span className="box-chip-caret" aria-hidden>
             ▾
           </span>
+          {overflow > 0 && (
+            <>
+              <span className="box-chip-overflow">
+                {shown.length > 0 ? t("boxChip.moreBoxes", { count: overflow }) : overflow}
+              </span>
+              <UntestedTag id="boxChip.foldPill" />
+            </>
+          )}
         </button>
         {/* Steering-mode station number, for the built-in scope the chip is
             naming — the root pill used to carry its own. */}
@@ -472,7 +485,7 @@ export function BoxScopeChip({
           and enters the box's scope on one click. Deliberately the chip's own
           box (`.box-chip`, minus the caret) rather than a shape of its own,
           so the leading segment stays one run. */}
-      {(shown.length > 0 || overflow > 0 || ordered.length === 0) && (
+      {(shown.length > 0 || ordered.length === 0) && (
         <div ref={pillsRef} className="box-pill-row">
           {/* No box yet: one quiet ghost pill is the door in (first-use
               discovery). It goes once any box exists. */}
@@ -565,36 +578,6 @@ export function BoxScopeChip({
               </div>
             );
           })}
-          {/* The boxes past the width budget (or hidden from the row), where the
-              hidden pills would be: `▣▾ +N` opens the same list as the caret,
-              under itself. With no pill shown at all it is the bare count. */}
-          {overflow > 0 && (
-            <div ref={foldRef} className="box-chip box-fold-pill">
-              <button
-                type="button"
-                className="box-chip-caret-btn"
-                title={t("boxChip.moreBoxesTitle", { count: overflow })}
-                aria-haspopup="menu"
-                aria-expanded={menuOpen && anchor === "fold"}
-                onMouseEnter={() => reveal("fold")}
-                onMouseLeave={scheduleClose}
-                onFocus={() => reveal("fold")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleFrom("fold");
-                }}
-              >
-                <BoxSwatch className="project-pill-box-swatch" />
-                <span className="box-chip-overflow">
-                  {shown.length > 0 ? t("boxChip.moreBoxes", { count: overflow }) : overflow}
-                </span>
-                <span className="box-chip-caret" aria-hidden>
-                  ▾
-                </span>
-              </button>
-              <UntestedTag id="boxChip.foldPill" />
-            </div>
-          )}
         </div>
       )}
 
@@ -653,6 +636,7 @@ export function BoxScopeChip({
             >
               {t("boxChip.allProjects")}
             </button>
+            {hidden && <BarHiddenSection hidden={hidden} onPicked={dismiss} />}
             {ordered.length > 0 && <div className="box-chip-menu-sep" />}
             {ordered.length > 0 && (
               <div className="box-chip-menu-label">

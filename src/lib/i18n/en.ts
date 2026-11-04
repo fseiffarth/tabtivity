@@ -10525,7 +10525,7 @@ export const enSource = {
   "lessons.projectBoxes.assignMembersTitle": "Fill it with projects",
   "lessons.projectBoxes.assignMembersBody": "Drag a project pill onto a box pill (or onto its row in the box list) to add it. Or open the box pill's menu: its Members checklist ticks projects in and out, closed ones included, and a project pill's menu has the same checklist of boxes. Alt-drag one pill onto another to box the two together.",
   "lessons.projectBoxes.boxDropdownTitle": "Enter and leave a box",
-  "lessons.projectBoxes.boxDropdownBody": "Click a box pill to enter it: the strip narrows to the box's projects and takes the box's colour. The ✕ on the selected pill (or All projects in the list, or the first row of the project search) leaves again. On a narrow window the pills fold into ▣▾ +N, which opens the same list. Ctrl+K finds your boxes too.",
+  "lessons.projectBoxes.boxDropdownBody": "Click a box pill to enter it: the strip narrows to the box's projects and takes the box's colour. The ✕ on the selected pill (or All projects in the list, or the first row of the project search) leaves again. On a narrow window the pills fold into the logo's list, and its ▾ counts them as +N. Ctrl+K finds your boxes too.",
   "lessons.projectBoxes.boxScopeTitle": "Open, rename, dissolve",
   "lessons.projectBoxes.boxScopeBody": "Entering a box also opens the box itself: its pill lights up while its own tabs are on screen, and its side panel stacks one section per project. Right-click the pill for Rename, Edit box… or Dissolve box…; dissolving only ends the grouping and never deletes a project. A click on a coloured swatch on a project pill jumps into that box.",
   "lessons.projectBoxes.memberChipTitle": "Which project is this tab in?",

@@ -5,7 +5,6 @@ import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
-import { BarHiddenChip } from "../projects/BarHiddenChip";
 import { barHiddenReason, setProjectBarHidden, useBarHidden } from "../../lib/projects/barHidden";
 import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
 import { BoxEmptyLine } from "../projects/BoxEmptyLine";
@@ -704,6 +703,17 @@ export function ProjectSwitcher({
             // Steering station 1 is the ring's root (`null`) head, which
             // `stationById` cannot carry precisely because it has no id.
             rootStation={steeringOnProjects ? 1 : undefined}
+            hidden={
+              currentBox
+                ? undefined
+                : {
+                    projects: barHiddenSplit.own,
+                    byBox: barHiddenSplit.groups,
+                    aliveProjectIds,
+                    aliveBoxIds,
+                    onOpen: (id) => void setActive(id),
+                  }
+            }
           />
           {/* Hairline between the fixed leading segment (★ · ⬡) and the
               scrolling project strip, so the two zones read as two zones. */}
@@ -801,16 +811,6 @@ export function ProjectSwitcher({
           >
             <ChevronRightIcon />
           </button>
-          {/* Outside the scroller, so "N hidden" never scrolls out of reach. */}
-          {!currentBox && (
-            <BarHiddenChip
-              projects={barHiddenSplit.own}
-              byBox={barHiddenSplit.groups}
-              aliveProjectIds={aliveProjectIds}
-              aliveBoxIds={aliveBoxIds}
-              onOpen={(id) => void setActive(id)}
-            />
-          )}
         </div>
         <div className="project-switcher-separator" />
 

@@ -456,8 +456,8 @@
   opacity: 1;
 }
 
-/* "+N": the boxes past the width budget (or hidden from the row), counted on the
-   fold pill; only the list it opens reaches them. */
+/* "+N": the boxes past the width budget (or hidden from the row), counted on
+   the caret; only the list it opens reaches them. */
 .box-chip-overflow {
   font-size: var(--text-sm);
   font-weight: 600;
@@ -585,23 +585,6 @@
   border-radius: var(--radius-sm);
   background-color: color-mix(in srgb, var(--slice-color, var(--accent)) 9%, transparent);
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--slice-color, var(--accent)) 55%, transparent);
-}
-
-/* The fold pill `▣▾ +N`, after the shown box pills: the boxes without a pill,
-   one click (or hover) from their list. The chip's own box, minus the pill's
-   inset, so it sits on the same rhythm as the pills before it. */
-.box-fold-pill {
-  padding: 0 var(--space-2);
-}
-.box-fold-pill .box-chip-caret-btn {
-  gap: 5px;
-  padding: 0;
-}
-.box-fold-pill .project-pill-box-swatch {
-  color: var(--text-secondary);
-}
-.box-fold-pill:hover .project-pill-box-swatch {
-  color: var(--text-primary);
 }
 
 /* The ghost "+ Box" pill, while there is no box: dashed, quiet, solid on hover. */
@@ -4599,44 +4582,47 @@ html:not(.show-untested-tags) .untested-tag {
   width: 84px;
 }
 
-/* "N hidden": the tail of the All projects row while some open projects are
-   kept off it (BarHiddenChip). Quiet like the box chip's "+N". */
-.bar-hidden-chip {
-  flex-shrink: 0;
-  align-self: center;
-  margin: 0 var(--space-1);
-  padding: 2px 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
+/* The logo dropdown's "N hidden" entry (BarHiddenList): unfolds, in place,
+   the projects kept off the All projects row — a name opens one, the eye
+   shows it (or a hidden box's members) on the row again. */
+.box-chip-menu button.bar-hidden-toggle {
   color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--text-sm);
-  white-space: nowrap;
-  cursor: var(--cur-pointer, pointer);
 }
-.bar-hidden-chip:hover,
-.bar-hidden-chip[aria-expanded="true"] {
+.box-chip-menu button.bar-hidden-toggle:hover,
+.box-chip-menu button.bar-hidden-toggle[aria-expanded="true"] {
   color: var(--text-primary);
 }
-
-.bar-hidden-menu .bar-hidden-row {
+.bar-hidden-caret {
+  width: 10px;
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+}
+.bar-hidden-list {
+  display: flex;
+  flex-direction: column;
+  padding-left: 16px;
+}
+.bar-hidden-group {
+  display: flex;
+  flex-direction: column;
+}
+.bar-hidden-row {
   display: flex;
   align-items: stretch;
 }
-.bar-hidden-menu .bar-hidden-row > :first-child {
+.bar-hidden-row > :first-child {
   flex: 1;
   min-width: 0;
 }
-.bar-hidden-menu .bar-hidden-box .context-menu-group-label {
+.bar-hidden-box {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.bar-hidden-menu button.bar-hidden-show {
+.box-chip-menu button.bar-hidden-show {
   flex: 0 0 auto;
-  width: 26px;
+  width: 22px;
   justify-content: center;
-  padding: 0;
+  padding: 5px 0;
   color: var(--accent);
 }

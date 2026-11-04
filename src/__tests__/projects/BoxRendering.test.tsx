@@ -122,9 +122,9 @@ function boxPillNames(container: HTMLElement): string[] {
   );
 }
 
-/** The fold pill `▣▾ +N` after the shown box pills (null when none is folded). */
-function foldPill(container: HTMLElement): HTMLElement | null {
-  return container.querySelector(".box-fold-pill");
+/** The `+N` on the logo's caret: the boxes without a pill (null when none). */
+function caretCount(container: HTMLElement): HTMLElement | null {
+  return container.querySelector(".box-chip-caret-btn .box-chip-overflow");
 }
 
 /** Open the chip's dropdown (hovering its caret opens it — a click on the
@@ -511,7 +511,7 @@ describe("box chip rendering (slice model)", () => {
     expect(boxPillNames(container)).toEqual(["boxA", "boxB"]);
   });
 
-  it("caps the row at MAX_BOX_PILLS, counts the rest on the fold pill, and always seats the selected box", async () => {
+  it("caps the row at MAX_BOX_PILLS, counts the rest on the caret, and always seats the selected box", async () => {
     const many = Array.from({ length: MAX_BOX_PILLS + 2 }, (_, i) =>
       box(`box${i}`, [], i + 1),
     );
@@ -520,9 +520,9 @@ describe("box chip rendering (slice model)", () => {
 
     const container = await renderSwitcher();
     expect(boxPillNames(container)).toEqual(many.slice(0, MAX_BOX_PILLS).map((b) => b.name));
-    // The count stands after the shown pills, no longer beside the logo.
-    expect(foldPill(container)!.textContent).toContain("+2");
-    expect(chip(container)!.textContent).not.toContain("+");
+    // The count rides the logo's caret, the list's one trigger.
+    expect(caretCount(container)!.textContent).toBe("+2");
+    expect(container.querySelector(".box-fold-pill")).toBeNull();
 
     // Picking an overflow box from the dropdown seats it in the last slot —
     // the box being looked at is never the one without a pill.
@@ -550,9 +550,9 @@ describe("box chip rendering (slice model)", () => {
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
 
     const container = await renderSwitcher();
-    // A hidden box has no pill, but the fold pill still counts it and the list has it.
+    // A hidden box has no pill, but the caret still counts it and the list has it.
     expect(boxPillNames(container)).toEqual(["boxA"]);
-    expect(foldPill(container)!.textContent).toContain("+1");
+    expect(caretCount(container)!.textContent).toBe("+1");
 
     const menu = await openChipMenu(container);
     const pins = [...menu.querySelectorAll<HTMLElement>(".box-chip-menu-pin")];
@@ -1333,7 +1333,7 @@ describe("header access: the caret opens on click as well as on hover (AS2a)", (
   });
 });
 
-describe("header access: the width-tier pill budget and the fold pill (AS2a)", () => {
+describe("header access: the width-tier pill budget and the caret's count (AS2a)", () => {
   const eight = () => Array.from({ length: 8 }, (_, i) => box(`box${i}`, [], i + 1));
 
   function seed(boxes: ProjectBox[]) {
@@ -1351,12 +1351,8 @@ describe("header access: the width-tier pill budget and the fold pill (AS2a)", (
       seed(eight());
       const container = await renderSwitcher(tier);
       expect(boxPillNames(container)).toHaveLength(expected);
-      // The rest stand folded: `▣▾ +N` after the shown pills.
-      const fold = foldPill(container)!;
-      expect(fold).toBeTruthy();
-      expect(fold.textContent).toContain(expected === 0 ? "8" : `+${8 - expected}`);
-      // After, not before: the pill row's last child.
-      expect(container.querySelector(".box-pill-row")!.lastElementChild).toBe(fold);
+      // The rest are counted on the logo's caret (`▾ +N`, bare N with no pill).
+      expect(caretCount(container)!.textContent).toBe(expected === 0 ? "8" : `+${8 - expected}`);
       cleanup();
       resetBoxSlice();
     }
@@ -1366,63 +1362,43 @@ describe("header access: the width-tier pill budget and the fold pill (AS2a)", (
     seed(eight());
     useBoxesStore.setState({ boxes: eight() });
     const container = await renderSwitcher(3);
-    // Select box5 through the list (the fold pill's own).
+    // Select box5 through the list.
     await act(async () => {
-      fireEvent.click(foldPill(container)!.querySelector("button") as HTMLElement);
+      fireEvent.click(container.querySelector(".box-chip-caret-btn") as HTMLElement);
     });
     await act(async () => {
       fireEvent.click(menuRow(document.querySelector(".box-chip-menu") as HTMLElement, "box5"));
     });
     expect(boxPillNames(container)).toEqual(["box5"]);
     expect(leaveButton(container)).toBeTruthy();
-    expect(foldPill(container)!.textContent).toContain("+7");
+    expect(caretCount(container)!.textContent).toBe("+7");
   });
 
-  it("shows no fold pill when every box has its pill", async () => {
+  it("shows no count when every box has its pill", async () => {
     seed([box("boxA", [], 1), box("boxB", [], 2)]);
     const container = await renderSwitcher(2);
     expect(boxPillNames(container)).toEqual(["boxA", "boxB"]);
-    expect(foldPill(container)).toBeNull();
+    expect(caretCount(container)).toBeNull();
   });
 
-  it("opens the list under the fold pill on hover and on click, and nothing sits beside the logo", async () => {
+  it("opens the one list under the logo, whatever overflows: no second trigger on the row", async () => {
     seed(eight());
     const container = await renderSwitcher(2);
-    expect(chip(container)!.textContent).not.toContain("+");
-    const foldButton = foldPill(container)!.querySelector("button") as HTMLElement;
-    const foldRect = { left: 300, right: 360, top: 0, bottom: 40 };
-    layOut(foldPill(container)!, foldRect);
+    expect(container.querySelector(".box-fold-pill")).toBeNull();
+    expect(container.querySelectorAll(".box-chip-caret-btn")).toHaveLength(1);
+    const caret = container.querySelector(".box-chip-caret-btn") as HTMLElement;
+    layOut(chip(container)!, { left: 12, right: 60, top: 0, bottom: 40 });
 
     await act(async () => {
-      fireEvent.mouseEnter(foldButton);
+      fireEvent.mouseEnter(caret);
     });
     const menu = document.querySelector(".box-chip-menu") as HTMLElement;
     expect(menu).toBeTruthy();
-    expect(menu.style.left).toBe("300px");
-    expect(foldButton.getAttribute("aria-expanded")).toBe("true");
-    // The same list as the caret's: every box, shown or folded.
+    expect(menu.style.left).toBe("12px");
+    expect(caret.getAttribute("aria-expanded")).toBe("true");
+    // Every box, shown or not.
     expect(menu.querySelectorAll(".box-chip-menu-row")).toHaveLength(8);
     cleanup();
-  });
-
-  it("a click on the fold pill pins its list", async () => {
-    seed(eight());
-    const container = await renderSwitcher(2);
-    const foldButton = foldPill(container)!.querySelector("button") as HTMLElement;
-    await act(async () => {
-      fireEvent.click(foldButton);
-    });
-    expect(document.querySelector(".box-chip-menu")).toBeTruthy();
-    vi.useFakeTimers();
-    try {
-      await act(async () => {
-        fireEvent.mouseLeave(foldButton);
-        vi.advanceTimersByTime(3000);
-      });
-      expect(document.querySelector(".box-chip-menu")).toBeTruthy();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });
 
