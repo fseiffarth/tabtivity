@@ -1548,7 +1548,7 @@ describe("box pill menu — shared checklist, dissolve, rename check (AS5a)", ()
     [...document.querySelectorAll(".box-pill-menu button")].find((b) => b.textContent?.includes(text)) as HTMLElement;
 
   beforeEach(() => {
-    useBoxEditorStore.setState({ open: false, boxId: null, initialMemberIds: [], renamingId: null });
+    useBoxEditorStore.setState({ open: false, boxId: null, renamingId: null });
   });
 
   it("lists closed projects with a closed label and adds or removes them like any other", async () => {

@@ -39,6 +39,7 @@ import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useFileSourcePrefStore } from "../../stores/remote/fileSourcePref";
 import { useBoxAccordionStore, resetBoxAccordion } from "../../stores/boxAccordion";
 import { useGitDirtyStore } from "../../stores/gitDirty";
+import { useBoxEditorStore } from "../../stores/boxEditor";
 import { useDragStore } from "../../stores/drag/drag";
 import type { TabEntry } from "../../stores/tabs";
 
@@ -771,5 +772,36 @@ describe("box side panel member menu and shared search", () => {
       expect(input.disabled).toBe(true);
       expect(input.placeholder).toContain("Local");
     });
+  });
+});
+
+describe("empty box in the side panel (AS5b)", () => {
+  it("shows the empty-box line (not the folder warning) and its button opens the sheet", async () => {
+    useBoxesStore.setState({ boxes: [box("boxE", [])] });
+    useTabsStore.setState({ scope: "box:boxE" });
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<SidePanel open={true} />));
+    });
+    const line = container.querySelector(".box-empty-panel .box-empty-line") as HTMLElement;
+    expect(line.textContent).toContain("No projects yet");
+    // The box folder's own section still leads the (otherwise empty) list.
+    expect(container.querySelectorAll(".file-root")).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(line.querySelector(".box-empty-add")!);
+    });
+    expect(useBoxEditorStore.getState().boxId).toBe("boxE");
+    useBoxEditorStore.getState().close();
+  });
+
+  it("a box with members shows no such line", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
+    useProjectsStore.setState({ projects: [proj("p1")], activeId: null, loaded: true });
+    useTabsStore.setState({ scope: "box:boxA" });
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(<SidePanel open={true} />));
+    });
+    expect(container.querySelector(".box-empty-line")).toBeNull();
   });
 });

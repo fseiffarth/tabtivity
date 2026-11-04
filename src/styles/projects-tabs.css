@@ -929,9 +929,66 @@
   border-color: var(--danger);
 }
 
-/* Box editor dialog (canonical dialog chrome; see BoxEditorDialog). */
+/* Box sheet (canonical dialog chrome; see BoxEditorDialog). */
 .box-editor {
-  width: min(440px, 92vw);
+  width: min(520px, 92vw);
+}
+
+/* A labelled block of the sheet: the caption above, its control(s) below. */
+.box-editor .box-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.box-editor .box-editor-field-label {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+}
+
+.box-editor .box-editor-help {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-sm);
+}
+
+.box-editor .box-editor-name-error {
+  font-size: var(--text-sm);
+}
+
+.box-editor input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* The palette chips sit on the sheet's own left edge and wrap on its width, not
+   the context menu's 172px column. */
+.box-editor .tab-color-swatches {
+  max-width: none;
+  padding: 2px 0;
+}
+
+/* `.project-dialog label` / `.project-dialog input` (a stacked field, a 34px text
+   box) must not reach the custom-colour chip: it is a swatch over a hidden input. */
+.box-editor label.box-color-custom {
+  display: inline-block;
+}
+
+.box-editor .box-color-custom input {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+}
+
+.box-editor .box-editor-members-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.box-editor .box-editor-count {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-sm);
 }
 
 /* The member list reads as one inset field: the control surface and border of
@@ -940,13 +997,12 @@
    centered dialog with every keystroke. */
 .box-editor .box-editor-members {
   flex: 0 0 auto;
-  height: 40vh;
+  height: min(30vh, 240px);
   overflow-y: auto;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
   padding: var(--space-1);
-  margin-top: -6px;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -997,8 +1053,97 @@
   padding: var(--space-1) var(--space-2);
 }
 
+/* One row's kind badges (closed, container, VM, remote) and the swatches of the
+   other boxes that hold the project; both trail the name. */
+.box-editor .box-editor-badge {
+  flex: 0 0 auto;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-sm);
+  line-height: 16px;
+}
+
+.box-editor .box-editor-badge.is-closed {
+  font-style: italic;
+}
+
+.box-editor .box-editor-also {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.box-editor .box-editor-also-swatch {
+  width: 12px;
+  height: 11px;
+}
+
+.box-editor .box-editor-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+}
+
+.box-editor .box-editor-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--text-md);
+}
+
+.box-editor .box-editor-folder-none {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-md);
+}
+
+.box-editor .box-editor-open {
+  flex: 0 0 auto;
+}
+
 .box-editor .box-editor-dissolve {
   margin-right: auto;
+}
+
+/* The empty-box line: in the slice strip (inline, after the logo chip) and in the
+   box's side panel (centred in `.file-tree-empty`). */
+.box-empty-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-md);
+  white-space: nowrap;
+}
+
+.box-empty-line.box-empty-strip {
+  padding: 0 var(--space-2);
+}
+
+.box-empty-line .box-empty-add {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.box-empty-line .box-empty-add:hover {
+  background: var(--control-hover-bg);
+}
+
+/* A narrow side panel wraps the line rather than clipping the button. */
+.box-empty-panel .box-empty-line {
+  flex-wrap: wrap;
+  white-space: normal;
 }
 
 /* Multi-root file view (box scope): one collapsible section per root, each set

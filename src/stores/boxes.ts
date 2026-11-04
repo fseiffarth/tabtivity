@@ -199,6 +199,9 @@ export interface BoxDraftDiff {
   name?: string;
   addMembers?: string[];
   removeMembers?: string[];
+  /** The new colour (`#rrggbb`), or `""` for the one hashed from the id; absent
+   *  leaves it. Compared with the box as the store holds it: no change, no write. */
+  color?: string;
 }
 
 /** `loaded` (the members when the editor opened) to `draft` (its checklist) as
@@ -368,11 +371,14 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
     }
     const addMembers = diff.addMembers ?? [];
     const removeMembers = diff.removeMembers ?? [];
-    if (!renamed && addMembers.length === 0 && removeMembers.length === 0) return before;
+    const color = diff.color === undefined ? undefined : isBoxColor(diff.color) ? diff.color.toLowerCase() : "";
+    const recoloured = color !== undefined && color !== (isBoxColor(before.color) ? before.color.toLowerCase() : "");
+    if (!renamed && !recoloured && addMembers.length === 0 && removeMembers.length === 0) return before;
     const patch: BoxPatch = {};
     if (renamed) patch.name = name;
     if (addMembers.length > 0) patch.addMembers = addMembers;
     if (removeMembers.length > 0) patch.removeMembers = removeMembers;
+    if (recoloured && color !== undefined) patch.color = color;
     let stored: ProjectBox;
     try {
       stored = await invoke<ProjectBox>("patch_box", { boxId, patch });
@@ -384,6 +390,7 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
       if (renamed) stored = await invoke<ProjectBox>("rename_box", { boxId, name });
       for (const id of addMembers) stored = await invoke<ProjectBox>("patch_box", { boxId, patch: { addMember: id } });
       for (const id of removeMembers) stored = await invoke<ProjectBox>("patch_box", { boxId, patch: { removeMember: id } });
+      if (recoloured && color !== undefined) stored = await invoke<ProjectBox>("patch_box", { boxId, patch: { color } });
     }
     set((state) => ({ boxes: state.boxes.map((b) => (b.id === boxId ? stored : b)) }));
     if (addMembers.length > 0 || removeMembers.length > 0) await refreshDocsFor(get().boxes, [boxId]);
