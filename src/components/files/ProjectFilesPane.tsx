@@ -33,6 +33,7 @@ import type { SortKey } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { UntestedTag } from "../common/UntestedTag";
+import { useLockstepState } from "../../hooks/useLockstepState";
 import { BoxEmptyLine } from "../projects/BoxEmptyLine";
 import { CloseIcon, FolderIcon, GripIcon, HexagonIcon, MoreIcon, RefreshIcon } from "../common/icons/Icon";
 
@@ -889,6 +890,13 @@ export function ProjectFilesPane({
   // The outcome line under the row: what the transfer did, or why it failed.
   // `bad` only colours it — a skipped-conflicts result is not an error.
   const [syncResult, setSyncResult] = useState<{ text: string; bad: boolean } | null>(null);
+  // With Git lockstep on, byte-sync (Sync all, Auto-sync) leaves every git-tracked
+  // file to Git sync. Neither said so: a Sync all that moved none of the files the
+  // user meant read as a success, and a lockstep that was not delivering was
+  // visible only in the Git view.
+  const lockstep = useLockstepState(projectId, isRemoteProject && !remoteBlocked && !compact);
+  const lockstepOn = !!lockstep?.enabled;
+  const lockstepStuck = lockstepOn && lockstep?.status === "desynchronized";
 
   /**
    * Run one whole-tree transfer with the confirm dialog in front of it, and
@@ -916,7 +924,9 @@ export function ProjectFilesPane({
     try {
       if (direction === "pull") {
         await useSyncStore.getState().syncWholeProject(projectId);
-        setSyncResult({ text: t("projectFilesPane.syncPullDone"), bad: false });
+        const parts = [t("projectFilesPane.syncPullDone")];
+        if (lockstepOn) parts.push(t("projectFilesPane.syncTrackedByGit"));
+        setSyncResult({ text: parts.join(" · "), bad: false });
       } else {
         const r = await useSyncStore.getState().pushWholeProject(projectId);
         const parts = [t("projectFilesPane.syncPushed", { count: r.pushed })];
@@ -933,6 +943,9 @@ export function ProjectFilesPane({
         }
         if (r.skipped_excluded > 0) {
           parts.push(t("projectFilesPane.syncExcludedSkipped", { count: r.skipped_excluded }));
+        }
+        if (r.skipped_tracked > 0) {
+          parts.push(t("projectFilesPane.syncTrackedSkipped", { count: r.skipped_tracked }));
         }
         setSyncResult({ text: parts.join(" · "), bad: r.failed_total > 0 });
       }
@@ -971,11 +984,13 @@ export function ProjectFilesPane({
                 onClick={() =>
                   void useSyncStore.getState().setAuto(projectId, [""], !autoAll, true)
                 }
-                title={t(
-                  autoAll
-                    ? "projectFilesPane.autoSyncOnTitle"
-                    : "projectFilesPane.autoSyncOffTitle",
-                )}
+                title={
+                  t(
+                    autoAll
+                      ? "projectFilesPane.autoSyncOnTitle"
+                      : "projectFilesPane.autoSyncOffTitle",
+                  ) + (lockstepOn ? "\n" + t("projectFilesPane.autoSyncLockstepNote") : "")
+                }
               >
                 {t(autoAll ? "projectFilesPane.autoSyncOn" : "projectFilesPane.autoSyncOff")}
               </button>
@@ -1030,6 +1045,17 @@ export function ProjectFilesPane({
           >
             {syncBusy ? t("projectFilesPane.syncAllBusy") : t("projectFilesPane.syncAll")}
           </button>
+        </div>
+      )}
+      {/* Lockstep is the transport for every git-tracked file here, and it is not
+          in step: until that is resolved (Git view), committed files reach the
+          other side by no route at all — Sync all and Auto-sync never carry them. */}
+      {!compact && !activeBox && isRemoteProject && projectId && !remoteBlocked && lockstepStuck && (
+        <div className="project-files-sync-result project-files-sync-result--bad" role="status">
+          <span>
+            {t("projectFilesPane.lockstepStuck", { detail: lockstep?.detail ?? "—" })}{" "}
+            <UntestedTag id="projectFilesPane.lockstepNotes" />
+          </span>
         </div>
       )}
       {/* The outcome of the last whole-tree transfer. Dismissible, and it stays

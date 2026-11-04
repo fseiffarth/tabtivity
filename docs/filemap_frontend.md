@@ -461,6 +461,7 @@ stores stay at the top. No `index.ts` barrels.
 | `hooks/useListReorder.ts` + `lib/listReorder.ts` | The shared drag-a-row-into-place gesture for `{ id }[]` lists. Pointer events (not HTML5 DnD); the grip takes pointer capture. |
 | `hooks/useTauriListener.ts` | `subscribeTauri`/`useTauriListener`: a Tauri `listen`/`onX` subscription with the unmount-before-it-settles race and the rejection handled in one place. Use it for new subscriptions. |
 | `hooks/useCrossWindowAppearance.ts` | The main window's theme/accent/token/corner/cursor/language broadcasts applied in a secondary window (`DetachedApp`, `PdfPresentApp`, `DeckAudienceApp`). |
+| `hooks/useLockstepState.ts` | A remote project's Git lockstep state (`git_peer_status` + `git-peer-status`) for non-Git views: the Files panel says git-tracked files are Git sync's job and when it is out of step. |
 | `hooks/useOpenVpn.ts` | The one OpenVPN client side: `useOpenVpnLog`, `useVpnReadyMarker` (on `terminalBus`), `pickAndStoreOvpnConfig`, `forgetVpnPassword`; used by `useRemoteSession`, `useRemoteReconnect`, `VpnPasswordPrompt`, `VpnIndicator`. |
 | `lib/runWithProgress.ts` | Install/pull-with-log flows: subscribes the progress event inside `try`, unlistens in `finally`, so a rejected `listen` never leaves a button stuck. |
 | `lib/shortcuts/shortcuts.ts` | Chord table (every app key, F11/panels/Esc/zoom included; `{key:""}` = off, `{key:"Super"}` = lone tap), chord parsing/resolution, `modifierLabel()` (⌘/Ctrl for mouse-modifier prose; key chords go through `shortcutHint`), steering legend rows. |

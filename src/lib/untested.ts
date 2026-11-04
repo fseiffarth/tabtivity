@@ -149,6 +149,7 @@ export const UNTESTED = {
   "syncConfirmDialog.1": { area: "common", what: "SyncConfirmDialog · {t(host ? \"syncConfirm.deleteHostTitle\" : \"syncConfirm.deleteLocalTitle\")}{\" \"}" },
   "syncConfirmDialog.2": { area: "common", what: "SyncConfirmDialog · {t(pull ? \"syncConfirm.pullTitle\" : \"syncConfirm.pushTitle\")}" },
   "syncConfirmDialog.3": { area: "common", what: "SyncConfirmDialog · take-newer ask: both directions in one dialog; any sync ask withdrawn on project switch" },
+  "syncConfirmDialog.4": { area: "common", what: "SyncConfirmDialog · push/pull of only git-tracked files: no contradictory headline, Close + Sync Git now; tracked files committed after pairing read green, no bogus ⬆" },
 
   // --- dev — Developer-only surfaces --------------------------------
   "devPerfHost.1": { area: "dev", what: "DevPerfHost · Perf monitor" },
@@ -243,6 +244,7 @@ export const UNTESTED = {
   "projectFilesPane.1": { area: "files", what: "ProjectFilesPane · Project settings" },
   "projectFilesPane.syncMirrorSkipped": { area: "files", what: "Remote tree · a line under the file tree naming mirror files a push left alone (background auto-sync or a manual push): a link or one behind a linked folder, a FIFO/device/folder where a file was, or one over 64 MiB — with the reason per file; dismissible, it clears once the file is an ordinary file again" },
   "projectFilesPane.2": { area: "files", what: "ProjectFilesPane · Large folders…" },
+  "projectFilesPane.lockstepNotes": { area: "files", what: "Remote Files panel with Git sync on · Sync all's result names the git-tracked files left to Git sync, the Auto-sync tooltip says tracked files travel as commits, and a red line says when Git sync is not in step" },
   "projectFilesPane.accordion": { area: "files", what: "Box side panel · one member section expanded at a time (the last clicked, else the active tab's), one-line headers with the member colour dot, a git dot (omitted for remote or unprobed members) and the agent-tab count; the choice is remembered per box" },
   "projectFilesPane.dropCollapsed": { area: "files", what: "Box side panel · a file dragged over a collapsed member section lands in that member's root on release, and the section opens after a short dwell" },
   "projectFilesPane.memberMenu": { area: "files", what: "Box side panel · the ⋯ menu on a member header: Files or Git, Remote or Local, open folder, project settings, and Open as tab (the member's Files tab with the git bar)" },
