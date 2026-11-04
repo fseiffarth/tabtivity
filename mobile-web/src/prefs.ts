@@ -196,6 +196,20 @@ export function writeHintReads(reads: Record<string, number> | undefined, storag
   writeJson(`${PREFIX}hintReads`, reads, storage);
 }
 
+/** When each tip last came up on this phone (ms since the epoch), by tip, so a
+ * spot's tips take turns (`HintQueue`) across reloads too. Anything that is not
+ * a map of times reads as never shown. */
+export function readHintShown(storage?: FlagStorage): Record<string, number> {
+  return readJson(`${PREFIX}hintShown`, (parsed) => {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])));
+  }, {}, storage);
+}
+
+export function writeHintShown(shown: Record<string, number> | undefined, storage?: FlagStorage): void {
+  writeJson(`${PREFIX}hintShown`, shown, storage);
+}
+
 /** When the last tip card came up on this phone (ms since the epoch), so the
  * next waits out `HintMessage`'s half hour across reloads too. 0 when none. */
 export function readTipShownAt(storage?: FlagStorage): number {

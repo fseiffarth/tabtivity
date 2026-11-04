@@ -569,7 +569,7 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
  * and never changes.
  */
 /** An agent chat's tips, in the order they come (`HintQueue`). */
-const CHAT_TIPS: readonly HintKey[] = ["composerAttach", "composerKeys", "composerPlanGoal", "composerClear", "composerCommit", "composerMic", "statusLamp", "statusModel", "statusMode", "statusWorktree", "sendHold", "chatMenu", "sentFiles", "markup", "chatSwipe"];
+const CHAT_TIPS: readonly HintKey[] = ["statusModel", "composerAttach", "composerKeys", "composerPlanGoal", "composerClear", "composerCommit", "composerMic", "statusLamp", "statusMode", "statusWorktree", "sendHold", "chatMenu", "sentFiles", "markup", "chatSwipe"];
 const TABBY_TIPS: readonly HintKey[] = ["sendHold", "chatMenu", "chatSwipe"];
 
 function AskedCard({ questions, label, notAnswered, untested, time, press }: {
@@ -2677,8 +2677,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               driver's list would only offer to move it off. */}
           {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
-            : <button className="fact-action" disabled={!connected} onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
-          <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
+            : <button className="fact-action" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
+          <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(isUntested("mobile.design.rounded") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}

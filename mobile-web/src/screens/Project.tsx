@@ -681,8 +681,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const showHoldHint = !!quickTarget && !hintsGone.hold;
   /** The screen's tips, each its own card, one at a time at the top. */
   const tips: HintKey[] = [
-    ...(drawerOffered ? ["projectFiles" as const] : []),
     ...(showHoldHint ? ["agentHold" as const] : []),
+    ...(drawerOffered ? ["projectFiles" as const] : []),
     ...(tabs.length > 0 ? ["tabCard" as const] : []),
   ];
   return <main className="screen project-screen" ref={screenRef}>
