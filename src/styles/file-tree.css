@@ -888,7 +888,9 @@
   align-self: center;
   margin-left: 4px;
   padding: 0 5px;
-  width: 64px;
+  /* A floor, not a fixed width: the label grew with the font sweeps
+     (9 → 11 px) and a fixed 64 px let "LOCAL ONLY" spill past the pill. */
+  min-width: 64px;
   height: 16px;
   box-sizing: border-box;
   border-radius: var(--radius-full);
