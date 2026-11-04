@@ -41,6 +41,14 @@ Read this first; keep it current when a decision or an open point changes.
   and ICS-import tools, the staged-write review, the overlay-docked agent),
   local-model and reader lanes too, with their controls and events in the
   browser client — everything the window's listener serves.
+- **The phone's features since 2026-10-11 on a server (2026-11-03, #2436,
+  #2437, open #2438).** The status says `server`; whatever only a window
+  answers is `501 server_no_window` (`host::server_window_codes`) and the
+  phone names the browser client instead of "start the desktop"; Mail,
+  From the desktop, the ⎇/locality moves and Diverged are left out. A
+  local project's agent starts in a linked worktree with no window. Still
+  window-only on a server: mail, alerts, Tabby's model switch, the moves,
+  Diverged and mode/cloud/local/API-key/sign-in launches (#2438).
 - **Nothing has run on a real server** or in the user's running window.
   Every new user-visible feature carries an `UntestedTag`.
 - **Released as a `.deb` (2026-10-14, plan §8.1).** Each GitHub release

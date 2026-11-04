@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { CheckboxIcon, ClockIcon } from "../../../src/components/common/icons/Icon";
 import { api, normalizeTodoBoard, reloadIfApplied, wasApplied, type TodoBoard, type TodoCard, type TodoColumn, type TodoTaskInput } from "../api";
 import { describeFailure, failureCode } from "../connection";
+import { isOnServer } from "../hostKind";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
@@ -184,7 +185,7 @@ export function Todo({ card }: { card?: string }) {
   return <main className="screen todo-screen">
     <header><h1>{t("todo.overlayTitle")}</h1><button onClick={load} disabled={busy}>↻</button></header>
     {error && <p className="error">{boardError(error.reason, t)}</p>}
-    {board?.desktop_available === false && <p className="notice">{t("mobile.headless.owner")} {isUntested("mobile.headless.todo") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {board?.desktop_available === false && <p className="notice">{t(isOnServer() ? "mobile.headless.ownerServer" : "mobile.headless.owner")} {(isOnServer() ? isUntested("mobile.server.noWindow") : isUntested("mobile.headless.todo")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {/* The search is the first thing under the header: it is what a board of
         forty cards is opened with, and it used to sit below a standing notice
         that says the same sentence every visit. That notice is now the last

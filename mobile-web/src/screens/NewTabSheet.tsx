@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { CloseIcon } from "../glyphs";
 import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type HostMachineRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
+import { isOnServer } from "../hostKind";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
 import { HintMessage } from "../components/HintMessage";
@@ -160,15 +161,17 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
       {creates && machines.length > 0 && <MachinePicker machines={machines} value={onMachine} here={!pinned} onChange={setMachine} />}
       {creates && <p className="sheet-note">{t("mobile.newTab.note")}</p>}
       {creates && agentsOnly && <p className="sheet-note">{t("mobile.newTab.agentsOnly")}</p>}
-      {creates && headless && !pinned && <p className="sheet-note">{t("mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+      {creates && headless && !pinned && <p className="sheet-note">{t(isOnServer() ? "mobile.newTab.headlessServer" : "mobile.newTab.headless")}{isUntested("mobile.headless") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       {creates && pinned && headless && <p className="sheet-note">{t("mobile.newTab.remoteOnlyNeedsWindow")}{isUntested("mobile.newTab.remoteOnly") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
       <div className="create">
         {/* Every row that opens a tab is behind `creates`; the file row at the
             foot is not — on a host with no tmux it is the whole sheet. */}
         {creates && <>
         {shells && here && <button className="primary" disabled={busy} onClick={() => onPick("shell")}>{t("mobile.newTab.shell")}</button>}
-        {linked.length > 0 && agents.length > 0 && !headless && <div className="new-tab-where" role="group" aria-label={t("mobile.newTab.where")}>
-          <small>{t("mobile.newTab.where")}{isUntested("mobile.newTab.worktree") && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
+        {/* With no window the host lists only the worktrees it can start an
+            agent in itself (a local project's), so the row stands then too. */}
+        {linked.length > 0 && agents.length > 0 && <div className="new-tab-where" role="group" aria-label={t("mobile.newTab.where")}>
+          <small>{t("mobile.newTab.where")}{(headless ? isUntested("mobile.headless.worktreeLaunch") : isUntested("mobile.newTab.worktree")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</small>
           <button className={where === "" ? "selected" : ""} aria-pressed={where === ""} onClick={() => setWhere("")}>{t("mobile.newTab.projectFolder")}</button>
           {linked.map((row) => <button key={row.id} className={where === row.id ? "selected" : ""} aria-pressed={where === row.id} title={row.label} onClick={() => setWhere(row.id)}>{row.branch || row.label}</button>)}
         </div>}
@@ -186,7 +189,7 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         {options.api_key && !headless && here && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
         {!headless && here && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
         {options.sign_in.length > 0 && !headless && !pinned && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
-        {headless && !pinned && <NeedsWindow agents={agents} options={options} linked={linked} />}
+        {headless && !pinned && <NeedsWindow agents={agents} options={options} />}
         </>}
         {/* At the sheet's foot, under everything that opens a tab. No desktop
             round trip — the sidecar writes the file itself — so neither a
@@ -259,9 +262,11 @@ function DefaultStar({ starred, label, onClick }: { starred: boolean; label: str
 
 /** With no window, everything only the window can start, folded into one
  * group at the sheet's foot — the reader sees what waits without a sheet of
- * dead buttons to tap: an agent's modes, the cloud sessions, the linked
- * worktrees, the local model's agents and the sign-in list. */
-function NeedsWindow({ agents, options, linked }: { agents: AgentRow[]; options: LaunchOptions; linked: LaunchOptions["worktrees"] }) {
+ * dead buttons to tap: an agent's modes, the cloud sessions, the local
+ * model's agents and the sign-in list. (The worktrees a host lists with no
+ * window it starts agents in itself.) On a server, which never has a window,
+ * the group names the browser client instead. */
+function NeedsWindow({ agents, options }: { agents: AgentRow[]; options: LaunchOptions }) {
   const t = useT();
   const rows: { key: string; label: string; items: string[] }[] = [];
   for (const agent of agents) {
@@ -269,13 +274,12 @@ function NeedsWindow({ agents, options, linked }: { agents: AgentRow[]; options:
   }
   const clouded = agents.filter((agent) => options.cloud.some((launch) => launch.agent_id === agent.id)).map((agent) => agent.label);
   if (clouded.length) rows.push({ key: "cloud", label: t("mobile.newTab.cloudGroup"), items: clouded });
-  if (linked.length && agents.length) rows.push({ key: "where", label: t("mobile.newTab.where"), items: linked.map((row) => row.branch || row.label) });
   if (options.local?.agents.length) rows.push({ key: "local", label: t("mobile.newTab.localGroup", { model: options.local.model }), items: options.local.agents.map((row) => row.label) });
   if (options.sign_in.length) rows.push({ key: "sign-in", label: t("mobile.signIn.listEntry"), items: [] });
   if (!rows.length) return null;
   const count = rows.reduce((sum, row) => sum + Math.max(row.items.length, 1), 0);
   return <details className="new-tab-held">
-    <summary>{t("mobile.newTab.needsWindow", { count: String(count) })}{isUntested("mobile.newTab.needsWindow") && <span className="untested">{t("mobile.newTab.untested")}</span>}</summary>
+    <summary>{t(isOnServer() ? "mobile.newTab.needsBrowser" : "mobile.newTab.needsWindow", { count: String(count) })}{isUntested("mobile.newTab.needsWindow") && <span className="untested">{t("mobile.newTab.untested")}</span>}</summary>
     <ul>{rows.map((row) => <li key={row.key}><strong>{row.label}</strong>{row.items.length > 0 && <span>{row.items.join(" · ")}</span>}</li>)}</ul>
   </details>;
 }

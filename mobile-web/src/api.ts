@@ -411,8 +411,9 @@ export interface MobileMailAttachment { filename: string; mime: string; size: nu
 /** The host reads these display preferences from desktop settings on each
  * probe: the untested pills, the desktop's theme for a phone that follows it,
  * the sections the desktop keeps this phone out of (absent from an older
- * host: none) and the desktop's AI switch (`ai_off`, absent: on). */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean }> {
+ * host: none), the desktop's AI switch (`ai_off`, absent: on) and whether the
+ * host is a server daemon, which never has a window (`server`, absent: no). */
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean; server?: boolean }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */

@@ -1166,3 +1166,82 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2436. **The phone on a server: no "start the desktop", window-only requests
+    named as such.** ✅ **Built** (2026-11-03, the server catch-up of
+    `develop`'s phone features since 2026-10-11). A server daemon never has
+    a window, so every phone request only a window answers came back as
+    `503 desktop_unavailable` and the phone said "Tabtivity isn't running on
+    your desktop — start it". Now: `GET /api/v1/status` carries `server`;
+    on a server `host::server_window_codes` renames every phone-API `503
+    desktop_unavailable` to `501 server_no_window`, which the phone words
+    "That needs the Tabtivity window, which a server does not have" with a
+    hint to the browser client (`mobile-web/src/hostKind.ts`,
+    `connection.ts`); the project screen, Calendar, To-do and ＋ sheet notes
+    name the server and the browser client; Mail and the composer's From the
+    desktop tile are left out (desktop images answer `server_no_window`
+    instead of listing the server account's Pictures); the catalog offers no
+    ⎇ worktree or locality move (`Catalog::without_window_moves`) and the
+    project menu no Diverged. Tests: `host/tests.rs`
+    `a_server_names_window_only_requests_as_such`,
+    `only_the_window_refusal_is_renamed`; `MobileConnectionError`,
+    `MobileNewTabSheet`. `UntestedTag` `mobile.server.noWindow`.
+    - [ ] 🖐️ Manual test — pair a phone with a server account: Home has
+      no Mail tab; a project's screen says "On this server there is no
+      Tabtivity window…"; the ＋ sheet says "On this server an agent…
+      starts right away" and folds the modes under "In the browser client";
+      in a chat the facts row's branch is plain (no ⎇ sheet), the composer's
+      ＋ has no From the desktop; Tabby's model chip, when tapped, says it
+      needs the window. A paired desktop (window closed) still says "Desktop
+      unavailable".
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2437. **An agent in a worktree from the phone with no window.** ✅ **Built**
+    (2026-11-03). The ＋ sheet's "Agents start in" row needed the window;
+    with none (a closed desktop window, or always on a server) the host now
+    lists a local project's linked worktrees itself
+    (`git_overview::launch_worktrees`: the window's `agentWorktreeChoices`
+    rule, the ids `mobile_opaque_id` mints) and starts the picked agent in
+    that folder (`headless::create_tab_at`), labelled "<agent> · <branch>"
+    as the window labels it; a stale id is `404 worktree_not_found`. A
+    remote project's worktrees still wait for the window (its agent runs in
+    the mirror's root). Tests: `git_overview`
+    `launch_worktrees_are_the_windows_list_under_the_desktops_ids`,
+    `host/tests.rs` `an_agent_starts_in_a_worktree_with_no_window`,
+    `MobileNewTabSheet`. `UntestedTag` `mobile.headless.worktreeLaunch`.
+    - [ ] 🖐️ Manual test — a local git project with a linked worktree,
+      the desktop window closed (or a server): the phone's ＋ shows Agents
+      start in with the branch; pick it and Claude; the new tab is
+      "Claude · <branch>" and `pwd` in it is the worktree; the next window
+      shows the tab in that worktree.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2438. **Phone requests a server still cannot answer.** Open. Each answers
+    `501 server_no_window` (#2436) and the phone says so; the browser
+    client does them. In order of use: Mail (the window builds the snapshot
+    from its mail stores — the daemon runs the mail engine, so a daemon-side
+    snapshot is possible); Alerts and their ✓ (`src/lib/alerts.ts`, ~700
+    lines of selectors over calendar, to-do and urgent mail — Needs you has
+    no alert rows on a server); Tabby's model list and switch (Claude's rows
+    come from the TS `/model` picker reader; the switch is a kill + relaunch
+    the owner could do like Undo clear); the ⎇ worktree and locality moves
+    (the window carries the conversation between folders/hosts); the
+    Diverged list and its resolve actions (the window's sync store and SSH
+    session); a mode, cloud, local-model, API-key or sign-in launch (the
+    window builds those specs; on a server sign-in tabs and admin API keys
+    matter most); the CLI overview's Claude `/usage` note still says "needs
+    the desktop app".

@@ -1835,6 +1835,18 @@ impl Catalog {
         self
     }
 
+    /// This snapshot as a host that never has a window lists it (a server
+    /// daemon): the facts row's ⎇ worktree and locality moves are the
+    /// window's — it stops the CLI, carries the conversation and respawns
+    /// the tab — so no tab offers them, and the phone draws the plain branch.
+    pub fn without_window_moves(mut self) -> Self {
+        for tab in self.projects.iter_mut().flat_map(|project| project.tabs.iter_mut()) {
+            tab.public.worktree_movable = false;
+            tab.public.location_movable = false;
+        }
+        self
+    }
+
     pub fn project(&self, id: &str) -> Option<&ResolvedProject> {
         self.projects.iter().find(|p| p.public.id == id)
     }

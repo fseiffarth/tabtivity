@@ -37,6 +37,7 @@ import { GripHint } from "./Home";
 import { isUntested } from "../../../src/lib/untested";
 import { ListSkeleton } from "../components/ListSkeleton";
 import { describeFailure } from "../connection";
+import { isOnServer } from "../hostKind";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import type { SubagentStep } from "../terminal/subagents";
 import { startVisiblePoll } from "../visiblePoll";
@@ -741,7 +742,10 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {/* Only once the host has answered: `!detail?.desktop_available` was also
         true while the first load was in flight, so every project opened on a
         "Desktop unavailable" notice that vanished a moment later. */}
-    {detail && !detail.desktop_available && <p className="notice">{t("mobile.project.desktopUnavailable")} {isUntested("mobile.headless.tabs") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {/* A server never has a window: its note names the browser client. */}
+    {detail && !detail.desktop_available && (isOnServer()
+      ? <p className="notice">{t("mobile.project.serverNoWindow")} {isUntested("mobile.server.noWindow") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>
+      : <p className="notice">{t("mobile.project.desktopUnavailable")} {isUntested("mobile.headless.tabs") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>)}
     {/* The host has no tmux (Windows): its tabs never reach a phone, so the
         controls that would open, schedule or send to one are not offered. */}
     {!terminalsOffered && <p className="notice">{t("mobile.project.terminalsUnsupported")} {isUntested("mobile.project.terminalsUnsupported") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
