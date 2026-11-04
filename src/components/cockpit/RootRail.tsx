@@ -4,8 +4,6 @@ import { storageKey } from "../../lib/brand";
 import type { DecisionGroupId } from "../../lib/cockpit/decisions";
 import type { RosterRow } from "../../lib/cockpit/roster";
 import { useT } from "../../lib/i18n";
-import { ROOT_SCOPE } from "../../stores/tabs";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { ChevronLeftIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { CockpitRail } from "./CockpitRail";
@@ -44,10 +42,9 @@ function useRailFold(): [boolean, (open: boolean) => void] {
 }
 
 /** A tab row picked in the Root view's rail: there is no detail pane to fill,
- *  so it goes to the tab — a root tab is shown in this very view. */
+ *  so it goes to the tab (`jumpToRow` shows a root tab in this very view). */
 function pickRow(row: RosterRow) {
-  if (row.scope.id === ROOT_SCOPE) useRootOverlayStore.getState().show(row.tab.key);
-  else jumpToRow(row.ptyId);
+  jumpToRow(row.ptyId);
 }
 
 /** The collapsed rail: live-store groups only (no backend read, no clock). */

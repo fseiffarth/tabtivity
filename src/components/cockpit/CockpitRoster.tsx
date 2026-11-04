@@ -14,6 +14,8 @@ import { useSettingsStore } from "../../stores/settings";
 import { useBoxesStore } from "../../stores/boxes";
 import { useCockpitStore, type CockpitRosterMode, type CockpitStateFilter } from "../../stores/cockpit";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { ROOT_SCOPE } from "../../stores/tabs";
 import { CONTINUE_PROMPT } from "../tabs/TabLocalityBadges";
 import { tabColorCss } from "../../lib/theme/tabColors";
 
@@ -53,11 +55,14 @@ const SORT_LABEL: Record<string, TranslationKey> = {
   native: "agentPrompts.sort.native",
 };
 
-/** Jump to the tab: show it in its own pane and close the cockpit. */
+/** Jump to the tab: show it in its own pane and close the cockpit. A root tab
+ *  has no pane behind the window: the jump opens the Root view of this very
+ *  window on it, so there is nothing to close (it would close what just opened). */
 export function jumpToRow(ptyId: string) {
   const at = ptyId.indexOf(":");
-  jumpToTab(ptyId.slice(0, at), ptyId.slice(at + 1));
-  useRootOverlayStore.getState().close();
+  const scope = ptyId.slice(0, at);
+  jumpToTab(scope, ptyId.slice(at + 1));
+  if (scope !== ROOT_SCOPE || isDetachedWindow()) useRootOverlayStore.getState().close();
 }
 
 /** ▶ Continue an interrupted row — the tab strip's action, AI switch respected. */

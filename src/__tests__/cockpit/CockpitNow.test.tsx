@@ -97,6 +97,16 @@ describe("CockpitNow", () => {
     expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
+  it("Enter on a root row jumps to it and leaves the window up (it is the Root view that opens)", async () => {
+    useTabsStore.setState({ tabsByScope: { ...useTabsStore.getState().tabsByScope, root: [agent("r", "rooty")] } });
+    render(<CockpitNow />);
+    await act(async () => {});
+    useCockpitStore.getState().select("root:r");
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Enter" });
+    expect(jumpToTab).toHaveBeenCalledWith("root", "r");
+    expect(useRootOverlayStore.getState().open).toBe(true);
+  });
+
   it("filters by text", async () => {
     render(<CockpitNow />);
     await act(async () => {});

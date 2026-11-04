@@ -14,7 +14,9 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) 
 import { jumpToTab, openPromptChartTab } from "../../lib/shortcuts/tabJump";
 import { translate, useI18nStore } from "../../lib/i18n";
 import { useBoxesStore } from "../../stores/boxes";
+import { installDetachedWindowContext } from "../../stores/detachedContext";
 import { useProjectsStore } from "../../stores/projects";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { PROMPTCHART_TAB_CMD, useTabsStore } from "../../stores/tabs";
 import type { ProjectEntry } from "../../types";
 import { BRAND } from "../../lib/brand";
@@ -72,9 +74,38 @@ describe("jumpToTab", () => {
     expect(projectSetActive).toHaveBeenCalledWith("p2");
   });
 
-  it("names the root scope as the null project", () => {
-    revealTabInScope.mockReturnValue(true);
+  it("opens a root tab in the Root view and never switches the workspace to the root scope", async () => {
+    // Root is a window over the workspace, not a place to switch to: the jump
+    // used to end in `setActive(null)` and swap the project out from under the user.
+    useTabsStore.setState({ tabsByScope: { root: [{ key: "root-shell", label: "sh", cmd: "", cwd: "/r", kind: "shell" }] } });
+    useRootOverlayStore.setState({ open: false, view: "now" });
     jumpToTab("root", "root-shell");
+    await Promise.resolve();
+    expect(revealTabInScope).toHaveBeenCalledWith("root", "root-shell");
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "root" });
+    expect(projectSetActive).not.toHaveBeenCalled();
+    expect(tabSetActive).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().activeId).toBe("p1");
+    expect(useTabsStore.getState().scope).toBe("p1");
+  });
+
+  it("keeps the old path for a root tab inside a popout (no console there)", () => {
+    const off = installDetachedWindowContext({ label: "w", scope: "root", groupId: "g" } as never);
+    try {
+      revealTabInScope.mockReturnValue(false);
+      useTabsStore.setState({ scope: "root" });
+      useRootOverlayStore.setState({ open: false, view: "root" });
+      jumpToTab("root", "root-shell");
+      expect(useRootOverlayStore.getState().open).toBe(false);
+      expect(tabSetActive).toHaveBeenCalledWith("root-shell");
+    } finally {
+      off();
+    }
+  });
+
+  it("names the root scope as the null project for its Prompt chart tab (a separate case)", async () => {
+    useTabsStore.setState({ scope: "p1" });
+    await openPromptChartTab("root");
     expect(projectSetActive).toHaveBeenCalledWith(null);
   });
 

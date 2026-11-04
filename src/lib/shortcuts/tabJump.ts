@@ -5,6 +5,8 @@ import { PROMPTCHART_TAB_CMD, ROOT_SCOPE, useTabsStore } from "../../stores/tabs
 import { resolveProjectDirectory } from "../../types";
 import { ASSISTANT_SCOPE } from "../assistant";
 import { showAssistant } from "../../stores/assistantView";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 
 /**
  * Show the tab a surface is pointing at: make it the visible tab of its
@@ -17,6 +19,13 @@ import { showAssistant } from "../../stores/assistantView";
  * Agents view are two ways of saying "that agent over there wants something",
  * and the only useful next step is the same one in both.
  *
+ * A **root tab** is the exception: root is no place to switch to (the root
+ * console is a window over whatever is open), so the jump opens the window on
+ * its Root view with that tab in front (`show(key)`) and leaves the active
+ * scope alone, and the caller must not close what it opened. In a popout the
+ * old path stays (the popout owns no console; the forwarded `setActive` is
+ * what reaches the main window).
+ *
  * Two fallbacks, both for a jump the reveal alone cannot make:
  *  - In a popout this store owns no layout, so the scope-addressed reveal finds
  *    nothing; `setActive` is forwarded to the main window and does the same job
@@ -26,6 +35,10 @@ import { showAssistant } from "../../stores/assistantView";
  *    the half of the request that can be honoured.
  */
 export function jumpToTab(scope: string, key: string) {
+  if (scope === ROOT_SCOPE && !isDetachedWindow()) {
+    useRootOverlayStore.getState().show(key);
+    return;
+  }
   const tabs = useTabsStore.getState();
   // A Tabby chat is shown by the side panel's Tabby view, which a jump opens on
   // that chat.
@@ -61,6 +74,9 @@ function bringUpScope(scope: string): Promise<void> {
  * the same half-honoured jump `jumpToTab` settles for.
  */
 export async function openPromptChartTab(scope: string): Promise<void> {
+  // Root's own Prompt chart tab still goes through `bringUpScope`, which
+  // switches the workspace to the root scope: a separate, pre-existing case
+  // that `jumpToTab`'s root rule does not cover.
   await bringUpScope(scope);
   const tabs = useTabsStore.getState();
   if (tabs.scope !== scope) return;

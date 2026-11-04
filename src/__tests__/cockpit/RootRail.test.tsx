@@ -166,14 +166,13 @@ describe("opening the rail", () => {
     expect(localStorage.getItem(FOLD)).toBe("closed");
   });
 
-  it("a root row shows its tab in this view without closing; another scope's row jumps", async () => {
+  it("every picked row goes through jumpToRow (it knows a root row stays in this view)", async () => {
     localStorage.setItem(FOLD, "open");
     await openRoot();
     const pick = (label: string) =>
       fireEvent.click(screen.getAllByText(label).find((el) => el.closest(".cockpit-rail-pick"))!);
     await act(async () => pick("rooty"));
-    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "root" });
-    expect(jumpToRow).not.toHaveBeenCalled();
+    expect(jumpToRow).toHaveBeenCalledWith("root:r");
     await act(async () => pick("alpha"));
     expect(jumpToRow).toHaveBeenCalledWith("p1:a");
   });

@@ -21,7 +21,7 @@ import {
 import { useActivityStore } from "../stores/activity";
 import { jumpToTab } from "../lib/shortcuts/tabJump";
 import { focusNextPopout } from "../lib/window/focusPopout";
-import { nextStatusTab, statusTabs, type TabStatusKind } from "../lib/shortcuts/statusJump";
+import { nextStatusTab, shownStatusTab, statusTabs, type TabStatusKind } from "../lib/shortcuts/statusJump";
 import {
   steeringActionFor,
   steeringKeyIs,
@@ -664,7 +664,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         const tabs = useTabsStore.getState();
         const target = nextStatusTab(
           statusTabs(status, activity.busyByTab, activity.attentionByTab, tabs.tabsByScope),
-          tabs.activeKey ? { scope: tabs.scope, key: tabs.activeKey } : null,
+          shownStatusTab(),
           e.shiftKey ? -1 : 1,
         );
         if (target) {

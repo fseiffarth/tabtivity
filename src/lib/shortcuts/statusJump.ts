@@ -11,7 +11,8 @@
  */
 import type { AttentionKind } from "../../stores/activity";
 import { projectStations } from "../../stores/keyboardSteering";
-import { ROOT_SCOPE, isPtyTabKind, type TabEntry } from "../../stores/tabs";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { ROOT_SCOPE, allGroups, isPtyTabKind, useTabsStore, type TabEntry } from "../../stores/tabs";
 
 export type TabStatusKind = "decision" | "working" | "done";
 
@@ -63,4 +64,19 @@ export function nextStatusTab(
     : -1;
   if (at < 0) return list[delta > 0 ? 0 : list.length - 1];
   return list[(at + delta + list.length) % list.length];
+}
+
+/** The tab a status jump walks on from: the one showing. While the root
+ *  console's Root view is up that is its focused subwindow's tab (a jump to a
+ *  root tab does not change the workspace's active tab, so going by that one
+ *  would land on the same root tab again and again); else the workspace's. */
+export function shownStatusTab(): StatusTab | null {
+  const tabs = useTabsStore.getState();
+  if (rootViewShown(useRootOverlayStore.getState())) {
+    const groups = allGroups(tabs.layoutByScope[ROOT_SCOPE] ?? null);
+    const focus = tabs.focusedGroupByScope[ROOT_SCOPE];
+    const group = groups.find((g) => g.id === focus) ?? groups[0];
+    if (group?.activeKey) return { scope: ROOT_SCOPE, key: group.activeKey };
+  }
+  return tabs.activeKey ? { scope: tabs.scope, key: tabs.activeKey } : null;
 }

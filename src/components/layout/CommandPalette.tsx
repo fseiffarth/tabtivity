@@ -16,7 +16,7 @@ import { scopeDisplayName, useBoxesStore } from "../../stores/boxes";
 import { useBoxSliceStore } from "../../stores/boxSlice";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useSettingsStore } from "../../stores/settings";
-import { useTabsStore } from "../../stores/tabs";
+import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
 import type { TabEntry } from "../../stores/tabs/types";
 import { fuzzyMatch, fuzzyRank } from "../../lib/fuzzy";
 import { loadQuickOpenIndex, type QuickOpenNote } from "../../lib/files/quickOpenIndex";
@@ -118,7 +118,9 @@ function openProjectFile(projectDir: string, rel: string, beside: boolean) {
  *  in the scope on screen. */
 function showTab(scope: string, key: string, beside: boolean) {
   const tabs = useTabsStore.getState();
-  if (beside && scope === tabs.scope && tabs.focusedGroupId) {
+  // A root tab is never moved into the workspace's layout: root is shown by
+  // its own window, `jumpToTab` opens that.
+  if (beside && scope === tabs.scope && scope !== ROOT_SCOPE && tabs.focusedGroupId) {
     tabs.splitWithTab(key, tabs.focusedGroupId, "right");
     return;
   }

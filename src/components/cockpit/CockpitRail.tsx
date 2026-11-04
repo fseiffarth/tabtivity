@@ -3,14 +3,13 @@ import type { ReactNode } from "react";
 import type { DecisionGroupId, Decisions } from "../../lib/cockpit/decisions";
 import type { RosterRow } from "../../lib/cockpit/roster";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import { jumpToTab } from "../../lib/shortcuts/tabJump";
-import { splitPtyId } from "../../stores/activity";
 import { useCockpitStore } from "../../stores/cockpit";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { GitPushProposalCard } from "../agents/GitPushMcp";
 import { AgentScheduleProposal } from "../agents/AgentScheduleProposal";
 import { RootReviewStrip } from "../layout/RootReviewStrip";
 import { AlertsMenu } from "../header/AlertsMenu";
+import { jumpToRow } from "./CockpitRoster";
 import { TabContinueButton } from "../tabs/TabLocalityBadges";
 import type { AlertsFeed } from "../files/useAlertsFeed";
 
@@ -159,11 +158,7 @@ export function CockpitRail({
                       <button
                         type="button"
                         className="cockpit-rail-pick"
-                        onClick={() => {
-                          const at = splitPtyId(ptyId);
-                          if (at) jumpToTab(at.scope, at.key);
-                          close();
-                        }}
+                        onClick={() => jumpToRow(ptyId)}
                       >
                         <span className="cockpit-rail-scope">{decisions.names[projectId] ?? projectId}</span>
                         <span className="cockpit-rail-tab">{ask.fileName ?? t("cockpit.rail.markupAny")}</span>
