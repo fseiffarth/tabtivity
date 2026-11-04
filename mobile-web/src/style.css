@@ -1263,6 +1263,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .session-facts :is(.fact-action,.fact-limit):focus-visible { outline:2px solid #8c7df4; outline-offset:-2px; }
 .session-facts .fact-action-plan:not(:disabled) { box-shadow:inset 0 0 0 1px #8c7df4; background:rgba(120,104,217,.28); color:#fff; }
 .fact-action-label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+/* The status chip is its lamp alone: padded out to a fingertip's width. */
+.fact-action.fact-status { min-width:26px; justify-content:center; }
 /* The same lamp the tab row shows, so the state reads without opening the
    sheet. `idle` is dim rather than absent: a missing lamp reads as broken. */
 .fact-lamp { width:7px; height:7px; flex:0 0 auto; border-radius:50%; background:#5a6178; }

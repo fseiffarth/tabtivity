@@ -1,5 +1,5 @@
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
-import { BranchIcon, ChevronLeftIcon, CloseIcon, NewChatIcon, UndoIcon } from "../glyphs";
+import { BranchIcon, ChevronLeftIcon, CloseIcon, MeterIcon, NewChatIcon, UndoIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { HintQueue, type HintKey } from "../components/HintMessage";
@@ -2387,6 +2387,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           desktop's "Project files on the phone" switch is on. */}
       {project && filesLabel !== null && <button
         className="drawer-open"
+        data-phone-hint="menu"
         onClick={() => setFilesOpen(true)}
         aria-haspopup="dialog"
         aria-expanded={filesOpen}
@@ -2701,16 +2702,18 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           (the desktop's Tabby view draws none either). */}
       {!bare && (tab.kind === "agent" || status?.branch || contextLeft || shownLimits.session || shownLimits.week) && <div className="session-facts">
         {/* An agent tab's model, mode and status lead the row as tappable facts:
-            the composer keeps the whole bar for the draft and its buttons. */}
+            the composer keeps the whole bar for the draft and its buttons.
+            Status is its lamp alone and effort a gauge plus the level, so the
+            row fits a phone's width; the full words stay their names. */}
         {tab.kind === "agent" && <>
-          <button className="fact-action" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /><span className="fact-action-label">{t("terminal.reader.status.button")}</span></button>
+          <button className="fact-action fact-status" onClick={() => setStatusSheet(true)} aria-haspopup="dialog" aria-expanded={statusSheet} title={t("mobile.facts.statusHint")} aria-label={t("terminal.reader.status.button")}><span className={`fact-lamp ${lamp}`} aria-hidden="true" /></button>
           {/* A local-model tab keeps the model it was launched on: the
               driver's list would only offer to move it off. */}
           {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
             : <button className="fact-action" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")}><span className="fact-action-label">{modelChip}</span></button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
-          {effortOffered && <button className="fact-action" disabled={!connected || !!liveQuestion} onClick={() => setEffortSheet(true)} aria-haspopup="dialog" aria-expanded={effortSheet} title={t("mobile.facts.effortHint")}><span className="fact-action-label">{effortNow ? t("terminal.reader.effort", { effort: effortNow }) : t("terminal.reader.effortUnknown")}</span></button>}
+          {effortOffered && <button className="fact-action" disabled={!connected || !!liveQuestion} onClick={() => setEffortSheet(true)} aria-haspopup="dialog" aria-expanded={effortSheet} title={t("mobile.facts.effortHint")} aria-label={effortNow ? t("terminal.reader.effort", { effort: effortNow }) : t("terminal.reader.effortUnknown")}><MeterIcon size="1em" /><span className="fact-action-label">{effortNow ?? t("terminal.reader.effortUnknown")}</span></button>}
           {effortOffered && isUntested("mobile.facts.effort") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
