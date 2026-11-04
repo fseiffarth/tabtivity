@@ -1773,32 +1773,6 @@
   color: var(--text-muted);
   font-size: var(--text-md);
 }
-.skills-seg-btn {
-  padding: 5px 10px;
-  border: 1px solid var(--control-border);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font-size: var(--text-md);
-  cursor: var(--cur-pointer, pointer);
-}
-.skills-seg-btn + .skills-seg-btn {
-  border-left: none;
-}
-.skills-seg-btn:first-of-type {
-  border-radius: var(--radius) 0 0 var(--radius);
-}
-.skills-seg-btn:last-of-type {
-  border-radius: 0 var(--radius) var(--radius) 0;
-}
-.skills-seg-btn:hover {
-  color: var(--text-primary);
-}
-.skills-seg-btn.on {
-  background: color-mix(in srgb, var(--accent) 18%, var(--control-bg));
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 600;
-}
 .skills-install-note {
   color: var(--text-muted);
   font-size: var(--text-sm);
@@ -1948,39 +1922,11 @@
   gap: 2px;
   margin-left: auto;
 }
-.ollama-ghost-btn {
+/* The model rows' small actions are the shared `.btn-quiet`, at meta size. */
+.ollama-model-actions .btn-quiet {
   padding: 3px var(--space-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-secondary);
   font-size: var(--text-sm);
   line-height: 1.4;
-  white-space: nowrap;
-  cursor: var(--cur-pointer, pointer);
-  transition: background var(--transition), color var(--transition);
-}
-.ollama-ghost-btn:hover:not(:disabled) {
-  background: var(--control-hover-bg);
-  color: var(--text-primary);
-}
-.ollama-ghost-btn.danger {
-  color: var(--danger);
-}
-.ollama-ghost-btn.danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger) 12%, var(--control-bg));
-  color: var(--danger);
-}
-.ollama-ghost-btn.primary {
-  color: var(--success);
-  font-weight: 600;
-}
-.ollama-ghost-btn:disabled {
-  opacity: 0.5;
-  cursor: var(--cur-default, default);
-}
-.ollama-ghost-btn:focus-visible {
-  outline: 1px solid var(--focus-ring);
 }
 .ollama-model-autostart {
   display: flex;
@@ -2077,41 +2023,9 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
-.ollama-seg {
-  display: inline-flex;
-  flex-wrap: wrap;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-full);
-  background: var(--control-bg);
-  overflow: hidden;
-}
-.ollama-seg button {
-  padding: 3px 10px;
-  border: none;
-  border-left: 1px solid var(--control-border);
-  background: none;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  line-height: 1.5;
+/* The filter rows are the shared `.seg`; model families arrive lower-case. */
+.ollama-filter-group .seg > button {
   text-transform: capitalize;
-  cursor: var(--cur-pointer, pointer);
-  transition: background var(--transition), color var(--transition);
-}
-.ollama-seg button:first-child {
-  border-left: none;
-}
-.ollama-seg button:hover:not(.active) {
-  background: var(--control-hover-bg);
-  color: var(--text-primary);
-}
-.ollama-seg button.active {
-  background: color-mix(in srgb, var(--accent) 20%, var(--control-bg));
-  color: var(--accent);
-  font-weight: 600;
-}
-.ollama-seg button:focus-visible {
-  outline: 1px solid var(--focus-ring);
-  outline-offset: -2px;
 }
 .ollama-reg-error {
   display: flex;

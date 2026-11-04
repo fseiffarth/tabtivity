@@ -1,6 +1,6 @@
 # Desktop UI round 2 — Plan
 
-Status: step 1 landed (see Progress); steps 2–4 open.
+Status: steps 1–2 and two fold batches landed; step 3 dropped; the rest of the fold needs its own design pass (see Progress).
 
 Design: the "Desktop UI round 2" canvas (palette, layout, hygiene, and
 light_lavender today vs proposed rebuilt from the user's screenshot of
@@ -33,12 +33,13 @@ light_lavender today vs proposed rebuilt from the user's screenshot of
      with the frames only on hover.
    - **Search:** a short header search placeholder (all five dictionaries).
    - **Git view:** the worktree row folded into the branch toolbar.
-2. **Side panel head, the rest:** the icon action row (↓ ⧉ ⤓ ⚙) joins a row
-   that has room. The view tabs fill the panel at the default width, so this
-   needs the tabs icon-only below a width, or the actions in the tab row's
-   overflow. Open — pick with the user.
-3. **Tabs:** the subwindow tab labels sit centred in equal widths. Find the
-   rule (not `.tab`) and left-align to content, up to 220 px.
+2. **Side panel head, the rest** (done; the user picked "icons on a narrow
+   panel"): the two toolbar rows share `.side-panel-toolbars`, a container.
+   Below 560 px the view tabs show only their glyph (the name is the tooltip
+   and the accessible name) and the action row joins them.
+3. **Tabs** (dropped): `.tab` is a `div` sized to its content and no rule
+   centres the label. The spacing in the screenshot is likely the close
+   button's reserved room. Needs a live look before anything changes.
 4. **Hygiene:**
    - fold the 95 `*-btn` classes into `.btn-primary` / `.settings-btn` /
      `.btn-quiet` (+ `.is-icon`) / `.btn-danger`, plus one `.seg` for the six
@@ -49,8 +50,27 @@ light_lavender today vs proposed rebuilt from the user's screenshot of
 
 ## Progress
 
-- Step 1: committed on develop (see `git log --grep "desktop UI round 2"`).
-  Not run live.
+- Step 1: `7b2e7301`. Not run live.
+- Step 2 and fold batches 1–2: committed on develop (see `git log --grep
+  "round 2"`). Not run live.
+  - **Batch 1:** one `.seg` replaces the skills scope, Ollama filter, stats
+    period and activity-year looks.
+  - **Batch 2:** `.btn-quiet` gains a hover fill and the `.is-danger` and
+    `.is-notable` modifiers, and Ollama's ghost buttons fold into it. Three
+    hand-rolled shadows now read `--shadow-1/2`.
+- **Not folded, measured 2026-11-04:** the canvas's name-based map does not
+  hold for the rest.
+  - Several "per-feature" classes are shared bases. `file-viewer-zoom-btn` has
+    104 call sites as the viewer toolbar's button, and `toolbar-btn` is the
+    side panel's.
+  - Others are one-line modifiers on those bases (`vpn-disconnect-btn`), or
+    links that are links (`inline-link-btn`, `cal-link-btn`).
+  - The next fold is a design pass of its own: settle the viewer-toolbar and
+    side-panel button sizes, then rename those bases into one shared toolbar
+    button.
+- **Colour literals left outside `themes.css`/`viewers.css`:** all in the
+  allowed set (the pre-paint splash in `base.css`, scrims, switch knobs, the
+  colour wheel, ink on amber, mail paper).
 
 ## Verification
 

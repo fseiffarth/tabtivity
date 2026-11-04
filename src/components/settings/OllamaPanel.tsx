@@ -943,7 +943,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   ) => (
     <div className="ollama-filter-group">
       <span className="ollama-filter-label">{label}</span>
-      <div className="ollama-seg" role="group" aria-label={label}>
+      <div className="seg" role="group" aria-label={label}>
         <button type="button" className={anyActive ? "active" : ""} aria-pressed={anyActive} onClick={onAny}>
           {t("ollama.any")}
         </button>
@@ -1118,7 +1118,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       title={t("ollama.deletePartialTitle")}
                       onClick={() => deletePausedPull(model)}
                     >
@@ -1144,7 +1144,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn"
+                      className="btn-quiet"
                       title={t("ollama.dismissTitle")}
                       onClick={() => dismissPull(model)}
                     >
@@ -1170,7 +1170,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <div className="ollama-model-actions">
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       title={t("ollama.deleteLayerTitle")}
                       onClick={() => deleteOrphan(o.path)}
                     >
@@ -1240,7 +1240,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <span className="ollama-model-actions-end">
                     <button
                       type="button"
-                      className={`ollama-ghost-btn${updateVerdicts[m.name]?.update_available ? " primary" : ""}`}
+                      className={`btn-quiet${updateVerdicts[m.name]?.update_available ? " is-notable" : ""}`}
                       disabled={busy[`${m.name}:pull`]}
                       title={t("ollama.updateTitle")}
                       onClick={() =>
@@ -1253,7 +1253,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       disabled={busy[`${m.name}:del`]}
                       title={t("ollama.deleteModelTitle")}
                       onClick={() =>

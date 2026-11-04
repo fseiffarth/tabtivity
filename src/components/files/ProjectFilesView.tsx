@@ -1773,6 +1773,11 @@ export function ProjectFilesView({
           host has never seen is invisible in the remote tree, so this count is
           where its existence first shows up), the live tmux sessions, the
           queued jobs. */}
+      {/* The two rows share one container: on a narrow panel (a container query
+          in files-panel.css) the tabs drop to their glyph and the actions join
+          their row, so the head is one row shorter. */}
+      <div className="side-panel-toolbars">
+      <div className="side-panel-toolbars-row">
       <div className="side-panel-toolbar side-panel-views">
         {availableSidePanelViews(viewGates).map(({ view: v, labelKey, Icon }) => {
           const count =
@@ -1797,10 +1802,11 @@ export function ProjectFilesView({
               className={`toolbar-btn toolbar-btn--sm toolbar-btn--tab${view === v ? " active" : ""}${v === "git" && gitPendingColor ? " toolbar-btn--flagged" : ""}`}
               aria-pressed={view === v}
               onClick={() => setView(v)}
-              title={title}
+              title={title ?? t(labelKey)}
+              aria-label={title ?? t(labelKey)}
             >
               <Icon />
-              {t(labelKey)}
+              <span className="toolbar-btn-label">{t(labelKey)}</span>
               {count > 0 && <span className="side-panel-orange-count">{count}</span>}
               {v === "git" && gitPendingColor && (
                 <span
@@ -1911,6 +1917,8 @@ export function ProjectFilesView({
             <GearIcon />
           </button>
         )}
+      </div>
+      </div>
       </div>
 
       {/* The workspace clock. A workspace expiry does not merely delete "some

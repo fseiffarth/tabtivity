@@ -4377,7 +4377,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-timeline-badge { position: absolute; top: 4px; left: 4px; z-index: 6; padding: 1px 6px; border-radius: var(--radius-full); background: var(--accent); color: var(--bg-panel); font-size: var(--text-sm); font-weight: 600; white-space: nowrap; pointer-events: none; }
 .agent-prompt-timeline-badge.is-blocked { background: var(--danger); text-decoration: line-through; }
 .agent-prompt-timeline-ghost { position: fixed; top: 0; left: 0; z-index: 40; display: flex; flex-direction: column; gap: 4px; padding: 7px var(--space-2) 7px 10px; border: 1px solid var(--accent); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--control-bg); color: var(--text-primary); opacity: .92; pointer-events: none; }
-.agent-prompt-timeline-ghost::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: 0 6px 18px rgb(0 0 0 / .28); pointer-events: none; }
+.agent-prompt-timeline-ghost::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: var(--shadow-2); pointer-events: none; }
 .agent-prompt-timeline-ghost > .agent-prompt-timeline-badge { position: static; align-self: flex-start; }
 /* The selection: a rubber band over the lanes, and a ring on each selected card. */
 .agent-prompt-timeline-marquee { position: fixed; z-index: 40; border: 1px dashed var(--accent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 12%, transparent); pointer-events: none; }
@@ -4404,7 +4404,7 @@ html:not(.show-untested-tags) .untested-tag {
   cursor: var(--cur-pointer, pointer);
   transition: opacity var(--transition), border-color var(--transition);
 }
-.agent-prompt-card::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: 0 3px 10px rgb(0 0 0 / .18); opacity: 0; transition: opacity var(--transition); pointer-events: none; }
+.agent-prompt-card::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: var(--shadow-1); opacity: 0; transition: opacity var(--transition); pointer-events: none; }
 .agent-prompt-card:hover::after,
 .agent-prompt-card.is-selected::after { opacity: 1; }
 .agent-prompt-card.is-selected { border-color: var(--accent); }

@@ -895,6 +895,43 @@
 .side-panel-actions:empty {
   display: none;
 }
+
+/* Narrow panel (round 2, 2026-11-04): the view tabs keep only their glyph (the
+   name is the tooltip) and the action row joins them, one row instead of two.
+   A container query, so the panel, the Files (Project) tab and the docked
+   column each switch at their own width. */
+.side-panel-toolbars {
+  container-type: inline-size;
+}
+@container (max-width: 560px) {
+  .side-panel-toolbars-row {
+    display: flex;
+    align-items: center;
+    background-color: var(--bg-side-panel-header);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .side-panel-toolbars-row > .side-panel-toolbar {
+    border-bottom: none;
+    background-color: transparent;
+  }
+  .side-panel-toolbars-row > .side-panel-views {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .side-panel-toolbars-row > .side-panel-actions {
+    flex: 0 1 auto;
+    padding-left: 0;
+    justify-content: flex-end;
+  }
+  .side-panel-views .toolbar-btn-label {
+    display: none;
+  }
+  .side-panel-views .toolbar-btn--tab {
+    height: 22px;
+    min-width: 24px;
+    justify-content: center;
+  }
+}
 .side-panel-actions .toolbar-btn--sm {
   height: 18px;
   min-width: 18px;

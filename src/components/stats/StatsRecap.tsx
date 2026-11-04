@@ -523,12 +523,12 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="stats-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("stats.title")}</h2>
-          <div className="stats-period-switch" role="group" aria-label={t("stats.periodGroupLabel")}>
+          <div className="stats-period-switch seg" role="group" aria-label={t("stats.periodGroupLabel")}>
             {PERIODS.map((p) => (
               <button
                 key={p}
                 type="button"
-                className={period === p ? "stats-period-btn active" : "stats-period-btn"}
+                className={period === p ? "active" : undefined}
                 onClick={() => setPeriod(p)}
               >
                 {t(PERIOD_LABEL_KEYS[p])}

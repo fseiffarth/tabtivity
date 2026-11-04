@@ -55,8 +55,13 @@ header wash. Concretely:
 ## Buttons
 
 `.btn-primary` and `.btn-danger` are the CTAs, `.settings-btn` the default,
-`.btn-quiet` the link-weight fourth. New buttons take one of these. The ~90
-older per-feature `*-btn` classes have not been folded in.
+`.btn-quiet` the link-weight fourth: no fill at rest, a hover fill, with
+`.is-danger` (a destructive row action) and `.is-notable` (news, such as an
+update) as modifiers. `.seg` is the one segmented control: a soft track with
+the picked option as a lifted chip, marked by the host's `.active`, `.on` or
+`.selected`. New buttons take one of these. Most older per-feature `*-btn`
+classes are still their own (`docs/desktop_ui_round2_plan.md` says why the
+rest need a sizing pass first).
 
 ## Floating surfaces
 
