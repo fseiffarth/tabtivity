@@ -286,7 +286,128 @@ tests are all in `FloatingFrame.test.ts`.
 - **The open rail is 280 px, fixed** (no grip). The Now view's rail resizes
   (`cockpitRailWidth`); Root's does not.
 
-## Next (I3: A5 entry points + A6 ownership)
+## I3 (A5 + A6)
+
+### A5 Entry points (plan M4)
+
+- sha: `c1b4842d`.
+- `jumpToTab(ROOT_SCOPE, key)` calls `rootOverlay.show(key)` and returns (outside
+  a popout; inside one the old forwarded `setActive` path stays). It never
+  reaches `bringUpScope`, so no caller can `setActive(null)` with a root tab.
+  `openPromptChartTab(ROOT_SCOPE)` still goes through `bringUpScope` (the plan's
+  call; a comment says so, and a test pins it).
+- `jumpToRow`: a root row leaves the window up (it just opened Root in it);
+  every other row still closes. `CockpitRail`'s markup row now goes through
+  `jumpToRow` (it did `jumpToTab` + `close()`, which would have closed the Root
+  view it opened for a root-tab ask). `RootRail.pickRow` is just `jumpToRow`.
+- Caller audit (all route through `jumpToTab`, so the fix is at the one place):
+  `useKeyboard` status keys, `CommandPalette`, `PillStatusBars`, `PillTabMarks`,
+  `TodoCard` (closes the to-do overlay first, then the Root view opens),
+  `PromptChart`, `AgentSchedulesView`, `CockpitRail`, `CockpitRoster`. Two
+  follow-on fixes found in the audit:
+  - Steering status keys walked on from the workspace's `activeKey`; a root
+    jump no longer changes it, so pressing the key again landed on the same root
+    tab forever. `statusJump.shownStatusTab()` is the Root view's focused tab
+    while Root is up, else the workspace's.
+  - `CommandPalette.showTab` "open beside" would `splitWithTab` a root tab into
+    the workspace when `scope === tabs.scope === root`; root tabs now always
+    take `jumpToTab`.
+- Already done by I1 and verified, nothing to change: gauge, steering **U** and
+  the box chip open Now; Machines/Models Escape guards use `rootViewShown`;
+  `closeOverlay()` callers; Ctrl+N's "console steps aside" keeps `open`.
+- The remaining `rootViewShown` swaps are in A6's commit (they are the
+  ownership rule, not an entry point): `OverlayAgentColumn`, `sourceJump`,
+  `openTexWorkspace`, `CenterPanel.drawnElsewhere`. `AssistantView`'s focus rule
+  and `CenterPanel`'s slot stand-down/focus rule keep `open`, as planned.
+- Tests: new `__tests__/cockpit/JumpToRootRow.test.ts` (5: root row opens Root
+  with scope/activeId unchanged and no close; project row and other project
+  close; `shownStatusTab` both ways); `TabJump.test` (the old "root = null
+  project" case replaced by the regression: no `setActive`, scope unchanged;
+  popout keeps old path; the prompt-chart case); `CockpitNow` (Enter on a root
+  row); `RootRail` (pickRow -> `jumpToRow`).
+
+### A6 Ownership (plan M5)
+
+- sha: `203907cd`.
+- `CockpitRoster.ScopeChip` (also used in `CockpitDetail`): the root scope's chip
+  is the `StarIcon` + "Root" (`cockpit-chip root`). The detail head's button
+  reads "Open in Root" (`cockpit.detail.openInRoot`) for a root row, "Jump to
+  tab" otherwise; both call `jumpToRow`.
+- `CockpitDetailPane`: mode `console` / `inConsole` / `cockpit.detail.inConsole`
+  removed. New mode `docked`, from `useDockedApp(scope, key)`: an app (mail,
+  calendar, todo) whose overlay is open (+ its settings gate) with its dock open
+  on that root key draws the tab in `OverlayAgentColumn`, so the pane shows
+  "Shown in the {name} overlay." (`cockpit.detail.docked`) and mounts no
+  `AttachedAgentPane`. Otherwise a root tab attaches like any tab; it marks root's
+  `shownKeys`. The Root view is never mounted with Now, so "never two attached
+  views of one PTY" holds structurally; the docked case is the only second
+  drawer, and it is now excluded.
+- `{app}` is the brand placeholder in the dictionaries: the docked string uses
+  `{name}` (a param called `app` rendered "Shown in the Tabtivity overlay").
+- `rootViewShown` replaces `open` in `OverlayAgentColumn` (`consoleOpen`: the
+  column keeps drawing while the window is on a cockpit view), `sourceJump`
+  `tabKeyForPath`, `openTexWorkspace`, and `CenterPanel`'s `drawnElsewhere`
+  (`rootDrawn || shownKeys.has(key)`): opening Projects/Usage/Now no longer wakes
+  every sleeping root terminal; a root tab drawn by the Now pane wakes just that
+  one; Root's view wakes all, as before. Root's slot stand-down and focus still
+  follow `open`.
+- Now never hydrates root: untouched (no `ensureRootScopeHydrated` anywhere in
+  the cockpit views; `CockpitShell` already tests it).
+- `PaneStandDown` is unchanged: it only exists for `scopeShownKeys` (non-root),
+  and root tabs' slots are left blank by `slotShown`, so "root's own line" never
+  applies.
+- Keys (five dictionaries): `cockpit.detail.openInRoot`, `cockpit.detail.docked`;
+  `cockpit.detail.inConsole` deleted. Register row `rootConsole.rootRow` (pill:
+  the detail head of a root row, and the docked note).
+- Tests: `CockpitStandDown` (root tab attaches via root's set; docked draws
+  nothing and names the overlay; overlay open/close hands the PTY over with
+  exactly one attached view at each step, using a reduced `MailColumn` that
+  mounts the real `AttachedAgentPane`; a project tab is never docked);
+  `CockpitNow` (star chip, Space draws it, "Open in Root"); `OverlayAgentColumn`
+  (stands down on Root only); `CenterPanelRootStandDown` (a cockpit view hides
+  the slot too); `SleepingTabs` (Projects does not wake, Now's pane wakes one,
+  Root wakes all).
+
+### Gates / tests (I3)
+
+- `scripts/gates.sh` green before each commit (brand, whitespace, lint 0
+  errors, build, vitest --changed). No Rust. Full `npm test` at the A6 tip:
+  **1062 files, 10832 tests** passed (I2 tip 1061 / 10816: +1 file, +16 tests).
+- Not run live (never started the app).
+
+### Flagged for user (I3)
+
+- **Steering status keys with a root target** still `setLevel("tabs")` after the
+  jump, as before, but the tab level walks the workspace's tab bar behind the
+  Root view. Kept (the repeat key now advances correctly); say if steering
+  should rather hand the keyboard to the Root terminal (`exitSteering`).
+- **Docked-note scope.** "Shown in the <app> overlay" appears only while that
+  overlay is open and its dock open on the key. A docked agent whose overlay is
+  shut is drawn by the pane (the column is not mounted), which is the intent.
+- `openPromptChartTab(ROOT)` still switches the workspace to root
+  (`bringUpScope`); the plan keeps it, but it is the same bug class.
+
+## Next (I4: A7 narrow windows + A8 strings, docs, filemap)
+
+- A8 owes the filemap rows for I1-I3 new files: `layout/RootStartAgent.tsx`,
+  `cockpit/RootRail.tsx`, `cockpit/CockpitRailIcons.tsx`,
+  `lib/cockpit/scopeLamp.ts`, `lib/cockpit/views.ts`, `lib/window/floatingFrame.ts`,
+  `layout/RootView.tsx`; plus `docs/context/root_console.md` / `cockpit.md` text:
+  the detail pane's root rule is now "attach via root's shownKeys, `docked`
+  note, no `console` mode", `jumpToTab` root rule, `drawnElsewhere` rule.
+- A8 rewording list: `cockpit.standDown` / `cockpit.showHere` (still project-tab
+  only), `settings.cockpit(+Help)`, untested rows `cockpit.title`,
+  `cockpit.indicator`, `rootOverlay.1`, `cockpit.standDown`; `rootConsole.rootRow`
+  is already added. Unused after A1: `rootConsole.moveHint/resizeHint/fill/restore`.
+- A7: the Root rail's open state is a fixed 280 px (`.cockpit-root-rail-full`);
+  the Now view's rail resizes. The icon rail is shared with the narrow band
+  (`CockpitRailIcons`): `RootRail.tsx` is the example of how to open the full
+  rail from it (`onExpand(group)`).
+- `jumpToRow` is the one door for "go to this roster tab": use it, not
+  `jumpToTab` + `close()`, in any new narrow-band control.
+- Tests opening a cockpit view must mock `components/cockpit/CockpitViews`.
+
+## Next (was: I3, done above)
 
 - `RootRail.pickRow` special-cases a root row with `show(key)` because
   `jumpToRow` still closes the window and goes through `bringUpScope` for a
