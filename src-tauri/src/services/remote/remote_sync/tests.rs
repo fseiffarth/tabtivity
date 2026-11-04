@@ -1146,6 +1146,29 @@ fn host_new_candidates_caps_after_sorting() {
 }
 
 #[test]
+fn lockstep_unrecorded_lists_tracked_files_without_a_record() {
+    let mut m = Manifest::new();
+    m.insert(
+        "seeded.md".into(),
+        SyncEntry {
+            selected: true,
+            ..Default::default()
+        },
+    );
+    let tracked: HashSet<String> = ["seeded.md", "rgt/new.py", "DATASETS.md", "", "a.py"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    // The seeded file already has its row; the empty path is never a file.
+    assert_eq!(
+        lockstep_unrecorded(&m, &tracked, 100),
+        vec!["DATASETS.md".to_string(), "a.py".to_string(), "rgt/new.py".to_string()],
+    );
+    assert_eq!(lockstep_unrecorded(&m, &tracked, 1), vec!["DATASETS.md".to_string()]);
+    assert!(lockstep_unrecorded(&m, &HashSet::new(), 100).is_empty());
+}
+
+#[test]
 fn local_new_candidates_sorts_and_caps() {
     let m = Manifest::new();
     let all = vec!["b".to_string(), "c".to_string(), "a".to_string()];

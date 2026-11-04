@@ -83,6 +83,11 @@ const CONTENT_VERIFY_MAX_BYTES: u64 = 1024 * 1024; // 1 MiB
 /// so a bounded IPC payload wins over completeness past this point.
 const LOCAL_NEW_ROWS_CAP: usize = 2000;
 
+/// Cap on the green rows `sync_status` adds for lockstep-tracked files with no
+/// manifest record ([`remote_sync::lockstep_unrecorded`]). No stat behind them, so
+/// the cost is payload only; past it a file keeps the rowless look.
+const LOCKSTEP_ROWS_CAP: usize = 5000;
+
 /// Per-file bound on a push's SFTP round-trips. Every transfer below rides the
 /// *pooled* session, and a dropped ControlMaster / dead `sftp-server` leaves a
 /// request waiting on a response that never comes — an unbounded wait that hangs
@@ -868,6 +873,25 @@ pub async fn sync_status(
                 host_checked: false,
             });
         }
+    }
+    // Lockstep-owned files the manifest never recorded (committed after pairing)
+    // read green for the same reason as the branch above. With no row they fell
+    // to the tree's "none" default — a ⬆ push whose transfer `drop_lockstep_tracked`
+    // withholds, so the dialog behind it could only be cancelled.
+    for rel in remote_sync::lockstep_unrecorded(&snapshot, &lockstep_tracked, LOCKSTEP_ROWS_CAP) {
+        out.push(SyncStatusEntry {
+            auto_sync: remote_sync::is_auto(&snapshot, &rel),
+            rel_path: rel,
+            is_dir: false,
+            selected: false,
+            state: SyncState::Green,
+            excluded: false,
+            host_mtime: None,
+            local_mtime: None,
+            host_diverged: false,
+            local_diverged: false,
+            host_checked: false,
+        });
     }
     // Re-stat the selected files concurrently over the pooled SFTP session. The
     // client multiplexes many in-flight requests over the one channel, so a large
