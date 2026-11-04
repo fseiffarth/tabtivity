@@ -61,6 +61,7 @@ pub struct OllamaModelInfo {
 // PATH lookups go through the shared, cross-platform `crate::paths::binary_on_path`
 // (`where` on Windows, `which` elsewhere); see that module for the rationale.
 use crate::paths::binary_on_path;
+use crate::services::agent_latest;
 use crate::tauri_host::Ctx;
 use app_core::CoreCtx;
 
@@ -1388,9 +1389,12 @@ fn wanted_updates(models: Vec<(String, String)>) -> Vec<OllamaModelUpdate> {
 // before v0.15, so on an older server that agent is absent from the new-tab
 // menu with nothing anywhere saying why.
 //
-// Same discipline as the model check: the **installed** version is free (a local
-// `ollama --version`) and read whenever the menu opens; the **latest** version
-// is a network request and happens only when the user clicks.
+// The **installed** version is free (a local `ollama --version`) and read
+// whenever the menu opens. The **latest** version is a network request: made on
+// the "Check for updates" click, and once a day by the agent CLIs' daily release
+// check ([`daily_release_check`], `commands::agents::start_daily_update_check`).
+// Either answer is stored beside the CLIs' (`agent_latest`, key
+// [`agent_latest::OLLAMA_KEY`]), and the menu's local read hands it back.
 
 /// Where the newest published version is read from: GitHub's releases rather
 /// than ollama.com (whose `/api/version` answers `0.0.0`) — the same source the
@@ -1441,8 +1445,9 @@ pub struct OllamaVersionStatus {
     /// The installed version, e.g. `"0.14.3"`. Empty when Ollama isn't
     /// installed, or answered something we couldn't parse.
     pub current: String,
-    /// The newest published version, e.g. `"0.32.5"`. Empty whenever the remote
-    /// half didn't run or didn't answer — never a stand-in for `current`.
+    /// The newest published version, e.g. `"0.32.5"`, from the last stored
+    /// check. Empty when no check has answered yet — never a stand-in for
+    /// `current`.
     pub latest: String,
     /// True only when both versions parsed *and* `latest` is genuinely newer.
     /// An unreadable version on either side is not an update.
@@ -1505,12 +1510,12 @@ fn version_is_newer(candidate: &str, current: &str) -> Option<bool> {
     Some(false)
 }
 
-/// The installed Ollama version, and — only when `check_remote` — the newest
-/// published one.
+/// The installed Ollama version against the newest published one.
 ///
 /// `check_remote: false` touches no network at all, so the menu can show what is
-/// installed the moment it opens. `true` is the "Check for updates" click and
-/// costs one unauthenticated GitHub request.
+/// installed the moment it opens; the newest version is then the last stored
+/// check (the daily one or a click), if any. `true` is the "Check for updates"
+/// click and costs one unauthenticated GitHub request.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
     app_core::rt::spawn_blocking(move || {
@@ -1550,23 +1555,59 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
             .to_string(),
             ..Default::default()
         };
-        if !check_remote {
-            return status;
-        }
-
-        match latest_ollama_tag().as_deref().map(parse_version) {
-            Some(Some(latest)) => {
-                status.update_available =
-                    version_is_newer(&latest, &status.current).unwrap_or(false);
-                status.latest = latest;
-            }
-            Some(None) => status.error = Some("couldn't read the latest version".to_string()),
-            None => status.error = Some("couldn't reach the release feed".to_string()),
+        let checked = if check_remote {
+            Some(check_latest_ollama())
+        } else {
+            agent_latest::load().remove(agent_latest::OLLAMA_KEY)
+        };
+        if let Some(checked) = checked {
+            apply_checked(&mut status, &checked);
         }
         status
     })
     .await
     .unwrap_or_default()
+}
+
+/// Ask GitHub for the newest Ollama release and store the answer (a failure
+/// keeps the last release seen, as for a CLI). Blocking: one `curl`.
+fn check_latest_ollama() -> agent_latest::Checked {
+    let found = match latest_ollama_tag().as_deref().map(parse_version) {
+        Some(Some(latest)) => Ok(latest),
+        Some(None) => Err("couldn't read the latest version".to_string()),
+        None => Err("couldn't reach the release feed".to_string()),
+    };
+    agent_latest::remember(agent_latest::OLLAMA_KEY, Some(found))
+}
+
+/// Fold a stored check into `status`, compared against the version installed
+/// now — so an upgrade made since the check never shows as still pending.
+fn apply_checked(status: &mut OllamaVersionStatus, checked: &agent_latest::Checked) {
+    status.latest = checked.latest.clone().unwrap_or_default();
+    status.update_available = !status.latest.is_empty()
+        && version_is_newer(&status.latest, &status.current).unwrap_or(false);
+    status.error = checked.error.clone();
+}
+
+/// Ollama's turn in the daily release check: when Ollama is installed and its
+/// last check (clicked or daily) is a day old, ask once and store the answer.
+/// True when it asked, so the caller tells the windows to re-read.
+pub async fn daily_release_check() -> bool {
+    app_core::rt::spawn_blocking(|| {
+        let due = agent_latest::is_due(
+            &agent_latest::load(),
+            agent_latest::OLLAMA_KEY,
+            crate::clock::now_secs(),
+            agent_latest::DAILY_EVERY_SECS,
+        );
+        if !due || !ollama_installed() {
+            return false;
+        }
+        check_latest_ollama();
+        true
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Permanently delete a locally installed model.

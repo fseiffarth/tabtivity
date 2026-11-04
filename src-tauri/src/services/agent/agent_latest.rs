@@ -320,9 +320,15 @@ pub struct Checked {
     pub checked_at: u64,
 }
 
-/// `<state_dir>/agent_latest.json`, keyed by registry `id`. Deleting it costs
-/// one click per card.
+/// `<state_dir>/agent_latest.json`, keyed by registry `id` — and by
+/// [`OLLAMA_KEY`] for Ollama's own release. Deleting it costs one click per
+/// card.
 pub type Store = HashMap<String, Checked>;
+
+/// The store key of Ollama's own newest release (`commands::ollama`), which the
+/// daily check asks about beside the CLIs'. No agent in the registry has this
+/// `id`, and nothing iterates the store, so it never reads as a CLI row.
+pub const OLLAMA_KEY: &str = "ollama";
 
 pub fn store_path() -> PathBuf {
     crate::storage::state_dir().join("agent_latest.json")
@@ -377,12 +383,16 @@ pub fn due_agents<'a>(
     installed
         .into_iter()
         .filter(|id| source_for(id).is_some())
-        .filter(|id| {
-            store
-                .get(*id)
-                .is_none_or(|checked| now.saturating_sub(checked.checked_at) >= every)
-        })
+        .filter(|id| is_due(store, id, now, every))
         .collect()
+}
+
+/// Whether `key`'s last check — failed or not — is `every` seconds old or was
+/// never made.
+pub fn is_due(store: &Store, key: &str, now: u64, every: u64) -> bool {
+    store
+        .get(key)
+        .is_none_or(|checked| now.saturating_sub(checked.checked_at) >= every)
 }
 
 /// One installed CLI against its newest published release.
@@ -628,6 +638,20 @@ mod tests {
         assert!(due_agents(&Store::new(), ["no-such-cli"], now, day).is_empty(), "no registry, nothing to ask");
         // A clock set back is never "overdue".
         assert!(due_agents(&store, ["claude"], 0, day).is_empty());
+    }
+
+    #[test]
+    fn ollama_is_due_daily_beside_the_clis() {
+        let day = DAILY_EVERY_SECS;
+        let now = 10 * day;
+        let mut store = Store::new();
+        assert!(is_due(&store, OLLAMA_KEY, now, day), "never checked");
+        store.insert(OLLAMA_KEY.into(), Checked { latest: Some("0.35.1".into()), error: None, checked_at: now - 60 });
+        assert!(!is_due(&store, OLLAMA_KEY, now, day));
+        assert!(is_due(&store, OLLAMA_KEY, now + day, day));
+        // Its key is no registry agent's, so it is never asked about as a CLI.
+        assert!(source_for(OLLAMA_KEY).is_none());
+        assert!(due_agents(&Store::new(), [OLLAMA_KEY], now, day).is_empty());
     }
 
     #[test]

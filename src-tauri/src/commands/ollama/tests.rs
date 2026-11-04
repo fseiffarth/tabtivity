@@ -324,6 +324,35 @@ fn the_installed_version_is_found_whatever_else_the_command_printed() {
 }
 
 #[test]
+fn a_stored_release_check_is_compared_against_the_installed_version() {
+    use crate::services::agent_latest::Checked;
+    let checked = Checked { latest: Some("0.35.1".into()), error: None, checked_at: 1 };
+    let mut status = OllamaVersionStatus { current: "0.30.0".into(), ..Default::default() };
+    apply_checked(&mut status, &checked);
+    assert_eq!((status.latest.as_str(), status.update_available), ("0.35.1", true));
+
+    // Upgraded since the check: the same answer is no longer an update.
+    let mut status = OllamaVersionStatus { current: "0.35.1".into(), ..Default::default() };
+    apply_checked(&mut status, &checked);
+    assert!(!status.update_available);
+
+    // A failed check keeps the release seen before, and says why.
+    let failed = Checked { latest: Some("0.35.1".into()), error: Some("down".into()), checked_at: 2 };
+    let mut status = OllamaVersionStatus { current: "0.30.0".into(), ..Default::default() };
+    apply_checked(&mut status, &failed);
+    assert!(status.update_available);
+    assert_eq!(status.error.as_deref(), Some("down"));
+
+    // Nothing ever answered, or Ollama's version unreadable: no update.
+    let mut status = OllamaVersionStatus { current: "0.30.0".into(), ..Default::default() };
+    apply_checked(&mut status, &Checked::default());
+    assert!(status.latest.is_empty() && !status.update_available);
+    let mut status = OllamaVersionStatus::default();
+    apply_checked(&mut status, &checked);
+    assert!(!status.update_available);
+}
+
+#[test]
 fn versions_compare_numerically_not_lexically() {
     // The bug a string compare would have: "0.9.0" > "0.14.3" as text, so
     // most of Ollama's history would have reported a downgrade as an update.

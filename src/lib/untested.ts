@@ -313,7 +313,7 @@ export const UNTESTED = {
   "localModel.igpuDropped": { area: "layout", what: "LocalModelMenu · A model is loaded, but none of it is on the GPU. This Ollama version drops integrated GPU…" },
   "localModel.skillsLibrary": { area: "layout", what: "LocalModelMenu · Skills library…" },
   "localModel.manageAgents": { area: "layout", what: "LocalModelMenu · Manage CLIs… opens the Models & agents overlay's Agents & CLIs tab" },
-  "localModel.agentUpdates": { area: "layout", what: "LocalModelMenu · Agents section: once a day (90 s after launch, then hourly for any CLI last checked over a day ago) each installed CLI's newest release is checked; each row reads up to date / → <latest> (opens Manage CLIs) / couldn't check, and a line says when the releases were last checked" },
+  "localModel.agentUpdates": { area: "layout", what: "LocalModelMenu · Agents section: once a day (90 s after launch, then hourly for any CLI last checked over a day ago) each installed CLI's newest release is checked; each row reads up to date / → <latest> (opens Manage CLIs) / couldn't check, and a line says when the releases were last checked; an installed Ollama is checked the same way and its section shows Upgrade to <latest> without a click" },
   "localModel.manageLocalModels": { area: "layout", what: "LocalModelMenu · Manage local models… / Install Ollama… opens the overlay's Ollama tab" },
   "modelsOverlay.machine": { area: "layout", what: "ModelsOverlay · live CPU, RAM and GPU machine meters below the four overview cards" },
   "modelsOverlay.title": { area: "layout", what: "ModelsOverlay · Models & agents (header button click; overview tile grid with live summaries, back button, tiled agent cards, Escape, focus return)" },

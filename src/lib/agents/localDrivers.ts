@@ -94,7 +94,7 @@ export function checkOllamaUpdates(models: string[] = []): Promise<OllamaModelUp
 export interface OllamaVersionStatus {
   /** e.g. `"0.14.3"`; empty when Ollama isn't installed or didn't parse. */
   current: string;
-  /** e.g. `"0.32.5"`; empty whenever the remote half didn't run or answer. */
+  /** e.g. `"0.32.5"`, from the last stored check (daily or clicked); empty when none answered yet. */
   latest: string;
   /** True only when both versions parsed and `latest` is genuinely newer. */
   update_available: boolean;
@@ -113,8 +113,10 @@ export interface OllamaVersionStatus {
  * is simply absent from the + menu with nothing saying why.
  *
  * `checkRemote: false` touches **no network** — it is a local `ollama
- * --version`, so the menu can show what's installed the moment it opens. `true`
- * is the "Check for updates" click and costs one unauthenticated request.
+ * --version` plus the last stored check (the daily release check or a click),
+ * so the menu can show what's installed, and whether a release is out, the
+ * moment it opens. `true` is the "Check for updates" click and costs one
+ * unauthenticated request.
  */
 export function ollamaVersionStatus(checkRemote: boolean): Promise<OllamaVersionStatus> {
   return invoke<OllamaVersionStatus>("ollama_version_status", { checkRemote });

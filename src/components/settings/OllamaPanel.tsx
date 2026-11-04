@@ -268,8 +268,8 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The installed Ollama version — a local read, no network (the registry half
-  // only runs when the user presses "Check for updates").
+  // The installed Ollama version — a local read, no network; the newest release
+  // comes from the last stored check (the daily one or "Check for updates").
   useEffect(() => {
     if (!installed) return;
     ollamaVersionStatus(false)

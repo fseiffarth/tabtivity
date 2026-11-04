@@ -1801,6 +1801,10 @@ async fn check_updates_of(
 /// `agent_versions` for the whole picture.
 pub const AGENT_UPDATES_CHECKED_EVENT: &str = "agent-updates-checked";
 
+/// The event every window hears after the daily check stored a new answer for
+/// Ollama's own release; no payload, a window re-reads `ollama_version_status`.
+pub const OLLAMA_RELEASE_CHECKED_EVENT: &str = "ollama-release-checked";
+
 /// How long after launch the first daily check waits, so it never competes
 /// with the window restoring its tabs.
 const DAILY_CHECK_FIRST_DELAY: std::time::Duration = std::time::Duration::from_secs(90);
@@ -1812,8 +1816,9 @@ const DAILY_CHECK_TICK: std::time::Duration = std::time::Duration::from_secs(60 
 /// Once a day per installed CLI, the "Check for update" a Manage CLIs card
 /// offers, without the click: shortly after launch and then hourly, every
 /// installed CLI with a known registry whose last check (clicked or not) is a
-/// day old is asked ([`crate::services::agent_latest::due_agents`]). One GET
-/// per due CLI, nothing else leaves the machine; nothing is installed. When
+/// day old is asked ([`crate::services::agent_latest::due_agents`]), and so is
+/// an installed Ollama ([`crate::commands::ollama::daily_release_check`]). One
+/// GET per due CLI, nothing else leaves the machine; nothing is installed. When
 /// anything was asked, every window hears [`AGENT_UPDATES_CHECKED_EVENT`] and
 /// re-reads the stored answers: the Models & agents menu and a new tab of the
 /// CLI show them.
@@ -1829,6 +1834,12 @@ pub fn start_daily_update_check(ctx: CoreCtx) {
 
 async fn run_daily_update_check(ctx: &CoreCtx) {
     use crate::services::agent_latest;
+
+    // Ollama's own release, beside the CLIs' (`commands::ollama`); windows
+    // re-read it through `ollama_version_status`.
+    if crate::commands::ollama::daily_release_check().await {
+        ctx.emit(OLLAMA_RELEASE_CHECKED_EVENT, ());
+    }
 
     let installed = installed_specs();
     let store = agent_latest::load();
