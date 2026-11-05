@@ -24,9 +24,14 @@ below are fixed: reviewers may not undo them.
      stopped halfway: run the `--no-default-features` clippy, the app-serverd
      clippy and tests, `cargo test --workspace` and the full vitest in its worktree
      first. Not yet reviewed.
-  3. **I1**: was told to stop at a green commit; its state and next action are in
-     `tmp/threat_recheck_2026_11_04/step-I1.md`. Resume it with a fresh Sonnet
-     implementer in the same worktree, `.claude/worktrees/tr1104-I1`.
+  3. **I1** paused with two WIP commits on `tr1104/I1` (`2522ef52` gap 83,
+     `1f8705db` gap 74 + export half of 86, docs and rows): not mergeable yet. A
+     fresh Sonnet implementer in `.claude/worktrees/tr1104-I1` runs `cargo test -p
+     tabtivity --test projects_commands an_imported_bundle` (never compiled yet),
+     fixes it, runs `scripts/gates.sh` (`cargo test --workspace` and the daemon test
+     never ran; 4 vitest files failed only under load), updates threat-model row 47
+     (still says `copy_tree_core` has no guards), and rewords the two commits without
+     "WIP". Details: `tmp/threat_recheck_2026_11_04/step-I1.md`.
   4. **I2b** never started: its worktree `.claude/worktrees/tr1104-I2b` (branch
      `tr1104/I2b` = `tr1104/I2a`) is ready. Start it on Sonnet.
   5. Then one Opus reviewer for I2a+I2b, one for I3 and one for I1, each followed by a
