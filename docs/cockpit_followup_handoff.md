@@ -169,3 +169,75 @@ Commits (worktree `cockpit-followup`): `5fd3b740` (F1), `37799227` (F4), `bdb530
 - F3, F5, F7, F8 (cockpit/Root layout), then F9. F8's resize grip adds more targets
   inside `CHROME_ZONE`-adjacent rail markup: re-check `regionTargets` if the rail
   toggle moves out of `.cockpit-rail-expand/-collapse`.
+
+## Review of I1+I2
+
+Range `develop..5ca2a8d2`. Reviewer commits are listed under Fixes.
+
+### Findings
+
+**F2 (gate removal): clean.**
+- No `useExperimental("cockpit")` / `experimentalEnabled(..., "cockpit")` / `cockpitOn`
+  is left in `src/`; `rg` for "cockpit experiment" finds only the Rust test name.
+  `cockpit` is out of `EXPERIMENTAL_FLAGS` (so `explicitExperimentalPatch` and the
+  `migrateExperimentalOnce` loops no longer write it), out of `Settings` (TS), and
+  the Rust field is gone. An old `settings.json` with `"cockpit": true` parses into
+  `Settings.extra` (test `a_stored_cockpit_experiment_key_still_loads`); the TS
+  store spreads unknown keys and never reads it; nothing writes it. A file without
+  the key loads as before (the window is now simply the cockpit, as F2 decided).
+- **The 11th test.** Not a lost test. A full vitest run of `develop` (1064 files /
+  10857 tests) against the tip, compared by name, shows 20 names gone: 10 deleted
+  flag-off tests, 9 renamed ones (the "with the experiment on" wording; each has a
+  successor), and 1 that is generated per Settings control:
+  `SettingsSearchCoverage` "finds settings.cockpit by its label" (one `it` per
+  searchable control; the cockpit row is gone). Hence -11 rather than -10.
+  Nothing to restore.
+
+**F1/F4/F6: one real bug (and a regression of my own fix), the rest holds.**
+- Bindings: everything goes through `steeringBindings` / `resolveChord`; no
+  hard-coded chord. The chrome level adds no binding.
+- `Ctrl+W` cannot close a hidden workspace tab: every workspace branch is behind
+  `!windowUp`; on the Root view it goes through `steeringTabsActive()` (Root's
+  focused subwindow). Popouts have their own handler and a separate store
+  (`rootOverlay.open` is false there). The Host session closes like its x.
+- Escape: `leaveRegion` skips `closeApp` for `chrome`; the window's own Escape
+  only fires with steering off. Hidden panes: `RootNewTabKeys` is mounted by
+  `RootView` only, so nothing sleeping is woken.
+- i18n: the 6 new keys are in all five dictionaries; `rootConsole.title`,
+  `settings.cockpit*` are gone from all five. Register rows `steering.rootChrome`
+  present, pill in the cheat sheet heading; legend and cheat-sheet rows present.
+
+**Bug: an empty Root's new-tab keys also opened a tab in an empty workspace.**
+`newTabChord.targetGroupId()` addressed an empty Root as `EMPTY_GROUP_ID`, the id
+the empty workspace's placeholder `TabBar` (behind the window) also answers to.
+With both empty, Ctrl+Shift+N, steering's N/O/1-9 and + reached both
+`RootNewTabKeys` and that bar: one key, two tabs (or two menus).
+
+### Fixes
+- `97c06828` Root's empty target gets its own id `ROOT_EMPTY_GROUP_ID`; regression
+  test in `SteeringRootChrome.test.tsx` (fails with the old id).
+- `c7f43af9` The + menu lookup / add menu in `RootView` still keyed on the
+  placeholder id; mapped. Test: the + key opens the menu of an empty Root.
+- A stale "with it off the strip is absent" sentence in the `rootConsole.viewStrip`
+  register row removed; the empty-Root chord test in `OverlayAgentChord.test.tsx`
+  updated to the new id.
+
+### Flagged for user
+- None new beyond I2's three. One observation (read from code, not run): Enter on a view tab
+  with Enter switches the window to that view while steering stays in the chrome
+  region; Escape then returns to the tabs level of whatever is behind (the
+  workspace on Now / Projects). Harmless, but the ladder reads `Tabs > Window bar`
+  there too.
+
+### Gates (worktree, clean tree)
+- `npm run build` ok; `npm run lint` 0 errors (29 warnings, none in touched code);
+  `scripts/brand-check.sh` ok; `git diff --check develop..HEAD` clean.
+- Full `npm test`: **1067 files, 10873 tests** passed (I2 tip 10871, +2 reviewer
+  tests). A first full run found the one test my id change broke
+  (`OverlayAgentChord`, fixed in the last commit); a name-by-name run of `develop`
+  gave the baseline 1064 / 10857.
+- `cargo test --workspace -q` ok (tabtivity 5054, app-serverd, core crates);
+  `cargo test -p tabtivity --no-default-features --lib --test server_secrets -q`
+  ok (4894 + 1); `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo clippy -p tabtivity --no-default-features --lib -- -D warnings` clean.
+- Not run live.
