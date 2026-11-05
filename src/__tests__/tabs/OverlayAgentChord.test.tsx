@@ -21,6 +21,7 @@ import { useKeyboard } from "../../hooks/useKeyboard";
 import {
   NEW_TAB_SHORTCUT_EVENT,
   OVERLAY_AGENT_EVENT,
+  ROOT_EMPTY_GROUP_ID,
   requestOverlayAgent,
   type NewTabShortcutDetail,
   type OverlayAgentDetail,
@@ -181,7 +182,7 @@ describe("Ctrl+1–9 inside an app overlay", () => {
     events = listen({ overlay: true, newTab: true });
     press(CTRL_1);
     // Root has no subwindow in this fixture: the empty one, not the workspace's pane.
-    expect(events.newTab.map((d) => d.groupId)).toEqual(["__empty__"]);
+    expect(events.newTab.map((d) => d.groupId)).toEqual([ROOT_EMPTY_GROUP_ID]);
     expect(useRootOverlayStore.getState().open).toBe(true);
   });
 
