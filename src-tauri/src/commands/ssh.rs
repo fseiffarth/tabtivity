@@ -379,25 +379,29 @@ pub(crate) fn run_ssh_auth(
     password: Option<&str>,
     remote: &[&str],
 ) -> Result<String, String> {
-    run_ssh_auth_raw(user, host, port, password, remote).map_err(|(explained, _)| explained)
+    run_ssh_auth_raw(user, host, port, password, remote, false).map_err(|(explained, _)| explained)
 }
 
 /// [`run_ssh_auth`] keeping ssh's raw stderr alongside the explained message, for
 /// the caller that must classify a failure ([`ssh_probe`]). The explained form is
 /// written for a person and says "No route to the host", so a classifier reading
 /// it matches nothing; the raw half is empty when ssh never ran.
+///
+/// `quiet` adds `-o LogLevel=ERROR` ([`quiet_ssh`]): the probe's stderr is then
+/// ssh's own errors only, never a server's pre-auth banner.
 fn run_ssh_auth_raw(
     user: &Option<String>,
     host: &str,
     port: Option<u16>,
     password: Option<&str>,
     remote: &[&str],
+    quiet: bool,
 ) -> Result<String, (String, String)> {
     use crate::services::ssh_common::SecretKind;
 
     let never_ran = |e: String| (e, String::new());
     let Some(pw) = password.filter(|p| !p.is_empty()) else {
-        let base = ssh_base_args(user, host, port).map_err(never_ran)?;
+        let base = quiet_ssh(ssh_base_args(user, host, port).map_err(never_ran)?, quiet);
         let mut cmd = crate::paths::command_no_window("ssh");
         cmd.args(&base);
         cmd.args(remote);
@@ -429,6 +433,7 @@ fn run_ssh_auth_raw(
             crate::services::ssh_common::ssh_passphrase_base_args(user, host, port)
         }
         .map_err(never_ran)?;
+        let base = quiet_ssh(base, quiet);
         match run_one_secret_attempt(kind, pw, &base, remote) {
             Ok(out) => return Ok(out),
             Err((explained, raw, rejected_locally)) => {
@@ -442,6 +447,21 @@ fn run_ssh_auth_raw(
         }
     }
     Err(error)
+}
+
+/// `base` (an option list ending in the `[user@]host` target) with `-o LogLevel=ERROR`
+/// before the target when `quiet`. OpenSSH prints a server's pre-auth banner, and its
+/// own "Connection closed/reset by …" notes, only at INFO and above, so at ERROR what
+/// is left on stderr is ssh's errors: `ssh: connect to host …`, `Could not resolve
+/// hostname`, `kex_exchange_identification: …`, `Permission denied (…)`. A command-line
+/// option outranks `~/.ssh/config`'s `LogLevel`. Checked against OpenSSH 10.2: a
+/// `Connection closed by`/`reset by` line goes away at ERROR, the others stay.
+fn quiet_ssh(mut base: Vec<String>, quiet: bool) -> Vec<String> {
+    if quiet && !base.is_empty() {
+        let at = base.len() - 1;
+        base.splice(at..at, ["-o".to_string(), "LogLevel=ERROR".to_string()]);
+    }
+    base
 }
 
 /// One authentication attempt for [`run_ssh_auth`]: build `ssh` (or `sshpass`)
@@ -692,28 +712,34 @@ pub struct SshProbe {
 /// no credential was judged, so a re-try replays nothing. Any text that got as far
 /// as authentication is a "no", whatever else it says.
 ///
-/// `err` is ssh's **raw** stderr: the markers are OpenSSH's own words, which
-/// `explain_ssh_error` rewrites (see [`probe_verdict`]).
+/// `err` is ssh's **raw** stderr from a run with `-o LogLevel=ERROR` ([`quiet_ssh`]),
+/// and only a line that *starts* with one of ssh's own prefixes counts: the host
+/// being dialled chooses the text of its pre-auth banner and of what it says on
+/// disconnect, and a substring match anywhere let it write itself an "unreachable"
+/// (which raises the project's VPN tunnel once) or a "rejected" verdict. The
+/// markers are OpenSSH's own words, which `explain_ssh_error` rewrites (see
+/// [`probe_verdict`]). Only a failed run reaches this (ssh's exit is 255 for every
+/// connection or authentication failure, and the probe's `true` cannot fail), so the
+/// exit code adds nothing to the lines. A quiet run that printed nothing is not
+/// unreachable: it may be an auth failure whose notes sit below ERROR.
 fn ssh_unreachable(err: &str) -> bool {
-    const MARKERS: [&str; 11] = [
-        "Connection timed out",
-        "Operation timed out",
-        "No route to host",
-        "Network is unreachable",
-        "Network is down",
-        "Host is down",
-        "Connection refused",
-        "Could not resolve hostname",
-        "Connection reset",
-        "kex_exchange_identification",
-        "Connection closed by",
+    const CLIENT_PREFIXES: [&str; 6] = [
+        "ssh: connect to host ",
+        "ssh: Could not resolve hostname",
+        "kex_exchange_identification:",
+        "ssh_exchange_identification:",
+        "Connection closed by ",
+        "Connection reset by ",
     ];
     const REJECTED: [&str; 3] = ["permission denied", "authentication", "host key"];
-    let err = err.to_ascii_lowercase();
-    !REJECTED.iter().any(|m| err.contains(m))
-        && MARKERS
-            .iter()
-            .any(|m| err.contains(&m.to_ascii_lowercase()))
+    let client = |line: &str| CLIENT_PREFIXES.iter().any(|prefix| line.starts_with(prefix));
+    // A client line names the host dialled, which may spell anything ("authentication.example"):
+    // only the other lines can say "no".
+    let rejected = err.lines().filter(|line| !client(line)).any(|line| {
+        let line = line.to_ascii_lowercase();
+        REJECTED.iter().any(|m| line.contains(m))
+    });
+    !rejected && err.lines().any(client)
 }
 
 /// The probe's answer from one authenticated run: the explained message is what
@@ -764,7 +790,7 @@ pub async fn ssh_probe(
         use crate::services::remote_credentials as creds;
         let _dial = crate::services::ssh_common::declared_dial(background, &user, &host, port);
         let saved = creds::get(&creds::ssh_account(&user, &host, port));
-        probe_verdict(run_ssh_auth_raw(&user, &host, port, saved.as_deref(), &["true"]))
+        probe_verdict(run_ssh_auth_raw(&user, &host, port, saved.as_deref(), &["true"], true))
     })
     .await
     .unwrap_or_else(|e| SshProbe {
@@ -1079,6 +1105,40 @@ mod tests {
         ] {
             assert!(!ssh_unreachable(err), "should not be unreachable: {err}");
         }
+    }
+
+    /// The host being dialled writes its own pre-auth banner and disconnect notes, so
+    /// the verdict reads ssh's own lines and nothing a line merely contains (gap 85).
+    #[test]
+    fn a_server_banner_cannot_write_the_verdict() {
+        for err in [
+            "*** Maintenance window: Connection closed by 192.0.2.10 port 22 ***",
+            "Welcome to build.example\n  Connection closed by 192.0.2.10 port 22",
+            "Notice: ssh: connect to host build.example port 22: Connection timed out",
+            "Banner: kex_exchange_identification: Connection closed by remote host",
+            "",
+        ] {
+            assert!(!ssh_unreachable(err), "a banner must not read as unreachable: {err:?}");
+        }
+        // The other direction: a line ssh printed is found among others, and a host *named*
+        // like a rejection is still unreachable.
+        assert!(ssh_unreachable("Welcome to build.example\nssh: connect to host build.example port 22: No route to host"));
+        assert!(ssh_unreachable("ssh: connect to host authentication.example port 22: Connection timed out"));
+        assert!(ssh_unreachable("ssh: Could not resolve hostname host-key.example: Name or service not known\r\n"));
+    }
+
+    /// The probe asks ssh for `LogLevel=ERROR` (which keeps the banner and the INFO notes
+    /// off stderr); other logins do not, and it goes before the target.
+    #[test]
+    fn the_probe_runs_ssh_quiet_before_the_target() {
+        let base = ssh_base_args(&Some("alice".to_string()), "host.example", Some(2222)).unwrap();
+        assert_eq!(quiet_ssh(base.clone(), false), base);
+        let quiet = quiet_ssh(base.clone(), true);
+        assert_eq!(quiet.last(), base.last(), "the target stays last");
+        let at = quiet.iter().position(|a| a == "LogLevel=ERROR").expect("LogLevel=ERROR");
+        assert_eq!(quiet[at - 1], "-o");
+        assert_eq!(quiet.len(), base.len() + 2);
+        assert_eq!(at + 2, quiet.len(), "-o LogLevel=ERROR sits right before the target");
     }
 
     /// The failures a dropped network really produces, through the same two steps
