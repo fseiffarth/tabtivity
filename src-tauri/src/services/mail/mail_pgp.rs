@@ -893,6 +893,45 @@ impl MailCrypto for PgpKeyring {
 
 // ── Pulling the signed bytes out of a multipart/signed ───────────────────────
 
+/// The two children of a root `multipart/<subtype>` (RFC 3156), or `None`.
+///
+/// **Exactly two**, the second typed `<second_main>/<second_sub>`
+/// (`application/pgp-signature`; `application/octet-stream` for the ciphertext).
+/// A signature covers children[0] and nothing else, while the reader renders a
+/// whole message: a third part (text, HTML, an attachment) appended to one
+/// genuine signed mail would sit outside the signature but under its verdict.
+/// Any other shape is unusable, never verified.
+fn two_part_root(
+    msg: &mail_parser::Message<'_>,
+    subtype: &str,
+    second_main: &str,
+    second_sub: &str,
+) -> Option<[u32; 2]> {
+    use mail_parser::{MimeHeaders, PartType};
+
+    let root = msg.root_part();
+    let ctype = root.content_type()?;
+    let is_root = ctype.ctype().eq_ignore_ascii_case("multipart")
+        && ctype
+            .subtype()
+            .is_some_and(|s| s.eq_ignore_ascii_case(subtype));
+    let PartType::Multipart(ids) = &root.body else {
+        return None;
+    };
+    let [first, second] = ids.as_slice() else {
+        return None;
+    };
+    if !is_root {
+        return None;
+    }
+    let second_type = msg.part(*second)?.content_type()?;
+    (second_type.ctype().eq_ignore_ascii_case(second_main)
+        && second_type
+            .subtype()
+            .is_some_and(|s| s.eq_ignore_ascii_case(second_sub)))
+    .then_some([*first, *second])
+}
+
 /// The exact bytes an RFC 3156 signature covers, and the signature beside them.
 ///
 /// **The single most error-prone function in the feature**, because the failure
@@ -912,24 +951,11 @@ impl MailCrypto for PgpKeyring {
 /// which is what makes rule 2 achievable at all: the slice is the original
 /// bytes, not a re-serialization.
 pub fn signed_part_bytes(raw: &[u8], msg: &mail_parser::Message<'_>) -> Option<(Vec<u8>, Vec<u8>)> {
-    use mail_parser::{MimeHeaders, PartType};
-
     // The `multipart/signed` node, and its two children in order. The **root**
     // only, matching `mail_crypto::detect`: a signed node nested beside other
     // content covers none of that content, and a signature checked there would
     // lend its verdict to parts the sender never saw.
-    let root = msg.root_part();
-    let children = {
-        let ctype = root.content_type()?;
-        let signed = ctype.ctype().eq_ignore_ascii_case("multipart")
-            && ctype
-                .subtype()
-                .is_some_and(|s| s.eq_ignore_ascii_case("signed"));
-        match (&root.body, signed) {
-            (PartType::Multipart(ids), true) if ids.len() >= 2 => ids.clone(),
-            _ => return None,
-        }
-    };
+    let children = two_part_root(msg, "signed", "application", "pgp-signature")?;
 
     let content = msg.part(children[0])?;
     let signature = msg.part(children[1])?;
@@ -954,23 +980,42 @@ pub fn signed_part_bytes(raw: &[u8], msg: &mail_parser::Message<'_>) -> Option<(
     Some((bytes, raw[sig_start..sig_end].to_vec()))
 }
 
-/// The ciphertext part of an RFC 3156 `multipart/encrypted` message.
-pub fn encrypted_part_bytes(raw: &[u8], msg: &mail_parser::Message<'_>) -> Option<Vec<u8>> {
-    use mail_parser::{MimeHeaders, PartType};
-    // The root only, for the reason `signed_part_bytes` gives: a ciphertext
-    // nested in someone else's message must not be decrypted into it.
-    let root = msg.root_part();
-    let children = {
-        let ctype = root.content_type()?;
-        let enc = ctype.ctype().eq_ignore_ascii_case("multipart")
-            && ctype
-                .subtype()
-                .is_some_and(|s| s.eq_ignore_ascii_case("encrypted"));
-        match (&root.body, enc) {
-            (PartType::Multipart(ids), true) if ids.len() >= 2 => ids.clone(),
-            _ => return None,
+/// Verify a `multipart/signed` root and say what the reader may render.
+///
+/// Returns the panel's verdict and, with a usable shape (exactly two children,
+/// the second a signature), the **signed part's own bytes**, children[0]: what a
+/// decrypted inner message is to the encrypted arm. The caller parses those in
+/// place of the message, so the body, the attachment list, `load_attachment` and
+/// the agent's `mail_read` show what the signature covers and nothing beside it.
+/// The verdict may be Bad or NoKey; the content is the same narrowed part.
+/// Any other shape is `Unusable` with `None`: the whole message stays as it is,
+/// and no part of it earns positive chrome.
+pub fn check_signed_root(
+    ring: &PgpKeyring,
+    raw: &[u8],
+    msg: &mail_parser::Message<'_>,
+    from_address: &str,
+) -> (Option<Vec<u8>>, crate::schema::mail::MailCryptoInfo) {
+    let (rendered, outcome) = match signed_part_bytes(raw, msg) {
+        Some((signed, sig)) => {
+            let outcome = ring.verify_detached(&signed, &sig);
+            (Some(signed), outcome)
         }
+        None => (None, VerifyOutcome::Unusable("signature-structure".into())),
     };
+    let info = crate::services::mail_crypto::info_for(
+        CryptoKind::PgpSigned,
+        Some(&outcome),
+        false,
+        from_address,
+    );
+    (rendered, info)
+}
+
+/// The ciphertext part of an RFC 3156 `multipart/encrypted` message.
+pub fn encrypted_part_bytes(raw: &[u8], msg: &mail_parser::Message<'_>) -> Option<Vec<u8>> {    // The root only, for the reason `signed_part_bytes` gives: a ciphertext
+    // nested in someone else's message must not be decrypted into it.
+    let children = two_part_root(msg, "encrypted", "application", "octet-stream")?;
     // Part 1 is the `application/pgp-encrypted` version marker; part 2 is the
     // payload. Reading part 1 as the message is the classic mis-slice.
     let payload = msg.part(children[1])?;
@@ -2028,6 +2073,136 @@ mod tests {
             "the CRLF before the boundary is not: {text:?}"
         );
         assert!(String::from_utf8_lossy(&sig).contains("SIGNATURE-BYTES"));
+    }
+
+    // ── Gap 75: only the signed part is shown under a signed verdict ────────
+
+    /// Parse a message and run [`check_signed_root`] over it.
+    fn check(
+        ring: &PgpKeyring,
+        raw: &str,
+        from: &str,
+    ) -> (Option<Vec<u8>>, crate::schema::mail::MailCryptoInfo) {
+        let msg = mail_parser::MessageParser::default()
+            .parse(raw.as_bytes())
+            .unwrap();
+        check_signed_root(ring, raw.as_bytes(), &msg, from)
+    }
+
+    /// A genuine signed mail from `alice@example.com`, its closing boundary
+    /// replaced by `extra` (more parts) and then the boundary again.
+    fn signed_mail_with(ring: &PgpKeyring, extra: &str) -> String {
+        let body = "Content-Type: text/plain; charset=utf-8\r\n\r\nthe signed words";
+        let sig = ring.sign_detached("acct-1", body.as_bytes()).unwrap();
+        let (ctype, mime) = wrap_signed(body, &sig);
+        let b = ctype.split("boundary=\"").nth(1).unwrap().trim_end_matches('"');
+        let closing = format!("--{b}--\r\n");
+        assert!(mime.ends_with(&closing));
+        let mime = mime.trim_end_matches(&closing).to_string()
+            + &extra.replace("{b}", b)
+            + &closing;
+        format!("From: alice@example.com\r\nContent-Type: {ctype}\r\n\r\n{mime}")
+    }
+
+    fn verified_alice() -> (tempfile::TempDir, PgpKeyring) {
+        let (d, ring) = keyring();
+        let info = ring
+            .generate("Alice", "alice@example.com", "acct-1")
+            .unwrap();
+        ring.set_verified(&info.fingerprint, true).unwrap();
+        (d, ring)
+    }
+
+    const UNSIGNED_EXTRAS: &str = concat!(
+        "--{b}\r\nContent-Type: text/html\r\n\r\n<b>UNSIGNED HTML</b>\r\n",
+        "--{b}\r\nContent-Type: application/pdf; name=\"x.pdf\"\r\n",
+        "Content-Disposition: attachment; filename=\"x.pdf\"\r\n\r\nPDF\r\n",
+    );
+
+    #[test]
+    fn a_genuine_two_part_signed_mail_is_verified_and_narrowed_to_the_signed_part() {
+        use crate::schema::mail::MailCryptoState;
+        let (_d, ring) = verified_alice();
+        let raw = signed_mail_with(&ring, "");
+        let (shown, info) = check(&ring, &raw, "alice@example.com");
+        assert_eq!(info.state, MailCryptoState::Verified);
+        let shown = shown.expect("a usable signed root renders its signed part");
+        let parsed = crate::services::mail_engine::parse_message(&shown).unwrap();
+        assert_eq!(parsed.text.as_deref(), Some("the signed words"));
+        assert!(
+            parsed.attachments.is_empty(),
+            "the signature part is not an attachment of what was signed"
+        );
+    }
+
+    /// The attack: one genuine signed mail with parts added outside the
+    /// signature. Before the fix this stayed Verified and showed the extras.
+    #[test]
+    fn a_third_part_beside_a_valid_signature_is_unusable_and_never_verified() {
+        use crate::schema::mail::MailCryptoState;
+        let (_d, ring) = verified_alice();
+        let raw = signed_mail_with(&ring, UNSIGNED_EXTRAS);
+
+        // The parser merges the extra leaves into the body lists and the
+        // attachment list of the message, which is what the pane used to show.
+        let whole = crate::services::mail_engine::parse_message(raw.as_bytes()).unwrap();
+        assert!(whole.attachments.iter().any(|a| a.meta.filename == "x.pdf"));
+
+        let (shown, info) = check(&ring, &raw, "alice@example.com");
+        assert_eq!(info.state, MailCryptoState::Unusable);
+        assert_ne!(info.state, MailCryptoState::Verified);
+        assert!(shown.is_none(), "no narrowing for a shape with no verdict");
+    }
+
+    #[test]
+    fn a_bad_signature_never_gets_the_verified_chip_and_still_shows_only_the_signed_part() {
+        use crate::schema::mail::MailCryptoState;
+        let (_d, ring) = verified_alice();
+        // Tampered after signing: the signed part no longer matches.
+        let raw = signed_mail_with(&ring, "").replace("the signed words", "the forged words");
+        let (shown, info) = check(&ring, &raw, "alice@example.com");
+        assert_eq!(info.state, MailCryptoState::Invalid);
+        let shown = String::from_utf8(shown.unwrap()).unwrap();
+        assert!(shown.contains("forged words") && !shown.contains("pgp-signature"));
+    }
+
+    #[test]
+    fn the_second_part_must_be_the_signature_and_the_encrypted_one_octet_stream() {
+        let signed = |second: &str| {
+            format!(
+                concat!(
+                    "From: a@example.com\r\n",
+                    "Content-Type: multipart/signed; protocol=\"application/pgp-signature\"; boundary=\"BB\"\r\n\r\n",
+                    "--BB\r\nContent-Type: text/plain\r\n\r\nhi\r\n",
+                    "--BB\r\nContent-Type: {}\r\n\r\nSIG\r\n--BB--\r\n"
+                ),
+                second
+            )
+        };
+        let parse = |raw: &str| signed_part_bytes(raw.as_bytes(), &mail_parser::MessageParser::default().parse(raw.as_bytes()).unwrap());
+        assert!(parse(&signed("application/pgp-signature")).is_some());
+        assert!(parse(&signed("APPLICATION/PGP-SIGNATURE; name=s.asc")).is_some());
+        assert!(parse(&signed("text/html")).is_none(), "a second part that is not a signature");
+        assert!(parse(&signed("application/pdf")).is_none());
+
+        let enc = |second: &str, extra: &str| {
+            format!(
+                concat!(
+                    "From: a@example.com\r\n",
+                    "Content-Type: multipart/encrypted; protocol=\"application/pgp-encrypted\"; boundary=\"BB\"\r\n\r\n",
+                    "--BB\r\nContent-Type: application/pgp-encrypted\r\n\r\nVersion: 1\r\n",
+                    "--BB\r\nContent-Type: {}\r\n\r\nCIPHER\r\n{}--BB--\r\n"
+                ),
+                second, extra
+            )
+        };
+        let payload = |raw: &str| encrypted_part_bytes(raw.as_bytes(), &mail_parser::MessageParser::default().parse(raw.as_bytes()).unwrap());
+        assert!(payload(&enc("application/octet-stream", "")).is_some());
+        assert!(payload(&enc("text/plain", "")).is_none());
+        assert!(
+            payload(&enc("application/octet-stream", "--BB\r\nContent-Type: text/html\r\n\r\n<b>x</b>\r\n")).is_none(),
+            "a part beside the ciphertext"
+        );
     }
 
     /// A message whose parts are separated by bare LF — routine after an MTA

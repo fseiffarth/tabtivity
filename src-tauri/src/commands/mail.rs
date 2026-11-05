@@ -786,11 +786,12 @@ fn apply_crypto_at(
                 }
             }
         }
+        // The signed part's own bytes go on to be rendered (gap 75): a part
+        // added beside it is outside the signature, so it is not shown under
+        // the verdict.
         CryptoKind::PgpSigned => {
-            let outcome = mail_pgp::signed_part_bytes(&raw, &parsed)
-                .map(|(signed, sig)| ring.verify_detached(&signed, &sig));
-            let info = mail_crypto::info_for(kind, outcome.as_ref(), false, from_address);
-            (raw, Some(info))
+            let (shown, info) = mail_pgp::check_signed_root(&ring, &raw, &parsed, from_address);
+            (shown.unwrap_or(raw), Some(info))
         }
         // Inline (pre-MIME) signatures are detected and reported, not checked:
         // the cleartext-signature framework has its own dash-escaping and
@@ -2798,6 +2799,32 @@ pub async fn mail_body(
     body_inner(state.clone(), message_id).await
 }
 
+/// Write (or, for decrypted mail, forget) the attachment rows `mail_body` shows.
+///
+/// A message with a crypto verdict may show only part of what an earlier open
+/// stored: a signed one renders just the signed part (gap 75), so the rows an
+/// older build or an earlier whole-message open wrote for parts beside it are
+/// replaced, not added to. Ordinary mail only upserts.
+fn record_attachments(
+    store: &MailStore,
+    id: &str,
+    attachments: &[mail_engine::ParsedAttachment],
+    decrypted: bool,
+    has_verdict: bool,
+) -> Result<(), String> {
+    if decrypted || has_verdict {
+        store.forget_message_content(id)?;
+    }
+    if decrypted {
+        return Ok(());
+    }
+    for att in attachments {
+        let blob = store.put_blob(&att.bytes)?;
+        store.put_attachment(id, &att.meta, &blob)?;
+    }
+    Ok(())
+}
+
 /// `mail_body`'s whole body, shared with the root MCP's `mail_read`
 /// ([`AgentMail`]) so the two cannot drift: same cache, same `BODY.PEEK[]`
 /// (which is what keeps the message unread), same `decrypt → parse → sanitize`.
@@ -2898,14 +2925,13 @@ async fn body_inner(rt: MailState, message_id: String) -> Result<MailBody, Strin
         let decrypted = crypto.as_ref().is_some_and(|c| c.decrypted);
         let attachments: Vec<MailAttachmentMeta> =
             parsed.attachments.iter().map(|a| a.meta.clone()).collect();
-        if decrypted {
-            store.forget_message_content(&id)?;
-        } else {
-            for att in &parsed.attachments {
-                let blob = store.put_blob(&att.bytes)?;
-                store.put_attachment(&id, &att.meta, &blob)?;
-            }
-        }
+        record_attachments(
+            &store,
+            &id,
+            &parsed.attachments,
+            decrypted,
+            crypto.is_some(),
+        )?;
 
         // The body cache holds no crypto verdict, so only mail that *has* none
         // is cached. A signed message, or one that failed to decrypt, re-fetches
@@ -4976,6 +5002,36 @@ mod tests {
 
     use super::*;
     use crate::schema::mail::{MailSecurity, MailServer};
+
+    #[test]
+    fn a_message_with_a_verdict_replaces_its_stored_attachment_rows() {
+        let store = MailStore::open_ephemeral().unwrap();
+        let att = |part: &str, name: &str| mail_engine::ParsedAttachment {
+            part_id: part.into(),
+            meta: crate::schema::mail::MailAttachmentMeta {
+                part_id: part.into(),
+                filename: name.into(),
+                mime: "application/pdf".into(),
+                size: 3,
+                inline: false,
+                type_mismatch: None,
+            },
+            bytes: name.as_bytes().to_vec(),
+        };
+        // An earlier whole-message open stored a part beside the signed one.
+        record_attachments(&store, "m1", &[att("2", "beside.pdf"), att("4", "x.pdf")], false, false)
+            .unwrap();
+        assert_eq!(store.attachments("m1").unwrap().len(), 2);
+        // The signed part alone now has one attachment, under another id.
+        record_attachments(&store, "m1", &[att("3", "signed.pdf")], false, true).unwrap();
+        let rows = store.attachments("m1").unwrap();
+        assert_eq!(rows.len(), 1, "the unsigned parts' rows are gone: {rows:?}");
+        assert_eq!(rows[0].filename, "signed.pdf");
+        // Ordinary mail only adds.
+        record_attachments(&store, "m2", &[att("2", "a.pdf")], false, false).unwrap();
+        record_attachments(&store, "m2", &[att("3", "b.pdf")], false, false).unwrap();
+        assert_eq!(store.attachments("m2").unwrap().len(), 2);
+    }
 
     #[test]
     fn a_server_classifies_fewer_messages_per_sync() {
