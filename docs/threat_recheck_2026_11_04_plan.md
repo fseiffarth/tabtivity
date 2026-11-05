@@ -13,6 +13,32 @@ below are fixed: reviewers may not undo them.
 - 2026-11-05: plan reviewed against the code (paths fixed, missed callers added,
   steps 2, 4, 6 and 7 split into two agent steps each; see "Open points decided by
   the plan review"). Next: the agent steps below.
+- 2026-11-05: plan committed `6e36fd30`. Wave 1 running: I1, I2a, I3 in
+  `.claude/worktrees/tr1104-<step>` (branches `tr1104/<step>`); reports go to
+  `tmp/threat_recheck_2026_11_04/step-<step>.md`. Then: reviewers, I2b, I4a, I5, I6, …
+- 2026-11-05: user: implementers from I2b on run on **Sonnet**; reviewers stay on Opus.
+- **2026-11-05, paused by the user. To continue, do these in order:**
+  1. **I2a** done: `tr1104/I2a` `41b78993` (gap 75), gates green except one flaky
+     `api_proxy` port test (passed alone). Not yet reviewed.
+  2. **I3** done: `tr1104/I3` `cb1f6f7f` (gaps 89, 90, 102–104), but its `gates.sh` was
+     stopped halfway: run the `--no-default-features` clippy, the app-serverd
+     clippy and tests, `cargo test --workspace` and the full vitest in its worktree
+     first. Not yet reviewed.
+  3. **I1** paused with two WIP commits on `tr1104/I1` (`2522ef52` gap 83,
+     `1f8705db` gap 74 + export half of 86, docs and rows): not mergeable yet. A
+     fresh Sonnet implementer in `.claude/worktrees/tr1104-I1` runs `cargo test -p
+     tabtivity --test projects_commands an_imported_bundle` (never compiled yet),
+     fixes it, runs `scripts/gates.sh` (`cargo test --workspace` and the daemon test
+     never ran; 4 vitest files failed only under load), updates threat-model row 47
+     (still says `copy_tree_core` has no guards), and rewords the two commits without
+     "WIP". Details: `tmp/threat_recheck_2026_11_04/step-I1.md`.
+  4. **I2b** never started: its worktree `.claude/worktrees/tr1104-I2b` (branch
+     `tr1104/I2b` = `tr1104/I2a`) is ready. Start it on Sonnet.
+  5. Then one Opus reviewer for I2a+I2b, one for I3 and one for I1, each followed by a
+     merge into develop. After that: I4a, I4b, I5, I6, I6b, I7a, I7b, I8, I9, I10 as
+     in the Agent steps table (at most 5 agents, 3 building), then the final review.
+  Reports: `tmp/threat_recheck_2026_11_04/step-<step>.md` in the main checkout.
+  Say "continue the threat recheck" to pick up here.
 
 ## Decisions (user, 2026-11-05)
 

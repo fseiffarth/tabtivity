@@ -7,6 +7,8 @@ import {
   isPythonPath,
   modulePathCandidates,
   parsePythonImports,
+  pythonImportLinks,
+  pythonLibRoots,
   pythonLinkRanges,
   pythonRefAt,
   pythonTokens,
@@ -441,5 +443,133 @@ describe("pythonLinkRanges", () => {
   it("underlines self.method only when the method exists in this file", () => {
     const src = ["class C:", "    def run(self):", "        self.step()", "        self.absent()", "    def step(self):", "        pass"].join("\n");
     expect(rangesOf(src)).toEqual(["step"]);
+  });
+});
+
+// ── External libraries (an in-tree venv's site-packages) ─────────────────────
+
+describe("pythonLibRoots", () => {
+  const listing = (dirs: Record<string, string[]>) => async (d: string) => dirs[d] ?? null;
+
+  it("finds an in-tree venv's site-packages from the relative interpreter", async () => {
+    const roots = await pythonLibRoots(
+      ".venv/bin/python",
+      "/proj",
+      listing({
+        "/proj/.venv/lib": ["python3.12", "python3.9", "pkgconfig"],
+        "/proj/.venv/lib/python3.12": ["site-packages"],
+        "/proj/.venv/lib/python3.9": ["os.py"],
+      }),
+    );
+    expect(roots).toEqual(["/proj/.venv/lib/python3.12/site-packages"]);
+  });
+
+  it("finds the Windows layout", async () => {
+    const roots = await pythonLibRoots(
+      "C:\\proj\\.venv\\Scripts\\python.exe",
+      "C:\\proj",
+      listing({ "C:\\proj\\.venv\\Lib": ["site-packages"] }),
+    );
+    expect(roots).toEqual(["C:\\proj\\.venv\\Lib\\site-packages"]);
+  });
+
+  it("names nothing for a bare command (the system fallback)", async () => {
+    expect(await pythonLibRoots("python3", "/proj", listing({}))).toEqual([]);
+  });
+});
+
+describe("resolvePythonDefinition into an external library", () => {
+  const SITE = "/proj/.venv/lib/python3.12/site-packages";
+  const MAIN = "/proj/hello.py";
+  const main = [
+    "from rdkit import Chem, rdBase",
+    "from rdkit.Chem import Descriptors, Draw",
+    "import numpy as np",
+    "",
+    "Chem.MolFromSmiles('C')",
+    "Descriptors.MolWt(m)",
+    "Draw.MolToFile(m, 'x.png')",
+    "np.zeros(3)",
+    "rdBase.rdkitVersion",
+  ].join("\n");
+  const files = {
+    [`${SITE}/rdkit/__init__.py`]: "from rdkit import rdBase\n",
+    [`${SITE}/rdkit/Chem/__init__.py`]: "from rdkit import rdBase\n",
+    [`${SITE}/rdkit/Chem/Descriptors.py`]: "def MolWt(m):\n    pass\n",
+    [`${SITE}/rdkit/Chem/Draw/__init__.py`]: "def MolToFile(m, f):\n    pass\n",
+    [`${SITE}/rdkit-stubs/rdBase.pyi`]: "rdkitVersion: str\n",
+    [`${SITE}/numpy/__init__.py`]: "from .core import zeros\n",
+    [`${SITE}/numpy/core.py`]: "\n\ndef zeros(n):\n    pass\n",
+  };
+  const at = (needle: string) =>
+    resolvePythonDefinition(main, main.lastIndexOf(needle) + 1, MAIN, "/proj", reader(files), [SITE]);
+
+  it("opens a submodule imported by name", async () => {
+    expect(await at("Chem.Mol")).toEqual({ path: `${SITE}/rdkit/Chem/__init__.py`, line: 1, column: 0 });
+    expect(await at("Draw.Mol")).toEqual({ path: `${SITE}/rdkit/Chem/Draw/__init__.py`, line: 1, column: 0 });
+  });
+
+  it("follows an attribute of a library module, through a re-export", async () => {
+    expect(await at("zeros")).toEqual({ path: `${SITE}/numpy/core.py`, line: 3, column: 4 });
+  });
+
+  it("falls back to a PEP 561 stubs package for a compiled module", async () => {
+    expect(await at("rdBase.rdkit")).toEqual({ path: `${SITE}/rdkit-stubs/rdBase.pyi`, line: 1, column: 0 });
+  });
+
+  it("does not look in site-packages without the roots", async () => {
+    const loc = await resolvePythonDefinition(main, main.lastIndexOf("Draw.Mol") + 1, MAIN, "/proj", reader(files));
+    expect(loc).toBeNull();
+  });
+
+  it("lists library candidates after the project's own roots", () => {
+    expect(modulePathCandidates({ module: "rdkit.Chem", level: 0 }, MAIN, "/proj", [SITE]).slice(4)).toEqual([
+      `${SITE}/rdkit/Chem.py`,
+      `${SITE}/rdkit/Chem/__init__.py`,
+      `${SITE}/rdkit/Chem.pyi`,
+      `${SITE}/rdkit/Chem/__init__.pyi`,
+      `${SITE}/rdkit-stubs/Chem.pyi`,
+      `${SITE}/rdkit-stubs/Chem/__init__.pyi`,
+    ]);
+  });
+});
+
+describe("underlining only names that resolve", () => {
+  const src = [
+    "import numpy as np",
+    "from rdkit import Chem, rdBase",
+    "",
+    "def local():",
+    "    pass",
+    "",
+    "np.zeros(3)",
+    "np.zeros(4)",
+    "Chem",
+    "rdBase",
+    "local()",
+  ].join("\n");
+  const words = (rs: { start: number; end: number }[]) => rs.map((r) => src.slice(r.start, r.end));
+
+  it("lists each outgoing name once, at its first use", () => {
+    expect(pythonImportLinks(src)).toEqual([
+      { key: "np", caret: src.indexOf("np") },
+      { key: "Chem", caret: src.indexOf("Chem") },
+      { key: "rdBase", caret: src.indexOf("rdBase") },
+      { key: "np.zeros", caret: src.indexOf("zeros") },
+    ]);
+  });
+
+  it("drops an imported name the resolver could not follow, keeps local ones", () => {
+    expect(words(pythonLinkRanges(src, new Set(["Chem", "np.zeros"])))).toEqual([
+      "Chem",
+      "zeros",
+      "zeros",
+      "Chem",
+      "local",
+    ]);
+  });
+
+  it("underlines no outgoing name before anything resolved", () => {
+    expect(words(pythonLinkRanges(src, new Set()))).toEqual(["local"]);
   });
 });
