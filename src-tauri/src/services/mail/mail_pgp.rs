@@ -3248,7 +3248,7 @@ mod tests {
 
         let listed = mine.get(&info.fingerprint).unwrap().unwrap();
         assert!(listed.expired && !listed.revoked);
-        assert!(mine.candidates_for(&[info.fingerprint.clone()]).unwrap().is_empty());
+        assert!(mine.candidates_for(std::slice::from_ref(&info.fingerprint)).unwrap().is_empty());
         assert!(mine.public_for_address("old@example.org").unwrap().is_none());
         let err = mine
             .encrypt_to("none", &["old@example.org".to_string()], b"hi")
