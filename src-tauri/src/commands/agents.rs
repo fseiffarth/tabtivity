@@ -417,19 +417,41 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
 
 /// What brings the installed `spec` up to date: its installer again, or, for a
 /// CLI whose installer cannot (`agent_install::self_update_argv`), its own
-/// update verb on the copy every other command resolves to. That copy is not
-/// always in the install home, so the two stay one binary rather than the
-/// installer adding a second, and a host copy gets it too: it cannot update
-/// itself from inside a fence.
+/// update verb on the copy every other command resolves to. That copy must be
+/// in Tabtivity's install home ([`update_target_in`]): a copy somewhere else
+/// belongs to whoever installed it, and Tabtivity never edits another app's
+/// paths.
 fn update_command(spec: &AgentSpec) -> Result<std::process::Command, String> {
     let Some(argv) = crate::services::agent_install::self_update_argv(spec.id) else {
         return installer_command(spec);
     };
     let bin = resolve_spec_path(spec).ok_or_else(|| format!("{} is not installed.", spec.label))?;
+    update_target_in(spec, &bin, &crate::services::agent_install::install_root())?;
     let mut c = crate::paths::command_no_window(&bin);
     c.args(argv).stdin(std::process::Stdio::null());
     into_install_home(&mut c)?;
     Ok(c)
+}
+
+/// Refuse an update verb on `bin` unless it lives (links resolved) in `root`,
+/// Tabtivity's install home. Says why, so the Update click explains itself.
+fn update_target_in(spec: &AgentSpec, bin: &std::path::Path, root: &std::path::Path) -> Result<(), String> {
+    let real = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    if real(bin).starts_with(real(root)) {
+        return Ok(());
+    }
+    Err(format!(
+        concat!(
+            "{} is installed at {}, outside {}'s install home ({}). Update would change a copy ",
+            "{} does not own: update it where it was installed, or install it from {}."
+        ),
+        spec.label,
+        bin.display(),
+        crate::app_name!(),
+        root.display(),
+        crate::app_name!(),
+        crate::app_name!(),
+    ))
 }
 
 /// Point an installer at Tabtivity's own install home: create it, hand over
@@ -910,6 +932,8 @@ pub async fn agent_warmup(agent: String, message: String) -> Result<AgentWarmupL
     let cwd = warmup_dir()?;
 
     let mut cmd = crate::paths::command_no_window(&path);
+    // Tabtivity's probe home with the stored login, not the user's own `$HOME`.
+    into_probe_home(&mut cmd, spec, &cwd).await?;
     cmd.args(&argv)
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
@@ -1581,7 +1605,13 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
         Err(error) => return AgentUsageReport::refused(spec.id, spec.label, true, "cli_failed", error),
     };
 
-    let mut cmd = tokio::process::Command::from(crate::paths::command_no_window(&path));
+    // The same probe home the version probes and the warm-up run in, so the
+    // usage windows come from the login the plan row is read from.
+    let mut std_cmd = crate::paths::command_no_window(&path);
+    if let Err(error) = into_probe_home(&mut std_cmd, spec, &cwd).await {
+        return AgentUsageReport::refused(spec.id, spec.label, true, "cli_failed", error);
+    }
+    let mut cmd = tokio::process::Command::from(std_cmd);
     cmd.args(&argv)
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
@@ -2146,6 +2176,78 @@ mod tests {
             assert_eq!(argv.last().map(String::as_str), Some("Test"), "{id}");
             assert_eq!(&argv[..args.len()], *args, "{id}");
             assert!(args.iter().all(|a| !a.is_empty()), "{id}: empty arg");
+        }
+    }
+
+    /// Gap 93: an update verb runs only on a copy in the install home.
+    #[test]
+    fn update_refuses_a_binary_outside_the_install_home_and_says_why() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("install");
+        let host = tmp.path().join("host");
+        for dir in [&root.join(".local").join("bin"), &host] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let ours = root.join(".local").join("bin").join("agy");
+        let theirs = host.join("agy");
+        std::fs::write(&ours, b"").unwrap();
+        std::fs::write(&theirs, b"").unwrap();
+        let agy = find_spec("antigravity").expect("antigravity in registry");
+
+        assert_eq!(update_target_in(agy, &ours, &root), Ok(()));
+        let err = update_target_in(agy, &theirs, &root).unwrap_err();
+        assert!(err.contains(&theirs.display().to_string()) && err.contains("install home") && err.contains("does not own"), "{err}");
+        // A launcher in the install home that links to a copy elsewhere is that copy.
+        #[cfg(unix)]
+        {
+            let link = root.join(".local").join("bin").join("agy-link");
+            std::os::unix::fs::symlink(&theirs, &link).unwrap();
+            assert!(update_target_in(agy, &link, &root).is_err());
+        }
+        // A sibling folder sharing the prefix is not inside.
+        let near = tmp.path().join("install-other");
+        std::fs::create_dir_all(&near).unwrap();
+        std::fs::write(near.join("agy"), b"").unwrap();
+        assert!(update_target_in(agy, &near.join("agy"), &root).is_err());
+    }
+
+    /// Gap 93: a probe command carries the probe home, and none of the
+    /// variables that would point the CLI at the user's own config.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_command_runs_with_the_probe_home_as_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let cwd = state.join("agent-cron");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let home = crate::services::agent_home::prepare_probe_home_in(state, &cwd).unwrap().dir;
+        let claude = find_spec("claude").expect("claude in registry");
+
+        let mut cmd = crate::paths::command_no_window("sh");
+        cmd.env("HOME", "/the/users/real/home").env("CLAUDE_CONFIG_DIR", "/the/users/real/.claude");
+        cmd.args(["-c", "printf '%s|%s' \"$HOME\" \"${CLAUDE_CONFIG_DIR-unset}\""]);
+        apply_probe_home(&mut cmd, claude, &home);
+        let out = cmd.output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{}|unset", home.display()));
+    }
+
+    /// Gap 93: the three probes all go through the probe home. A source scan,
+    /// as for the other spawn paths: the spawn itself needs a real CLI.
+    #[test]
+    fn usage_version_and_warmup_spawns_use_the_probe_home() {
+        fn body<'a>(src: &'a str, head: &str) -> &'a str {
+            let start = src.find(head).unwrap_or_else(|| panic!("{head} not found"));
+            let end = src[start..].find("\n}\n").map_or(src.len(), |e| start + e);
+            &src[start..end]
+        }
+        let this = include_str!("agents.rs");
+        let registry = include_str!("../services/agent/agent_registry.rs");
+        for (what, text) in [
+            ("agent_warmup", body(this, "pub async fn agent_warmup(")),
+            ("agent_usage", body(this, "pub async fn agent_usage(")),
+            ("probe_agent_version", body(registry, "pub(crate) async fn probe_agent_version(")),
+        ] {
+            assert!(text.contains("into_probe_home("), "{what} must run in the probe home");
         }
     }
 
