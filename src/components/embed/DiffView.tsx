@@ -377,7 +377,7 @@ export function DiffView({
 
   /** What is on screen: the one whole file as a single hunk, or the parsed files. */
   const shown = useMemo<DiffFile[]>(
-    () => (wholeHunk ? [{ oldPath: relPath, newPath: relPath, hunks: [wholeHunk] }] : files),
+    () => (wholeHunk ? [{ ...files[0], oldPath: relPath, newPath: relPath, hunks: [wholeHunk] }] : files),
     [wholeHunk, relPath, files],
   );
   const stats = useMemo(() => shown.map(fileStats), [shown]);

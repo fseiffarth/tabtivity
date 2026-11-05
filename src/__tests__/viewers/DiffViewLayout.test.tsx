@@ -148,7 +148,9 @@ describe("DiffView whole file", () => {
     expect(folds[0].textContent).toBe("Show 25 unchanged lines");
     expect(screen.queryByText("line 1")).toBeNull();
     expect(screen.getByText("line 27")).toBeTruthy();
-    expect(screen.getByText("line 30 changed", { exact: false })).toBeTruthy();
+    // The changed word sits in its own `.diff-word` mark, so match the whole line's text.
+    const texts = Array.from(document.querySelectorAll(".diff-text"), (el) => el.textContent);
+    expect(texts).toContain("+line 30 changed");
 
     fireEvent.click(folds[0]);
     expect(screen.getByText("line 1")).toBeTruthy();

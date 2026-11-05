@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import { basename, relativePathWithin } from "../../lib/paths";
-import { parseUnifiedDiff } from "../../lib/viewers/diff";
+import { parseUnifiedDiff, type DiffLine } from "../../lib/viewers/diff";
 import { splitDiffRows } from "../../lib/viewers/diffRows";
 import { disabledViewers, type FileEntry } from "../../lib/viewers/fileUtils";
 import { readerRequest } from "../../lib/agents/agentReader";
