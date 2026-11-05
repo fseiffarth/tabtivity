@@ -3120,6 +3120,26 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-files-viewless > p { margin: 0; }
 .terminal-files-viewless-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
 .terminal-changes-view { margin-left: auto; }
+/* Diff colours, shared by the diff viewer and the agent Reader's Diffs. They
+   follow each theme's --success / --danger; the word marks are the stronger tint
+   of the same hue. */
+:root {
+  --diff-add-bg: color-mix(in srgb, var(--success) 15%, transparent);
+  --diff-del-bg: color-mix(in srgb, var(--danger) 15%, transparent);
+  --diff-add-mark: color-mix(in srgb, var(--success) 38%, transparent);
+  --diff-del-mark: color-mix(in srgb, var(--danger) 38%, transparent);
+}
+.diff-line.is-add { background: var(--diff-add-bg); }
+.diff-line.is-del { background: var(--diff-del-bg); }
+.diff-line.is-add .diff-word { background: var(--diff-add-mark); }
+.diff-line.is-del .diff-word { background: var(--diff-del-mark); }
+.diff-word { border-radius: 2px; }
+.diff-file-note {
+  padding: 2px 0.75em;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
 .terminal-changes-split { min-width: 500px; }
 .terminal-changes-split-heading, .terminal-changes-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .terminal-changes-split-heading > span { padding: 6px var(--space-3); color: var(--text-secondary); background: var(--bg-subtle); border-bottom: 1px solid var(--border-subtle); }
@@ -3127,8 +3147,10 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-changes-split-row > div:first-child, .terminal-changes-split-heading > span:first-child { border-right: 1px solid var(--border-subtle); }
 .terminal-changes-split-row > div > span { flex: none; width: 42px; padding: 0 var(--space-2); text-align: right; color: var(--text-muted); user-select: none; }
 .terminal-changes-split-row code { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
-.terminal-changes-split-row .add { background: color-mix(in srgb, var(--success) 13%, transparent); }
-.terminal-changes-split-row .del { background: color-mix(in srgb, var(--danger) 13%, transparent); }
+.terminal-changes-split-row .add { background: var(--diff-add-bg); }
+.terminal-changes-split-row .del { background: var(--diff-del-bg); }
+.terminal-changes-split-row .add .diff-word { background: var(--diff-add-mark); }
+.terminal-changes-split-row .del .diff-word { background: var(--diff-del-mark); }
 .terminal-changes-split-note { padding: var(--space-1) var(--space-3); color: var(--text-muted); background: var(--bg-subtle); }
 @media (max-width: 600px) {
   .terminal-changes-body { flex-direction: column; }

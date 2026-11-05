@@ -7,7 +7,15 @@ import { useT } from "../../lib/i18n";
 import { useProjectsStore } from "../../stores/projects";
 import { resolveProjectDirectory } from "../../types";
 import { relFromAbs } from "../../lib/viewers/fileUtils";
-import { parseUnifiedDiff, wholeFileHunk, type DiffHunk, type DiffLine } from "../../lib/viewers/diff";
+import {
+  diffFilePath,
+  parseUnifiedDiff,
+  wholeFileHunk,
+  type DiffFile,
+  type DiffHunk,
+  type DiffLine,
+} from "../../lib/viewers/diff";
+import { hunkWordMarks, splitByMarks, type WordMark } from "../../lib/viewers/wordDiff";
 import { basename, dirname } from "../../lib/paths";
 import { UntestedTag } from "../common/UntestedTag";
 import { storageKey } from "../../lib/brand";
@@ -38,30 +46,39 @@ function isPatchFile(path: string): boolean {
   return lower.endsWith(".diff") || lower.endsWith(".patch");
 }
 
-// Low-alpha line backgrounds, keyed off the GitHub-ish add/del greens & reds so
-// they read in both light and dark themes (the text colour stays the app's).
-const ADD_BG = "rgba(63, 185, 80, 0.15)"; // #3fb950
-const DEL_BG = "rgba(248, 81, 73, 0.15)"; // #f85149
-
-function lineBackground(type: DiffLine["type"]): string | undefined {
-  if (type === "add") return ADD_BG;
-  if (type === "del") return DEL_BG;
-  return undefined;
+/** `text` with the changed stretches (`marks`) wrapped in `.diff-word`. Plain
+ *  React children — the text is escaped, never HTML. */
+export function MarkedText({ text, marks }: { text: string; marks?: readonly WordMark[] }) {
+  if (!marks || marks.length === 0) return <>{text}</>;
+  return (
+    <>
+      {splitByMarks(text, marks).map((part, i) =>
+        part.marked ? (
+          <span className="diff-word" key={i}>
+            {part.text}
+          </span>
+        ) : (
+          part.text
+        ),
+      )}
+    </>
+  );
 }
 
 /** A single rendered diff line: two line-number gutter columns then the text.
- *  Text is rendered as React children, which auto-escapes — no raw HTML. */
-export function DiffLineRow({ line }: { line: DiffLine }) {
+ *  Add/del tints come from the `.diff-line.is-add` / `.is-del` theme classes;
+ *  `marks` are the word-level changes inside it (see `hunkWordMarks`). Text is
+ *  rendered as React children, which auto-escapes — no raw HTML. */
+export function DiffLineRow({ line, marks }: { line: DiffLine; marks?: readonly WordMark[] }) {
   const muted = line.type === "hunk" || line.type === "meta" || line.type === "nonewline";
   const marker =
     line.type === "add" ? "+" : line.type === "del" ? "-" : line.type === "context" ? " " : "";
   return (
     <div
-      className="diff-line"
+      className={line.type === "add" ? "diff-line is-add" : line.type === "del" ? "diff-line is-del" : "diff-line"}
       data-type={line.type}
       style={{
         display: "flex",
-        background: lineBackground(line.type),
         color: muted ? "var(--text-secondary, #8b949e)" : "var(--text-primary)",
         whiteSpace: "pre",
       }}
@@ -96,10 +113,43 @@ export function DiffLineRow({ line }: { line: DiffLine }) {
         {line.newNo ?? ""}
       </span>
       <span className="diff-text" style={{ flex: "1 1 auto", paddingLeft: "0.5em" }}>
-        {line.type === "hunk" || line.type === "nonewline" ? line.text : marker + line.text}
+        {line.type === "hunk" || line.type === "nonewline" ? (
+          line.text
+        ) : (
+          <>
+            {marker}
+            <MarkedText text={line.text} marks={marks} />
+          </>
+        )}
       </span>
     </div>
   );
+}
+
+/** A hunk's lines, with the word-level marks between paired del/add lines. */
+export function DiffHunkLines({ lines }: { lines: readonly DiffLine[] }) {
+  const marks = useMemo(() => hunkWordMarks(lines), [lines]);
+  return (
+    <>
+      {lines.map((line, li) => (
+        <DiffLineRow line={line} marks={marks.get(line)} key={li} />
+      ))}
+    </>
+  );
+}
+
+/** The one-line notes under a file's header: binary, rename/copy, mode change. */
+function fileNotes(file: DiffFile, t: ReturnType<typeof useT>): string[] {
+  const notes: string[] = [];
+  if (file.status === "renamed" || file.status === "copied") {
+    const key = file.status === "renamed" ? "diffView.renamedFrom" : "diffView.copiedFrom";
+    notes.push(t(key, { path: file.oldPath }) + (file.similarity != null ? ` · ${t("diffView.similar", { pct: String(file.similarity) })}` : ""));
+  }
+  if (file.binary) notes.push(t("diffView.binary"));
+  if (file.oldMode && file.newMode && file.oldMode !== file.newMode && file.status === "modified") {
+    notes.push(t("diffView.modeChange", { from: file.oldMode, to: file.newMode }));
+  }
+  return notes;
 }
 
 /**
@@ -258,9 +308,7 @@ export function DiffView({
               {relPath} <UntestedTag id="diffView.wholeFile" />
             </div>
             <div className="diff-hunk">
-              {wholeHunk.lines.map((line, li) => (
-                <DiffLineRow line={line} key={li} />
-              ))}
+              <DiffHunkLines lines={wholeHunk.lines} />
             </div>
           </div>
         ) : files.length === 0 ? (
@@ -282,13 +330,16 @@ export function DiffView({
                   top: 0,
                 }}
               >
-                {file.newPath && file.newPath !== "/dev/null" ? file.newPath : file.oldPath}
+                {diffFilePath(file)} <UntestedTag id="diffView.wordMarks" />
               </div>
+              {fileNotes(file, t).map((note) => (
+                <div className="diff-file-note" key={note}>
+                  {note}
+                </div>
+              ))}
               {file.hunks.map((hunk, hi) => (
                 <div className="diff-hunk" key={hi}>
-                  {hunk.lines.map((line, li) => (
-                    <DiffLineRow line={line} key={li} />
-                  ))}
+                  <DiffHunkLines lines={hunk.lines} />
                 </div>
               ))}
             </div>
