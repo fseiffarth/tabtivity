@@ -29,6 +29,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
 import { useBoxesStore } from "../../stores/boxes";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 
 function Harness() {
@@ -69,6 +70,7 @@ describe("#62 keyboard nav wiring", () => {
     useSettingsStore.setState({ settings: null });
     resetBoxSlice();
     useBoxesStore.setState({ boxes: [] });
+    useRootOverlayStore.setState({ open: false, view: "root" });
     cleanup();
   });
 
@@ -224,15 +226,16 @@ describe("#62 keyboard nav wiring", () => {
     useProjectsStore.setState({ setActive });
     render(<Harness />);
 
-    // Last pill → wraps to the root scope.
+    // Last pill → wraps to the root station: the Root view opens, the
+    // workspace stays on its project (no switch to the root scope).
     key({ key: "Tab", shiftKey: true, ctrlKey: true });
-    expect(setActive).toHaveBeenCalledWith(null);
+    expect(setActive).not.toHaveBeenCalled();
+    expect(rootViewShown(useRootOverlayStore.getState())).toBe(true);
 
-    // And out of the root scope again, into the first pill.
-    setActive.mockClear();
-    useProjectsStore.setState({ activeId: null });
+    // And out of Root again, into the first pill; the view steps aside.
     key({ key: "Tab", shiftKey: true, ctrlKey: true });
     expect(setActive).toHaveBeenCalledWith("p1");
+    expect(rootViewShown(useRootOverlayStore.getState())).toBe(false);
   });
 
   it("Shift+Ctrl+Tab inside a box slice walks only the pills the slice shows, an inactive member included", () => {

@@ -108,3 +108,8 @@ close / clear / plan / goal / prompt and the tab's right-click act on Root's
 focused subwindow, a status key's jump to a project's tab steps the window aside,
 the new-tab keys do nothing there, and typing after leaving steering goes to the
 root terminal. The root window is then the place steered, not a layer over it.
+The project ring's first station (steering's projects level: 1, left/right, and
+the cycle-project chords) is the **Root view**, not the root scope: landing on it
+opens the window on Root and the workspace stays on its project; while the window
+shows Root the ring stands on that station, and landing on a project closes it
+(`useKeyboard.landOnStation`).

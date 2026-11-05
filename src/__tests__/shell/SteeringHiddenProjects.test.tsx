@@ -22,6 +22,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 import type { ProjectEntry, Settings } from "../../types";
 
@@ -35,6 +36,8 @@ function press(init: Partial<KeyboardEventInit> & { key: string }) {
     document.body.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
   });
 }
+
+const rootViewUp = () => rootViewShown(useRootOverlayStore.getState());
 
 function project(id: string, position: number, status = "active"): ProjectEntry {
   return { id, name: id, status, position, local_file: `/p/${id}/project.json` };
@@ -64,6 +67,7 @@ beforeEach(() => {
   useSettingsStore.setState({ settings: null });
   resetBoxSlice();
   useTabsStore.setState({ scope: "a", tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {} });
+  useRootOverlayStore.setState({ open: false, view: "root" });
   useKeyboardSteeringStore.getState().exit();
 });
 
@@ -120,8 +124,10 @@ describe("steering the project level past hidden projects", () => {
     expect(setActive).toHaveBeenLastCalledWith("d");
     toProjects();
     press({ key: "ArrowRight" });
-    // Past the last visible pill: the ring wraps to the root terminal.
-    expect(setActive).toHaveBeenLastCalledWith(null);
+    // Past the last visible pill: the ring wraps to the root station, which
+    // opens the Root view and leaves the workspace on its project.
+    expect(setActive).toHaveBeenLastCalledWith("d");
+    expect(rootViewUp()).toBe(true);
   });
 
   it("← from a hidden active project reaches a visible neighbour, then keeps walking", () => {
@@ -136,7 +142,8 @@ describe("steering the project level past hidden projects", () => {
     expect(setActive).toHaveBeenLastCalledWith("a");
     toProjects();
     press({ key: "ArrowLeft" });
-    expect(setActive).toHaveBeenLastCalledWith(null);
+    expect(setActive).not.toHaveBeenCalledWith(null);
+    expect(rootViewUp()).toBe(true);
     toProjects();
     press({ key: "ArrowLeft" });
     expect(setActive).toHaveBeenLastCalledWith("d");

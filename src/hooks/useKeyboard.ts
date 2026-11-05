@@ -67,6 +67,7 @@ import {
 } from "../lib/shortcuts/steeringRegion";
 import {
   openProjectShellInRootConsole,
+  rootViewShown,
   toggleRootConsole,
   useRootOverlayStore,
 } from "../stores/rootOverlay";
@@ -441,10 +442,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       const slot = steeringSlot(action);
       if (slot !== null) {
         const target = projectStations()[slot - 1];
-        if (target !== undefined) {
-          const ps = useProjectsStore.getState();
-          landOnTabs(target !== ps.activeId ? ps.setActive(target) : Promise.resolve());
-        }
+        if (target !== undefined) landOnTabs(landOnStation(target));
         return;
       }
       switch (action) {
@@ -1471,16 +1469,37 @@ function stepSidePanelView(delta: 1 | -1) {
  * (no project in the ring is current) the first step lands on the first / last
  * visible pill.
  */
-function cycleProject(delta: 1 | -1): Promise<void> | null {
+function cycleProject(delta: 1 | -1): Promise<unknown> | null {
   const ps = useProjectsStore.getState();
   const stations = projectStations();
   if (stations.length < 2) return null;
-  const idx = stations.indexOf(ps.activeId);
+  // The root station is the Root VIEW: while the window shows it, that is
+  // where the ring stands, whatever project the workspace behind it is on.
+  const here = rootViewShown(useRootOverlayStore.getState()) ? null : ps.activeId;
+  const idx = stations.indexOf(here);
   const next =
     idx < 0 && stations.length > 1
       ? stations[delta > 0 ? 1 : stations.length - 1]
       : stations[(idx + delta + stations.length) % stations.length];
-  return next !== ps.activeId ? ps.setActive(next) : null;
+  return next !== here ? landOnStation(next) : null;
+}
+
+/**
+ * Land on one station of the project ring. A project switches the workspace to
+ * it (and a Root view that was up steps aside, so the project is what shows).
+ * The **root station opens the Root view** and nothing else: the workspace
+ * stays on its project (`setActive(null)` used to switch the whole workspace to
+ * the root scope, which cost the project you were in).
+ */
+function landOnStation(target: string | null): Promise<unknown> {
+  if (target === null) {
+    useRootOverlayStore.getState().show();
+    return Promise.resolve();
+  }
+  const ps = useProjectsStore.getState();
+  const overlay = useRootOverlayStore.getState();
+  if (rootViewShown(overlay)) overlay.close();
+  return target !== ps.activeId ? ps.setActive(target) : Promise.resolve();
 }
 
 /**
