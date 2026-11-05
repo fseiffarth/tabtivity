@@ -45,7 +45,11 @@ describe("Mobile project — collected prompts", () => {
   it("sends a prompt to the agent tab and schedules one with the text prefilled", async () => {
     const terminal = vi.fn();
     render(<Project id="p1" back={() => {}} terminal={terminal} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Collected prompts" }));
+    // The row renders disabled until the project's detail has loaded; a click
+    // before then is dropped and the sheet never opens.
+    const open = await screen.findByRole("button", { name: "Collected prompts" });
+    await waitFor(() => expect((open as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(open);
     expect(await screen.findByRole("dialog", { name: "Collected prompts" })).toBeTruthy();
     expect(await screen.findByText("Run the tests")).toBeTruthy();
     // Only the agent tab is a target.
