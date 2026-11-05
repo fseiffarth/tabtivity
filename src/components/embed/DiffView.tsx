@@ -1,12 +1,9 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { ModeToggle } from "./fileViewer/toolbar";
 import { ViewerHeader } from "./fileViewer/ViewerHeader";
-import { useReadonlyFile } from "./fileViewer/editableFile";
+import { DiffMoreRow, DiffStateNote } from "./diff/DiffStates";
+import { useDiffSource } from "./diff/useDiffSource";
 import { useT } from "../../lib/i18n";
-import { useProjectsStore } from "../../stores/projects";
-import { resolveProjectDirectory } from "../../types";
-import { relFromAbs } from "../../lib/viewers/fileUtils";
 import {
   parseUnifiedDiff,
   wholeFileHunk,
@@ -15,7 +12,18 @@ import {
   type DiffLine,
 } from "../../lib/viewers/diff";
 import { hunkWordMarks, splitByMarks, type WordMark } from "../../lib/viewers/wordDiff";
-import { basename, dirname } from "../../lib/paths";
+import {
+  DIFF_LINE_BUDGET,
+  DIFF_LINE_STEP,
+  capDiffFiles,
+  clampLineWindow,
+  firstChangeIndex,
+  growLineWindow,
+  initialLineWindow,
+  shortenDiffFiles,
+  shortenLongLines,
+  type LineWindow,
+} from "../../lib/viewers/diffBudget";
 import {
   anchorId,
   changeAnchors,
@@ -28,7 +36,7 @@ import {
   splitDiffRows,
   stepChange,
 } from "../../lib/viewers/diffRows";
-import { ArrowDownIcon, ArrowUpIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, RefreshIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { Dropdown } from "../common/Dropdown";
 import { storageKey } from "../../lib/brand";
@@ -53,13 +61,6 @@ function writeFlagPref(key: string, on: boolean): void {
   } catch {
     // Not remembered — the switch still works for this tab.
   }
-}
-
-/** True when `path` is a literal diff/patch file (read its raw content) rather
- *  than a source path (compute the diff via the backend). */
-function isPatchFile(path: string): boolean {
-  const lower = path.toLowerCase();
-  return lower.endsWith(".diff") || lower.endsWith(".patch");
 }
 
 /** `text` with the changed stretches (`marks`) wrapped in `.diff-word`. Plain
@@ -312,73 +313,70 @@ export function DiffView({
   tabKey?: string;
 }) {
   const t = useT();
-  const patchMode = isPatchFile(path);
   const [wholePref, setWholePref] = useState(() => readFlagPref(WHOLE_KEY, true));
-  const whole = mode === "git" && !patchMode && wholePref;
+  // Where the text comes from and in what state (patch file, git diff, sync
+  // diff; loading / error / not a repo / not connected): `diff/useDiffSource`.
+  const src = useDiffSource({ path, projectId, mode, wantWhole: wholePref });
+  const { patchMode, whole, relPath } = src;
 
-  // Hooks must run unconditionally. In patch mode we use this file's content; in
-  // source mode we ignore it (and fetch the diff via the backend instead).
-  const fileState = useReadonlyFile(path);
-
-  const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
-  const projectDir = resolveProjectDirectory(project);
-  // A file outside the project (or no project — the root console) asks git
-  // from its own folder.
-  const inProject = relFromAbs(projectDir, path);
-  const gitDir = inProject ? projectDir : dirname(path);
-  const relPath = inProject || basename(path);
-
-  // Source-mode: fetch the diff on mount (and whenever the target changes) — the
-  // working-tree diff via `git_diff_file`, or the host-vs-mirror diff via
-  // `sync_diff` when this pane is a sync diff. The whole-file view asks once
-  // the file is read and again whenever it is re-read, keeping the text each
-  // answer was taken against: the shown pair stays until the next one lands.
-  const against = whole ? fileState.content : null;
-  const [gitAgainst, setGitAgainst] = useState<string | null>(null);
-  const [gitText, setGitText] = useState<string | null>(null);
-  const [gitError, setGitError] = useState<string | null>(null);
-  useEffect(() => {
-    if (patchMode || (whole && against == null)) return;
-    let cancelled = false;
-    if (!whole) {
-      setGitText(null);
-      setGitError(null);
-    }
-    const req =
-      mode === "sync"
-        ? invoke<string>("sync_diff", { projectId, relPath })
-        : invoke<string>("git_diff_file", { projectDir: gitDir, relPath });
-    req
-      .then((text) => {
-        if (cancelled) return;
-        setGitText(text);
-        setGitAgainst(against);
-        setGitError(null);
-      })
-      .catch((e) => {
-        if (!cancelled) setGitError(String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [patchMode, whole, mode, projectId, gitDir, relPath, against]);
-
-  const text = patchMode ? fileState.content : gitText;
-  const error = patchMode || whole ? (fileState.error ?? gitError) : gitError;
-  const loaded = text != null && (!whole || gitAgainst != null);
-
-  const files = useMemo(() => (text != null ? parseUnifiedDiff(text) : []), [text]);
+  // A trailing newline is harmless to the parser; trimmed for older diffs' sake.
+  const files = useMemo(
+    () => (src.text != null ? parseUnifiedDiff(src.text.replace(/\r?\n$/u, "")) : []),
+    [src.text],
+  );
   /** Whole mode: the one file's diff over the text it was taken against —
    * null when it doesn't fit (the file moved on mid-ask: the bare hunks show). */
   const wholeHunk = useMemo<DiffHunk | null>(
-    () => (whole && gitAgainst != null ? wholeFileHunk(files[0], gitAgainst) : null),
-    [whole, files, gitAgainst],
+    () => (whole && src.against != null ? wholeFileHunk(files[0], src.against) : null),
+    [whole, files, src.against],
   );
 
-  /** What is on screen: the one whole file as a single hunk, or the parsed files. */
+  // A big diff draws its first lines only (`lib/viewers/diffBudget`): the
+  // Changes view grows downward, the Whole file view is a window around the
+  // first change that grows both ways. Both reset when the tab shows another file.
+  const [budget, setBudget] = useState({ path, lines: DIFF_LINE_BUDGET });
+  const changeBudget = budget.path === path ? budget.lines : DIFF_LINE_BUDGET;
+  const capped = useMemo(() => capDiffFiles(files, changeBudget), [files, changeBudget]);
+  const [winState, setWinState] = useState<{ path: string; w: LineWindow } | null>(null);
+  const wholeLines = wholeHunk?.lines ?? null;
+  const win = useMemo<LineWindow | null>(() => {
+    if (!wholeLines) return null;
+    if (winState && winState.path === path) return clampLineWindow(winState.w, wholeLines.length);
+    return initialLineWindow(wholeLines.length, firstChangeIndex(wholeLines));
+  }, [wholeLines, winState, path]);
+  // A very long line is cut until the user asks for it whole.
+  const [fullLines, setFullLines] = useState(false);
+  const drawn = useMemo(() => {
+    if (wholeLines && win) {
+      const part = wholeLines.slice(win.start, win.end);
+      const r = fullLines ? { lines: part, shortened: 0 } : shortenLongLines(part);
+      return { files: [] as DiffFile[], lines: r.lines, shortened: r.shortened };
+    }
+    const r = fullLines ? { files: capped.files, shortened: 0 } : shortenDiffFiles(capped.files);
+    return { files: r.files, lines: [] as DiffLine[], shortened: r.shortened };
+  }, [wholeLines, win, capped, fullLines]);
+
+  const growChanges = (all: boolean) =>
+    setBudget({ path, lines: all ? capped.total : changeBudget + DIFF_LINE_STEP });
+  const growWhole = (dir: "up" | "down" | "all") => {
+    if (win && wholeLines) setWinState({ path, w: growLineWindow(win, wholeLines.length, dir) });
+  };
+
+  /** What is on screen: the whole file's drawn window as a single hunk, or the
+   *  drawn (capped) parsed files. */
   const shown = useMemo<DiffFile[]>(
-    () => (wholeHunk ? [{ ...files[0], oldPath: relPath, newPath: relPath, hunks: [wholeHunk] }] : files),
-    [wholeHunk, relPath, files],
+    () =>
+      wholeHunk && win
+        ? [
+            {
+              ...((files[0] as DiffFile | undefined) ?? { status: "modified" as const, binary: false, combined: false, crlf: false }),
+              oldPath: relPath,
+              newPath: relPath,
+              hunks: [{ ...wholeHunk, lines: drawn.lines }],
+            },
+          ]
+        : drawn.files,
+    [wholeHunk, win, files, relPath, drawn],
   );
   const stats = useMemo(() => shown.map(fileStats), [shown]);
   const anchors = useMemo(() => changeAnchors(shown), [shown]);
@@ -458,12 +456,17 @@ export function DiffView({
   // Open the whole file at its first change, once per file shown.
   const scrolledFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!wholeHunk || scrolledFor.current === path) return;
+    if (!wholeHunk) {
+      // Back in the Changes view: the next Whole file view opens at the change again.
+      if (!whole) scrolledFor.current = null;
+      return;
+    }
+    if (scrolledFor.current === path) return;
     scrolledFor.current = path;
     if (anchors.length === 0) return;
     setCur(0);
     request(`c:${anchors[0].id}`, "center");
-  }, [wholeHunk, path, anchors, request]);
+  }, [wholeHunk, whole, path, anchors, request]);
 
   return (
     <ViewerHeader onOpenExternally={onOpenExternally}>
@@ -520,6 +523,17 @@ export function DiffView({
           <UntestedTag id="diffView.layout" />
         </div>
       )}
+      {src.canRefresh && (
+        <button
+          type="button"
+          className="file-viewer-format-btn diff-refresh-btn"
+          title={t("common.refresh")}
+          aria-label={t("common.refresh")}
+          onClick={src.refresh}
+        >
+          <RefreshIcon />
+        </button>
+      )}
       <div
         ref={scrollRef}
         className="diff-viewer"
@@ -542,20 +556,26 @@ export function DiffView({
           lineHeight: "1.5",
         }}
       >
-        {error != null ? (
-          <div className="diff-error" style={{ padding: "1rem", color: "#f85149" }}>
-            {error}
-          </div>
-        ) : !loaded ? (
-          <div className="diff-loading" style={{ padding: "1rem", color: "var(--text-secondary, #8b949e)" }}>
-            {t("diffView.loading")}
-          </div>
-        ) : shown.length === 0 ? (
-          <div className="diff-empty" style={{ padding: "1rem", color: "var(--text-secondary, #8b949e)" }}>
-            {t("diffView.noChanges")}
-          </div>
+        {src.status !== "ready" || shown.length === 0 ? (
+          <DiffStateNote
+            status={src.status}
+            error={src.error}
+            empty={src.status === "ready"}
+            onRetry={src.refresh}
+          />
         ) : (
           <>
+            {wholeHunk && files.length === 0 && <DiffMoreRow>{t("diffView.noChanges")}</DiffMoreRow>}
+            {win && win.start > 0 && (
+              <DiffMoreRow hint={t("diffView.linesAbove", { n: win.start })}>
+                <button type="button" className="file-viewer-format-btn" onClick={() => growWhole("up")}>
+                  {t("diffView.showEarlier", { n: Math.min(win.start, DIFF_LINE_STEP) })}
+                </button>
+                <button type="button" className="file-viewer-format-btn" onClick={() => growWhole("all")}>
+                  {t("diffView.showAll", { total: wholeLines?.length ?? 0 })}
+                </button>
+              </DiffMoreRow>
+            )}
             {shown.length > 1 && (
               <nav className="diff-index" aria-label={t("diffView.fileIndex")}>
                 {shown.map((file, fi) => (
@@ -628,7 +648,36 @@ export function DiffView({
                 </div>
               );
             })}
+            {win && wholeLines && win.end < wholeLines.length && (
+              <DiffMoreRow hint={t("diffView.linesBelow", { n: wholeLines.length - win.end })}>
+                <button type="button" className="file-viewer-format-btn" onClick={() => growWhole("down")}>
+                  {t("diffView.showMore", { n: Math.min(wholeLines.length - win.end, DIFF_LINE_STEP) })}
+                </button>
+                <button type="button" className="file-viewer-format-btn" onClick={() => growWhole("all")}>
+                  {t("diffView.showAll", { total: wholeLines.length })}
+                </button>
+              </DiffMoreRow>
+            )}
+            {!wholeHunk && capped.shown < capped.total && (
+              <DiffMoreRow hint={t("diffView.bigDiff", { shown: capped.shown, total: capped.total })}>
+                <button type="button" className="file-viewer-format-btn" onClick={() => growChanges(false)}>
+                  {t("diffView.showMore", { n: Math.min(capped.total - capped.shown, DIFF_LINE_STEP) })}
+                </button>
+                <button type="button" className="file-viewer-format-btn" onClick={() => growChanges(true)}>
+                  {t("diffView.showAll", { total: capped.total })}
+                </button>
+                <UntestedTag id="diffView.states" />
+              </DiffMoreRow>
+            )}
           </>
+        )}
+        {src.status === "ready" && drawn.shortened > 0 && (
+          <DiffMoreRow hint={t("diffView.longLines", { n: drawn.shortened })}>
+            <button type="button" className="file-viewer-format-btn" onClick={() => setFullLines(true)}>
+              {t("diffView.showFullLines")}
+            </button>
+            <UntestedTag id="diffView.states" />
+          </DiffMoreRow>
         )}
       </div>
     </ViewerHeader>
