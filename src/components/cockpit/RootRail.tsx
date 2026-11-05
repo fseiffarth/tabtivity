@@ -54,12 +54,24 @@ function pickRow(row: RosterRow) {
   jumpToRow(row.ptyId);
 }
 
-/** The collapsed rail: live-store groups only (no backend read, no clock). With
- *  nothing waiting it is not drawn at all, so the console gets the 40 px back. */
-function RootRailCollapsed({ onExpand }: { onExpand: (group: DecisionGroupId | null) => void }) {
+/** The collapsed rail: live-store groups only (no backend read, no clock): what
+ *  the header badge counts, schedule proposals included when something loaded
+ *  them. With nothing waiting the 40 px column is not drawn, so the console gets
+ *  it back; the push / schedule / markup groups need a read that only the open
+ *  rail makes, so the "Needs you" chip stands in the window's bar instead (the
+ *  rail as its popover), and the way to them is never gone. */
+function RootRailCollapsed({
+  onExpand,
+  chipSlot,
+}: {
+  onExpand: (group: DecisionGroupId | null) => void;
+  chipSlot: HTMLElement | null;
+}) {
   const scopes = useCockpitScopes();
-  const { decisions } = useDecisionsFor(scopes);
-  if (decisions.groups.length === 0) return null;
+  const schedules = useScheduleProposals(scopes);
+  const extras = useMemo(() => ({ push: [], schedules, markup: [] }), [schedules]);
+  const { decisions } = useDecisionsFor(scopes, extras);
+  if (decisions.groups.length === 0) return chipSlot ? createPortal(<RootRailChip />, chipSlot) : null;
   return <CockpitRailIcons decisions={decisions} onExpand={onExpand} />;
 }
 
@@ -150,8 +162,8 @@ function RootRailPopover({ anchor, onClose }: { anchor: NeedsYouAnchor; onClose:
 }
 
 /**
- * Root's Needs-you column: a 40 px icon rail by default (nothing at all while
- * nothing waits), the full `CockpitRail` beside the console when opened, its
+ * Root's Needs-you column: a 40 px icon rail by default (while nothing waits, no
+ * column: the chip in the bar instead), the full `CockpitRail` beside the console when opened, its
  * width dragged by the same grip as Now's and remembered. It reads the live
  * stores the header badge reads and nothing else while collapsed. In a narrow
  * window (under 820 px, `lib/window/frameBand`) there is no room for a column,
@@ -167,6 +179,7 @@ export function RootRail({ chipSlot }: { chipSlot: HTMLElement | null }) {
     <RootRailFull focusGroup={focusGroup} onCollapse={() => setOpen(false)} />
   ) : (
     <RootRailCollapsed
+      chipSlot={chipSlot}
       onExpand={(group) => {
         setFocusGroup(group);
         setOpen(true);

@@ -7,11 +7,12 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const invokeMock = vi.fn((cmd: string, _args?: unknown) => {
+const invokeDefault = (cmd: string, _args?: unknown): Promise<unknown> => {
   if (cmd === "root_mcp_status") return Promise.resolve({ running: true, tools: [] });
   if (cmd === "list_agents") return Promise.resolve([]);
   return Promise.resolve([]);
-});
+};
+const invokeMock = vi.fn(invokeDefault);
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn() }));
 vi.mock("../../components/tabs/TabPane", () => ({ TabPane: () => null }));
@@ -25,6 +26,7 @@ import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { jumpToRow } from "../../components/cockpit/CockpitRoster";
 import { storageKey } from "../../lib/brand";
 import { useActivityStore } from "../../stores/activity";
+import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useBoxesStore } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
@@ -49,6 +51,7 @@ async function openRoot() {
 beforeEach(() => {
   cleanup();
   invokeMock.mockClear();
+  invokeMock.mockImplementation(invokeDefault);
   localStorage.clear();
   useProjectsStore.setState({ projects: [project("p1")], activeId: "p1", rootDir: "/r" });
   useBoxesStore.setState({ boxes: [] });
@@ -66,6 +69,7 @@ beforeEach(() => {
     lastWorkingByTab: {},
   });
   useRootReviewStore.setState({ proposals: [], imports: [], refresh: vi.fn(() => Promise.resolve()) });
+  useAgentSchedulesStore.setState({ byTarget: {} });
   useRootOverlayStore.setState({ open: false, view: "root", installTabs: {} });
 });
 afterEach(() => cleanup());
@@ -166,9 +170,12 @@ describe("opening the rail", () => {
 });
 
 describe("an empty rail", () => {
+  const chip = () => document.querySelector<HTMLElement>(".root-overlay-subbar .cockpit-needs-chip");
+
   it("is not drawn at all while nothing waits, and comes back when something does", async () => {
     await openRoot();
     expect(icons()).toBeTruthy();
+    expect(chip()).toBeNull();
     act(() => useActivityStore.setState({ attentionByTab: {} }));
     // No 40 px column: neither the icons nor their nav element.
     expect(icons()).toBeNull();
@@ -177,6 +184,7 @@ describe("an empty rail", () => {
     expect(document.querySelector(".subwindow-body .root-overlay-region")).toBeTruthy();
     act(() => useActivityStore.setState({ attentionByTab: { "p1:b": "decision" } }));
     expect(icons()).toBeTruthy();
+    expect(chip()).toBeNull();
   });
 
   it("an open rail stays open (its extra groups need it) even with nothing in the live stores", async () => {
@@ -184,9 +192,51 @@ describe("an empty rail", () => {
     act(() => useActivityStore.setState({ attentionByTab: {} }));
     await openRoot();
     expect(document.querySelector(".cockpit-rail")).toBeTruthy();
-    // Folding it then leaves nothing to draw.
+    // Folding it then leaves nothing to draw in the column (the chip takes over).
     await act(async () => fireEvent.click(screen.getByLabelText("Fold the Needs-you rail")));
     expect(icons()).toBeNull();
+    expect(chip()).toBeTruthy();
+  });
+
+  it("leaves the way to the unloaded groups: the chip in the bar, whose popover makes the reads", async () => {
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    await openRoot();
+    expect(icons()).toBeNull();
+    expect(chip()?.textContent).toBe("Needs you 0");
+    // Nothing is read until it is opened.
+    const reads = () => invokeMock.mock.calls.map(([cmd]) => cmd);
+    expect(reads()).not.toContain("git_push_mcp_proposals");
+    await act(async () => fireEvent.click(chip()!));
+    expect(document.querySelector(".cockpit-needs-popover .cockpit-rail")).toBeTruthy();
+    for (const cmd of ["git_push_mcp_proposals", "agent_schedules_list", "markup_mcp_list"]) {
+      expect(reads()).toContain(cmd);
+    }
+  });
+
+  it("a push request found by that popover is listed there", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "git_push_mcp_proposals") {
+        return Promise.resolve([{ id: "q1", kind: "push", status: "pending", branch: "develop", summary: "ship it", created: 1, commits: [] }]);
+      }
+      if (cmd === "root_mcp_status") return Promise.resolve({ running: true, tools: [] });
+      return Promise.resolve([]);
+    });
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    await openRoot();
+    await act(async () => fireEvent.click(chip()!));
+    await act(async () => {});
+    expect(document.querySelector('.cockpit-needs-popover [data-group="push"]')).toBeTruthy();
+  });
+
+  it("a schedule proposal the stores already hold counts for the column, as it does for the header badge", async () => {
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    useAgentSchedulesStore.setState({
+      byTarget: { [scheduleCacheKey("p1", "t-a")]: [{ id: "s1", enabled: false, origin: { by: "agent", session: "x" } } as never] },
+    });
+    await openRoot();
+    expect(groupIcons().map((el) => el.dataset.group)).toEqual(["schedule"]);
+    expect(chip()).toBeNull();
+    useAgentSchedulesStore.setState({ byTarget: {} });
   });
 });
 
