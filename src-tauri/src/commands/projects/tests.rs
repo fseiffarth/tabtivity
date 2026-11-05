@@ -428,8 +428,8 @@ fn a_fifo_at_the_destination_file_fails_instead_of_blocking() {
 /// lowered through `CopyLimits` still copies and moves by the default limits.
 #[test]
 fn an_own_copy_has_no_entry_or_byte_cap() {
-    assert!(CopyLimits::DEFAULT.entries > crate::services::tree_copy::MAX_ENTRIES);
-    assert!(CopyLimits::DEFAULT.bytes > crate::services::tree_copy::MAX_BYTES);
+    const { assert!(CopyLimits::DEFAULT.entries > crate::services::tree_copy::MAX_ENTRIES) };
+    const { assert!(CopyLimits::DEFAULT.bytes > crate::services::tree_copy::MAX_BYTES) };
 
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");

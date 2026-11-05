@@ -2118,8 +2118,7 @@ fn imported_sandbox(spec: &Value) -> (Value, SandboxResets) {
     };
     let mut kept = serde_json::Map::new();
     kept.insert("enabled".into(), Value::Bool(false));
-    let mut resets = SandboxResets::default();
-    resets.spec = map.get("enabled") == Some(&Value::Bool(true));
+    let mut resets = SandboxResets { spec: map.get("enabled") == Some(&Value::Bool(true)), policy: false };
     for key in ["dockerfile", "image", "spec_source_hash"] {
         resets.spec |= map.get(key).is_some_and(|v| !v.is_null());
     }
