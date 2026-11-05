@@ -139,6 +139,20 @@ through a tunnel coming up, which is why reconnecting seemed to need the VPN eve
 on the network that doesn't. The classifier reads ssh's raw stderr now
 (`run_ssh_auth_raw`, `probe_verdict`), and the explained text stays for display.
 
+It reads only ssh's own lines (2026-11-05, gap 85). The probe runs with
+`-o LogLevel=ERROR` (`quiet_ssh`), which keeps the server's pre-auth banner out of
+stderr (OpenSSH prints it at INFO and above), and `ssh_unreachable` counts a line
+only when it *starts* with a client prefix (`ssh: connect to host `,
+`ssh: Could not resolve hostname`, `kex_exchange_identification:`, `Connection
+closed by `, `Connection reset by `); a rejection marker on any other line
+(permission denied, authentication, host key) still wins. Checked against OpenSSH
+10.2 with a stub server: at ERROR the `Connection closed/reset by` lines go away
+(they are INFO), `ssh: connect to host`, `Could not resolve hostname` and
+`kex_exchange_identification:` stay. So a server that drops the connection after its
+version string, with nothing else, now reads as "not unreachable" (no re-try),
+which is the safe side of the VPN step. The exit code is not read: only a failed
+run gets here, and ssh exits 255 for every connection and authentication failure.
+
 That made the headless VPN step live for those failures, so it has its own limits.
 It runs on the first attempt only, never from a re-try: polkit authenticates each
 `pkexec`, so a timer that dialled the tunnel would raise a system prompt at every
