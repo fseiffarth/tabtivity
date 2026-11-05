@@ -109,7 +109,7 @@ describe("recommendedLessons", () => {
   it("firstRecommendedLesson is the first group's best lesson", () => {
     expect(firstRecommendedLesson(["organize"])).toBe("mail");
     expect(firstRecommendedLesson(["code"])).toBe("install-agent");
-    expect(firstRecommendedLesson(["phone", "localAi"])).toBe("local-model");
+    expect(firstRecommendedLesson(["localAi", "phone"])).toBe("mobile");
   });
 });
 

@@ -241,7 +241,7 @@ describe("How to start intro wizard", () => {
     next();
     fireEvent.click(goalCard(/Organize my day/));
     fireEvent.click(goalCard(/Continue on my phone/));
-    expect(readIntroGoals()).toEqual(["organize", "phone"]);
+    expect(readIntroGoals()).toEqual(["phone", "organize"]);
     unmount();
 
     render(<HowToStart onClose={() => {}} />);
