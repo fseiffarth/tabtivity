@@ -396,7 +396,7 @@ fn push_branch_patterns(yaml: &str) -> Vec<String> {
     let Some(map) = doc.as_mapping() else { return Vec::new() };
     // YAML 1.1 reads a bare `on` key as a boolean; the parser here does not,
     // but a workflow file is written for GitHub's, so both spellings count.
-    let Some(on) = map.get("on").or_else(|| map.get(&Y::Bool(true))) else { return Vec::new() };
+    let Some(on) = map.get("on").or_else(|| map.get(Y::Bool(true))) else { return Vec::new() };
     let Some(branches) = on.as_mapping().and_then(|on| on.get("push")).and_then(Y::as_mapping).and_then(|push| push.get("branches")) else { return Vec::new() };
     match branches {
         Y::String(one) => vec![one.clone()],
