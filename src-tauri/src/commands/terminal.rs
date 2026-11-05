@@ -345,7 +345,12 @@ pub async fn pty_drop_files(
         .ok_or("no_terminal")?
         .ok_or("remote_tab")?;
     let sizes = sizes.unwrap_or_default();
-    app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await
+    let dropped = app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await?;
+    // A file in a Tabby chat's inbox is an attachment, whatever is typed next.
+    if agent && !dropped.items.is_empty() {
+        crate::services::assistant_attach::note_tab_file(&id);
+    }
+    Ok(dropped)
 }
 
 fn drop_files(dir: &Path, paths: &[String], sizes: &[Option<u64>], agent: bool) -> PtyDropped {
@@ -419,7 +424,11 @@ pub async fn pty_paste_clipboard_image(ctx: Ctx, id: String, agent: bool) -> Res
         .map_err(|_| "no_clipboard_image")?
         .map_err(|_| "no_clipboard_image")??;
     let state_dir = crate::storage::state_dir();
-    app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?
+    let pasted = app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?;
+    if agent && pasted.is_ok() {
+        crate::services::assistant_attach::note_tab_file(&id);
+    }
+    pasted
 }
 
 fn paste_image(dir: &Path, state_dir: &Path, png: &[u8], agent: bool) -> Result<String, String> {
@@ -443,6 +452,9 @@ pub async fn pty_write(
         let reg = registry.lock_ok();
         (reg.input_sender(&id), reg.is_ai(&id))
     };
+    // A Tabby chat's keystrokes decide, here in the backend, whether the chat
+    // has had an `@` attachment (the web lane then narrows its URLs).
+    crate::services::assistant_attach::note_tab_input(&id, &data);
     // The AI switch: while it is off nothing typed reaches an agent; an
     // interrupt or a key that only steers its screen still does.
     let kept = if ai && crate::services::ai_switch::is_off() {

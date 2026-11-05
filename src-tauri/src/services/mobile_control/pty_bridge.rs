@@ -951,6 +951,10 @@ pub async fn attach(
     on_seen: impl Fn(),
 ) -> Result<(), String> {
     let tmux_name = target.name().to_string();
+    // A Tabby chat's own session: what the phone types into it is the user's
+    // own input, which decides whether the chat has had an `@` attachment
+    // (`assistant_attach`, gap 78). The backend reads it here, off the bytes.
+    let chat = crate::services::assistant_attach::chat_of_tmux(&tmux_name);
     let guard = registry.acquire(&tmux_name, viewer).await?;
     // Do this before the live attach starts redrawing. The browser receives it
     // before every PTY byte below, and tmux's clear/redraw then leaves these
@@ -1190,6 +1194,9 @@ pub async fn attach(
                         tokio::time::sleep_until(at + input_gap(previous_key, &bytes)).await;
                     }
                     last_write = Some((tokio::time::Instant::now(), opens_with_key(&bytes)));
+                    if let Some(uid) = &chat {
+                        crate::services::assistant_attach::note_input_in(&state_dir, uid, &bytes);
+                    }
                     // The AI switch: nothing typed reaches an agent while it is
                     // off. The frame is still acked — it was handled, by
                     // dropping it — and the phone is told why.
