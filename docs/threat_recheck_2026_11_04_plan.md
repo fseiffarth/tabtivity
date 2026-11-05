@@ -44,6 +44,13 @@ below are fixed: reviewers may not undo them.
   `pkill -f`: kill only their own PIDs.
 - 2026-11-05: **I3 landed** on develop `f01652f9` (review `review-I3.md`: one gap-103
   bypass fixed, `5ac217bc`). I1 finished (`14fa850f`), its review running; I2b running.
+- 2026-11-05: **I4a landed** on develop `60a408cf` (review fixed a gap-54 regression and
+  the warm-up token attribution, `60bad0e4`). I1 reviewed (`b90d6747`, data-loss fix);
+  its follow-up (copy cap decision, sandbox scope/network and `sync_code` resets,
+  linear `pruned`, no-follow resume create) running, then land. I2a+I2b reviewed
+  (`bc79d813`, revocation carried across re-imports); its follow-up (old-mail decision,
+  `signature-structure` note) was mid-gates (uncommitted in `tr1104-I2b`), then land.
+  I4b running on `60a408cf`. Next: I5, I6, then I6b, I7a, I7b, I8, I9, I10.
 
 ## Decisions (user, 2026-11-05)
 
@@ -65,6 +72,8 @@ below are fixed: reviewers may not undo them.
 | — daily release check | **Add a switch, on by default** (Models & agents). Off: checks run only on a click. |
 | 103 reading (2026-11-05) | **Named branches only.** Only workflow push triggers that name a literal branch or a literal-prefix pattern (`release/**`) add card-required branches; a bare `*`/`**` or no branch filter adds nothing. |
 | 93 updates (2026-11-05) | **Keep the install home.** Updates keep `HOME` = the install home (`into_install_home`) plus the new refusal; the login-holding probe home is for `/usage`, `--version` and the warm-up. |
+| 88 old mail (2026-11-05) | **Expired: keep; revoked: no.** A signature dated inside the key's validity still verifies after the key expires; a revoked key, subkey or (all) user IDs make every signature by it Unusable, whatever its date. |
+| 83 copy cap (2026-11-05) | **Only on untrusted input.** The 200 000-entry / 32 GiB cap applies to bundle/set import and the host-copy export; the user's own archive, mirror move, Duplicate and move-out copies keep the FIFO/link/source guards but have no size cap. |
 
 ## No decision needed
 
