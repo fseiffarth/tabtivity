@@ -241,3 +241,133 @@ With both empty, Ctrl+Shift+N, steering's N/O/1-9 and + reached both
   ok (4894 + 1); `cargo clippy --workspace --all-targets -- -D warnings` and
   `cargo clippy -p tabtivity --no-default-features --lib -- -D warnings` clean.
 - Not run live.
+
+## I3: F3, F5, F7, F8, F9 (cockpit and Root layout, overlay order)
+
+Commits (worktree `cockpit-followup`): `645bfc34` (F3), `5c6d47ef` (F5), `0ff30ac6` (F7), `280bcb11` (F8), `0a099de2` (F9), then the handoff commit.
+
+### F3: the detail's composer draft across the narrow unmount
+- **Verified, not a bug, no code change.** The Reader's composer already keeps an
+  unsent draft per tab in `lib/agents/readerDrafts` (the Reader unmounting, the
+  Chat/Terminal switch and another tab shown already relied on it), so Now's detail
+  pane unmounting loses nothing. A mutation check (dropping the composer's
+  `setReaderDraft` effect) fails both tests.
+- Test `cockpit/NowDraft.test.tsx` (2): mounts the REAL `TerminalReaderView` where
+  `TabPane` would be (stand-in), wide -> narrow -> wide, and narrow list -> detail ->
+  back -> detail. Only `TabPane`/`TerminalView` is replaced, so the composer, its
+  draft store and the Now/detail mount/unmount path are real.
+
+### F5: Root's sub-bar "Needs you N" chip
+- Under 820 px `RootRail` portals Now's chip into a new bar slot `RootBarSlots.chip`
+  (before the ⚿ badge): the sub-bar's controls, or the title bar's controls when a split
+  Root has no sub-bar. Click opens `NeedsYouPopover` (the same component Now uses);
+  a picked row goes to `jumpToRow` like the open rail's.
+- **Shared, no variant.** `NeedsYouChip` is extracted from `CockpitNow` into
+  `NeedsYouPopover.tsx` and used by both; `useColumnWidth` moved to its own module
+  (`cockpit/useColumnWidth.tsx`, with `ColumnGrip`) for F8; Now uses both.
+- Closed, the chip reads live stores only (`useDecisionsFor` without extras, the
+  header badge's counts); the popover mounts the three loads only while open
+  (`RootRailPopover`). The chip shows even at 0, like Now's.
+- Tests in `NarrowWindow.test.tsx` (the old "Root has no rail" test now asserts the chip):
+  chip in `.root-overlay-subbar`, popover, pick -> `jumpToTab` and the window closes,
+  toggle, popover does not outlive the wide band.
+
+### F7: Tonight's Show in a narrow window
+- `stores/cockpit`: one-shot `detailAsked` / `askDetail()`. Tonight's Show calls it
+  only when the band is narrow; `CockpitNow` takes it (first render when it mounts, and
+  an effect, which also focuses the detail) and clears it. Back returns to the list with
+  the row still selected.
+- Tests `cockpit/TonightShow.test.tsx` (3): narrow lands on the detail then back; wide
+  unchanged and no flag left over; a later ordinary narrow Now starts on the roster.
+  Mutation checked.
+- Only `autoContinue` items have a Show button in Tonight; that is the only entry.
+
+### F8: Root's rail column
+- The collapsed icon rail renders nothing while no live-store group has a count. An
+  **open** rail stays open when empty (its push / schedule / markup groups are not in
+  the live count; the user opened it), folding it then leaves nothing.
+- The open rail's width is `useColumnWidth("cockpitRootRailWidth", 280, +1)` + `ColumnGrip`
+  (`flex-basis` inline, `max-width: 60%` in CSS). Read tolerantly (`readWidth`: garbage,
+  empty, 0, negative, NaN -> 280; out of range -> clamped 220..1100; unreadable storage
+  -> 280). Now's rail keeps `cockpitRailWidth`.
+- Tests in `RootRail.test.tsx` (+13): empty vanishes and returns, open-and-empty stays,
+  280 default + grip, drag + persist + remount + Now's key untouched, clamp, 8 tolerant
+  reads, throwing storage. `SteeringRootChrome` "left / right walk" needed an asking tab
+  in the store, since the rail toggle it walks to exists only when something waits.
+
+### F9: Machines / Models over the window
+- Cause: Machines, Models and the window are `.modal-backdrop` at one z-index, the window
+  last in DOM; the Machines handler only deferred to the window for the Root view, so on
+  Usage both closed on one Escape (and the overlay sat under the window).
+- Rule (a front rule, no remount): the overlay frame sets `stores/consoleCover` on mount
+  (`coverConsole(windowOpen)`); the window opening afresh (`show` / `openView` when it was
+  closed) clears it; the window then wears `.under-overlay` (`--z-modal` - 1) only while
+  the flag is set AND Machines or Models is open (`lib/window/consoleFront`). A
+  dialog the overlay raises (host-key, HPC guard, connect) is later in DOM at `--z-modal`,
+  so it still lands on top; a z-index above 100 for the overlay would not have kept that.
+- Escape: the overlays' handlers defer to the window only when it is in front
+  (`consoleInFront()`: open and not covered), the window's handler waits while an overlay
+  covers it (`consoleUnderOverlay()`). The old "defer when the Root view is shown" check
+  became "when the window is in front, any view".
+- The same fix covers the Root view's "Add agent..." (Models overlay, Agents & CLIs), which
+  had the same under-the-window landing.
+- Tests `cockpit/OverlayOverWindow.test.tsx` (6): overlay in front and Escape order, Escape
+  aimed at `<body>` (the old both-close case), window raised later stays in front, window
+  reopened clears the flag, Models from the Root view, Models from the header. 3 fail
+  without the window's guard. The CSS (jsdom has no layout) is the class only.
+
+### Gates
+- `scripts/gates.sh` run before each commit: brand, whitespace, lint (0 errors, no new
+  warnings), build, vitest `--changed`, `untested.mjs check`. No Rust touched.
+  `MobileTerminalTranscript` "keeps the chat while a /clear sent mid-turn..." failed twice
+  in the `--changed` run (not touched by this round; 33/33 alone, three times) and passed
+  on the other runs: load-dependent flake.
+- Full `npm test`: **1070 files, 10901 tests** passed (tip 1067 / 10873: +3 files = NowDraft, TonightShow, OverlayOverWindow; +28 tests).
+- Not run live.
+
+### Flagged for user
+- **F3 needed no code**: the draft already survived; there is only the regression test.
+- **A split Root has no sub-bar**, so its narrow chip sits in the title bar's cluster,
+  which is already tight at 820 px (not looked at, no layout engine here).
+- **Root's empty rail cannot be opened** (nothing to open it from): push requests,
+  schedule proposals and markup questions do not count toward the collapsed icons (same as
+  the header badge), so they are reachable only with the rail already open, or below 820 px
+  via the chip, which is always there.
+- **F9 limit**: mail / calendar / to-do overlays are also at `--z-modal`; with one of them
+  open beneath, a lowered window can paint under it while the Machines / Models overlay is
+  up (all of it behind the overlay's own backdrop).
+- Tonight's Show reaches Now's detail only for auto-continue rows (the only Show button).
+
+### Click-through (F1-F9)
+Chords below are the defaults; all are rebindable in Settings.
+1. **F1 project ring lands on Root.** Window closed, workspace on project A. Press the
+   steering key (Shift+Space), go to the projects level (Up from the tabs level), press
+   `1`, or Left/Right until the ring's first station: the Cockpit window opens on Root,
+   the project behind stays A. From a project's station, Right/Left past the end lands on
+   Root again; landing on a project from Root closes the window and shows that project.
+2. **F2 no flag.** Settings has no "Cockpit" experiment row; the header cockpit button
+   opens a window titled "Cockpit" with Now / Projects / Tonight / Usage / Root tabs. If
+   `rootConsoleFrame` was never dragged it opens wide.
+3. **F3 draft.** Window narrower than 820 px (drag its edge): Now -> pick an agent (opens
+   the detail) -> type text in the composer, do not send -> Agents (back) -> open the same
+   agent again: text is there. Then widen past 1180 px and back: still there.
+4. **F4 chrome level.** On the Root view with steering on, press Up from Root's tabs: the
+   cursor sits on the view tab; Left/Right walk the view tabs, ✓, fill and x; Enter on a view
+   tab opens that view; Down returns. Ctrl+Shift+N (shell), Ctrl+1 (agent) and steering's `+` /
+   `N` open the tab in Root's focused subwindow while Root is shown.
+5. **F5 chip.** Narrow the window under 820 px on the Root view with an agent asking: the
+   sub-bar shows "Needs you N" (amber while asking). Click: the rail opens as a popover; pick
+   a row: the window goes to that tab. Widen: the chip goes, the icon rail returns.
+6. **F6 chords.** Root view: Ctrl+W closes Root's active tab, your tab-step chord steps Root's tabs. On Now, Ctrl+W and the tab chords do nothing to the
+   project tabs behind the window.
+7. **F7 Tonight Show.** Under 820 px, give an agent "auto-continue" so Tonight lists it, open
+   Tonight, press Show: Now opens on that agent's detail with the row selected; Agents
+   returns to the list with the row still highlighted. Wide, Show selects it beside the roster.
+8. **F8 rail.** Root view with nothing waiting: no 40 px column at the left. Make an agent
+   ask: the column appears. Open it (click an icon): drag its right edge to resize; close and
+   reopen the window: the width is kept. Now's rail width is separate.
+9. **F9 overlays.** Usage view -> "Open Machines" (needs at least one machine): the Machines
+   overlay is in front of the window. Escape closes only Machines; a second Escape closes the
+   window. Same from the Root view's `+` -> "Add agent...": the Models & agents overlay is in front.
+   Open Machines from the header first, then Ctrl+Shift+R: the window is in front, Escape closes it
+   first.
