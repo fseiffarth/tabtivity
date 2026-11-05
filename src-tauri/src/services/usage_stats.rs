@@ -234,16 +234,27 @@ struct Active {
 pub struct UsageWatchState {
     pending: Pending,
     active: Arc<Mutex<Option<Active>>>,
+    /// The scope the frontend last asked to watch. Attaching runs on the
+    /// blocking pool, so two quick switches can attach out of order; each
+    /// attach watches whatever is wanted *when it gets the lock*, never its
+    /// own (possibly stale) argument, so the last request always wins.
+    wanted: Arc<Mutex<String>>,
 }
 
 pub fn new_state() -> UsageWatchState {
     UsageWatchState {
         pending: Arc::new(Mutex::new(HashMap::new())),
         active: Arc::new(Mutex::new(None)),
+        wanted: Arc::new(Mutex::new(String::new())),
     }
 }
 
 impl UsageWatchState {
+    /// Record `project_id` as the scope to watch; [`watch_wanted`] attaches it.
+    pub fn want(&self, project_id: &str) {
+        *self.wanted.lock_ok() = project_id.to_string();
+    }
+
     /// Fold one counted event into the pending batch.
     fn bump(&self, project_id: &str, key: &str) {
         let mut pending = self.pending.lock_ok();
@@ -309,22 +320,32 @@ pub fn watch_root_for(project_id: &str) -> Option<PathBuf> {
 /// newly-created folder's churn going uncounted until then is worth the ~98%
 /// reduction in watch load.
 /// `excluded` additionally drops the subtrees the user excluded by hand (the file
-/// tree's "Exclude from scans"), so one list governs every scan rather than the
-/// size walk and the churn watcher each having their own notion of "skip this".
+/// tree's "Exclude from scans") and the ones git ignores ([`git_ignored_dirs`]),
+/// so one list governs every scan rather than the size walk and the churn
+/// watcher each having their own notion of "skip this".
+///
+/// Breadth-first and capped at [`MAX_WATCHED_DIRS`]: past the cap the deepest
+/// folders go unwatched, which costs a usage counter some churn and never a
+/// multi-second attach.
 fn watch_pruned(
     watcher: &mut notify::RecommendedWatcher,
     root: &Path,
     excluded: &std::collections::HashSet<String>,
 ) {
     // (dir, project-relative path) — the rel is what the exclusion list speaks.
-    let mut stack = vec![(root.to_path_buf(), String::new())];
-    while let Some((dir, rel)) = stack.pop() {
+    let mut queue = std::collections::VecDeque::from([(root.to_path_buf(), String::new())]);
+    let mut watched = 0usize;
+    while let Some((dir, rel)) = queue.pop_front() {
+        if watched >= MAX_WATCHED_DIRS {
+            break;
+        }
         // NonRecursive: every directory gets its own watch, so files anywhere in
         // the surviving tree are still reported — only the ignored subtrees are
         // absent, which a recursive watch could not express.
         if watcher.watch(&dir, RecursiveMode::NonRecursive).is_err() {
             continue; // vanished mid-walk, or the watch limit is exhausted
         }
+        watched += 1;
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -347,9 +368,36 @@ fn watch_pruned(
             if excluded.contains(&child_rel) {
                 continue;
             }
-            stack.push((entry.path(), child_rel));
+            queue.push_back((entry.path(), child_rel));
         }
     }
+}
+
+/// The most directories one project's churn watch covers. Each is an inotify
+/// watch and, through `notify`, a round-trip to its event thread; a project
+/// holding build trees or agent worktrees nobody ignored by name ran to tens of
+/// thousands and made every switch into it take seconds.
+const MAX_WATCHED_DIRS: usize = 20_000;
+
+/// The directories git ignores under `root` (project-relative, `/`-separated),
+/// so the churn watch skips what the project itself calls not-its-files: agent
+/// worktrees, scratch folders, build output under a name [`IGNORED_DIRS`] does
+/// not know. A folder that is not a repository, or a git that fails, ignores
+/// nothing beyond the name list.
+///
+/// One `git ls-files`, which reads the ignore rules without descending the
+/// ignored trees (`--directory` names an ignored folder once).
+fn git_ignored_dirs(root: &Path) -> std::collections::HashSet<String> {
+    let args = ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"];
+    let Some(listed) = crate::services::git_hardened::stdout(None, root, &args) else {
+        return Default::default();
+    };
+    listed
+        .split('\0')
+        .filter_map(|entry| entry.strip_suffix('/'))
+        .map(|dir| dir.trim_start_matches("./").to_string())
+        .filter(|dir| !dir.is_empty())
+        .collect()
 }
 
 /// The user's own scan-exclusion list for `project_id` — `scan_excluded_paths` on
@@ -379,7 +427,16 @@ fn user_excluded_dirs(project_id: &str) -> std::collections::HashSet<String> {
 /// One watcher at a time: the recap counts what you are working on, and watching
 /// every project a user has ever opened would mean an inotify tree per project.
 pub fn watch_project(state: &UsageWatchState, project_id: &str) -> Result<(), String> {
+    state.want(project_id);
+    watch_wanted(state)
+}
+
+/// Attach the watch to the scope last passed to [`UsageWatchState::want`].
+/// Blocking — a directory walk — so the command runs it on the blocking pool.
+pub fn watch_wanted(state: &UsageWatchState) -> Result<(), String> {
     let mut guard = state.active.lock_ok();
+    let project_id = state.wanted.lock_ok().clone();
+    let project_id = project_id.as_str();
 
     let Some(root) = (!project_id.is_empty())
         .then(|| watch_root_for(project_id))
@@ -416,7 +473,9 @@ pub fn watch_project(state: &UsageWatchState, project_id: &str) -> Result<(), St
     })
     .map_err(|e| e.to_string())?;
 
-    watch_pruned(&mut watcher, &canonical, &user_excluded_dirs(project_id));
+    let mut excluded = user_excluded_dirs(project_id);
+    excluded.extend(git_ignored_dirs(&canonical));
+    watch_pruned(&mut watcher, &canonical, &excluded);
 
     // Replacing the stored watcher drops the previous one, unwatching it.
     *guard = Some(Active {
@@ -689,6 +748,41 @@ mod tests {
         assert_eq!(d.last.len(), 100);
         d.prune(t0 + COOLDOWN);
         assert!(d.last.is_empty(), "expired cooldowns must not accumulate");
+    }
+
+    // ── git-ignored folders ────────────────────────────────────────────────
+
+    #[test]
+    fn git_ignored_folders_are_listed_once_and_tracked_ones_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git").args(args).current_dir(root).output().unwrap().status.success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(root.join(".gitignore"), "scratch/\n").unwrap();
+        for leaf in [["scratch", "deep"], ["src", "mod"]] {
+            std::fs::create_dir_all(root.join(leaf[0]).join(leaf[1])).unwrap();
+            std::fs::write(root.join(leaf[0]).join(leaf[1]).join("f.txt"), "x").unwrap();
+        }
+        // Rules in info/exclude count as well (agent worktrees are excluded there).
+        std::fs::create_dir_all(root.join(".claude").join("worktrees").join("w1")).unwrap();
+        std::fs::write(root.join(".claude").join("worktrees").join("w1").join("f.txt"), "x").unwrap();
+        std::fs::write(root.join(".git").join("info").join("exclude"), "**/.claude/worktrees/\n").unwrap();
+
+        let ignored = git_ignored_dirs(root);
+        assert!(ignored.contains("scratch"), "{ignored:?}");
+        assert!(ignored.iter().any(|d| d.starts_with(".claude")), "{ignored:?}");
+        assert!(!ignored.iter().any(|d| d.starts_with("src")), "{ignored:?}");
+        assert!(!ignored.iter().any(|d| d.contains("deep")), "an ignored folder is named once: {ignored:?}");
+    }
+
+    #[test]
+    fn a_folder_outside_any_repository_ignores_nothing_by_git() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("a")).unwrap();
+        assert!(git_ignored_dirs(dir.path()).is_empty());
     }
 
     // ── pending accumulator ────────────────────────────────────────────────

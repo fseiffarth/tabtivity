@@ -4,12 +4,14 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import { basename, relativePathWithin } from "../../lib/paths";
 import { parseUnifiedDiff, type DiffLine } from "../../lib/viewers/diff";
+import { splitDiffRows } from "../../lib/viewers/diffRows";
 import { disabledViewers, type FileEntry } from "../../lib/viewers/fileUtils";
 import { readerRequest } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { useSettingsStore } from "../../stores/settings";
 import type { TabEntry } from "../../stores/tabs";
-import { DiffLineRow } from "../embed/DiffView";
+import { DiffLineRow, MarkedText } from "../embed/DiffView";
+import { hunkWordMarks, type WordMark } from "../../lib/viewers/wordDiff";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { openFileEntry } from "../../lib/files/openFileEntry";
 import { openTabInScope } from "../../lib/tabs/tabScopeContext";
@@ -28,29 +30,6 @@ import { projectIdOfScope } from "../../lib/terminal/ptyId";
  * follows it into an open subagent. Portaled with the Reader over the
  * pane, so the pane's mouse handling leaves it alone (`SIGN_IN_CARD_CLASS`).
  */
-
-/** Pair each contiguous replacement run; keep context and metadata in order. */
-export function splitDiffRows(lines: readonly DiffLine[]): { before?: DiffLine; after?: DiffLine; note?: string }[] {
-  const rows: { before?: DiffLine; after?: DiffLine; note?: string }[] = [];
-  let at = 0;
-  while (at < lines.length) {
-    const line = lines[at];
-    if (line.type === "del" || line.type === "add") {
-      const before: DiffLine[] = [];
-      const after: DiffLine[] = [];
-      while (at < lines.length && (lines[at].type === "del" || lines[at].type === "add")) {
-        const item = lines[at++];
-        (item.type === "del" ? before : after).push(item);
-      }
-      for (let index = 0; index < Math.max(before.length, after.length); index++) rows.push({ before: before[index], after: after[index] });
-    } else {
-      rows.push(line.type === "context" ? { before: line, after: line } : { note: line.text });
-      at++;
-    }
-  }
-  return rows;
-}
-
 
 export interface FileChange {
   path: string;
@@ -132,6 +111,12 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
   const [open, setOpen] = useState(initialOpen);
   // Without its final newline, which would parse as one more (empty) row.
   const files = useMemo(() => (open ? parseUnifiedDiff(change.diff.replace(/\n$/u, "")) : []), [open, change.diff]);
+  // Word-level marks for every paired del/add line, shared by both layouts.
+  const marks = useMemo(() => {
+    const all = new Map<DiffLine, readonly WordMark[]>();
+    for (const file of files) for (const hunk of file.hunks) for (const [line, m] of hunkWordMarks(hunk.lines)) all.set(line, m);
+    return all;
+  }, [files]);
   const shown = shownPath(base, change.path);
   const name = basename(shown);
   const folder = shown.slice(0, shown.length - name.length);
@@ -196,10 +181,10 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
                 {splitDiffRows(hunk.lines).map((row, index) => row.note !== undefined
                   ? <div className="terminal-changes-split-note" key={index}>{row.note}</div>
                   : <div className="terminal-changes-split-row" key={index}>
-                    <div className={row.before?.type === "del" ? "del" : ""}><span>{row.before?.oldNo}</span><code>{row.before?.text}</code></div>
-                    <div className={row.after?.type === "add" ? "add" : ""}><span>{row.after?.newNo}</span><code>{row.after?.text}</code></div>
+                    <div className={row.before?.type === "del" ? "del" : ""}><span>{row.before?.oldNo}</span><code>{row.before && <MarkedText text={row.before.text} marks={marks.get(row.before)} />}</code></div>
+                    <div className={row.after?.type === "add" ? "add" : ""}><span>{row.after?.newNo}</span><code>{row.after && <MarkedText text={row.after.text} marks={marks.get(row.after)} />}</code></div>
                   </div>)}
-              </div> : hunk.lines.map((line, lineIndex) => <DiffLineRow line={line} key={lineIndex} />)}
+              </div> : hunk.lines.map((line, lineIndex) => <DiffLineRow line={line} marks={marks.get(line)} key={lineIndex} />)}
             </div>
           ))}
           {change.cut && <small className="terminal-changes-note">{t("terminal.changes.cut")}</small>}

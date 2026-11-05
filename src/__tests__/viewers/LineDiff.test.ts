@@ -12,6 +12,7 @@ import {
   locateBlock,
   applyBlockToggle,
   canToggle,
+  blockSideLines,
   type Decision,
 } from "../../lib/viewers/linediff";
 
@@ -114,5 +115,28 @@ describe("locateBlock / applyBlockToggle", () => {
     const ambiguous = "X\nfoo\nX";
     expect(canToggle(ambiguous, b, "accept")).toBe(false);
     expect(applyBlockToggle(ambiguous, b, "accept")).toBeNull();
+  });
+});
+
+describe("blockSideLines", () => {
+  it("numbers each block's lines per side, 1-based", () => {
+    const rows = diffLines("a\nb\nc\nd\ne", "a\nX\nc\nd\nE\nF");
+    const blocks = groupChanges(rows);
+    expect(blockSideLines(rows, blocks)).toEqual([
+      { left: [2], right: [2] },
+      { left: [5], right: [5, 6] },
+    ]);
+  });
+
+  it("leaves the absent side empty for a pure insertion or deletion", () => {
+    const ins = diffLines("a\nc", "a\nb\nc");
+    expect(blockSideLines(ins, groupChanges(ins))).toEqual([{ left: [], right: [2] }]);
+    const del = diffLines("a\nb\nc", "a\nc");
+    expect(blockSideLines(del, groupChanges(del))).toEqual([{ left: [2], right: [] }]);
+  });
+
+  it("gives nothing for identical texts", () => {
+    const rows = diffLines("a\nb", "a\nb");
+    expect(blockSideLines(rows, groupChanges(rows))).toEqual([]);
   });
 });

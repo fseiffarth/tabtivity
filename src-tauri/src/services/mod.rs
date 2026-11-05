@@ -134,6 +134,7 @@ pub mod sandbox;
 pub mod sheet_reader;
 pub mod skills;
 // SyncTeX read natively: reverse and forward search, page anchors, map freshness.
+pub mod sync_handoff;
 pub mod synctex;
 // The tracked external-app windows and their launch origins (managed state).
 pub mod window_registry;

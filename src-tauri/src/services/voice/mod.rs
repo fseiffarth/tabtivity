@@ -22,6 +22,7 @@ pub mod cpu;
 pub mod gpu;
 pub mod models;
 pub mod phantom;
+pub mod piper;
 pub mod resample;
 pub mod session;
 pub mod ssip;
@@ -178,8 +179,11 @@ pub struct VoiceStatus {
     /// Why listening cannot start at all; `None` when it can (a model may
     /// still need installing: `models`).
     pub listen: Option<VoiceError>,
-    /// Why read-aloud cannot run; `None` when it can.
+    /// Why the OS voice cannot read aloud; `None` when it can. A natural
+    /// voice (`natural`) speaks without it.
     pub speak: Option<VoiceError>,
+    /// The natural (Piper) voices: offered here, and which are installed.
+    pub natural: piper::NaturalState,
     pub session: Option<SessionInfo>,
     /// Whether this build can use a GPU at all.
     pub gpu_built: bool,
@@ -203,6 +207,7 @@ pub fn status() -> VoiceStatus {
             None
         },
         speak: tts::availability(),
+        natural: piper::state(),
         session: ACTIVE.lock_ok().as_ref().map(|a| a.info()),
         gpu_built: gpu::BUILT,
         gpu_crashed: gpu::crashed(),
@@ -410,7 +415,9 @@ pub const SPEAK_RATE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
 
 /// Read `chunks` aloud as read `id`, after whatever is being said
 /// (`replace`: instead of it). `voice:speaking` says what became of it.
-pub fn speak(ctx: &CoreCtx, id: &str, chunks: &[String], lang: &str, rate: f32, replace: bool) -> Result<(), VoiceError> {
+/// `natural`: in the language's natural voice when one is installed.
+#[allow(clippy::too_many_arguments)]
+pub fn speak(ctx: &CoreCtx, id: &str, chunks: &[String], lang: &str, rate: f32, natural: bool, replace: bool) -> Result<(), VoiceError> {
     if id.is_empty()
         || id.len() > 200
         || chunks.len() > MAX_SPEAK_CHUNKS
@@ -420,10 +427,10 @@ pub fn speak(ctx: &CoreCtx, id: &str, chunks: &[String], lang: &str, rate: f32, 
     {
         return Err(VoiceError::BadArgument);
     }
-    if let Some(e) = tts::availability() {
+    if let Some(e) = tts::availability_for(lang, natural) {
         return Err(e);
     }
-    tts::queue(ctx, tts::os_engine, id.to_string(), chunks.to_vec(), lang.to_string(), rate, replace)
+    tts::queue(ctx, tts::engine, id.to_string(), chunks.to_vec(), lang.to_string(), rate, natural, replace)
 }
 
 /// Stop what is being read and everything queued.
@@ -456,8 +463,10 @@ pub fn stop_for_exit() {
         }
     }
     stt::release_now();
-    // The voice too: CANCEL self, then the speaker thread, bounded.
+    // The voice too: CANCEL self (or kill Piper), then the speaker thread,
+    // bounded — and Piper once more, in case the thread was left behind.
     tts::stop_for_exit(Duration::from_millis(500));
+    piper::kill_current();
 }
 
 #[cfg(test)]

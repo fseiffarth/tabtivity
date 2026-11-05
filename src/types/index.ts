@@ -682,13 +682,16 @@ export interface Settings {
    *  read-aloud speed (a multiplier, unset: 1); `voice_read_aloud` and
    *  `voice_hands_free_on` are the Chat chips' state — read answers aloud,
    *  and the hands-free loop, which needs the experimental flag below too.
-   *  `voice_gpu`: whether speech may use the GPU (unset: yes). */
+   *  `voice_gpu`: whether speech may use the GPU (unset: yes);
+   *  `voice_natural`: read aloud with an installed natural (Piper) voice
+   *  rather than the OS voice (unset: yes). */
   voice_model?: string;
   voice_lang?: string;
   voice_gpu?: boolean;
   voice_headset?: boolean;
   voice_pause_ms?: number;
   voice_rate?: number;
+  voice_natural?: boolean;
   voice_read_aloud?: boolean;
   voice_hands_free_on?: boolean;
   /** EXPERIMENTAL: the Chat's hands-free loop (`ReaderVoice`). */

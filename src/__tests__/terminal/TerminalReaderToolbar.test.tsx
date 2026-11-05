@@ -13,7 +13,7 @@ vi.mock("../../components/embed/FileViewerPane", () => ({ FileViewerPane: ({ pat
 
 import { TerminalPromptStrip } from "../../components/terminal/TerminalPromptStrip";
 import { TerminalReaderView } from "../../components/terminal/TerminalReaderView";
-import { splitDiffRows } from "../../components/terminal/TerminalReaderChanges";
+import { splitDiffRows } from "../../lib/viewers/diffRows";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";

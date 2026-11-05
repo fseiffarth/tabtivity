@@ -123,13 +123,24 @@ fn known_scope_ids() -> Vec<String> {
 /// local mirror — is resolved backend-side (`services::usage_stats::watch_root_for`).
 /// Watching is best-effort: a project with nothing watchable simply records no
 /// file stats.
+///
+/// `async` over the blocking pool: attaching walks the project's folders and
+/// puts a watch on each, which on a big tree took seconds — and a synchronous
+/// command runs on the main thread, so every switch into such a project froze
+/// the window that long. The scope is recorded before the hop, and an attach
+/// watches whatever was recorded last, so a late one never re-attaches a
+/// project the user already left.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn usage_watch_project(
+pub async fn usage_watch_project(
     ctx: Ctx,
     project_id: String,
 ) -> Result<(), String> {
-    let state = ctx.get::<crate::services::usage_stats::UsageWatchState>();
-    crate::services::usage_stats::watch_project(state, &project_id)
+    let state = ctx.get::<crate::services::usage_stats::UsageWatchState>().clone();
+    state.want(&project_id);
+    app_core::rt::try_blocking("usage_watch_project", move || {
+        crate::services::usage_stats::watch_wanted(&state)
+    })
+    .await
 }
 
 /// Commits and line churn attributable to *you*, in a time window.
