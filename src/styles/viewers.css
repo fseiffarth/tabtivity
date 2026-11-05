@@ -6970,3 +6970,30 @@ select.file-viewer-run-args-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Sync resolver "Hand to an agent" dialog: the ready prompt and the one-click
+   ways to hand it over. */
+.sync-handoff-prompt {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 4px 0 8px;
+  padding: 6px 8px;
+  resize: vertical;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-primary, var(--text));
+  font: inherit;
+  font-size: 12px;
+}
+.sync-handoff-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.sync-handoff-none {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}

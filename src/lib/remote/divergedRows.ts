@@ -138,3 +138,18 @@ export function splitByDeleteSide(
   }
   return { host, local };
 }
+
+/**
+ * The diverged files BOTH sides changed since their recorded base (the backend's
+ * per-side flags, both copies present) — the true conflicts, the complement of
+ * `withoutChangedOnBoth`. What "Hand to an agent" takes from the orange list.
+ */
+export function bothChangedPaths(
+  byPath: Record<string, SyncEntryStatus> | undefined,
+  relPaths: string[],
+): string[] {
+  return relPaths.filter((rel) => {
+    const e = byPath?.[rel];
+    return !!(e && e.hostMtime != null && e.localMtime != null && e.hostDiverged && e.localDiverged);
+  });
+}

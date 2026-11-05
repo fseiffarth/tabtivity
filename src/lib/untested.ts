@@ -158,6 +158,8 @@ export const UNTESTED = {
   "bibCards.1": { area: "embed", what: "BibCards · ＋ entry" },
   "compareView.1": { area: "embed", what: "CompareView · Select a commit" },
   "compareView.sideTimes": { area: "embed", what: "CompareView · sync resolver: per-side modified time, \"newer\" badge, per-change commit/save times beside Take and on the numbered chips" },
+  "syncHandoff.resolver": { area: "embed", what: "SyncMergeView · Hand to an agent: writes both versions + CONFLICTS.md into the project's agent home (~/handoff/<id>), then opens an agent tab / queues the prompt at an open one / copies it; Load resolved reads the agent's resolved/<file> into Result (never saves or syncs)" },
+  "syncHandoff.panel": { area: "files", what: "ProjectFilesView · orange list · Hand N to an agent: the files both sides changed, exported in one folder" },
   "deckView.presentationTitle": { area: "embed", what: "DeckView · Presentation" },
   "fileViewer.autocompleteLabel": { area: "embed", what: "FileViewerPane · Autocomplete" },
   "fileViewer.spellingAddLanguage": { area: "embed", what: "FileViewerPane · ＋ Language (download a spelling dictionary)" },

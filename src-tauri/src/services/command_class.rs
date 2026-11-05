@@ -948,6 +948,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_auto_preview", Core),
     ("sync_big_folders", Core),
     ("sync_diff", Core),
+    ("sync_handoff_export", Core),
+    ("sync_handoff_load_resolved", Core),
     ("sync_file_meta", Core),
     ("sync_mark_selected", Core),
     ("sync_pull", Core),

@@ -2155,6 +2155,8 @@ pub fn run() {
             commands::sync::sync_scan_host_new,
             commands::sync::sync_file_meta,
             commands::sync::sync_resolve_if_identical,
+            commands::sync_handoff::sync_handoff_export,
+            commands::sync_handoff::sync_handoff_load_resolved,
             commands::sync::sync_apply_delete,
             commands::sync::sync_diff,
             commands::ssh::ssh_tooling_status,
