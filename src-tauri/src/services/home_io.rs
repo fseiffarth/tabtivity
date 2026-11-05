@@ -252,6 +252,18 @@ impl HomeDir {
         (names, odd)
     }
 
+    /// [`HomeDir::names`] reading at most `limit` entries (in directory order,
+    /// then sorted): a folder an agent filled with hundreds of thousands of
+    /// names costs `limit` reads, not all of them.
+    pub fn names_capped(&self, limit: usize) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(&self.path) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries.flatten().take(limit).filter_map(|e| e.file_name().to_str().map(str::to_string)).collect();
+        names.sort();
+        names
+    }
+
     /// Open the child directory `name` without creating it: `None` when
     /// missing, a link or not a directory.
     pub fn subdir_existing(&self, name: &str) -> Option<Self> {
