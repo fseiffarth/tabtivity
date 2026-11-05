@@ -307,6 +307,9 @@ interface FileRowProps {
   scanExcluded: boolean;
   canPyRun: boolean;
   canShRun: boolean;
+  /** Some row of the listing wears a run button: rows without one reserve its
+   *  width so icons and names stay in one column. */
+  runSlot: boolean;
   isRunning: boolean;
   runLocked: boolean;
   isCompiling: boolean;
@@ -348,6 +351,7 @@ const FileRow = React.memo(function FileRow({
   scanExcluded,
   canPyRun,
   canShRun,
+  runSlot,
   isRunning,
   runLocked,
   isCompiling,
@@ -538,6 +542,7 @@ const FileRow = React.memo(function FileRow({
           <span className="file-run-spinner" />
         </span>
       )}
+      {runSlot && !canRun && !isCompiling && <span className="file-run-slot" aria-hidden="true" />}
       <span className="file-icon"><FileIcon ext={e.extension} isDir={e.is_dir} /></span>
       <span className="file-name">{e.name}</span>
       {notOnRemote && (
@@ -2903,6 +2908,17 @@ export function FileTree({
         const { standard, gitignored, hiddenExt } = sections;
         const rows = rowWindow;
 
+        // The same two run verdicts `renderEntry` hands each row, asked of every
+        // row on screen: one runnable file reserves the run-button column for
+        // all of them, so the ▶ never pushes only its own row's icon right.
+        const runnableRow = (e: FileEntry) =>
+          !e.is_dir && (shellRunnerFor(e.extension, HOST_OS) !== null
+            || (isPythonPath(e.path) && isMainScriptCached(pyMainCache, e.path)));
+        const runSlot = rows.regular.some(runnableRow)
+          || (scaffoldExpanded && rows.standard.some(runnableRow))
+          || (gitignoredExpanded && rows.gitignored.some(runnableRow))
+          || (hiddenExtExpanded && rows.hiddenExt.some(runnableRow));
+
         function renderEntry(e: FileEntry, isScaffold = false, isGitignored = false, isHiddenExt = false) {
           const status = isGitignored || isHiddenExt ? undefined : displayStatuses[e.name];
           // A folder's headline number is its non-ignored weight — the part
@@ -3002,6 +3018,7 @@ export function FileTree({
               scanExcluded={e.is_dir && isScanExcluded(rel)}
               canPyRun={canPyRun}
               canShRun={canShRun}
+              runSlot={runSlot}
               isRunning={isRunning}
               runLocked={runLocked}
               isCompiling={isCompiling}
