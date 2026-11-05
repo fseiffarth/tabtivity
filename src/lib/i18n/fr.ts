@@ -10995,6 +10995,8 @@ export const dict: Dict = {
   "transfer.note.pushReset": "Le niveau de push des agents et ses branches protégées sont revenus à la valeur par défaut ; réglez-les de nouveau sur cet ordinateur.",
   "transfer.note.scheduleReset": "Le niveau de planification des agents est revenu à la valeur par défaut ; réglez-le de nouveau sur cet ordinateur.",
   "transfer.note.interpreterReset": "L'interpréteur Python épinglé du projet n'a pas été importé : un chemin issu d'un fichier s'exécute au clic sur Exécuter, choisissez-le de nouveau ici.",
+  "transfer.note.sandboxPolicyReset": "La portée et le réseau du conteneur du projet ont été remis par défaut (tous les onglets, réseau par défaut) : ils viennent de l'auteur du fichier ; réglez-les de nouveau ici si besoin.",
+  "transfer.note.syncCodeReset": "La synchronisation du code vers les hôtes de calcul du projet a été désactivée : connecter un hôte enverrait le code de ce projet à l'hôte de l'auteur du fichier ; réactivez-la par hôte si vous lui faites confiance.",
   "transfer.note.sessionSanitized": "Certains onglets nommaient une commande que ce {app} ne connaît pas et sont revenus en shells simples.",
   "transfer.note.sessionUnreadable": "La disposition des onglets de ce fichier était illisible et a été ignorée.",
   "transfer.note.newId": "Un projet portant l'id de ce fichier est déjà enregistré ici ; l'import reçoit donc son propre nouvel id.",

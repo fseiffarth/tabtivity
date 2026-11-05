@@ -10993,6 +10993,8 @@ export const dict: Dict = {
   "transfer.note.pushReset": "El nivel de push de los agentes y sus ramas protegidas volvieron al valor predeterminado; configúralos de nuevo en este ordenador.",
   "transfer.note.scheduleReset": "El nivel de programación de los agentes volvió al valor predeterminado; configúralo de nuevo en este ordenador.",
   "transfer.note.interpreterReset": "No se importó el intérprete de Python fijado del proyecto: una ruta de un archivo se ejecuta al pulsar Ejecutar, así que elígelo de nuevo aquí.",
+  "transfer.note.sandboxPolicyReset": "El alcance y la red del contenedor del proyecto se restablecieron a los valores por defecto (todas las pestañas, red por defecto): los eligió el autor del archivo; vuelve a ajustarlos aquí si los quieres.",
+  "transfer.note.syncCodeReset": "Se desactivó la sincronización del código con los hosts de trabajo del proyecto: al conectar uno se enviaría el código de este proyecto al host del autor del archivo; actívala por host cuando confíes en él.",
   "transfer.note.sessionSanitized": "Algunas pestañas nombraban un comando que este {app} no conoce y volvieron como shells simples.",
   "transfer.note.sessionUnreadable": "No se pudo leer la disposición de pestañas de este archivo y se omitió.",
   "transfer.note.newId": "Ya hay aquí un proyecto con el id de este archivo, así que la importación recibe un id nuevo propio.",

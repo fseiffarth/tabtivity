@@ -10993,6 +10993,8 @@ export const dict: Dict = {
   "transfer.note.pushReset": "Il livello di push degli agenti e i suoi branch protetti sono tornati al valore predefinito; impostali di nuovo su questo computer.",
   "transfer.note.scheduleReset": "Il livello di pianificazione degli agenti è tornato al valore predefinito; impostalo di nuovo su questo computer.",
   "transfer.note.interpreterReset": "L'interprete Python fissato del progetto non è stato importato: un percorso preso da un file viene eseguito con Esegui, quindi sceglilo di nuovo qui.",
+  "transfer.note.sandboxPolicyReset": "L'ambito e la rete del container del progetto sono stati riportati ai valori predefiniti (tutte le schede, rete predefinita): li ha scelti l'autore del file; reimpostali qui se vuoi.",
+  "transfer.note.syncCodeReset": "La sincronizzazione del codice verso gli host di calcolo del progetto è stata disattivata: collegando un host il codice di questo progetto verrebbe inviato all'host dell'autore del file; riattivala per host se ti fidi.",
   "transfer.note.sessionSanitized": "Alcune schede nominavano un comando che questo {app} non conosce e sono tornate come shell semplici.",
   "transfer.note.sessionUnreadable": "La disposizione delle schede in questo file non era leggibile ed è stata saltata.",
   "transfer.note.newId": "Un progetto con l'id di questo file è già registrato qui, quindi l'importazione riceve un id nuovo tutto suo.",

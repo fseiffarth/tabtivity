@@ -1327,6 +1327,67 @@ fn pack_tar(
     pack_tar_with(zip, archive, filter, progress, PACK_LIMITS)
 }
 
+/// The folders [`pack_tar_with`] left out, so everything below one is dropped
+/// without another look. A component trie (an arena, so a path of many
+/// components never recurses), because the old list was rescanned for every
+/// entry: a hostile archive of 200 000 entries made that quadratic. A lookup
+/// now costs the length of the path whatever the number of pruned folders.
+#[derive(Default)]
+struct PrunedDirs {
+    /// `children[node]`: component name to the child's index. Node 0 is the root.
+    children: Vec<HashMap<String, usize>>,
+    pruned: Vec<bool>,
+}
+
+impl PrunedDirs {
+    /// Leave `rel` (a [`host_rel`] path) out.
+    fn insert(&mut self, rel: &str) {
+        if self.children.is_empty() {
+            self.children.push(HashMap::new());
+            self.pruned.push(false);
+        }
+        let mut node = 0;
+        for component in rel.split('/') {
+            node = match self.children[node].get(component) {
+                Some(&child) => child,
+                None => {
+                    self.children.push(HashMap::new());
+                    self.pruned.push(false);
+                    let child = self.children.len() - 1;
+                    self.children[node].insert(component.to_string(), child);
+                    child
+                }
+            };
+        }
+        self.pruned[node] = true;
+    }
+
+    /// Whether `rel` lies strictly below a pruned folder.
+    fn covers(&self, rel: &str) -> bool {
+        if self.children.is_empty() {
+            return false;
+        }
+        let mut node = 0;
+        let mut components = rel.split('/').peekable();
+        while let Some(component) = components.next() {
+            let Some(&child) = self.children[node].get(component) else {
+                return false;
+            };
+            if self.pruned[child] && components.peek().is_some() {
+                return true;
+            }
+            node = child;
+        }
+        false
+    }
+
+    /// Hash lookups a `covers` of `rel` makes at most: one per component.
+    #[cfg(test)]
+    fn nodes(&self) -> usize {
+        self.children.len()
+    }
+}
+
 fn pack_tar_with(
     zip: &mut zip::ZipWriter<&mut fs::File>,
     archive: impl std::io::Read,
@@ -1347,7 +1408,7 @@ fn pack_tar_with(
     let mut carried: HashMap<String, u64> = HashMap::new();
     let mut entries: usize = 0;
     let mut written: u64 = 0;
-    let mut pruned: Vec<String> = Vec::new();
+    let mut pruned = PrunedDirs::default();
     let mut failure: Option<String> = None;
     loop {
         let header = match tar.next_header() {
@@ -1365,19 +1426,19 @@ fn pack_tar_with(
         let Some(rel) = host_rel(&header.path) else {
             continue;
         };
-        if pruned.iter().any(|p| rel.starts_with(p.as_str())) {
+        if pruned.covers(&rel) {
             continue;
         }
         let is_dir = header.kind == Kind::Dir;
         if host_excluded(&rel, is_dir, filter) {
             if is_dir {
-                pruned.push(format!("{rel}/"));
+                pruned.insert(&rel);
             }
             continue;
         }
         if rel.matches('/').count() + usize::from(is_dir) > MAX_DEPTH {
             if is_dir {
-                pruned.push(format!("{rel}/"));
+                pruned.insert(&rel);
             }
             pack.skipped.push((rel, Skip::TooDeep));
             continue;
@@ -2031,20 +2092,36 @@ fn reset_imported_connect(spec: &mut Value) -> bool {
     reset
 }
 
+/// The built-in Docker networks an import may keep (`host` is refused
+/// everywhere; a custom name is the author's, naming a network of theirs).
+const BUILTIN_NETWORKS: [&str; 2] = ["bridge", "none"];
+
+/// What [`imported_sandbox`] reset, for the two import notes.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SandboxResets {
+    /// The container was switched off, or a Dockerfile, image or bad cap went.
+    spec: bool,
+    /// The scope went back to the default, or a custom network name was dropped.
+    policy: bool,
+}
+
 /// The container spec an import keeps: off, with the resource caps and a
-/// network that parses to a known-safe value. The in-repo `dockerfile`, the
-/// `image` and the `spec_source_hash` are cleared, so enabling the container
-/// on this machine runs the O#143 confirm (a matching hash would otherwise
-/// answer it in advance). Returns the kept spec and whether anything was reset.
-fn imported_sandbox(spec: &Value) -> (Value, bool) {
+/// built-in network. The in-repo `dockerfile`, the `image` and the
+/// `spec_source_hash` are cleared, so enabling the container on this machine
+/// runs the O#143 confirm (a matching hash would otherwise answer it in
+/// advance). The `scope` goes back to the default (every tab) and a `network`
+/// that is not `bridge` or `none` back to the default bridge: both are the
+/// author's choice of how much this machine's container contains (gap 74).
+fn imported_sandbox(spec: &Value) -> (Value, SandboxResets) {
     let Some(map) = spec.as_object() else {
-        return (Value::Null, true);
+        return (Value::Null, SandboxResets { spec: true, ..SandboxResets::default() });
     };
     let mut kept = serde_json::Map::new();
     kept.insert("enabled".into(), Value::Bool(false));
-    let mut reset = map.get("enabled") == Some(&Value::Bool(true));
+    let mut resets = SandboxResets::default();
+    resets.spec = map.get("enabled") == Some(&Value::Bool(true));
     for key in ["dockerfile", "image", "spec_source_hash"] {
-        reset |= map.get(key).is_some_and(|v| !v.is_null());
+        resets.spec |= map.get(key).is_some_and(|v| !v.is_null());
     }
     if let Some(pids) = map.get("pids_limit").filter(|v| v.as_u64().is_some_and(|n| n > 0)) {
         kept.insert("pids_limit".into(), pids.clone());
@@ -2058,24 +2135,39 @@ fn imported_sandbox(spec: &Value) -> (Value, bool) {
             {
                 kept.insert(key.into(), Value::String(v.to_string()));
             }
-            Some(_) => reset = true,
+            Some(_) => resets.spec = true,
             None => {}
         }
     }
-    match map.get("network").and_then(Value::as_str) {
-        Some(n) if crate::services::sandbox::validate_network(n).is_ok() => {
+    match map.get("network").filter(|v| !v.is_null()) {
+        Some(Value::String(n)) if BUILTIN_NETWORKS.contains(&n.trim()) => {
             kept.insert("network".into(), Value::String(n.trim().to_string()));
         }
-        Some(_) => reset = true,
+        Some(_) => resets.policy = true,
         None => {}
     }
-    if matches!(map.get("scope").and_then(Value::as_str), Some("all" | "agents")) {
-        kept.insert("scope".into(), map["scope"].clone());
+    // The default scope is "all"; a bundle can only have weakened it.
+    if map.get("scope").is_some_and(|v| !v.is_null() && v != "all") {
+        resets.policy = true;
     }
     if map.get("readonly_rootfs") == Some(&Value::Bool(true)) {
         kept.insert("readonly_rootfs".into(), Value::Bool(true));
     }
-    (Value::Object(kept), reset)
+    (Value::Object(kept), resets)
+}
+
+/// Reset a `compute_hosts` worker's `sync_code` to the off a user chooses on
+/// purpose: the default when the key is absent is ON, so the flag is written
+/// `false`, not removed. A worker with it on gets this project's tracked code
+/// pushed to the author's host the first time it is connected. Returns whether
+/// the bundle had it on (or silent, which reads as on).
+fn reset_imported_sync_code(host: &mut Value) -> bool {
+    let Some(map) = host.as_object_mut() else {
+        return false;
+    };
+    let was_on = map.get("sync_code") != Some(&Value::Bool(false));
+    map.insert("sync_code".into(), Value::Bool(false));
+    was_on
 }
 
 /// What an import adopts from a bundle's registry entry or `project.json`
@@ -2110,18 +2202,26 @@ fn adopt_imported_entry(value: &mut Value) -> Vec<String> {
         note("interpreterReset");
     }
     let mut connect_reset = map.get_mut("remote").is_some_and(reset_imported_connect);
+    let mut sync_reset = false;
     if let Some(hosts) = map.get_mut("compute_hosts").and_then(Value::as_array_mut) {
         for host in hosts {
             connect_reset |= reset_imported_connect(host);
+            sync_reset |= reset_imported_sync_code(host);
         }
+    }
+    if sync_reset {
+        note("syncCodeReset");
     }
     if connect_reset {
         note("connectReset");
     }
     if let Some(spec) = map.get("sandbox").filter(|v| !v.is_null()) {
-        let (kept, reset) = imported_sandbox(spec);
-        if reset {
+        let (kept, resets) = imported_sandbox(spec);
+        if resets.spec {
             note("sandboxReset");
+        }
+        if resets.policy {
+            note("sandboxPolicyReset");
         }
         map.insert("sandbox".into(), kept);
     }
@@ -3249,6 +3349,56 @@ mod tests {
         assert_eq!(run(PackLimits { entries: 100, bytes: 50 }), Ok(5), "exactly full is fine");
     }
 
+    /// The pruned-folder lookup keeps `starts_with("dir/")` semantics: strictly
+    /// below a pruned folder, whole components only, the folder itself and a
+    /// sibling that merely shares a prefix are not covered.
+    #[test]
+    fn a_pruned_folder_covers_what_is_below_it_and_only_that() {
+        let mut pruned = PrunedDirs::default();
+        assert!(!pruned.covers("a/b"), "an empty set covers nothing");
+        pruned.insert("a/node_modules");
+        pruned.insert("build");
+        for (rel, want) in [
+            ("a/node_modules", false),
+            ("a/node_modules/x", true),
+            ("a/node_modules/x/y/z", true),
+            ("a/node_modules_extra/x", false),
+            ("a/node", false),
+            ("a/other/node_modules/x", false),
+            ("a", false),
+            ("build", false),
+            ("build/out.o", true),
+            ("builder/out.o", false),
+        ] {
+            assert_eq!(pruned.covers(rel), want, "{rel}");
+        }
+        // An outer folder pruned after an inner one covers both.
+        pruned.insert("a");
+        assert!(pruned.covers("a/node_modules") && pruned.covers("a/z"));
+        assert!(!pruned.covers("a"));
+    }
+
+    /// The lookup does not grow with the number of pruned folders, and a hostile
+    /// path of many components never recurses: the set is an arena of
+    /// per-component maps, one node per distinct (parent, name), not a list
+    /// rescanned for every entry.
+    #[test]
+    fn the_pruned_lookup_is_a_trie_not_a_rescanned_list() {
+        let mut pruned = PrunedDirs::default();
+        for i in 0..5000 {
+            pruned.insert(&format!("d{i}/node_modules"));
+        }
+        // Root + 5000 folders + 5000 pruned children; a list would hold 5000 strings.
+        assert_eq!(pruned.nodes(), 1 + 2 * 5000);
+        assert!(pruned.covers("d4999/node_modules/pkg/index.js"));
+        assert!(!pruned.covers("d5000/node_modules/pkg/index.js"));
+        let deep = vec!["c"; 100_000].join("/");
+        pruned.insert(&deep);
+        assert!(pruned.covers(&format!("{deep}/x")));
+        assert!(!pruned.covers(&deep));
+        drop(pruned); // no recursive drop
+    }
+
     #[test]
     fn only_a_bundle_carrying_conversations_needs_the_new_format() {
         let mut contents = BundleContents::default();
@@ -3483,7 +3633,7 @@ mod tests {
         notes.sort();
         assert_eq!(
             notes,
-            ["connectReset", "interpreterReset", "pushReset", "sandboxReset", "scheduleReset"]
+            ["connectReset", "interpreterReset", "pushReset", "sandboxReset", "scheduleReset", "syncCodeReset"]
         );
         for key in [
             "git_push_mcp", "schedule_mcp", "python_interpreter", "run_host", "default_apps", "agent_fence",
@@ -3518,6 +3668,7 @@ mod tests {
         twin["sandbox"]["memory"] = "--privileged".into();
         let notes = adopt_imported_entry(&mut twin);
         assert!(notes.contains(&"sandboxReset".to_string()));
+        assert!(notes.contains(&"sandboxPolicyReset".to_string()), "the host network went: {notes:?}");
         assert_eq!(twin["sandbox"], serde_json::json!({ "enabled": false, "cpus": "2", "pids_limit": 64 }));
         assert!(twin.get("python_interpreter").is_none() && twin["remote"].get("key_auth").is_none());
         // A quiet container spec (already off, no source) is no reset.
@@ -3528,6 +3679,51 @@ mod tests {
         let mut odd = serde_json::json!({ "id": "p", "sandbox": "yes" });
         assert_eq!(adopt_imported_entry(&mut odd), ["sandboxReset"]);
         assert!(odd.get("sandbox").is_none());
+    }
+
+    /// Gap 74 (user decision, 2026-11-05): the container's scope and a custom
+    /// network name go back to the defaults, and every worker's `sync_code` is
+    /// written off; each reset is reported.
+    #[test]
+    fn an_import_resets_the_container_scope_and_network_and_worker_code_sync() {
+        let mut entry = serde_json::json!({
+            "id": "p",
+            "sandbox": { "enabled": false, "scope": "agents", "network": "corp-egress", "readonly_rootfs": true },
+            "compute_hosts": [
+                { "id": "w1", "host": "a.example", "remote_path": "/r", "sync_code": true },
+                { "id": "w2", "host": "b.example", "remote_path": "/r" },
+                { "id": "w3", "host": "c.example", "remote_path": "/r", "sync_code": false, "pull_outputs": true },
+            ],
+        });
+        let mut notes = adopt_imported_entry(&mut entry);
+        notes.sort();
+        assert_eq!(notes, ["sandboxPolicyReset", "syncCodeReset"]);
+        // No scope key = the default (every tab); no network key = the default bridge.
+        assert_eq!(entry["sandbox"], serde_json::json!({ "enabled": false, "readonly_rootfs": true }));
+        // Written `false`, not removed: a missing key reads as ON.
+        for host in entry["compute_hosts"].as_array().unwrap() {
+            assert_eq!(host["sync_code"], false, "{host}");
+        }
+        assert_eq!(entry["compute_hosts"][2]["pull_outputs"], true, "the rest of the worker stays");
+        let worker = serde_json::from_value::<crate::schema::project::ComputeHost>(entry["compute_hosts"][1].clone());
+        assert!(worker.is_ok_and(|h| !h.sync_code), "a worker with no key now reads as off");
+
+        // The built-in networks and the default scope stay and say nothing.
+        for network in ["bridge", "none"] {
+            let mut calm = serde_json::json!({
+                "id": "p",
+                "sandbox": { "enabled": false, "scope": "all", "network": network },
+                "compute_hosts": [{ "id": "w", "host": "h", "remote_path": "/r", "sync_code": false }],
+            });
+            assert!(adopt_imported_entry(&mut calm).is_empty(), "{network}");
+            assert_eq!(calm["sandbox"], serde_json::json!({ "enabled": false, "network": network }));
+        }
+        // `host` and a name that is not valid are dropped like any custom one.
+        for network in ["host", "a b;rm", ""] {
+            let mut odd = serde_json::json!({ "id": "p", "sandbox": { "enabled": false, "network": network } });
+            assert_eq!(adopt_imported_entry(&mut odd), ["sandboxPolicyReset"], "{network:?}");
+            assert!(odd["sandbox"].get("network").is_none());
+        }
     }
 
     fn entry_with(id: &str, extra: &[(&str, Value)]) -> ProjectEntry {

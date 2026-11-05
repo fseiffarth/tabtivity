@@ -10997,6 +10997,8 @@ export const dict: Dict = {
   "transfer.note.pushReset": "Die Push-Stufe der Agenten und ihre geschützten Branches wurden auf den Standard zurückgesetzt; stelle sie für diesen Rechner neu ein.",
   "transfer.note.scheduleReset": "Die Zeitplan-Stufe der Agenten wurde auf den Standard zurückgesetzt; stelle sie für diesen Rechner neu ein.",
   "transfer.note.interpreterReset": "Der festgelegte Python-Interpreter des Projekts wurde nicht übernommen — ein Pfad aus einer Datei wird bei „Ausführen“ gestartet, wähle ihn hier neu.",
+  "transfer.note.sandboxPolicyReset": "Der Container-Umfang und das Netzwerk des Projekts wurden auf den Standard zurückgesetzt (alle Tabs, Standardnetzwerk) — sie stammen vom Ersteller der Datei; stelle sie hier bei Bedarf neu ein.",
+  "transfer.note.syncCodeReset": "Das Synchronisieren des Codes zu den Worker-Hosts des Projekts wurde ausgeschaltet — beim Verbinden eines Workers würde der Code dieses Projekts zum Host des Dateiautors gesendet; schalte es pro Worker wieder ein, wenn du dem Host vertraust.",
   "transfer.note.sessionSanitized": "Einige Tabs nannten einen Befehl, den dieses {app} nicht kennt, und kamen als einfache Shells zurück.",
   "transfer.note.sessionUnreadable": "Das Tab-Layout in dieser Datei war nicht lesbar und wurde übersprungen.",
   "transfer.note.newId": "Ein Projekt mit der ID dieser Datei ist hier schon registriert, der Import bekommt daher eine eigene neue ID.",

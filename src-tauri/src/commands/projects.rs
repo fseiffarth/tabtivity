@@ -832,11 +832,13 @@ struct CopyLimits {
 }
 
 impl CopyLimits {
-    const DEFAULT: CopyLimits = CopyLimits {
-        entries: crate::services::tree_copy::MAX_ENTRIES,
-        bytes: crate::services::tree_copy::MAX_BYTES,
-        depth: 128,
-    };
+    /// The user's own copy (archive, mirror move, Duplicate, the Remote →
+    /// Remote-only move-out): the tree is theirs and a `target/` or
+    /// `node_modules/` easily holds 200 000 entries, so there is no entry or
+    /// byte cap (user decision, 2026-11-05; the caps of
+    /// [`crate::services::tree_copy`] guard a tree a stranger or a remote host
+    /// picks). The depth cap stays: it bounds the walk's recursion, not a size.
+    const DEFAULT: CopyLimits = CopyLimits { entries: usize::MAX, bytes: u64::MAX, depth: 128 };
 }
 
 /// The running totals of one walk.
@@ -944,19 +946,16 @@ fn open_source_file(from: &Path) -> Result<Option<fs::File>, String> {
 /// One regular file, through a no-follow, non-blocking handle that is checked
 /// regular once open. A file that stopped being regular (or vanished) between
 /// the directory read and the open is skipped, like a special file. The
-/// destination may be left by an interrupted earlier pass (a resumed archive):
-/// a link planted there is replaced, never written through.
+/// destination may be left by an interrupted earlier pass (a resumed archive),
+/// so it is opened by [`create_destination`]: never through a link.
 fn copy_file_core(from: &Path, to: &Path, limits: CopyLimits, tally: &mut CopyTally) -> Result<(), String> {
     use std::io::Read;
     let Some(input) = open_source_file(from)? else {
         tally.skipped += 1;
         return Ok(());
     };
-    if fs::symlink_metadata(to).is_ok_and(|m| m.file_type().is_symlink()) {
-        fs::remove_file(to).map_err(|e| e.to_string())?;
-    }
     let permissions = input.metadata().ok().map(|m| m.permissions());
-    let mut out = fs::File::create(to).map_err(|e| e.to_string())?;
+    let mut out = create_destination(to)?;
     let room = limits.bytes.saturating_sub(tally.bytes);
     // One byte past the room tells "exactly full" from "over".
     let copied = std::io::copy(&mut input.take(room.saturating_add(1)), &mut out)
@@ -969,6 +968,49 @@ fn copy_file_core(from: &Path, to: &Path, limits: CopyLimits, tally: &mut CopyTa
         let _ = out.set_permissions(permissions);
     }
     Ok(())
+}
+
+/// Open the destination file of a copy for writing without following a link.
+/// A new file is made with `O_EXCL | O_NOFOLLOW`; one a resumed pass left is
+/// opened `O_NOFOLLOW | O_NONBLOCK`, checked regular on the handle (a FIFO
+/// planted there fails instead of blocking the copy), and then emptied. A link
+/// at `to` is refused: the copy fails (a move keeps its source) rather than
+/// write through it or guess what it was meant to be.
+fn create_destination(to: &Path) -> Result<fs::File, String> {
+    let refuse = |why: &str| format!("{}: {why}", to.display());
+    match fs::symlink_metadata(to) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(refuse("the destination is a link, not a file the copy may write"));
+        }
+        Ok(meta) if !meta.is_file() => {
+            return Err(refuse("the destination is not a regular file"));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+            return options.open(to).map_err(|e| format!("{}: {e}", to.display()));
+        }
+        Err(e) => return Err(refuse(&e.to_string())),
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    if !file.metadata().map_err(|e| format!("{}: {e}", to.display()))?.is_file() {
+        return Err(refuse("the destination is not a regular file"));
+    }
+    file.set_len(0).map_err(|e| format!("{}: {e}", to.display()))?;
+    Ok(file)
 }
 
 /// Recreate one symlink at `to`, replacing whatever an interrupted earlier copy

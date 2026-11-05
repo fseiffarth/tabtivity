@@ -90,9 +90,15 @@ with a note in the import result (`ImportBundleResult.notes`, words in
   they make the app dial the author's host at launch with `BatchMode` and
   `accept-new`; the user turns them on again here.
 - `sandbox` comes in `enabled: false` with `dockerfile`, `image` and
-  `spec_source_hash` cleared (`sandboxReset`), keeping resource caps, `scope`
-  and a `network` that passes `sandbox::validate_network`. A matching hash
-  would answer the O#143 "docker build runs RUN as root" confirm in advance.
+  `spec_source_hash` cleared (`sandboxReset`), keeping the resource caps and a
+  `network` of `bridge` or `none`. The `scope` goes back to the default (every
+  tab) and any other network name back to the default bridge
+  (`sandboxPolicyReset`): both are how far the author wanted this machine's
+  container to reach, not descriptive. A matching hash would answer the O#143
+  "docker build runs RUN as root" confirm in advance.
+- Every `compute_hosts` entry's `sync_code` is written `false` (`syncCodeReset`;
+  absent reads as on): a connected worker with it on gets the project's tracked
+  code pushed to the author's host.
 - `git_push_mcp` (level and protected list, `pushReset`) and `schedule_mcp`
   (`scheduleReset`) are removed, i.e. the default level. The *export* still
   keeps the push level (a bundle moved between one user's machines) and drops
@@ -222,9 +228,19 @@ Both calls are user gestures (`ssh_common::user_dial`). The stream is the
 host's to shape, so `pack_tar` bounds it (`PACK_LIMITS`, gap 86): every header
 counts against 200 000 entries and every file byte (a hard link copied from the
 bundle included, since the zip stores a full copy) against 32 GiB — the
-`tree_copy` limits. The `links`, `carried`, `pruned` and `skipped` collections
-hold one item per entry, so the entry bound bounds them. A hit fails the export
+`tree_copy` limits. The `links`, `carried` and `skipped` collections
+hold one item per entry, so the entry bound bounds them. The pruned folders sit
+in a component trie (`PrunedDirs`), so a lookup costs the length of the path,
+not a rescan of every pruned folder per entry. A hit fails the export
 and the staged bundle is dropped, like any other export error.
+
+The user's own copies (`projects::copy_tree_core`: archive, move the mirror,
+Duplicate, the Remote -> Remote-only move-out) do not use these caps. They copy
+regular files only through no-follow handles, skip pipes and sockets, create a
+destination file `O_EXCL | O_NOFOLLOW` (refusing a link or FIFO there), fail on
+an unreadable file and never remove the source after a failed copy, but have no
+entry or byte cap (the user's decision, 2026-11-05: a `target/` or `node_modules/`
+passes 200 000 entries); the depth cap stays, as it bounds recursion.
 
 ## Nothing left out without a word
 

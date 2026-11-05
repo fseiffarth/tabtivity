@@ -3876,6 +3876,8 @@ export const enSource = {
   "transfer.note.pushReset": "The agent push level and its protected branches were reset to the default; set them again for this computer.",
   "transfer.note.scheduleReset": "The agent schedule level was reset to the default; set it again for this computer.",
   "transfer.note.interpreterReset": "The project's pinned Python interpreter was not imported — a path from a file runs when you press Run, so pick it again here.",
+  "transfer.note.sandboxPolicyReset": "The project's container scope and network were reset to the defaults (every tab, the default network) — the file's author chose them; set them again here if you want them.",
+  "transfer.note.syncCodeReset": "Code sync to the project's worker hosts was turned off — connecting a worker would push this project's code to the file author's host, so switch it on per worker once you trust the host.",
   "transfer.note.sessionSanitized": "Some tabs named a command this {app} does not know and came back as plain shells.",
   "transfer.note.sessionUnreadable": "The tab layout in this file could not be read and was skipped.",
   "transfer.note.newId": "A project with this file's id is already registered here, so the import gets its own new id.",

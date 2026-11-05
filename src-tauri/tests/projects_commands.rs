@@ -1285,8 +1285,8 @@ fn an_imported_bundle_adopts_descriptive_keys_and_resets_the_rest() {
             assert!(!stored.extra.contains_key(key), "{key} must be reset on import");
         }
         let sandbox = stored.extra.get("sandbox").expect("the caps stay");
-        // `scope` is the spec's own default ("all"): a descriptive cap, kept.
-        assert_eq!(sandbox, &serde_json::json!({ "enabled": false, "memory": "4g", "scope": "all" }));
+        // `scope` is never adopted: the spec's default (every tab) applies.
+        assert_eq!(sandbox, &serde_json::json!({ "enabled": false, "memory": "4g" }));
         for note in ["sandboxReset", "pushReset", "scheduleReset"] {
             assert!(result.notes.iter().any(|n| n == note), "{note} in {:?}", result.notes);
         }

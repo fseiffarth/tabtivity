@@ -367,11 +367,13 @@ fn an_unreadable_file_fails_the_copy_and_the_source_stays() {
     std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
-/// Gap 83: a link planted at a destination file name is replaced, not written
-/// through, when a resumed pass copies a regular file over it.
+/// Gap 83 follow-up: a link planted at a destination file name (a resumed
+/// pass's leftovers are the user's own area, but an agent can reach it) is
+/// refused: the copy fails, nothing is written through it, a move keeps its
+/// source. A dangling link is not created through either.
 #[cfg(unix)]
 #[test]
-fn a_link_in_the_partial_destination_is_not_written_through() {
+fn a_link_at_the_destination_file_is_refused_not_written_through() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("src");
     std::fs::create_dir_all(&src).unwrap();
@@ -382,9 +384,72 @@ fn a_link_in_the_partial_destination_is_not_written_through() {
     std::fs::create_dir_all(&dst).unwrap();
     std::os::unix::fs::symlink(&victim, dst.join("a.txt")).unwrap();
 
+    let err = copy_tree_core(&src, &dst, true).unwrap_err();
+    assert!(err.contains("a link"), "{err}");
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep", "not written through");
+    assert!(std::fs::symlink_metadata(dst.join("a.txt")).unwrap().file_type().is_symlink());
+    assert!(move_tree(&src, &dst).is_err());
+    assert!(src.join("a.txt").exists(), "a refused move keeps its source");
+
+    // A dangling link: a plain create would make the file it points at.
+    let target = tmp.path().join("made-by-the-copy");
+    std::fs::remove_file(dst.join("a.txt")).unwrap();
+    std::os::unix::fs::symlink(&target, dst.join("a.txt")).unwrap();
+    assert!(copy_tree_core(&src, &dst, true).is_err());
+    assert!(!target.exists(), "nothing created through a dangling link");
+
+    // A file a resumed pass left is overwritten in place, shorter or longer.
+    std::fs::remove_file(dst.join("a.txt")).unwrap();
+    std::fs::write(dst.join("a.txt"), b"a longer leftover than the new bytes").unwrap();
     copy_tree_core(&src, &dst, true).unwrap();
-    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
     assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"new");
+}
+
+/// A FIFO at the destination name must fail the copy, not block it (`File::create`
+/// on a FIFO with no reader waits for one forever).
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_destination_file_fails_instead_of_blocking() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.txt"), b"new").unwrap();
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    crate::services::home_io::mkfifo(&dst.join("a.txt"));
+    let (s, d) = (src.clone(), dst.clone());
+    let result = crate::services::home_io::within_deadline(move || copy_tree_core(&s, &d, true));
+    assert!(result.is_err(), "{result:?}");
+}
+
+/// User decision 2026-11-05: the user's own copies (archive, mirror move,
+/// Duplicate, move-out) have no entry or byte cap (the 200 000-entry / 32 GiB
+/// ones guard bundle import and the host-copy export). A tree past a cap
+/// lowered through `CopyLimits` still copies and moves by the default limits.
+#[test]
+fn an_own_copy_has_no_entry_or_byte_cap() {
+    assert!(CopyLimits::DEFAULT.entries > crate::services::tree_copy::MAX_ENTRIES);
+    assert!(CopyLimits::DEFAULT.bytes > crate::services::tree_copy::MAX_BYTES);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(src.join("sub")).unwrap();
+    for n in 0..12 {
+        std::fs::write(src.join("sub").join(format!("f{n}")), b"0123456789").unwrap();
+    }
+    // The old cap, lowered: 5 entries and 20 bytes refuse this tree ...
+    let lowered = CopyLimits { entries: 5, bytes: 20, ..CopyLimits::DEFAULT };
+    assert!(copy_tree_core_with(&src, &tmp.path().join("capped"), true, lowered).is_err());
+    // ... and the own-copy paths, on their default limits, copy it whole.
+    copy_tree_core(&src, &tmp.path().join("dup"), false).unwrap();
+    assert_eq!(std::fs::read_dir(tmp.path().join("dup").join("sub")).unwrap().count(), 12);
+    let exdev = |_: &std::path::Path, _: &std::path::Path| {
+        Err(std::io::Error::new(std::io::ErrorKind::CrossesDevices, "cross-device"))
+    };
+    let moved = tmp.path().join("moved");
+    move_fresh_tree(&src, &moved, "the folder", exdev).unwrap();
+    assert_eq!(std::fs::read_dir(moved.join("sub")).unwrap().count(), 12);
+    assert!(!src.exists());
 }
 
 /// Gap 83: entries, bytes and depth are bounded; a bound hit fails the copy
