@@ -96,6 +96,17 @@ describe("SyncHandoffButton", () => {
     expect((screen.getByRole("dialog").querySelector("textarea") as HTMLTextAreaElement).value).toContain("~/handoff/conflicts-1/CONFLICTS.md");
   });
 
+  it("Show folder asks the backend by project and export id, never by path", async () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: /Hand to an agent/ }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+    mockInvoke.mockResolvedValueOnce(undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Show folder" }));
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith("sync_handoff_reveal", { projectId: "p1", id: "conflicts-1" }),
+    );
+  });
+
   it("queues the prompt at an open local agent tab, and lists no host tab", async () => {
     setup();
     fireEvent.click(screen.getByRole("button", { name: /Hand to an agent/ }));

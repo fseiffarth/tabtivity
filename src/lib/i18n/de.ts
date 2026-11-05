@@ -8454,6 +8454,8 @@ export const dict: Dict = {
   "syncHandoff.sendTo": "Prompt an einen offenen Agenten-Tab senden",
   "syncHandoff.noTabs": "Kein offener lokaler Agenten-Tab in diesem Projekt.",
   "syncHandoff.copyPrompt": "Prompt kopieren",
+  "syncHandoff.showFolder": "Ordner zeigen",
+  "syncHandoff.showFolderTitle": "Den Export-Ordner im Dateimanager öffnen",
   "syncHandoff.copied": "Prompt kopiert.",
   "syncHandoff.sent": "Prompt für {tab} eingereiht.",
   "syncHandoff.opened": "{agent} mit dem Prompt geöffnet.",

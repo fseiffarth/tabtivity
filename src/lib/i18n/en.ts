@@ -8811,6 +8811,8 @@ export const enSource = {
   "syncHandoff.sendTo": "Send the prompt to an open agent tab",
   "syncHandoff.noTabs": "No open local agent tab in this project.",
   "syncHandoff.copyPrompt": "Copy prompt",
+  "syncHandoff.showFolder": "Show folder",
+  "syncHandoff.showFolderTitle": "Open the export folder in your file manager",
   "syncHandoff.copied": "Prompt copied.",
   "syncHandoff.sent": "Prompt queued for {tab}.",
   "syncHandoff.opened": "Opened {agent} with the prompt.",

@@ -12,6 +12,7 @@ import { isHostPinned } from "../../lib/projectTabHost";
 import { resolveProjectDirectory } from "../../types";
 import type { HandoffFile } from "../../lib/viewers/syncHandoff";
 import { DialogShell } from "../common/PromptDialogs";
+import { UntestedTag } from "../common/UntestedTag";
 
 /** What the backend answers (`services::sync_handoff::HandoffExport`). */
 interface HandoffExport {
@@ -117,6 +118,15 @@ export function SyncHandoffButton({
       .catch((e) => setError(t("syncHandoff.failed", { reason: String(e) })));
   };
 
+  // The export folder lives in the agent home, which is hard to browse to: open
+  // it in the file manager (the backend finds it from the project and the id).
+  const reveal = () => {
+    if (!result || !projectId) return;
+    invoke("sync_handoff_reveal", { projectId, id: result.out.id }).catch((e) =>
+      setError(t("syncHandoff.failed", { reason: String(e) })),
+    );
+  };
+
   const copy = () => {
     navigator.clipboard?.writeText(prompt).then(
       () => setNote(t("syncHandoff.copied")),
@@ -178,6 +188,10 @@ export function SyncHandoffButton({
             <button type="button" onClick={copy}>
               {t("syncHandoff.copyPrompt")}
             </button>
+            <button type="button" onClick={reveal} title={t("syncHandoff.showFolderTitle")}>
+              {t("syncHandoff.showFolder")}
+            </button>
+            <UntestedTag id="syncHandoff.reveal" />
             <button type="button" onClick={() => setResult(null)}>
               {t("common.close")}
             </button>

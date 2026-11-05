@@ -35,3 +35,17 @@ pub async fn sync_handoff_load_resolved(project_id: String, rel_path: String) ->
     })
     .await
 }
+
+/// Open export `id`'s folder in the OS file manager ("Show folder" in the
+/// hand-over dialog). The folder is found from the project and the id, never
+/// from a path the window sends.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn sync_handoff_reveal(project_id: String, id: String) -> Result<(), String> {
+    app_core::rt::try_blocking("sync", move || {
+        let dir = sync_handoff::export_dir_in(&crate::storage::state_dir(), &project_id, &id)
+            .ok_or_else(|| "that export is gone".to_string())?;
+        crate::services::os_open::check(&dir)?;
+        opener::open(&dir).map_err(|e| e.to_string())
+    })
+    .await
+}

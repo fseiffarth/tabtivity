@@ -33,7 +33,7 @@
 //!
 //! AppHandle-free and unit-testable.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -400,6 +400,27 @@ pub fn load_resolved_in(state_dir: &Path, scope_id: &str, rel: &str) -> Option<R
     None
 }
 
+/// True for an id [`new_id`] could have made: `conflicts-` + stamp + hex,
+/// nothing that could step out of the hand-over folder.
+fn is_export_id(id: &str) -> bool {
+    id.len() <= 40
+        && id.strip_prefix("conflicts-").is_some_and(|rest| {
+            !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+        })
+}
+
+/// The folder of export `id` under `scope_id`'s agent home, for "Show folder":
+/// only an existing real folder (opened handle by handle, never through a link
+/// an agent planted), and only an id of the export shape.
+pub fn export_dir_in(state_dir: &Path, scope_id: &str, id: &str) -> Option<PathBuf> {
+    if storage::is_reserved_scope(scope_id) || !is_export_id(id) {
+        return None;
+    }
+    let home = agent_home::scope_home_in(state_dir, scope_id);
+    let dir = HomeDir::open_existing(&home, DIR)?.open_subdir(id)?;
+    Some(dir.path().to_path_buf())
+}
+
 /// The file at `parts` below `dir`, folders opened one handle at a time and
 /// never created.
 fn open_below(dir: &HomeDir, parts: &[&str]) -> Option<HomeFile> {
@@ -609,5 +630,31 @@ mod tests {
     fn a_backtick_in_a_name_is_refused() {
         assert_eq!(safe_rel("a`b.py"), None);
         assert_eq!(safe_rel("d/x` text"), None);
+    }
+
+    #[test]
+    fn show_folder_names_only_an_existing_export() {
+        let state = tempfile::tempdir().unwrap();
+        let out = export_in(state.path(), "p", &[file("a.py", "1", "2")], now(), 1).unwrap();
+        let dir = export_dir_in(state.path(), "p", &out.id).unwrap();
+        assert!(dir.join("CONFLICTS.md").is_file());
+        assert!(dir.ends_with(Path::new(DIR).join(&out.id)));
+        for bad in ["../x", "conflicts-..", "conflicts-/etc", "notes", "conflicts-", "conflicts-zz"] {
+            assert_eq!(export_dir_in(state.path(), "p", bad), None, "{bad:?}");
+        }
+        assert_eq!(export_dir_in(state.path(), "p", "conflicts-20990101-000000-0000"), None);
+        assert_eq!(export_dir_in(state.path(), "root", &out.id), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn show_folder_never_follows_a_link_in_place_of_an_export() {
+        let state = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        export_in(state.path(), "p", &[file("a.py", "1", "2")], now(), 1).unwrap();
+        let root = agent_home::scope_home_in(state.path(), "p").join(DIR);
+        let id = "conflicts-20990101-000000-beef";
+        std::os::unix::fs::symlink(elsewhere.path(), root.join(id)).unwrap();
+        assert_eq!(export_dir_in(state.path(), "p", id), None);
     }
 }

@@ -708,6 +708,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["sync_diff", "core"],
   ["sync_handoff_export", "core"],
   ["sync_handoff_load_resolved", "core"],
+  ["sync_handoff_reveal", "client"],
   ["sync_file_meta", "core"],
   ["sync_mark_selected", "core"],
   ["sync_pull", "core"],

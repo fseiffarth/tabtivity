@@ -950,6 +950,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_diff", Core),
     ("sync_handoff_export", Core),
     ("sync_handoff_load_resolved", Core),
+    ("sync_handoff_reveal", Client),
     ("sync_file_meta", Core),
     ("sync_mark_selected", Core),
     ("sync_pull", Core),
