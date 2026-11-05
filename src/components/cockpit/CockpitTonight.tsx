@@ -15,6 +15,7 @@ import {
 } from "../../lib/cockpit/tonight";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { openPromptChartTab } from "../../lib/shortcuts/tabJump";
+import { useFrameBandValue } from "../../lib/window/frameBand";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import { lastUserInputAt, useActivityStore } from "../../stores/activity";
 import { queuePromptForTab, useAgentPromptsStore } from "../../stores/agents/agentPrompts";
@@ -73,6 +74,7 @@ function useLoadPrompts(scopes: readonly CockpitScopeTabs[]) {
  */
 export function CockpitTonight() {
   const t = useT();
+  const band = useFrameBandValue();
   const now = useCockpitNow();
   const scopes = useCockpitScopes();
   useLoadSchedules(scopes);
@@ -196,6 +198,8 @@ export function CockpitTonight() {
                       <button type="button" className="settings-btn sm" onClick={() => {
                           const store = useCockpitStore.getState();
                           store.select(item.ptyId!);
+                          // Narrow, Now shows one column: land on this agent's detail.
+                          if (band === "narrow") store.askDetail();
                           useRootOverlayStore.getState().openView("now");
                         }}>
                         {t("cockpit.tonight.show")}

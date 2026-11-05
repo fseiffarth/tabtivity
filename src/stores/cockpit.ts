@@ -38,7 +38,12 @@ interface CockpitState {
    *  Tonight's away recap. Stamped by `RootOverlayHost`; stays here because
    *  "away since" is about the cockpit, not about terminal-only sessions. */
   lastClosedAt: number | null;
+  /** Narrow window only: the next Now view opens on the selected agent's detail
+   *  instead of the roster (Tonight's "Show"). Now takes the request when it
+   *  mounts and clears it. */
+  detailAsked: boolean;
   select: (ptyId: string | null) => void;
+  askDetail: () => void;
   setRosterMode: (mode: CockpitRosterMode) => void;
   setStateFilter: (filter: CockpitStateFilter) => void;
   setSort: (sort: AgentSort) => void;
@@ -58,7 +63,9 @@ export const useCockpitStore = create<CockpitState>((set) => ({
   boxFilter: null,
   scopeFilter: null,
   lastClosedAt: null,
+  detailAsked: false,
   select: (selected) => set({ selected }),
+  askDetail: () => set({ detailAsked: true }),
   setRosterMode: (rosterMode) => set({ rosterMode }),
   setStateFilter: (stateFilter) => set({ stateFilter }),
   setSort: (sort) => set({ sort }),

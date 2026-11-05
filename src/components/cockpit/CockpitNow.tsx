@@ -57,7 +57,10 @@ export function CockpitNow() {
   const iconsRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   // Narrow only: which of master and detail fills the window.
-  const [pane, setPane] = useState<"list" | "detail">("list");
+  // Tonight's "Show" asks for the detail (`detailAsked`); a request made before
+  // this mounted is honoured on the first render, so the roster never flashes.
+  const [pane, setPane] = useState<"list" | "detail">(() => (useCockpitStore.getState().detailAsked ? "detail" : "list"));
+  const detailAsked = useCockpitStore((s) => s.detailAsked);
   const [needsYou, setNeedsYou] = useState<NeedsYouAnchor | null>(null);
   const now = useCockpitNow();
   const scopes = useCockpitScopes();
@@ -104,6 +107,12 @@ export function CockpitNow() {
     if (!rect) return;
     setNeedsYou(band === "mid" ? { x: rect.right + 4, y: rect.top, group } : { x: rect.left, y: rect.bottom + 4, group });
   };
+  useEffect(() => {
+    if (!detailAsked) return;
+    useCockpitStore.setState({ detailAsked: false });
+    setPane("detail");
+    setDetailFocused(true);
+  }, [detailAsked]);
   const openDetail = () => setPane("detail");
   const backToList = () => {
     setPane("list");

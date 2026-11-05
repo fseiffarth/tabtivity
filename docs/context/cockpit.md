@@ -90,7 +90,9 @@ Escape on it returns), Tonight and Usage stack, the title bar drops its label an
 folds the box filter into a ▾ icon, and Root swaps its icon rail for the same
 "Needs you N" chip in its sub-bar (or, in a split Root with no sub-bar, in the title
 bar's cluster), opening the rail as the same popover (`NeedsYouChip` /
-`NeedsYouPopover`; a picked row goes to its tab). The band is written
+`NeedsYouPopover`; a picked row goes to its tab). Tonight's "Show" on an
+item in a narrow window switches to Now and opens that agent's detail (back returns to
+the list): `cockpit.detailAsked`, a one-shot request Now takes when it mounts. The band is written
 on the frame (`data-band`) for the CSS and provided by context for the views that
 swap what they mount, so a column that is not shown mounts nothing (a hidden detail
 attaches no terminal). Unsent composer text survives that unmount: the Reader keeps
