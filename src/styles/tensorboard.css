@@ -243,11 +243,12 @@
 
 .tb-tick {
   fill: var(--text-muted);
-  font-size: 10px;
+  /* In the chart's own units (the SVG scales with its box), so a token, not px. */
+  font-size: var(--text-xs);
 }
 
 .tb-chart-big .tb-tick {
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .tb-line {

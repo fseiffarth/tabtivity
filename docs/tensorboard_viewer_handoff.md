@@ -90,7 +90,33 @@ Frontend
 
 ## Gate results
 
-(filled in below at the end of the run)
+Run on a heavily loaded machine (load average 60-100 from other sessions), so
+`scripts/gates.sh`'s `vitest` step timed out workers in two runs; each failed
+file passed when re-run alone and the final full run was clean except for one
+real finding (below, fixed).
+
+- `scripts/brand-check.sh`, `git diff --check`: pass.
+- `npm run lint`: 0 errors, no warnings in the touched files (the repo's other
+  advisory warnings are unchanged).
+- `npm run build` (tsc + desktop, mobile, web bundles): pass.
+- Full `npx vitest run`: 1083 files / 11,133 tests passed. The one failure was
+  `theme/TypeScale` (my `px` font sizes in `tensorboard.css`); fixed to tokens
+  and re-run with the theme folder and the viewer tests: 196 tests pass.
+  New tests: `tensorboard.test.ts` (37), `TensorBoardView.test.tsx` (8),
+  3 detection tests in `InternalViewer.test.ts`.
+- `cargo clippy -p tabtivity -p app-serverd --all-targets -- -D warnings`,
+  `cargo clippy -p tabtivity --no-default-features --lib -- -D warnings`,
+  `cargo clippy -p app-serverd --all-targets -- -D warnings`: pass.
+- `cargo test -p tabtivity -p app-serverd`: 5142 + 143 + 38 + 1 passed, 0 failed
+  (33 of the lib tests are the new `tfevents` ones).
+- `cargo test -p tabtivity --no-default-features --lib --test server_secrets`
+  (the daemon build): 4972 + 1 passed, 0 failed.
+- `UPDATE_COMMAND_CLASSES=1 ... the_generated_command_classes_ts_is_current`
+  regenerated `commandClasses.ts` (two `core` rows).
+- Not run: `cargo test --workspace` as a separate invocation (src-core and
+  src-gateway are untouched), `scripts/privacy-check.sh` beyond the pre-commit
+  hook, `ci-local.sh` / cross-OS checks. Rust tests use `Path::join` and
+  `tempfile`; none hardcode `a/b` paths.
 
 ## Flagged for user
 
