@@ -1803,6 +1803,7 @@ pub fn run() {
             commands::voice::voice_status,
             commands::voice::voice_gpu_retry,
             commands::voice::voice_model_install_script,
+            commands::voice::voice_natural_install_script,
             commands::voice::voice_listen_start,
             commands::voice::voice_listen_pause,
             commands::voice::voice_listen_stop,

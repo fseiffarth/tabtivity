@@ -777,6 +777,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["voice_listen_start", "client"],
   ["voice_listen_stop", "client"],
   ["voice_model_install_script", "client"],
+  ["voice_natural_install_script", "client"],
   ["voice_speak", "client"],
   ["voice_speak_stop", "client"],
   ["voice_status", "client"],

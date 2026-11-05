@@ -50,6 +50,7 @@ const status: VoiceStatus = {
   cpu: true,
   models: [{ id: "small", kind: "whisper", installed: true, sizeBytes: 190_000_000 }],
   defaultModel: "small",
+  natural: { offered: false, voices: [] },
   gpuBuilt: false,
   gpuCrashed: false,
   device: null,

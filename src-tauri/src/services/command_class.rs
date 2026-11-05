@@ -1026,6 +1026,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("voice_listen_start", Client),
     ("voice_listen_stop", Client),
     ("voice_model_install_script", Client),
+    ("voice_natural_install_script", Client),
     ("voice_speak", Client),
     ("voice_speak_stop", Client),
     ("voice_status", Client),
