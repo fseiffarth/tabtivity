@@ -734,6 +734,10 @@ pub(crate) fn entry_is_vm(entry: &ProjectEntry) -> bool {
 /// exist. `src` is only removed after the whole copy succeeded, so a failed
 /// fallback leaves the source intact and the move retryable.
 pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
+    move_tree_with(src, dst, CopyLimits::DEFAULT)
+}
+
+fn move_tree_with(src: &Path, dst: &Path, limits: CopyLimits) -> Result<(), String> {
     if !src.exists() {
         return Ok(());
     }
@@ -745,7 +749,7 @@ pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
         Err(e) if crate::paths::is_cross_device(&e) || dst.exists() => {}
         Err(e) => return Err(format!("could not move {}: {e}", src.display())),
     }
-    copy_tree_core(src, dst, true)?;
+    copy_tree_core_with(src, dst, true, limits)?;
     fs::remove_dir_all(src).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -765,10 +769,25 @@ fn move_fresh_tree(
     what: &str,
     rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<(), String> {
+    move_fresh_tree_with(src, dst, what, rename, CopyLimits::DEFAULT)
+}
+
+fn move_fresh_tree_with(
+    src: &Path,
+    dst: &Path,
+    what: &str,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    limits: CopyLimits,
+) -> Result<(), String> {
     match rename(src, dst) {
         Ok(()) => Ok(()),
         Err(e) if crate::paths::is_cross_device(&e) => {
-            copy_tree_core(src, dst, true)?;
+            // `dst` was free, so what is there after a failed copy (a bound
+            // hit, a read error) is our half-made tree; the source stays.
+            if let Err(error) = copy_tree_core_with(src, dst, true, limits) {
+                let _ = fs::remove_dir_all(dst);
+                return Err(error);
+            }
             fs::remove_dir_all(src).map_err(|e| e.to_string())
         }
         Err(e) => Err(format!("could not move {what}: {e}")),
@@ -790,10 +809,80 @@ fn move_fresh_tree(
 /// case — errored out a cross-device `archive_project` halfway through the
 /// move, and a link to a large tree silently duplicated it. A dangling link is
 /// therefore fine here: the link itself is copied, pointing at the same target.
+///
+/// Gap 83: the tree is one an agent may have written to, so the walk takes
+/// each entry's type from the directory entry (an `lstat`, never a followed
+/// link) and copies only regular files, read from a handle opened
+/// `O_NOFOLLOW | O_NONBLOCK` and checked regular on that handle
+/// ([`home_io::open_regular`]) — a FIFO an agent planted blocks nothing, and
+/// pipes, sockets and devices are skipped (they carry no data, so a move that
+/// skipped one still removes its source). Entries, bytes and depth are
+/// bounded like [`tree_copy`]'s; a bound hit fails the copy, and every caller
+/// removes the source only after a copy that returned `Ok`.
 fn copy_tree_core(src: &Path, dst: &Path, keep_git: bool) -> Result<(), String> {
+    copy_tree_core_with(src, dst, keep_git, CopyLimits::DEFAULT)
+}
+
+/// What one [`copy_tree_core`] walk may cover.
+#[derive(Debug, Clone, Copy)]
+struct CopyLimits {
+    entries: usize,
+    bytes: u64,
+    depth: usize,
+}
+
+impl CopyLimits {
+    const DEFAULT: CopyLimits = CopyLimits {
+        entries: crate::services::tree_copy::MAX_ENTRIES,
+        bytes: crate::services::tree_copy::MAX_BYTES,
+        depth: 128,
+    };
+}
+
+/// The running totals of one walk.
+#[derive(Default)]
+struct CopyTally {
+    entries: usize,
+    bytes: u64,
+    skipped: usize,
+}
+
+fn copy_tree_core_with(
+    src: &Path,
+    dst: &Path,
+    keep_git: bool,
+    limits: CopyLimits,
+) -> Result<(), String> {
+    let mut tally = CopyTally::default();
+    copy_dir_core(src, dst, keep_git, limits, &mut tally, 0)?;
+    if tally.skipped > 0 {
+        eprintln!(
+            "copy_tree_core: left {} special file(s) (pipes, sockets, devices) out of {}",
+            tally.skipped,
+            src.display()
+        );
+    }
+    Ok(())
+}
+
+fn copy_dir_core(
+    src: &Path,
+    dst: &Path,
+    keep_git: bool,
+    limits: CopyLimits,
+    tally: &mut CopyTally,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > limits.depth {
+        return Err("too large to copy: the folders are nested too deeply".to_string());
+    }
     fs::create_dir_all(dst).map_err(|e| e.to_string())?;
     for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
+        tally.entries += 1;
+        if tally.entries > limits.entries {
+            return Err("too large to copy: the folder holds too many entries".to_string());
+        }
         let file_type = entry.file_type().map_err(|e| e.to_string())?;
         if !keep_git && entry.file_name() == ".git" {
             continue;
@@ -806,10 +895,42 @@ fn copy_tree_core(src: &Path, dst: &Path, keep_git: bool) -> Result<(), String> 
             if !keep_git && fs::symlink_metadata(from.join(".git")).is_ok() {
                 continue;
             }
-            copy_tree_core(&from, &to, keep_git)?;
+            copy_dir_core(&from, &to, keep_git, limits, tally, depth + 1)?;
+        } else if file_type.is_file() {
+            copy_file_core(&from, &to, limits, tally)?;
         } else {
-            fs::copy(&from, &to).map_err(|e| e.to_string())?;
+            tally.skipped += 1;
         }
+    }
+    Ok(())
+}
+
+/// One regular file, through a no-follow, non-blocking handle that is checked
+/// regular once open. A file that stopped being regular (or vanished) between
+/// the directory read and the open is skipped, like a special file. The
+/// destination may be left by an interrupted earlier pass (a resumed archive):
+/// a link planted there is replaced, never written through.
+fn copy_file_core(from: &Path, to: &Path, limits: CopyLimits, tally: &mut CopyTally) -> Result<(), String> {
+    use std::io::Read;
+    let Some(input) = crate::services::home_io::open_regular(from) else {
+        tally.skipped += 1;
+        return Ok(());
+    };
+    if fs::symlink_metadata(to).is_ok_and(|m| m.file_type().is_symlink()) {
+        fs::remove_file(to).map_err(|e| e.to_string())?;
+    }
+    let permissions = input.metadata().ok().map(|m| m.permissions());
+    let mut out = fs::File::create(to).map_err(|e| e.to_string())?;
+    let room = limits.bytes.saturating_sub(tally.bytes);
+    // One byte past the room tells "exactly full" from "over".
+    let copied = std::io::copy(&mut input.take(room.saturating_add(1)), &mut out)
+        .map_err(|e| e.to_string())?;
+    if copied > room {
+        return Err("too large to copy: the copy is larger than the limit".to_string());
+    }
+    tally.bytes += copied;
+    if let Some(permissions) = permissions {
+        let _ = out.set_permissions(permissions);
     }
     Ok(())
 }

@@ -308,6 +308,99 @@ fn symlinks_are_preserved_and_a_dangling_one_is_tolerated() {
     copy_tree_core(&src, &dst, true).unwrap();
 }
 
+/// Gap 83: a FIFO an agent planted in the tree blocks nothing. The copy
+/// skipped it with `fs::copy` (which opens it for reading and waits for a
+/// writer, forever); now only regular files are read, through a non-blocking
+/// handle, and a move that skipped a special still removes its source.
+#[cfg(unix)]
+#[test]
+fn a_planted_fifo_does_not_hang_a_copy_or_a_move() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(src.join("sub")).unwrap();
+    std::fs::write(src.join("a.txt"), b"a").unwrap();
+    crate::services::home_io::mkfifo(&src.join("sub").join("pipe"));
+    crate::services::home_io::mkfifo(&src.join("top-pipe"));
+
+    let (s, d) = (src.clone(), tmp.path().join("copy"));
+    let dd = d.clone();
+    crate::services::home_io::within_deadline(move || copy_tree_core(&s, &dd, true)).unwrap();
+    assert_eq!(std::fs::read(d.join("a.txt")).unwrap(), b"a");
+    assert!(!d.join("sub").join("pipe").exists() && !d.join("top-pipe").exists(), "specials are left out");
+
+    // Resumed into a non-empty destination (rename cannot take it): a copy,
+    // then the source goes.
+    let moved = tmp.path().join("moved");
+    std::fs::create_dir_all(&moved).unwrap();
+    std::fs::write(moved.join("stale.txt"), b"s").unwrap();
+    let (s, m) = (src.clone(), moved.clone());
+    crate::services::home_io::within_deadline(move || move_tree(&s, &m)).unwrap();
+    assert!(!src.exists(), "a skipped special carries no data, so the source still goes");
+    assert_eq!(std::fs::read(moved.join("a.txt")).unwrap(), b"a");
+}
+
+/// Gap 83: a link planted at a destination file name is replaced, not written
+/// through, when a resumed pass copies a regular file over it.
+#[cfg(unix)]
+#[test]
+fn a_link_in_the_partial_destination_is_not_written_through() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.txt"), b"new").unwrap();
+    let victim = tmp.path().join("victim.txt");
+    std::fs::write(&victim, b"keep").unwrap();
+    let dst = tmp.path().join("dst");
+    std::fs::create_dir_all(&dst).unwrap();
+    std::os::unix::fs::symlink(&victim, dst.join("a.txt")).unwrap();
+
+    copy_tree_core(&src, &dst, true).unwrap();
+    assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"new");
+}
+
+/// Gap 83: entries, bytes and depth are bounded; a bound hit fails the copy
+/// and neither move reaches `remove_dir_all(src)`.
+#[test]
+fn a_copy_past_its_bounds_fails_and_the_source_stays() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    let deep = src.join("d1").join("d2").join("d3");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(src.join("a.txt"), b"12345").unwrap();
+    std::fs::write(src.join("b.txt"), b"12345").unwrap();
+    std::fs::write(deep.join("c.txt"), b"x").unwrap();
+    let roomy = CopyLimits { entries: 100, bytes: 1000, depth: 10 };
+    copy_tree_core_with(&src, &tmp.path().join("ok"), true, roomy).expect("inside the bounds");
+
+    for (name, limits, needle) in [
+        ("entries", CopyLimits { entries: 3, ..roomy }, "too many entries"),
+        ("bytes", CopyLimits { bytes: 8, ..roomy }, "larger than the limit"),
+        ("depth", CopyLimits { depth: 2, ..roomy }, "nested too deeply"),
+    ] {
+        let dst = tmp.path().join(format!("out-{name}"));
+        let err = copy_tree_core_with(&src, &dst, true, limits).unwrap_err();
+        assert!(err.contains(needle), "{name}: {err}");
+
+        // The resumed move (existing destination): the source is kept.
+        let partial = tmp.path().join(format!("partial-{name}"));
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::write(partial.join("stale"), b"s").unwrap();
+        let err = move_tree_with(&src, &partial, limits).unwrap_err();
+        assert!(err.contains(needle), "{name}: {err}");
+        assert!(src.join("a.txt").exists() && deep.join("c.txt").exists(), "{name}: source kept");
+
+        // The cross-device move: source kept, the half-made destination removed.
+        let fresh = tmp.path().join(format!("fresh-{name}"));
+        let exdev = |_: &std::path::Path, _: &std::path::Path| {
+            Err(std::io::Error::new(std::io::ErrorKind::CrossesDevices, "cross-device"))
+        };
+        let err = move_fresh_tree_with(&src, &fresh, "the folder", exdev, limits).unwrap_err();
+        assert!(err.contains(needle), "{name}: {err}");
+        assert!(src.join("a.txt").exists() && !fresh.exists(), "{name}: source kept, partial removed");
+    }
+}
+
 /// A worktree copied as a bare directory would be worse than useless — but a
 /// stray `.git` FILE at the top level must be dropped too, whatever the tree
 /// around it looks like.
