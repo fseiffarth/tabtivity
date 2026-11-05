@@ -5,8 +5,8 @@ import { IS_MAC } from "../lib/platform";
 import { toggleWindowFullscreen } from "../lib/window/fullscreenMode";
 import { probeSuperKeyOwnership } from "../lib/shortcuts/superKey";
 import { ROOT_SCOPE, allGroups, findGroup, useTabsStore } from "../stores/tabs";
-import { steeringInRoot, steeringTabs } from "../lib/shortcuts/steeringScope";
-import { closeTabWithConfirm } from "../lib/remote/closeRemoteTab";
+import { steeringInRoot, steeringTabs, steeringTabsActive } from "../lib/shortcuts/steeringScope";
+import { closeTabInScope, closeTabWithConfirm } from "../lib/remote/closeRemoteTab";
 import { reopenClosedAgentTab } from "../stores/agents/closedAgentTabs";
 import { useProjectsStore } from "../stores/projects";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../stores/boxes";
@@ -1177,10 +1177,19 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         (!editable || editorMayTakeChord(action, e) || terminalMayTakeChord(action, e)) &&
         chordMatches(resolveChord(action, overrides), e);
 
+      // The tab and subwindow chords below act on what the user is looking at.
+      // While the root window's Root view is in front that is **Root's** tabs
+      // and subwindows (close, step and cycle within the shown Root subwindow);
+      // on any other view of the window there is nothing of the workspace in
+      // sight, so they do nothing to the tabs behind it. Popped-out subwindows
+      // are not in Root's shown layout (`steeringTabs`) and stay untouched.
+      const windowUp = useRootOverlayStore.getState().open;
+      const inRootView = steeringInRoot();
+
       // Toggle app-internal fullscreen of the focused subwindow.
       if (is("toggleFullscreen")) {
         const focused = tabs.focusedGroupId;
-        if (focused) {
+        if (focused && !windowUp) {
           e.preventDefault();
           tabs.toggleFullscreen(focused);
         }
@@ -1239,7 +1248,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // empty by a stray chord.
       if (is("closeSubwindow")) {
         const focused = tabs.focusedGroupId;
-        if (focused && allGroups(tabs.layout).length > 1) {
+        if (focused && !windowUp && allGroups(tabs.layout).length > 1) {
           e.preventDefault();
           tabs.closeGroup(focused);
         }
@@ -1251,7 +1260,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // for the last remaining subwindow — hiding it just shows the +-placeholder.
       if (is("hideSubwindow")) {
         const focused = tabs.focusedGroupId;
-        if (focused) {
+        if (focused && !windowUp) {
           e.preventDefault();
           tabs.hideGroup(focused);
         }
@@ -1261,6 +1270,15 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // Toggle the focused subwindow's docked file viewer (same flag the ◫
       // button and the sidebar's resize-edge double-click write).
       if (is("toggleSubwindowFiles")) {
+        if (windowUp) {
+          const walked = steeringTabs();
+          const rootGroup = inRootView && walked.focusedGroupId ? findGroup(walked.layout, walked.focusedGroupId) : null;
+          if (rootGroup) {
+            e.preventDefault();
+            tabs.setGroupFilesInScope(ROOT_SCOPE, rootGroup.id, !rootGroup.filesOpen);
+          }
+          return;
+        }
         const focused = tabs.focusedGroupId;
         const group = focused ? findGroup(tabs.layout, focused) : null;
         if (focused && group) {
@@ -1272,6 +1290,14 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
 
       // Close the active tab.
       if (is("closeTab")) {
+        if (windowUp) {
+          const active = inRootView ? steeringTabsActive() : null;
+          if (active) {
+            e.preventDefault();
+            closeTabInScope(active.scope, active.tab.key);
+          }
+          return;
+        }
         if (tabs.activeKey) {
           e.preventDefault();
           closeTabWithConfirm(tabs.activeKey);
@@ -1282,7 +1308,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // Close every tab in the current project (scope). The active project's
       // debounced saveLayout effect then persists the now-empty layout.
       if (is("closeAllTabs")) {
-        if ((tabs.tabsByScope[tabs.scope] ?? []).length > 0) {
+        if (!windowUp && (tabs.tabsByScope[tabs.scope] ?? []).length > 0) {
           e.preventDefault();
           tabs.closeAllTabs();
         }
@@ -1293,9 +1319,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // Shift+Tab cycle. All three step the focused group's active tab.
       const prev = is("prevTab");
       if (prev || is("nextTab") || is("cycleTabs")) {
-        const focused = tabs.focusedGroupId;
-        const group = focused ? findGroup(tabs.layout, focused) : null;
-        if (group && group.tabKeys.length > 1) {
+        // Root view: Root's focused subwindow; another view: nothing to step.
+        const walked = windowUp ? (inRootView ? steeringTabs() : null) : { scope: tabs.scope, layout: tabs.layout, focusedGroupId: tabs.focusedGroupId };
+        const focused = walked?.focusedGroupId ?? null;
+        const group = focused && walked ? findGroup(walked.layout, focused) : null;
+        if (walked && group && group.tabKeys.length > 1) {
           e.preventDefault();
           const len = group.tabKeys.length;
           const cur = group.activeKey
@@ -1303,7 +1331,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
             : 0;
           const delta = prev ? -1 : 1;
           const next = group.tabKeys[(cur + delta + len) % len];
-          tabs.setGroupActive(group.id, next);
+          tabs.setGroupActiveInScope(walked.scope, group.id, next);
         }
         return;
       }
@@ -1315,6 +1343,18 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // committed focus (id 0), so stepping wraps in document order.
       const down = is("subwindowDown");
       if (down || is("subwindowUp")) {
+        // Root view: step Root's subwindows at once (no Shift preview, whose
+        // numbered badges belong to the workspace's frames); other views: none.
+        if (windowUp) {
+          const walked = inRootView ? steeringTabs() : null;
+          const rootIds = walked ? allGroups(walked.layout).map((g) => g.id) : [];
+          if (walked && rootIds.length >= 2) {
+            e.preventDefault();
+            const from = Math.max(0, walked.focusedGroupId ? rootIds.indexOf(walked.focusedGroupId) : 0);
+            tabs.focusGroupInScope(ROOT_SCOPE, rootIds[(from + (down ? 1 : -1) + rootIds.length) % rootIds.length]);
+          }
+          return;
+        }
         const ids = allGroups(tabs.layout).map((g) => g.id);
         const n = ids.length;
         if (n >= 2) {

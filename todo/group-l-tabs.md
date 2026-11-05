@@ -1080,7 +1080,9 @@ correctness/UX work atop the same layout model #42 detaches.*
     goes on to the projects, where 1 or ←/→ onto the root station open the Root
     view and leave the workspace on its project. N, O, 1-9 and + (and
     Ctrl+Shift+N / M, Ctrl+1-9) open the tab in Root's focused subwindow, the
-    same one the + menu would; the window stays up.
+    same one the + menu would; the window stays up. With the Root view in front
+    Ctrl+W and Ctrl+Shift+←/→ close and step Root's tabs, not the project's; on
+    the Now view they do nothing to the project's tabs.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

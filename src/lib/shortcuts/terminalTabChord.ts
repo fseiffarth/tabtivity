@@ -13,15 +13,19 @@
  *  keyboard handler — main window and popout alike — resolves it from xterm's
  *  textarea (`terminalMayTakeChord`). */
 import { actionChords, chordMatches, resolveChord, type ShortcutAction, type ShortcutMap } from "./shortcuts";
+import { steeringInRoot } from "./steeringScope";
 
 const TERMINAL_TAB_ACTIONS: readonly ShortcutAction[] = ["prevTab", "nextTab"];
 
-/** xterm's helper textarea in a workspace pane. The root console's terminals
- *  are excluded: its overlay sits over the workspace, so stepping the focused
- *  pane's tabs from there would switch tabs the user cannot see. */
+/** xterm's helper textarea in a workspace pane. The root window's terminals
+ *  are excluded: the window sits over the workspace, so stepping the focused
+ *  pane's tabs from there would switch tabs the user cannot see. Except on the
+ *  Root view, where the same chords step **Root's** tabs (`useKeyboard`). */
 export function isPaneTerminalTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
-  return !!el?.classList?.contains("xterm-helper-textarea") && !el.closest(".root-overlay");
+  if (!el?.classList?.contains("xterm-helper-textarea")) return false;
+  if (!el.closest(".root-overlay")) return true;
+  return steeringInRoot() && !!el.closest(".root-console-backdrop");
 }
 
 /** Whether the window's handler may resolve `action` for a keydown typed into

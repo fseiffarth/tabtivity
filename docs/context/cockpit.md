@@ -121,3 +121,10 @@ goes on to the projects. It uses the ordinary steering keys, so rebinding them
 rebinds it. The new-tab keys (steering N / O / 1-9 / + and the Ctrl+Shift+N / M,
 Ctrl+1-9 chords) open the tab in Root's focused subwindow while the Root view is
 up (`RootNewTabKeys`, the same tab the + menu's row builds; the window stays).
+
+The non-steering chords follow the same rule (`useKeyboard`, `windowUp` /
+`inRootView`): on the Root view Ctrl+W, the tab stepping chords (prev / next /
+cycle, also from Root's own terminal, `terminalTabChord`), the subwindow stepping
+chords and the files toggle act on Root's focused subwindow; Close subwindow, Hide
+subwindow, Close all tabs and app fullscreen do nothing; on the other views
+(Now ...) every one of these does nothing to the workspace behind the window.
