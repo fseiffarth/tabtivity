@@ -25,7 +25,10 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 ## Gates
 
 Before calling work done, run `scripts/gates.sh`: only the gates below that
-your change (diff vs HEAD + untracked) touches; `--all` runs every one. All
+your change (diff vs HEAD + untracked) touches; `--all` runs every one. Runs
+are one at a time across sessions: a queued run waits, then reuses the
+last result if the tree is unchanged; run it in the background so a
+tool timeout can't kill it while it waits. All
 are CI gates, at zero warnings except `npm run lint`:
 
 ```
