@@ -59,7 +59,7 @@ Plan: [`docs/headless_mcp_plan.md`](headless_mcp_plan.md). TODO #2339
 ## Done — phase 1b (the markup lane in the Mobile host)
 
 Plan: "Phase 1b" in [`docs/headless_mcp_plan.md`](headless_mcp_plan.md).
-Never run live. Commits: see git log (tr2339/markup).
+Never run live. Commits: `335a9104` (the change), plus a docs-only follow-up recording the gate results.
 
 - **The bug.** A tab the Mobile host spawned never got `markup_ask` /
   `markup_withdraw` / `markup_done`: the host routed no `/mcp/markup` and
@@ -121,7 +121,19 @@ Never run live. Commits: see git log (tr2339/markup).
     three minutes (the host's sweep needs three missed looks).
   - `backend:stale`: the host must restart to serve the lane; a tab spawned
     before keeps lacking it (its MCP config is fixed at start).
-- **Gate results.** @@GATES@@
+- **Gate results.** All green at zero warnings, in the worktree on `tr2339/markup`
+  (`scripts/gates.sh`, change selection): brand-check, `git diff --check`,
+  `npm run lint` (no new warnings), `cargo clippy -p tabtivity -p app-serverd
+  --all-targets -D warnings`, `cargo clippy -p tabtivity --no-default-features
+  --lib`, `cargo clippy -p app-serverd`, `npm run build`, vitest (the
+  changed-related set: 32 files, 249 tests), `cargo test -p tabtivity -p
+  app-serverd` (lib 5160 passed, 11 ignored; 143 + 39 + 1 in the other
+  suites). `cargo test -p tabtivity --no-default-features --lib --test
+  server_secrets` (the daemon's build): 4990 + 1 passed on the rerun; its first
+  run in the gate script failed one timing test,
+  `deadline::tests::a_stalled_call_times_out_and_enough_of_them_turn_new_ones_away`,
+  while another cargo build loaded the machine; it passes alone and on the
+  rerun (unrelated to this change).
 
 ### Flagged for user
 
