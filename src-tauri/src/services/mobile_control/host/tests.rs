@@ -850,71 +850,59 @@ async fn a_phone_creates_a_project_by_name_only() {
     assert_eq!(json(&body)["error"], "invalid_name");
 }
 
+/// The phone's model sheet acts on the live tab only (threat model gap 81):
+/// saved launch defaults are a host-wide write that reaches every later launch
+/// of the CLI, so they are set on the desktop alone. The routes are gone, and
+/// an older phone calling them is refused without anything written.
+#[tokio::test]
+async fn the_phone_has_no_route_to_the_saved_launch_defaults() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(63)).await.0;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let settings_file = host.state.config.state_dir.join("settings.json");
+    let before = std::fs::read(&settings_file).ok();
+    let uri = format!("/api/v1/tabs/{tab_id}/launch-defaults");
+
+    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "opus", "effort": "high" })))).await;
+    assert!(matches!(status, StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED), "answered {status}: {body}");
+    let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+    assert!(!body.contains("saved"), "{body}");
+    assert_eq!(std::fs::read(&settings_file).ok(), before, "nothing was written");
+    if let Some(bytes) = before {
+        let stored: Value = serde_json::from_slice(&bytes).expect("json");
+        assert!(stored.get("agent_launch_defaults").is_none(), "{stored}");
+    }
+}
+
+/// The phone's chat shows the running shells like the desktop's, but the
+/// command line never crosses the browser API (threat model gap 79): what the
+/// agent said the shell does and whether it runs in the background do.
+#[tokio::test]
+async fn a_phone_transcript_keeps_the_running_shells_without_their_command_lines() {
+    use crate::services::agent_transcript::{AgentTranscript, RunningShell};
+    let host = Fixture::with_project();
+    let transcript = AgentTranscript {
+        shells: vec![
+            RunningShell { command: "cat ~/.ssh/config".into(), description: Some("Check the config".into()), cut: true, ..Default::default() },
+            RunningShell { command: "npm run dev".into(), background: true, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone("d1".into()), "t1", transcript).await;
+    assert_eq!(wire["shells"][0]["description"], "Check the config");
+    assert_eq!(wire["shells"][1]["background"], true);
+    assert!(!wire.to_string().contains("ssh"), "{wire}");
+    assert!(!wire.to_string().contains("npm run dev"), "{wire}");
+    assert!(wire["shells"][0].get("cut").is_none());
+}
+
 /// H3 (headless owner plan §3): with no window open, the phone's tab
 /// edits — rename, colour, close, reopen — are the owner's: they land in
 /// the session file through the workspace service, answered as stored
 /// and flagged; a close ends the tab's session and remembers an agent
 /// tab; a reopen brings it back as a new tab started detached on its
 /// resume args. Nothing raw crosses.
-/// The model sheet's launch defaults: read and saved for the tab's CLI only,
-/// refused as the desktop form refuses them, never by a stranger.
-#[tokio::test]
-async fn launch_defaults_are_the_tabs_cli_and_keep_every_other_setting() {
-    let host = Fixture::with_project();
-    let cookie = host.pair_device(&signing_key(63)).await.0;
-    let (_, tab_id) = project_and_tab(&host, &cookie).await;
-    let settings_file = host.state.config.state_dir.join("settings.json");
-    let mut seeded: Value = std::fs::read(&settings_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_else(|| json!({}));
-    seeded["a_later_key"] = json!(7);
-    seeded["agent_launch_defaults"] = json!({ "codex": { "model": "gpt", "effort": "" } });
-    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
-    let uri = format!("/api/v1/tabs/{tab_id}/launch-defaults");
-
-    let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(status, StatusCode::OK, "answered: {body}");
-    assert_eq!(json(&body)["saved"], json!({ "model": "", "effort": "" }));
-    assert_eq!(json(&body)["cli"], "claude");
-    assert!(json(&body)["models"].is_null(), "{body}");
-    seeded["agent_models"] = json!({ "claude": ["opus", "haiku"], "codex": ["gpt"] });
-    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
-    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(json(&body)["models"], json!(["opus", "haiku"]));
-    assert_eq!(json(&body)["capabilities"]["model"], true);
-    assert!(json(&body)["capabilities"]["efforts"].as_array().expect("efforts").contains(&json!("high")));
-
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": " opus ", "effort": "high" })))).await;
-    assert_eq!(status, StatusCode::OK, "answered: {body}");
-    let stored: Value = serde_json::from_slice(&std::fs::read(&settings_file).expect("read")).expect("json");
-    assert_eq!(stored["agent_launch_defaults"]["claude"], json!({ "model": "opus", "effort": "high" }));
-    assert_eq!(stored["agent_launch_defaults"]["codex"]["model"], "gpt");
-    assert_eq!(stored["a_later_key"], 7);
-    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(json(&body)["saved"], json!({ "model": "opus", "effort": "high" }));
-
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "", "effort": "ultra" })))).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(json(&body)["error"], "invalid_effort");
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "--x", "cmd": "codex" })))).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(json(&body)["error"], "invalid_request");
-    let (status, _, _) = host.send(request_as("PUT", "/api/v1/tabs/nope/launch-defaults", &cookie, Some(json!({})))).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-
-    let (status, _, _) = host.send(request_as("PUT", &uri, &cookie, Some(json!({})))).await;
-    assert_eq!(status, StatusCode::OK);
-    let stored: Value = serde_json::from_slice(&std::fs::read(&settings_file).expect("read")).expect("json");
-    assert!(stored["agent_launch_defaults"].get("claude").is_none(), "{stored}");
-
-    let stranger = Request::builder()
-        .method("PUT")
-        .uri(&uri)
-        .header(header::ORIGIN, ORIGIN)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(r#"{"model":"opus"}"#))
-        .expect("request");
-    assert_eq!(host.send(stranger).await.0, StatusCode::UNAUTHORIZED);
-}
-
 #[tokio::test]
 async fn tab_edits_close_and_reopen_are_the_owners_with_no_window() {
     let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));

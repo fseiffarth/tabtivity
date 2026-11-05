@@ -4870,18 +4870,31 @@ async fn tab_named_files(
     (StatusCode::OK, Json(json!({ "files": found })))
 }
 
+/// The running shells keep what the agent said they do and whether they run
+/// in the background; the command line, and that it was cut, stay on the
+/// desktop. A command line carries absolute host paths and whatever the agent
+/// put inline (a token in a header, a password), and `AGENTS.md` says commands
+/// never cross the browser API (threat model gap 79).
+fn empty_shell_commands(transcript: &mut crate::services::agent_transcript::AgentTranscript) {
+    for shell in &mut transcript.shells {
+        shell.command.clear();
+        shell.cut = false;
+    }
+}
+
 /// A transcript as the phone may see it: the folders the agent and its
 /// subagents work in are paths, which do not cross the browser API. A
 /// subagent's folder in a linked worktree of the tab's project crosses as that
 /// worktree's name and branch instead (`worktree` on its `agent` entry), as the
-/// tab cards name it. The running shells cross whole, command line included
-/// (cut at the desktop's bound, as its Reader shows them).
+/// tab cards name it. The running shells cross without their command lines
+/// ([`empty_shell_commands`]).
 async fn phone_transcript(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
+    empty_shell_commands(&mut transcript);
     transcript.context_card = None;
     transcript.cwd = None;
     transcript.running_cwds.clear();
@@ -5766,94 +5779,6 @@ async fn remember_model_rows(
         Ok(()) => (StatusCode::OK, Json(json!({ "kept": true }))),
         Err(why) => {
             eprintln!("mobile: keeping a model list failed: {why}");
-            api_error(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
-        }
-    }
-}
-
-/// The CLI whose startup defaults a phone's model sheet on `tab_id` edits
-/// (`services::agent_defaults`): an agent tab's — not a local-model tab's (its
-/// model is fixed), a Tabby chat's (its launch is pinned) or a host tab's
-/// (its command names nothing on this machine).
-fn launch_defaults_cli(
-    state: &HostState,
-    phone: &Phone,
-    tab_id: &str,
-) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    let catalog = catalog(state, phone)?;
-    let Some((_, tab)) = catalog.tab(tab_id) else {
-        return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
-    };
-    if tab.public.kind != "agent" {
-        return Err(api_error(StatusCode::BAD_REQUEST, "agent_tab_required"));
-    }
-    if tab.local_model || tab.place.on_host() || tab.public.assistant_launch.is_some() {
-        return Err(api_error(StatusCode::CONFLICT, "no_launch_defaults"));
-    }
-    Ok(crate::services::agent_defaults::stem(&tab.cmd).to_string())
-}
-
-/// `GET /api/v1/tabs/{id}/launch-defaults` — `{ saved: { model, effort },
-/// capabilities, cli, models }`: the model and effort new sessions of the
-/// tab's CLI start on (Manage CLIs → Default model and effort), what that CLI
-/// can take, its command and the user's own model-name list (`null` when none).
-async fn launch_defaults(
-    State(state): State<HostState>,
-    headers: HeaderMap,
-    Path(tab_id): Path<String>,
-) -> impl IntoResponse {
-    let phone = match authenticate(&headers, &state) {
-        Ok(phone) => phone,
-        Err(error) => return error,
-    };
-    let cli = match launch_defaults_cli(&state, &phone, &tab_id) {
-        Ok(cli) => cli,
-        Err(error) => return error,
-    };
-    let settings = crate::storage::read_json::<crate::schema::Settings>(&state.config.state_dir.join("settings.json"))
-        .unwrap_or_default();
-    (
-        StatusCode::OK,
-        Json(json!({
-            "saved": crate::services::agent_defaults::saved_in(&settings, &cli),
-            "capabilities": crate::services::agent_defaults::capabilities(&cli),
-            "cli": cli,
-            // The user's own list from Settings → Agents, when they set one
-            // for this CLI; the built-in names live in the phone's bundle.
-            "models": settings.agent_models.as_ref().and_then(|all| all.get(&cli.to_lowercase())),
-        })),
-    )
-}
-
-/// `PUT /api/v1/tabs/{id}/launch-defaults` with `{ model, effort }` — keep
-/// them as the tab's CLI's startup defaults (both blank: back to the CLI's
-/// own). This session keeps its model; only new ones start on these. `400`
-/// with `invalid_model` / `invalid_effort` / `effort_needs_model` for what the
-/// desktop form refuses too.
-async fn save_launch_defaults(
-    State(state): State<HostState>,
-    headers: HeaderMap,
-    Path(tab_id): Path<String>,
-    body: Bytes,
-) -> impl IntoResponse {
-    let phone = match mutation_guard(&headers, &state) {
-        Ok(phone) => phone,
-        Err(error) => return error,
-    };
-    let Ok(saved) = serde_json::from_slice::<crate::services::agent_defaults::Saved>(&body) else {
-        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
-    };
-    let cli = match launch_defaults_cli(&state, &phone, &tab_id) {
-        Ok(cli) => cli,
-        Err(error) => return error,
-    };
-    if let Err(code) = crate::services::agent_defaults::check(&cli, &saved) {
-        return api_error(StatusCode::BAD_REQUEST, code);
-    }
-    match crate::services::agent_defaults::save_in(&state.config.state_dir.join("settings.json"), &cli, &saved) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "saved": true }))),
-        Err(why) => {
-            eprintln!("mobile: saving launch defaults failed: {why}");
             api_error(StatusCode::INTERNAL_SERVER_ERROR, "write_failed")
         }
     }
@@ -8335,7 +8260,6 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/locations", get(tab_locations))
         .route("/api/v1/tabs/{tab_id}/location", post(move_tab_location))
         .route("/api/v1/tabs/{tab_id}/assistant-models", get(assistant_models))
-        .route("/api/v1/tabs/{tab_id}/launch-defaults", get(launch_defaults).put(save_launch_defaults))
         .route("/api/v1/tabs/{tab_id}/model-rows", get(model_rows).post(remember_model_rows))
         .route("/api/v1/tabs/{tab_id}/assistant-model", post(switch_assistant_model))
         .route("/api/v1/tabs/{tab_id}/sign-in", post(sign_in_tab))

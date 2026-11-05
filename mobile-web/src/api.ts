@@ -852,29 +852,6 @@ export function rememberModelRows(tabId: string, rows: ModelRows): Promise<{ kep
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`, { method: "POST", body: JSON.stringify(rows) });
 }
 
-/** One CLI's startup defaults and what it can take (`services::agent_defaults`). */
-export interface LaunchDefaults {
-  saved: { model: string; effort: string };
-  capabilities: { model: boolean; efforts: string[]; effort_requires_model: boolean };
-  /** The tab's CLI command and the user's own model names for it (Settings →
-   * Agents); absent from a host build older than the dropdown. */
-  cli?: string;
-  models?: string[] | null;
-}
-
-/** `GET /api/v1/tabs/{id}/launch-defaults` — the model and effort new sessions
- * of the tab's CLI start on (Manage CLIs → Default model and effort). `409
- * no_launch_defaults` for a local-model, Tabby or host tab. */
-export function getLaunchDefaults(tabId: string): Promise<LaunchDefaults> {
-  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/launch-defaults`);
-}
-
-/** `PUT /api/v1/tabs/{id}/launch-defaults` — keep them for the tab's CLI;
- * both blank hands the choice back to the CLI. This session keeps its own. */
-export function saveLaunchDefaults(tabId: string, saved: LaunchDefaults["saved"]): Promise<{ saved: boolean }> {
-  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/launch-defaults`, { method: "PUT", body: JSON.stringify(saved) });
-}
-
 /** `POST /api/v1/tabs/{id}/assistant-model` — switch the chat to that model:
  * the desktop restarts its CLI on it and resumes the conversation (so the wait
  * is `WORKTREE_MOVE_TIMEOUT`'s). `409 tab_busy` while the chat is at work. */
@@ -1122,7 +1099,8 @@ export interface SessionTranscript {
    * Claude Code's own subagent row shows — read off a subagent's own file. */
   tokens?: number;
   /** The shells the agent is running now — Claude's `Bash` calls still
-   * without a result, and background ones still running. */
+   * without a result, and background ones still running. The phone's API
+   * empties each `command` (command lines never cross it). */
   shells?: RunningShell[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
@@ -1132,12 +1110,14 @@ export interface SessionTranscript {
   watched?: boolean;
 }
 
-/** A shell command the agent started and is waiting on. */
+/** A shell command the agent started and is waiting on. The phone's API
+ * empties `command` and drops `cut` (command lines never cross it); only the
+ * desktop's Reader sees them. */
 export interface RunningShell {
   command: string;
   description?: string;
   at?: string;
-  /** The command was cut at the desktop's bound. */
+  /** The command was cut at the desktop's bound (desktop Reader only). */
   cut?: boolean;
   /** Sent to the background: it can run on past the turn. */
   background?: boolean;
