@@ -399,7 +399,7 @@ export const enSource = {
   "mobile.hints.chatSwipe": "Swipe right over the chat to go back to the tab list. Swipe left to open the project's ☰ menu, where the project has one.",
   "mobile.hints.markup": "Open a PDF the agent sent and tap Mark up (or touch it with a pen) to write on its pages. Submit sends your marks to the agent, which works them in.",
   "mobile.hints.statusLamp": "The row over the message box is the session's status line. Tap its lamp to see the status and usage.",
-  "mobile.hints.statusModel": "Tap the model in the status line to switch the model and, where the CLI offers it, its effort.",
+  "mobile.hints.statusModel": "Tap the model to switch it. If the CLI supports it, you can also set the effort there.",
   "mobile.hints.statusMode": "Tap the mode in the status line to switch the permission mode.",
   "mobile.hints.statusWorktree": "Tap ⎇ in the status line to move the agent to another worktree.",
   "mobile.hints.todoDone": "Tap the box on a card to mark it done.",

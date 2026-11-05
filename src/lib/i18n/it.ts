@@ -345,7 +345,7 @@ export const dict: Dict = {
   "mobile.hints.chatSwipe": "Scorri verso destra sulla chat per tornare all'elenco delle schede. Scorri verso sinistra per aprire il menu ☰ del progetto, se ne ha uno.",
   "mobile.hints.markup": "Apri un PDF inviato dall'agente e tocca Annota (o toccalo con una penna) per scrivere sulle pagine. Invia manda i tuoi segni all'agente, che li applica.",
   "mobile.hints.statusLamp": "La riga sopra il campo del messaggio è la riga di stato della sessione. Tocca la sua spia per stato e consumo.",
-  "mobile.hints.statusModel": "Tocca il modello nella riga di stato per cambiare modello e, dove la CLI lo offre, il suo effort.",
+  "mobile.hints.statusModel": "Tocca il modello per cambiarlo. Se la CLI lo supporta, lì imposti anche l'effort.",
   "mobile.hints.statusMode": "Tocca la modalità nella riga di stato per cambiare la modalità dei permessi.",
   "mobile.hints.statusWorktree": "Tocca ⎇ nella riga di stato per spostare l'agente in un altro worktree.",
   "mobile.hints.todoDone": "Tocca la casella di una scheda per segnarla come fatta.",
