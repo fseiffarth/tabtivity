@@ -810,47 +810,43 @@ impl PgpKeyring {
                 key_id: issuers.into_iter().next(),
             };
         }
-        // Only a key in good standing can vouch for anything (gap 88). One that
-        // could have signed it but was revoked or has expired is said so, not
-        // reported as a missing key and not as a pass.
-        let candidates: Vec<_> = all
-            .iter()
-            .filter(|(_, _, standing)| *standing == Standing::Live)
-            .collect();
-        if candidates.is_empty() {
-            let revoked = all.iter().any(|(_, _, s)| *s == Standing::Revoked);
-            return VerifyOutcome::Unusable(
-                if revoked { "signer-key-revoked" } else { "signer-key-expired" }.into(),
-            );
-        }
         // When the signature says it was made. A signature with no creation
         // time cannot be placed inside any key's life, so it passes nothing.
-        let Some(made) = sig.signature.created().map(|t| t.as_secs()) else {
-            return VerifyOutcome::Bad;
-        };
+        let made = sig.signature.created().map(|t| t.as_secs());
 
-        for (key, info, _) in candidates {
+        // A key that has *expired* still vouches for what it signed before it
+        // did (the user's decision on gap 88): the signature has to fall inside
+        // the life of the key and of the subkey that made it, else it is Bad.
+        // A key, subkey or user ID its owner *revoked* vouches for nothing,
+        // whatever the signature's date: a thief of the key can backdate. New
+        // encryption and signing never use an expired key (`candidates_for`).
+        let mut revoked_hit = false;
+        for (key, info, _) in &all {
             let primary = key_window(key);
             // The primary key and every subkey: signing is normally done by a
             // *subkey*, so checking only the primary would fail every ordinary
             // modern key and report it as forged.
             if sig.verify(key, signed).is_ok() || sig.verify(&key.primary_key, signed).is_ok() {
-                if primary.holds_at(made) {
+                if primary.revoked {
+                    revoked_hit = true;
+                } else if made.is_some_and(|t| primary.holds_at(t)) {
                     return good_outcome(info);
                 }
                 continue;
             }
             for sub in &key.public_subkeys {
                 if sig.verify(sub, signed).is_ok() {
-                    // The signature has to fall inside the life of the subkey
-                    // that made it and of the key that certifies it: a key
-                    // cannot sign before it existed or after it expired.
                     let sub = subkey_window(sub.key.created_at().as_secs(), &sub.signatures);
-                    if primary.holds_at(made) && sub.holds_at(made) {
+                    if primary.revoked || sub.revoked {
+                        revoked_hit = true;
+                    } else if made.is_some_and(|t| primary.holds_at(t) && sub.holds_at(t)) {
                         return good_outcome(info);
                     }
                 }
             }
+        }
+        if revoked_hit {
+            return VerifyOutcome::Unusable("signer-key-revoked".into());
         }
         // A key that could have signed it did not. That is a *failure*, not an
         // absence, and the two must not share chrome.
@@ -1696,11 +1692,13 @@ fn key_window(key: &SignedPublicKey) -> Window {
     use pgp::packet::SignatureType;
 
     let created = key.primary_key.created_at().as_secs();
+    // A key whose every user id its owner revoked has withdrawn all its claims.
     let revoked = key
         .details
         .revocation_signatures
         .iter()
-        .any(|s| s.typ() == Some(SignatureType::KeyRevocation));
+        .any(|s| s.typ() == Some(SignatureType::KeyRevocation))
+        || (!key.details.users.is_empty() && user_ids_of_details(&key.details).is_empty());
 
     let direct = latest(
         key.details
@@ -3321,12 +3319,80 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("old@example.org"), "{err}");
 
-        // A mail it signed back when it was valid reads as expired, not as a pass.
-        let signed = b"hello";
-        let sig = signature_at(&key, signed, now_secs() - 90 * DAY);
+    }
+
+    /// The user's decision on gap 88: an expired key keeps its old signatures.
+    /// The key lived from 100 to 70 days ago.
+    #[test]
+    fn an_old_signature_of_an_expired_key_still_verifies() {
+        let made = build_curve25519("Old <old@example.org>", Some(secs_ago(100))).unwrap();
+        let key = expiring_after(made, 30);
+        let (_d, mine) = keyring();
+        let info = import_public(&mine, &key);
+        mine.set_verified(&info.fingerprint, true).unwrap();
+        assert!(mine.get(&info.fingerprint).unwrap().unwrap().expired);
+
+        let sig = signature_at(&key, b"hello", now_secs() - 90 * DAY);
+        assert!(
+            matches!(
+                mine.verify_detached(b"hello", sig.as_bytes()),
+                VerifyOutcome::Good { trust: SignerTrust::Verified, .. }
+            ),
+            "{:?}",
+            mine.verify_detached(b"hello", sig.as_bytes())
+        );
+    }
+
+    #[test]
+    fn a_new_signature_of_an_expired_key_is_bad() {
+        let made = build_curve25519("Old <old@example.org>", Some(secs_ago(100))).unwrap();
+        let key = expiring_after(made, 30);
+        let (_d, mine) = keyring();
+        let info = import_public(&mine, &key);
+        mine.set_verified(&info.fingerprint, true).unwrap();
+
+        let sig = signature_at(&key, b"hello", now_secs() - 10 * DAY);
+        assert_eq!(mine.verify_detached(b"hello", sig.as_bytes()), VerifyOutcome::Bad);
+        let sig = signature_at(&key, b"hello", now_secs());
+        assert_eq!(mine.verify_detached(b"hello", sig.as_bytes()), VerifyOutcome::Bad);
+    }
+
+    /// A thief of a key can date a signature however they like, so a revoked
+    /// key's signature is Unusable even when it claims a date before the
+    /// revocation.
+    #[test]
+    fn an_old_signature_of_a_revoked_key_is_unusable() {
+        let made = build_curve25519("Leaked <leaked@example.org>", Some(secs_ago(100))).unwrap();
+        let sig = signature_at(&made, b"x", now_secs() - 50 * DAY);
+        let revoked = revoke_key(made);
+        let (_d, mine) = keyring();
+        let info = import_public(&mine, &revoked);
+        mine.set_verified(&info.fingerprint, true).unwrap();
         assert_eq!(
-            mine.verify_detached(signed, sig.as_bytes()),
-            VerifyOutcome::Unusable("signer-key-expired".into())
+            mine.verify_detached(b"x", sig.as_bytes()),
+            VerifyOutcome::Unusable("signer-key-revoked".into())
+        );
+    }
+
+    #[test]
+    fn a_key_whose_every_user_id_is_revoked_is_unusable() {
+        let key = generate_curve25519("Me <me@example.com>").unwrap();
+        let sig = signature_at(&key, b"x", now_secs() - DAY);
+        let mut revoked = key.clone();
+        let public = revoked.primary_key.public_key().clone();
+        let user = &mut revoked.details.users[0];
+        let mut config = config_with(&user.signatures[0], now_secs(), None);
+        config.typ = SignatureType::CertRevocation;
+        let rev = config
+            .sign_certification(&key.primary_key, &public, &Pin::empty(), user.id.tag(), &user.id)
+            .unwrap();
+        user.signatures.push(rev);
+        let (_d, mine) = keyring();
+        let info = import_public(&mine, &revoked);
+        assert!(mine.get(&info.fingerprint).unwrap().unwrap().revoked);
+        assert_eq!(
+            mine.verify_detached(b"x", sig.as_bytes()),
+            VerifyOutcome::Unusable("signer-key-revoked".into())
         );
     }
 
@@ -3425,7 +3491,7 @@ mod tests {
             .unwrap();
 
         let sig = signature_at(&key, b"x", now_secs());
-        assert_eq!(mine.verify_detached(b"x", sig.as_bytes()), VerifyOutcome::Bad);
+        assert_eq!(mine.verify_detached(b"x", sig.as_bytes()), VerifyOutcome::Unusable("signer-key-revoked".into()));
         assert!(mine.sign_detached("acct-1", b"x").is_err(), "no signing with a revoked subkey");
         let err = mine
             .encrypt_to("acct-1", &["rev@example.org".to_string()], b"x")

@@ -82,7 +82,7 @@ describe("mail crypto display", () => {
       "signer-key-missing",
       "signature-invalid",
       "signer-key-revoked",
-      "signer-key-expired",
+      "signature-structure",
       "format-not-supported",
       "inline-signature-not-checked",
       "decrypt-failed",

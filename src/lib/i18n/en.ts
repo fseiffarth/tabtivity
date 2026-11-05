@@ -8238,7 +8238,7 @@ export const enSource = {
   "mail.crypto.noteNoKey": "You do not have the sender's key, so nothing could be checked either way. This is not the same as a bad signature.",
   "mail.crypto.noteInvalid": "The signature does not match this message. Treat the contents as unverified.",
   "mail.crypto.noteKeyRevoked": "The key that signed this was revoked by its owner, so nothing it signed can be trusted.",
-  "mail.crypto.noteKeyExpired": "The key that signed this has expired, so the signature was not accepted. Ask the sender for their renewed key.",
+  "mail.crypto.noteSignatureStructure": "This message is not shaped like a signed message must be, so the signature could not be tied to any part of it and nothing in it is vouched for.",
   "mail.crypto.noteUnsupported": "{app} recognizes this format but cannot open it yet.",
   "mail.crypto.noteInlineUnchecked": "This is the older inline signature format. {app} shows that it is there but does not check it.",
   "mail.crypto.noteDecryptFailed": "This message could not be decrypted.",

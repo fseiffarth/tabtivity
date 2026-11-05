@@ -7878,7 +7878,7 @@ export const dict: Dict = {
   "mail.crypto.noteNoKey": "Vous n'avez pas la clé de l'expéditeur, rien n'a donc pu être vérifié. Ce n'est pas la même chose qu'une signature invalide.",
   "mail.crypto.noteInvalid": "La signature ne correspond pas à ce message. Considérez le contenu comme non vérifié.",
   "mail.crypto.noteKeyRevoked": "La clé qui a signé ceci a été révoquée par son titulaire : rien de ce qu’elle a signé n’est digne de confiance.",
-  "mail.crypto.noteKeyExpired": "La clé qui a signé ceci a expiré, la signature n’a donc pas été acceptée. Demandez à l’expéditeur sa clé renouvelée.",
+  "mail.crypto.noteSignatureStructure": "Ce message n’a pas la structure d’un message signé, la signature n’a donc pu être rattachée à aucune de ses parties et rien n’y est garanti.",
   "mail.crypto.noteUnsupported": "{app} reconnaît ce format mais ne sait pas encore l'ouvrir.",
   "mail.crypto.noteInlineUnchecked": "Il s'agit de l'ancien format de signature en ligne. {app} signale sa présence mais ne la vérifie pas.",
   "mail.crypto.noteDecryptFailed": "Ce message n'a pas pu être déchiffré.",

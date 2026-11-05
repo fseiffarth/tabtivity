@@ -1020,7 +1020,7 @@ export function mailCryptoNoteKey(note: string): TranslationKey | null {
     "signer-key-missing": "mail.crypto.noteNoKey",
     "signature-invalid": "mail.crypto.noteInvalid",
     "signer-key-revoked": "mail.crypto.noteKeyRevoked",
-    "signer-key-expired": "mail.crypto.noteKeyExpired",
+    "signature-structure": "mail.crypto.noteSignatureStructure",
     "format-not-supported": "mail.crypto.noteUnsupported",
     "inline-signature-not-checked": "mail.crypto.noteInlineUnchecked",
     "decrypt-failed": "mail.crypto.noteDecryptFailed",
