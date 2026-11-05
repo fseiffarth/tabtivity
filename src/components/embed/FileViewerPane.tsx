@@ -26,6 +26,7 @@ import { isTexDocumentRoot, resolveTexRoot } from "../../lib/viewers/tex/tex";
 import {
   TableView,
   NotebookView,
+  TensorBoardView,
   SqliteView,
   PdfView,
   DeckView,
@@ -324,6 +325,9 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
     view = <TableView path={effectivePath} onOpenExternally={openExternally} tabKey={tabKey} />;
   } else if (viewer === "notebook") {
     view = <NotebookView path={effectivePath} onOpenExternally={openExternally} tabKey={tabKey} />;
+  } else if (viewer === "tensorboard") {
+    // An event file, or a folder opened as training runs (the path says which).
+    view = <TensorBoardView path={effectivePath} onOpenExternally={openExternally} tabKey={tabKey} />;
   } else if (viewer === "diff") {
     view = <DiffView path={path} projectId={projectId} onOpenExternally={openExternally} tabKey={tabKey} />;
   } else if (viewer === "syncdiff") {

@@ -8,7 +8,7 @@ import { invokeTrusted } from "../../lib/execTrust";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { FileDropContext } from "./fileDropContext";
 import { openTabInScope, useTabScope } from "../../lib/tabs/tabScopeContext";
-import { openFileEntry } from "../../lib/files/openFileEntry";
+import { openFileEntry, openTrainingRuns } from "../../lib/files/openFileEntry";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
 import { HOST_OS } from "../../lib/platform";
 import { useSettingsStore } from "../../stores/settings";
@@ -3352,16 +3352,38 @@ export function FileTree({
             const downloadExcluded = syncTracked && isPathExcluded(syncStatus, entryRel);
             return (
               <>
-                {onOpenFolderTab && entry.is_dir && (
+                {entry.is_dir && (onOpenFolderTab || !disabledViewerSet.has("tensorboard")) && (
                   <>
-                    <button
-                      onClick={() => {
-                        setContextMenu(null);
-                        onOpenFolderTab(entryRel);
-                      }}
-                    >
-                      {t("fileTree.openInNewTab")}
-                    </button>
+                    {onOpenFolderTab && (
+                      <button
+                        onClick={() => {
+                          setContextMenu(null);
+                          onOpenFolderTab(entryRel);
+                        }}
+                      >
+                        {t("fileTree.openInNewTab")}
+                      </button>
+                    )}
+                    {/* Every folder holding TensorBoard event files below this one is a
+                        training run, drawn natively (no TensorBoard process). */}
+                    {!disabledViewerSet.has("tensorboard") && (
+                      <button
+                        className="untested"
+                        onClick={() => {
+                          setContextMenu(null);
+                          openTrainingRuns({
+                            entry,
+                            projectDir,
+                            label: t("tensorboard.tabLabel", { name: entry.name }),
+                            placeTab: fileDrop ? fileDrop.openTab : undefined,
+                            scope: tabScope,
+                          });
+                        }}
+                      >
+                        {t("tensorboard.openAsRuns")}
+                        <UntestedTag id="viewer.tensorboard.runs" />
+                      </button>
+                    )}
                     <hr />
                   </>
                 )}

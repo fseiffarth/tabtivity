@@ -68,6 +68,9 @@ pub mod home_io;
 // special file is read, and bytes and entries are bounded.
 pub mod tree_copy;
 pub mod hpc_mode;
+// Local port forwards over a remote project's ControlMaster, so a server a
+// remote tab prints opens in this machine's browser (docs/context/port_forwards.md).
+pub mod port_forward;
 // Which IDE a project tree belongs to (`.idea/`, `.vs/` + `*.sln`, `.vscode/`)
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
@@ -141,6 +144,8 @@ pub mod window_registry;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;
 pub mod state_gc;
+// TensorBoard event files read natively (the training-curves viewer).
+pub mod tfevents;
 pub mod terminal_service;
 pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share
