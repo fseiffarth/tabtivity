@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { uncoverConsole } from "./consoleCover";
 import { invoke } from "@tauri-apps/api/core";
 import { isDetachedWindow } from "./detachedContext";
 import { ROOT_SCOPE, hydrateScopeFromDisk, useTabsStore, type TabEntry } from "./tabs";
@@ -66,17 +67,21 @@ interface RootOverlayState {
   clearInstallTab: (key: string) => void;
 }
 
-export const useRootOverlayStore = create<RootOverlayState>((set) => ({
+export const useRootOverlayStore = create<RootOverlayState>((set, get) => ({
   open: false,
   view: "root",
   show: (key) => {
     void ensureRootScopeHydrated();
     if (key) useTabsStore.getState().revealTabInScope(ROOT_SCOPE, key);
+    if (!get().open) uncoverConsole();
     set({ open: true, view: "root" });
   },
   openView: (view) => {
     if (view === "root") useRootOverlayStore.getState().show();
-    else set({ open: true, view });
+    else {
+      if (!get().open) uncoverConsole();
+      set({ open: true, view });
+    }
   },
   // `view` stays: the next plain open of a cockpit view is the caller's choice.
   close: () => set({ open: false }),

@@ -7,6 +7,7 @@ import { useBoxesStore } from "../../stores/boxes";
 import { COCKPIT_VIEWS, type CockpitView } from "../../lib/cockpit/views";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { FrameBandContext, useFrameBand } from "../../lib/window/frameBand";
+import { consoleUnderOverlay, useConsoleUnderOverlay } from "../../lib/window/consoleFront";
 import { storageKey } from "../../lib/brand";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { ARRIVAL_MS, useArrivalsStore } from "../../stores/calendar/arrivals";
@@ -209,6 +210,8 @@ function RootOverlay() {
   const t = useT();
   const close = useRootOverlayStore((s) => s.close);
   const view: RootOverlayView = useRootOverlayStore((s) => s.view);
+  // An overlay opened from this window (Machines, Models) is in front of it.
+  const under = useConsoleUnderOverlay();
   const boxFilter = useCockpitStore((s) => s.boxFilter);
   const boxes = useBoxesStore((s) => s.boxes);
   // The window's frame — the one hook the header overlays use: moved by the
@@ -252,6 +255,9 @@ function RootOverlay() {
       // marks it handled) — closing the console under an open panel would take
       // the pending decision with it.
       if (busyRef.current || framing || e.defaultPrevented) return;
+      // The Machines / Models overlay opened from this window is in front of it
+      // and takes this Escape; the window waits for the next.
+      if (consoleUnderOverlay()) return;
       e.stopPropagation();
       close();
     };
@@ -312,7 +318,7 @@ function RootOverlay() {
 
   return (
     <div
-      className={`modal-backdrop root-overlay-backdrop root-console-backdrop app-overlay-backdrop`}
+      className={`modal-backdrop root-overlay-backdrop root-console-backdrop app-overlay-backdrop${under ? " under-overlay" : ""}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   MODELS_OVERLAY_SECTIONS,
@@ -6,7 +6,9 @@ import {
   type ModelsOverlaySection,
 } from "../../stores/modelsOverlay";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
-import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { coverConsole } from "../../stores/consoleCover";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { consoleInFront } from "../../lib/window/consoleFront";
 import { useSettingsStore } from "../../stores/settings";
 import { saverInterval, useQuiesce } from "../../stores/power";
 import { AGENT_REGISTRY_CHANGED_EVENT } from "../../lib/agents/agentRegistry";
@@ -117,6 +119,10 @@ function ModelsOverlay() {
   // back button too, so it goes on the mark alone (the root console's placement).
   const { title: moveHint, ...barRest } = barProps;
 
+  // Opened from the console window (the Root view's "Add agent..."): this
+  // overlay is the front one and the window steps below it (`stores/consoleCover`).
+  useLayoutEffect(() => coverConsole(useRootOverlayStore.getState().open), []);
+
   // Sections visited this opening. A section is rendered once it has been shown
   // and is kept (hidden) after, so a running install's log survives a trip back
   // to the grid. Derived with the view so a first visit renders in the same
@@ -149,10 +155,11 @@ function ModelsOverlay() {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       // The root console opens above this overlay (a "Run in terminal"
       // install): its Escape is its own, and must not also close the room the
-      // install was started from. Likewise any key aimed outside this frame
+      // install was started from. (An overlay opened from the console window is
+      // the front one instead.) Likewise any key aimed outside this frame
       // (focus on <body> still counts as ours — a click on the bar drops it
       // there).
-      if (rootViewShown(useRootOverlayStore.getState())) return;
+      if (consoleInFront()) return;
       const tgt = e.target;
       if (tgt instanceof Node && tgt !== document.body && !frameRef.current?.contains(tgt)) return;
       e.stopPropagation();

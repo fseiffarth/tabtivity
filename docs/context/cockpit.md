@@ -137,3 +137,17 @@ cycle, also from Root's own terminal, `terminalTabChord`), the subwindow steppin
 chords and the files toggle act on Root's focused subwindow; Close subwindow, Hide
 subwindow, Close all tabs and app fullscreen do nothing; on the other views
 (Now ...) every one of these does nothing to the workspace behind the window.
+
+## Machines and Models over the window
+
+The Usage view's "Open Machines" and the Root view's "Add agent..." open the Machines /
+Models & agents overlay from the window. All three are `.modal-backdrop`s at one z-index
+with the window last in DOM order, so the overlay used to land under it and one Escape
+closed both. Now an overlay that mounts while the window is up sets `stores/consoleCover`
+(`coverConsole`), the window wears `.under-overlay` (one layer down: `--z-modal` - 1, so the
+overlay and the dialogs it raises, which are later in DOM, stay above it), and the Escape
+handlers ask `lib/window/consoleFront`: the overlay closes on the first Escape, the window on
+the next. An overlay opened first with the window raised over it later (a terminal sign-in or
+install) is unchanged: the window opening afresh clears the flag and is in front. Known
+limit: the mail / calendar / to-do overlays are also at `--z-modal`, so with one of them open
+beneath, a lowered window can paint under it for as long as the overlay above is up.

@@ -1,6 +1,8 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, type ReactNode } from "react";
 import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
-import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { coverConsole } from "../../stores/consoleCover";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { consoleInFront } from "../../lib/window/consoleFront";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useFloatingFrame } from "../common/useFloatingFrame";
@@ -32,6 +34,10 @@ export function MachinesOverlayFrame({ children }: { children: ReactNode }) {
   // The move hint on the mark alone, as the Models overlay places it.
   const { title: moveHint, ...barRest } = barProps;
 
+  // Opened from the console window (the Usage view's door): this overlay is the
+  // front one and the window steps below it (`stores/consoleCover`).
+  useLayoutEffect(() => coverConsole(useRootOverlayStore.getState().open), []);
+
   // Focus leaves the header button for the first control inside, so Escape
   // and the arrow keys are aimed here from the first keystroke.
   useEffect(() => {
@@ -41,10 +47,11 @@ export function MachinesOverlayFrame({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
-      // A terminal sign-in opens the root console above this overlay; its
+      // The console window in front of this overlay (a terminal sign-in opened
+      // it above; an overlay opened from the window is above it instead): its
       // Escape is its own. So is a key aimed outside this frame (focus on
       // <body> still counts — a click on the bar drops it there).
-      if (rootViewShown(useRootOverlayStore.getState())) return;
+      if (consoleInFront()) return;
       const tgt = e.target;
       if (tgt instanceof Node && tgt !== document.body && !frameRef.current?.contains(tgt)) return;
       e.stopPropagation();
