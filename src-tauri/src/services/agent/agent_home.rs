@@ -347,8 +347,13 @@ fn prepare_home_with(
     if let Some(dir) = trust {
         trust_chat_folder(home, dir)?;
     }
-    // The probe home runs no tab, so it has no turn state to report.
-    if seed != Seed::Probe {
+    // The probe home runs no tab, so it has no turn state to report. It still
+    // gets what is not a hook: OpenCode 2's managed service listens on one
+    // fixed loopback port shared by every home, so a warm-up's or a version
+    // probe's `opencode` must run its own server too (gap 54).
+    if seed == Seed::Probe {
+        crate::services::opencode_session::disable_service_in_home(home);
+    } else {
         crate::services::agent_session::register_hooks_in_home(home);
     }
     // Copilot signs in through a keyring the fence hides: its home gets the
@@ -1148,6 +1153,24 @@ mod tests {
         assert_eq!(get(&win, "USERPROFILE"), get(&win, "HOME"));
         assert!(get(&win, "APPDATA").is_some_and(|a| Path::new(&a).starts_with(home)));
         assert!(PROBE_UNSET.contains(&"CLAUDE_CONFIG_DIR") && PROBE_UNSET.contains(&"CODEX_HOME"));
+    }
+
+    /// Gap 54 in the probe home: a warm-up's `opencode run` must not start or
+    /// join OpenCode 2's shared background service, so the home carries the
+    /// same `disabled: true` every Tabtivity-owned home does.
+    #[test]
+    fn the_probe_home_disables_opencodes_shared_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let cwd = state.join("agent-cron");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let probe = prepare_probe_home_in(state, &cwd).unwrap().dir;
+        let service: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(probe.join(".config/opencode/service.json")).unwrap()).unwrap();
+        assert_eq!(service["disabled"], true);
+        // Still no plugin or hint: those are the hooks the probe home leaves out.
+        let config = std::fs::read_to_string(probe.join(".config/opencode/opencode.json")).unwrap_or_default();
+        assert!(!config.contains("plugin"), "{config}");
     }
 
     /// The keeper sweeps every folder under `agent-homes`, so a rotation a
