@@ -1080,7 +1080,7 @@ pub fn host_mux_sftp_args(spec: &RemoteSpec, control_path: &std::path::Path) -> 
 /// `control_path` as the one `-o ControlPath=` value it may be: absolute, and
 /// with nothing ssh would read as more than a path — a `%` token it would
 /// expand, whitespace that would split the option, a control character.
-fn literal_control_path(control_path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn literal_control_path(control_path: &std::path::Path) -> Result<String, String> {
     let path = control_path.to_string_lossy();
     if !control_path.is_absolute()
         || path.contains('%')

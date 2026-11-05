@@ -2100,6 +2100,10 @@ pub fn run() {
             commands::ssh::ssh_default_dir,
             commands::ssh::ssh_list_dir,
             commands::ssh::ssh_mkdir,
+            // Local port forwards for a remote tab's servers (docs/context/port_forwards.md)
+            commands::port_forward::port_forward_open,
+            commands::port_forward::port_forward_list,
+            commands::port_forward::port_forward_close,
             // Pooled SSH/SFTP connection lifecycle (mount-free remote, Phase 0)
             commands::remote::remote_connect,
             commands::remote::remote_disconnect,
@@ -2740,6 +2744,11 @@ pub fn run() {
                 // container. Dropping the registry alone would kill only the
                 // shell leaders and orphan everything they spawned.
                 _app.state::<RegistryState>().lock_ok().kill_all();
+                // Every port forward a remote tab's server link opened
+                // (`ssh -O cancel`): a master kept alive by ControlPersist
+                // must not keep a local port bound once the app is gone.
+                // Before the pooled connections below, which the cancel needs.
+                services::port_forward::close_all();
                 // The local tmux servers those PTYs were clients of survive the
                 // clients by design (that is what makes a crash resumable), so a
                 // clean quit ends Tabtivity's own sessions explicitly. The window's

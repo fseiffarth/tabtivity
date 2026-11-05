@@ -98,6 +98,9 @@ pub enum OffReason {
     /// Reads the CLI config or login files of *this computer's* own user; on a
     /// server the user signs in through sign-in tabs instead (§5.1).
     LocalCliFiles,
+    /// Binds a listener on the machine's own loopback (a port forward); a
+    /// daemon's loopback is not the browser user's.
+    DaemonLoopback,
 }
 
 impl CommandClass {
@@ -125,6 +128,7 @@ impl OffReason {
             OffReason::WholeDocumentSave => "whole-document-save",
             OffReason::HeadlessOwner => "headless-owner",
             OffReason::LocalCliFiles => "local-cli-files",
+            OffReason::DaemonLoopback => "daemon-loopback",
         }
     }
 }
@@ -741,6 +745,10 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("pdf_markup_undo", Core),
     ("pdf_markup_undo_preview", Core),
     ("pdf_markup_undo_settle", Core),
+    // commands/port_forward.rs
+    ("port_forward_close", Off(OffReason::DaemonLoopback)),
+    ("port_forward_list", Off(OffReason::DaemonLoopback)),
+    ("port_forward_open", Off(OffReason::DaemonLoopback)),
     // commands/power.rs
     ("get_power_state", Client),
     // commands/presenter.rs

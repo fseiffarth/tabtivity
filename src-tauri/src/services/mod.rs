@@ -68,6 +68,9 @@ pub mod home_io;
 // special file is read, and bytes and entries are bounded.
 pub mod tree_copy;
 pub mod hpc_mode;
+// Local port forwards over a remote project's ControlMaster, so a server a
+// remote tab prints opens in this machine's browser (docs/context/port_forwards.md).
+pub mod port_forward;
 // Which IDE a project tree belongs to (`.idea/`, `.vs/` + `*.sln`, `.vscode/`)
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;

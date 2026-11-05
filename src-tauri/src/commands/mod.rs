@@ -49,6 +49,7 @@ pub mod os_clock;
 pub mod pdf_clip;
 pub mod pdf_markup;
 pub mod persist_lane;
+pub mod port_forward;
 pub mod power;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
