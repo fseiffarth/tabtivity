@@ -4,7 +4,6 @@ import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { useRootOverlayStore, type RootOverlayView } from "../../stores/rootOverlay";
 import { useCockpitStore } from "../../stores/cockpit";
 import { useBoxesStore } from "../../stores/boxes";
-import { useExperimental } from "../../lib/experimental";
 import { COCKPIT_VIEWS, type CockpitView } from "../../lib/cockpit/views";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { FrameBandContext, useFrameBand } from "../../lib/window/frameBand";
@@ -29,8 +28,8 @@ import { usePoll } from "../../lib/usePoll";
 import { ChevronDownIcon, CloseIcon } from "../common/icons/Icon";
 import { RootView, type RootBarSlots } from "./RootView";
 
-// The cockpit's views are reached only with the `cockpit` experiment on, so
-// their graph stays out of the startup chunk and only the shown one mounts.
+// The cockpit's views' graph stays out of the startup chunk and only the shown
+// one mounts.
 const CockpitViewBody = lazy(() =>
   import("../cockpit/CockpitViews").then((m) => ({ default: m.CockpitViewBody })),
 );
@@ -204,24 +203,12 @@ function RootTabLamp({ children }: { children: (lamp: ScopeLamp, stateClass: str
  * shows ONE of five views (`rootOverlay.view`): the cockpit's Now / Projects /
  * Tonight / Usage, or Root — the root console proper, `RootView`, which portals
  * its strip, ⚿ badge and ◫ toggle into the bar's slots. Only the shown view is
- * mounted. Without the `cockpit` experiment the strip of views is absent, the
- * effective view is Root whatever the store holds, and the window is today's
- * console in every pixel.
+ * mounted.
  */
 function RootOverlay() {
   const t = useT();
   const close = useRootOverlayStore((s) => s.close);
-  const cockpitOn = useExperimental("cockpit");
-  const storedView = useRootOverlayStore((s) => s.view);
-  // The stored view may be stale (the flag was switched off while it was set).
-  const view: RootOverlayView = cockpitOn ? storedView : "root";
-  // ... and the store is made to say what the window shows: the chord, the
-  // Machines / Models Escape guards and every `rootViewShown` reader would
-  // otherwise take an open console for a cockpit view (Ctrl+Shift+R would
-  // "switch to Root" instead of closing it).
-  useEffect(() => {
-    if (!cockpitOn && storedView !== "root") useRootOverlayStore.setState({ view: "root" });
-  }, [cockpitOn, storedView]);
+  const view: RootOverlayView = useRootOverlayStore((s) => s.view);
   const boxFilter = useCockpitStore((s) => s.boxFilter);
   const boxes = useBoxesStore((s) => s.boxes);
   // The window's frame — the one hook the header overlays use: moved by the
@@ -231,20 +218,18 @@ function RootOverlay() {
   const { frameRef, frameStyle, frameClass, framing, barProps, grips, fillButton } =
     useFloatingFrame(storageKey("rootConsoleFrame"));
   // The frame's width band (`lib/window/frameBand`): `data-band` for the CSS, the
-  // context for the views that swap what they mount. Without the experiment
-  // the window is today's console at any width, so the band stays `wide`.
-  const measuredBand = useFrameBand(frameRef);
-  const band = cockpitOn ? measuredBand : "wide";
+  // context for the views that swap what they mount.
+  const band = useFrameBand(frameRef);
   // The ⚿ badge's reading (`root_mcp_status`, once per mount) — also what
   // tells the ✓ Approvals panel whether the review gate is only advisory.
   const rights = useRootMcpRights();
   const busyRef = useRef(false);
-  // With the experiment on, the Root view's strip, ⚿ badge and ◫ toggle sit in a
+  // The Root view's strip, ⚿ badge and ◫ toggle sit in a
   // sub-bar under the title bar (the title bar then never changes between views).
   // A split layout keeps a strip in every subwindow and has no sole strip to
   // move, so it drops the sub-bar and the badge stays where it always was.
   const split = useTabsStore((s) => allGroups(s.layoutByScope[ROOT_SCOPE] ?? null).length > 1);
-  const subBar = cockpitOn && view === "root" && !split;
+  const subBar = view === "root" && !split;
   // Callback refs into state: the view portals into these once they exist.
   const [stripEl, setStripEl] = useState<HTMLElement | null>(null);
   const [rightsEl, setRightsEl] = useState<HTMLElement | null>(null);
@@ -320,19 +305,19 @@ function RootOverlay() {
 
   return (
     <div
-      className={`modal-backdrop root-overlay-backdrop root-console-backdrop${cockpitOn ? " app-overlay-backdrop" : ""}`}
+      className={`modal-backdrop root-overlay-backdrop root-console-backdrop app-overlay-backdrop`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}
     >
       <div
         ref={frameRef}
-        className={`root-overlay subwindow focused ${frameClass}${cockpitOn ? " root-overlay-wide" : ""}`}
+        className={`root-overlay subwindow focused ${frameClass} root-overlay-wide`}
         style={frameStyle}
-        data-band={cockpitOn ? band : undefined}
+        data-band={band}
         role="dialog"
         aria-modal="true"
-        aria-label={t(cockpitOn ? "cockpit.title" : "rootConsole.title")}
+        aria-label={t("cockpit.title")}
       >
         {/* Resize grips, one per edge and corner (withheld while the console
             fills the window — there is nothing to drag them into). */}
@@ -342,53 +327,43 @@ function RootOverlay() {
             dialog, and this one holds terminals. A press on a tab or a control
             keeps its own meaning — see `useFloatingFrame`'s BAR_NO_DRAG. */}
         <div {...barRest} className={`tab-bar root-overlay-bar ${barRest.className}`}>
-          {cockpitOn ? (
-            <div className="root-overlay-mark app-overlay-mark" title={moveHint}>
-              <CockpitGlyph className="cockpit-overlay-glyph" />
-              <span className="app-overlay-label">{t("cockpit.title")}</span>
-              <UntestedTag id="cockpit.title" />
-            </div>
-          ) : (
-            <div className="root-overlay-mark" title={moveHint}>
-              <StarIcon />
-            </div>
-          )}
-          {cockpitOn && (
-            <>
-              <div className="tab-strip root-view-strip" role="tablist" aria-label={t("rootConsole.viewStrip")}>
-                {COCKPIT_VIEWS.map((id) =>
-                  viewTab(id, <span className="tab-label">{t(VIEW_LABEL[id])}</span>, " cockpit-view-tab"),
-                )}
-                <span className="root-view-divider" role="presentation" />
-                <RootTabLamp>
-                  {(lamp, stateClass) =>
-                    viewTab(
-                      "root",
-                      <>
-                        <TabStatusMark stateClass={stateClass} />
-                        <span className="root-view-star"><StarIcon /></span>
-                        <span className="tab-label">{t("rootConsole.view.root")}</span>
-                        {lamp.asking > 0 && (
-                          <span
-                            className="root-view-count"
-                            title={t("cockpit.view.rootAsking", { count: lamp.asking })}
-                            aria-label={t("cockpit.view.rootAsking", { count: lamp.asking })}
-                          >
-                            {lamp.asking}
-                          </span>
-                        )}
-                      </>,
-                      ` root-view-tab-root${stateClass}`,
-                    )
-                  }
-                </RootTabLamp>
-              </div>
-              <UntestedTag id="rootConsole.viewStrip" />
-            </>
-          )}
+          <div className="root-overlay-mark app-overlay-mark" title={moveHint}>
+            <CockpitGlyph className="cockpit-overlay-glyph" />
+            <span className="app-overlay-label">{t("cockpit.title")}</span>
+            <UntestedTag id="cockpit.title" />
+          </div>
+          <div className="tab-strip root-view-strip" role="tablist" aria-label={t("rootConsole.viewStrip")}>
+            {COCKPIT_VIEWS.map((id) =>
+              viewTab(id, <span className="tab-label">{t(VIEW_LABEL[id])}</span>, " cockpit-view-tab"),
+            )}
+            <span className="root-view-divider" role="presentation" />
+            <RootTabLamp>
+              {(lamp, stateClass) =>
+                viewTab(
+                  "root",
+                  <>
+                    <TabStatusMark stateClass={stateClass} />
+                    <span className="root-view-star"><StarIcon /></span>
+                    <span className="tab-label">{t("rootConsole.view.root")}</span>
+                    {lamp.asking > 0 && (
+                      <span
+                        className="root-view-count"
+                        title={t("cockpit.view.rootAsking", { count: lamp.asking })}
+                        aria-label={t("cockpit.view.rootAsking", { count: lamp.asking })}
+                      >
+                        {lamp.asking}
+                      </span>
+                    )}
+                  </>,
+                  ` root-view-tab-root${stateClass}`,
+                )
+              }
+            </RootTabLamp>
+          </div>
+          <UntestedTag id="rootConsole.viewStrip" />
           {!subBar && <div className="root-overlay-slot" ref={setStripEl} />}
           <div className="tab-controls root-overlay-controls" style={subBar ? undefined : controlsStyle}>
-            {cockpitOn && view !== "root" && boxes.length > 0 && (
+            {view !== "root" && boxes.length > 0 && (
               <span className={`cockpit-box-filter-wrap${boxFilter ? " on" : ""}`}>
                 {/* Narrow, the select folds into this ▾ (CSS, `data-band`): the
                     native control stays, invisible, over the icon. */}
@@ -415,9 +390,7 @@ function RootOverlay() {
                 the one pill of every view). Switching the tools on and off stays
                 in Settings, where it always was. */}
             {!subBar && <span className="root-overlay-slot" ref={setRightsEl} />}
-            {/* The console never tagged its own ✓: without the experiment the pills
-                are exactly the ones it always had, in their old order. */}
-            <OverlayApprovals advisory={rights.reviewAdvisory} untested={cockpitOn} />
+            <OverlayApprovals advisory={rights.reviewAdvisory} />
             {view === "root" && <UntestedTag id="rootOverlay.1" />}
             {view === "root" && <UntestedTag id="rootOverlay.viewers" />}
             {!subBar && <span className="root-overlay-slot" ref={setFilesEl} />}

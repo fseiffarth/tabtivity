@@ -121,15 +121,13 @@ views of one PTY would take turns resizing it.
 
 ## Views: one window, five
 
-With the `cockpit` experiment on, the console's window is also the cockpit's
+The console's window is also the cockpit's
 (`docs/context/cockpit.md`). A view strip in the title bar reads Now, Projects,
 Tonight, Usage, a divider, then **Root** (the star): the console proper, this
 whole document. `stores/rootOverlay` holds `view` (`"root" | CockpitView`) next to
 `open`; `show()` always means Root, `openView(view)` opens a cockpit view (and
 never hydrates root), `rootViewShown` asks whether root's layout is on screen (as
-against `open`, "is the window up"). Only the shown view mounts. Experiment off
-there is no strip, no sub-bar, no icon rail and no cockpit door: the window is
-today's console, the strip in the title bar.
+against `open`, "is the window up"). Only the shown view mounts.
 
 The pieces, and the rules they keep:
 
@@ -137,9 +135,10 @@ The pieces, and the rules they keep:
   backdrop, the frame, the title bar, the Escape rule and `useRootMcpRights`; the
   view owns the layout tree, pane layer, `GroupStrip`, `+` menu, file column and
   drag. The view portals its strip, ⚿ badge and ◫ toggle into the shell's bar
-  slots (`RootBarSlots`): with the experiment on they sit in a sub-bar under the
-  title bar (a split layout keeps a strip per subwindow and has no sub-bar), so
-  the title bar never changes between views; off, they are in the title bar.
+  slots (`RootBarSlots`): they sit in a sub-bar under the
+  title bar (a split layout keeps a strip per subwindow and has no sub-bar, so
+  there they stay in the title bar), so the title bar never changes between
+  views.
 - **One ✓ Approvals pill** (`OverlayApprovals`, the whole queue, with the review
   gate's advisory), in the title bar of every view.
 - **Escape** is one rule in the shell: not from a pane (`.root-overlay-region`) or
@@ -153,7 +152,7 @@ The pieces, and the rules they keep:
   Now detail pane, never both (the views never mount together); a tab docked in
   an open app overlay is that column's. Root's slots in `CenterPanel` stand down
   for `open` (the window covers them) and wake by what is drawn.
-- **Root's Needs-you rail** (experiment on): a 40 px icon rail of live-store
+- **Root's Needs-you rail**: a 40 px icon rail of live-store
   groups beside the console, the full `CockpitRail` on a click (fold remembered);
   the Root tab wears the lamp of root's tabs (asking count, working ring).
   Neither reads anything the header badge does not. Narrower than 820 px the rail

@@ -73,7 +73,6 @@ export const EXPERIMENTAL_FLAGS = [
   "copilot_completion",
   "assistant",
   "voice_hands_free",
-  "cockpit",
 ] as const;
 
 export type ExperimentalFlag = (typeof EXPERIMENTAL_FLAGS)[number];

@@ -1,8 +1,7 @@
 /**
  * The merged window's shell (`docs/cockpit_root_merge_plan.md`): one window, one
- * store, five views. It opens on a view, the strip of views exists only with the
- * `cockpit` experiment on (off, the effective view is Root whatever the store
- * holds), Escape and the backdrop close it, only the shown view mounts, `show()`
+ * store, five views. It opens on a view, the strip of views is always there,
+ * Escape and the backdrop close it, only the shown view mounts, `show()`
  * always means Root, and the header badge is derived from the stores.
  */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -25,21 +24,14 @@ import { CockpitIndicator } from "../../components/header/CockpitIndicator";
 import { cockpitBadge } from "../../lib/cockpit/decisions";
 import { useCockpitStore } from "../../stores/cockpit";
 import { toggleRootConsole, useRootOverlayStore } from "../../stores/rootOverlay";
-import { useSettingsStore } from "../../stores/settings";
 import { useActivityStore } from "../../stores/activity";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
-import type { Settings } from "../../types";
 
 const agent = (key: string): TabEntry => ({ key, label: key, cmd: "claude", cwd: "/p", kind: "agent" });
 
-function setFlag(on: boolean) {
-  useSettingsStore.setState({ settings: { cockpit: on, experimental_explicit: true } as Settings });
-}
-
 beforeEach(() => {
-  setFlag(true);
   bodyMounts.length = 0;
   localStorage.clear();
   useRootOverlayStore.setState({ open: false, view: "root" });
@@ -129,36 +121,12 @@ describe("the merged window", () => {
     expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
-  it("is the centred, wide window with the experiment on, the console's own size without", async () => {
-    const { container, rerender } = render(<RootOverlayHost />);
+  it("is the centred, wide window labelled Cockpit, on Root too", async () => {
+    const { container } = render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().show());
     expect((container.firstChild as Element).classList.contains("app-overlay-backdrop")).toBe(true);
     expect(screen.getByRole("dialog").classList.contains("root-overlay-wide")).toBe(true);
-    act(() => setFlag(false));
-    rerender(<RootOverlayHost />);
-    expect((container.firstChild as Element).classList.contains("app-overlay-backdrop")).toBe(false);
-    expect(screen.getByRole("dialog").classList.contains("root-overlay-wide")).toBe(false);
-  });
-
-  it("with the experiment off: no strip, the effective view is Root whatever the store holds", async () => {
-    setFlag(false);
-    render(<RootOverlayHost />);
-    await act(async () => useRootOverlayStore.getState().openView("usage"));
-    expect(screen.queryAllByRole("tab").length).toBe(0);
-    expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Root console");
-    expect(screen.queryByTestId("cockpit-body")).toBeNull();
-    expect(document.querySelector(".root-overlay-region")).toBeTruthy();
-    expect(bodyMounts).toEqual([]);
-  });
-
-  it("the experiment switched off under an open cockpit view leaves a plain console: Ctrl+Shift+R closes it", async () => {
-    render(<RootOverlayHost />);
-    await act(async () => useRootOverlayStore.getState().openView("usage"));
-    await act(async () => setFlag(false));
-    // The window now shows Root, so the store must say so: the chord on Root closes.
-    expect(useRootOverlayStore.getState().view).toBe("root");
-    act(() => toggleRootConsole());
-    expect(useRootOverlayStore.getState().open).toBe(false);
+    expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Cockpit");
   });
 
   it("show() always means Root, and keeps no cockpit view behind", async () => {
@@ -193,12 +161,6 @@ describe("the merged window", () => {
 });
 
 describe("CockpitIndicator", () => {
-  it("is absent with the experiment off", () => {
-    setFlag(false);
-    const { container } = render(<CockpitIndicator />);
-    expect(container.firstChild).toBeNull();
-  });
-
   it("shows the derived count, opens Now, and closes only a cockpit view", () => {
     useTabsStore.setState({ tabsByScope: { p1: [agent("a")] } });
     useActivityStore.setState({ attentionByTab: { "p1:a": "decision" } });

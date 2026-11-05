@@ -726,11 +726,6 @@ pub struct Settings {
     /// listen mode is the same session as dictation's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_hands_free: Option<bool>,
-    /// EXPERIMENTAL, default OFF. The desktop cockpit overlay
-    /// (`docs/desktop_cockpit_plan.md`): every project's agents and decisions in
-    /// one header overlay. Purely a frontend gate; nothing in the backend reads it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cockpit: Option<bool>,
     /// EXPERIMENTAL, default OFF. The chat assistant (`docs/assistant_plan.md`,
     /// `services::assistant`): chats in a scope of its own that reach the web
     /// and nothing else. Read via [`Settings::assistant_enabled`]; the
@@ -1545,6 +1540,17 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
         assert_eq!(back.experimental_explicit, Some(true));
         assert!(!back.web_browser());
+    }
+
+    /// The cockpit graduated out of the experiments: a profile that still carries
+    /// its old `cockpit` key must load, and the key rides in `extra` untouched
+    /// (nothing reads it any more).
+    #[test]
+    fn a_stored_cockpit_experiment_key_still_loads() {
+        let s: Settings = serde_json::from_str(r#"{"cockpit":true,"experimental_explicit":true}"#)
+            .expect("parse a profile that still has the cockpit key");
+        assert_eq!(s.experimental_explicit, Some(true));
+        assert_eq!(s.extra.get("cockpit"), Some(&serde_json::json!(true)));
     }
 
     /// The browser's settings must be **named fields**, not `extra` passengers.

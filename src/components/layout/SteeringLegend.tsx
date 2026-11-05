@@ -92,7 +92,6 @@ export function SteeringLegend() {
   const mail = useSettingsStore((s) => steeringAppEnabled("mail", s.settings));
   const calendar = useSettingsStore((s) => steeringAppEnabled("calendar", s.settings));
   const todo = useSettingsStore((s) => steeringAppEnabled("todo", s.settings));
-  const cockpit = useExperimental("cockpit");
   const busyByTab = useActivityStore((s) => s.busyByTab);
   const attentionByTab = useActivityStore((s) => s.attentionByTab);
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
@@ -187,7 +186,7 @@ export function SteeringLegend() {
           steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
           tabCard: inPane && !!activeTabCard(),
           multiPane,
-          apps: { mail, calendar, todo, cockpit },
+          apps: { mail, calendar, todo },
           agent: steeringAgentOffer(activeTab),
           terminal,
           // Only where ↓ could step into it.

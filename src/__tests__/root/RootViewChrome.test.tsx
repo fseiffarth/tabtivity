@@ -1,11 +1,8 @@
 /**
- * The Root view's chrome with the `cockpit` experiment on
- * (`docs/cockpit_root_merge_plan.md`, M3): the root tab strip, + menu, ⚿ badge
+ * The Root view's chrome (`docs/cockpit_root_merge_plan.md`, M3): the root tab strip, + menu, ⚿ badge
  * and ◫ toggle sit in a sub-bar under the title bar (a split layout drops it),
  * the Root tab carries a lamp (amber count while a root agent asks, the working
  * ring while one works), and the empty card starts the default agent in Root.
- * With the experiment off the window is the console it always was: the strip in
- * the title bar and exactly its old pills.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -44,10 +41,8 @@ import { isUntested } from "../../lib/untested";
 import { scopeLamp } from "../../lib/cockpit/scopeLamp";
 import type { Settings } from "../../types";
 
-function setFlag(on: boolean) {
-  useSettingsStore.setState({
-    settings: { cockpit: on, experimental_explicit: true, root_agents: ["claude"] } as Settings,
-  });
+function setRootAgents(rootAgents: string[]) {
+  useSettingsStore.setState({ settings: { root_agents: rootAgents } as Settings });
 }
 
 function seed() {
@@ -69,7 +64,7 @@ async function openRoot() {
 beforeEach(() => {
   cleanup();
   localStorage.clear();
-  setFlag(true);
+  setRootAgents(["claude"]);
   useTabsStore.setState({ scope: "p1", tabsByScope: {}, layoutByScope: {}, focusedGroupByScope: {} });
   useProjectsStore.setState({ rootDir: "/r", activeId: "p1" });
   useRootOverlayStore.setState({ open: false, view: "root", installTabs: {} });
@@ -99,7 +94,7 @@ describe("scopeLamp", () => {
   });
 });
 
-describe("the Root view with the experiment on", () => {
+describe("the Root view", () => {
   it("holds the tab strip, + and ⚿ badge in a sub-bar under the title bar", async () => {
     seed();
     await openRoot();
@@ -194,43 +189,15 @@ describe("Start <agent> in Root", () => {
   });
 
   it("names the switch when the default agent is not allowed in Root", async () => {
-    useSettingsStore.setState({ settings: { cockpit: true, experimental_explicit: true, root_agents: [] } as Settings });
+    setRootAgents([]);
     await openRoot();
     expect(await screen.findByText(/Allow .* in the root console/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Start .* in Root/ })).toBeNull();
   });
-
-  it("is absent without the experiment: the empty card is text only", async () => {
-    setFlag(false);
-    await openRoot();
-    expect(screen.getByText("The root console is empty")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Start .* in Root/ })).toBeNull();
-  });
 });
 
-describe("the experiment off", () => {
-  it("is today's console: the strip and + in the title bar, no sub-bar, no lamp", async () => {
-    seed();
-    setFlag(false);
-    await openRoot();
-    expect(subBar()).toBeNull();
-    expect(titleBar().querySelector(".tab-new-btn")).toBeTruthy();
-    expect(titleBar().querySelector(".root-view-strip")).toBeNull();
-    expect(document.querySelector(".root-view-count")).toBeNull();
-  });
-
-  it("carries exactly the pills the console always had: ⚿, ✓ (no tag of its own), then its two tags", async () => {
-    setFlag(false);
-    await openRoot();
-    const controls = titleBar().querySelector(".root-overlay-controls") as HTMLElement;
-    const kids = Array.from(controls.querySelectorAll(".root-overlay-rights, .untested-tag")).map((el) =>
-      el.classList.contains("untested-tag") ? "tag" : el.classList.contains("root-overlay-approvals") ? "approvals" : "rights",
-    );
-    const tags = ["rootOverlay.1", "rootOverlay.viewers"].filter((id) => isUntested(id as never)).length;
-    expect(kids).toEqual(["rights", "approvals", ...Array(tags).fill("tag")]);
-  });
-
-  it("with the experiment on the ✓ is tagged as the new surface it is", async () => {
+describe("the title bar pills", () => {
+  it("the ✓ is tagged as the new surface it is", async () => {
     await openRoot();
     const controls = titleBar().querySelector(".root-overlay-controls") as HTMLElement;
     const approvals = controls.querySelector(".root-overlay-approvals") as HTMLElement;

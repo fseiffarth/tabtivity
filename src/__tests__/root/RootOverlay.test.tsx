@@ -153,11 +153,11 @@ describe("RootOverlayHost", () => {
     expect(latest.get(b.key)?.visible).toBe(true);
   });
 
-  it("the view's strip, + and ⚿ badge sit in the shell's title bar, the file toggle beside ⤢", async () => {
+  it("the view's strip, + and ⚿ badge sit in the shell's sub-bar, the file toggle beside ⤢", async () => {
     seedRootTabs();
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().show());
-    const bar = document.querySelector(".root-overlay-bar") as HTMLElement;
+    const bar = document.querySelector(".root-overlay-subbar") as HTMLElement;
     expect(bar.contains(screen.getByText("Claude"))).toBe(true);
     expect(bar.contains(screen.getByTitle("New tab"))).toBe(true);
     expect(bar.querySelector(".root-overlay-rights.status")).toBeTruthy();

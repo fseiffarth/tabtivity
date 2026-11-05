@@ -2,28 +2,22 @@
  * Which tabs steering's tab levels walk.
  *
  * Normally the workspace's: the active scope's layout and focused subwindow.
- * While the root window shows its Root view with the `cockpit` experiment on
+ * While the root window shows its Root view
  * (`rootViewShown`), the window is what the user is looking at, and the tabs
  * under it are not — a status key that jumped to a root agent, or the keys
  * after Shift+Space, walk **Root's** tabs and set Root's focused subwindow, so
  * what is typed afterwards goes to the root terminal (`RootView` focuses the
- * active tab of its focused group). Without the experiment the console is
- * today's, and steering walks it as the overlay region, as it always did.
+ * active tab of its focused group).
  *
  * The keys themselves are unchanged and rebindable (`steeringBindings`): only
  * the target moves.
  */
-import { experimentalEnabled } from "../experimental";
-import { useSettingsStore } from "../../stores/settings";
 import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { ROOT_SCOPE, allGroups, findGroup, useTabsStore, type LayoutNode, type TabEntry } from "../../stores/tabs";
 
 /** The Root view is up and steering's tab levels belong to it. */
 export function steeringInRoot(): boolean {
-  return (
-    experimentalEnabled(useSettingsStore.getState().settings, "cockpit") &&
-    rootViewShown(useRootOverlayStore.getState())
-  );
+  return rootViewShown(useRootOverlayStore.getState());
 }
 
 /** What the tab levels walk: the scope, its layout, and its focused subwindow

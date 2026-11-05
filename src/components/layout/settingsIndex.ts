@@ -151,7 +151,6 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   resourceMonitor: { labels: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"] },
   experimental: {
     labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter", "settings.assistant", "settings.voiceHandsFree"],
-    items: [{ key: "settings.cockpit", aliases: "settings.searchAlias.cockpit" }],
   },
   git: { keywords: ["nav.git.blurb"], aliases: "settings.searchAlias.git" },
   vpn: { keywords: ["nav.vpn.blurb"], aliases: "settings.searchAlias.vpn" },

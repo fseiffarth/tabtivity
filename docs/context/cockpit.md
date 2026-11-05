@@ -3,13 +3,16 @@
 The cockpit answers the question the phone's Home answers: *is anything waiting
 for me, anywhere?* It lists every project's agent tabs, the decisions waiting on
 the user, tonight's schedules and the machines. It is not a window of its own:
-with the `cockpit` experiment on, the root console's window gets four more
+the root console's window carries four more
 views (Now, Projects, Tonight, Usage) beside **Root**, the console proper
 (`docs/context/root_console.md`, "Views"). One frame, one title bar, one
 Escape rule, one ✓ Approvals pill. Plan and fixed decisions:
 `docs/desktop_cockpit_plan.md`; the merge: `docs/cockpit_root_merge_plan.md`
 (decisions), `docs/cockpit_root_merge_design.md` (layout), `docs/cockpit_root_merge_handoff.md`
-(build log). Experiment off, the window is exactly the old console.
+(build log). It was an experiment (`cockpit`) until the follow-up round
+(`docs/cockpit_root_merge_plan.md`, F2): the gate is gone, the surface is always
+on, and a profile's stale `cockpit` settings key is ignored (the backend keeps
+it in `Settings.extra`; nothing reads it).
 
 ## A fan-out over stores, not a store
 
@@ -87,7 +90,7 @@ Escape on it returns), Tonight and Usage stack, the title bar drops its label an
 folds the box filter into a ▾ icon, and Root has no icon rail. The band is written
 on the frame (`data-band`) for the CSS and provided by context for the views that
 swap what they mount, so a column that is not shown mounts nothing (a hidden detail
-attaches no terminal). Without the experiment no band is written.
+attaches no terminal).
 
 ## Keys and entry points
 
@@ -99,7 +102,7 @@ conflicts with the mode-wide ones. Steering opens the cockpit's Now view with U
 chip's row. Ctrl+Shift+R is `toggleRootConsole`: closed -> Root, another view ->
 Root, Root -> close.
 
-While the Root view is up (experiment on) steering's tab levels walk **Root's**
+While the Root view is up steering's tab levels walk **Root's**
 tabs, not the workspace's (`lib/shortcuts/steeringScope`): the arrows,
 close / clear / plan / goal / prompt and the tab's right-click act on Root's
 focused subwindow, a status key's jump to a project's tab steps the window aside,

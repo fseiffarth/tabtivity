@@ -5,7 +5,6 @@ import { useTabsStore } from "../../stores/tabs";
 import { useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { cockpitBadge } from "../../lib/cockpit/decisions";
-import { useExperimental } from "../../lib/experimental";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { useDomainReview } from "../layout/RootReviewStrip";
@@ -21,7 +20,6 @@ import { CockpitGlyph } from "./HeaderGlyphs";
  */
 export function CockpitIndicator() {
   const t = useT();
-  const enabled = useExperimental("cockpit");
   // Up on one of the cockpit's views — Root being up is not the cockpit being up.
   const open = useRootOverlayStore((s) => s.open && s.view !== "root");
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
@@ -33,7 +31,6 @@ export function CockpitIndicator() {
     () => cockpitBadge({ tabsByScope, busyByTab, attentionByTab, schedulesByTarget, approvals: waiting }),
     [tabsByScope, busyByTab, attentionByTab, schedulesByTarget, waiting],
   );
-  if (!enabled) return null;
   const label = badge.total > 0
     ? t("cockpit.indicatorCount", { asking: badge.asking, interrupted: badge.interrupted, proposals: badge.proposals, approvals: badge.approvals })
     : t("cockpit.indicator");

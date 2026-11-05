@@ -36,10 +36,9 @@ import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useRootReviewStore } from "../../stores/rootReview";
-import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useAgentModelsStore } from "../../stores/agents/agentModels";
-import type { ProjectEntry, Settings } from "../../types";
+import type { ProjectEntry } from "../../types";
 
 const agent = (key: string, label = key): TabEntry => ({ key, label, cmd: "claude", cwd: "/p", kind: "agent" });
 const project = (id: string): ProjectEntry =>
@@ -206,7 +205,6 @@ describe("the window measures its frame", () => {
         disconnect() {}
       },
     );
-    useSettingsStore.setState({ settings: { cockpit: true, experimental_explicit: true } as Settings });
   });
   afterEach(() => {
     delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
@@ -256,13 +254,6 @@ describe("the window measures its frame", () => {
     expect(document.querySelector(".cockpit-root-rail-full")).toBeNull();
     await resizeTo(1500);
     expect(document.querySelector(".cockpit-rail-icons")).toBeTruthy();
-  });
-
-  it("without the experiment the console has no band at any width", async () => {
-    useSettingsStore.setState({ settings: { cockpit: false, experimental_explicit: true } as Settings });
-    await openAt("root", 700);
-    expect(frame().dataset.band).toBeUndefined();
-    expect(document.querySelector(".cockpit-rail-icons")).toBeNull();
   });
 
   it("folds the box filter into an icon wrapper in the title bar (the select stays)", async () => {

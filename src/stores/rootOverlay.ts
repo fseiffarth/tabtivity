@@ -46,8 +46,7 @@ export type RootOverlayView = "root" | CockpitView;
 interface RootOverlayState {
   open: boolean;
   /** The view the window shows (or opens on next). Session-only: a relaunch
-   *  starts on Root, and the cockpit's doors name their view when they open.
-   *  Without the `cockpit` experiment the shell shows Root whatever this holds. */
+   *  starts on Root, and the cockpit's doors name their view when they open. */
   view: RootOverlayView;
   /** Open the window on `view`. `"root"` is `show()`; a cockpit view never
    *  restores the root scope (opening it must not bring root's agents up). */

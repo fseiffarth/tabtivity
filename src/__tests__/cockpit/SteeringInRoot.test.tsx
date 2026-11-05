@@ -53,15 +53,13 @@ const shell = (key: string): TabEntry => ({ key, label: key, cmd: "bash", cwd: "
 const agent = (key: string): TabEntry => ({ key, label: key, cmd: "claude", cwd: "/p", kind: "agent" });
 const group = (id: string, keys: string[], activeKey: string): LayoutNode => ({ type: "group", id, tabKeys: keys, activeKey });
 
-function setFlag(on: boolean, steeringKeys?: Settings["steering_keys"]) {
-  useSettingsStore.setState({
-    settings: { cockpit: on, experimental_explicit: true, steering_keys: steeringKeys } as Settings,
-  });
+function setSteeringKeys(steeringKeys?: Settings["steering_keys"]) {
+  useSettingsStore.setState({ settings: { steering_keys: steeringKeys } as Settings });
 }
 
 beforeEach(() => {
   jumps.length = 0;
-  setFlag(true);
+  setSteeringKeys();
   useTabsStore.setState({
     scope: "p",
     tabs: [shell("w1"), shell("w2")],
@@ -120,7 +118,7 @@ describe("steering with the Root view up", () => {
   });
 
   it("the keys stay rebindable: a user's binding walks Root too", () => {
-    setFlag(true, { right: ["l"], left: ["h"] });
+    setSteeringKeys({ right: ["l"], left: ["h"] });
     render(<Harness />);
     press({ key: " ", shiftKey: true });
     press({ key: "l" });
@@ -202,15 +200,5 @@ describe("steering without the Root view", () => {
     press({ key: "ArrowRight" });
     expect(workspaceActive()).toBe("w2");
     expect(rootActive()).toBe("r1");
-  });
-
-  it("is today's console without the experiment: the workspace's tabs, the window an overlay", () => {
-    setFlag(false);
-    const rect = { x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON: () => ({}) };
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(rect as DOMRect);
-    document.body.innerHTML =
-      '<div class="modal-backdrop root-overlay-backdrop root-console-backdrop"><div class="root-overlay" aria-modal="true"></div></div>';
-    expect(topLayer()?.closest(".root-console-backdrop")).toBeTruthy();
-    expect(steeringActiveTab()).toMatchObject({ scope: "p", tab: { key: "w1" } });
   });
 });

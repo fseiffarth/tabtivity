@@ -1,6 +1,5 @@
 /**
- * Root's Needs-you rail (`docs/cockpit_root_merge_plan.md`, M8): with the
- * `cockpit` experiment on, a 40 px icon rail of the live-store groups beside the
+ * Root's Needs-you rail (`docs/cockpit_root_merge_plan.md`, M8): a 40 px icon rail of the live-store groups beside the
  * console; a click opens the real rail (with the groups that need a read),
  * scrolled to that group; the fold is remembered per machine; a mouse press
  * never moves the focus off a terminal; a picked row goes to its tab.
@@ -30,18 +29,14 @@ import { useBoxesStore } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useRootReviewStore } from "../../stores/rootReview";
-import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
-import type { ProjectEntry, Settings } from "../../types";
+import type { ProjectEntry } from "../../types";
 
 const agent = (key: string, label = key): TabEntry => ({ key, label, cmd: "claude", cwd: "/p", kind: "agent" });
 const project = (id: string): ProjectEntry =>
   ({ id, name: id.toUpperCase(), status: "active", position: 1, local_file: `/${id}/project.json` }) as ProjectEntry;
 const FOLD = storageKey("cockpitRootRail");
 
-function setFlag(on: boolean) {
-  useSettingsStore.setState({ settings: { cockpit: on, experimental_explicit: true } as Settings });
-}
 const icons = () => document.querySelector(".cockpit-rail-icons");
 const groupIcons = () => Array.from(document.querySelectorAll<HTMLElement>(".cockpit-rail-icon[data-group]"));
 
@@ -55,7 +50,6 @@ beforeEach(() => {
   cleanup();
   invokeMock.mockClear();
   localStorage.clear();
-  setFlag(true);
   useProjectsStore.setState({ projects: [project("p1")], activeId: "p1", rootDir: "/r" });
   useBoxesStore.setState({ boxes: [] });
   useTabsStore.setState({
@@ -97,13 +91,6 @@ describe("the icon rail", () => {
     expect(groupIcons()).toHaveLength(0);
     act(() => useActivityStore.setState({ attentionByTab: { "p1:b": "decision" } }));
     expect(groupIcons().map((el) => el.dataset.group)).toEqual(["asking"]);
-  });
-
-  it("is not there without the experiment", async () => {
-    setFlag(false);
-    await openRoot();
-    expect(icons()).toBeNull();
-    expect(document.querySelector(".cockpit-root-rail-full")).toBeNull();
   });
 
   it("is not there on a cockpit view", async () => {

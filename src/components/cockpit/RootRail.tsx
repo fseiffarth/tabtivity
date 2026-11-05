@@ -101,7 +101,7 @@ function RootRailFull({ focusGroup, onCollapse }: { focusGroup: DecisionGroupId 
 }
 
 /**
- * Root's Needs-you column (experiment on): a 40 px icon rail by default, the
+ * Root's Needs-you column: a 40 px icon rail by default, the
  * full `CockpitRail` beside the console when opened. It reads the live stores
  * the header badge reads and nothing else while collapsed. In a narrow window
  * (under 820 px, `lib/window/frameBand`) there is no room for it beside the

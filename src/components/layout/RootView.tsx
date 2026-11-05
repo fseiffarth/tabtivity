@@ -50,7 +50,6 @@ import { TabMarkMenuItems } from "../tabs/TabMarkMenuItems";
 import { RootRightsBadge, type RootMcpRights } from "./RootRightsBadge";
 import { RootStartAgent } from "./RootStartAgent";
 import { RootRail } from "../cockpit/RootRail";
-import { useExperimental } from "../../lib/experimental";
 import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 
@@ -108,7 +107,7 @@ function filesReserveStyle(files: GroupFiles | undefined): React.CSSProperties |
  * The shell's title bar, handed to the view: three slot elements the view
  * portals into (so the bar looks as it always did while its parts keep living
  * in the view's state), the bar's move / fill gestures for the strip, and a
- * setter for the control cluster's reserved width. The flag-on sub-bar (a row
+ * setter for the control cluster's reserved width. The sub-bar (a row
  * under the title bar) hands the same shape.
  */
 export interface RootBarSlots {
@@ -162,7 +161,6 @@ export function RootView({
   busyRef: { current: boolean };
 }) {
   const t = useT();
-  const cockpitOn = useExperimental("cockpit");
   const tabs = useTabsStore((s) => s.tabsByScope[ROOT_SCOPE] ?? NO_TABS);
   const layout = useTabsStore((s) => s.layoutByScope[ROOT_SCOPE] ?? null);
   const storedFocus = useTabsStore((s) => s.focusedGroupByScope[ROOT_SCOPE] ?? null);
@@ -482,7 +480,7 @@ export function RootView({
         soleGroupId !== EMPTY_GROUP_ID &&
         createPortal(filesToggle(soleGroupId, !!sole?.filesOpen), slots.files)}
       <div className="subwindow-body">
-        {cockpitOn && <RootRail />}
+        <RootRail />
         <div
             className={`subwindow-pane-region root-overlay-region${dragging ? " dragging" : ""}`}
             ref={regionRef}
@@ -492,7 +490,7 @@ export function RootView({
               <div className="center-placeholder-card">
                 <div className="center-placeholder-title">{t("rootConsole.emptyTitle")}</div>
                 <div className="center-placeholder-hint">{t("rootConsole.emptyHint")}</div>
-                {cockpitOn && <RootStartAgent rootDir={rootDir} onStart={addTab} />}
+                <RootStartAgent rootDir={rootDir} onStart={addTab} />
               </div>
             </div>
           ) : (

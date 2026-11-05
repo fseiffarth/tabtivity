@@ -34,9 +34,4 @@ describe("Settings search covers every control", () => {
     const hit = searchSettings(label, t, () => true).find((r) => r.label === label && r.path);
     expect(hit, `add "${key}" to SEARCH_INDEX in settingsIndex.ts`).toBeDefined();
   });
-
-  it("finds the cockpit by another word for it", () => {
-    const hit = searchSettings("dashboard", t, () => true).find((r) => r.label === t("settings.cockpit"));
-    expect(hit?.page).toBe("settings-anchor-experimental");
-  });
 });

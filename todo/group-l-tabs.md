@@ -988,29 +988,15 @@ correctness/UX work atop the same layout model #42 detaches.*
         - [ ] ❌ Doesn't work on macOS
 
 - [ ] **Cockpit + root console: one window (2026-11-04, ✅ Built · 🧪 Untested).**
-  The cockpit's four views and the root console are views of one window,
-  behind Settings → Experimental → Cockpit views (off = today's console).
+  The cockpit's four views and the root console are views of one window (no
+  longer an experiment since the follow-up round, F2).
   Plan `docs/cockpit_root_merge_plan.md`, design `docs/cockpit_root_merge_design.md`,
   log `docs/cockpit_root_merge_handoff.md` (Click-through). Pills: `cockpit.*`,
   `rootConsole.*`, `overlayApprovals.button`; clear them with `npm run untested`
   once confirmed. *Files: `src/components/layout/{RootOverlay,RootView}.tsx`,
   `src/components/cockpit/*`, `src/lib/window/{floatingFrame,frameBand}.ts`,
   `src/lib/shortcuts/{tabJump,steeringScope}.ts`.*
-  - [ ] 🖐️ Manual test — Experiment off is today's console: Settings → Experimental
-    → Cockpit views off. Ctrl+Shift+R opens a window with the star mark, the tab
-    strip in the title bar, ⚿, ✓, ◫, ⤢, ✕ and nothing else: no view strip, no
-    sub-bar, no icon rail, no "Start in Root" button on the empty card, no
-    Cockpit button in the header. Drag, resize and ⤢ keep your old frame; Escape
-    closes it; a pane keeps the key in a terminal.
-    - [ ] ✅ Works on Linux (X11)
-    - [ ] ❌ Doesn't work on Linux (X11)
-    - [ ] ✅ Works on Linux (Wayland)
-    - [ ] ❌ Doesn't work on Linux (Wayland)
-    - [ ] ✅ Works on Windows
-    - [ ] ❌ Doesn't work on Windows
-    - [ ] ✅ Works on macOS
-    - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual test — Experiment on, one window with five views: the title bar
+  - [ ] 🖐️ Manual test — One window with five views: the title bar
     reads Cockpit, then Now / Projects / Tonight / Usage │ ★ Root. Switching
     views never moves or resizes the window. Ctrl+Shift+R from closed opens
     Root, from Now switches to Root, from Root closes. The header gauge,
@@ -1057,7 +1043,7 @@ correctness/UX work atop the same layout model #42 detaches.*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Manual test — Narrow windows: with the experiment on, drag the window to
+  - [ ] 🖐️ Manual test — Narrow windows: drag the window to
     about 1000 px wide: Now's rail becomes the icon rail (click opens the full
     rail in a popover; picking a row selects it), roster and detail side by
     side. Under 820 px (minimum window): the label goes, the box filter becomes

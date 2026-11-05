@@ -12,9 +12,7 @@ import { RootReviewStrip, useDomainReview, type ReviewDomain } from "./RootRevie
  * the proposals that overlay's tools made — or, with no `domain` (the console,
  * the cockpit), the whole queue. Every pill is a door onto the same store, so a
  * decision made in one is gone from all. `advisory` (the console's) adds the
- * "review gate can be bypassed" note to the panel. `untested={false}` leaves out
- * the register's pill: the console without the `cockpit` experiment shows
- * exactly the pills it always did (its ✓ was never tagged on its own).
+ * "review gate can be bypassed" note to the panel.
  *
  * Open/closed is local. The panel's click-away catcher covers the window, so the
  * overlay cannot move under it and a click-time anchor holds; its Escape is
@@ -24,11 +22,9 @@ import { RootReviewStrip, useDomainReview, type ReviewDomain } from "./RootRevie
 export function OverlayApprovals({
   domain,
   advisory = false,
-  untested = true,
 }: {
   domain?: ReviewDomain;
   advisory?: boolean;
-  untested?: boolean;
 }) {
   const t = useT();
   const { waiting } = useDomainReview(domain);
@@ -60,7 +56,7 @@ export function OverlayApprovals({
       >
         {t("rootReview.badge")}{waiting > 0 ? ` ${waiting}` : ""} ▾
       </button>
-      {untested && <UntestedTag id="overlayApprovals.button" />}
+      <UntestedTag id="overlayApprovals.button" />
       {anchor && (
         <ContextMenuPortal
           x={anchor.x}

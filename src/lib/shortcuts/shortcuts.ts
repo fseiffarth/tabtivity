@@ -842,7 +842,6 @@ export type SteeringCondition =
   | "mail"
   | "calendar"
   | "todo"
-  | "cockpit"
   | "agentClear"
   | "agentPlan"
   | "agentGoal"
@@ -913,7 +912,7 @@ export interface SteeringLegendState {
   /** A card floats over the active tab's terminal. */
   tabCard?: boolean;
   multiPane: boolean;
-  apps: { mail: boolean; calendar: boolean; todo: boolean; cockpit?: boolean };
+  apps: { mail: boolean; calendar: boolean; todo: boolean };
   /** The active tab is a live terminal (↓ scrolls it). */
   terminal?: boolean;
   /** The active tab shows a document that scrolls (↓ scrolls it). */
@@ -1068,7 +1067,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["mail"], labelKey: "steering.mail.label", descKey: "steering.mail.desc", levels: BASE_LEVELS, when: "mail", group: "open" },
   { actions: ["calendar"], labelKey: "steering.calendar.label", descKey: "steering.calendar.desc", levels: BASE_LEVELS, when: "calendar", group: "open" },
   { actions: ["todo"], labelKey: "steering.todo.label", descKey: "steering.todo.desc", levels: BASE_LEVELS, when: "todo", group: "open" },
-  { actions: ["cockpit"], labelKey: "steering.cockpit.label", descKey: "steering.cockpit.desc", levels: BASE_LEVELS, when: "cockpit", group: "open" },
+  { actions: ["cockpit"], labelKey: "steering.cockpit.label", descKey: "steering.cockpit.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["nextDecision"], labelKey: "steering.nextDecision.label", descKey: "steering.nextDecision.desc", levels: BASE_LEVELS, status: "decision", group: "status" },
   { actions: ["nextWorking"], labelKey: "steering.nextWorking.label", descKey: "steering.nextWorking.desc", levels: BASE_LEVELS, status: "working", group: "status" },
   { actions: ["nextDone"], labelKey: "steering.nextDone.label", descKey: "steering.nextDone.desc", levels: BASE_LEVELS, status: "done", group: "status" },

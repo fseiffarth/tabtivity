@@ -693,8 +693,6 @@ export interface Settings {
   voice_hands_free_on?: boolean;
   /** EXPERIMENTAL: the Chat's hands-free loop (`ReaderVoice`). */
   voice_hands_free?: boolean;
-  /** EXPERIMENTAL: the desktop cockpit overlay (`docs/desktop_cockpit_plan.md`). */
-  cockpit?: boolean;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */
