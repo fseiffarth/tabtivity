@@ -87,7 +87,10 @@ rail (the full rail in a `ContextMenuPortal` popover, `NeedsYouPopover`) beside
 roster and detail (detail floors at 360 px); under 820 px Now is master / detail
 (a "Needs you N" chip, a click or Space on a row opens the detail, the back bar or
 Escape on it returns), Tonight and Usage stack, the title bar drops its label and
-folds the box filter into a ▾ icon, and Root has no icon rail. The band is written
+folds the box filter into a ▾ icon, and Root swaps its icon rail for the same
+"Needs you N" chip in its sub-bar (or, in a split Root with no sub-bar, in the title
+bar's cluster), opening the rail as the same popover (`NeedsYouChip` /
+`NeedsYouPopover`; a picked row goes to its tab). The band is written
 on the frame (`data-band`) for the CSS and provided by context for the views that
 swap what they mount, so a column that is not shown mounts nothing (a hidden detail
 attaches no terminal). Unsent composer text survives that unmount: the Reader keeps

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { storageKey } from "../../lib/brand";
 import type { DecisionGroupId } from "../../lib/cockpit/decisions";
@@ -10,6 +11,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { CockpitRail } from "./CockpitRail";
 import { CockpitRailIcons } from "./CockpitRailIcons";
 import { jumpToRow } from "./CockpitRoster";
+import { NeedsYouChip, NeedsYouPopover, type NeedsYouAnchor } from "./NeedsYouPopover";
 import {
   useCockpitScopes,
   useDecisionsFor,
@@ -101,17 +103,55 @@ function RootRailFull({ focusGroup, onCollapse }: { focusGroup: DecisionGroupId 
 }
 
 /**
- * Root's Needs-you column: a 40 px icon rail by default, the
- * full `CockpitRail` beside the console when opened. It reads the live stores
- * the header badge reads and nothing else while collapsed. In a narrow window
- * (under 820 px, `lib/window/frameBand`) there is no room for it beside the
- * console, so it is not mounted at all (and loads nothing).
+ * The narrow band's way to the rail (under 820 px, no room beside the console):
+ * Now's "Needs you N" chip, in Root's sub-bar, opening the rail as Now's popover.
+ * Closed it reads the live stores only (the header badge's counts); the popover
+ * mounts the three loads while it is open.
  */
-export function RootRail() {
+function RootRailChip() {
+  const scopes = useCockpitScopes();
+  const { decisions } = useDecisionsFor(scopes);
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const [anchor, setAnchor] = useState<NeedsYouAnchor | null>(null);
+  const toggle = () => {
+    if (anchor) return setAnchor(null);
+    const rect = chipRef.current?.getBoundingClientRect();
+    if (rect) setAnchor({ x: rect.left, y: rect.bottom + 4, group: null });
+  };
+  return (
+    <>
+      <NeedsYouChip chipRef={chipRef} decisions={decisions} open={anchor != null} onClick={toggle} />
+      <UntestedTag id="cockpit.narrow" />
+      {anchor && <RootRailPopover anchor={anchor} onClose={() => setAnchor(null)} />}
+    </>
+  );
+}
+
+/** The chip's popover: the full rail with its reads, mounted only while open. */
+function RootRailPopover({ anchor, onClose }: { anchor: NeedsYouAnchor; onClose: () => void }) {
+  const scopes = useCockpitScopes();
+  useLoadSchedules(scopes);
+  const push = usePushRequests(scopes);
+  const schedules = useScheduleProposals(scopes);
+  const markup = useMarkupAsks(scopes);
+  const extras = useMemo(() => ({ push, schedules, markup }), [push, schedules, markup]);
+  const { decisions, alerts } = useDecisionsFor(scopes, extras);
+  return <NeedsYouPopover anchor={anchor} decisions={decisions} alerts={alerts} selected={null} onPick={pickRow} onClose={onClose} />;
+}
+
+/**
+ * Root's Needs-you column: a 40 px icon rail by default, the full `CockpitRail`
+ * beside the console when opened. It reads the live stores the header badge
+ * reads and nothing else while collapsed. In a narrow window (under 820 px,
+ * `lib/window/frameBand`) there is no room for a column, so none is mounted;
+ * the "Needs you N" chip takes its place in the window's bar (`chipSlot`,
+ * where the Root view portals it).
+ */
+export function RootRail({ chipSlot }: { chipSlot: HTMLElement | null }) {
   const band = useFrameBandValue();
   const [open, setOpen] = useRailFold();
   const [focusGroup, setFocusGroup] = useState<DecisionGroupId | null>(null);
-  if (band === "narrow") return null;
+  if (band === "narrow") return chipSlot ? createPortal(<RootRailChip />, chipSlot) : null;
   return open ? (
     <RootRailFull focusGroup={focusGroup} onCollapse={() => setOpen(false)} />
   ) : (

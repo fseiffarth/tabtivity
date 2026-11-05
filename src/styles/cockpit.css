@@ -626,6 +626,10 @@
   font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
 }
+/* In Root's bar the cluster places it, not the heading's auto margin. */
+.root-overlay-slot .cockpit-needs-chip {
+  margin-left: 0;
+}
 .cockpit-needs-chip:hover {
   background: var(--control-hover-bg);
 }

@@ -115,7 +115,9 @@ function filesReserveStyle(files: GroupFiles | undefined): React.CSSProperties |
 export interface RootBarSlots {
   /** After the star mark: the sole subwindow's tab strip and its +. */
   strip: HTMLElement | null;
-  /** First in the control cluster: the ⚿ tools badge. */
+  /** Before the ⚿ badge: the "Needs you N" chip of a narrow window (under 820 px). */
+  chip: HTMLElement | null;
+  /** In the control cluster: the ⚿ tools badge. */
   rights: HTMLElement | null;
   /** Before ⤢: the sole subwindow's ◫ file toggle. */
   files: HTMLElement | null;
@@ -500,7 +502,7 @@ export function RootView({
         soleGroupId !== EMPTY_GROUP_ID &&
         createPortal(filesToggle(soleGroupId, !!sole?.filesOpen), slots.files)}
       <div className="subwindow-body">
-        <RootRail />
+        <RootRail chipSlot={slots.chip} />
         <div
             className={`subwindow-pane-region root-overlay-region${dragging ? " dragging" : ""}`}
             ref={regionRef}

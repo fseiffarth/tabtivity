@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 import type { DecisionGroupId, Decisions } from "../../lib/cockpit/decisions";
+import { useT } from "../../lib/i18n";
 import type { RosterRow } from "../../lib/cockpit/roster";
 import type { AlertsFeed } from "../files/useAlertsFeed";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
@@ -11,6 +12,36 @@ export interface NeedsYouAnchor {
   x: number;
   y: number;
   group: DecisionGroupId | null;
+}
+
+/**
+ * The "Needs you N" chip of the narrow bands (under 820 px): Now's heading and
+ * Root's sub-bar carry this one button, amber while an agent asks. `onClick`
+ * opens or closes the popover below.
+ */
+export function NeedsYouChip({
+  decisions,
+  open,
+  onClick,
+  chipRef,
+}: {
+  decisions: Decisions;
+  open: boolean;
+  onClick: () => void;
+  chipRef: RefObject<HTMLButtonElement>;
+}) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      ref={chipRef}
+      className={`cockpit-needs-chip${decisions.items.asking.length > 0 ? " asking" : ""}`}
+      aria-expanded={open}
+      onClick={onClick}
+    >
+      {t("cockpit.narrow.needsYou", { count: decisions.total })}
+    </button>
+  );
 }
 
 /**

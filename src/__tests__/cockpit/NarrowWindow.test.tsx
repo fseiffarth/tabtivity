@@ -27,6 +27,7 @@ vi.mock("../../components/cockpit/CockpitViews", async () => {
 vi.mock("../../lib/shortcuts/tabJump", () => ({ jumpToTab: vi.fn(), openPromptChartTab: vi.fn() }));
 
 import { CockpitNow } from "../../components/cockpit/CockpitNow";
+import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { FrameBandContext, frameBand, type FrameBand } from "../../lib/window/frameBand";
 import { useActivityStore } from "../../stores/activity";
@@ -246,14 +247,54 @@ describe("the window measures its frame", () => {
     expect(document.querySelector(".cockpit-now-rail .cockpit-rail")).toBeTruthy();
   });
 
-  it("Root keeps its icon rail down to 820 px and has none under it", async () => {
+  it("Root keeps its icon rail down to 820 px; under it the column goes and a chip takes over", async () => {
     await openAt("root", 820);
     expect(document.querySelector(".cockpit-rail-icons")).toBeTruthy();
+    expect(document.querySelector(".cockpit-needs-chip")).toBeNull();
     await resizeTo(819);
     expect(document.querySelector(".cockpit-rail-icons")).toBeNull();
     expect(document.querySelector(".cockpit-root-rail-full")).toBeNull();
+    expect(document.querySelector(".root-overlay-subbar .cockpit-needs-chip")).toBeTruthy();
     await resizeTo(1500);
     expect(document.querySelector(".cockpit-rail-icons")).toBeTruthy();
+    expect(document.querySelector(".cockpit-needs-chip")).toBeNull();
+  });
+
+  it("Root, narrow: the sub-bar's Needs you N chip opens the rail as Now's popover; a pick goes to the tab", async () => {
+    await openAt("root", 700);
+    const chip = screen.getByRole("button", { name: "Needs you 1" });
+    // Now's own chip, not a variant: the same class in Root's sub-bar.
+    expect(chip.className).toContain("cockpit-needs-chip");
+    expect(chip.closest(".root-overlay-subbar")).toBeTruthy();
+    expect(chip.className).toContain("asking");
+    await act(async () => void fireEvent.click(chip));
+    expect(chip.getAttribute("aria-expanded")).toBe("true");
+    const pop = document.querySelector(".cockpit-needs-popover")!;
+    expect(pop.querySelector(".cockpit-rail")).toBeTruthy();
+    await act(async () => void fireEvent.click(Array.from(pop.querySelectorAll(".cockpit-rail-pick")).find((el) => el.textContent?.includes("beta"))!));
+    expect(jumpToTab).toHaveBeenCalledWith("p2", "b");
+    expect(document.querySelector(".cockpit-needs-popover")).toBeNull();
+    // A second press on the chip opens it again, a third closes it.
+    // Every row but a root tab's closes the window it was picked in.
+    expect(useRootOverlayStore.getState().open).toBe(false);
+  });
+
+  it("Root, narrow: the chip toggles its popover", async () => {
+    await openAt("root", 700);
+    const chip = screen.getByRole("button", { name: "Needs you 1" });
+    await act(async () => void fireEvent.click(chip));
+    expect(document.querySelector(".cockpit-needs-popover")).toBeTruthy();
+    await act(async () => void fireEvent.click(chip));
+    expect(document.querySelector(".cockpit-needs-popover")).toBeNull();
+  });
+
+  it("Root, narrow: a popover left open does not outlive the wide band", async () => {
+    await openAt("root", 700);
+    await act(async () => void fireEvent.click(screen.getByRole("button", { name: "Needs you 1" })));
+    expect(document.querySelector(".cockpit-needs-popover")).toBeTruthy();
+    await resizeTo(1500);
+    expect(document.querySelector(".cockpit-needs-popover")).toBeNull();
+    expect(document.querySelector(".cockpit-needs-chip")).toBeNull();
   });
 
   it("folds the box filter into an icon wrapper in the title bar (the select stays)", async () => {

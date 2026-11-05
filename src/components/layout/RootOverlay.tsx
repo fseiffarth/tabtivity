@@ -232,6 +232,7 @@ function RootOverlay() {
   const subBar = view === "root" && !split;
   // Callback refs into state: the view portals into these once they exist.
   const [stripEl, setStripEl] = useState<HTMLElement | null>(null);
+  const [chipEl, setChipEl] = useState<HTMLElement | null>(null);
   const [rightsEl, setRightsEl] = useState<HTMLElement | null>(null);
   const [filesEl, setFilesEl] = useState<HTMLElement | null>(null);
   const [controlsStyle, setControlsStyle] = useState<React.CSSProperties | undefined>(undefined);
@@ -261,6 +262,7 @@ function RootOverlay() {
   const { title: moveHint, ...barRest } = barProps;
   const slots: RootBarSlots = {
     strip: stripEl,
+    chip: chipEl,
     rights: rightsEl,
     files: filesEl,
     onBarPointerDown: barProps.onPointerDown,
@@ -394,6 +396,7 @@ function RootOverlay() {
                 (`OverlayApprovals`, the same pill the header overlays carry — and
                 the one pill of every view). Switching the tools on and off stays
                 in Settings, where it always was. */}
+            {!subBar && <span className="root-overlay-slot" ref={setChipEl} />}
             {!subBar && <span className="root-overlay-slot" ref={setRightsEl} />}
             <OverlayApprovals advisory={rights.reviewAdvisory} />
             {view === "root" && <UntestedTag id="rootOverlay.1" />}
@@ -413,6 +416,7 @@ function RootOverlay() {
           >
             <div className="root-overlay-slot" ref={setStripEl} />
             <div className="tab-controls root-overlay-controls" style={controlsStyle}>
+              <span className="root-overlay-slot" ref={setChipEl} />
               <span className="root-overlay-slot" ref={setRightsEl} />
               <UntestedTag id="rootConsole.subBar" />
               <span className="root-overlay-slot" ref={setFilesEl} />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { buildDecisions, type DecisionGroupId } from "../../lib/cockpit/decisions";
 import { buildRoster, type RosterRow } from "../../lib/cockpit/roster";
@@ -15,7 +15,8 @@ import { CockpitDetail } from "./CockpitDetail";
 import { CockpitRail } from "./CockpitRail";
 import { CockpitRailIcons } from "./CockpitRailIcons";
 import { CockpitRoster } from "./CockpitRoster";
-import { NeedsYouPopover, type NeedsYouAnchor } from "./NeedsYouPopover";
+import { NeedsYouChip, NeedsYouPopover, type NeedsYouAnchor } from "./NeedsYouPopover";
+import { ColumnGrip, useColumnWidth } from "./useColumnWidth";
 import { CockpitViewHeading } from "./CockpitViewHeading";
 import {
   useCockpitNow,
@@ -31,59 +32,10 @@ const RAIL_KEY = storageKey("cockpitRailWidth");
 const DETAIL_KEY = storageKey("cockpitDetailWidth");
 const RAIL_DEFAULT = 300;
 const DETAIL_DEFAULT = 560;
-const MIN_COLUMN = 220;
-const MAX_COLUMN = 1100;
 /** The detail's floor and ceiling beside the roster in the middle band: it
  *  gives up width before the roster does, but never below a readable pane. */
 const MID_DETAIL_MIN = 360;
 const MID_DETAIL_MAX = "55%";
-
-const clamp = (w: number) => Math.min(MAX_COLUMN, Math.max(MIN_COLUMN, Math.round(w)));
-
-/** A remembered column width (per machine; a convenience, never state). */
-function readWidth(key: string, fallback: number): number {
-  try {
-    const n = Number(localStorage.getItem(key));
-    return Number.isFinite(n) && n > 0 ? clamp(n) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeWidth(key: string, width: number) {
-  try {
-    localStorage.setItem(key, String(width));
-  } catch {
-    // Unavailable: the width holds for this session.
-  }
-}
-
-/** A column's drag handle: the width follows the pointer, and is written once
- *  on release. `sign` is +1 when dragging right widens the column. */
-function useColumnWidth(key: string, fallback: number, sign: 1 | -1) {
-  const [width, setWidth] = useState(() => readWidth(key, fallback));
-  const onPointerDown = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const start = width;
-      let last = start;
-      const move = (ev: PointerEvent) => {
-        last = clamp(start + sign * (ev.clientX - startX));
-        setWidth(last);
-      };
-      const up = () => {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        writeWidth(key, last);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-    },
-    [key, sign, width],
-  );
-  return { width, onPointerDown };
-}
 
 /**
  * The Now view (`docs/desktop_cockpit_plan.md`, View 1): the Decisions rail,
@@ -190,15 +142,12 @@ export function CockpitNow() {
       <CockpitViewHeading view="now">
         {band === "narrow" && (
           <>
-            <button
-              type="button"
-              ref={chipRef}
-              className={`cockpit-needs-chip${decisions.items.asking.length > 0 ? " asking" : ""}`}
-              aria-expanded={needsYou != null}
+            <NeedsYouChip
+              chipRef={chipRef}
+              decisions={decisions}
+              open={needsYou != null}
               onClick={() => (needsYou ? setNeedsYou(null) : openNeedsYou(null))}
-            >
-              {t("cockpit.narrow.needsYou", { count: decisions.total })}
-            </button>
+            />
             <UntestedTag id="cockpit.narrow" />
           </>
         )}
@@ -209,7 +158,7 @@ export function CockpitNow() {
             <div className="cockpit-now-rail" style={{ width: rail.width }}>
               <CockpitRail decisions={decisions} selected={shownId} alerts={alerts} />
             </div>
-            <div className="cockpit-grip" role="separator" aria-orientation="vertical" onPointerDown={rail.onPointerDown} />
+            <ColumnGrip onPointerDown={rail.onPointerDown} />
           </>
         )}
         {band === "mid" && (
@@ -233,7 +182,7 @@ export function CockpitNow() {
           </div>
         )}
         {showRoster && showDetailPane && (
-          <div className="cockpit-grip" role="separator" aria-orientation="vertical" onPointerDown={detail.onPointerDown} />
+          <ColumnGrip onPointerDown={detail.onPointerDown} />
         )}
         {showDetailPane && (
           <div
