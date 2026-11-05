@@ -211,6 +211,15 @@ describe("the new-tab keys open a tab in Root", () => {
     expect(workspaceBar).toEqual([]);
   });
 
+  it("the + key opens the + menu of an empty Root too", () => {
+    useTabsStore.setState({ tabsByScope: { p: [], root: [] }, layoutByScope: {}, focusedGroupByScope: {} });
+    render(<><Harness /><RootOverlayHost /></>);
+    press({ key: " ", shiftKey: true });
+    press({ key: "+" });
+    expect(document.querySelector(".tab-add-menu")).not.toBeNull();
+    expect(steering()).toMatchObject({ level: "region", region: "addTab" });
+  });
+
   it("the + key opens Root's + menu and walks it as the add-tab region", () => {
     render(<><Harness /><RootOverlayHost /></>);
     press({ key: " ", shiftKey: true });

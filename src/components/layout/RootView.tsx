@@ -361,7 +361,9 @@ export function RootView({
 
   /** The new-tab keys (`RootNewTabKeys`): open the + menu of one subwindow from
    *  its button's place, or add a tab to it. */
-  const openMenuFor = (groupId: string) => {
+  const openMenuFor = (requested: string) => {
+    // An empty Root's strip is registered under the placeholder id.
+    const groupId = requested === ROOT_EMPTY_GROUP_ID ? EMPTY_GROUP_ID : requested;
     const button = stripRefs.current
       .get(groupId)
       ?.closest(".tab-bar")
