@@ -2280,6 +2280,8 @@ pub fn run() {
             commands::synctex::synctex_status,
             commands::synctex::synctex_view,
             commands::synctex::synctex_page_lines,
+            commands::tfevents::tfevents_read,
+            commands::tfevents::tfevents_discover,
             commands::tex::list_fonts,
             commands::tex::resolve_tex_root,
             commands::tex::tex_auto_engine,

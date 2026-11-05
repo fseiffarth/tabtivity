@@ -1047,6 +1047,9 @@ export const UNTESTED = {
   "cockpit.tonight.heading": { area: "cockpit", what: "Cockpit · Tonight view" },
   "cockpit.usage.heading": { area: "cockpit", what: "Cockpit · Usage view" },
   "cockpit.standDown": { area: "cockpit", what: "Cockpit Now view's detail pane showing a project's agent tab while that project is on screen behind the window: the tab's own pane shows \"Shown in the cockpit's Now view · Show here\" instead of the terminal, nothing restarts or resizes; closing the window (or Show here) gives the pane back intact" },
+  "viewer.tensorboard": { area: "viewers", what: "TensorBoard viewer · an events.out.tfevents.* file opens as one chart per scalar tag (PyTorch/tensorboardX/Lightning simple values and TF2/Keras tensor scalars), tags grouped by prefix with a filter (/regex), smoothing slider (debiased EMA, default 0.6), step/relative/wall x axis, log y, hover readout, click to enlarge; images/histograms are only counted in the footer; local and SSH (ranged reads), a hidden pane does not poll" },
+  "viewer.tensorboard.runs": { area: "viewers", what: "TensorBoard viewer · folder context menu → Open as training runs: every folder holding event files (3 levels, 64 files) is a run with its own colour and a legend chip that turns it off; restarts in one folder merge by step" },
+  "viewer.tensorboard.live": { area: "viewers", what: "TensorBoard viewer · Live: on when the newest point is under 10 minutes old; re-reads only the new bytes every 5 s locally and 20 s over SSH; stops while the pane is hidden or the host is disconnected and catches up on show" },
 } as const satisfies Record<string, UntestedEntry>;
 
 // The phone shares this register but renders its tags in several shapes. Its

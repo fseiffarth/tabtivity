@@ -141,6 +141,8 @@ pub mod window_registry;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;
 pub mod state_gc;
+// TensorBoard event files read natively (the training-curves viewer).
+pub mod tfevents;
 pub mod terminal_service;
 pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share

@@ -88,6 +88,7 @@ pub mod connect;
 pub mod sync;
 pub mod sync_handoff;
 pub mod synctex;
+pub mod tfevents;
 pub mod terminal;
 pub mod tex;
 pub mod timer;

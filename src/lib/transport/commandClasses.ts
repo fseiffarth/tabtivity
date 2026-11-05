@@ -755,6 +755,8 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["tex_capability", "core"],
   ["tex_auto_engine", "core"],
   ["tex_preview_snippet", "core"],
+  ["tfevents_discover", "core"],
+  ["tfevents_read", "core"],
   ["get_project_activity", "core"],
   ["get_time_activity_all", "core"],
   ["timer_flush_app", "core"],

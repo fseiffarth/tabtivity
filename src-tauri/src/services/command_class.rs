@@ -999,6 +999,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("tex_capability", Core),
     ("tex_auto_engine", Core),
     ("tex_preview_snippet", Core),
+    // commands/tfevents.rs
+    ("tfevents_discover", Core),
+    ("tfevents_read", Core),
     // commands/timer.rs
     ("get_project_activity", Core),
     ("get_time_activity_all", Core),

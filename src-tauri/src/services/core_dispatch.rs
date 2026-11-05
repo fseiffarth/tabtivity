@@ -445,6 +445,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("read_spreadsheet", "path", BodyConfined),
     ("sqlite_page", "path", BodyConfined),
     ("sqlite_tables", "path", BodyConfined),
+    ("tfevents_discover", "path", BodyConfined), // `fs::byte_route` + `confine_abs`
+    ("tfevents_read", "path", BodyConfined), // `fs::read_range_routed` (`open_confined`)
     ("write_file_text", "path", BodyConfined),
     // Relative paths inside a held `ProjectDir` (`enforce_confinement`, or a
     // pathspec git resolves inside the repo).

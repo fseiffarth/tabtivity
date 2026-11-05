@@ -72,18 +72,66 @@ export function openFileEntry(opts: {
     return;
   }
 
-  const tab: Omit<TabEntry, "key"> = {
-    label: entry.name,
-    cmd: "",
-    cwd: projectDir,
-    kind: "embed",
-    embedPath: entry.path,
-    viewer,
-  };
+  placeEmbedTab(
+    {
+      label: entry.name,
+      cmd: "",
+      cwd: projectDir,
+      kind: "embed",
+      embedPath: entry.path,
+      viewer,
+    },
+    { placeTab: opts.placeTab, scope, newSubwindow, tabScope },
+  );
+}
 
+/**
+ * Open a folder as TensorBoard training runs (`docs/tensorboard_viewer_plan.md`):
+ * a `tensorboard` embed tab whose path is the folder itself, which the viewer
+ * lists for event files. Placed exactly like a file's viewer tab (focused
+ * subwindow, a popout's `placeTab`, a scope, a new subwindow), and focuses the
+ * tab already open for that folder.
+ */
+export function openTrainingRuns(opts: {
+  entry: FileEntry;
+  projectDir: string;
+  /** The tab label, e.g. "Runs: logs" (the caller has the translation). */
+  label: string;
+  placeTab?: (tab: Omit<TabEntry, "key">) => void;
+  scope?: string | null;
+  newSubwindow?: boolean;
+}): void {
+  const { entry, projectDir, label, scope, newSubwindow } = opts;
+  placeEmbedTab(
+    {
+      label,
+      cmd: "",
+      cwd: projectDir,
+      kind: "embed",
+      embedPath: entry.path,
+      viewer: "tensorboard",
+    },
+    { placeTab: opts.placeTab, scope, newSubwindow, tabScope: scope ?? useTabsStore.getState().scope },
+  );
+}
+
+/** The shared placement of an embed tab: see [`openFileEntry`] for the cases. */
+function placeEmbedTab(
+  tab: Omit<TabEntry, "key">,
+  where: {
+    placeTab?: (tab: Omit<TabEntry, "key">) => void;
+    scope?: string | null;
+    newSubwindow?: boolean;
+    tabScope: string;
+  },
+): void {
+  const { scope, newSubwindow, tabScope } = where;
+  const placeTab = where.placeTab ?? (newSubwindow
+    ? (tb: Omit<TabEntry, "key">) => openTabInNewSubwindow(tabScope, tb)
+    : undefined);
   const sameFile = (t: TabEntry) =>
-    t.kind === "embed" && t.viewer === viewer && t.embedPath === entry.path;
-  if (newSubwindow && !opts.placeTab) {
+    t.kind === "embed" && t.viewer === tab.viewer && t.embedPath === tab.embedPath;
+  if (newSubwindow && !where.placeTab) {
     openTabInNewSubwindow(tabScope, tab, sameFile);
     return;
   }
