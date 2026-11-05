@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { IS_MAC } from "../../lib/platform";
 import { startWindowDrag } from "../../lib/window/startWindowDrag";
+import { useFullscreenMode } from "../../lib/window/fullscreenMode";
+import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { Clock } from "../header/Clock";
 import { StatusCluster } from "../header/StatusCluster";
 import { WindowControls } from "../header/WindowControls";
@@ -33,7 +35,50 @@ function handleDrag(e: React.MouseEvent) {
   if (!target.closest(NON_DRAG_SELECTOR)) startWindowDrag();
 }
 
+/** How long the fullscreen bar stays down after the pointer leaves it. */
+const AUTOHIDE_LEAVE_MS = 450;
+/** Something in the bar still needs it open: the pointer is on it, or a menu
+ *  dropped out of it (hover menu or a click-opened one). */
+function barBusy(header: HTMLElement | null): boolean {
+  if (!header) return false;
+  return (
+    header.matches(":hover") ||
+    useHeaderHoverMenuStore.getState().openId !== null ||
+    header.querySelector("[role='menu'], .tab-new-menu, .project-switcher-add-menu") !== null
+  );
+}
+
 export function HeaderBar() {
+  // In the window's own fullscreen mode the bar steps out of the layout (the
+  // content takes the whole screen) and slides down while the pointer is at the
+  // top edge. Windowed, it is the ordinary always-visible bar.
+  const fullscreen = useFullscreenMode((s) => s.on);
+  const [revealed, setRevealed] = useState(false);
+  const hideTimer = useRef<number | null>(null);
+  const clearHide = () => {
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  };
+  const reveal = () => {
+    clearHide();
+    setRevealed(true);
+  };
+  const scheduleHide = () => {
+    clearHide();
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null;
+      // Busy (a menu is open, the pointer came back): look again shortly.
+      if (barBusy(headerRef.current)) scheduleHide();
+      else setRevealed(false);
+    }, AUTOHIDE_LEAVE_MS);
+  };
+  useEffect(() => {
+    if (!fullscreen) {
+      clearHide();
+      setRevealed(false);
+    }
+    return clearHide;
+  }, [fullscreen]);
   const order = useSettingsStore((s) => s.settings?.header_order);
   const pins = useSettingsStore((s) => s.settings?.header_pins);
   const pinDefaults = useHeaderPinDefaults();
@@ -57,11 +102,19 @@ export function HeaderBar() {
   // Layout, from `workspace_capabilities`.)
 
   return (
+    <>
+    {fullscreen && !revealed && (
+      <div className="header-hotzone" aria-hidden="true" onMouseEnter={() => { reveal(); scheduleHide(); }} />
+    )}
     <header
       ref={headerRef}
-      className={`app-header${IS_MAC ? " is-mac" : ""}`}
+      className={`app-header${IS_MAC ? " is-mac" : ""}${
+        fullscreen ? ` is-autohide${revealed ? " is-revealed" : ""}` : ""
+      }`}
       data-width-tier={widthTier}
       onMouseDown={handleDrag}
+      onMouseEnter={fullscreen ? reveal : undefined}
+      onMouseLeave={fullscreen ? scheduleHide : undefined}
     >
       {/* The bar opens on the project strip itself: its leading box chip is the
           leftmost thing in the window. Its Tabtivity logo is the window's move
@@ -106,5 +159,6 @@ export function HeaderBar() {
         <WindowControls />
       </div>
     </header>
+    </>
   );
 }

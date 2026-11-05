@@ -522,6 +522,15 @@ impl HomeFile {
         Some(bytes)
     }
 
+    /// [`read`](Self::read), but `None` for a file over `cap` bytes — never more
+    /// than `cap + 1` bytes are read, whatever an agent left there.
+    pub fn read_capped(&self, cap: u64) -> Option<Vec<u8>> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        self.open_read()?.take(cap + 1).read_to_end(&mut bytes).ok()?;
+        (bytes.len() as u64 <= cap).then_some(bytes)
+    }
+
     /// The link's target, for a symlink.
     pub fn read_link(&self) -> Option<PathBuf> {
         #[cfg(unix)]

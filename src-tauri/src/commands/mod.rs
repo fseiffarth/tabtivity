@@ -86,6 +86,7 @@ pub mod subwindow;
 #[cfg(feature = "desktop")]
 pub mod connect;
 pub mod sync;
+pub mod sync_handoff;
 pub mod synctex;
 pub mod terminal;
 pub mod tex;

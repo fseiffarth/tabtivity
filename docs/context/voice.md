@@ -75,6 +75,24 @@ the user's ears — and speech that starts while the voice speaks stops it
 cannot undo a new one's mode. Barge-in through speakers needs a voice whose
 samples Tabtivity sees (Piper, plan step 7).
 
+## Natural voices (Piper)
+
+The user found espeak on Ubuntu too poor (2026-11-05), so plan step 7's
+Piper voices exist: `services::voice::piper`. The frozen MIT
+`rhasspy/piper` 2023.11.14-2 binary (user's pick over piper1-gpl's Python
+package and sherpa-onnx) runs as a **child process, never linked** — its
+espeak-ng is GPL. One medium voice per app language, program and voices
+fetched by an install tab from pinned URLs with embedded hashes into
+`<state_dir>/voice/{piper,voices}/`. Not on macOS: the release's macOS
+build is broken and macOS's own voices are good. One Piper process per
+read (not per chunk: one model load), chunks one per stdin line, raw PCM
+read from stdout and played through a `cpal` output stream that Tabtivity
+owns — the samples an echo canceller would need. The mute gate still
+applies (half-duplex), and echo cancellation is still open. `tts::ReadAloud`
+picks per read: a natural voice when the `voice_natural` setting allows it
+and one is installed for the language, else the OS voice, built lazily; a
+Piper that will not start falls back to the OS voice for that read.
+
 ## The hands-free send guard
 
 `shared/handsFree.ts`, one state machine for both the desktop and the phone:

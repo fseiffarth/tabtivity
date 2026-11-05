@@ -59,6 +59,8 @@ workflow="${CI_LOCAL_WORKFLOW:-$repo/.github/workflows/ci-cd.yml}"
 # SCHED_IDLE + nice 19, so a gate run never makes the window lag (the file says why).
 . "$repo/scripts/lib/low_priority.sh"
 low_priority_reexec "$repo/scripts/ci-local.sh" "$@"
+# One gate run at a time per checkout (the file says why).
+. "$repo/scripts/lib/gate_lock.sh"
 
 # ---------------------------------------------------------------------------
 # The steps, in run order: cheap checks first, then the lint job, the test
@@ -672,5 +674,5 @@ done
 case "$action" in
   list) list_steps ;;
   drift) check_drift ;;
-  run) run_all "$fastmode" "$from" ;;
+  run) gate_lock "ci-local.sh"; run_all "$fastmode" "$from" ;;
 esac

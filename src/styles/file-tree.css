@@ -749,6 +749,12 @@
   cursor: var(--cur-pointer, pointer);
 }
 
+.file-run-slot {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
 .file-run-btn:hover {
   background: color-mix(in srgb, var(--success) 14%, transparent);
   border-color: var(--success);

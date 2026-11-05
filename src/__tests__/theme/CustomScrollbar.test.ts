@@ -367,11 +367,25 @@ describe("installCustomScrollbars following motion", () => {
     panel.dispatchEvent(
       motionEvent("animationstart", { animationName: "side-panel-drop-pulse", pseudoElement: "::before" }),
     );
+    const hitTest = vi.spyOn(document, "elementFromPoint");
+    for (const type of ["transitionend", "transitioncancel"]) {
+      for (const propertyName of ["background-color", "opacity"]) {
+        panel.dispatchEvent(motionEvent(type, { propertyName }));
+      }
+    }
+    for (const type of ["animationend", "animationcancel"]) {
+      panel.dispatchEvent(
+        motionEvent(type, { animationName: "side-panel-drop-pulse", pseudoElement: "::before" }),
+      );
+    }
+    expect(clock.pending()).toBe(0);
     clock.tick();
     clock.tick();
     expect(rect.mock.calls.length).toBe(measured);
+    expect(hitTest).not.toHaveBeenCalled();
     expect(clock.pending()).toBe(0);
 
+    hitTest.mockRestore();
     uninstall();
     list.remove();
     panel.remove();
@@ -387,7 +401,7 @@ describe("installCustomScrollbars following motion", () => {
     panel.dispatchEvent(motionEvent("transitionrun", { propertyName: "transform" }));
     panel.dispatchEvent(motionEvent("transitionrun", { propertyName: "border-left-color" }));
     panel.dispatchEvent(motionEvent("transitionend", { propertyName: "border-left-color" }));
-    clock.tick(); // the end's full pass
+    clock.tick(); // the slide's next frame; the colour's end adds no work
     const measured = rect.mock.calls.length;
     clock.tick();
     clock.tick();
@@ -514,6 +528,56 @@ describe("installCustomScrollbars discovering late overflow", () => {
 
   const thumbs = (axis: "vertical" | "horizontal") =>
     document.querySelectorAll(`.app-scrollbar-layer .app-scrollbar-${axis}`).length;
+
+  it("does not remeasure content for its own thumb additions", async () => {
+    const clock = frameClock();
+    const { panel, list } = mountList({ scrollHeight: 1000, scrollWidth: 100 });
+    const uninstall = installCustomScrollbars();
+    const measure = vi.spyOn(list, "getBoundingClientRect");
+    try {
+      clock.tick();
+      expect(measure).toHaveBeenCalledTimes(1);
+      measure.mockClear();
+      await Promise.resolve(); // Deliver the thumb's own child-list mutation.
+      clock.tick();
+      expect(measure).not.toHaveBeenCalled();
+    } finally {
+      measure.mockRestore();
+      uninstall();
+      panel.remove();
+      clock.restore();
+    }
+  });
+
+  it("reads every container's bounding box before writing thumb styles", () => {
+    const clock = frameClock();
+    const first = mountList({ scrollHeight: 1000, scrollWidth: 100 });
+    const second = mountList({ scrollHeight: 1000, scrollWidth: 100 });
+    const uninstall = installCustomScrollbars();
+    const operations: string[] = [];
+    const reads = [first, second].map(({ list }) =>
+      vi.spyOn(list, "getBoundingClientRect").mockImplementation(() => {
+        operations.push("read");
+        return { top: 0, left: 0, width: 100, height: 200 } as DOMRect;
+      }),
+    );
+    const writes = [...document.querySelectorAll<HTMLElement>(".app-scrollbar-vertical")].map((thumb) =>
+      vi.spyOn(thumb.style, "opacity", "set").mockImplementation(() => {
+        operations.push("write");
+      }),
+    );
+    try {
+      clock.tick();
+      expect(operations).toEqual(["read", "read", "write", "write"]);
+    } finally {
+      reads.forEach((spy) => spy.mockRestore());
+      writes.forEach((spy) => spy.mockRestore());
+      uninstall();
+      first.panel.remove();
+      second.panel.remove();
+      clock.restore();
+    }
+  });
 
   it("grows a vertical thumb for a list that overflowed sideways only when it was found", () => {
     const clock = frameClock();

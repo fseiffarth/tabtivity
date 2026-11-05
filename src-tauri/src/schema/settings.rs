@@ -671,6 +671,13 @@ pub struct Settings {
     /// Settings — it stops the popup, it does not stop the counting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_stats_recap: Option<bool>,
+    /// When true (the default, absent counts as on), the app asks the CLIs'
+    /// registries and Ollama's releases for their newest version once a day by
+    /// itself (`commands::agents::start_daily_update_check`). Off: no request
+    /// leaves for it, and a release is looked up only on a click in Manage
+    /// CLIs / the Ollama row. Read at every tick, so a change applies at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_release_check: Option<bool>,
     /// UTC date ("YYYY-MM-DD") the recap was last auto-shown, so it opens once a
     /// day rather than on every window. Written by the recap host itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1238,6 +1245,11 @@ impl Settings {
         self.daily_stats_recap.unwrap_or(true)
     }
 
+    /// Whether the background daily release check runs. Defaults ON when unset.
+    pub fn daily_release_check(&self) -> bool {
+        self.daily_release_check.unwrap_or(true)
+    }
+
     /// The rule every experimental flag follows (mirrors `src/lib/experimental.ts`):
     /// an explicit value wins, in both directions, and an unset flag is **off**.
     ///
@@ -1769,17 +1781,20 @@ mod default_rule_tests {
         assert!(absent.connections_headless());
         assert!(absent.agent_remote_control());
         assert!(absent.daily_stats_recap());
+        assert!(absent.daily_release_check());
         assert_eq!(absent.color_scheme(), "light_lavender");
 
         let off: Settings = serde_json::from_str(
             r#"{"persist_local_sessions":false,"connections_headless":false,
-                "agent_remote_control":false,"daily_stats_recap":false,"color_scheme":"soft_dark"}"#,
+                "agent_remote_control":false,"daily_stats_recap":false,"daily_release_check":false,
+                "color_scheme":"soft_dark"}"#,
         )
         .unwrap();
         assert!(!off.persist_local_sessions());
         assert!(!off.connections_headless());
         assert!(!off.agent_remote_control());
         assert!(!off.daily_stats_recap());
+        assert!(!off.daily_release_check());
         assert_eq!(off.color_scheme(), "soft_dark");
         assert!(off.extra.is_empty(), "{:?}", off.extra.keys().collect::<Vec<_>>());
     }

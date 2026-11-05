@@ -35,6 +35,11 @@ pub const HOMES_DIR: &str = "agent-homes";
 /// The scope key of the Host session's home. A project id is a UUID and a box
 /// scope is `box:<id>`, so it collides with neither; `root` is the console's.
 pub const HOST_SCOPE_KEY: &str = "host";
+/// The key of the probe home: where `/usage`, the `--version` probes and the
+/// scheduled warm-up run an agent CLI (`prepare_probe_home`). A scope key never
+/// holds a dot (`storage::project_key`), so no project, box or imported id can
+/// name it, and it does not end in [`LOCAL_MODEL_SUFFIX`].
+pub const PROBE_SCOPE_KEY: &str = "probe.cli";
 /// What a scope's local-model home appends to the scope's key. A key is made
 /// of `[A-Za-z0-9_-]` only (`storage::project_key`), so no scope's own home
 /// can carry it.
@@ -94,6 +99,55 @@ pub fn host_home_in(state_dir: &Path) -> PathBuf {
 pub fn host_home() -> PathBuf {
     host_home_in(&storage::state_dir())
 }
+
+/// The probe home under `state_dir`.
+pub fn probe_home_in(state_dir: &Path) -> PathBuf {
+    homes_root_in(state_dir).join(PROBE_SCOPE_KEY)
+}
+
+pub fn probe_home() -> PathBuf {
+    probe_home_in(&storage::state_dir())
+}
+
+/// Whether `home` is the probe home ([`probe_home_in`]). It holds the shared
+/// logins and nothing else Tabtivity places, so a sweep that reads a home's
+/// hooks or sessions skips it.
+pub fn is_probe_home(home: &Path) -> bool {
+    home.file_name().is_some_and(|n| n == PROBE_SCOPE_KEY)
+}
+
+/// The environment that makes a CLI use `home` as its home: `HOME`, and on
+/// Windows `USERPROFILE` and `APPDATA` (what `agent_install::install_env_for`
+/// sets for an installer), plus the per-CLI file-storage switches a spawn gets
+/// (`agent_auth::fence_env`) so a login a keyring would hold lands in the
+/// file the keeper copies.
+pub fn probe_env_for(windows: bool, home: &Path, bin: &str) -> Vec<(String, String)> {
+    let s = |p: PathBuf| p.to_string_lossy().into_owned();
+    let mut env = vec![("HOME".to_string(), s(home.to_path_buf()))];
+    if windows {
+        env.push(("USERPROFILE".to_string(), s(home.to_path_buf())));
+        env.push(("APPDATA".to_string(), s(home.join("AppData").join("Roaming"))));
+    }
+    let bin = bin.rsplit(['/', '\\']).next().unwrap_or(bin);
+    let bin = bin.strip_suffix(".exe").unwrap_or(bin);
+    env.extend(
+        crate::services::agent_auth::fence_env(bin)
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string())),
+    );
+    env
+}
+
+/// Variables that would send a CLI to a config folder other than `$HOME`'s:
+/// a probe run drops them so the login it reads is the probe home's.
+pub const PROBE_UNSET: &[&str] = &[
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+];
 
 /// The scope id of a local spawn: its project or box, else the root console.
 pub fn scope_of(project_id: Option<&str>) -> String {
@@ -180,6 +234,25 @@ fn prepare_assistant_home_in(state_dir: &Path, local: bool, chat_dir: &Path) -> 
     prepare_home_with(state_dir, &home, storage::ASSISTANT_SCOPE, &[], Seed::Assistant, Some(chat_dir))
 }
 
+/// The probe home (`agent-homes/probe.cli`), brought up to date for a run in
+/// `cwd` (the warm-up folder). What it gets: the shared logins, placed the way
+/// a spawn places them, and Claude's and Codex's folder trust for `cwd` with
+/// Claude's onboarding flag, so a print-mode run does not stop at a dialog.
+/// What it never gets: the `agent_global` layer, Tabtivity's session hooks,
+/// the Copilot token setting, any seeded history. It is never mounted into a
+/// fence (a fence mounts its own scope's home only). The login keeper sweeps
+/// it with every other home, so a token rotation a probe run caused is adopted
+/// and the stored login does not go stale.
+pub fn prepare_probe_home(cwd: &Path) -> io::Result<PreparedHome> {
+    prepare_probe_home_in(&storage::state_dir(), cwd)
+}
+
+/// [`prepare_probe_home`] against an explicit state dir.
+pub(crate) fn prepare_probe_home_in(state_dir: &Path, cwd: &Path) -> io::Result<PreparedHome> {
+    let home = probe_home_in(state_dir);
+    prepare_home_with(state_dir, &home, PROBE_SCOPE_KEY, &[], Seed::Probe, Some(cwd))
+}
+
 /// The Host session's home: same preparation, but nothing is seeded from a
 /// fenced scope's state and no transcripts are copied in.
 pub fn prepare_host_home() -> io::Result<PreparedHome> {
@@ -201,6 +274,9 @@ enum Seed {
     /// neither the `agent_global` layer nor the Copilot setting reaches it
     /// ([`prepare_assistant_home`]).
     Assistant,
+    /// The probe home's: nothing seeded, no `agent_global` layer, no hooks, no
+    /// Copilot setting ([`prepare_probe_home`]).
+    Probe,
 }
 
 fn prepare_home_in(
@@ -260,7 +336,7 @@ fn prepare_home_with(
     // The user's Tabtivity-wide instructions, skills, hooks and MCP servers,
     // before Tabtivity's own hooks so a merge never displaces those. Never
     // into the assistant's home (plan decision 4).
-    if seed != Seed::Assistant {
+    if !matches!(seed, Seed::Assistant | Seed::Probe) {
         if let Err(e) = crate::services::agent_global::apply_to_home(state_dir, home) {
             eprintln!("agent_home: apply the global agent config to {}: {e}", home.display());
         }
@@ -271,12 +347,20 @@ fn prepare_home_with(
     if let Some(dir) = trust {
         trust_chat_folder(home, dir)?;
     }
-    crate::services::agent_session::register_hooks_in_home(home);
+    // The probe home runs no tab, so it has no turn state to report. It still
+    // gets what is not a hook: OpenCode 2's managed service listens on one
+    // fixed loopback port shared by every home, so a warm-up's or a version
+    // probe's `opencode` must run its own server too (gap 54).
+    if seed == Seed::Probe {
+        crate::services::opencode_session::disable_service_in_home(home);
+    } else {
+        crate::services::agent_session::register_hooks_in_home(home);
+    }
     // Copilot signs in through a keyring the fence hides: its home gets the
     // plain-text token setting Tabtivity's keeper collects from (`copilot_auth`).
     // That is the scope's own home; Copilot drives no local model.
     #[cfg(target_os = "linux")]
-    if !matches!(seed, Seed::LocalModel | Seed::Assistant) {
+    if !matches!(seed, Seed::LocalModel | Seed::Assistant | Seed::Probe) {
         let _ = crate::services::copilot_auth::prepare_home(scope_id);
     }
     crate::services::agent_auth::link_into_home(state_dir, home);
@@ -305,7 +389,7 @@ fn prepare_home_with(
 fn seed_home(state_dir: &Path, home: &Path, scope_id: &str, roots: &[PathBuf], seed: Seed) {
     let user_home = crate::paths::home_dir();
     let root_strings = || roots.iter().map(|r| r.to_string_lossy().into_owned()).collect::<Vec<String>>();
-    // `Seed::Nothing` and `Seed::Assistant` bring in nothing.
+    // `Seed::Nothing`, `Seed::Assistant` and `Seed::Probe` bring in nothing.
     if seed == Seed::LocalModel {
         seed_claude_json(&user_home.join(".claude.json"), home, &root_strings());
     }
@@ -981,5 +1065,149 @@ mod tests {
         assert!(trust_chat_folder(&home, Path::new("/s/c")).is_err());
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}");
         assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+    }
+
+    // ── the probe home (threat recheck 2026-11-04, gap 93) ──────────────────
+
+    const CODEX_LOGIN: &str = r#"{"tokens":{"account_id":"acc-1","access_token":"t1"}}"#;
+
+    fn store_login(state: &Path) {
+        let store = crate::services::agent_auth::store_path_in(
+            state,
+            "codex",
+            &crate::services::agent_auth::file(".codex/auth.json"),
+        );
+        write_file(&store, CODEX_LOGIN);
+    }
+
+    #[test]
+    fn the_probe_home_collides_with_no_other_kind_of_home() {
+        let state = Path::new("/s");
+        let probe = probe_home_in(state);
+        assert_eq!(probe, PathBuf::from("/s/agent-homes/probe.cli"));
+        assert!(is_probe_home(&probe));
+        assert!(!is_probe_home(&host_home_in(state)));
+        assert!(!is_local_model_home(&probe));
+        assert_ne!(probe, host_home_in(state));
+        // No scope id can spell the key: ids are folded to [A-Za-z0-9_-].
+        for id in ["probe.cli", "probe_cli", "probe.cli.local", "root", "assistant", "box:probe.cli"] {
+            assert_ne!(scope_home_in(state, id), probe, "{id}");
+            assert_ne!(local_model_home_in(state, id), probe, "{id}");
+        }
+    }
+
+    #[test]
+    fn the_probe_home_holds_the_stored_login_and_none_of_the_scope_extras() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        store_login(state);
+        // The Tabtivity-wide layer and the scope-only extras exist to be left out.
+        let layer = crate::services::agent_global::global_dir_in(state);
+        write_file(&layer.join(".claude/CLAUDE.md"), "from the layer");
+        write_file(&layer.join(".codex/config.toml"), "[mcp_servers.evil]\ncommand = \"x\"\n");
+        let user = tmp.path().join("user");
+        write_file(&user.join(".claude.json"), r#"{"oauthAccount":{"emailAddress":"real@example.org"}}"#);
+        let cwd = state.join("agent-cron");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let prepared = prepare_probe_home_in(state, &cwd).unwrap();
+        let home = prepared.dir;
+        assert_eq!(home, probe_home_in(state));
+        assert!(prepared.fresh);
+        // The login a spawn would place.
+        assert_eq!(std::fs::read_to_string(home.join(".codex/auth.json")).unwrap(), CODEX_LOGIN);
+        // Trust for the warm-up folder, so a print-mode run meets no dialog.
+        let claude: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(claude["hasCompletedOnboarding"], true);
+        assert_eq!(claude["projects"][cwd.to_string_lossy().as_ref()]["hasTrustDialogAccepted"], true);
+        assert!(std::fs::read_to_string(home.join(".codex/config.toml")).unwrap().contains("trusted"));
+        // Not the user's identity, not the global layer, no hook, no MCP server.
+        assert!(claude.get("oauthAccount").is_none());
+        assert!(!home.join(".claude/CLAUDE.md").exists());
+        let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(!codex.contains("evil") && !codex.contains("hooks"), "{codex}");
+        let hook_script = crate::services::agent_session::hook_command();
+        // Control: a scope's home registers it.
+        let sibling = prepare_home_in(state, &scope_home_in(state, "p1"), "p1", &[], Seed::Scope).unwrap().dir;
+        let settings = std::fs::read_to_string(sibling.join(".claude/settings.json")).unwrap_or_default();
+        assert!(settings.contains(&hook_script), "the control home has the hook: {settings}");
+        for rel in [".claude/settings.json", ".codex/config.toml", ".codex/hooks.json", ".gemini/settings.json"] {
+            if let Ok(text) = std::fs::read_to_string(home.join(rel)) {
+                assert!(!text.contains(&hook_script), "{rel} registers the session hook");
+            }
+        }
+        // A second preparation reuses it.
+        assert!(!prepare_probe_home_in(state, &cwd).unwrap().fresh);
+    }
+
+    #[test]
+    fn the_probe_command_environment_names_the_probe_home_only() {
+        let home = Path::new("/s/agent-homes/probe.cli");
+        let unix = probe_env_for(false, home, "/usr/bin/gemini");
+        let get = |env: &[(String, String)], k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get(&unix, "HOME").as_deref(), Some("/s/agent-homes/probe.cli"));
+        assert_eq!(get(&unix, "USERPROFILE"), None);
+        // The file-storage switch a spawn gets, so a keyring does not hold the login.
+        assert_eq!(get(&unix, "GEMINI_FORCE_FILE_STORAGE").as_deref(), Some("true"));
+        let win = probe_env_for(true, home, "claude.exe");
+        assert_eq!(get(&win, "USERPROFILE"), get(&win, "HOME"));
+        assert!(get(&win, "APPDATA").is_some_and(|a| Path::new(&a).starts_with(home)));
+        assert!(PROBE_UNSET.contains(&"CLAUDE_CONFIG_DIR") && PROBE_UNSET.contains(&"CODEX_HOME"));
+    }
+
+    /// Gap 54 in the probe home: a warm-up's `opencode run` must not start or
+    /// join OpenCode 2's shared background service, so the home carries the
+    /// same `disabled: true` every Tabtivity-owned home does.
+    #[test]
+    fn the_probe_home_disables_opencodes_shared_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let cwd = state.join("agent-cron");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let probe = prepare_probe_home_in(state, &cwd).unwrap().dir;
+        let service: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(probe.join(".config/opencode/service.json")).unwrap()).unwrap();
+        assert_eq!(service["disabled"], true);
+        // Still no plugin or hint: those are the hooks the probe home leaves out.
+        let config = std::fs::read_to_string(probe.join(".config/opencode/opencode.json")).unwrap_or_default();
+        assert!(!config.contains("plugin"), "{config}");
+    }
+
+    /// The keeper sweeps every folder under `agent-homes`, so a rotation a
+    /// probe run caused lands in the store and every other home; otherwise the
+    /// stored login would go stale.
+    #[test]
+    fn the_login_keeper_adopts_a_rotation_made_in_the_probe_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        store_login(state);
+        let cwd = state.join("agent-cron");
+        let probe = prepare_probe_home_in(state, &cwd).unwrap().dir;
+        let other = prepare_home_in(state, &scope_home_in(state, "p1"), "p1", &[], Seed::Scope).unwrap().dir;
+        assert!(existing_homes_in(state).contains(&probe));
+
+        let rotated = r#"{"tokens":{"account_id":"acc-1","access_token":"t2"}}"#;
+        let fresh = probe.join(".codex/auth.json.tmp");
+        std::fs::write(&fresh, rotated).unwrap();
+        std::fs::rename(&fresh, probe.join(".codex/auth.json")).unwrap();
+        crate::services::agent_auth::reconcile_all_in(state);
+        let store = crate::services::agent_auth::store_path_in(state, "codex", &crate::services::agent_auth::file(".codex/auth.json"));
+        assert_eq!(std::fs::read_to_string(store).unwrap(), rotated);
+        assert_eq!(std::fs::read_to_string(other.join(".codex/auth.json")).unwrap(), rotated);
+    }
+
+    #[test]
+    fn deleting_a_scope_home_never_takes_the_probe_home() {
+        // `delete_scope_home` names only `scope_home_in` and `local_model_home_in`
+        // of a key, and no key maps onto the probe home (the test above).
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let probe = prepare_probe_home_in(state, &state.join("agent-cron")).unwrap().dir;
+        for id in ["probe.cli", "probe_cli", "probe"] {
+            for home in [scope_home_in(state, id), local_model_home_in(state, id)] {
+                assert_ne!(home, probe, "{id}");
+            }
+        }
+        assert!(probe.is_dir());
     }
 }

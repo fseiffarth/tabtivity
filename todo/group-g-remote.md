@@ -341,7 +341,9 @@ container) — as opposed to the git **push** axis (#21/#22).*
           mismatches. Document the model; consider running `git` on the remote
           via the exec wrapper; add a manual "refresh file tree" affordance.
         - [ ] **SSH `LocalForward` per project** to reach remote dev-server ports
-          at `localhost:port`.
+          at `localhost:port`. Plan: `docs/localhost_viewer_plan.md` (server
+          chip + `ssh -O forward` over the ControlMaster; also fixes remote-tab
+          loopback links opening the local port).
         - [ ] **Remote-status panel** (mount state, control-master liveness, VPN
           state, last error) for debuggability.
 

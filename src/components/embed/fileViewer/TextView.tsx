@@ -12,8 +12,6 @@ import { type InternalViewer } from "../../../lib/viewers/fileUtils";
 import {
   isPythonPath,
   isPythonMainScript,
-  pythonLinkRanges,
-  resolvePythonDefinition,
 } from "../../../lib/viewers/python";
 import {
   debugPythonFile,
@@ -41,7 +39,7 @@ import { UntestedTag } from "../../common/UntestedTag";
 import { AddRemarkDialog } from "../../files/AddRemarkDialog";
 import { basename, relativePathWithin } from "../../../lib/paths";
 import { resolveProjectDirectory } from "../../../types";
-import { useFileScope, readFileText } from "../../../lib/files/fileAccess";
+import { useFileScope } from "../../../lib/files/fileAccess";
 import { offsetToLineCol } from "../../../lib/viewers/tex/tex";
 import { isTreePath, isJsonPath } from "../../../lib/viewers/yaml";
 import { isBibPath } from "../../../lib/viewers/tex/bib";
@@ -51,7 +49,7 @@ import { CommentIcon } from "../../common/icons/Icon";
 import { ErrorNote } from "../../common/ErrorNote";
 import { YamlTree, YamlGrid, BibCards } from "./lazyViewers";
 import { useViewerState } from "./viewerState";
-import { jumpToSource } from "./sourceJump";
+import { usePythonLinks } from "./pythonLinks";
 import { localMirrorRootFor, ViewerHeader } from "./ViewerHeader";
 import { useEditableFile, ExternalChangeBanner } from "./editableFile";
 import { CodeEditor } from "./CodeEditor";
@@ -424,23 +422,17 @@ export function TextView({
     [scope, cwd, isRemoteProject, fileDrop],
   );
 
-  // Ctrl/Cmd+Click a name to open its `def`/`class` — in this file or in the
-  // module it was imported from. `jumpToSource` handles both: it re-uses an open
-  // editor when there is one (including the same file, and across a detached
-  // window) and otherwise opens the target in this tab's subwindow.
-  const followPython = useCallback(
-    async (caret: number) => {
-      const loc = await resolvePythonDefinition(draft, caret, path, projectDir, async (p) => {
-        try {
-          return await readFileText(p, projectId);
-        } catch {
-          return null; // doesn't exist / unreadable — just not this candidate
-        }
-      });
-      if (loc) jumpToSource(loc.path, loc.line, loc.column);
-    },
-    [draft, path, projectDir, projectId],
-  );
+  // Ctrl/Cmd+Click a name to open its `def`/`class` — in this file, in the
+  // module it was imported from, or in an external library in the project's venv.
+  const pyLinks = usePythonLinks({
+    enabled: isPy,
+    loaded,
+    draft,
+    path,
+    projectDir,
+    projectId,
+    remote: isRemoteProject,
+  });
 
   const fmt = useFormatter(path, draft, setDraft);
   const issue = useSyntaxCheck(path, draft, loaded);
@@ -784,8 +776,8 @@ export function TextView({
             blame={blame}
             breakpoints={pyDebug ? bp.set : undefined}
             onToggleBreakpoint={pyDebug ? bp.toggle : undefined}
-            onFollowLink={isPy ? followPython : undefined}
-            linkRanges={isPy ? pythonLinkRanges : undefined}
+            onFollowLink={isPy ? pyLinks.follow : undefined}
+            linkRanges={isPy ? pyLinks.linkRanges : undefined}
             // The LIVE offset (not `viewPos.initial`), so re-showing Source after
             // a trip through Tree restores where the editor was, not the stale
             // open-time snapshot.

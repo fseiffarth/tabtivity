@@ -7,13 +7,12 @@ import { useTabsStore } from "../../stores/tabs";
 import { resolveProjectDirectory, resolveLocalMirror } from "../../types";
 import { relFromAbs } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
-
-/** Join a remote directory and a project-relative path with a single `/`
- *  (POSIX — the host is always Unix here), tolerating a trailing slash on the
- *  root and a leading one on the rel. */
-function joinRemote(root: string, rel: string): string {
-  return `${root.replace(/\/+$/, "")}/${rel.replace(/^\/+/, "")}`;
-}
+import { useSyncSideTimes } from "./useSyncSideTimes";
+import { SyncHandoffButton } from "./SyncHandoffButton";
+import { UntestedTag } from "../common/UntestedTag";
+import { buildHandoffFile } from "../../lib/viewers/syncHandoff";
+import { joinRemote } from "../../lib/viewers/syncHandoffCollect";
+import { sshOf, useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 
 /**
  * Three-way merge for a diverged (amber) file of a remote project — the PyCharm-
@@ -41,7 +40,7 @@ export function SyncMergeView({
 
   // Resolve the mirror root the same way FileViewerPane does, so `rel` keys the
   // sync backend exactly like the orange list's own pull/push calls.
-  const { rel, hostPath } = useMemo(() => {
+  const { rel, hostPath, mirrorRoot, projectDir } = useMemo(() => {
     const projectDir = resolveProjectDirectory(project);
     const mirrorRoot = resolveLocalMirror(project) ?? (projectDir ? `${projectDir}/mirror` : null);
     const r = mirrorRoot ? relFromAbs(mirrorRoot, path) : null;
@@ -49,6 +48,8 @@ export function SyncMergeView({
     return {
       rel: r,
       hostPath: r && remotePath ? joinRemote(remotePath, r) : null,
+      mirrorRoot,
+      projectDir: projectDir || null,
     };
   }, [project, path]);
 
@@ -113,6 +114,28 @@ export function SyncMergeView({
     };
   }, [path, hostPath, projectId, t]);
 
+  // Per-side modified times + per-change blame times (which side is newer).
+  const sideTimes = useSyncSideTimes({ projectId, rel, mirrorRoot, projectDir, localText, hostText });
+
+  const connected = useRemoteStatusStore((s) => (projectId ? sshOf(s, projectId) === "connected" : false));
+  // A resolved file the agent wrote, handed to the Result column (never saved).
+  const [loadResult, setLoadResult] = useState<{ text: string; nonce: number } | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const loadResolved = () => {
+    if (!projectId || !rel) return;
+    setNote(null);
+    invoke<{ id: string; text: string } | null>("sync_handoff_load_resolved", { projectId, relPath: rel })
+      .then((r) => {
+        if (!r) {
+          setNote(t("syncHandoff.noneYet"));
+          return;
+        }
+        setLoadResult({ text: r.text, nonce: Date.now() });
+        setNote(t("syncHandoff.loadedNote"));
+      })
+      .catch((e) => setNote(String(e)));
+  };
+
   const closeTab = () => {
     if (tabKey) useTabsStore.getState().removeTab(tabKey);
   };
@@ -167,6 +190,11 @@ export function SyncMergeView({
       {error != null && (
         <div className="file-viewer-error" style={{ padding: "4px 8px", flex: "0 0 auto" }}>{error}</div>
       )}
+      {note != null && (
+        <div className="file-viewer-loading" style={{ flex: "0 0 auto", padding: "4px 10px", fontSize: "11px" }}>
+          {note}
+        </div>
+      )}
       {identical && (
         <div
           className="file-viewer-loading"
@@ -193,6 +221,30 @@ export function SyncMergeView({
           applyLabel={applying ? t("syncMergeView.resolving") : t("syncMergeView.resolve")}
           onApply={apply}
           onClose={closeTab}
+          sideTimes={sideTimes ?? undefined}
+          loadResult={loadResult}
+          barExtra={
+            <>
+              <button
+                className="file-viewer-format-btn"
+                onClick={loadResolved}
+                title={t("syncHandoff.loadResolvedTitle")}
+              >
+                {t("syncHandoff.loadResolved")}
+              </button>
+              <SyncHandoffButton
+                projectId={projectId}
+                connected={connected}
+                label={t("syncHandoff.button")}
+                title={t("syncHandoff.buttonTitle")}
+                collect={async () => ({
+                  files: rel ? [buildHandoffFile({ relPath: rel, localText: localText ?? "", remoteText: hostText ?? "", times: sideTimes })] : [],
+                  skipped: 0,
+                })}
+              />
+              <UntestedTag id="syncHandoff.resolver" />
+            </>
+          }
         />
       </div>
     </div>

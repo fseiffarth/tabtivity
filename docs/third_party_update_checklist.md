@@ -2109,6 +2109,16 @@ Plan: `docs/desktop_voice_plan.md`.
   self` → `210`, events `701`/`702`/`703` naming the id; the socket at
   `$XDG_RUNTIME_DIR/speech-dispatcher/speechd.sock` or `SPEECHD_ADDRESS`
   `unix_socket:`, `speech-dispatcher --spawn` when nothing listens.
+- Piper (`piper.rs`): the MIT `rhasspy/piper` **2023.11.14-2** release
+  (archived upstream; Linux x86_64/aarch64 `.tar.gz`, Windows `.zip`, no
+  macOS), each archive pinned by SHA-256 and size, unpacking to a `piper/`
+  folder whose binary finds its libraries through `RUNPATH $ORIGIN`. Flags
+  used: `--model`, `--config`, `--espeak_data`, `--length_scale`,
+  `--output_raw` (16-bit LE mono at the voice's `audio.sample_rate`, per
+  stdin line), `--quiet`. Voices from `rhasspy/piper-voices` at a fixed
+  commit, `.onnx` + `.onnx.json` both hashed. Run only as a child, never
+  linked (espeak-ng is GPL). Moving to `OHF-Voice/piper1-gpl` or another
+  build is a new row per OS, never a swapped hash.
 
 **Verify** `cargo test -p tabtivity --lib -- services::voice`; a clean
 `cargo build` with the new pins on Linux, then the CI Windows/macOS jobs;

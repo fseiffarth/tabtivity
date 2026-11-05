@@ -551,8 +551,6 @@ export interface Settings {
    *  first, then menu order (`agentShortcutSlots`); keys it lacks follow the
    *  ones it names. Round-trips through the backend settings `extra`. */
   agent_order?: string[];
-  /** Explicit opt-in: skip confirmation on future CLI usage-limit handoffs. */
-  agent_limit_auto_handoff?: boolean;
   /** New agent tabs take the name of their first prompt (`lib/agents/autoTabName`).
    *  Unset = on; only an explicit `false` turns it off. Round-trips through the
    *  backend settings `extra`. */
@@ -682,13 +680,16 @@ export interface Settings {
    *  read-aloud speed (a multiplier, unset: 1); `voice_read_aloud` and
    *  `voice_hands_free_on` are the Chat chips' state — read answers aloud,
    *  and the hands-free loop, which needs the experimental flag below too.
-   *  `voice_gpu`: whether speech may use the GPU (unset: yes). */
+   *  `voice_gpu`: whether speech may use the GPU (unset: yes);
+   *  `voice_natural`: read aloud with an installed natural (Piper) voice
+   *  rather than the OS voice (unset: yes). */
   voice_model?: string;
   voice_lang?: string;
   voice_gpu?: boolean;
   voice_headset?: boolean;
   voice_pause_ms?: number;
   voice_rate?: number;
+  voice_natural?: boolean;
   voice_read_aloud?: boolean;
   voice_hands_free_on?: boolean;
   /** EXPERIMENTAL: the Chat's hands-free loop (`ReaderVoice`). */
@@ -725,6 +726,10 @@ export interface Settings {
    *  of each day. Turning it off stops the popup, not the counting — the recap
    *  stays reachable from Settings. */
   daily_stats_recap?: boolean;
+  /** When true (the default; absent = on), the app looks up the CLIs' and Ollama's
+   *  newest releases once a day by itself. Off: only a click in Manage CLIs or the
+   *  Ollama row asks. Read by the backend at every tick (Manage CLIs). */
+  daily_release_check?: boolean;
   /** UTC date ("YYYY-MM-DD") the recap was last auto-shown, so it opens once a day
    *  rather than once per window. Written by the recap host. */
   daily_stats_last_shown?: string;
@@ -1319,13 +1324,20 @@ export interface GitPushProposal {
   remote_sha: string | null;
   commits: string[];
   diffstat: string;
+  /** The changed files as `"<status> <path>"` lines, workflow, hook and
+   *  manifest paths first and capped; `files_total` counts all of them. */
+  files?: string[];
+  files_total?: number;
   note: string;
   needs_url_confirm: boolean;
-  /** The push goes to the remote's default branch: it always waits for a click. */
+  /** The push goes to a branch that always waits for a click: the remote's
+   *  default, main or master, or one a release workflow runs on. */
   to_default?: boolean;
   created_at: string;
   /** `allowed`: an "Allow CI" card the user allowed. */
   status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired" | "allowed";
+  /** Who closed a `dismissed` card. Absent (an older record) reads as the user. */
+  dismissed_by?: "user" | "system" | null;
   category: string | null;
   message: string;
   output: string;

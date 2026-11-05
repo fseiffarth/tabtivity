@@ -11,11 +11,17 @@
 //! click never overwrites an edit it did not see.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use super::dev_build::SOURCE_ROOT;
+use super::home_io::{HomeDir, HomeFile};
+
+/// The most one `todo/*.md` is read as: the largest group file is ~100 KB, and
+/// a checkout an agent can write must not hand the window a file of any size.
+const GROUP_CAP: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +59,27 @@ fn group_path(root: &Path, name: &str) -> Result<PathBuf, String> {
         return Err(format!("not a todo group: {name}"));
     }
     Ok(todo_dir(root).join(name))
+}
+
+/// A group file, opened the way the host opens a file an agent can write
+/// (gap 90): no link at `todo/` or at the file, never blocking on a planted
+/// FIFO, a regular file on the opened handle, and no more than [`GROUP_CAP`]
+/// bytes. The handle comes back for its mode.
+fn open_group(path: &Path) -> Result<fs::File, String> {
+    HomeFile::open_below(path, 2)
+        .and_then(|file| file.open_read())
+        .ok_or_else(|| format!("cannot read {}", path.display()))
+}
+
+fn read_group(path: &Path) -> Result<(String, fs::File), String> {
+    let file = open_group(path)?;
+    let mut bytes = Vec::new();
+    (&file).take(GROUP_CAP + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > GROUP_CAP {
+        return Err(format!("{} is larger than {} MiB", path.display(), GROUP_CAP >> 20));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", path.display()))?;
+    Ok((text, file))
 }
 
 /// Open and done task boxes (`- [ ]` / `- [x]`, unordered bullets only), skipping
@@ -117,13 +144,13 @@ fn title_of(text: &str, name: &str) -> String {
 /// The groups in `root/todo`, `group-*` by name and anything else (`done.md`)
 /// after them.
 pub fn list_in(root: &Path) -> Result<Vec<TodoGroup>, String> {
-    let entries = fs::read_dir(todo_dir(root)).map_err(|e| e.to_string())?;
-    let mut groups: Vec<TodoGroup> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
+    let dir = HomeDir::open_below(&todo_dir(root), 1).ok_or("the todo folder is missing or is a link")?;
+    let mut groups: Vec<TodoGroup> = dir
+        .names()
+        .into_iter()
+        .filter_map(|name| {
             let path = group_path(root, &name).ok()?;
-            let text = fs::read_to_string(path).ok()?;
+            let (text, _) = read_group(&path).ok()?;
             let (open, done) = count_tasks(&text);
             Some(TodoGroup {
                 title: title_of(&text, &name),
@@ -140,7 +167,7 @@ pub fn list_in(root: &Path) -> Result<Vec<TodoGroup>, String> {
 }
 
 pub fn read_in(root: &Path, name: &str) -> Result<String, String> {
-    fs::read_to_string(group_path(root, name)?).map_err(|e| e.to_string())
+    read_group(&group_path(root, name)?).map(|(text, _)| text)
 }
 
 /// Replace the group's text with `next` if it still reads `expected`. The new
@@ -148,7 +175,7 @@ pub fn read_in(root: &Path, name: &str) -> Result<String, String> {
 /// agent reading the file mid-write sees the old text or the new, never half.
 pub fn write_in(root: &Path, name: &str, expected: &str, next: &str) -> Result<WriteOutcome, String> {
     let path = group_path(root, name)?;
-    let current = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let (current, file) = read_group(&path)?;
     if current != expected {
         return Ok(WriteOutcome::Changed { current });
     }
@@ -157,10 +184,13 @@ pub fn write_in(root: &Path, name: &str, expected: &str, next: &str) -> Result<W
     #[cfg(unix)]
     let mode = {
         use std::os::unix::fs::PermissionsExt;
-        fs::metadata(&path).map_err(|e| e.to_string())?.permissions().mode() & 0o7777
+        file.metadata().map_err(|e| e.to_string())?.permissions().mode() & 0o7777
     };
     #[cfg(not(unix))]
-    let mode = 0o600;
+    let mode = {
+        let _ = &file;
+        0o600
+    };
     crate::storage::write_private_atomic_mode(&path, next.as_bytes(), mode)?;
     Ok(WriteOutcome::Written)
 }
@@ -266,5 +296,60 @@ mod tests {
             WriteOutcome::Written
         );
         assert_eq!(read_in(dir.path(), "group-a.md").unwrap(), "- [x] a\n");
+    }
+
+    /// Gap 90: the checkout is writable by a fenced agent working on the app
+    /// itself, so a planted link must not show another file's text and a
+    /// planted FIFO must not park a worker.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_link_or_fifo_is_never_read_listed_or_written_through() {
+        let dir = checkout(&[("group-a.md", "# Real\n- [ ] a\n")]);
+        let secret = dir.path().join("secret.txt");
+        fs::write(&secret, "# Secret title\n- [ ] hidden\n").unwrap();
+        let todo = dir.path().join("todo");
+        std::os::unix::fs::symlink(&secret, todo.join("group-link.md")).unwrap();
+        super::super::home_io::mkfifo(&todo.join("group-fifo.md"));
+        let root = dir.path().to_path_buf();
+        let listed = super::super::home_io::within_deadline({
+            let root = root.clone();
+            move || list_in(&root)
+        })
+        .unwrap();
+        let names: Vec<_> = listed.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["group-a.md"], "neither the link nor the FIFO is a group");
+        for name in ["group-link.md", "group-fifo.md"] {
+            let root = root.clone();
+            let read = super::super::home_io::within_deadline(move || read_in(&root, name));
+            assert!(read.is_err(), "{name} must not be read");
+        }
+        let root2 = root.clone();
+        let write = super::super::home_io::within_deadline(move || write_in(&root2, "group-link.md", "# Secret title\n- [ ] hidden\n", "x"));
+        assert!(write.is_err(), "a write never starts from a link's text");
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "# Secret title\n- [ ] hidden\n", "and never lands in the link's target");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_todo_folder_lists_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("group-a.md"), "# Elsewhere\n- [ ] a\n").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("todo")).unwrap();
+        assert!(list_in(dir.path()).is_err());
+        assert!(read_in(dir.path(), "group-a.md").is_err());
+    }
+
+    #[test]
+    fn a_group_past_the_cap_is_refused_not_read() {
+        let big = "x".repeat(GROUP_CAP as usize + 1);
+        let dir = checkout(&[("group-a.md", big.as_str()), ("group-b.md", "- [ ] b\n")]);
+        assert!(read_in(dir.path(), "group-a.md").unwrap_err().contains("larger"));
+        assert!(write_in(dir.path(), "group-a.md", "x", "y").is_err());
+        let names: Vec<_> = list_in(dir.path()).unwrap().into_iter().map(|g| g.name).collect();
+        assert_eq!(names, ["group-b.md"]);
+        let ok = "x".repeat(GROUP_CAP as usize);
+        fs::write(dir.path().join("todo").join("group-a.md"), &ok).unwrap();
+        assert_eq!(read_in(dir.path(), "group-a.md").unwrap().len(), ok.len());
     }
 }

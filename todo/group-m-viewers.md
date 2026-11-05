@@ -3001,3 +3001,23 @@ default-app resolution), `src/types/index.ts`, `README.md`.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2428. **Native TensorBoard viewer: training curves from event files.** 📝
+    Planned (2026-11-05), not built: `docs/tensorboard_viewer_plan.md`.
+    `events.out.tfevents.*` opens in a viewer tab that parses the file in Rust
+    (TFRecord + Event protobuf, hand-written, no new crate) and draws scalars
+    as SVG charts: tag groups, runs legend, EMA smoothing, live refresh while
+    visible. A folder opens as several runs. Local, SSH and container projects
+    through the scoped byte read (+ a ranged SFTP read). Images/text, hparams
+    and histograms are later phases; profiler/graphs stay with the real
+    TensorBoard (`docs/localhost_viewer_plan.md`).
+    - [ ] 🤖 Automated test
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

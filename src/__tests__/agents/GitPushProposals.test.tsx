@@ -118,3 +118,28 @@ it("closes a card the user approved once it is pushed, and leaves other pushed o
   expect(invoke).toHaveBeenCalledWith("git_push_mcp_clear", { id: "push-a" });
   expect(invoke).not.toHaveBeenCalledWith("git_push_mcp_clear", { id: "push-other" });
 });
+
+it("keeps a card the system closed, with its reason and a Clear button, and hides the user's own dismissals (gap 89)", async () => {
+  const settled: GitPushProposal = { ...row, id: "push-s", status: "dismissed", dismissed_by: "system", category: "dismissed", message: "Already on the remote: the branch was pushed another way." };
+  const mine: GitPushProposal = { ...row, id: "push-u", status: "dismissed", dismissed_by: "user", message: "The user dismissed the push." };
+  const old: GitPushProposal = { ...row, id: "push-o", status: "dismissed", message: "from a record without the field" };
+  invoke.mockResolvedValueOnce([settled, mine, old]);
+  await act(async () => { render(<GitPushProposals projectId="p" />); });
+  expect(screen.getAllByText(/^Agent push ·/)).toHaveLength(1);
+  expect(screen.getByText("Closed without you: Already on the remote: the branch was pushed another way.")).toBeTruthy();
+  expect(screen.queryByText(/The user dismissed the push/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Push" })).toBeNull();
+  invoke.mockResolvedValueOnce({ ...settled, cleared: true });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Clear" })); });
+  expect(invoke).toHaveBeenCalledWith("git_push_mcp_clear", { id: "push-s" });
+  expect(screen.queryByText(/Closed without you/)).toBeNull();
+});
+
+it("lists the changed files and says how many a default-branch push touches (gap 102)", () => {
+  const files = ["A .github/workflows/ci.yml", "M package.json", "A docs/a.md"];
+  render(<GitPushProposalCard proposal={{ ...row, needs_url_confirm: false, to_default: true, files, files_total: 63 }} />);
+  expect(screen.getByRole("list", { name: "Changed files" })).toBeTruthy();
+  for (const line of files) expect(screen.getByText(line)).toBeTruthy();
+  expect(screen.getByText("… and 60 more")).toBeTruthy();
+  expect(screen.getByText(/This push touches 63 files\./)).toBeTruthy();
+});

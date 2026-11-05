@@ -189,7 +189,7 @@ bound over the home path. A local-model tab (`PtyOptions.local_model`) gets
 the scope's second home, `<project_key(scope)>.local` — no scope key can
 contain a `.` — so the config an `ollama launch` writes into its agent and
 the sessions a local model runs stay apart from the scope's own agents';
-same fence, same roots, seeded with only `.claude.json`. The owning project is mounted read-write. If it
+same fence, same roots, seeded with only `.claude.json`. A third kind, the **probe home** `agent-homes/probe.cli` (`prepare_probe_home`), is not a scope's: `/usage`, the `--version` probes and the scheduled warm-up run the CLI there (`HOME` set, `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`XDG_*_HOME` dropped) so the usage shown comes from the stored login and the user's own `~/.claude` is never touched (gap 93). It gets the shared logins, folder trust for `agent-cron` and the onboarding flag; no `agent_global` layer, no session hooks, no Copilot setting, nothing seeded. No fence mounts it, the login keeper sweeps it like every home, and `codex_hook_state` skips it. An update (`update_command`) keeps `HOME` = the install home and refuses a binary outside it. The owning project is mounted read-write. If it
 belongs to project boxes, every box folder and member root is added
 read-write; membership in several boxes produces the union. A `box:<id>` tab
 receives that box's roots directly. Claude also receives `--add-dir` and

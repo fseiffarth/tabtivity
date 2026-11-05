@@ -9,7 +9,7 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
-import { hasCliLimitNotice, nextLimitCli, type HandoffCli } from "../../lib/agents/limitHandoff";
+import { cliLimitNoticeLine, nextLimitCli, type HandoffCli } from "../../lib/agents/limitHandoff";
 import { runsLocally } from "../../stores/agents/agentClearUndo";
 import { readerRequest, type SessionTranscript } from "../../lib/agents/agentReader";
 import { aiIsOff } from "../../lib/aiSwitch";
@@ -24,7 +24,8 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
   const scope = parts?.scope;
   const tab = usePaneTab(scope, parts?.key);
   const [next, setNext] = useState<HandoffCli | null>(null);
-  const [neverAsk, setNeverAsk] = useState(false);
+  /** The screen line that matched, as the dialog quotes it. */
+  const [line, setLine] = useState("");
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const attempted = useRef(false);
@@ -32,7 +33,8 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
   const modal = useModalFocus(dismiss, !!next && visible);
   const identity = `${ptyId}:${tab?.sessionId ?? ""}:${tab?.relaunchSeq ?? 0}`;
 
-  const handoff = async (target: HandoffCli, remember: boolean) => {
+  // Always the user's click: a line on the screen is the agent's own output, so it never switches by itself.
+  const handoff = async (target: HandoffCli) => {
     if (!parts || !tab || aiIsOff()) return;
     setBusy(true);
     setFailed(false);
@@ -44,7 +46,6 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
       const context = JSON.stringify(transcript.entries.filter((entry) => entry.kind === "prompt" || entry.kind === "answer")
         .slice(-20).map((entry) => ({ role: entry.kind, text: entry.text.slice(-1200) })));
       if (aiIsOff()) return;
-      if (remember) await useSettingsStore.getState().updateSettings({ agent_limit_auto_handoff: true });
       useTabsStore.getState().addTabToScope(parts.scope, {
         label: target.label, cmd: target.bin, args: [], env: {}, kind: "agent",
         cwd: tab.cwd || cwd, location: tab.location,
@@ -56,14 +57,12 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
       setNext(target);
     } finally { setBusy(false); }
   };
-  const handoffRef = useRef(handoff);
-  handoffRef.current = handoff;
 
   useEffect(() => {
     attempted.current = false;
     setNext(null);
     setFailed(false);
-    setNeverAsk(false);
+    setLine("");
     if (!visible || !scope || !tab || tab.kind !== "agent" || tab.assistant || !runsLocally(scope, tab)) return;
     let stopped = false;
     let checking = false;
@@ -71,7 +70,8 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
       if (checking || aiIsOff()) return;
       const term = terminalFor(ptyId);
       if (!term) return;
-      if (!hasCliLimitNotice(readableScreen(term.buffer.active, 25, { plain: true }).lines.join("\n"))) {
+      const matched = cliLimitNoticeLine(readableScreen(term.buffer.active, 25, { plain: true }).lines.join("\n"));
+      if (matched === null) {
         handled.delete(identity);
         attempted.current = false;
         return;
@@ -86,8 +86,8 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
         if (!target) return;
         attempted.current = true;
         handled.add(identity);
-        if (settings?.agent_limit_auto_handoff) await handoffRef.current(target, false);
-        else setNext(target);
+        setLine(matched);
+        setNext(target);
       } catch { /* Retry a transient registry read on the next screen check. */ }
       finally { checking = false; }
     };
@@ -101,11 +101,11 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
     <div className="project-dialog" ref={modal} role="dialog" aria-modal="true" aria-labelledby="cli-limit-title" style={{ color: "var(--text-primary)" }} onClick={(event) => event.stopPropagation()}>
       <h2 id="cli-limit-title">{t("terminal.limitHandoff.title")} <UntestedTag id="terminal.limitHandoff" /></h2>
       <p>{t("terminal.limitHandoff.body", { agent: tab?.cmd ?? "", next: next.label })}</p>
-      <label><input type="checkbox" checked={neverAsk} onChange={(event) => setNeverAsk(event.target.checked)} />{t("terminal.limitHandoff.neverAsk")}</label>
+      {line && <p data-testid="limit-line">{t("terminal.limitHandoff.line", { line })}</p>}
       {failed && <p role="alert">{t("terminal.limitHandoff.failed")}</p>}
       <div className="project-dialog-actions">
         <button type="button" disabled={busy} onClick={dismiss}>{t("common.cancel")}</button>
-        <button type="button" disabled={busy} onClick={() => void handoff(next, neverAsk)}>{t("terminal.limitHandoff.switch", { next: next.label })}</button>
+        <button type="button" disabled={busy} onClick={() => void handoff(next)}>{t("terminal.limitHandoff.switch", { next: next.label })}</button>
       </div>
     </div>
   </div>, document.body);

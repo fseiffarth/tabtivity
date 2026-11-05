@@ -276,6 +276,34 @@ describe("python go-to-definition (#py)", () => {
     expect(addTab).not.toHaveBeenCalled();
   });
 
+  it("Ctrl+Click on an external library's name opens it in the project's venv", async () => {
+    const SITE = "/p/.venv/lib/python3.12/site-packages";
+    const src = "import numpy as np\n\nnp.zeros(3)\n";
+    interpreter = ".venv/bin/python";
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: Record<string, unknown> = {}) => {
+      if (cmd === "read_file_text" && args.path === "/p/lib_user.py") return Promise.resolve(src);
+      if (cmd === "read_file_text" && args.path === `${SITE}/numpy/__init__.py`) {
+        return Promise.resolve("def zeros(n):\n    pass\n");
+      }
+      if (cmd === "list_dir" && args.projectDir === "/p/.venv/lib") {
+        return Promise.resolve([{ name: "python3.12", is_dir: true }]);
+      }
+      if (cmd === "list_dir" && args.projectDir === "/p/.venv/lib/python3.12") {
+        return Promise.resolve([{ name: "site-packages", is_dir: true }]);
+      }
+      if (cmd === "list_dir") return Promise.reject(new Error("no such dir"));
+      return base(cmd, args);
+    });
+    const textarea = await renderViewer("/p/lib_user.py");
+    textarea.selectionStart = textarea.selectionEnd = src.indexOf("zeros") + 1;
+    await act(async () => {
+      fireEvent.click(textarea, { ctrlKey: true });
+    });
+    await waitFor(() => expect(addTab).toHaveBeenCalled());
+    expect((addTab.mock.calls[0][0] as Record<string, unknown>).embedPath).toBe(`${SITE}/numpy/__init__.py`);
+  });
+
   it("Ctrl+Click on an unresolvable name does nothing", async () => {
     const textarea = await renderViewer();
     // `os` is imported by util.py, not by this file, and is not in the tree.

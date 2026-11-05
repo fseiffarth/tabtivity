@@ -20,7 +20,7 @@
  * is out of scope by construction.
  */
 
-import { dirname, resolvePath } from "../paths";
+import { dirname, isAbsolute, resolvePath } from "../paths";
 
 const PY_EXTENSIONS = [".py", ".pyi", ".pyw"];
 
@@ -405,8 +405,18 @@ export function pythonRefAt(source: string, caret: number): PyRef | null {
  * That keeps the affordance honest: if it's underlined, clicking it lands
  * somewhere. Definition sites themselves are excluded (jumping from `def foo` to
  * `def foo` is a no-op that would make every definition look like a link).
+ *
+ * A name that leads out of this file (an imported name, `mod.thing`) is only a
+ * link once it is known to land: pass `followable`, the {@link pythonImportLinks}
+ * keys the resolver found a target for, and the rest are left plain. An external
+ * library the editor can't read (an environment outside the project, a compiled
+ * module without stubs) is then never underlined. Without `followable`, every
+ * import-dependent name is underlined (the lexical answer alone).
  */
-export function pythonLinkRanges(source: string): { start: number; end: number }[] {
+export function pythonLinkRanges(
+  source: string,
+  followable?: ReadonlySet<string>,
+): { start: number; end: number }[] {
   const defs = findPythonDefs(source);
   const defNames = new Set(defs.map((d) => d.name));
   // Every definition site — `def`/`class` AND a module-level binding. A name is
@@ -427,15 +437,18 @@ export function pythonLinkRanges(source: string): { start: number; end: number }
     if (t.qualifier != null) {
       // `mod.thing` — followable only when `mod` is an imported module, or when
       // it is `self` (then `thing` is a method of the class in THIS file).
-      if (importedModules.has(t.qualifier) || t.qualifier === "self") {
-        if (t.qualifier === "self" && !defNames.has(t.name)) continue;
-        out.push({ start: t.start, end: t.end });
+      if (t.qualifier === "self") {
+        if (defNames.has(t.name)) out.push({ start: t.start, end: t.end });
+      } else if (importedModules.has(t.qualifier)) {
+        if (!followable || followable.has(`${t.qualifier}.${t.name}`)) {
+          out.push({ start: t.start, end: t.end });
+        }
       }
       continue;
     }
 
     if (importedNames.has(t.name)) {
-      out.push({ start: t.start, end: t.end });
+      if (!followable || followable.has(t.name)) out.push({ start: t.start, end: t.end });
       continue;
     }
     if (defNames.has(t.name) && !defSites.has(`${lineOf(t.start)}:${t.name}`)) {
@@ -443,6 +456,30 @@ export function pythonLinkRanges(source: string): { start: number; end: number }
     }
   }
   return out;
+}
+
+/**
+ * The names of `source` whose link leads out of the file, one per distinct key
+ * (`name` for an imported name, `mod.thing` for an attribute of an imported
+ * module) with a caret inside its first use — what has to be resolved before
+ * {@link pythonLinkRanges} may underline them.
+ */
+export function pythonImportLinks(source: string): { key: string; caret: number }[] {
+  const imports = parsePythonImports(source);
+  const importedNames = new Set(imports.map((i) => i.local));
+  const importedModules = new Set(imports.filter((i) => i.symbol === "").map((i) => i.local));
+  const seen = new Map<string, number>();
+  for (const t of pythonTokens(source)) {
+    if (PY_KEYWORDS.has(t.name)) continue;
+    let key: string | null = null;
+    if (t.qualifier != null) {
+      if (importedModules.has(t.qualifier)) key = `${t.qualifier}.${t.name}`;
+    } else if (importedNames.has(t.name)) {
+      key = t.name;
+    }
+    if (key != null && !seen.has(key)) seen.set(key, t.start);
+  }
+  return [...seen].map(([key, caret]) => ({ key, caret }));
 }
 
 /** A function mapping a source offset to its 1-based line number. */
@@ -478,6 +515,7 @@ export function modulePathCandidates(
   imp: Pick<PyImport, "module" | "level">,
   filePath: string,
   projectRoot: string,
+  libRoots: readonly string[] = [],
 ): string[] {
   const parts = imp.module ? imp.module.split(".") : [];
 
@@ -501,6 +539,67 @@ export function modulePathCandidates(
     const base = parts.length ? resolvePath(root, parts.join("/")) : root;
     if (parts.length) out.push(`${base}.py`);
     out.push(resolvePath(base, "__init__.py"));
+  }
+  // An external library: the environment's `site-packages`, after the project's
+  // own roots (a project module shadows nothing there, as on `sys.path`). A
+  // compiled module has no `.py`, so its `.pyi` stub is tried too, and then a
+  // separate `<pkg>-stubs` package (PEP 561), which is where many ship them.
+  if (imp.level === 0 && parts.length) {
+    for (const root of libRoots) {
+      const base = resolvePath(root, parts.join("/"));
+      out.push(`${base}.py`, resolvePath(base, "__init__.py"));
+      out.push(`${base}.pyi`, resolvePath(base, "__init__.pyi"));
+      const stub = resolvePath(root, [`${parts[0]}-stubs`, ...parts.slice(1)].join("/"));
+      if (parts.length > 1) out.push(`${stub}.pyi`);
+      out.push(resolvePath(stub, "__init__.pyi"));
+    }
+  }
+  return [...new Set(out)];
+}
+
+/** Lists a directory's entry names, or null when it can't be listed. */
+export type PyLister = (dir: string) => Promise<string[] | null>;
+
+/**
+ * The `site-packages` folders of the environment `interpreter` belongs to — where
+ * an external library (`import numpy`) lives. Found from the file system only:
+ * the interpreter is never run, since an in-tree venv's `python` is the
+ * project's own program.
+ *
+ * `interpreter` is what the backend's precedence picked (`python_interpreter_for`):
+ * relative (`.venv/bin/python`) for an in-tree venv, absolute for a pinned one. A
+ * bare command (`python3`, the system fallback) names no environment of the
+ * project's, so it yields nothing. The environment's prefix is two levels up from
+ * the interpreter (`<prefix>/bin/python`, `<prefix>\Scripts\python.exe`); its
+ * packages sit in `<prefix>/lib/python3.X/site-packages`, or `<prefix>\Lib\site-packages`
+ * on Windows.
+ */
+export async function pythonLibRoots(
+  interpreter: string,
+  projectDir: string,
+  list: PyLister,
+): Promise<string[]> {
+  const interp = interpreter.trim();
+  if (!interp || !/[/\\]/.test(interp)) return [];
+  const abs = isAbsolute(interp) ? interp : projectDir ? resolvePath(projectDir, interp) : "";
+  if (!abs) return [];
+  const prefix = dirname(dirname(abs));
+  if (!prefix) return [];
+
+  const out: string[] = [];
+  const winLib = resolvePath(prefix, "Lib");
+  if ((await list(winLib))?.includes("site-packages")) {
+    out.push(resolvePath(winLib, "site-packages"));
+  }
+  const lib = resolvePath(prefix, "lib");
+  const versions = ((await list(lib)) ?? [])
+    .filter((n) => /^python3(\.\d+)?$/.test(n))
+    .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  for (const v of versions) {
+    const dir = resolvePath(lib, v);
+    if ((await list(dir))?.includes("site-packages")) {
+      out.push(resolvePath(dir, "site-packages"));
+    }
   }
   return [...new Set(out)];
 }
@@ -530,6 +629,9 @@ export type PyReader = (path: string) => Promise<string | null>;
  *  - an imported module name → the top of that module's file.
  *  - anything else defined in this file → its def here.
  *
+ * `libRoots` are the environment's `site-packages` ({@link pythonLibRoots}), so a
+ * name from an external library resolves into its installed source.
+ *
  * Returns null when nothing resolves — the caller must treat that as "not a
  * link" rather than guessing.
  */
@@ -539,6 +641,7 @@ export async function resolvePythonDefinition(
   filePath: string,
   projectRoot: string,
   read: PyReader,
+  libRoots: readonly string[] = [],
 ): Promise<PyLocation | null> {
   const ref = pythonRefAt(source, caret);
   if (!ref || PY_KEYWORDS.has(ref.name)) return null;
@@ -556,7 +659,7 @@ export async function resolvePythonDefinition(
   if (ref.qualifier != null) {
     const mod = imports.find((i) => i.local === ref.qualifier && i.symbol === "");
     if (!mod) return null;
-    return await defInModule(mod, ref.name, filePath, projectRoot, read, new Set());
+    return await defInModule(mod, ref.name, filePath, projectRoot, read, libRoots, new Set());
   }
 
   const imported = imports.find((i) => i.local === ref.name);
@@ -569,6 +672,7 @@ export async function resolvePythonDefinition(
         filePath,
         projectRoot,
         read,
+        libRoots,
         new Set(),
       );
       if (hit) return hit;
@@ -578,10 +682,10 @@ export async function resolvePythonDefinition(
           ? `${imported.module}.${imported.symbol}`
           : imported.symbol,
       };
-      return await moduleHead(asModule, filePath, projectRoot, read);
+      return await moduleHead(asModule, filePath, projectRoot, read, libRoots);
     }
     // `import mod` — open the module itself.
-    return await moduleHead(imported, filePath, projectRoot, read);
+    return await moduleHead(imported, filePath, projectRoot, read, libRoots);
   }
 
   return localDef(ref.name);
@@ -602,9 +706,10 @@ async function defInModule(
   filePath: string,
   projectRoot: string,
   read: PyReader,
+  libRoots: readonly string[],
   seen: Set<string>,
 ): Promise<PyLocation | null> {
-  for (const candidate of modulePathCandidates(imp, filePath, projectRoot)) {
+  for (const candidate of modulePathCandidates(imp, filePath, projectRoot, libRoots)) {
     const visitKey = `${candidate}#${name}`;
     if (seen.has(visitKey)) continue;
     seen.add(visitKey);
@@ -616,7 +721,7 @@ async function defInModule(
     // The module exists but doesn't define the name — it may re-export it.
     const via = parsePythonImports(text).find((i) => i.local === name && i.symbol);
     if (via) {
-      const hit = await defInModule(via, via.symbol, candidate, projectRoot, read, seen);
+      const hit = await defInModule(via, via.symbol, candidate, projectRoot, read, libRoots, seen);
       if (hit) return hit;
     }
   }
@@ -629,8 +734,9 @@ async function moduleHead(
   filePath: string,
   projectRoot: string,
   read: PyReader,
+  libRoots: readonly string[],
 ): Promise<PyLocation | null> {
-  for (const candidate of modulePathCandidates(imp, filePath, projectRoot)) {
+  for (const candidate of modulePathCandidates(imp, filePath, projectRoot, libRoots)) {
     if ((await read(candidate)) != null) return { path: candidate, line: 1, column: 0 };
   }
   return null;

@@ -2930,3 +2930,24 @@ unchanged; the new agents are additive.
   the Media Session API (plan step 5); if it does, it toggles talk/stop.
 - [ ] `voice_voices` and a system-voice picker in Settings → Voice (needs a
   per-language filter: espeak-ng lists thousands of variants).
+- [x] Natural voices (plan step 7, `services::voice::piper`): the OS voice
+  sounded terrible on Ubuntu (2026-11-05). Piper MIT binary as a child, one
+  medium voice per app language, install tab from Settings → Voice. Not on
+  macOS (broken build; its own voices are good). Never live.
+- [ ] 🖐️ Natural voice — Settings → Voice: **Natural voice** on, **Install
+  natural voice · N MB** opens a tab that fetches Piper and the voice and
+  verifies both. Turn on Read aloud in a Chat: the next answer is spoken in
+  the neural voice, at the read-aloud speed; Ctrl+Shift+Q silences it at
+  once. Turn Natural voice off: the system voice reads again. Quit: no
+  `piper` process is left (`pgrep -a piper`).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+- [ ] Natural voice in the Chat: offer the install from the Read aloud chip
+  the first time (plan step 7's card), not only in Settings.
+- [ ] Talk over a natural voice through speakers: `webrtc-audio-processing`
+  echo cancellation against the samples `piper.rs` plays (plan step 7);
+  probe the crate on the three CI OSes first.

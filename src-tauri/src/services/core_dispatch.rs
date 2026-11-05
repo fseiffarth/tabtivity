@@ -494,6 +494,11 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("git_worktree_lock", "path", BodyConfined),
     ("git_worktree_remove", "path", BodyConfined),
     ("git_worktree_unlock", "path", BodyConfined),
+    // The resolver hand-over: the relative paths are vetted by
+    // `sync_handoff::safe_rel` and written/read only through `home_io` handles
+    // below the project's agent home, never a project folder.
+    ("sync_handoff_export", "files", BodyConfined),
+    ("sync_handoff_load_resolved", "relPath", BodyConfined),
     // ── On a remote host ────────────────────────────────────────────────
     ("hpc_ws_anchor", "mirrorPath", Remote),
     ("hpc_ws_anchor", "workspacePath", Remote),

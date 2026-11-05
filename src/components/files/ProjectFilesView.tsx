@@ -33,6 +33,7 @@ import {
   splitByDeleteSide,
   splitByNewerSide,
   withoutChangedOnBoth,
+  bothChangedPaths,
 } from "../../lib/remote/divergedRows";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
@@ -42,6 +43,8 @@ import { IS_LINUX } from "../../lib/platform";
 import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtyState } from "../../stores/gitDirty";
 import { coalescedRun, type CoalescedRun } from "../../lib/coalescedRun";
 import { usePoll, type PollRun } from "../../lib/usePoll";
+import { SyncHandoffButton } from "../embed/SyncHandoffButton";
+import { collectHandoffFiles } from "../../lib/viewers/syncHandoffCollect";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
 import type { SortKey } from "../../lib/viewers/fileUtils";
 import {
@@ -698,6 +701,8 @@ export function ProjectFilesView({
   );
   const newerSplit = useMemo(() => splitByNewerSide(syncMap, bulkFiles), [syncMap, bulkFiles]);
   const deleteSplit = useMemo(() => splitByDeleteSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
+  // The true conflicts (both sides changed since the last sync), for "Hand to an agent".
+  const conflictFiles = useMemo(() => bothChangedPaths(syncMap, orangeFiles), [syncMap, orangeFiles]);
   // NEW local-only files (never synced — the host has no copy). A separate list
   // from the amber one on purpose: these have nothing to merge and no remote
   // side to take, so their whole vocabulary is "upload" or "leave local".
@@ -2222,6 +2227,25 @@ export function ProjectFilesView({
                     <ArrowsHorizontalIcon />
                   </button>
                   <UntestedTag id="projectFilesView.takeNewerAll" />
+                  <SyncHandoffButton
+                    projectId={projectId}
+                    connected={!remoteBlocked}
+                    disabled={conflictFiles.length === 0 || !mirrorRoot}
+                    className="orange-file-act"
+                    label={t("syncHandoff.buttonCount", { count: conflictFiles.length })}
+                    title={t("syncHandoff.bulkTitle")}
+                    collect={(progress) =>
+                      collectHandoffFiles({
+                        projectId: projectId ?? "",
+                        rels: conflictFiles,
+                        mirrorRoot: mirrorRoot ?? "",
+                        remotePath: project?.remote?.remote_path ?? "",
+                        byPath: syncMap,
+                        progress,
+                      })
+                    }
+                  />
+                  <UntestedTag id="syncHandoff.panel" />
                   <button
                     type="button"
                     className="orange-file-act orange-file-act--icon orange-file-act--delete"

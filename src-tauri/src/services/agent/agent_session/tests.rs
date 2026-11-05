@@ -2398,3 +2398,20 @@ fn planted_fifos_links_and_oversized_records_read_as_nothing() {
     mkfifo(&agent_home.join(".codex/config.toml"));
     within_deadline(move || codex_hook_state_of_home(&agent_home));
 }
+
+/// Gap 93: a warm-up's Codex run in the probe home leaves a `sessions/` folder
+/// and no hook (the probe home registers none by design); that must not read
+/// as "Tabtivity's hook is not registered" for the Codex tabs.
+#[test]
+fn the_probe_home_never_counts_in_the_codex_hook_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let probe = crate::services::agent_home::probe_home_in(tmp.path());
+    std::fs::create_dir_all(probe.join(".codex/sessions")).unwrap();
+    std::fs::write(probe.join(".codex/config.toml"), "").unwrap();
+    assert_eq!(codex_hook_state_across(std::slice::from_ref(&probe)), CodexHookState::NoCodex);
+    // The same folder under a scope's name does count (the control).
+    let scope = crate::services::agent_home::scope_home_in(tmp.path(), "p1");
+    std::fs::create_dir_all(scope.join(".codex/sessions")).unwrap();
+    std::fs::write(scope.join(".codex/config.toml"), "").unwrap();
+    assert_eq!(codex_hook_state_across(&[scope]), CodexHookState::NotRegistered);
+}

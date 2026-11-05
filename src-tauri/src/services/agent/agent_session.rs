@@ -1909,12 +1909,18 @@ pub enum CodexHookState {
 /// Codex asks for the trust approval per config file. `NoCodex` when no home
 /// has run it yet.
 pub fn codex_hook_state() -> CodexHookState {
+    codex_hook_state_across(&crate::services::agent_home::existing_homes_in(&storage::state_dir()))
+}
+
+/// [`codex_hook_state`] over the given homes.
+fn codex_hook_state_across(homes: &[PathBuf]) -> CodexHookState {
     let mut worst: Option<CodexHookState> = None;
-    for home in crate::services::agent_home::existing_homes_in(&storage::state_dir()) {
-        if !home.join(".codex").join("sessions").is_dir() {
+    for home in homes {
+        // The probe home (a warm-up's Codex run) registers no hook by design.
+        if crate::services::agent_home::is_probe_home(home) || !home.join(".codex").join("sessions").is_dir() {
             continue;
         }
-        let state = codex_hook_state_of_home(&home);
+        let state = codex_hook_state_of_home(home);
         let rank = |s: CodexHookState| match s {
             CodexHookState::Enabled => 0,
             CodexHookState::NoCodex => 1,

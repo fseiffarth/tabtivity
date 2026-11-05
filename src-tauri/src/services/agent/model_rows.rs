@@ -14,6 +14,14 @@
 //! Keyed by registry id and by the executable's identity
 //! (`agent_versions::VersionSource`): updating the CLI drops its rows. Cache,
 //! not truth — deleting the file costs one slower sheet.
+//!
+//! **Per scope.** The picker's rows are screen text, and the screen is the
+//! agent's own output: a fenced agent can draw a fake picker. Rows are kept
+//! under the scope of the tab that drew them (a project id, `box:<id>`,
+//! `root`) and listed only in a sheet of that scope, so a fake picker reaches
+//! its own scope's sheet and no other. The rows an older build kept unscoped
+//! (a `rows` key) are never read and go with the next write. Tabby's `screens`
+//! come from its own probe and stay apart.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,6 +36,11 @@ const MAX_DESCRIPTION: usize = 400;
 const MAX_SCREENS: usize = 24;
 const MAX_SCREEN_ROWS: usize = 80;
 const MAX_SCREEN_LINE: usize = 400;
+/// The most scopes one entry keeps rows for (the oldest write goes first), and
+/// the longest scope id taken (a longer one is refused, not cut: a cut id could
+/// name another scope).
+const MAX_SCOPES: usize = 32;
+const MAX_SCOPE_ID: usize = 256;
 
 /// One picker row, as the session drew it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -51,15 +64,24 @@ pub struct Rows {
     pub rows: Vec<Row>,
 }
 
+/// The rows one scope's session drew.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ScopeRows {
+    scope: String,
+    rows: Rows,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Entry {
     /// The executable the rows belong to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<VersionSource>,
-    /// The rows a session's own picker drew (the renderer's read).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    rows: Option<Rows>,
+    /// The rows each scope's sessions drew (the renderer's read), the most
+    /// recently written last. The unscoped `rows` an older build wrote are not
+    /// read: nothing says which scope's screen drew them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scopes: Vec<ScopeRows>,
     /// The screens Tabby's probe captured (`assistant_model_probe`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     screens: Vec<Vec<String>>,
@@ -123,16 +145,32 @@ fn patch_in(path: &Path, agent: &str, source: Option<&VersionSource>, fill: impl
     })
 }
 
-pub fn rows_in(path: &Path, agent: &str, source: Option<&VersionSource>) -> Option<Rows> {
-    entry_in(path, agent, source)?.rows.filter(|rows| !rows.rows.is_empty())
+/// A scope id a row can be kept under: not blank, not absurdly long.
+fn scope_id(scope: &str) -> Option<&str> {
+    let scope = scope.trim();
+    (!scope.is_empty() && scope.chars().count() <= MAX_SCOPE_ID).then_some(scope)
 }
 
-pub fn remember_rows_in(path: &Path, agent: &str, source: Option<&VersionSource>, rows: Rows) -> Result<(), String> {
+/// The rows `scope`'s sessions drew for `agent`'s build; nothing another
+/// scope drew.
+pub fn rows_in(path: &Path, agent: &str, scope: &str, source: Option<&VersionSource>) -> Option<Rows> {
+    let scope = scope_id(scope)?;
+    let entry = entry_in(path, agent, source)?;
+    entry.scopes.into_iter().find(|kept| kept.scope == scope).map(|kept| kept.rows).filter(|rows| !rows.rows.is_empty())
+}
+
+pub fn remember_rows_in(path: &Path, agent: &str, scope: &str, source: Option<&VersionSource>, rows: Rows) -> Result<(), String> {
+    let scope = scope_id(scope).ok_or("the rows need the scope of the session that drew them")?.to_string();
     let rows = bounded(rows);
     if rows.rows.is_empty() {
         return Ok(());
     }
-    patch_in(path, agent, source, |entry| entry.rows = Some(rows))
+    patch_in(path, agent, source, |entry| {
+        entry.scopes.retain(|kept| kept.scope != scope);
+        entry.scopes.push(ScopeRows { scope, rows });
+        let over = entry.scopes.len().saturating_sub(MAX_SCOPES);
+        entry.scopes.drain(..over);
+    })
 }
 
 pub fn screens_in(path: &Path, agent: &str, source: Option<&VersionSource>) -> Option<Vec<Vec<String>>> {
@@ -179,11 +217,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = dir.path().join("model_rows.json");
         let (old, new) = builds(dir.path());
-        remember_rows_in(&store, "claude", Some(&old), list(&["Opus", "Sonnet"])).unwrap();
-        assert_eq!(rows_in(&store, "claude", Some(&old)), Some(list(&["Opus", "Sonnet"])));
-        assert_eq!(rows_in(&store, "claude", Some(&new)), None);
-        assert_eq!(rows_in(&store, "codex", Some(&old)), None);
-        assert_eq!(rows_in(&store, "claude", None), None);
+        remember_rows_in(&store, "claude", "p1", Some(&old), list(&["Opus", "Sonnet"])).unwrap();
+        assert_eq!(rows_in(&store, "claude", "p1", Some(&old)), Some(list(&["Opus", "Sonnet"])));
+        assert_eq!(rows_in(&store, "claude", "p1", Some(&new)), None);
+        assert_eq!(rows_in(&store, "codex", "p1", Some(&old)), None);
+        assert_eq!(rows_in(&store, "claude", "p1", None), None);
     }
 
     #[test]
@@ -192,13 +230,13 @@ mod tests {
         let store = dir.path().join("model_rows.json");
         let (old, new) = builds(dir.path());
         remember_screens_in(&store, "claude", Some(&old), &[vec!["❯ 1. Opus".to_string()]]).unwrap();
-        remember_rows_in(&store, "claude", Some(&old), list(&["Opus"])).unwrap();
+        remember_rows_in(&store, "claude", "p1", Some(&old), list(&["Opus"])).unwrap();
         // Same build: the rows join the screens.
         assert!(screens_in(&store, "claude", Some(&old)).is_some());
-        remember_rows_in(&store, "claude", Some(&new), list(&["Fable"])).unwrap();
-        assert_eq!(rows_in(&store, "claude", Some(&new)), Some(list(&["Fable"])));
+        remember_rows_in(&store, "claude", "p1", Some(&new), list(&["Fable"])).unwrap();
+        assert_eq!(rows_in(&store, "claude", "p1", Some(&new)), Some(list(&["Fable"])));
         assert_eq!(screens_in(&store, "claude", Some(&new)), None);
-        assert_eq!(rows_in(&store, "claude", Some(&old)), None);
+        assert_eq!(rows_in(&store, "claude", "p1", Some(&old)), None);
     }
 
     #[test]
@@ -206,13 +244,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = dir.path().join("model_rows.json");
         let (old, _) = builds(dir.path());
-        remember_rows_in(&store, "claude", Some(&old), list(&["  "])).unwrap();
+        remember_rows_in(&store, "claude", "p1", Some(&old), list(&["  "])).unwrap();
         assert!(!store.exists());
         let many: Vec<Row> = (0..100)
             .map(|n| Row { label: format!("{n}{}", "x".repeat(500)), description: Some(" ".to_string()), number: Some(n) })
             .collect();
-        remember_rows_in(&store, "claude", Some(&old), Rows { title: Some(" ".to_string()), rows: many }).unwrap();
-        let Rows { title, rows } = rows_in(&store, "claude", Some(&old)).unwrap();
+        remember_rows_in(&store, "claude", "p1", Some(&old), Rows { title: Some(" ".to_string()), rows: many }).unwrap();
+        let Rows { title, rows } = rows_in(&store, "claude", "p1", Some(&old)).unwrap();
         assert_eq!(title, None);
         assert_eq!(rows.len(), MAX_ROWS);
         assert!(rows.iter().all(|row| row.label.chars().count() == MAX_LABEL && row.description.is_none()));
@@ -222,7 +260,64 @@ mod tests {
     fn nothing_is_written_for_an_executable_that_cannot_be_identified() {
         let dir = tempfile::tempdir().unwrap();
         let store = dir.path().join("model_rows.json");
-        assert!(remember_rows_in(&store, "claude", None, list(&["Opus"])).is_err());
+        assert!(remember_rows_in(&store, "claude", "p1", None, list(&["Opus"])).is_err());
         assert!(!store.exists());
+    }
+
+    /// Gap 95: a fenced agent's fake picker, read off its own tab's screen, is
+    /// listed in that scope's sheets and in no other scope's.
+    #[test]
+    fn rows_are_listed_only_in_the_scope_that_drew_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("model_rows.json");
+        let (old, _) = builds(dir.path());
+        remember_rows_in(&store, "claude", "p1", Some(&old), list(&["Opus"])).unwrap();
+        remember_rows_in(&store, "claude", "p2", Some(&old), list(&["Planted", "Sonnet"])).unwrap();
+        assert_eq!(rows_in(&store, "claude", "p1", Some(&old)), Some(list(&["Opus"])));
+        assert_eq!(rows_in(&store, "claude", "p2", Some(&old)), Some(list(&["Planted", "Sonnet"])));
+        assert_eq!(rows_in(&store, "claude", "p3", Some(&old)), None);
+        assert_eq!(rows_in(&store, "claude", "box:p1", Some(&old)), None);
+        assert_eq!(rows_in(&store, "claude", "", Some(&old)), None);
+        // A later list of the same scope replaces its own, not the others'.
+        remember_rows_in(&store, "claude", "p1", Some(&old), list(&["Fable"])).unwrap();
+        assert_eq!(rows_in(&store, "claude", "p1", Some(&old)), Some(list(&["Fable"])));
+        assert_eq!(rows_in(&store, "claude", "p2", Some(&old)), Some(list(&["Planted", "Sonnet"])));
+    }
+
+    /// The unscoped `rows` an older build wrote are never listed (a fake picker
+    /// could have planted them), the file still reads, and Tabby's screens in
+    /// the same entry survive the next write.
+    #[test]
+    fn an_older_builds_unscoped_rows_are_never_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("model_rows.json");
+        let (old, _) = builds(dir.path());
+        remember_screens_in(&store, "claude", Some(&old), &[vec!["❯ 1. Opus".to_string()]]).unwrap();
+        let mut file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&store).unwrap()).unwrap();
+        file["claude"]["rows"] = serde_json::json!({ "rows": [{ "label": "Planted" }] });
+        std::fs::write(&store, file.to_string()).unwrap();
+        assert_eq!(rows_in(&store, "claude", "p1", Some(&old)), None);
+        assert_eq!(rows_in(&store, "claude", "root", Some(&old)), None);
+        remember_rows_in(&store, "claude", "p1", Some(&old), list(&["Opus"])).unwrap();
+        assert_eq!(rows_in(&store, "claude", "p1", Some(&old)), Some(list(&["Opus"])));
+        assert!(screens_in(&store, "claude", Some(&old)).is_some(), "Tabby's screens stay apart");
+        assert!(!std::fs::read_to_string(&store).unwrap().contains("Planted"));
+    }
+
+    #[test]
+    fn the_scope_count_is_capped_and_the_oldest_goes_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("model_rows.json");
+        let (old, _) = builds(dir.path());
+        for n in 0..MAX_SCOPES + 3 {
+            remember_rows_in(&store, "claude", &format!("p{n}"), Some(&old), list(&["Opus"])).unwrap();
+        }
+        assert_eq!(rows_in(&store, "claude", "p0", Some(&old)), None);
+        assert_eq!(rows_in(&store, "claude", "p2", Some(&old)), None);
+        assert!(rows_in(&store, "claude", "p3", Some(&old)).is_some());
+        assert!(rows_in(&store, "claude", &format!("p{}", MAX_SCOPES + 2), Some(&old)).is_some());
+        let long = "x".repeat(MAX_SCOPE_ID + 1);
+        assert!(remember_rows_in(&store, "claude", &long, Some(&old), list(&["Opus"])).is_err());
+        assert!(remember_rows_in(&store, "claude", "  ", Some(&old), list(&["Opus"])).is_err());
     }
 }

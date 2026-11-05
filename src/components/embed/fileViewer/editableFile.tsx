@@ -381,6 +381,9 @@ export function useReadonlyFile(path: string) {
   // unsaved draft), and holding the key makes the message follow the language.
   const [errorKey, setErrorKey] = useState<TranslationKey | null>(null);
   const error = errorKey ? t(errorKey) : null;
+  // A viewer's Retry: bumping it re-runs the first read below.
+  const [reloadTick, setReloadTick] = useState(0);
+  const reload = useCallback(() => setReloadTick((n) => n + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -390,7 +393,7 @@ export function useReadonlyFile(path: string) {
       .then((text) => { if (!cancelled) setContent(text); })
       .catch((e) => { if (!cancelled) setErrorKey(describeFileErrorKey(e)); });
     return () => { cancelled = true; };
-  }, [path, scope]);
+  }, [path, scope, reloadTick]);
 
   // Diff-aware reload: silently re-read on an external write, once loaded. The
   // read is dropped if the file was switched meanwhile.
@@ -403,5 +406,5 @@ export function useReadonlyFile(path: string) {
   }, [path, scope, identity]);
   useDiskReloadPoll(path, scope, onDiskChange, { enabled: content != null });
 
-  return { content, error, loaded: content != null };
+  return { content, error, loaded: content != null, reload };
 }
