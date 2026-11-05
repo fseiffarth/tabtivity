@@ -2062,6 +2062,26 @@ fn walk_mirror_inner(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(
     Ok(())
 }
 
+/// What a pull of `files` (`(rel, host size)`) adds to the disk holding `mirror_root`:
+/// a file already in the mirror is replaced, so only its growth counts (the transfer
+/// stages a copy beside it, but that is transient and the write fails visibly if the
+/// disk really is that full). A re-pull of a mirror that is already on the disk must
+/// not be refused for the room its own files take. A path that cannot be confined or
+/// is not a regular file counts in full.
+pub fn pull_bytes_needed(mirror_root: &Path, files: &[(String, u64)]) -> u64 {
+    files
+        .iter()
+        .map(|(rel, size)| {
+            let held = confined_mirror_path(mirror_root, rel)
+                .ok()
+                .and_then(|local| std::fs::symlink_metadata(local).ok())
+                .filter(|meta| meta.is_file())
+                .map_or(0, |meta| meta.len());
+            size.saturating_sub(held)
+        })
+        .fold(0u64, u64::saturating_add)
+}
+
 /// Why a manual pull of `bytes` into `mirror_root` is refused for want of room:
 /// the preview's total (the sizes the host listed, which it chose) against the free
 /// space of the disk holding the mirror (`duscan::capacity_of`, the read the disk

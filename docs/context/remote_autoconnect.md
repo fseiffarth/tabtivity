@@ -147,9 +147,11 @@ only when it *starts* with a client prefix (`ssh: connect to host `,
 closed by `, `Connection reset by `); a rejection marker on any other line
 (permission denied, authentication, host key) still wins. Checked against OpenSSH
 10.2 with a stub server: at ERROR the `Connection closed/reset by` lines go away
-(they are INFO), `ssh: connect to host`, `Could not resolve hostname` and
-`kex_exchange_identification:` stay. So a server that drops the connection after its
-version string, with nothing else, now reads as "not unreachable" (no re-try),
+(they are INFO, and so are `kex_exchange_identification: …` for a reset or close),
+while `ssh: connect to host`, `Could not resolve hostname` and `Connection timed out
+during banner exchange` stay (the last is a client prefix too). So a connection that is
+reset or closed mid-handshake, with nothing else printed, now reads as "not unreachable"
+(no re-try; a `MaxStartups` drop is such a case, re-tried by Reconnect all instead),
 which is the safe side of the VPN step. The exit code is not read: only a failed
 run gets here, and ssh exits 255 for every connection and authentication failure.
 

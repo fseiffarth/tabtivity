@@ -1717,3 +1717,23 @@ fn a_pull_larger_than_the_free_space_is_refused_up_front() {
     assert_eq!(human_bytes(1536), "1.5 KiB");
     assert_eq!(human_bytes(12), "12 B");
 }
+
+/// A re-pull replaces the mirror's own files, so the room it asks for is only their
+/// growth: a mirror already holding every file never asks for more than it has.
+#[test]
+fn a_pull_counts_only_what_the_mirror_does_not_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let mirror = dir.path();
+    std::fs::create_dir_all(mirror.join("d")).unwrap();
+    std::fs::write(mirror.join("d").join("held.bin"), vec![0u8; 100]).unwrap();
+    std::fs::write(mirror.join("shrunk.bin"), vec![0u8; 50]).unwrap();
+    let files = vec![
+        ("d/held.bin".to_string(), 100u64),
+        ("shrunk.bin".to_string(), 10),
+        ("d/grown.bin".to_string(), 30),
+        ("new.bin".to_string(), 7),
+    ];
+    assert_eq!(pull_bytes_needed(mirror, &files), 37, "held and shrunk add nothing");
+    assert_eq!(pull_bytes_needed(mirror, &[("../out.bin".to_string(), 5)]), 5, "an unconfined path counts in full");
+    assert_eq!(pull_bytes_needed(mirror, &[("d/held.bin".to_string(), 160)]), 60);
+}

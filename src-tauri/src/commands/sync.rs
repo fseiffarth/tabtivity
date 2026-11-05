@@ -2056,10 +2056,18 @@ async fn pull_subtree(
     // Room for it, before anything is written (gap 86): the listing's sizes are the
     // host's word and the preview the user confirmed is the only other bound, so a
     // pull that cannot fit is refused here rather than filling the disk part-way.
-    if let Some(refusal) = remote_sync::pull_space_refusal(
-        &remote_sync::mirror_dir(project_id),
-        files.iter().map(|f| f.size).fold(0u64, u64::saturating_add),
-    ) {
+    // Only what the mirror does not hold already counts (a re-pull replaces its own files).
+    let room = {
+        let mirror = remote_sync::mirror_dir(project_id);
+        let listed: Vec<(String, u64)> = files.iter().map(|f| (f.rel.clone(), f.size)).collect();
+        app_core::rt::spawn_blocking(move || {
+            let needed = remote_sync::pull_bytes_needed(&mirror, &listed);
+            remote_sync::pull_space_refusal(&mirror, needed)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    };
+    if let Some(refusal) = room {
         return Err(refusal);
     }
 

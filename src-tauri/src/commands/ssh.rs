@@ -723,8 +723,11 @@ pub struct SshProbe {
 /// exit code adds nothing to the lines. A quiet run that printed nothing is not
 /// unreachable: it may be an auth failure whose notes sit below ERROR.
 fn ssh_unreachable(err: &str) -> bool {
-    const CLIENT_PREFIXES: [&str; 6] = [
+    const CLIENT_PREFIXES: [&str; 7] = [
         "ssh: connect to host ",
+        // TCP is up but the host never speaks (a half-open tunnel, a filtering firewall):
+        // ssh prints this at ERROR, so it survives `LogLevel=ERROR` where the INFO notes do not.
+        "Connection timed out during banner exchange",
         "ssh: Could not resolve hostname",
         "kex_exchange_identification:",
         "ssh_exchange_identification:",
@@ -1125,6 +1128,10 @@ mod tests {
         assert!(ssh_unreachable("Welcome to build.example\nssh: connect to host build.example port 22: No route to host"));
         assert!(ssh_unreachable("ssh: connect to host authentication.example port 22: Connection timed out"));
         assert!(ssh_unreachable("ssh: Could not resolve hostname host-key.example: Name or service not known\r\n"));
+        // Printed by ssh at ERROR (`ConnectTimeout` covers the banner exchange too): a host
+        // that accepts the connection and then says nothing is not "rejected".
+        assert!(ssh_unreachable("Connection timed out during banner exchange"));
+        assert!(!ssh_unreachable("Welcome\n  Connection timed out during banner exchange"));
     }
 
     /// The probe asks ssh for `LogLevel=ERROR` (which keeps the banner and the INFO notes
