@@ -57,7 +57,7 @@ import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
-import type { FileEntry } from "../../lib/viewers/fileUtils";
+import { internalViewerFor, type FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
@@ -1449,6 +1449,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     onShowFiles?.();
     if (at.line) useEditorJumpStore.getState().requestJump(entry.path, at.line, at.column ?? 0);
   };
+  const filesTabRef = useRef(!!onShowFiles);
+  filesTabRef.current = !!onShowFiles;
   const learnPaths = useCallback(async (entries: readonly { text: string }[]) => {
     const ask = unknownPaths(entries.map((entry) => entry.text), pathLinksRef.current);
     if (!ask.length) return;
@@ -1457,7 +1459,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const next = new Map(pathLinksRef.current);
     for (const path of ask) {
       const entry = found.get(path);
-      next.set(path, entry && isLinkable(entry, ctx.projectDir, ctx.disabled) ? entry : null);
+      // A file no in-app viewer shows (an STL, a .blend) is still a link
+      // while the Files tab is offered: a click shows it there, where it can be
+      // opened outside the app on the user's word — `tabtivity-send` points the
+      // desktop at any project file. Without that tab it stays plain text.
+      const shown = entry && (isLinkable(entry, ctx.projectDir, ctx.disabled) || (filesTabRef.current && !entry.is_dir));
+      next.set(path, shown ? entry : null);
     }
     pathLinksRef.current = next;
     setPathLinks(next);
@@ -1471,8 +1478,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const ctx = pathContextRef.current;
     setPathHover(null);
     const at = { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined };
-    // A file opens in the Files tab; a folder, or Ctrl+click, still as a tab.
-    if (onShowFiles && !newSubwindow && !entry.is_dir) {
+    // A file opens in the Files tab; a folder, or Ctrl+click, still as a tab —
+    // except a file no in-app viewer shows, which has no tab to open.
+    if (onShowFiles && !entry.is_dir && (!newSubwindow || !internalViewerFor(entry, ctx.disabled))) {
       showInFiles(entry, at);
       return;
     }
@@ -1519,6 +1527,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       name: relativePathWithin(pathContextRef.current.projectDir || tabDir, entry.path) || entry.path,
       line: Number(el.dataset.line) || undefined,
       isDir: entry.is_dir,
+      viewless: !entry.is_dir && !internalViewerFor(entry, pathContextRef.current.disabled),
     });
   };
   const onPathOut = (event: ReactMouseEvent) => {

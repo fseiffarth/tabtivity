@@ -161,6 +161,31 @@ describe("desktop conversation toolbar", () => {
     expect(screen.getByTestId("file-viewer").textContent).toBe("/project/src/result.ts");
   });
 
+  it("links a sent file no viewer shows; it opens only in the Files tab, outside the app on a click there", async () => {
+    entries.push({ kind: "answer", text: "Sent to your desktop:\n\nblender/kb_top.stl", at: "2026-10-25T09:01:00Z" });
+    invoke.mockImplementation((command: string, args?: { candidates?: string[]; path?: string }) => {
+      if (command === "agent_tab_transcript") return Promise.resolve({ available: true, entries, truncated: false, version: "1" });
+      if (command === "resolve_text_paths") return Promise.resolve(args?.candidates?.map((path) => path === "blender/kb_top.stl"
+        ? { name: "kb_top.stl", path: "/project/blender/kb_top.stl", is_dir: false, size: 2048, extension: ".stl" } : null));
+      return Promise.resolve([]);
+    });
+    render(<Pane host={host} />);
+    const link = await waitFor(() => {
+      const found = host.querySelector<HTMLElement>('[data-path-link="blender/kb_top.stl"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    // No viewer tab to open: Ctrl+click shows it in the Files tab as well.
+    fireEvent.click(link, { ctrlKey: true });
+    expect(openFile).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: /^Files/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByTestId("file-viewer")).toBeNull();
+    expect(screen.getByText("No in-app viewer shows this file.")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^Open in a tab/ })).toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Show in folder" })));
+    expect(invoke).toHaveBeenCalledWith("open_in_file_manager", { path: "/project/blender" });
+  });
+
   it("lists the conversation's workflow runs as Workspaces, apart from its subagents", async () => {
     entries.push(
       { kind: "agent", text: "Review parser", role: "reviewer", subagent: "child", at: "2026-10-25T09:01:00Z" },

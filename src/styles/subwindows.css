@@ -3114,6 +3114,11 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 /* The Files tab: the picked file's viewer beside the list. */
 .terminal-files-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .terminal-files-viewer > .file-viewer { flex: 1 1 auto; min-height: 0; }
+/* A file no in-app viewer shows: name, folder · size, and the ways out. */
+.terminal-files-viewless { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-3); overflow-wrap: anywhere; }
+.terminal-files-viewless > strong { color: var(--text-primary); }
+.terminal-files-viewless > p { margin: 0; }
+.terminal-files-viewless-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
 .terminal-changes-view { margin-left: auto; }
 .terminal-changes-split { min-width: 500px; }
 .terminal-changes-split-heading, .terminal-changes-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
