@@ -585,6 +585,69 @@ fn opencode_adopts_only_a_token_rotation() {
     }
 }
 
+/// An unsigned JWT whose payload is `claims`.
+fn jwt(claims: &str) -> String {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    format!("{}.{}.sig", engine.encode(r#"{"alg":"none"}"#), engine.encode(claims))
+}
+
+fn oauth_jwt(refresh: &str, claims: &str) -> String {
+    format!(r#"{{"type":"oauth","refresh":"{refresh}","access":"{}","expires":1}}"#, jwt(claims))
+}
+
+/// Gap 94: a rotation whose access token names another account (or none) is
+/// not taken when the stored token names one; an opaque stored token keeps
+/// the old behaviour.
+#[test]
+fn an_opencode_rotation_must_keep_the_stored_tokens_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path();
+    let homes = oc_homes(state, &["a", "b"]);
+    let a = &homes[0];
+    let held = format!(r#"{{"openai":{}}}"#, oauth_jwt("r1", r#"{"sub":"alice","exp":1}"#));
+    write_store(&store_of(state, "opencode", OC), held.as_bytes()).unwrap();
+    reconcile_all_in(state);
+    let store = store_of(state, "opencode", OC);
+    let stored = || -> serde_json::Value { serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap() };
+
+    // Same identity, new tokens: adopted.
+    write_in_place(&a.join(OC), &format!(r#"{{"openai":{}}}"#, oauth_jwt("r2", r#"{"sub":"alice","exp":2}"#)));
+    reconcile_all_in(state);
+    assert_eq!(stored()["openai"]["refresh"], "r2");
+
+    // Another account's token, a token with another claim set, an opaque one.
+    for (case, bad) in [
+        oauth_jwt("evil", r#"{"sub":"mallory"}"#),
+        oauth_jwt("evil", r#"{"sub":"alice","account_id":"extra"}"#),
+        oauth_jwt("evil", r#"{"exp":3}"#),
+        oauth("evil", ""),
+    ]
+    .iter()
+    .enumerate()
+    {
+        write_in_place(&a.join(OC), &format!(r#"{{"openai":{bad}}}"#));
+        reconcile_all_in(state);
+        assert_eq!(stored()["openai"]["refresh"], "r2", "case {case}");
+        assert!(std::fs::read_to_string(a.join(OC)).unwrap().contains("r2"), "the copy is put back, case {case}");
+    }
+    let blocked = status_in(state, tmp.path()).iter().find(|s| s.id == "opencode").unwrap().blocked.clone();
+    assert_eq!(blocked.and_then(|b| b.config).as_deref(), Some("openai.access"));
+}
+
+#[test]
+fn the_identity_of_an_opencode_token_comes_from_its_claims() {
+    let id = |claims: &str| access_identity(&serde_json::from_str(&oauth_jwt("r", claims)).unwrap());
+    assert_eq!(id(r#"{"sub":"u1"}"#).as_deref(), Some("sub=u1"));
+    assert_eq!(
+        id(r#"{"sub":"u1","https://api.openai.com/auth":{"chatgpt_account_id":"acc"}}"#).as_deref(),
+        Some("sub=u1;chatgpt_account_id=acc")
+    );
+    assert_eq!(id(r#"{"exp":1}"#), None);
+    assert_eq!(access_identity(&serde_json::from_str(&oauth("r", "")).unwrap()), None);
+    assert_eq!(access_identity(&serde_json::json!({"access": "gho_abc.def"})), None);
+}
+
 #[test]
 fn a_new_opencode_login_in_a_tab_is_not_adopted() {
     let tmp = tempfile::tempdir().unwrap();
