@@ -35,6 +35,7 @@ vi.mock("../../components/tabs/useAddTabMenuData", () => ({
 import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { clearRegionCursor } from "../../lib/shortcuts/steeringRegion";
+import { useActivityStore } from "../../stores/activity";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useSettingsStore } from "../../stores/settings";
@@ -96,6 +97,8 @@ describe("steering reaches the root window's chrome", () => {
   });
 
   it("left / right walk the view tabs and the bar's buttons, never Root's own tabs or the body", () => {
+    // The Needs-you rail (and its toggle) exists only while something waits.
+    useActivityStore.setState({ attentionByTab: { "root:r1": "decision" } });
     render(<><Harness /><RootOverlayHost /></>);
     press({ key: " ", shiftKey: true });
     press({ key: "ArrowUp" });

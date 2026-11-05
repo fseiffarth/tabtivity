@@ -528,7 +528,10 @@
   writing-mode: vertical-rl;
 }
 .cockpit-root-rail-full {
+  /* 280 px until the grip (`.cockpit-grip`, same as Now's rail) sets another
+     basis from the remembered width. */
   flex: 0 0 280px;
+  max-width: 60%;
   min-width: 0;
   min-height: 0;
   display: flex;

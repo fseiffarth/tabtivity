@@ -164,3 +164,89 @@ describe("opening the rail", () => {
     expect(jumpToRow).toHaveBeenCalledWith("p1:a");
   });
 });
+
+describe("an empty rail", () => {
+  it("is not drawn at all while nothing waits, and comes back when something does", async () => {
+    await openRoot();
+    expect(icons()).toBeTruthy();
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    // No 40 px column: neither the icons nor their nav element.
+    expect(icons()).toBeNull();
+    expect(document.querySelector(".cockpit-rail-expand")).toBeNull();
+    expect(document.querySelector(".subwindow-body > .cockpit-grip")).toBeNull();
+    expect(document.querySelector(".subwindow-body .root-overlay-region")).toBeTruthy();
+    act(() => useActivityStore.setState({ attentionByTab: { "p1:b": "decision" } }));
+    expect(icons()).toBeTruthy();
+  });
+
+  it("an open rail stays open (its extra groups need it) even with nothing in the live stores", async () => {
+    localStorage.setItem(FOLD, "open");
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    await openRoot();
+    expect(document.querySelector(".cockpit-rail")).toBeTruthy();
+    // Folding it then leaves nothing to draw.
+    await act(async () => fireEvent.click(screen.getByLabelText("Fold the Needs-you rail")));
+    expect(icons()).toBeNull();
+  });
+});
+
+describe("the open rail's width", () => {
+  const WIDTH = storageKey("cockpitRootRailWidth");
+  const column = () => document.querySelector<HTMLElement>(".cockpit-root-rail-full")!;
+  const grip = () => document.querySelector<HTMLElement>(".subwindow-body > .cockpit-grip")!;
+  const drag = (by: number) => {
+    fireEvent.pointerDown(grip(), { clientX: 300, pointerId: 1 });
+    fireEvent(window, new MouseEvent("pointermove", { clientX: 300 + by }));
+    fireEvent(window, new MouseEvent("pointerup"));
+  };
+
+  beforeEach(() => localStorage.setItem(FOLD, "open"));
+
+  it("is 280 px with a grip beside it, as before", async () => {
+    await openRoot();
+    expect(grip().getAttribute("role")).toBe("separator");
+    expect(column().style.flexBasis).toBe("280px");
+  });
+
+  it("follows the grip, is written on release under its own key and is back after a remount", async () => {
+    localStorage.setItem(storageKey("cockpitRailWidth"), "333");
+    await openRoot();
+    await act(async () => drag(60));
+    expect(column().style.flexBasis).toBe("340px");
+    expect(localStorage.getItem(WIDTH)).toBe("340");
+    // Now's rail keeps its own width.
+    expect(localStorage.getItem(storageKey("cockpitRailWidth"))).toBe("333");
+    cleanup();
+    await openRoot();
+    expect(column().style.flexBasis).toBe("340px");
+  });
+
+  it("clamps a drag to the column's bounds", async () => {
+    await openRoot();
+    await act(async () => drag(-900));
+    expect(column().style.flexBasis).toBe("220px");
+    expect(localStorage.getItem(WIDTH)).toBe("220");
+  });
+
+  it.each([["garbage", "280px"], ["", "280px"], ["-40", "280px"], ["0", "280px"], ["NaN", "280px"], ["5", "220px"], ["99999", "1100px"], ["412.6", "413px"]])(
+    "reads a stored %j tolerantly (%s)",
+    async (stored, shown) => {
+      localStorage.setItem(WIDTH, stored);
+      await openRoot();
+      expect(column().style.flexBasis).toBe(shown);
+    },
+  );
+
+  it("still opens at 280 px when storage cannot be read", async () => {
+    const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation((key: string) => {
+      if (key === WIDTH) throw new Error("denied");
+      return key === FOLD ? "open" : null;
+    });
+    try {
+      await openRoot();
+      expect(column().style.flexBasis).toBe("280px");
+    } finally {
+      get.mockRestore();
+    }
+  });
+});

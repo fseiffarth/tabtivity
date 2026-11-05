@@ -38,7 +38,10 @@ project, schedules per agent target, markup asks per agent tab), the event
 listeners that refresh them and the 15 s clock exist only while the view is on
 screen. Root's Needs-you icon rail and its tab lamp read the same live stores as
 the header badge and nothing else (the open rail adds the three loads, only
-while open). The header badge reads live stores only: it counts asking +
+while open). The icon rail is not
+drawn at all while no group has a count (the console keeps the 40 px); an open rail
+stays, 280 px by default with Now's resize grip, its width in `cockpitRootRailWidth`
+(read tolerantly: a bad value is the default, an out-of-range one the nearest legal width). The header badge reads live stores only: it counts asking +
 interrupted + already-loaded schedule proposals + root approvals, and not push
 requests, whose read runs git per project.
 

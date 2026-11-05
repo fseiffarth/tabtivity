@@ -12,6 +12,7 @@ import { CockpitRail } from "./CockpitRail";
 import { CockpitRailIcons } from "./CockpitRailIcons";
 import { jumpToRow } from "./CockpitRoster";
 import { NeedsYouChip, NeedsYouPopover, type NeedsYouAnchor } from "./NeedsYouPopover";
+import { ColumnGrip, useColumnWidth } from "./useColumnWidth";
 import {
   useCockpitScopes,
   useDecisionsFor,
@@ -22,6 +23,9 @@ import {
 } from "./useCockpitData";
 
 const FOLD_KEY = storageKey("cockpitRootRail");
+/** The open rail's remembered width; its own key, so Now's rail keeps its own. */
+const WIDTH_KEY = storageKey("cockpitRootRailWidth");
+const WIDTH_DEFAULT = 280;
 
 /** The rail's remembered fold (per machine; a convenience, never state):
  *  collapsed unless the user opened it. */
@@ -50,10 +54,12 @@ function pickRow(row: RosterRow) {
   jumpToRow(row.ptyId);
 }
 
-/** The collapsed rail: live-store groups only (no backend read, no clock). */
+/** The collapsed rail: live-store groups only (no backend read, no clock). With
+ *  nothing waiting it is not drawn at all, so the console gets the 40 px back. */
 function RootRailCollapsed({ onExpand }: { onExpand: (group: DecisionGroupId | null) => void }) {
   const scopes = useCockpitScopes();
   const { decisions } = useDecisionsFor(scopes);
+  if (decisions.groups.length === 0) return null;
   return <CockpitRailIcons decisions={decisions} onExpand={onExpand} />;
 }
 
@@ -71,34 +77,38 @@ function RootRailFull({ focusGroup, onCollapse }: { focusGroup: DecisionGroupId 
   const markup = useMarkupAsks(scopes);
   const extras = useMemo(() => ({ push, schedules, markup }), [push, schedules, markup]);
   const { decisions, alerts } = useDecisionsFor(scopes, extras);
+  const width = useColumnWidth(WIDTH_KEY, WIDTH_DEFAULT, 1);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!focusGroup) return;
     ref.current?.querySelector(`[data-group="${focusGroup}"]`)?.scrollIntoView?.({ block: "start" });
   }, [focusGroup]);
   return (
-    <div className="cockpit-root-rail-full" ref={ref}>
-      <CockpitRail
-        decisions={decisions}
-        selected={null}
-        alerts={alerts}
-        onPick={pickRow}
-        headAction={
-          <>
-            <UntestedTag id="cockpit.rootRail" />
-            <button
-              type="button"
-              className="cockpit-rail-icon cockpit-rail-collapse"
-              title={t("cockpit.rail.collapse")}
-              aria-label={t("cockpit.rail.collapse")}
-              onClick={onCollapse}
-            >
-              <ChevronLeftIcon />
-            </button>
-          </>
-        }
-      />
-    </div>
+    <>
+      <div className="cockpit-root-rail-full" ref={ref} style={{ flexBasis: width.width }}>
+        <CockpitRail
+          decisions={decisions}
+          selected={null}
+          alerts={alerts}
+          onPick={pickRow}
+          headAction={
+            <>
+              <UntestedTag id="cockpit.rootRail" />
+              <button
+                type="button"
+                className="cockpit-rail-icon cockpit-rail-collapse"
+                title={t("cockpit.rail.collapse")}
+                aria-label={t("cockpit.rail.collapse")}
+                onClick={onCollapse}
+              >
+                <ChevronLeftIcon />
+              </button>
+            </>
+          }
+        />
+      </div>
+      <ColumnGrip onPointerDown={width.onPointerDown} />
+    </>
   );
 }
 
@@ -140,12 +150,13 @@ function RootRailPopover({ anchor, onClose }: { anchor: NeedsYouAnchor; onClose:
 }
 
 /**
- * Root's Needs-you column: a 40 px icon rail by default, the full `CockpitRail`
- * beside the console when opened. It reads the live stores the header badge
- * reads and nothing else while collapsed. In a narrow window (under 820 px,
- * `lib/window/frameBand`) there is no room for a column, so none is mounted;
- * the "Needs you N" chip takes its place in the window's bar (`chipSlot`,
- * where the Root view portals it).
+ * Root's Needs-you column: a 40 px icon rail by default (nothing at all while
+ * nothing waits), the full `CockpitRail` beside the console when opened, its
+ * width dragged by the same grip as Now's and remembered. It reads the live
+ * stores the header badge reads and nothing else while collapsed. In a narrow
+ * window (under 820 px, `lib/window/frameBand`) there is no room for a column,
+ * so none is mounted; the "Needs you N" chip takes its place in the window's
+ * bar (`chipSlot`, where the Root view portals it).
  */
 export function RootRail({ chipSlot }: { chipSlot: HTMLElement | null }) {
   const band = useFrameBandValue();

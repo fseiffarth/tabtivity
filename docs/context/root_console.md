@@ -153,10 +153,12 @@ The pieces, and the rules they keep:
   an open app overlay is that column's. Root's slots in `CenterPanel` stand down
   for `open` (the window covers them) and wake by what is drawn.
 - **Root's Needs-you rail**: a 40 px icon rail of live-store
-  groups beside the console, the full `CockpitRail` on a click (fold remembered);
-  the Root tab wears the lamp of root's tabs (asking count, working ring).
-  Neither reads anything the header badge does not. Narrower than 820 px the rail
-  is not mounted.
+  groups beside the console (not drawn at all while nothing waits), the full
+  `CockpitRail` on a click (fold remembered; resizable by Now's grip, width
+  remembered); the Root tab wears the lamp of root's tabs (asking count, working
+  ring). Neither reads anything the header badge does not. Narrower than 820 px the
+  column is not mounted and Now's "Needs you N" chip sits in the window's bar
+  instead (the sub-bar; the title bar's cluster in a split Root).
 - **The empty Root card** offers "Start <agent> in Root" (the `+` menu's default
   root-allowed agent, one click).
 - **Steering** walks Root's tabs while the Root view is up (`steeringScope`).
