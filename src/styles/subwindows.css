@@ -2362,6 +2362,13 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   margin: 0;
   white-space: pre-wrap;
 }
+/* `overflow-wrap: anywhere` (above) also lowers a table column's min-content
+   width to one character, so a long cell squeezed short columns ("Agent",
+   "Model") into one letter per line. `break-word` wraps the same overlong
+   words but leaves min-content at the longest word. */
+.terminal-reader-turn .markdown-body :is(th, td) {
+  overflow-wrap: break-word;
+}
 .terminal-reader-turn.user {
   align-self: flex-end;
   border-bottom-right-radius: 4px;
