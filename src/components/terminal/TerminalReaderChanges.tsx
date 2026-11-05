@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import { basename, relativePathWithin } from "../../lib/paths";
-import { parseUnifiedDiff, type DiffLine } from "../../lib/viewers/diff";
+import { parseUnifiedDiff } from "../../lib/viewers/diff";
+import { splitDiffRows } from "../../lib/viewers/diffRows";
 import { disabledViewers, type FileEntry } from "../../lib/viewers/fileUtils";
 import { readerRequest } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
@@ -29,29 +30,6 @@ import { projectIdOfScope } from "../../lib/terminal/ptyId";
  * follows it into an open subagent. Portaled with the Reader over the
  * pane, so the pane's mouse handling leaves it alone (`SIGN_IN_CARD_CLASS`).
  */
-
-/** Pair each contiguous replacement run; keep context and metadata in order. */
-export function splitDiffRows(lines: readonly DiffLine[]): { before?: DiffLine; after?: DiffLine; note?: string }[] {
-  const rows: { before?: DiffLine; after?: DiffLine; note?: string }[] = [];
-  let at = 0;
-  while (at < lines.length) {
-    const line = lines[at];
-    if (line.type === "del" || line.type === "add") {
-      const before: DiffLine[] = [];
-      const after: DiffLine[] = [];
-      while (at < lines.length && (lines[at].type === "del" || lines[at].type === "add")) {
-        const item = lines[at++];
-        (item.type === "del" ? before : after).push(item);
-      }
-      for (let index = 0; index < Math.max(before.length, after.length); index++) rows.push({ before: before[index], after: after[index] });
-    } else {
-      rows.push(line.type === "context" ? { before: line, after: line } : { note: line.text });
-      at++;
-    }
-  }
-  return rows;
-}
-
 
 export interface FileChange {
   path: string;

@@ -3152,6 +3152,36 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-changes-split-row .add .diff-word { background: var(--diff-add-mark); }
 .terminal-changes-split-row .del .diff-word { background: var(--diff-del-mark); }
 .terminal-changes-split-note { padding: var(--space-1) var(--space-3); color: var(--text-muted); background: var(--bg-subtle); }
+/* The native diff viewer's layout: change anchors, folds, file index. */
+.diff-anchor[data-current="true"], .terminal-changes-split-row[data-current="true"] { box-shadow: inset 3px 0 0 var(--accent); }
+.diff-fold {
+  display: block; width: 100%; padding: 2px var(--space-3); border: 0;
+  border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-subtle); color: var(--text-muted); font: inherit; text-align: center;
+  cursor: var(--cur-pointer, pointer);
+}
+.diff-fold:hover { color: var(--text-primary); }
+.diff-index { max-height: 9.5em; overflow-y: auto; padding: 2px 0; border-bottom: 1px solid var(--border-color); }
+.diff-index-row {
+  display: flex; align-items: baseline; gap: var(--space-3); width: 100%; padding: 1px var(--space-3);
+  border: 0; background: transparent; color: var(--text-primary); font: inherit; text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+.diff-index-row:hover { background: var(--bg-subtle); }
+.diff-index-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-index-from { color: var(--text-muted); }
+.diff-file-header { display: flex; align-items: baseline; gap: var(--space-3); }
+.diff-file-fold {
+  display: inline-flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding: 0; border: 0;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: var(--cur-pointer, pointer);
+}
+.diff-file-fold > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-file-caret { display: inline-block; transition: transform 0.1s; color: var(--text-muted); }
+.diff-file-caret.folded { transform: rotate(-90deg); }
+.diff-file-header .terminal-changes-counts { margin-left: auto; }
+.diff-viewer:focus { outline: none; }
+.diff-nav { display: inline-flex; align-items: center; gap: 2px; }
+.diff-nav svg { width: 12px; height: 12px; }
 @media (max-width: 600px) {
   .terminal-changes-body { flex-direction: column; }
   .terminal-changes-body > .terminal-changes-files { width: auto; max-height: 25%; border-right: none; border-bottom: 1px solid var(--border-subtle); }
