@@ -30,6 +30,7 @@ fn socket(name: &str) -> PathBuf {
 
 struct FakeMux {
     alive: bool,
+    pid: std::cell::Cell<Option<u32>>,
     runs: RefCell<Vec<Vec<String>>>,
     /// Answers for the next `run`s, front first; empty means success.
     answers: RefCell<Vec<Result<(), String>>>,
@@ -37,7 +38,7 @@ struct FakeMux {
 
 impl FakeMux {
     fn new() -> Self {
-        Self { alive: true, runs: RefCell::new(Vec::new()), answers: RefCell::new(Vec::new()) }
+        Self { alive: true, pid: std::cell::Cell::new(None), runs: RefCell::new(Vec::new()), answers: RefCell::new(Vec::new()) }
     }
     fn ops(&self) -> Vec<String> {
         self.runs
@@ -51,6 +52,9 @@ impl FakeMux {
 impl Mux for FakeMux {
     fn alive(&self, _control_path: &Path) -> bool {
         self.alive
+    }
+    fn master_pid(&self, _control_path: &Path) -> Option<u32> {
+        self.pid.get()
     }
     fn run(&self, args: Vec<String>) -> Result<(), String> {
         self.runs.borrow_mut().push(args);
@@ -224,6 +228,53 @@ fn stop_a_master_teardown_and_quit_each_cancel_what_they_own() {
     assert!(reg.lock().unwrap().rows().is_empty());
     let cancels = mux.ops().iter().filter(|o| *o == "cancel").count();
     assert_eq!(cancels, 3, "every forward was cancelled exactly once");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_forward_of_a_replaced_master_is_not_reused() {
+    // The pool reaps a dead connection without a teardown, so the row stays;
+    // after a reconnect the socket answers from a new master. Reusing the row
+    // would hand out a local port nothing listens on any more.
+    let reg = Mutex::new(Registry::new());
+    let mux = FakeMux::new();
+    mux.pid.set(Some(100));
+    let s = spec(None, None);
+    let path = socket("cm-abc");
+    let first = open_via(&reg, &mux, &request(&s, &path, "p1:a", "localhost", 8888), &fixed).unwrap();
+    let again = open_via(&reg, &mux, &request(&s, &path, "p1:b", "localhost", 8888), &fixed).unwrap();
+    assert!(again.reused, "the same master still serves it");
+    assert_eq!(mux.ops(), vec!["forward"]);
+
+    mux.pid.set(Some(200));
+    let fresh = open_via(&reg, &mux, &request(&s, &path, "p1:a", "localhost", 8888), &fixed).unwrap();
+    assert!(!fresh.reused, "a new master has no such forward");
+    assert_ne!(fresh.id, first.id);
+    assert_eq!(mux.ops(), vec!["forward", "forward"]);
+    let rows = reg.lock().unwrap().rows();
+    assert_eq!(rows.len(), 1, "the dead master's row is gone");
+    assert_eq!(rows[0].id, fresh.id);
+    // Another socket's forwards are not touched by this master's change.
+    let other = socket("cm-other");
+    open_via(&reg, &mux, &request(&s, &other, "p1:a", "localhost", 6006), &fixed).unwrap();
+    mux.pid.set(Some(300));
+    open_via(&reg, &mux, &request(&s, &path, "p1:a", "localhost", 7000), &fixed).unwrap();
+    assert!(reg.lock().unwrap().rows().iter().any(|r| r.remote_port == 6006));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn an_unreadable_master_pid_never_counts_as_a_replaced_master() {
+    let reg = Mutex::new(Registry::new());
+    let mux = FakeMux::new();
+    let s = spec(None, None);
+    let path = socket("cm-abc");
+    open_via(&reg, &mux, &request(&s, &path, "p1:a", "localhost", 8888), &fixed).unwrap();
+    mux.pid.set(Some(7));
+    let joined = open_via(&reg, &mux, &request(&s, &path, "p1:b", "localhost", 8888), &fixed).unwrap();
+    assert!(joined.reused);
+    assert_eq!(parse_master_pid("Master running (pid=4242)\r\n"), Some(4242));
+    assert_eq!(parse_master_pid("Master running"), None);
 }
 
 #[cfg(not(windows))]

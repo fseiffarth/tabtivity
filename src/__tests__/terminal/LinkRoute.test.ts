@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeLink, tabLocality, type TabLocality } from "../../lib/terminal/linkRoute";
+import { isLoopbackHostname, routeLink, tabLocality, type TabLocality } from "../../lib/terminal/linkRoute";
 
 const remote: TabLocality = { kind: "remote", projectId: "p1", hostId: "primary" };
 
@@ -26,6 +26,39 @@ describe("routeLink", () => {
     expect(routeLink("http://localhost/", remote)).toMatchObject({ forward: { remotePort: 80 } });
     expect(routeLink("http://localhost:8888/", { kind: "container" })).toBe("unsupported");
     expect(routeLink("http://127.0.0.1:8888/", { kind: "unknown" })).toBe("unsupported");
+  });
+
+  it("never opens this machine's port for a loopback spelling the clean parse does not take", () => {
+    const spellings = [
+      "http://localhost.:8888/",
+      "http://LOCALHOST.:8888/lab?token=x",
+      "http://app.localhost:8888/",
+      "http://localhost.localdomain:8888/",
+      "http://user:pw@localhost:8888/",
+      "http://user@127.0.0.1:8888/",
+      "http://[::ffff:127.0.0.1]:8888/",
+      "http://[::ffff:7f00:1]:8888/",
+      "http://[::ffff:0.0.0.0]:8888/",
+      "http://local%68ost.:8888/",
+    ];
+    for (const url of spellings) {
+      expect(routeLink(url, remote), url).toBe("unsupported");
+      expect(routeLink(url, { kind: "container" }), url).toBe("unsupported");
+      expect(routeLink(url, { kind: "unknown" }), url).toBe("unsupported");
+      expect(routeLink(url, { kind: "local" }), url).toBe("external");
+    }
+    // A name that only looks like a loopback stays an ordinary link.
+    expect(routeLink("https://notlocalhost.example.com/", remote)).toBe("external");
+    expect(routeLink("https://localhost.example.com:8443/", remote)).toBe("external");
+  });
+
+  it("isLoopbackHostname: the loopback in every spelling, and nothing else", () => {
+    for (const yes of ["localhost", "localhost.", "[::1]", "::", "127.1.2.3", "0.0.0.0", "a.localhost"]) {
+      expect(isLoopbackHostname(yes), yes).toBe(true);
+    }
+    for (const no of ["example.com", "localhost.example.com", "192.0.2.1", "[2001:db8::1]", "node042", "mylocalhost"]) {
+      expect(isLoopbackHostname(no), no).toBe(false);
+    }
   });
 
   it("opens a public link of a remote or container tab in the browser", () => {

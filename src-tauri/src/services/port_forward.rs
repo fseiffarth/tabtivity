@@ -190,6 +190,12 @@ pub trait Mux {
     /// Whether a ControlMaster answers on `control_path` (strict: anything
     /// short of a yes is no).
     fn alive(&self, control_path: &Path) -> bool;
+    /// The pid of the master answering on `control_path` (`-O check` says
+    /// "Master running (pid=N)"), when it can be read. A forward lives in one
+    /// master process: a different pid on the same socket is a different master.
+    fn master_pid(&self, _control_path: &Path) -> Option<u32> {
+        None
+    }
     /// Run `ssh <args>`; `Err` carries stderr.
     fn run(&self, args: Vec<String>) -> Result<(), String>;
 }
@@ -202,6 +208,19 @@ impl Mux for SshMux {
         crate::services::ssh_exec::master_alive(control_path, ALIVE_TIMEOUT)
     }
 
+    fn master_pid(&self, control_path: &Path) -> Option<u32> {
+        let args = crate::services::ssh_exec::master_check_args(control_path).ok()?;
+        let mut command = crate::paths::command_no_window("ssh");
+        command.args(args);
+        let out = crate::paths::output_within(command, ALIVE_TIMEOUT).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        // ssh prints it on stderr; stdout is read too, for a build that differs.
+        parse_master_pid(&String::from_utf8_lossy(&out.stderr))
+            .or_else(|| parse_master_pid(&String::from_utf8_lossy(&out.stdout)))
+    }
+
     fn run(&self, args: Vec<String>) -> Result<(), String> {
         let mut command = crate::paths::command_no_window("ssh");
         command.args(args);
@@ -212,6 +231,18 @@ impl Mux for SshMux {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         Err(if stderr.is_empty() { "ssh refused the forward".to_string() } else { stderr })
     }
+}
+
+/// The `N` of `Master running (pid=N)`.
+pub fn parse_master_pid(text: &str) -> Option<u32> {
+    let digits: String = text.split("pid=").nth(1)?.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// Whether two readings of "which master is on this socket" are known to be
+/// different processes. An unreadable pid on either side is not evidence.
+fn other_master(recorded: Option<u32>, now: Option<u32>) -> bool {
+    matches!((recorded, now), (Some(a), Some(b)) if a != b)
 }
 
 /// The identity of a forward: the same ssh target, remote host and port is one
@@ -237,6 +268,11 @@ struct Forward {
     /// The ssh target and port to rebuild `-O cancel` from.
     ssh_target: String,
     ssh_port: Option<u16>,
+    /// The master process the forward was made in. The pool drops a dead
+    /// connection without a teardown (`remote::connect_host` and the other
+    /// reapers), so a row can outlive its master: after a reconnect the socket
+    /// answers again, from a master that never heard of the forward.
+    master_pid: Option<u32>,
 }
 
 impl Forward {
@@ -360,6 +396,13 @@ pub fn open_via(
         registry.lock_ok().take_where(|f| f.control_path == req.control_path);
         return Err(PortForwardError::NotConnected);
     }
+    // A forward made in a master that is gone is not reused: its local port
+    // listens no more, and the next program to bind it would be handed the
+    // page (and its `?token=`) of a server it never was.
+    let master_pid = mux.master_pid(&req.control_path);
+    registry
+        .lock_ok()
+        .take_where(|f| f.control_path == req.control_path && other_master(f.master_pid, master_pid));
     if let Some(opened) = join_existing(registry, &key, req.owner) {
         return Ok(opened);
     }
@@ -407,6 +450,7 @@ pub fn open_via(
         host_label: req.spec.label.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| req.spec.host.clone()),
         ssh_target: target,
         ssh_port: req.spec.port,
+        master_pid,
     });
     Ok(Opened { id: id.to_string(), local_port: local, reused: false })
 }

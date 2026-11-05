@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LineLike } from "../../lib/terminal/terminalSelection";
-import { findServerUrls, forwardedUrl, localPageUrl, parseServerTarget } from "../../lib/terminal/serverUrls";
+import { findServerUrls, forwardedUrl, isLoopbackServerHost, localPageUrl, parseServerTarget } from "../../lib/terminal/serverUrls";
 
 const COLS = 100;
 
@@ -141,5 +141,16 @@ describe("parseServerTarget and the URLs built from it", () => {
     expect(forwardedUrl(t, 9001)).toBe("http://127.0.0.1:9001/lab?token=abc#x");
     expect(localPageUrl(parseServerTarget("http://0.0.0.0:3000/")!)).toBe("http://127.0.0.1:3000/");
     expect(localPageUrl(parseServerTarget("http://[::1]:3000/")!)).toBe("http://[::1]:3000/");
+  });
+});
+
+describe("isLoopbackServerHost", () => {
+  it("is the loopback itself, never a node name that merely starts like one", () => {
+    for (const yes of ["localhost", "::1", "127.0.0.1", "127.8.9.10"]) expect(isLoopbackServerHost(yes), yes).toBe(true);
+    // The chip of a local tab skips the confirmation only for these.
+    for (const no of ["localhost-gpu", "localhostevil", "node042", "127.0.0.1.evil", "127.", "1270"]) {
+      expect(isLoopbackServerHost(no), no).toBe(false);
+    }
+    expect(parseServerTarget("http://localhost-gpu:8888/", true)?.host).toBe("localhost-gpu");
   });
 });

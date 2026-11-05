@@ -82,12 +82,40 @@ export type LinkRoute =
       };
     };
 
+/**
+ * Whether `hostname` (as `URL.hostname` spells it, IPv6 bracketed) is this
+ * machine's loopback under any spelling a browser resolves there: `localhost`
+ * with a trailing dot, `*.localhost`, `localhost.localdomain`, 127/8, `0.0.0.0`,
+ * `::`, `::1` and the IPv4-mapped forms. [`parseServerTarget`] reads only the
+ * clean spellings as a server; this is the broad net a non-local tab's link must
+ * not slip through to open *this* machine's port.
+ */
+export function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/gu, "").replace(/\.+$/u, "").toLowerCase();
+  if (host === "localhost" || host === "localhost.localdomain" || host.endsWith(".localhost")) return true;
+  if (host === "0.0.0.0" || /^127(?:\.\d{1,3}){3}$/u.test(host)) return true;
+  if (host === "::" || host === "::1") return true;
+  return /^::(?:ffff:)?(?:7f[0-9a-f]{2}:[0-9a-f]{1,4}|0:0)$/u.test(host);
+}
+
+/** An http(s) URL whose host is the loopback in any spelling (userinfo included). */
+function pointsAtLoopback(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (parsed.protocol === "http:" || parsed.protocol === "https:") && isLoopbackHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function routeLink(url: string, locality: TabLocality | undefined): LinkRoute {
   if (!locality || locality.kind === "local") return "external";
   const target = parseServerTarget(url);
   // Anything that is not the tab's own loopback (or a node name with a port) is an
-  // ordinary web link, opened here.
-  if (!target) return "external";
+  // ordinary web link, opened here. A loopback the clean parse does not take
+  // (`localhost.`, userinfo, an IPv4-mapped address) is still the tab's own
+  // loopback: never this machine's port.
+  if (!target) return pointsAtLoopback(url) ? "unsupported" : "external";
   if (locality.kind !== "remote") return "unsupported";
   return {
     forward: {

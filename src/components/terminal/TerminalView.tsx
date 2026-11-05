@@ -63,7 +63,7 @@ import { relativePathWithin } from "../../lib/paths";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
 import { SERVER_CHIPS_CLASS, TerminalServerChips } from "./TerminalServerChips";
-import { localPageUrl, forwardedUrl, type ServerUrl } from "../../lib/terminal/serverUrls";
+import { isLoopbackServerHost, localPageUrl, forwardedUrl, type ServerUrl } from "../../lib/terminal/serverUrls";
 import { watchServers } from "../../lib/terminal/serverWatch";
 import { routeLink, tabLocality, type LinkRoute } from "../../lib/terminal/linkRoute";
 import { forwardAndOpen, hostLabelOf } from "../../lib/remote/portForward";
@@ -444,7 +444,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   );
   forwardServerRef.current = (forward, open, viaLink = false) => {
     const hostLabel = hostLabelOf(projectEntry, forward.hostId);
-    const loopback = /^(?:localhost|::1|127(?:\.\d{1,3}){3})$/u.test(forward.remoteHost);
+    const loopback = isLoopbackServerHost(forward.remoteHost);
     return forwardAndOpen({
       target: { projectId: forward.projectId, hostId: forward.hostId, remoteHost: forward.remoteHost, remotePort: forward.remotePort },
       page: forward,
@@ -2496,7 +2496,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     } else if (locality.kind === "local") {
       // A server on this machine opens as printed: its host is the loopback, so
       // no confirmation; a node name is another machine and asks like any link.
-      if (/^(?:localhost|::1|127\.)/u.test(server.host)) {
+      if (isLoopbackServerHost(server.host)) {
         void invoke("open_external_url", { url: localPageUrl(server) }).catch(() => {});
       } else {
         void openLinkRef.current(localPageUrl(server)).catch(() => {});
@@ -2707,7 +2707,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         key={signIn.url}
         host={host}
         request={signIn}
-        onOpen={() => void invoke("open_external_url", { url: signIn.url }).catch(() => {})}
+        onOpen={() => {
+          // A sign-in link on the tab's own loopback (a dev server's login) is
+          // routed like any link: a remote tab's is forwarded, never this machine's port.
+          if (routeLink(signIn.url, localityRef.current) !== "external") {
+            void openLinkRef.current(signIn.url).catch(() => {});
+          } else {
+            void invoke("open_external_url", { url: signIn.url }).catch(() => {});
+          }
+        }}
         onCopy={() => {
           invoke("copy_text_to_clipboard", { text: signIn.url })
             .then(() => useProjectsStore.setState({ switchToast: signInCopiedRef.current }))

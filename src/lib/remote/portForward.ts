@@ -137,7 +137,9 @@ export async function forwardAndOpen(opts: {
     }
     return localPort;
   } catch (e) {
-    opts.notify(portForwardErrorText(e));
+    // The opener's own error names the URL it was given, and that one carries
+    // the server's `?token=`: a toast shows the words, never the link.
+    opts.notify(portForwardErrorText(e).replace(/https?:\/\/\S+/giu, "[link]"));
     return null;
   }
 }

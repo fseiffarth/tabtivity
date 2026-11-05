@@ -67,6 +67,24 @@ describe("forwardAndOpen", () => {
   });
 });
 
+describe("forwardAndOpen: a failed open", () => {
+  it("never puts the page's token into the message it shows", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "port_forward_open"
+        ? Promise.resolve({ id: "1", localPort: 9001, reused: false })
+        : Promise.reject(new Error("failed to open http://127.0.0.1:9001/lab?token=SECRET: no browser")),
+    );
+    const notify = vi.fn();
+    const out = await forwardAndOpen({ target, page, tabUid: "t", confirm: () => Promise.resolve(true), notify });
+    expect(out).toBeNull();
+    expect(notify).toHaveBeenCalledTimes(1);
+    const shown = String(notify.mock.calls[0][0]);
+    expect(shown).not.toContain("SECRET");
+    expect(shown).not.toContain("127.0.0.1");
+    expect(shown).toContain("no browser");
+  });
+});
+
 describe("portForwardErrorText", () => {
   it("translates the backend tokens and passes anything else through", () => {
     expect(portForwardErrorText("port-forward:unsupported-os")).toContain("Windows");

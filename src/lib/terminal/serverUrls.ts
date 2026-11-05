@@ -38,6 +38,12 @@ export interface ServerUrl extends ServerTarget {
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const ANY_HOSTS = new Set(["0.0.0.0", "::"]);
 
+/** Whether a [`ServerTarget`] host (already normalised) is the loopback itself,
+ *  not a node name that merely starts like one (`localhost-gpu`). */
+export function isLoopbackServerHost(host: string): boolean {
+  return /^(?:localhost|::1|127(?:\.\d{1,3}){3})$/u.test(host);
+}
+
 /** Whether `hostname` (as `URL.hostname` spells it, IPv6 bracketed) is this machine itself. */
 function loopbackHost(hostname: string): string | null {
   const host = hostname.replace(/^\[|\]$/gu, "").toLowerCase();

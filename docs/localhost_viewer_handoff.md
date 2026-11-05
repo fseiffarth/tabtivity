@@ -75,3 +75,42 @@ keys are also in de/es/fr/it (my translations; worth a native read).
 - Forwards end on a project switch (above); say if that is wrong for persistent tabs.
 - Phase 1b (Windows `ssh -N -L` child), phase 2 (compute-node extras beyond the node-name
   host that already falls out), phase 3 (containers) are untouched.
+
+## Security review (2026-11-05) — nothing run live
+
+Fixed in the review commit (each with a test): loopback spellings the clean URL parse does not
+take (`localhost.`, `*.localhost`, userinfo, IPv4-mapped IPv6) opened **this** machine's port from
+a remote/container tab; the sign-in card opened a loopback sign-in link without routing; a local
+tab's chip skipped the confirmation for any node name starting `localhost`; a failed browser
+open put the forwarded `?token=` URL into a toast; a forward row outlived a replaced master
+(the pool reaps dead connections without `teardown_pooled`) and was reused for a port nothing
+listens on, so the next program to bind it got the page and token (`Mux::master_pid`).
+
+### Flagged for user (design / plausible, not changed)
+
+- **Origin `127.0.0.1:<port>` for a remote page.** The forwarded page's origin is a loopback
+  address, so a browser's Private Network Access does not treat its requests to other
+  `127.0.0.1` ports (Ollama, other dev servers) as public-to-local. A hostile remote server
+  gets the reach of a local page, and cookies on `127.0.0.1` are shared across ports. A
+  per-forward name such as `<id>.localhost` would isolate cookies and storage; it needs the
+  server to accept that `Host` (Jupyter/Vite host checks), so it is a product decision.
+- **Any local user or process can connect to the forwarded port** (`127.0.0.1` is shared on a
+  multi-user host). Jupyter's token protects it; TensorBoard has no auth. A unix socket cannot
+  serve a browser URL, so this is inherent to `-L`.
+- **Crash leaves forwards.** `close_all` runs only on a clean quit. After a crash a
+  `ControlPersist` master keeps its forwards bound until it expires; the registry is gone, so
+  nothing sweeps them on the next start.
+- **Timeouts can orphan a forward.** `-O forward` that times out client-side (8 s) may still
+  have succeeded in the master; the retry then opens a second one on another port and the first
+  is never cancelled. Likewise `open_via` treats a master that misses the 4 s `-O check` as dead
+  and drops its rows without cancelling.
+- **Open racing tab close.** `close_for_tab` between the ssh call and the registry insert finds
+  no owner; the forward is then owned by a gone tab until Stop, a disconnect or quit.
+- **`close_for_master` is keyed by socket**, which several projects on one ssh target share:
+  deactivating project A also ends project B's forwards on that host.
+- **Typed ssh in a login/root console tab** (`login` is "local"): a loopback link there opens
+  this machine's port, since nothing says the tab's shell is on another host.
+- **Pid check is best effort.** If `ssh -O check` prints no pid, a replaced master is not noticed.
+- **A remote can print any `name:port`** that forwards to a host its network can reach (the
+  chip names it, the dialog asks once per session per target); a second click on the same
+  target does not ask again.
