@@ -270,6 +270,9 @@ function RootOverlay() {
       // The Machines / Models overlay opened from this window is in front of it
       // and takes this Escape; the window waits for the next.
       if (consoleUnderOverlay()) return;
+      // Handled: an overlay opened after this window (its listener runs later)
+      // must not take the same Escape for its own.
+      e.preventDefault();
       e.stopPropagation();
       close();
     };

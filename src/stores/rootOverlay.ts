@@ -67,19 +67,21 @@ interface RootOverlayState {
   clearInstallTab: (key: string) => void;
 }
 
-export const useRootOverlayStore = create<RootOverlayState>((set, get) => ({
+export const useRootOverlayStore = create<RootOverlayState>((set) => ({
   open: false,
   view: "root",
   show: (key) => {
     void ensureRootScopeHydrated();
     if (key) useTabsStore.getState().revealTabInScope(ROOT_SCOPE, key);
-    if (!get().open) uncoverConsole();
+    // Asked for again while an overlay opened from the window covers it (a
+    // sign-in or install tab the overlay started): the window comes to the front.
+    uncoverConsole();
     set({ open: true, view: "root" });
   },
   openView: (view) => {
     if (view === "root") useRootOverlayStore.getState().show();
     else {
-      if (!get().open) uncoverConsole();
+      uncoverConsole();
       set({ open: true, view });
     }
   },

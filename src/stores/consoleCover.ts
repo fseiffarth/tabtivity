@@ -10,7 +10,8 @@ import { create } from "zustand";
  * FROM the window (the Usage view's "Open Machines", the Root view's "Add
  * agent...") used to land under it. This flag says the overlay was opened while
  * the window was up, so the window steps one layer down (`.under-overlay`) and the
- * overlay is the front one; the window opening afresh (`rootOverlay.show/openView`)
+ * overlay is the front one; the window being asked for (`rootOverlay.show/openView`, opened afresh or
+ * raised again by a tab the overlay started)
  * clears it. Whether it matters is `lib/window/consoleFront` (an overlay must also
  * be open). Session-only; no data.
  */

@@ -134,6 +134,23 @@ describe("the Machines overlay opened from the window", () => {
   });
 });
 
+describe("a tab the overlay starts", () => {
+  it("raises the window over the overlay that covered it (an install or sign-in in a root tab)", async () => {
+    mountAll();
+    await act(async () => useRootOverlayStore.getState().show());
+    await act(async () => useModelsOverlayStore.getState().openOverlay("agents"));
+    expect(consoleBackdrop()?.classList.contains("under-overlay")).toBe(true);
+    // runInstallInTab / a terminal sign-in: the window is already open.
+    await act(async () => useRootOverlayStore.getState().show("k1"));
+    expect(consoleBackdrop()?.classList.contains("under-overlay")).toBe(false);
+    expect(document.documentElement.hasAttribute("data-console-under-overlay")).toBe(false);
+    // Escape goes to the window first, as when the overlay was opened from the header.
+    act(() => void fireEvent.keyDown(document.body, { key: "Escape" }));
+    expect(windowUp()).toBe(false);
+    expect(models()).toBe(true);
+  });
+});
+
 describe("the Models overlay opened from the window", () => {
   it("is in front of it (the Root view's Add agent door), and Escape closes only it", async () => {
     mountAll();
