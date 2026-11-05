@@ -25,7 +25,7 @@ export function DiffStateNote({
   if (status === "error") {
     return (
       <div className="diff-error" role="alert" style={{ padding: "1rem" }}>
-        <div style={{ color: "#f85149", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{error}</div>
+        <div style={{ color: "var(--danger, #f85149)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{error}</div>
         <button
           type="button"
           className="file-viewer-format-btn"

@@ -146,7 +146,8 @@ pub fn safe_rel(rel: &str) -> Option<Vec<&str>> {
         if p.is_empty() || *p == "." || *p == ".." || p.len() > MAX_COMPONENT_LEN {
             return None;
         }
-        if p.chars().any(|c| c.is_control() || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*')) {
+        // A backtick would end the code span the name stands in, in CONFLICTS.md.
+        if p.chars().any(|c| c.is_control() || matches!(c, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*' | '`')) {
             return None;
         }
         if p.ends_with(' ') || p.ends_with('.') {
@@ -268,13 +269,15 @@ fn validate(files: &[HandoffFileIn]) -> Result<(), String> {
         return Err(format!("too many files (at most {MAX_FILES} per export)"));
     }
     let mut total = 0usize;
+    // Folded to lower case: `A.py` and `a.py` from a Linux host would be one
+    // file in a case-insensitive state dir (macOS, Windows).
     let mut seen = std::collections::HashSet::new();
     for f in files {
         if safe_rel(&f.rel_path).is_none() {
             return Err(format!("'{}' is not a plain project-relative path", f.rel_path.chars().take(80).collect::<String>()));
         }
-        if !seen.insert(f.rel_path.as_str()) {
-            return Err(format!("'{}' is listed twice", f.rel_path));
+        if !seen.insert(f.rel_path.to_lowercase()) {
+            return Err(format!("'{}' is listed twice (names differing only in case count as one)", f.rel_path));
         }
         for text in [&f.local_text, &f.remote_text] {
             if text.len() > MAX_FILE_BYTES {
@@ -285,6 +288,20 @@ fn validate(files: &[HandoffFileIn]) -> Result<(), String> {
     }
     if total > MAX_TOTAL_BYTES {
         return Err(format!("the files together exceed {} MiB", MAX_TOTAL_BYTES / (1024 * 1024)));
+    }
+    // A file cannot also be a folder of another: `a` and `a/b`.
+    for f in files {
+        let lower = f.rel_path.to_lowercase();
+        let mut prefix = String::new();
+        for part in lower.split('/').collect::<Vec<_>>().split_last().map(|(_, folders)| folders).unwrap_or(&[]) {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            if seen.contains(&prefix) {
+                return Err(format!("'{}' is both a file and a folder in this export", prefix));
+            }
+        }
     }
     Ok(())
 }
@@ -329,17 +346,24 @@ pub fn export_in(
     prune(&root);
     let id = new_id(now, nonce);
     let out = root.subdir(&id).ok_or("could not create the export folder")?;
-    for f in files {
-        let parts = safe_rel(&f.rel_path).ok_or("unsafe path")?;
-        for (side, text) in [("local", &f.local_text), ("remote", &f.remote_text)] {
-            let mut full = vec![side];
-            full.extend(&parts);
-            put(&out, &full, text.as_bytes())?;
+    let written = (|| -> Result<(), String> {
+        for f in files {
+            let parts = safe_rel(&f.rel_path).ok_or("unsafe path")?;
+            for (side, text) in [("local", &f.local_text), ("remote", &f.remote_text)] {
+                let mut full = vec![side];
+                full.extend(&parts);
+                put(&out, &full, text.as_bytes())?;
+            }
         }
+        // The folder the agent writes into, present from the start.
+        out.subdir("resolved").ok_or("could not create the resolved folder")?;
+        write_in(&out, "CONFLICTS.md", conflicts_md(files).as_bytes())
+    })();
+    if let Err(e) = written {
+        // No half-written export left for an agent (or Load resolved) to find.
+        let _ = root.remove_tree(&id);
+        return Err(e);
     }
-    // The folder the agent writes into, present from the start.
-    out.subdir("resolved").ok_or("could not create the resolved folder")?;
-    write_in(&out, "CONFLICTS.md", conflicts_md(files).as_bytes())?;
     Ok(HandoffExport { agent_dir: format!("~/{DIR}/{id}"), id, file_count: files.len() })
 }
 
@@ -367,13 +391,8 @@ pub fn load_resolved_in(state_dir: &Path, scope_id: &str, rel: &str) -> Option<R
     for id in ids.into_iter().rev() {
         let Some(dir) = root.open_subdir(&id).and_then(|d| d.open_subdir("resolved")) else { continue };
         let Some(file) = open_below(&dir, &parts) else { continue };
-        if !file.is_file() {
-            continue;
-        }
-        let Some(bytes) = file.read() else { continue };
-        if bytes.len() > MAX_FILE_BYTES {
-            continue;
-        }
+        // Capped while reading: the agent controls this file's size.
+        let Some(bytes) = file.read_capped(MAX_FILE_BYTES as u64) else { continue };
         if let Ok(text) = String::from_utf8(bytes) {
             return Some(ResolvedFile { id, text });
         }
@@ -568,5 +587,27 @@ mod tests {
         let again = export_in(state.path(), "p", &[file("a.py", "1", "2")], Utc.timestamp_opt(1_762_200_000, 0).single().unwrap(), 9);
         assert!(again.is_err());
         assert_eq!(std::fs::read_dir(victim.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn names_that_would_collide_on_disk_are_refused_before_anything_is_written() {
+        let state = tempfile::tempdir().unwrap();
+        for files in [
+            vec![file("A.py", "1", "2"), file("a.py", "3", "4")],
+            vec![file("a", "1", "2"), file("a/b.py", "3", "4")],
+            vec![file("Src/b.py", "1", "2"), file("src", "3", "4")],
+        ] {
+            let names: Vec<_> = files.iter().map(|f| f.rel_path.clone()).collect();
+            assert!(export_in(state.path(), "p", &files, now(), 1).is_err(), "{names:?}");
+        }
+        let root = agent_home::scope_home_in(state.path(), "p").join(DIR);
+        let left = std::fs::read_dir(&root).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(left, 0, "no export folder is left behind");
+    }
+
+    #[test]
+    fn a_backtick_in_a_name_is_refused() {
+        assert_eq!(safe_rel("a`b.py"), None);
+        assert_eq!(safe_rel("d/x` text"), None);
     }
 }

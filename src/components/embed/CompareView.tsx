@@ -4,6 +4,7 @@ import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 import { dateLocale, useI18nStore, useT } from "../../lib/i18n";
 import { useUnsavedWork } from "../../lib/window/unsavedWork";
+import { useDialogs } from "../common/PromptDialogs";
 import { useProjectsStore } from "../../stores/projects";
 import { resolveProjectDirectory } from "../../types";
 import { isPathWithin } from "../../lib/paths";
@@ -408,13 +409,36 @@ export function CompareView({
   // Result text for the user to review. Every block is marked as hand-edited
   // (`manual`, decisions cleared) because the buffer no longer follows the
   // per-block picks; nothing is written or synced here.
+  // Hand edits or per-change picks already in the Result are asked about
+  // first: loading replaces them and nothing brings them back.
   const lastLoad = useRef<number | null>(null);
+  const { confirmAction, dialogs } = useDialogs();
   useEffect(() => {
     if (!loadResult || lastLoad.current === loadResult.nonce) return;
     lastLoad.current = loadResult.nonce;
-    setDecisions({});
-    setManual(true);
-    setResultText(loadResult.text);
+    const apply = () => {
+      setDecisions({});
+      setManual(true);
+      setResultText(loadResult.text);
+    };
+    if (!manual && Object.keys(decisions).length === 0) {
+      apply();
+      return;
+    }
+    let live = true;
+    void confirmAction({
+      title: t("syncHandoff.replaceTitle"),
+      body: t("syncHandoff.replaceBody"),
+      confirmLabel: t("syncHandoff.replaceConfirm"),
+      danger: true,
+    }).then((ok) => {
+      if (ok && live) apply();
+    });
+    return () => {
+      live = false;
+    };
+    // Runs per load only; the picks are read as they stand when it lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadResult]);
 
   // Sync merge: date every change block on each side (newest commit of its lines
@@ -797,6 +821,7 @@ export function CompareView({
           />
         </div>
       )}
+      {dialogs}
     </div>
   );
 }

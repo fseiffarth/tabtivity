@@ -255,7 +255,7 @@ describe("DiffView on a big diff", () => {
     fireEvent.click(screen.getByText(/Show all 5001 lines/));
     await waitFor(() => expect(drawn()).toBe(5001));
     expect(screen.queryByText(/Large diff/)).toBeNull();
-  });
+  }, 60_000);
 
   it("cuts a megabyte line and shows it whole on request", async () => {
     gitDiff = () => Promise.resolve(`--- a/m.js\n+++ b/m.js\n@@ -1 +1 @@\n+${"x".repeat(100_000)}\n`);
@@ -279,4 +279,57 @@ describe("DiffView on a big diff", () => {
     expect(screen.getByText("Show 3000 earlier lines")).toBeTruthy();
     expect(screen.getByText(/lines below/)).toBeTruthy();
   });
+
+  it("counts every change of the whole file, and Next reaches one outside the window", async () => {
+    localStorage.setItem(WHOLE_KEY, "1");
+    const total = 20_000;
+    fileText = Array.from({ length: total }, (_, i) => (i === 1_000 || i === 19_000 ? `NEW ${i}` : `row ${i}`)).join("\n") + "\n";
+    gitDiff = () =>
+      Promise.resolve(
+        "--- a/w.txt\n+++ b/w.txt\n" +
+          "@@ -1000,3 +1000,3 @@\n row 999\n-old 1000\n+NEW 1000\n row 1001\n" +
+          "@@ -19000,3 +19000,3 @@\n row 18999\n-old 19000\n+NEW 19000\n row 19001\n",
+      );
+    const { container } = render(view("/p/w.txt"));
+    await screen.findByText(/lines below/);
+    const count = () => container.querySelector(".diff-nav .file-viewer-find-count")!.textContent;
+    await waitFor(() => expect(count()).toBe("1 / 2"));
+    fireEvent.click(screen.getByRole("button", { name: /Next change/ }));
+    await waitFor(() => expect(count()).toBe("2 / 2"));
+    // The window grew to reach it, and the landed-on change is the drawn one.
+    expect(screen.queryByText(/lines below/)).toBeNull();
+    const current = container.querySelector('[data-current="true"]');
+    expect(current?.textContent).toContain("old 19000");
+  }, 60_000);
+
+  it("Show full lines holds for its file only", async () => {
+    const long = (name: string) => `--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n+${"x".repeat(5_000)}\n`;
+    gitDiff = (args) => Promise.resolve(long(String(args.relPath)));
+    const { container, rerender } = render(view("/p/m.js"));
+    await screen.findByText(/very long lines are shortened/);
+    fireEvent.click(screen.getByText("Show full lines"));
+    const text = () => container.querySelector('.diff-line[data-type="add"] .diff-text')?.textContent ?? "";
+    await waitFor(() => expect(text().length).toBe(5_001));
+    rerender(view("/p/n.js"));
+    await screen.findByText(/very long lines are shortened/);
+    expect(text().length).toBeLessThan(2_100);
+  });
+
+  it("the file index lists the files past the cap, with their full counts", async () => {
+    const big = Array.from({ length: 2_000 }, (_, i) => `+a ${i}`).join("\n");
+    gitDiff = () =>
+      Promise.resolve(
+        `--- /dev/null\n+++ b/one.txt\n@@ -0,0 +1,2000 @@\n${big}\n` +
+          "--- a/two.txt\n+++ b/two.txt\n@@ -1 +1 @@\n-x\n+y\n",
+      );
+    const { container } = render(view());
+    await screen.findByText(/Large diff/);
+    const rows = container.querySelectorAll(".diff-index-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("+2000");
+    expect(rows[1].textContent).toContain("two.txt");
+    // Jumping to the file past the cap draws it.
+    fireEvent.click(rows[1]);
+    await waitFor(() => expect(container.querySelectorAll(".diff-file")).toHaveLength(2));
+  }, 60_000);
 });

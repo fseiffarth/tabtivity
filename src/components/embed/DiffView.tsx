@@ -181,6 +181,7 @@ const HunkBody = memo(function HunkBody({
   lines,
   fileIndex,
   hunkIndex,
+  offset,
   split,
   folding,
   current,
@@ -190,6 +191,9 @@ const HunkBody = memo(function HunkBody({
   lines: readonly DiffLine[];
   fileIndex: number;
   hunkIndex: number;
+  /** Where `lines` starts in the whole hunk (the Whole file window's start):
+   *  ids and fold keys count from the hunk, so growing the window keeps them. */
+  offset: number;
   split: boolean;
   folding: boolean;
   current: string | undefined;
@@ -203,7 +207,7 @@ const HunkBody = memo(function HunkBody({
   return (
     <div className="diff-hunk">
       {segments.map((seg) => {
-        const key = `${fileIndex}:${hunkIndex}:${seg.from}-${seg.to}`;
+        const key = `${fileIndex}:${hunkIndex}:${offset + seg.from}`;
         if (seg.fold && !expanded.has(key)) {
           return (
             <button type="button" className="diff-fold" key={seg.from} onClick={() => onExpand(key)}>
@@ -219,7 +223,7 @@ const HunkBody = memo(function HunkBody({
                 if (row.note !== undefined) {
                   return <div className="terminal-changes-split-note" key={index}>{row.note}</div>;
                 }
-                const id = anchorId(fileIndex, hunkIndex, seg.from + row.at);
+                const id = anchorId(fileIndex, hunkIndex, offset + seg.from + row.at);
                 return (
                   <div
                     className="terminal-changes-split-row"
@@ -240,7 +244,7 @@ const HunkBody = memo(function HunkBody({
             {part.map((line, i) => {
               const li = seg.from + i;
               if (!starts.has(li)) return <DiffLineRow line={line} marks={marks.get(line)} key={li} />;
-              const id = anchorId(fileIndex, hunkIndex, li);
+              const id = anchorId(fileIndex, hunkIndex, offset + li);
               return (
                 <div className="diff-anchor" key={li} data-jump={`c:${id}`} data-current={current === id ? "true" : undefined}>
                   <DiffLineRow line={line} marks={marks.get(line)} />
@@ -345,7 +349,8 @@ export function DiffView({
     return initialLineWindow(wholeLines.length, firstChangeIndex(wholeLines));
   }, [wholeLines, winState, path]);
   // A very long line is cut until the user asks for it whole.
-  const [fullLines, setFullLines] = useState(false);
+  const [fullLinesFor, setFullLinesFor] = useState<string | null>(null);
+  const fullLines = fullLinesFor === path;
   const drawn = useMemo(() => {
     if (wholeLines && win) {
       const part = wholeLines.slice(win.start, win.end);
@@ -362,39 +367,46 @@ export function DiffView({
     if (win && wholeLines) setWinState({ path, w: growLineWindow(win, wholeLines.length, dir) });
   };
 
-  /** What is on screen: the whole file's drawn window as a single hunk, or the
-   *  drawn (capped) parsed files. */
-  const shown = useMemo<DiffFile[]>(
+  /** The whole diff, uncapped — the whole file as one hunk, or every parsed
+   *  file. Counts, the file index and the change counter speak for this. */
+  const full = useMemo<DiffFile[]>(
     () =>
-      wholeHunk && win
+      wholeHunk
         ? [
             {
               ...((files[0] as DiffFile | undefined) ?? { status: "modified" as const, binary: false, combined: false, crlf: false }),
               oldPath: relPath,
               newPath: relPath,
-              hunks: [{ ...wholeHunk, lines: drawn.lines }],
+              hunks: [wholeHunk],
             },
           ]
-        : drawn.files,
-    [wholeHunk, win, files, relPath, drawn],
+        : files,
+    [wholeHunk, files, relPath],
   );
-  const stats = useMemo(() => shown.map(fileStats), [shown]);
-  const anchors = useMemo(() => changeAnchors(shown), [shown]);
+  /** What is drawn: the Whole file window, or the capped files — a prefix of
+   *  `full` (same file / hunk indices), so ids and stats line up. */
+  const shown = useMemo<DiffFile[]>(
+    () => (wholeHunk && win ? [{ ...full[0], hunks: [{ ...wholeHunk, lines: drawn.lines }] }] : drawn.files),
+    [wholeHunk, win, full, drawn],
+  );
+  const lineOffset = wholeHunk && win ? win.start : 0;
+  const stats = useMemo(() => full.map(fileStats), [full]);
+  const anchors = useMemo(() => changeAnchors(full), [full]);
 
   const [splitPref, setSplitPref] = useState(() => readFlagPref(SPLIT_KEY, false));
   const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  const [cur, setCur] = useState(-1);
+  const [curId, setCurId] = useState<string | null>(null);
   const [jump, setJump] = useState<{ target: string; align: "center" | "start"; n: number } | null>(null);
   const jumpCount = useRef(0);
-  const curIdx = cur < anchors.length ? cur : -1;
+  const curIdx = curId == null ? -1 : anchors.findIndex((a) => a.id === curId);
   const currentId = curIdx >= 0 ? anchors[curIdx].id : undefined;
 
   // Another file in the tab starts with every file open, every fold shut.
   useEffect(() => {
     setCollapsed(new Set());
     setExpanded(new Set());
-    setCur(-1);
+    setCurId(null);
   }, [path]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -413,19 +425,31 @@ export function DiffView({
     (dir: 1 | -1) => {
       const next = stepChange(curIdx, anchors.length, dir);
       if (next < 0) return;
-      setCur(next);
-      openFile(anchors[next].file);
+      const a = anchors[next];
+      // A change past what is drawn: draw everything first, then land on it.
+      if (wholeHunk && win) {
+        if (a.line < win.start || a.line >= win.end) growWhole("all");
+      } else if ((shown[a.file]?.hunks[a.hunk]?.lines.length ?? 0) <= a.line) {
+        growChanges(true);
+      }
+      setCurId(a.id);
+      openFile(a.file);
       request(`c:${anchors[next].id}`, "center");
       scrollRef.current?.focus({ preventScroll: true });
     },
-    [curIdx, anchors, openFile, request],
+    // growWhole / growChanges are fresh closures each render over the deps below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [curIdx, anchors, openFile, request, wholeHunk, win, shown],
   );
   const goFile = useCallback(
     (fi: number) => {
+      // A file past the cap is drawn first (the index lists every file).
+      if (fi >= shown.length) growChanges(true);
       openFile(fi);
       request(`f:${fi}`, "start");
     },
-    [openFile, request],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [openFile, request, shown],
   );
   const toggleFile = useCallback((fi: number) => {
     setCollapsed((prev) => {
@@ -464,7 +488,7 @@ export function DiffView({
     if (scrolledFor.current === path) return;
     scrolledFor.current = path;
     if (anchors.length === 0) return;
-    setCur(0);
+    setCurId(anchors[0].id);
     request(`c:${anchors[0].id}`, "center");
   }, [wholeHunk, whole, path, anchors, request]);
 
@@ -576,9 +600,9 @@ export function DiffView({
                 </button>
               </DiffMoreRow>
             )}
-            {shown.length > 1 && (
+            {full.length > 1 && (
               <nav className="diff-index" aria-label={t("diffView.fileIndex")}>
-                {shown.map((file, fi) => (
+                {full.map((file, fi) => (
                   <button type="button" className="diff-index-row" key={`${file.newPath}:${fi}`} onClick={() => goFile(fi)}>
                     <span className="diff-index-path">
                       <FileName file={file} />
@@ -636,6 +660,7 @@ export function DiffView({
                           lines={hunk.lines}
                           fileIndex={fi}
                           hunkIndex={hi}
+                          offset={lineOffset}
                           split={splitPref}
                           folding={!!wholeHunk}
                           current={currentId?.startsWith(`${fi}:${hi}:`) ? currentId : undefined}
@@ -673,7 +698,7 @@ export function DiffView({
         )}
         {src.status === "ready" && drawn.shortened > 0 && (
           <DiffMoreRow hint={t("diffView.longLines", { n: drawn.shortened })}>
-            <button type="button" className="file-viewer-format-btn" onClick={() => setFullLines(true)}>
+            <button type="button" className="file-viewer-format-btn" onClick={() => setFullLinesFor(path)}>
               {t("diffView.showFullLines")}
             </button>
             <UntestedTag id="diffView.states" />
