@@ -371,3 +371,82 @@ Chords below are the defaults; all are rebindable in Settings.
    window. Same from the Root view's `+` -> "Add agent...": the Models & agents overlay is in front.
    Open Machines from the header first, then Ctrl+Shift+R: the window is in front, Escape closes it
    first.
+
+## Final review
+
+Range `develop..HEAD` (I1, I2, the I1+I2 review, I3); I3's commits (F3 `645bfc34`, F5 `5c6d47ef`,
+F7 `0ff30ac6`, F8 `280bcb11`, F9 `0a099de2`) read hardest, since none had a reviewer.
+
+### Findings
+
+**The two suspected regressions were both real.**
+1. **F8 hid the only door to unloaded decisions.** With no live-store group counting, the 40 px
+   column vanished, and with it the expand button: push requests, schedule proposals and markup
+   asks (they need the open rail's three reads) were unreachable on a wide window. The header
+   badge also counts loaded schedule proposals, which the collapsed rail never passed in.
+   Fix `d54029f0`: the collapsed rail now counts the schedule proposals the stores already hold
+   (a store read, `useScheduleProposals`), and with nothing counting the shared `NeedsYouChip`
+   stands in the window's bar (`RootBarSlots.chip`; its popover makes the three reads only when
+   opened, so no new backend work while closed). The column itself stays gone, as asked.
+   Tests (`RootRail.test.tsx`): chip appears when empty and is absent otherwise, no reads before
+   it is clicked, the popover makes them and lists a found push request, a held schedule proposal
+   gives a column icon, folding an open empty rail leaves the chip.
+2. **F9 left mail / calendar / to-do over the lowered window.** Real z-order: all overlays are
+   `.modal-backdrop` at `--z-modal` and `AppShell` renders Machines, then Mail, Calendar, To-do,
+   Models, and the window last. Window at `--z-modal` - 1 with one of the three open: the window
+   AND a Machines overlay opened from it (Machines precedes them) painted under mail, where the
+   window used to be above everything. Fix `ad85b67a`: while the window is under an overlay,
+   `RootOverlay` sets `html[data-console-under-overlay]` and `apps.css` drops those three
+   backdrops to `--z-modal` - 2 (Machines/Models/the window excluded by `:not`). Window stays
+   above them, the overlay above the window, dialogs the overlay raises (later in DOM) still on top.
+
+**One more bug found while checking F9's rules (`abe41603`).** An overlay opened from the window
+covers it; an install or sign-in it starts calls `show(key)` on the already-open window, which
+`show` did not uncover, so the new tab landed under the overlay (it was always in front before F9).
+`show`/`openView` now always clear the cover. In that order (window registered first) the window's
+Escape listener ran first and the overlay then closed on the same press, so the window's Escape
+now calls `preventDefault` (the overlays already return on `defaultPrevented`). Test: "a tab the
+overlay starts".
+
+**Checked and clean.**
+- F5: `NeedsYouChip` is one component used by Now and Root, no variant; `useColumnWidth` /
+  `ColumnGrip` extracted once, Now uses both (grip markup not copied).
+- F7: `detailAsked` is set only in the narrow band, taken on Now's first render and cleared; back
+  returns to the list with the row selected; no flag left over in a wide window.
+- F8: `cockpitRootRailWidth` read through the shared tolerant `readWidth` (garbage / 0 / negative /
+  NaN -> 280, clamped 220..1100, throwing storage -> 280); Now keeps `cockpitRailWidth`.
+- F3: no code change was needed; the test mounts the real `TerminalReaderView` and was mutation
+  checked by the implementer (drop the draft effect -> both tests fail).
+- i18n: no key added in I3; the keys removed in F2 are gone from all five dictionaries (full suite
+  has the parity test, green). `UntestedTag`: `cockpit.rootRail` text updated for the chip;
+  `cockpit.narrow` already covers the chip and Tonight's Show; `machines.overlayTitle` and
+  `modelsOverlay.title` cover F9. Filemap rows and `docs/context/{cockpit,root_console}.md`
+  updated for both fixes. No dead code left (`get` in the `rootOverlay` store creator went with the
+  fix). `scripts/privacy-check.sh develop HEAD`: clean.
+
+### Fixes
+- `ad85b67a` F9: mail / calendar / to-do step down with the lowered window (+ 3 tests).
+- `d54029f0` F8: the chip stands in for the hidden column; held schedule proposals count (+ 4 tests).
+- `abe41603` F9: a tab the overlay starts raises the window; the window's Escape marks the key handled (+ 1 test).
+- the docs commit after them (context docs, filemap).
+
+### Flagged for user
+- **"Needs you 0" chip on a wide Root with nothing waiting.** It is the price of keeping the
+  push / schedule / markup groups reachable without a backend poll; the column is gone as you asked,
+  the chip is small and sits in the sub-bar (in the title bar of a split Root, which is already
+  tight). If you would rather have nothing there and accept that those groups only show once
+  something live is waiting, say so and the chip goes (one condition in `RootRailCollapsed`).
+- Push requests and markup asks still do not count toward the collapsed column (a read per project
+  / agent tab); the header badge does not count them either.
+- Everything from I2's and I3's flagged lists still stands.
+
+### Gates (worktree, clean tree)
+- `npm run build` ok; `npm run lint` 0 errors, 29 warnings (same count as before, none in touched
+  code); `scripts/brand-check.sh` ok; `scripts/privacy-check.sh develop HEAD` ok;
+  `git diff --check develop..HEAD` clean.
+- Full `npm test`: **1070 files, 10908 tests** passed (I3 tip 10901, +7 reviewer tests).
+- Rust: `cargo test --workspace -q` ok (tabtivity 5054, app-serverd 143, core crates);
+  `cargo test -p tabtivity --no-default-features --lib --test server_secrets -q` ok (4894 + 1);
+  `cargo clippy` x3 (`--workspace --all-targets`, `tabtivity --no-default-features --lib`,
+  `app-serverd --all-targets`) all `-D warnings`, clean.
+- Not run live.
