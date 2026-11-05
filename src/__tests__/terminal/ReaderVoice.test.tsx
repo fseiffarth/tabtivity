@@ -45,6 +45,7 @@ function status(installed: boolean): VoiceStatus {
       { id: "silero-vad", kind: "vad", installed, sizeBytes: 900_000 },
     ],
     defaultModel: "small",
+    natural: { offered: false, voices: [] },
     gpuBuilt: false,
     gpuCrashed: false,
     device: null,

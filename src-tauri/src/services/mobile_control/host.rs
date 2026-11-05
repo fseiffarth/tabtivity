@@ -5696,14 +5696,16 @@ async fn assistant_models(
 }
 
 /// The CLI build a phone's model sheet on `tab_id` lists the remembered rows
-/// of (`services::model_rows`): its registry id and executable. Only for an
+/// of (`services::model_rows`): its registry id, executable and the desktop's
+/// own id of the tab's scope (rows are kept and listed per scope, gap 95; the
+/// id never crosses the browser API). Only for an
 /// agent tab whose CLI runs on this machine — not a remote, container or VM
 /// project's, not a host tab's, not a local-model tab's (its model is fixed).
 fn model_rows_cli(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
-) -> Result<(&'static str, crate::services::agent_versions::VersionSource), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(&'static str, crate::services::agent_versions::VersionSource, String), (StatusCode, Json<serde_json::Value>)> {
     let catalog = catalog(state, phone)?;
     let Some((project, tab)) = catalog.tab(tab_id) else {
         return Err(api_error(StatusCode::NOT_FOUND, "tab_not_found"));
@@ -5714,7 +5716,9 @@ fn model_rows_cli(
     if project.host != super::discovery::ProjectHost::Local || tab.place.on_host() || tab.local_model {
         return Err(api_error(StatusCode::CONFLICT, "not_this_machine"));
     }
-    crate::services::agent_registry::installed_source(&tab.cmd).ok_or_else(|| api_error(StatusCode::NOT_FOUND, "unknown_agent"))
+    let (cli, source) = crate::services::agent_registry::installed_source(&tab.cmd)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "unknown_agent"))?;
+    Ok((cli, source, project.raw_id.clone()))
 }
 
 /// `GET /api/v1/tabs/{id}/model-rows` — `{ title?, rows }`, the rows the tab's
@@ -5729,12 +5733,12 @@ async fn model_rows(
         Ok(phone) => phone,
         Err(error) => return error,
     };
-    let (cli, source) = match model_rows_cli(&state, &phone, &tab_id) {
+    let (cli, source, scope) = match model_rows_cli(&state, &phone, &tab_id) {
         Ok(cli) => cli,
         Err(error) => return error,
     };
     let store = crate::services::model_rows::store_path_in(&state.config.state_dir);
-    let rows = crate::services::model_rows::rows_in(&store, cli, Some(&source)).unwrap_or_default();
+    let rows = crate::services::model_rows::rows_in(&store, cli, &scope, Some(&source)).unwrap_or_default();
     (StatusCode::OK, Json(json!(rows)))
 }
 
@@ -5753,12 +5757,12 @@ async fn remember_model_rows(
     let Ok(rows) = serde_json::from_slice::<crate::services::model_rows::Rows>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    let (cli, source) = match model_rows_cli(&state, &phone, &tab_id) {
+    let (cli, source, scope) = match model_rows_cli(&state, &phone, &tab_id) {
         Ok(cli) => cli,
         Err(error) => return error,
     };
     let store = crate::services::model_rows::store_path_in(&state.config.state_dir);
-    match crate::services::model_rows::remember_rows_in(&store, cli, Some(&source), rows) {
+    match crate::services::model_rows::remember_rows_in(&store, cli, &scope, Some(&source), rows) {
         Ok(()) => (StatusCode::OK, Json(json!({ "kept": true }))),
         Err(why) => {
             eprintln!("mobile: keeping a model list failed: {why}");

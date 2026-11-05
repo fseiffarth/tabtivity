@@ -76,12 +76,25 @@ export interface VoiceModelState {
   sizeBytes: number;
 }
 
+/** One natural (Piper) voice, by the app language it speaks. */
+export interface NaturalVoiceState {
+  lang: string;
+  installed: boolean;
+  /** What its install still fetches, Piper itself included. */
+  downloadBytes: number;
+}
+
 export interface VoiceStatus {
   cpu: boolean;
   models: VoiceModelState[];
   defaultModel: string;
   listen: VoiceErrorCode | null;
+  /** Why the OS voice cannot read aloud; an installed natural voice reads
+   * without it. */
   speak: VoiceErrorCode | null;
+  /** Natural voices (`services::voice::piper`): offered on this machine
+   * (not on macOS, whose own voices are good), and which are installed. */
+  natural: { offered: boolean; voices: NaturalVoiceState[] };
   session: VoiceSessionInfo | null;
   /** Whether this build can use a GPU at all. */
   gpuBuilt: boolean;
@@ -192,6 +205,18 @@ export function voiceStatus(): Promise<VoiceStatus> {
  * install tab. */
 export function voiceModelInstallCommand(model: string): Promise<string> {
   return invoke<string>("voice_model_install_script", { id: model });
+}
+
+/** The command line that installs the natural voice for `lang` (and Piper,
+ * when missing) in an install tab. */
+export function voiceNaturalInstallCommand(lang: string): Promise<string> {
+  return invoke<string>("voice_natural_install_script", { lang });
+}
+
+/** The natural voice that would read in `lang` (a BCP 47 tag). */
+export function naturalVoiceFor(status: VoiceStatus | null, lang: string): NaturalVoiceState | undefined {
+  const primary = lang.split(/[-_]/)[0]?.toLowerCase();
+  return status?.natural?.voices.find((voice) => voice.lang === primary);
 }
 
 /** Forget that a GPU attempt crashed the app: the next listen tries it again. */
@@ -347,10 +372,11 @@ export async function startDesktopDictation(
 export const SPEAK_LIMITS = { chunks: 200, chunkChars: 1000, rate: { min: 0.5, max: 2 } } as const;
 
 /** Read `chunks` aloud as read `id` (after what is being said; `replace`:
- * instead of it). `voice:speaking` follows it; rejects with the backend's
- * code when there is no voice. */
-export function voiceSpeak(id: string, chunks: string[], lang: string, rate = 1, replace = false): Promise<void> {
-  return invoke("voice_speak", { id, chunks, lang, rate, replace });
+ * instead of it). `natural`: in the language's natural voice when one is
+ * installed, else the OS voice. `voice:speaking` follows it; rejects with the
+ * backend's code when there is no voice. */
+export function voiceSpeak(id: string, chunks: string[], lang: string, rate = 1, replace = false, natural = true): Promise<void> {
+  return invoke("voice_speak", { id, chunks, lang, rate, replace, natural });
 }
 
 /** Stop what is being read, and everything queued. */

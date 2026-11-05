@@ -10,6 +10,8 @@ export interface PathLinkHover {
   name: string;
   line?: number;
   isDir: boolean;
+  /** A file no in-app viewer shows: a click shows it in the chat's Files tab. */
+  viewless?: boolean;
 }
 
 /**
@@ -21,7 +23,9 @@ export interface PathLinkHover {
 export function PathLinkHint({ hover }: { hover: PathLinkHover | null }) {
   const t = useT();
   if (!hover) return null;
-  const action = hover.isDir
+  const action = hover.viewless
+    ? t("terminal.pathLink.showInFiles")
+    : hover.isDir
     ? t("terminal.pathLink.openFolder")
     : hover.line
       ? t("terminal.pathLink.openLine", { line: hover.line })
@@ -34,7 +38,8 @@ export function PathLinkHint({ hover }: { hover: PathLinkHover | null }) {
     >
       {hover.name} · {action}
       <UntestedTag id="terminal.pathLink.open" />
-      {!hover.isDir && (
+      {hover.viewless && <UntestedTag id="terminal.reader.viewlessFiles" />}
+      {!hover.isDir && !hover.viewless && (
         <>
           <br />
           {t("terminal.pathLink.newSubwindow")}

@@ -852,6 +852,11 @@ both are fine, phase 2 is dropped. If either is not, phase 2 starts.
 
 ### 7. Piper voices and barge-in through speakers
 
+**Status (2026-11-05):** the gate found the OS voice not good enough on
+Ubuntu. Voices built (`services::voice::piper`, MIT binary picked with the
+user, not on macOS); echo cancellation and the Chat install card are open
+(`todo/group-s-agents.md`). Never live.
+
 - **Probe first.** The MIT-licensed `rhasspy/piper` was archived in October
   2025, and its last standalone binaries get no fixes. The active
   `OHF-Voice/piper1-gpl` is GPL-3 and mainly a Python package. Check which

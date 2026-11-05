@@ -1,4 +1,10 @@
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
+import { dirname } from "../../lib/paths";
+import { formatBytes } from "../../lib/formatBytes";
+import { openErrorText } from "../../lib/openExternal";
+import { useWindowsStore } from "../../stores/windows";
 import { internalViewerFor, type FileEntry, type InternalViewer } from "../../lib/viewers/fileUtils";
 import { FileViewerPane } from "../embed/FileViewerPane";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
@@ -41,7 +47,7 @@ export function TerminalReaderFiles({ files, picked, projectId, disabled, visibl
         <strong>{t("terminal.readerFiles.title")}</strong>
         <UntestedTag id="terminal.reader.files" />
         {picked && <small className="terminal-changes-path" title={picked.path}>{picked.name}</small>}
-        {picked && (
+        {picked && viewer && (
           <button type="button" className="terminal-changes-close terminal-files-open"
             onClick={(event) => onOpenTab(picked, event.ctrlKey || event.metaKey)}
             title={t("terminal.readerFiles.openTab")} aria-label={t("terminal.readerFiles.openTab")}>
@@ -74,10 +80,40 @@ export function TerminalReaderFiles({ files, picked, projectId, disabled, visibl
           ) : viewer ? (
             <FileViewerPane key={picked.path} viewer={viewer} path={picked.path} projectId={projectId} visible={visible} />
           ) : (
-            <div className="terminal-reader-empty">{t("terminal.readerFiles.noViewer")}</div>
+            <ViewlessFile key={picked.path} entry={picked} projectId={projectId} />
           )}
         </div>
       </div>
     </aside>
+  );
+}
+
+/** A file no in-app viewer shows (an STL the agent was asked to send): its
+ *  name, folder and size, and the two ways out of the app the user picks —
+ *  its own app (asked first, launchers refused: `openFile`) or the folder in
+ *  the OS file manager. Never opened on the chat click alone. */
+function ViewlessFile({ entry, projectId }: { entry: FileEntry; projectId: string | null }) {
+  const t = useT();
+  const [error, setError] = useState<string | null>(null);
+  const folder = dirname(entry.path);
+  const fail = (path: string) => (err: unknown) => setError(openErrorText(err, path));
+  return (
+    <div className="terminal-reader-empty terminal-files-viewless">
+      <UntestedTag id="terminal.reader.viewlessFiles" />
+      <strong title={entry.path}>{entry.name}</strong>
+      <small title={folder}>{folder} · {formatBytes(entry.size)}</small>
+      <p>{t("terminal.readerFiles.noViewer")}</p>
+      <div className="terminal-files-viewless-actions">
+        <button type="button" className="terminal-reader-earlier"
+          onClick={() => { setError(null); void useWindowsStore.getState().openFile(entry.path, undefined, projectId, "reader_files").catch(fail(entry.path)); }}>
+          {t("terminal.readerFiles.openOutside")}
+        </button>
+        <button type="button" className="terminal-reader-earlier"
+          onClick={() => { setError(null); void invoke("open_in_file_manager", { path: folder }).catch(fail(folder)); }}>
+          {t("terminal.readerFiles.showFolder")}
+        </button>
+      </div>
+      {error && <small role="alert">{error}</small>}
+    </div>
   );
 }

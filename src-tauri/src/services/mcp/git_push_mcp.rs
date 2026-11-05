@@ -33,12 +33,12 @@ use crate::services::git_hardened::{hardened_git_command_in, push_transport_comm
 pub const SERVER_NAME: &str = crate::brand::MCP_GIT_SERVER;
 /// Emitted whenever a proposal is created or changes state.
 pub const CHANGED_EVENT: &str = "git-push-mcp-changed";
-pub const CONTRACT: &str = concat!("Pushes the branch checked out in this tab's project, fast-forward only, to its existing upstream branch — never a tag, a force-push, a delete, a new remote branch or a branch the user protected. A push to the remote's default branch (main, say) always waits for the user's approval, whatever the level. ", crate::app_name!(), " pushes from outside your sandbox with the user's stored token; you never see it. The repo's pre-push hook runs first, inside your sandbox and without any token (", crate::app_upper!(), "_PUSH_PREFLIGHT=1); other hooks do not run. Depending on the project's level the push is applied at once or staged for the user's approval — then poll git_push_status for the outcome. A repository made or swapped in after this tab started is never pushed (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six pushes per hour and two pending proposals per tab.");
+pub const CONTRACT: &str = concat!("Pushes the branch checked out in this tab's project, fast-forward only, to its existing upstream branch — never a tag, a force-push, a delete, a new remote branch or a branch the user protected. A push to the remote's default branch, to main or master, or to a branch a release workflow of the pushed commit runs on (a push trigger naming it) always waits for the user's approval on a card, whatever the level. ", crate::app_name!(), " pushes from outside your sandbox with the user's stored token; you never see it. The repo's pre-push hook runs first, inside your sandbox and without any token (", crate::app_upper!(), "_PUSH_PREFLIGHT=1); other hooks do not run. Depending on the project's level the push is applied at once or staged for the user's approval — then poll git_push_status for the outcome. A repository made or swapped in after this tab started is never pushed (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six pushes per hour and two pending proposals per tab.");
 /// What every CI tool's description says about which repo it reads (gap 19).
 const CI_REPO_RULE: &str = "Only for the repository the user confirmed for this project's pushes or allowed on a card; any other answers ci_repo_unconfirmed and puts an \"Allow CI\" card in front of the user — ask again once they allowed it.";
 /// The server's `instructions`: the push contract plus the release and CI
 /// tools that share the lane.
-pub const INSTRUCTIONS: &str = concat!("Pushes, release tags and CI for the project this tab works in, done by ", crate::app_name!(), " outside your sandbox with the user's stored token (you never see it). git_push pushes the checked-out branch fast-forward to its existing upstream (never a tag, force-push, delete, new remote branch or a branch the user protected; a push to the remote's default branch always waits for the user's approval on a card); the repo's pre-push hook runs first inside your sandbox without a token. Your sandbox holds no git credentials, so a plain `git push` from the shell fails: push with git_push instead, and never ask the user to push for you before trying it. git_release proposes an annotated release tag on the checked-out branch's tip once that tip is on the remote; it always waits for the user to press Release on the card. Staged requests: poll git_push_status for the outcome. ci_runs, ci_run and ci_security_alerts read GitHub Actions runs, failed-job logs and annotations, and open code-scanning alerts of this repo — read-only, sixty reads per tab per hour, and only for the repo the user confirmed for pushes or allowed on a card (ci_repo_unconfirmed otherwise: a card is waiting, ask again once the user allowed it). A repository created or swapped after this tab started is never used (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six push or release requests per hour and two pending per tab.");
+pub const INSTRUCTIONS: &str = concat!("Pushes, release tags and CI for the project this tab works in, done by ", crate::app_name!(), " outside your sandbox with the user's stored token (you never see it). git_push pushes the checked-out branch fast-forward to its existing upstream (never a tag, force-push, delete, new remote branch or a branch the user protected; a push to the remote's default branch, to main or master, or to a branch a release workflow runs on always waits for the user's approval on a card); the repo's pre-push hook runs first inside your sandbox without a token. Your sandbox holds no git credentials, so a plain `git push` from the shell fails: push with git_push instead, and never ask the user to push for you before trying it. git_release proposes an annotated release tag on the checked-out branch's tip once that tip is on the remote; it always waits for the user to press Release on the card. Staged requests: poll git_push_status for the outcome. ci_runs, ci_run and ci_security_alerts read GitHub Actions runs, failed-job logs and annotations, and open code-scanning alerts of this repo — read-only, sixty reads per tab per hour, and only for the repo the user confirmed for pushes or allowed on a card (ci_repo_unconfirmed otherwise: a card is waiting, ask again once the user allowed it). A repository created or swapped after this tab started is never used (repo_changed: ask the user to restart the tab). Every refusal is a normal result with a fixed `category` and a `message` saying what to do next. Budget: six push or release requests per hour and two pending per tab.");
 
 /// How long the whole request may block the tool call before it answers
 /// `running` and lets the agent poll — inside the listener's 30 s socket life.
@@ -358,15 +358,87 @@ pub fn is_protected(branch: &str, policy: &ProjectPolicy) -> bool {
     policy.protected.iter().any(|p| p == branch)
 }
 
-/// Whether `branch` is the remote's default branch (falling back to
-/// `main`/`master` when the remote did not say). A push to it is always
-/// staged for the user's click, whatever the level: a single-branch
-/// project has nothing else to push, and the user still decides.
+/// Whether `branch` is one a push always waits for the user's click on, at any
+/// level (gap 103): the remote's default branch, and `main` and `master`
+/// whatever the remote's `HEAD` says (a repo whose default is `develop` still
+/// releases from `main`). A single-branch project has nothing else to push,
+/// and the user still decides. The branches a release workflow runs on are
+/// added by [`workflow_names_branch`].
 pub fn is_default_branch(branch: &str, default_branch: Option<&str>) -> bool {
-    match default_branch {
-        Some(default) => default == branch,
-        None => matches!(branch, "main" | "master"),
+    default_branch == Some(branch) || matches!(branch, "main" | "master")
+}
+
+/// The most workflow files and bytes per file read from the pushed commit.
+const WORKFLOW_MAX_FILES: usize = 20;
+const WORKFLOW_MAX_BYTES: u64 = 64 * 1024;
+const WORKFLOW_DIR: &str = ".github/workflows/";
+
+/// Whether a workflow `push` trigger's branch pattern names `branch`: a
+/// literal name, or a pattern with a literal prefix (`release/**`,
+/// `release-*`). A pattern with no literal prefix (`*`, `**`: CI on every
+/// branch) and a negation name nothing, or every push would need a card.
+fn pattern_names_branch(pattern: &str, branch: &str) -> bool {
+    let pattern = pattern.trim();
+    if pattern.is_empty() || pattern.starts_with('!') { return false; }
+    match pattern.find(['*', '?', '[', '+', '\\']) {
+        None => pattern == branch,
+        Some(0) => false,
+        Some(at) => branch.starts_with(&pattern[..at]),
     }
+}
+
+/// The branch patterns of a workflow's `on.push.branches`. Anything that is
+/// not a map with those keys (a bare `on: push`, a list of events, a trigger
+/// with no branch filter, a file that does not parse) names no branch.
+fn push_branch_patterns(yaml: &str) -> Vec<String> {
+    use serde_norway::Value as Y;
+    let Ok(doc) = serde_norway::from_str::<Y>(yaml) else { return Vec::new() };
+    let Some(map) = doc.as_mapping() else { return Vec::new() };
+    // YAML 1.1 reads a bare `on` key as a boolean; the parser here does not,
+    // but a workflow file is written for GitHub's, so both spellings count.
+    let Some(on) = map.get("on").or_else(|| map.get(Y::Bool(true))) else { return Vec::new() };
+    let Some(branches) = on.as_mapping().and_then(|on| on.get("push")).and_then(Y::as_mapping).and_then(|push| push.get("branches")) else { return Vec::new() };
+    match branches {
+        Y::String(one) => vec![one.clone()],
+        Y::Sequence(items) => items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether a workflow of the commit `head` — read from its committed blobs,
+/// never the working tree an agent can write — runs on a push to `branch`
+/// (gap 103). At most [`WORKFLOW_MAX_FILES`] files of [`WORKFLOW_MAX_BYTES`];
+/// whatever cannot be read or parsed names nothing. The answer only ever adds
+/// a card.
+pub(crate) fn workflow_names_branch(dir: &Path, head: &str, branch: &str) -> bool {
+    if validate_sha(head).is_err() { return false; }
+    let listing = match crate::services::git_bounded::output(lane_git_command(dir, &["ls-tree", "-z", head, "--", WORKFLOW_DIR])) {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return false,
+    };
+    let all_blobs = String::from_utf8_lossy(&listing).split('\0').filter_map(|entry| {
+        let (meta, path) = entry.split_once('\t')?;
+        let mut meta = meta.split(' ');
+        let (mode, kind, oid) = (meta.next()?, meta.next()?, meta.next()?);
+        let name = path.rsplit('/').next()?.to_ascii_lowercase();
+        // A regular blob only: not a link (its text is a path) or a submodule.
+        (matches!(mode, "100644" | "100755") && kind == "blob" && (name.ends_with(".yml") || name.ends_with(".yaml")) && validate_sha(oid).is_ok()).then(|| oid.to_string())
+    }).collect::<Vec<_>>();
+    // A bound is not a place to hide: the commit is the agent's, so padding a
+    // workflow past the byte cap or adding workflows past the file cap must not
+    // turn the check off. Past either bound the branch needs a card (the answer
+    // only ever adds one).
+    if all_blobs.len() > WORKFLOW_MAX_FILES { return true; }
+    all_blobs.iter().any(|oid| {
+        let mut cmd = lane_git_command(dir, &["cat-file", "blob", oid]);
+        let opts = crate::services::git_bounded::Opts { stdout_cap: Some(WORKFLOW_MAX_BYTES), timeout: Some(Duration::from_secs(10)), ..Default::default() };
+        let Ok(ran) = crate::services::git_bounded::run(&mut cmd, opts) else { return false };
+        // A file past the cap is cut mid-line and cannot be read: it counts as
+        // naming the branch.
+        if ran.cut { return true; }
+        if !ran.output.status.success() { return false; }
+        push_branch_patterns(&String::from_utf8_lossy(&ran.output.stdout)).iter().any(|pattern| pattern_names_branch(pattern, branch))
+    })
 }
 
 // ── Running processes with a cap ────────────────────────────────────────────
@@ -523,6 +595,12 @@ fn ls_remote(dir: &Path, url: &str, branch: &str, token: Option<&str>, origins: 
 /// `git ls-remote --symref` for exactly `refs`, with the scoped token; its
 /// stdout, or the classified failure. Shared with `services::git_release`.
 pub(crate) fn ls_remote_raw(dir: &Path, url: &str, refs: &[String], token: Option<&str>, origins: &[String]) -> Result<String, Failure> {
+    ls_remote_raw_within(dir, url, refs, token, origins, REMOTE_TIMEOUT)
+}
+
+/// [`ls_remote_raw`] stopped after `timeout` (the card refresh asks for far
+/// less than a push's two minutes).
+pub(crate) fn ls_remote_raw_within(dir: &Path, url: &str, refs: &[String], token: Option<&str>, origins: &[String], timeout: Duration) -> Result<String, Failure> {
     let mut args: Vec<String> = Vec::new();
     if token.is_some() { args.extend(scoped_token_config(origins, "x-access-token")); }
     args.extend(["ls-remote", "--symref", "--", url].map(str::to_string));
@@ -530,9 +608,9 @@ pub(crate) fn ls_remote_raw(dir: &Path, url: &str, refs: &[String], token: Optio
     let mut cmd = hardened_git_command_in(dir, &args);
     if let Some(tok) = token { cmd.env(crate::app_env!("GIT_TOKEN"), tok); }
     cmd.env("GIT_TERMINAL_PROMPT", "0");
-    let ran = match crate::services::git_bounded::run(&mut cmd, lane_opts(None, REMOTE_TIMEOUT)) {
+    let ran = match crate::services::git_bounded::run(&mut cmd, lane_opts(None, timeout)) {
         Ok(ran) => ran,
-        Err(RunError::TimedOut(_)) => return Err(Failure::new(Category::Network, "The remote did not answer within two minutes; try again later.")),
+        Err(RunError::TimedOut(_)) => return Err(Failure::new(Category::Network, "The remote did not answer in time; try again later.")),
         Err(e) => return Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
     };
     let (stdout, stderr) = lane_text(&ran.output);
@@ -550,9 +628,52 @@ pub(crate) fn ls_remote_raw(dir: &Path, url: &str, refs: &[String], token: Optio
 }
 
 fn commits_between(dir: &Path, base: &str, head: &str) -> (Vec<String>, String) {
-    let commits = git(dir, &["log", "--format=%h %s", &format!("{base}..{head}"), "--"]).map(|s| s.lines().map(str::to_string).collect()).unwrap_or_default();
+    // The subjects are the agent's words: no bidi or invisible character may
+    // reorder or hide what the user reads before pressing Push (gap 102).
+    let commits = git(dir, &["log", "--format=%h %s", &format!("{base}..{head}"), "--"])
+        .map(|s| s.lines().map(clean_line).collect()).unwrap_or_default();
     let diffstat = git(dir, &["diff", "--shortstat", base, head, "--"]).unwrap_or_default().trim().to_string();
     (commits, diffstat)
+}
+
+/// One line of agent-written text as the card shows it: invisible, bidi and
+/// control characters gone (the helper the note uses), tabs read as spaces.
+fn clean_line(line: &str) -> String {
+    crate::services::root_mcp_mail::strip_invisible(line).replace(['\t', '\n'], " ")
+}
+
+/// Files a card lists at most; the card still says how many there are.
+const FILES_CAP: usize = 60;
+
+/// The paths whose change decides more than their text: a workflow, a hook
+/// or a build manifest. Listed first on a card (gap 102).
+fn is_sensitive_path(path: &str) -> bool {
+    const DIRS: &[&str] = &[".github/", ".githooks/", ".husky/", ".gitlab/", ".circleci/"];
+    const NAMES: &[&str] = &[
+        "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.toml", "cargo.lock", "build.rs", "pyproject.toml", "setup.py", "setup.cfg",
+        "requirements.txt", "makefile", "dockerfile", "go.mod", "gemfile", "pom.xml", "build.gradle", "tauri.conf.json", ".gitattributes", ".gitmodules",
+        ".gitlab-ci.yml", ".pre-commit-config.yaml", "lefthook.yml", "justfile",
+    ];
+    let lower = path.to_ascii_lowercase();
+    DIRS.iter().any(|d| lower.starts_with(d)) || lower.starts_with("hooks/") || NAMES.contains(&lower.rsplit('/').next().unwrap_or(""))
+}
+
+/// The files `base..head` changes as `"<status> <path>"` lines — workflow,
+/// hook and manifest paths first, at most [`FILES_CAP`] — and how many there
+/// are in all. Names only: `--name-status` reads no content, and the diff
+/// drivers a repo configures are pinned off besides.
+fn changed_files(dir: &Path, base: &str, head: &str) -> (Vec<String>, usize) {
+    let Ok(out) = crate::services::git_bounded::output(lane_git_command(dir, &["diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", base, head, "--"])) else { return (Vec::new(), 0) };
+    if !out.status.success() { return (Vec::new(), 0); }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut fields = text.split('\0');
+    let mut files: Vec<(bool, String)> = Vec::new();
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+        files.push((!is_sensitive_path(path), format!("{} {}", clean_line(status), clean_line(path))));
+    }
+    let total = files.len();
+    files.sort_by_key(|(rest, _)| *rest);
+    (files.into_iter().take(FILES_CAP).map(|(_, line)| line).collect(), total)
 }
 
 /// Everything decided before any project code runs. `requested` is the
@@ -596,7 +717,7 @@ fn plan(dir: &Path, policy: &ProjectPolicy, requested: Option<&str>, token: Opti
     let (commits, diffstat) = commits_between(dir, &remote_sha, &head);
     Ok(Plan {
         needs_url_confirm: policy.confirmed_url.as_deref() != Some(url.as_str()),
-        to_default: is_default_branch(&branch, view.default_branch.as_deref()),
+        to_default: is_default_branch(&branch, view.default_branch.as_deref()) || workflow_names_branch(dir, &head, &branch),
         default_branch: view.default_branch, branch, remote, url, head, remote_sha, commits, diffstat,
     })
 }
@@ -763,6 +884,14 @@ pub enum Kind { Push, Release,
     /// repo, never counted against the push budget or the pending limit.
     CiRepo }
 
+/// Who closed a dismissed card. A card the user dismissed hides; one the
+/// system closed (a newer request, a push that went out, the remote holding
+/// the commit, the agent's own withdrawal) stays listed with its reason until
+/// the user clears it (gap 89).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DismissedBy { User, System }
+
 /// One agent request, from admission to its terminal state. The card and
 /// `git_push_status` both read this; the audit ring only ever sees the
 /// category and SHAs.
@@ -791,15 +920,22 @@ pub struct Proposal {
     pub remote_sha: Option<String>,
     pub commits: Vec<String>,
     pub diffstat: String,
+    /// The changed files as `"<status> <path>"` lines, workflow, hook and
+    /// manifest paths first, capped ([`FILES_CAP`]); `files_total` counts all.
+    pub files: Vec<String>,
+    pub files_total: usize,
     pub note: String,
     pub needs_url_confirm: bool,
-    /// The push goes to the remote's default branch, so it waits for the
-    /// user's click even at apply.
+    /// The push goes to a branch that always waits for the user's click, even
+    /// at apply: the remote's default, `main`/`master`, or one a release
+    /// workflow runs on ([`is_default_branch`], [`workflow_names_branch`]).
     pub to_default: bool,
     pub created_at: String,
     #[serde(skip)]
     created: Instant,
     pub status: Status,
+    /// Set with `Dismissed`.
+    pub dismissed_by: Option<DismissedBy>,
     pub category: Option<Category>,
     pub message: String,
     pub output: String,
@@ -853,9 +989,9 @@ fn new_proposal(session: &Session, project: &str, dir: &Path, note: String) -> P
         id: proposal_id("push"),
         session: session.id.clone(), tab: session.identity.tab.clone(), project: project.to_string(), dir: dir.to_path_buf(),
         fence_scope: session.identity.push.as_ref().and_then(|b| b.fence_scope.clone()),
-        kind: Kind::Push, tag: None, repo: None, branch: None, remote: None, url: None, head: None, remote_sha: None, commits: Vec::new(), diffstat: String::new(), note,
+        kind: Kind::Push, tag: None, repo: None, branch: None, remote: None, url: None, head: None, remote_sha: None, commits: Vec::new(), diffstat: String::new(), files: Vec::new(), files_total: 0, note,
         needs_url_confirm: false, to_default: false, created_at: chrono::Local::now().to_rfc3339(), created: Instant::now(), status: Status::Running,
-        category: None, message: String::new(), output: String::new(), state: RepoState::default(), preflight_output: String::new(),
+        dismissed_by: None, category: None, message: String::new(), output: String::new(), state: RepoState::default(), preflight_output: String::new(),
         cleared: false,
     }
 }
@@ -865,6 +1001,24 @@ fn update(id: &str, f: impl FnOnce(&mut Proposal)) -> Option<Proposal> {
     let p = list.iter_mut().find(|p| p.id == id)?;
     f(p);
     Some(p.clone())
+}
+/// [`update`] as a compare-and-set: `f` runs only while the proposal still
+/// has status `from`, under the store's lock, so two writers racing for one
+/// card cannot both win and a late one cannot overwrite a state it never saw
+/// (gap 104). `None` when the card is gone or has moved on.
+fn update_from(id: &str, from: Status, f: impl FnOnce(&mut Proposal)) -> Option<Proposal> {
+    let mut list = proposals().lock_ok();
+    let p = list.iter_mut().find(|p| p.id == id && p.status == from)?;
+    f(p);
+    Some(p.clone())
+}
+/// Close a card without a push: who closed it, why, and the `dismissed`
+/// category the agent reads.
+fn dismiss(p: &mut Proposal, by: DismissedBy, message: impl Into<String>) {
+    p.status = Status::Dismissed;
+    p.dismissed_by = Some(by);
+    p.category = Some(Category::Dismissed);
+    p.message = message.into();
 }
 /// A proposal just staged supersedes the older still-pending ones of its
 /// kind from the same tab, and every tab's pending pushes of the same branch
@@ -876,9 +1030,8 @@ fn supersede_older(id: &str) {
     let Some(new) = list.iter().find(|p| p.id == id).cloned() else { return };
     let same_branch = |p: &Proposal| new.kind == Kind::Push && p.dir == new.dir && new.branch.is_some() && p.branch == new.branch;
     for p in list.iter_mut().filter(|p| p.id != id && p.kind == new.kind && p.status == Status::Pending && (p.tab == new.tab || same_branch(p))) {
-        p.status = Status::Dismissed;
-        p.category = Some(Category::Dismissed);
-        p.message = if p.tab == new.tab { "Superseded by a newer request of this tab." } else { "Superseded by a newer push request of this branch." }.into();
+        let message = if p.tab == new.tab { "Superseded by a newer request of this tab." } else { "Superseded by a newer push request of this branch." };
+        dismiss(p, DismissedBy::System, message);
     }
 }
 
@@ -888,43 +1041,100 @@ fn supersede_older(id: &str) {
 fn dismiss_pushed_branch(id: &str, dir: &Path, branch: &str) {
     let mut list = proposals().lock_ok();
     for p in list.iter_mut().filter(|p| p.id != id && p.kind == Kind::Push && p.status == Status::Pending && p.dir == dir && p.branch.as_deref() == Some(branch)) {
-        p.status = Status::Dismissed;
-        p.category = Some(Category::Dismissed);
-        p.message = "A newer push of this branch went out; this request no longer applies.".into();
+        dismiss(p, DismissedBy::System, "A newer push of this branch went out; this request no longer applies.");
     }
 }
 
-/// Dismiss the pending push cards (of `project`, or of `tab`) whose commit
-/// the branch's remote-tracking ref already contains: the branch was pushed
-/// another way (a terminal, the git bar), so the card has nothing left to
-/// send. Local refs only, no network; the tracking ref only ever records
-/// what the remote held. Runs git, so callers are off the UI thread.
-pub fn settle_pushed_elsewhere(project: Option<&str>, tab: Option<&str>) {
+/// How long one card's `ls-remote` answer stands before the next refresh may
+/// ask again, and how long any one asks may take: a stalled remote costs the
+/// refresh seconds, not the push's two minutes.
+const SETTLE_RECHECK: Duration = Duration::from_secs(30);
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(15);
+/// One refresh asks the remote for as long as this, then leaves the rest of
+/// its cards for the next.
+const SETTLE_BUDGET: Duration = Duration::from_secs(45);
+
+fn settle_asked() -> &'static Mutex<HashMap<String, Instant>> {
+    static ASKED: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    ASKED.get_or_init(Default::default)
+}
+/// Whether `id` may be asked about now, marking it asked (a failed or
+/// timed-out ask counts: it is not retried for [`SETTLE_RECHECK`] either).
+fn settle_due(id: &str) -> bool {
+    let mut asked = settle_asked().lock_ok();
+    let now = Instant::now();
+    asked.retain(|_, at| now.duration_since(*at) < SETTLE_RECHECK);
+    if asked.contains_key(id) { return false; }
+    asked.insert(id.to_string(), now);
+    true
+}
+
+/// Dismiss the pending push cards (of `project`, or of `tab`) the remote
+/// already holds: the branch was pushed another way (a terminal, the git
+/// bar), so the card has nothing left to send. The remote is asked, never
+/// the local tracking ref — `.git` is writable by the fenced agent, so a
+/// ref it wrote must not be able to make a card vanish with a false
+/// statement (gap 89). One `ls-remote` of the card's own stored URL (never
+/// `remote.<name>.url`, re-read from the same writable config) with the
+/// stored token, hooks off and [`SETTLE_TIMEOUT`] long, per card per
+/// [`SETTLE_RECHECK`]. The card settles only when the remote's tip is its
+/// commit or a descendant; a card whose URL the user has not confirmed, no
+/// token to ask with (the keyring-free process) and every failure leave it
+/// pending. Called from the window's refresh only, never from the agent's
+/// `git_push_status` poll. Runs git and the network: callers are off the UI
+/// thread. Returns whether a card settled.
+pub fn settle_pushed_elsewhere(project: Option<&str>, tab: Option<&str>) -> bool {
+    if keyring_free() { return false; }
+    struct Card { id: String, project: String, dir: PathBuf, url: String, branch: String, head: String }
     // Snapshot first: git never runs under the proposals lock.
-    let cards: Vec<(String, PathBuf, String, String)> = proposals()
+    let cards: Vec<Card> = proposals()
         .lock_ok()
         .iter()
-        .filter(|p| p.kind == Kind::Push && p.status == Status::Pending && project.is_none_or(|id| p.project == id) && tab.is_none_or(|t| p.tab == t))
-        .filter_map(|p| Some((p.id.clone(), p.dir.clone(), format!("refs/remotes/{}/{}", p.remote.as_deref()?, p.branch.as_deref()?), p.head.clone()?)))
+        .filter(|p| p.kind == Kind::Push && p.status == Status::Pending && !p.needs_url_confirm && project.is_none_or(|id| p.project == id) && tab.is_none_or(|t| p.tab == t))
+        .filter_map(|p| Some(Card { id: p.id.clone(), project: p.project.clone(), dir: p.dir.clone(), url: p.url.clone()?, branch: p.branch.clone()?, head: p.head.clone()? }))
         .collect();
+    let started = Instant::now();
     let mut settled = false;
-    for (id, dir, tracking, head) in cards {
-        let on_remote = lane_git_command(&dir, &["merge-base", "--is-ancestor", head.as_str(), tracking.as_str()]).bounded_output().is_ok_and(|o| o.status.success());
+    for card in cards {
+        if started.elapsed() >= SETTLE_BUDGET { break; }
+        if validate_branch(&card.branch).is_err() || validate_sha(&card.head).is_err() || !settle_due(&card.id) { continue; }
+        let (token, origins) = creds(&card.project);
+        let want = format!("refs/heads/{}", card.branch);
+        let Ok(listing) = ls_remote_raw_within(&card.dir, &card.url, std::slice::from_ref(&want), token.as_deref(), &origins, SETTLE_TIMEOUT) else { continue };
+        let Some(tip) = listing.lines().find_map(|line| line.split_once('\t').filter(|(sha, name)| *name == want && validate_sha(sha).is_ok()).map(|(sha, _)| sha.to_string())) else { continue };
+        let on_remote = tip == card.head || lane_git_command(&card.dir, &["merge-base", "--is-ancestor", card.head.as_str(), tip.as_str()]).bounded_output().is_ok_and(|o| o.status.success());
         if !on_remote { continue; }
-        settled |= update(&id, |p| if p.status == Status::Pending && p.head.as_deref() == Some(head.as_str()) {
-            p.status = Status::Dismissed;
-            p.category = Some(Category::Dismissed);
-            p.message = "Already on the remote: the branch was pushed another way.".into();
+        settled |= update_from(&card.id, Status::Pending, |p| if p.head.as_deref() == Some(card.head.as_str()) {
+            dismiss(p, DismissedBy::System, "Already on the remote: the branch was pushed another way.");
         })
         .is_some_and(|p| p.status == Status::Dismissed);
     }
     if settled { changed(); }
+    settled
+}
+
+/// [`settle_pushed_elsewhere`] for a project on its own thread, so the card
+/// list the window asked for is not held up by the network; the window hears
+/// of a settled card through the change event. One at a time.
+pub fn settle_in_background(project: &str) {
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) { return; }
+    let project = project.to_string();
+    let spawned = std::thread::Builder::new().name("git-push-settle".into()).spawn(move || {
+        settle_pushed_elsewhere(Some(&project), None);
+        RUNNING.store(false, std::sync::atomic::Ordering::Release);
+    });
+    if spawned.is_err() { RUNNING.store(false, std::sync::atomic::Ordering::Release); }
 }
 fn get(id: &str) -> Option<Proposal> {
     proposals().lock_ok().iter().find(|p| p.id == id).cloned()
 }
+/// A step failed: the card says so — unless it already went out. A release
+/// whose second approval fails `tag_exists`, or a push whose twin lost a
+/// race, must not turn the `Pushed` the agent polls into `Failed` (gap 104).
 fn fail(id: &str, failure: Failure) -> Option<Proposal> {
     let out = update(id, |p| {
+        if p.status == Status::Pushed { return; }
         p.status = Status::Failed;
         p.category = Some(failure.category);
         p.message = failure.message.clone();
@@ -1086,20 +1296,27 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
         Err(failure) => { fail(&id, failure); return; }
     };
     update(&id, |p| apply_plan(p, &plan));
+    let planned_head = plan.head.clone();
     let (plan, preflight_output) = match preflight(&p.dir, HookBoundary::of(p.fence_scope.as_deref()), plan) {
         Ok(done) => done,
         Err(failure) => { fail(&id, failure); return; }
     };
+    // The hook may have committed (a version bump): the workflows of the commit
+    // that goes out decide whether its branch needs a card.
+    let plan = refresh_to_default(&p.dir, &planned_head, plan);
     let staged = must_stage(level, &plan);
+    // Git runs before the store's lock is taken, not under it.
+    let (files, files_total) = if staged { changed_files(&p.dir, &plan.remote_sha, &plan.head) } else { (Vec::new(), 0) };
     update(&id, |p| {
         apply_plan(p, &plan);
+        (p.files, p.files_total) = (files, files_total);
         p.preflight_output = preflight_output;
         if staged {
             p.status = Status::Pending;
             p.message = if plan.needs_url_confirm && level == Level::Apply {
                 "The first push to this URL needs the user's confirmation; a card is waiting for them.".into()
             } else if plan.to_default && level == Level::Apply {
-                format!("'{}' is the remote's default branch, so the push waits for the user's approval; a card is waiting for them.", plan.branch)
+                format!("'{}' is a branch whose pushes always wait for the user's approval (the remote's default, main or master, or one a release workflow runs on); a card is waiting for them.", plan.branch)
             } else {
                 "Staged for the user's approval; poll git_push_status for the outcome.".into()
             };
@@ -1109,6 +1326,15 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
     changed();
     if staged { return; }
     push_now(&id, &plan, token.as_deref(), &origins);
+}
+
+/// A pre-push hook that committed moved the pushed commit: whether its branch
+/// needs a card is read again from the workflows of the commit that goes out.
+fn refresh_to_default(dir: &Path, planned_head: &str, mut plan: Plan) -> Plan {
+    if plan.head != planned_head && !plan.to_default {
+        plan.to_default = workflow_names_branch(dir, &plan.head, &plan.branch);
+    }
+    plan
 }
 
 fn push_now(id: &str, plan: &Plan, token: Option<&str>, origins: &[String]) {
@@ -1137,16 +1363,45 @@ fn push_now(id: &str, plan: &Plan, token: Option<&str>, origins: &[String]) {
 /// URL records it as confirmed.
 pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
     let p = get(id).ok_or("proposal not found")?;
-    if p.status != Status::Pending { return Err("this proposal is no longer pending".into()); }
+    if p.status != Status::Pending { return Err(NOT_PENDING.into()); }
     if p.kind == Kind::CiRepo { return decide_ci_repo(&p, approve, allow_ci_repo); }
     if !approve {
-        let out = update(id, |p| { p.status = Status::Dismissed; p.category = Some(Category::Dismissed); p.message = "The user dismissed the push.".into(); });
+        let out = update_from(id, Status::Pending, |p| dismiss(p, DismissedBy::User, "The user dismissed the push.")).ok_or(NOT_PENDING)?;
         changed();
-        return out.ok_or("proposal not found".into());
+        return Ok(out);
     }
+    after_pending_check();
     let lock = project_lock(&p.project);
     let _guard = lock.lock_ok();
-    if p.kind == Kind::Release { return decide_release(p); }
+    // The lock may have been long in coming: a newer request, a withdrawal or
+    // a first approval can have changed the card meanwhile. The claim is the
+    // check, made where nothing else can change the card between it and the
+    // `Running` it writes (gap 104).
+    let p = update_from(id, Status::Pending, |p| p.status = Status::Running).ok_or(NOT_PENDING)?;
+    changed();
+    let decided = if p.kind == Kind::Release { decide_release(p) } else { decide_push(id, p) };
+    if decided.is_err() {
+        // Nothing was decided (an unreadable policy file, an incomplete card):
+        // the card is the user's to press again.
+        update_from(id, Status::Running, |p| p.status = Status::Pending);
+        changed();
+    }
+    decided
+}
+
+const NOT_PENDING: &str = "this proposal is no longer pending";
+
+/// Test seam: runs between `decide`'s first pending check and the project
+/// lock, where a test moves the card the way another client could.
+fn after_pending_check() {
+    #[cfg(test)]
+    AFTER_PENDING_CHECK.with(|slot| if let Some(f) = slot.borrow_mut().take() { f() });
+}
+#[cfg(test)]
+thread_local! { static AFTER_PENDING_CHECK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) }; }
+
+/// The approved branch push of a card [`decide`] has claimed (`Running`).
+fn decide_push(id: &str, p: Proposal) -> Result<Proposal, String> {
     let (Some(branch), Some(head), Some(remote), Some(url), Some(remote_sha)) = (p.branch.clone(), p.head.clone(), p.remote.clone(), p.url.clone(), p.remote_sha.clone()) else {
         return Err("incomplete proposal".into());
     };
@@ -1170,7 +1425,7 @@ pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
     if live_remote != remote_sha && !lane_git_command(&p.dir, &["merge-base", "--is-ancestor", &live_remote, &head]).bounded_output().is_ok_and(|o| o.status.success()) {
         return fail(id, Failure::new(Category::Diverged, "The remote moved in the meantime; pull or rebase first, then ask again.")).ok_or("proposal not found".into());
     }
-    update(id, |p| { p.status = Status::Running; p.needs_url_confirm = false; });
+    update(id, |p| p.needs_url_confirm = false);
     let plan = Plan { branch, remote, url, head, remote_sha: live_remote, to_default: p.to_default, default_branch: view.default_branch, commits: p.commits.clone(), diffstat: p.diffstat.clone(), needs_url_confirm: false };
     push_now(id, &plan, token.as_deref(), &origins);
     get(id).ok_or("proposal not found".into())
@@ -1178,21 +1433,27 @@ pub fn decide(id: &str, approve: bool) -> Result<Proposal, String> {
 
 /// The user pressed Allow (or Dismiss) on an "Allow CI" card: Allow records
 /// the repo in the project's `git_ci_repos`, so the agent's next read goes.
-/// `allow` is the `projects.json` write (a test seam).
+/// `allow` is the `projects.json` write (a test seam). The card is claimed
+/// (`Running`) before the write, so a second click or the agent's withdrawal
+/// cannot race it, and given back when the write fails.
 fn decide_ci_repo(p: &Proposal, approve: bool, allow: impl FnOnce(&str, &str) -> Result<(), String>) -> Result<Proposal, String> {
     let repo = p.repo.clone().ok_or("incomplete proposal")?;
-    if approve { allow(&p.project, &repo)?; }
-    let out = update(&p.id, |p| if approve {
-        p.status = Status::Allowed;
-        p.category = None;
-        p.message = format!("The user allowed CI reads for {repo}; ask again.");
+    let out = if approve {
+        update_from(&p.id, Status::Pending, |p| p.status = Status::Running).ok_or(NOT_PENDING)?;
+        if let Err(e) = allow(&p.project, &repo) {
+            update_from(&p.id, Status::Running, |p| p.status = Status::Pending);
+            return Err(e);
+        }
+        update_from(&p.id, Status::Running, |p| {
+            p.status = Status::Allowed;
+            p.category = None;
+            p.message = format!("The user allowed CI reads for {repo}; ask again.");
+        })
     } else {
-        p.status = Status::Dismissed;
-        p.category = Some(Category::Dismissed);
-        p.message = format!("The user did not allow CI reads for {repo}.");
-    });
+        update_from(&p.id, Status::Pending, |p| dismiss(p, DismissedBy::User, format!("The user did not allow CI reads for {repo}.")))
+    };
     changed();
-    out.ok_or("proposal not found".into())
+    out.ok_or(NOT_PENDING.into())
 }
 
 /// Close a finished card. The record stays, so the agent polling
@@ -1230,7 +1491,7 @@ fn run_release(id: String, requested: Option<String>) {
         p.url = Some(plan.url.clone());
         p.head = Some(plan.head.clone());
         p.remote_sha = Some(plan.head.clone());
-        p.commits = vec![plan.subject.clone()];
+        p.commits = vec![clean_line(&plan.subject)];
         p.state = local_state(&p.dir);
         p.status = Status::Pending;
         p.message = "Staged for the user's approval; poll git_push_status for the outcome.".into();
@@ -1252,8 +1513,7 @@ fn decide_release(p: Proposal) -> Result<Proposal, String> {
     if plan.head != head {
         return fail(&p.id, Failure::new(Category::StaleApproval, "The branch moved after the release was proposed; ask the agent to request it again.")).ok_or("proposal not found".into());
     }
-    update(&p.id, |p| p.status = Status::Running);
-    changed();
+    // `decide` claimed the card (`Running`) under the project lock already.
     match crate::services::git_release::release(&p.dir, &plan, &plan.tag, token.as_deref(), &origins) {
         Ok(output) => {
             update(&p.id, |p| {
@@ -1408,7 +1668,7 @@ fn proposal_view(p: &Proposal) -> Value {
     json!({
         "id": p.id, "kind": p.kind, "tag": p.tag, "repo": p.repo, "status": p.status, "category": p.category, "message": p.message, "output": p.output, "state": p.state,
         "branch": p.branch, "remote": p.remote, "url": p.url, "head": p.head, "remoteSha": p.remote_sha,
-        "commits": p.commits, "diffstat": p.diffstat, "note": p.note, "needsUrlConfirm": p.needs_url_confirm, "toDefault": p.to_default,
+        "commits": p.commits, "diffstat": p.diffstat, "files": p.files, "filesTotal": p.files_total, "note": p.note, "needsUrlConfirm": p.needs_url_confirm, "toDefault": p.to_default, "dismissedBy": p.dismissed_by,
         "createdAt": p.created_at, "preflightOutput": p.preflight_output,
     })
 }
@@ -1495,18 +1755,20 @@ fn call_cancel(session: &Session, id: &str) -> Result<Value, String> {
         return Ok(json!({"status":"refused","category":Category::NotFound,"message":"No such request of this tab.","output":"","state":Value::Null}));
     };
     match p.status {
-        Status::Pending => {
-            let out = update(id, |p| { p.status = Status::Dismissed; p.category = Some(Category::Dismissed); p.message = "Withdrawn by the agent.".into(); });
-            changed();
-            Ok(out.map(|p| proposal_view(&p)).unwrap_or(Value::Null))
-        }
+        // Only while the card is still pending: one the user is approving this
+        // moment is Running by now and cannot be withdrawn (gap 104).
+        Status::Pending => match update_from(id, Status::Pending, |p| dismiss(p, DismissedBy::System, "Withdrawn by the agent.")) {
+            Some(out) => { changed(); Ok(proposal_view(&out)) }
+            None => Ok(json!({"status":"refused","category":Category::Busy,"message":"The request is being decided and cannot be withdrawn now.","output":"","state":p.state})),
+        },
         Status::Running => Ok(json!({"status":"refused","category":Category::Busy,"message":"The request is running and cannot be withdrawn now.","output":"","state":p.state})),
         _ => Ok(json!({"status":"refused","category":Category::NotFound,"message":"The request is already decided.","output":"","state":p.state})),
     }
 }
 
 fn call_status(session: &Session, dir: &Path, policy: &ProjectPolicy) -> Value {
-    settle_pushed_elsewhere(None, Some(&session.identity.tab));
+    // No remote question here: the agent's own poll must not drive a network
+    // call (gap 89); the window's card refresh settles pushed-elsewhere cards.
     let rows: Vec<Value> = proposals_for(None, Some(&session.identity.tab)).iter().map(proposal_view).collect();
     json!({"state":local_state(dir),"level":policy.level(),"protected":policy.protected,"allowedBranches":allowed_branches(dir, policy),"defaultBranch":upstream_default_branch(dir),"urlConfirmed":policy.confirmed_url,"proposals":rows})
 }
@@ -1731,8 +1993,10 @@ mod tests {
         assert!(is_default_branch("main", Some("main")));
         assert!(!is_default_branch("develop", Some("main")));
         assert!(is_default_branch("trunk", Some("trunk")));
-        assert!(!is_default_branch("main", Some("trunk")), "the remote's own answer wins");
-        assert!(is_default_branch("main", None) && is_default_branch("master", None), "fallback without a remote answer");
+        // Gap 103: main and master need a card whatever the remote's HEAD says.
+        assert!(is_default_branch("main", Some("trunk")) && is_default_branch("master", Some("develop")), "a repo whose default is not main still releases from it");
+        assert!(is_default_branch("main", None) && is_default_branch("master", None), "and without a remote answer");
+        assert!(!is_default_branch("develop", None) && !is_default_branch("release/1", Some("main")));
     }
 
     #[test]
@@ -2187,24 +2451,334 @@ mod tests {
         proposals().lock().unwrap().retain(|p| !p.tab.starts_with("tab:branch-cards"));
     }
 
+    /// A pending card for `work`'s `develop` at `head`, as the plan would stage it.
+    fn staged_card(tab: &str, work: &Path, remote: &Path, head: &str) -> String {
+        let s = session(tab, work);
+        let id = test_proposal(&s, work);
+        set_pending(&id, &Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: head.to_string(),
+            remote_sha: sh(work, &["rev-parse", "origin/develop"]), to_default: false, default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false });
+        id
+    }
+    /// Forget the answer for one card only: the cache is process-wide and tests run in parallel.
+    fn forget_settle_answers(id: &str) { settle_asked().lock().unwrap().remove(id); }
+
     #[test]
-    fn a_card_the_remote_already_holds_is_dismissed() {
+    fn a_card_the_remote_already_holds_is_dismissed_and_stays_listed_as_the_systems() {
         if !have_git() { eprintln!("git not on PATH — skipping"); return; }
         let (_root, remote, work) = pair();
         let head = commit(&work, "b.txt");
-        let s = session("tab:elsewhere", &work);
-        let id = test_proposal(&s, &work);
-        set_pending(&id, &Plan { branch: "develop".into(), remote: "origin".into(), url: format!("file://{}", remote.display()), head: head.clone(),
-            remote_sha: sh(&work, &["rev-parse", "origin/develop"]), to_default: false, default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false });
-        settle_pushed_elsewhere(None, Some("tab:elsewhere"));
+        let id = staged_card("tab:elsewhere", &work, &remote, &head);
+        forget_settle_answers(&id);
+        assert!(!settle_pushed_elsewhere(None, Some("tab:elsewhere")));
         assert_eq!(get(&id).unwrap().status, Status::Pending, "not on the remote yet");
         // The user pushes from a terminal, a commit past the card's.
         commit(&work, "c.txt");
         sh(&work, &["push", "-q", "origin", "develop"]);
-        settle_pushed_elsewhere(None, Some("tab:elsewhere"));
+        forget_settle_answers(&id);
+        assert!(settle_pushed_elsewhere(None, Some("tab:elsewhere")));
         let p = get(&id).unwrap();
-        assert_eq!((p.status, p.category), (Status::Dismissed, Some(Category::Dismissed)), "{}", p.message);
+        assert_eq!((p.status, p.category, p.dismissed_by), (Status::Dismissed, Some(Category::Dismissed), Some(DismissedBy::System)), "{}", p.message);
+        assert!(p.message.starts_with("Already on the remote"), "{}", p.message);
         proposals().lock().unwrap().retain(|p| p.tab != "tab:elsewhere");
+    }
+
+    /// Gap 89: `.git` is the fenced agent's to write, so a tracking ref it
+    /// forged says nothing about the remote.
+    #[test]
+    fn a_forged_tracking_ref_neither_settles_a_card_nor_is_asked_without_the_users_url() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, remote, work) = pair();
+        let head = commit(&work, "b.txt");
+        let id = staged_card("tab:forged", &work, &remote, &head);
+        // The agent writes the tracking ref to the card's commit; the remote never got it.
+        sh(&work, &["update-ref", "refs/remotes/origin/develop", &head]);
+        forget_settle_answers(&id);
+        assert!(!settle_pushed_elsewhere(None, Some("tab:forged")));
+        assert_eq!(get(&id).unwrap().status, Status::Pending, "the remote does not hold the commit");
+        // `remote.origin.url` re-read from the writable config is never asked: the card's own URL is.
+        let other = _root.path().join("elsewhere.git");
+        sh(_root.path(), &["init", "-q", "--bare", "-b", "main", other.to_str().unwrap()]);
+        sh(&work, &["push", "-q", other.to_str().unwrap(), &format!("{head}:refs/heads/develop")]);
+        sh(&work, &["config", "remote.origin.url", &format!("file://{}", other.display())]);
+        forget_settle_answers(&id);
+        assert!(!settle_pushed_elsewhere(None, Some("tab:forged")));
+        assert_eq!(get(&id).unwrap().status, Status::Pending, "a rewritten remote URL is not consulted");
+        // A card whose URL the user has not confirmed is not asked at all.
+        update(&id, |p| p.needs_url_confirm = true);
+        sh(&work, &["push", "-q", remote.to_str().unwrap(), &format!("{head}:refs/heads/develop")]);
+        forget_settle_answers(&id);
+        assert!(!settle_pushed_elsewhere(None, Some("tab:forged")));
+        assert_eq!(get(&id).unwrap().status, Status::Pending);
+        update(&id, |p| p.needs_url_confirm = false);
+        forget_settle_answers(&id);
+        assert!(settle_pushed_elsewhere(None, Some("tab:forged")), "the remote does hold it now");
+        proposals().lock().unwrap().retain(|p| p.tab != "tab:forged");
+    }
+
+    #[test]
+    fn the_remote_is_asked_once_per_card_per_half_minute_and_never_by_the_agents_status_poll() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, remote, work) = pair();
+        let head = commit(&work, "b.txt");
+        let id = staged_card("tab:asked", &work, &remote, &head);
+        forget_settle_answers(&id);
+        assert!(!settle_pushed_elsewhere(None, Some("tab:asked")));
+        sh(&work, &["push", "-q", "origin", "develop"]);
+        assert!(!settle_pushed_elsewhere(None, Some("tab:asked")), "an answer stands for the recheck window");
+        assert_eq!(get(&id).unwrap().status, Status::Pending);
+        // The agent's own poll asks nobody, however long since.
+        forget_settle_answers(&id);
+        let s = session("tab:asked", &work);
+        let status = call_status(&s, &work, &propose_policy());
+        assert_eq!(status["proposals"][0]["status"], "pending", "git_push_status settles nothing");
+        assert_eq!(get(&id).unwrap().status, Status::Pending);
+        // The keyring-free process has no token to ask with: pending, too.
+        serve_without_keyring_on_this_thread(true);
+        assert!(!settle_pushed_elsewhere(None, Some("tab:asked")));
+        serve_without_keyring_on_this_thread(false);
+        assert_eq!(get(&id).unwrap().status, Status::Pending);
+        assert!(settle_pushed_elsewhere(None, Some("tab:asked")));
+        proposals().lock().unwrap().retain(|p| p.tab != "tab:asked");
+    }
+
+    #[test]
+    fn who_closed_a_card_is_recorded_and_only_the_users_dismissal_is_theirs() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, remote, work) = pair();
+        let head = commit(&work, "b.txt");
+        let (user, agent, newer, older) = (staged_card("tab:who", &work, &remote, &head), staged_card("tab:who-agent", &work, &remote, &head), staged_card("tab:who-new", &work, &remote, &head), staged_card("tab:who-old", &work, &remote, &head));
+        assert_eq!(decide(&user, false).unwrap().dismissed_by, Some(DismissedBy::User));
+        let s = session("tab:who-agent", &work);
+        call_cancel(&s, &agent).unwrap();
+        assert_eq!(get(&agent).unwrap().dismissed_by, Some(DismissedBy::System), "the agent's withdrawal");
+        supersede_older(&newer);
+        let (old, new) = (get(&older).unwrap(), get(&newer).unwrap());
+        assert_eq!((old.status, old.dismissed_by, new.dismissed_by), (Status::Dismissed, Some(DismissedBy::System), None), "superseded");
+        assert_eq!(proposal_view(&old)["dismissedBy"], "system");
+        proposals().lock().unwrap().retain(|p| !p.tab.starts_with("tab:who"));
+    }
+
+    /// Gap 104: `decide` checks "pending" where the card cannot change before
+    /// it writes `Running`.
+    #[test]
+    fn a_card_changed_while_decide_waits_for_the_lock_is_not_pushed_or_overwritten() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, remote, work) = pair();
+        let head = commit(&work, "b.txt");
+        let id = staged_card("tab:cas", &work, &remote, &head);
+        let remote_tip = || sh(&work, &["-C", remote.to_str().unwrap(), "rev-parse", "refs/heads/develop"]);
+        let before = remote_tip();
+        let lock = project_lock("p");
+        let guard = lock.lock_ok();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn({
+            let id = id.clone();
+            move || {
+                AFTER_PENDING_CHECK.with(|slot| *slot.borrow_mut() = Some(Box::new(move || tx.send(()).unwrap())));
+                decide(&id, true)
+            }
+        });
+        rx.recv_timeout(Duration::from_secs(20)).expect("decide passed its first check");
+        // Another request supersedes the card while the click waits for the lock.
+        update(&id, |p| dismiss(p, DismissedBy::System, "Superseded by a newer request of this tab."));
+        drop(guard);
+        let decided = worker.join().unwrap();
+        assert!(decided.is_err(), "{decided:?}");
+        assert_eq!(get(&id).unwrap().status, Status::Dismissed, "Running never replaces Dismissed");
+        assert_eq!(remote_tip(), before, "nothing was pushed");
+        proposals().lock().unwrap().retain(|p| p.tab != "tab:cas");
+    }
+
+    #[test]
+    fn status_writes_are_compare_and_set_and_a_failure_never_replaces_pushed() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, remote, work) = pair();
+        let head = commit(&work, "b.txt");
+        let (id, ci) = (staged_card("tab:cas2", &work, &remote, &head), staged_card("tab:cas2", &work, &remote, &head));
+        // Running: the agent cannot withdraw it and the user cannot dismiss it again.
+        update(&id, |p| p.status = Status::Running);
+        let s = session("tab:cas2", &work);
+        assert_eq!(call_cancel(&s, &id).unwrap()["category"], "busy");
+        assert!(update_from(&id, Status::Pending, |p| p.message = "x".into()).is_none());
+        assert_eq!(get(&id).unwrap().status, Status::Running);
+        // Pushed stays Pushed: a late failure (a twin release's tag_exists) only reports.
+        update(&id, |p| { p.status = Status::Pushed; p.message = "Pushed develop.".into(); });
+        let after = fail(&id, Failure::new(Category::TagExists, "tag exists")).unwrap();
+        assert_eq!((after.status, after.category, after.message.as_str()), (Status::Pushed, None, "Pushed develop."));
+        update(&id, |p| p.status = Status::Failed);
+        assert_eq!(fail(&id, Failure::new(Category::Network, "n")).unwrap().status, Status::Failed);
+        // An Allow whose write fails hands the card back; a decided one is not decided twice.
+        update(&ci, |p| { p.kind = Kind::CiRepo; p.repo = Some("o/r".into()); });
+        let card = get(&ci).unwrap();
+        assert!(decide_ci_repo(&card, true, |_, _| Err("disk full".into())).is_err());
+        assert_eq!(get(&ci).unwrap().status, Status::Pending, "a failed write leaves the card to press again");
+        let mut allowed = 0;
+        decide_ci_repo(&card, true, |_, _| { allowed += 1; Ok(()) }).unwrap();
+        assert!(decide_ci_repo(&card, true, |_, _| { allowed += 1; Ok(()) }).is_err() && decide_ci_repo(&card, false, |_, _| Ok(())).is_err());
+        assert_eq!((allowed, get(&ci).unwrap().status), (1, Status::Allowed));
+        proposals().lock().unwrap().retain(|p| p.tab != "tab:cas2");
+    }
+
+    #[test]
+    fn a_push_triggers_branch_pattern_names_only_a_literal_or_a_literal_prefix() {
+        for (pattern, branch, names) in [
+            ("develop", "develop", true), ("develop", "develop2", false), ("release/**", "release/1.2", true), ("release/*", "release/x", true),
+            ("release-*", "release-2", true), ("release-*", "main", false), ("v?", "v1", true),
+            ("**", "develop", false), ("*", "develop", false), ("*-release", "x-release", false), ("!dependabot/**", "dependabot/x", false),
+            ("", "develop", false), ("  main ", "main", true), ("[ab]c", "ac", false),
+        ] {
+            assert_eq!(pattern_names_branch(pattern, branch), names, "{pattern:?} vs {branch:?}");
+        }
+    }
+
+    #[test]
+    fn push_branch_patterns_reads_the_yaml_shapes_and_names_nothing_for_the_rest() {
+        let pats = |y: &str| push_branch_patterns(y);
+        assert_eq!(pats("on:\n  push:\n    branches: [release/**, main]\n"), ["release/**", "main"]);
+        assert_eq!(pats("name: x\non:\n  pull_request:\n  push:\n    branches:\n      - 'rel-*'\n      - dev\n"), ["rel-*", "dev"]);
+        assert_eq!(pats("on:\n  push:\n    branches: only\n"), ["only"]);
+        assert_eq!(pats("true:\n  push:\n    branches: [x]\n"), ["x"], "a YAML 1.1 reader's `on`");
+        for none in ["on: push\n", "on: [push, pull_request]\n", "on:\n  push:\n", "on:\n  push:\n    tags: ['v*']\n", "on:\n  pull_request:\n    branches: [main]\n", "jobs: {}\n", "- a\n- b\n", "\u{0}: [:", "on: {push: {branches: {a: b}}}\n", ""] {
+            assert!(pats(none).is_empty(), "{none:?}");
+        }
+        // CI on every branch names no branch.
+        let ci = pats("on:\n  push:\n    branches: ['**', '!dependabot/**']\n");
+        assert!(ci.iter().all(|p| !pattern_names_branch(p, "develop") && !pattern_names_branch(p, "release/1")), "{ci:?}");
+        // An alias bomb in 64 KiB is refused or finishes at once, never hangs.
+        let mut bomb = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for i in 1..9 { bomb.push_str(&format!("a{i}: &a{i} [{}]\n", vec![format!("*a{}", i - 1); 10].join(", "))); }
+        let started = Instant::now();
+        assert!(pats(&bomb).is_empty());
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    }
+
+    fn commit_files(work: &Path, files: &[(&str, &str)]) -> String {
+        for (name, text) in files {
+            let path = work.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            sh(work, &["add", name]);
+        }
+        sh(work, &["commit", "-q", "-m", "files"]);
+        sh(work, &["rev-parse", "HEAD"])
+    }
+
+    /// Gap 103: workflows are read from the commit that goes out.
+    #[test]
+    fn a_workflow_of_the_pushed_commit_makes_the_branch_it_names_need_a_card() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, _remote, work) = pair();
+        let names = |head: &str, branch: &str| workflow_names_branch(&work, head, branch);
+        let base = sh(&work, &["rev-parse", "HEAD"]);
+        assert!(!names(&base, "develop"), "no workflow, no card");
+        let head = commit_files(&work, &[(".github/workflows/rel.yml", "on:\n  push:\n    branches: [staging, 'release/**']\n"), (".github/workflows/ci.yml", "on:\n  push:\n    branches: ['**']\n")]);
+        assert!(names(&head, "staging") && names(&head, "release/1.2"), "a literal name and a literal prefix");
+        assert!(!names(&head, "feature/x") && !names(&head, "develop"), "CI on every branch names nothing");
+        // The working tree is the agent's: an uncommitted edit, or one in a later commit, is not the pushed commit's.
+        std::fs::write(work.join(".github/workflows/rel.yml"), "on:\n  push:\n    branches: [develop]\n").unwrap();
+        assert!(!names(&head, "develop"), "not the committed blob");
+        sh(&work, &["commit", "-q", "-a", "-m", "edit"]);
+        assert!(names(&sh(&work, &["rev-parse", "HEAD"]), "develop") && !names(&head, "develop"), "each commit its own workflows");
+        // A bad commit id is refused before it reaches git.
+        assert!(!names("--all", "develop") && !names("HEAD", "develop"));
+        // Past the cap of bytes, a workflow is not read.
+        let padded = format!("# {}\non:\n  push:\n    branches: [huge]\n", "x".repeat(WORKFLOW_MAX_BYTES as usize));
+        let big = commit_files(&work, &[(".github/workflows/big.yml", padded.as_str())]);
+        assert!(names(&big, "huge") && names(&big, "feature/x"), "a workflow past {WORKFLOW_MAX_BYTES} bytes cannot be read, so every branch needs a card");
+    }
+
+    /// Padding a commit with decoy workflows must not hide the real one.
+    #[test]
+    fn workflows_past_the_file_cap_make_every_branch_need_a_card() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, _remote, work) = pair();
+        let names: Vec<String> = (0..WORKFLOW_MAX_FILES).map(|i| format!(".github/workflows/a{i:02}.yml")).collect();
+        let files: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), "on: push\n")).collect();
+        let at_cap = commit_files(&work, &files);
+        assert!(!workflow_names_branch(&work, &at_cap, "feature/x"), "within the cap, workflows with no branch filter name nothing");
+        let head = commit_files(&work, &[(".github/workflows/zz.yml", "on:\n  push:\n    branches: [late]\n")]);
+        assert!(workflow_names_branch(&work, &head, "late") && workflow_names_branch(&work, &head, "feature/x"), "past {WORKFLOW_MAX_FILES} files every branch needs a card");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_workflow_that_is_a_link_in_the_commit_is_not_followed() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, _remote, work) = pair();
+        std::fs::create_dir_all(work.join(".github/workflows")).unwrap();
+        std::fs::create_dir_all(work.join("ci")).unwrap();
+        std::fs::write(work.join("ci/real.yml"), "on:\n  push:\n    branches: [linked]\n").unwrap();
+        std::os::unix::fs::symlink("../../ci/real.yml", work.join(".github/workflows/l.yml")).unwrap();
+        sh(&work, &["add", "ci/real.yml", ".github/workflows/l.yml"]);
+        sh(&work, &["commit", "-q", "-m", "link"]);
+        assert!(!workflow_names_branch(&work, &sh(&work, &["rev-parse", "HEAD"]), "linked"));
+    }
+
+    #[test]
+    fn main_master_and_workflow_branches_need_a_card_whatever_the_remotes_head_says() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (root, remote, work) = pair();
+        // The remote's default is `develop`; releases come from `main`.
+        sh(root.path(), &["-C", remote.to_str().unwrap(), "symbolic-ref", "HEAD", "refs/heads/develop"]);
+        let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
+        sh(&work, &["checkout", "-q", "main"]);
+        commit(&work, "c.txt");
+        let to_main = plan(&work, &policy, None, None, &[]).unwrap();
+        assert_eq!(to_main.default_branch.as_deref(), Some("develop"));
+        assert!(to_main.to_default && must_stage(Level::Apply, &to_main), "main, though the remote's default is develop");
+        // A topic branch named by a workflow trigger, and one that is not.
+        sh(&work, &["checkout", "-q", "-b", "staging"]);
+        sh(&work, &["push", "-q", "-u", "origin", "staging"]);
+        let head = commit_files(&work, &[(".github/workflows/rel.yml", "on:\n  push:\n    branches: [staging]\n")]);
+        let planned = plan(&work, &policy, None, None, &[]).unwrap();
+        assert!(planned.to_default && must_stage(Level::Apply, &planned), "staging deploys on push");
+        sh(&work, &["checkout", "-q", "develop"]);
+        commit(&work, "d.txt");
+        let other = plan(&work, &policy, None, None, &[]).unwrap();
+        assert!(other.to_default, "develop is the remote's default here");
+        sh(&work, &["checkout", "-q", "-b", "topic", "main"]);
+        sh(&work, &["push", "-q", "-u", "origin", "topic"]);
+        commit(&work, "e.txt");
+        let topic = plan(&work, &policy, None, None, &[]).unwrap();
+        assert!(!topic.to_default && !must_stage(Level::Apply, &topic), "an unnamed branch still goes at Apply");
+        // A hook that committed moves the pushed commit: its workflows decide again.
+        let moved = refresh_to_default(&work, &head, Plan { branch: "staging".into(), head: head.clone(), ..topic.clone() });
+        assert!(!moved.to_default, "same commit, nothing re-read");
+        let fresh = Plan { branch: "staging".into(), head: head.clone(), ..topic.clone() };
+        assert!(refresh_to_default(&work, "0".repeat(40).as_str(), fresh).to_default, "a new tip is read");
+    }
+
+    /// Gap 102: the card's subjects and file list are what the user decides on.
+    #[test]
+    fn subjects_lose_invisible_characters_and_the_card_lists_changed_files_sensitive_first() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, _remote, work) = pair();
+        let base = sh(&work, &["rev-parse", "HEAD"]);
+        std::fs::write(work.join("a.txt"), "changed\n").unwrap();
+        for (name, text) in [("docs/readme.md", "d\n"), ("src/main.rs", "m\n"), (".github/workflows/ci.yml", "on: push\n"), ("package.json", "{}\n"), ("a\u{202E}b\u{200B}.txt", "x\n")] {
+            let path = work.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        sh(&work, &["add", "-A"]);
+        sh(&work, &["commit", "-q", "-m", "ship it \u{202E}exe.txt\u{200B} now"]);
+        let head = sh(&work, &["rev-parse", "HEAD"]);
+        let (commits, _) = commits_between(&work, &base, &head);
+        assert_eq!(commits.len(), 1);
+        assert!(commits[0].ends_with("ship it exe.txt now"), "{:?}", commits[0]);
+        assert!(!commits[0].contains(['\u{202E}', '\u{200B}']), "{:?}", commits[0]);
+        let (files, total) = changed_files(&work, &base, &head);
+        assert_eq!(total, 6);
+        assert_eq!(&files[..2], [".github/workflows/ci.yml".to_string(), "package.json".to_string()].map(|f| format!("A {f}")), "workflow and manifest first: {files:?}");
+        assert!(files.contains(&"M a.txt".to_string()) && files.contains(&"A src/main.rs".to_string()), "{files:?}");
+        assert!(files.iter().all(|f| !f.contains(['\u{202E}', '\u{200B}'])) && files.contains(&"A ab.txt".to_string()), "{files:?}");
+        // Capped, with the real count.
+        let many: Vec<(String, String)> = (0..70).map(|i| (format!("gen/f{i:02}.txt"), "x\n".to_string())).chain([(".husky/pre-push".to_string(), "#!/bin/sh\n".to_string())]).collect();
+        let refs: Vec<(&str, &str)> = many.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+        let big = commit_files(&work, &refs);
+        let (files, total) = changed_files(&work, &head, &big);
+        assert_eq!((files.len(), total), (FILES_CAP, 71));
+        assert_eq!(files[0], "A .husky/pre-push", "a hook is listed first even among many");
     }
 
     #[test]

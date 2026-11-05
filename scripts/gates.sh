@@ -9,6 +9,13 @@
 #   scripts/gates.sh --all         every gate, exactly as AGENTS.md lists them
 #   scripts/gates.sh --list        the gates and what selects each
 #   scripts/gates.sh -n            print the selection, run nothing
+#   scripts/gates.sh --fresh       run even if the tree is unchanged since the
+#                                  last recorded run (GATES_FRESH=1 too)
+#
+# Runs are one at a time per checkout: a run started while another session's
+# is in flight waits for it, then prints that run's result instead of running
+# when the tree has not changed since it started (same mode and base, or an
+# --all pass). scripts/lib/gate_lock.sh has the details.
 #
 # Selection (scripts/lib/changed.sh, shared with ci-local.sh --fast):
 #   always     brand-check, `git diff --check`
@@ -34,6 +41,8 @@ cd "$repo"
 # SCHED_IDLE + nice 19, so a gate run never makes the window lag (the file says why).
 . "$repo/scripts/lib/low_priority.sh"
 low_priority_reexec "$repo/scripts/gates.sh" "$@"
+# One run at a time per checkout, and reuse of an unchanged tree's result.
+. "$repo/scripts/lib/gate_lock.sh"
 command -v cargo >/dev/null 2>&1 || PATH="$HOME/.cargo/bin:$PATH"
 export LC_NUMERIC=C  # $EPOCHREALTIME with a "." for the timings
 
@@ -45,10 +54,11 @@ pkg() {
        p && /^name[[:space:]]*=/ { sub(/^[^"]*"/, ""); sub(/".*$/, ""); print; exit }' "$1/Cargo.toml"
 }
 
-mode=changed base=HEAD dry=0
+argv="$*" mode=changed base=HEAD dry=0 fresh="${GATES_FRESH:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --all) mode=all ;;
+    --fresh) fresh=1 ;;
     --base) [ $# -ge 2 ] || die "--base needs a revision"; base="$2"; shift ;;
     --base=*) base="${1#--base=}" ;;
     --list) mode=list ;;
@@ -81,6 +91,24 @@ EOF
 fi
 
 git rev-parse -q --verify "$base^{commit}" >/dev/null || die "no such revision: $base"
+
+# One run at a time across sessions (scripts/lib/gate_lock.sh says why); a run
+# on a tree nobody changed since the last recorded run prints that result.
+last="$(git rev-parse --absolute-git-dir)/gates.last"
+key="$mode $(git rev-parse "$base")"
+if [ "$dry" = 0 ]; then
+  gate_lock "gates.sh${argv:+ $argv}"
+  fp0="$(gate_tree_fp)"
+  if [ -z "$fresh" ] && [ -f "$last" ]; then
+    { read -r _ l_fp; read -r _ l_mode l_base; read -r _ l_rc; read -r _ l_at; } <"$last" || true
+    if [ "${l_fp:-}" = "$fp0" ] && { [ "$l_mode $l_base" = "$key" ] || { [ "$l_mode" = all ] && [ "$l_rc" = 0 ]; }; }; then
+      echo "gates: the tree is unchanged since a run (${l_mode}) that finished $(( $(date +%s) - ${l_at:-0} ))s ago; its result stands (--fresh runs again):"
+      tail -n +5 "$last"
+      exit "$l_rc"
+    fi
+  fi
+fi
+
 if [ "$mode" = all ]; then
   A_FE=1 A_CORE=1 A_GATEWAY=1 A_TAURI=1 A_SERVERD=1 A_ALL=1 CHANGED=""
   echo "gates --all: every AGENTS.md gate"
@@ -187,12 +215,19 @@ for i in "${!G_ID[@]}"; do
   fi
 done
 
-echo "== gates =="
-printf '%s\n' "${summary[@]}"
+result=("== gates ==" "${summary[@]}")
 if [ -n "$failed" ]; then
-  echo "FAILED: $failed (full log: $logs/$failed.log)"
+  result+=("FAILED: $failed (full log: $logs/$failed.log)")
 else
   rm -rf "$logs"
-  [ "$rc" = 0 ] && echo "All selected gates passed." || echo "A gate's tool is missing (MISS above): not verified."
+  [ "$rc" = 0 ] && result+=("All selected gates passed.") || result+=("A gate's tool is missing (MISS above): not verified.")
+fi
+printf '%s\n' "${result[@]}"
+# Recorded for reuse only if no session changed the tree while the gates ran.
+if [ "$(gate_tree_fp)" = "$fp0" ]; then
+  { printf 'fp %s\nkey %s\nrc %s\nat %s\n' "$fp0" "$key" "$rc" "$(date +%s)"
+    printf '%s\n' "${result[@]}"; } >"$last.tmp" && mv -f "$last.tmp" "$last"
+else
+  echo "gates: the tree changed while they ran (another session's edits?): result not recorded for reuse"
 fi
 exit "$rc"

@@ -13,6 +13,44 @@ below are fixed: reviewers may not undo them.
 - 2026-11-05: plan reviewed against the code (paths fixed, missed callers added,
   steps 2, 4, 6 and 7 split into two agent steps each; see "Open points decided by
   the plan review"). Next: the agent steps below.
+- 2026-11-05: plan committed `6e36fd30`. Wave 1 running: I1, I2a, I3 in
+  `.claude/worktrees/tr1104-<step>` (branches `tr1104/<step>`); reports go to
+  `tmp/threat_recheck_2026_11_04/step-<step>.md`. Then: reviewers, I2b, I4a, I5, I6, …
+- 2026-11-05: user: implementers from I2b on run on **Sonnet**; reviewers stay on Opus.
+- **2026-11-05, paused by the user. To continue, do these in order:**
+  1. **I2a** done: `tr1104/I2a` `41b78993` (gap 75), gates green except one flaky
+     `api_proxy` port test (passed alone). Not yet reviewed.
+  2. **I3** done: `tr1104/I3` `cb1f6f7f` (gaps 89, 90, 102–104), but its `gates.sh` was
+     stopped halfway: run the `--no-default-features` clippy, the app-serverd
+     clippy and tests, `cargo test --workspace` and the full vitest in its worktree
+     first. Not yet reviewed.
+  3. **I1** paused with two WIP commits on `tr1104/I1` (`2522ef52` gap 83,
+     `1f8705db` gap 74 + export half of 86, docs and rows): not mergeable yet. A
+     fresh Sonnet implementer in `.claude/worktrees/tr1104-I1` runs `cargo test -p
+     tabtivity --test projects_commands an_imported_bundle` (never compiled yet),
+     fixes it, runs `scripts/gates.sh` (`cargo test --workspace` and the daemon test
+     never ran; 4 vitest files failed only under load), updates threat-model row 47
+     (still says `copy_tree_core` has no guards), and rewords the two commits without
+     "WIP". Details: `tmp/threat_recheck_2026_11_04/step-I1.md`.
+  4. **I2b** never started: its worktree `.claude/worktrees/tr1104-I2b` (branch
+     `tr1104/I2b` = `tr1104/I2a`) is ready. Start it on Sonnet.
+  5. Then one Opus reviewer for I2a+I2b, one for I3 and one for I1, each followed by a
+     merge into develop. After that: I4a, I4b, I5, I6, I6b, I7a, I7b, I8, I9, I10 as
+     in the Agent steps table (at most 5 agents, 3 building), then the final review.
+  Reports: `tmp/threat_recheck_2026_11_04/step-<step>.md` in the main checkout.
+  Say "continue the threat recheck" to pick up here.
+- 2026-11-05, resumed: running I1 (finish, Sonnet), I2b (Sonnet) and the I3 review
+  (Opus, runs I3's missing gates first; report `review-I3.md`). Agents must never
+  `pkill -f`: kill only their own PIDs.
+- 2026-11-05: **I3 landed** on develop `f01652f9` (review `review-I3.md`: one gap-103
+  bypass fixed, `5ac217bc`). I1 finished (`14fa850f`), its review running; I2b running.
+- 2026-11-05: **I4a landed** on develop `60a408cf` (review fixed a gap-54 regression and
+  the warm-up token attribution, `60bad0e4`). I1 reviewed (`b90d6747`, data-loss fix);
+  its follow-up (copy cap decision, sandbox scope/network and `sync_code` resets,
+  linear `pruned`, no-follow resume create) running, then land. I2a+I2b reviewed
+  (`bc79d813`, revocation carried across re-imports); its follow-up (old-mail decision,
+  `signature-structure` note) was mid-gates (uncommitted in `tr1104-I2b`), then land.
+  I4b running on `60a408cf`. Next: I5, I6, then I6b, I7a, I7b, I8, I9, I10.
 
 ## Decisions (user, 2026-11-05)
 
@@ -34,6 +72,8 @@ below are fixed: reviewers may not undo them.
 | — daily release check | **Add a switch, on by default** (Models & agents). Off: checks run only on a click. |
 | 103 reading (2026-11-05) | **Named branches only.** Only workflow push triggers that name a literal branch or a literal-prefix pattern (`release/**`) add card-required branches; a bare `*`/`**` or no branch filter adds nothing. |
 | 93 updates (2026-11-05) | **Keep the install home.** Updates keep `HOME` = the install home (`into_install_home`) plus the new refusal; the login-holding probe home is for `/usage`, `--version` and the warm-up. |
+| 88 old mail (2026-11-05) | **Expired: keep; revoked: no.** A signature dated inside the key's validity still verifies after the key expires; a revoked key, subkey or (all) user IDs make every signature by it Unusable, whatever its date. |
+| 83 copy cap (2026-11-05) | **Only on untrusted input.** The 200 000-entry / 32 GiB cap applies to bundle/set import and the host-copy export; the user's own archive, mirror move, Duplicate and move-out copies keep the FIFO/link/source guards but have no size cap. |
 
 ## No decision needed
 

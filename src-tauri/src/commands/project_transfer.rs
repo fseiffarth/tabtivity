@@ -1200,6 +1200,23 @@ fn tar_complaints(stderr: &str) -> Vec<(String, Skip)> {
         .collect()
 }
 
+/// What one host-copy export may take from the host's stream (gap 86): the
+/// archive is the host's to send, so entries (every header, kept or not) and
+/// bytes (file bytes, hard links copied back out of the bundle included) are
+/// bounded like [`crate::services::tree_copy`]'s. The `links`, `carried`,
+/// `pruned` and `skipped` collections hold at most one item per entry, so the
+/// entry bound bounds them. A bound hit fails the export.
+#[derive(Debug, Clone, Copy)]
+struct PackLimits {
+    entries: usize,
+    bytes: u64,
+}
+
+const PACK_LIMITS: PackLimits = PackLimits {
+    entries: crate::services::tree_copy::MAX_ENTRIES,
+    bytes: crate::services::tree_copy::MAX_BYTES,
+};
+
 /// What streaming the host's tree into a bundle carried and left out.
 #[derive(Debug, Default)]
 struct HostPack {
@@ -1307,12 +1324,91 @@ fn pack_tar(
     filter: &WalkFilter,
     progress: &mut dyn FnMut(u64),
 ) -> Result<(HostPack, Option<String>), String> {
+    pack_tar_with(zip, archive, filter, progress, PACK_LIMITS)
+}
+
+/// The folders [`pack_tar_with`] left out, so everything below one is dropped
+/// without another look. A component trie (an arena, so a path of many
+/// components never recurses), because the old list was rescanned for every
+/// entry: a hostile archive of 200 000 entries made that quadratic. A lookup
+/// now costs the length of the path whatever the number of pruned folders.
+#[derive(Default)]
+struct PrunedDirs {
+    /// `children[node]`: component name to the child's index. Node 0 is the root.
+    children: Vec<HashMap<String, usize>>,
+    pruned: Vec<bool>,
+}
+
+impl PrunedDirs {
+    /// Leave `rel` (a [`host_rel`] path) out.
+    fn insert(&mut self, rel: &str) {
+        if self.children.is_empty() {
+            self.children.push(HashMap::new());
+            self.pruned.push(false);
+        }
+        let mut node = 0;
+        for component in rel.split('/') {
+            node = match self.children[node].get(component) {
+                Some(&child) => child,
+                None => {
+                    self.children.push(HashMap::new());
+                    self.pruned.push(false);
+                    let child = self.children.len() - 1;
+                    self.children[node].insert(component.to_string(), child);
+                    child
+                }
+            };
+        }
+        self.pruned[node] = true;
+    }
+
+    /// Whether `rel` lies strictly below a pruned folder.
+    fn covers(&self, rel: &str) -> bool {
+        if self.children.is_empty() {
+            return false;
+        }
+        let mut node = 0;
+        let mut components = rel.split('/').peekable();
+        while let Some(component) = components.next() {
+            let Some(&child) = self.children[node].get(component) else {
+                return false;
+            };
+            if self.pruned[child] && components.peek().is_some() {
+                return true;
+            }
+            node = child;
+        }
+        false
+    }
+
+    /// Hash lookups a `covers` of `rel` makes at most: one per component.
+    #[cfg(test)]
+    fn nodes(&self) -> usize {
+        self.children.len()
+    }
+}
+
+fn pack_tar_with(
+    zip: &mut zip::ZipWriter<&mut fs::File>,
+    archive: impl std::io::Read,
+    filter: &WalkFilter,
+    progress: &mut dyn FnMut(u64),
+    limits: PackLimits,
+) -> Result<(HostPack, Option<String>), String> {
     use crate::services::tar_stream::{Kind, TarReader};
+    let too_large = |what: &str| {
+        Err(format!(
+            "The host's copy is too large to export: {what}. Export without the tree, or pack a smaller folder."
+        ))
+    };
     let mut tar = TarReader::new(archive);
     let mut pack = HostPack::default();
     let mut links: Vec<(String, String)> = Vec::new();
-    let mut carried: HashSet<String> = HashSet::new();
-    let mut pruned: Vec<String> = Vec::new();
+    // Each carried file with its size: a hard link is a second copy in the zip.
+    let mut carried: HashMap<String, u64> = HashMap::new();
+    let mut entries: usize = 0;
+    let mut written: u64 = 0;
+    let mut pruned = PrunedDirs::default();
     let mut failure: Option<String> = None;
     loop {
         let header = match tar.next_header() {
@@ -1323,22 +1419,26 @@ fn pack_tar(
                 break;
             }
         };
+        entries += 1;
+        if entries > limits.entries {
+            return too_large("the archive holds too many entries");
+        }
         let Some(rel) = host_rel(&header.path) else {
             continue;
         };
-        if pruned.iter().any(|p| rel.starts_with(p.as_str())) {
+        if pruned.covers(&rel) {
             continue;
         }
         let is_dir = header.kind == Kind::Dir;
         if host_excluded(&rel, is_dir, filter) {
             if is_dir {
-                pruned.push(format!("{rel}/"));
+                pruned.insert(&rel);
             }
             continue;
         }
         if rel.matches('/').count() + usize::from(is_dir) > MAX_DEPTH {
             if is_dir {
-                pruned.push(format!("{rel}/"));
+                pruned.insert(&rel);
             }
             pack.skipped.push((rel, Skip::TooDeep));
             continue;
@@ -1349,12 +1449,16 @@ fn pack_tar(
                 .add_directory(format!("{name}/"), dir_options())
                 .map_err(|e| format!("zip {name}: {e}"))?,
             Kind::File => {
+                if written.saturating_add(header.size) > limits.bytes {
+                    return too_large("the files add up to more than the limit");
+                }
                 let copied = zip_copy(zip, &name, tar.content(header.size), header.size, header.mode)?;
                 if copied != Some(header.size) {
                     failure = Some(format!("{rel} ended early"));
                     break;
                 }
-                carried.insert(rel);
+                carried.insert(rel, header.size);
+                written += header.size;
                 pack.files += 1;
                 pack.bytes += header.size;
                 if pack.files.is_multiple_of(64) {
@@ -1364,17 +1468,24 @@ fn pack_tar(
             Kind::Symlink(target) => links.push((name, target)),
             // The earlier member's bytes are already in the bundle: copied
             // from there, not sent twice.
-            Kind::HardLink(target) => match host_rel(&target).filter(|t| carried.contains(t)) {
-                Some(target) => match zip.deep_copy_file(&format!("{SECTION_MIRROR}/{target}"), &name) {
+            Kind::HardLink(target) => match host_rel(&target).filter(|t| carried.contains_key(t)) {
+                Some(target) => {
+                    let size = carried[&target];
+                    if written.saturating_add(size) > limits.bytes {
+                        return too_large("the files add up to more than the limit");
+                    }
+                    match zip.deep_copy_file(&format!("{SECTION_MIRROR}/{target}"), &name) {
                     Ok(()) => {
-                        carried.insert(rel);
+                        carried.insert(rel, size);
+                        written += size;
                         pack.files += 1;
                     }
                     Err(e) => {
                         eprintln!("project_transfer: hard link {rel}: {e}");
                         pack.skipped.push((rel, Skip::Unreadable));
                     }
-                },
+                    }
+                }
                 None => pack.skipped.push((rel, Skip::Unreadable)),
             },
             Kind::Special => pack.skipped.push((rel, Skip::Special)),
@@ -1924,19 +2035,197 @@ fn exported_entry(entry: &ProjectEntry) -> ProjectEntry {
     entry
 }
 
-/// Nor does an imported entry keep what the user confirmed for agent pushes
-/// and CI on the exporting machine (gap 19): the bundle may name any repo.
-fn drop_imported_confirmations(entry: &mut ProjectEntry) {
-    crate::services::git_push_mcp::drop_confirmations(&mut entry.extra);
+/// The registry keys (and, for the `project.json` twin, the project fields) an
+/// import adopts from a bundle: purely descriptive ones, plus the structural
+/// spec import settles itself. Everything else is dropped, including keys a
+/// later build adds, so an unknown key does not travel (gap 74). In
+/// particular none of what Tabtivity later *executes* or consents on this
+/// machine's behalf: phone access, agent push / CI levels and confirmations,
+/// the schedule level, `run_host`, `python_interpreter`, `default_apps`,
+/// `agent_fence`, `remote_control`, `hpc`.
+const ADOPTED_KEYS: &[&str] = &[
+    // The record's own identity (the import overwrites most of it right after).
+    "id",
+    "name",
+    "status",
+    "position",
+    "local_file",
+    "directory",
+    "mirror",
+    // Where it lives: settled below (`remote`, `compute_hosts`, `sandbox`).
+    "remote",
+    "compute_hosts",
+    "sandbox",
+    // Descriptive.
+    "description",
+    "git_type",
+    "git_provider",
+    "git_profile_url",
+    "categories",
+    "color",
+    "icon",
+    "favorite",
+    "weight",
+    // Time and size statistics the schema names.
+    "created_at",
+    "file_type_stats",
+    "time_today_s",
+    "time_total_s",
+    "last_updated",
+    "time",
+];
+
+/// Reset a `remote` spec or a `compute_hosts` worker to what an import may
+/// carry: no unattended connect. `auto_connect` is the user's own opt-in and
+/// `key_auth` the recorded "this host takes my key" flag; together they make
+/// the app dial the author's host at launch with `BatchMode` and
+/// `accept-new`, so both must be given again on this machine. Returns whether
+/// a set flag was removed.
+fn reset_imported_connect(spec: &mut Value) -> bool {
+    let Some(map) = spec.as_object_mut() else {
+        return false;
+    };
+    let mut reset = false;
+    for key in ["auto_connect", "key_auth"] {
+        reset |= map.remove(key).is_some_and(|v| v != Value::Bool(false) && !v.is_null());
+    }
+    reset
 }
 
-/// Drop [`mobile_keys`] from an entry (or `project.json`) body.
-fn drop_mobile_keys(value: &mut Value) {
-    if let Some(map) = value.as_object_mut() {
-        for key in mobile_keys() {
-            map.remove(&key);
+/// The built-in Docker networks an import may keep (`host` is refused
+/// everywhere; a custom name is the author's, naming a network of theirs).
+const BUILTIN_NETWORKS: [&str; 2] = ["bridge", "none"];
+
+/// What [`imported_sandbox`] reset, for the two import notes.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SandboxResets {
+    /// The container was switched off, or a Dockerfile, image or bad cap went.
+    spec: bool,
+    /// The scope went back to the default, or a custom network name was dropped.
+    policy: bool,
+}
+
+/// The container spec an import keeps: off, with the resource caps and a
+/// built-in network. The in-repo `dockerfile`, the `image` and the
+/// `spec_source_hash` are cleared, so enabling the container on this machine
+/// runs the O#143 confirm (a matching hash would otherwise answer it in
+/// advance). The `scope` goes back to the default (every tab) and a `network`
+/// that is not `bridge` or `none` back to the default bridge: both are the
+/// author's choice of how much this machine's container contains (gap 74).
+fn imported_sandbox(spec: &Value) -> (Value, SandboxResets) {
+    let Some(map) = spec.as_object() else {
+        return (Value::Null, SandboxResets { spec: true, ..SandboxResets::default() });
+    };
+    let mut kept = serde_json::Map::new();
+    kept.insert("enabled".into(), Value::Bool(false));
+    let mut resets = SandboxResets { spec: map.get("enabled") == Some(&Value::Bool(true)), policy: false };
+    for key in ["dockerfile", "image", "spec_source_hash"] {
+        resets.spec |= map.get(key).is_some_and(|v| !v.is_null());
+    }
+    if let Some(pids) = map.get("pids_limit").filter(|v| v.as_u64().is_some_and(|n| n > 0)) {
+        kept.insert("pids_limit".into(), pids.clone());
+    }
+    for key in ["memory", "cpus"] {
+        match map.get(key).and_then(Value::as_str) {
+            Some(v)
+                if !v.is_empty()
+                    && v.len() <= 16
+                    && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') =>
+            {
+                kept.insert(key.into(), Value::String(v.to_string()));
+            }
+            Some(_) => resets.spec = true,
+            None => {}
         }
     }
+    match map.get("network").filter(|v| !v.is_null()) {
+        Some(Value::String(n)) if BUILTIN_NETWORKS.contains(&n.trim()) => {
+            kept.insert("network".into(), Value::String(n.trim().to_string()));
+        }
+        Some(_) => resets.policy = true,
+        None => {}
+    }
+    // The default scope is "all"; a bundle can only have weakened it.
+    if map.get("scope").is_some_and(|v| !v.is_null() && v != "all") {
+        resets.policy = true;
+    }
+    if map.get("readonly_rootfs") == Some(&Value::Bool(true)) {
+        kept.insert("readonly_rootfs".into(), Value::Bool(true));
+    }
+    (Value::Object(kept), resets)
+}
+
+/// Reset a `compute_hosts` worker's `sync_code` to the off a user chooses on
+/// purpose: the default when the key is absent is ON, so the flag is written
+/// `false`, not removed. A worker with it on gets this project's tracked code
+/// pushed to the author's host the first time it is connected. Returns whether
+/// the bundle had it on (or silent, which reads as on).
+fn reset_imported_sync_code(host: &mut Value) -> bool {
+    let Some(map) = host.as_object_mut() else {
+        return false;
+    };
+    let was_on = map.get("sync_code") != Some(&Value::Bool(false));
+    map.insert("sync_code".into(), Value::Bool(false));
+    was_on
+}
+
+/// What an import adopts from a bundle's registry entry or `project.json`
+/// body (edited in place): an allowlist ([`ADOPTED_KEYS`]), not a drop-list,
+/// because the manifest is attacker-controlled and the registry entry is the
+/// trusted record of what runs and where (gap 74). Beyond the allowlist:
+/// no unattended connect on the primary or any worker
+/// ([`reset_imported_connect`]), the container off and unconfirmed
+/// ([`imported_sandbox`]); the push and schedule levels fall back to their
+/// defaults (absent) and the pinned Python interpreter goes (Run executes it).
+/// Returns the machine tokens of what was reset, for the import report; a
+/// token appears only when something was. Run on both copies of the entry
+/// (`projects.json` and the `project.json` twin, which is read back).
+fn adopt_imported_entry(value: &mut Value) -> Vec<String> {
+    let Some(map) = value.as_object_mut() else {
+        return Vec::new();
+    };
+    let mut notes: Vec<String> = Vec::new();
+    let mut note = |token: &str| {
+        if !notes.iter().any(|n| n == token) {
+            notes.push(token.to_string());
+        }
+    };
+    let had = |map: &serde_json::Map<String, Value>, key: &str| map.get(key).is_some_and(|v| !v.is_null());
+    if had(map, "git_push_mcp") {
+        note("pushReset");
+    }
+    if had(map, "schedule_mcp") {
+        note("scheduleReset");
+    }
+    if had(map, "python_interpreter") {
+        note("interpreterReset");
+    }
+    let mut connect_reset = map.get_mut("remote").is_some_and(reset_imported_connect);
+    let mut sync_reset = false;
+    if let Some(hosts) = map.get_mut("compute_hosts").and_then(Value::as_array_mut) {
+        for host in hosts {
+            connect_reset |= reset_imported_connect(host);
+            sync_reset |= reset_imported_sync_code(host);
+        }
+    }
+    if sync_reset {
+        note("syncCodeReset");
+    }
+    if connect_reset {
+        note("connectReset");
+    }
+    if let Some(spec) = map.get("sandbox").filter(|v| !v.is_null()) {
+        let (kept, resets) = imported_sandbox(spec);
+        if resets.spec {
+            note("sandboxReset");
+        }
+        if resets.policy {
+            note("sandboxPolicyReset");
+        }
+        map.insert("sandbox".into(), kept);
+    }
+    map.retain(|key, v| ADOPTED_KEYS.contains(&key.as_str()) && !(key == "sandbox" && v.is_null()));
+    notes
 }
 
 fn absolutize(path: &Path) -> PathBuf {
@@ -2521,11 +2810,19 @@ pub fn import_project_export_blocking(
             settle_imported_posture(spec, manifest.contents.mirror);
         }
     }
-    // Nor is phone access: a bundle exported with it on (or by a build that
-    // still carried it) must not open the project to this machine's phones
-    // without the user switching it on here.
-    drop_mobile_keys(&mut entry_value);
-    drop_mobile_keys(&mut project_value);
+    // Nor is anything but the descriptive keys (gap 74): the registry entry is
+    // the trusted record of what runs and where, so a bundle gets an allowlist
+    // and the defaults for the rest — no phone access, no unattended connect,
+    // the container off and unconfirmed, the push and schedule levels reset.
+    // Both copies, since `project.json` is read back.
+    for token in adopt_imported_entry(&mut entry_value)
+        .into_iter()
+        .chain(adopt_imported_entry(&mut project_value))
+    {
+        if !notes.contains(&token) {
+            notes.push(token);
+        }
+    }
 
     let mut entry: ProjectEntry =
         serde_json::from_value(entry_value).map_err(|e| format!("bundle entry: {e}"))?;
@@ -2547,7 +2844,6 @@ pub fn import_project_export_blocking(
         }
     }
     entry.extra.remove("vm");
-    drop_imported_confirmations(&mut entry);
 
     let project_file = directory.join("project.json");
     entry.local_file = project_file.to_string_lossy().to_string();
@@ -3016,6 +3312,92 @@ mod tests {
         assert!(failure.is_some());
     }
 
+    /// Gap 86 (export half): the host chooses what its archive holds, so the
+    /// entry count and the byte total (hard links, which the zip stores as
+    /// full copies, included) are bounded, and a bound hit fails the export.
+    #[cfg(unix)]
+    #[test]
+    fn a_hosts_archive_past_its_bounds_fails_the_export() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        fs::create_dir_all(&tree).unwrap();
+        for name in ["a", "b", "c"] {
+            fs::write(tree.join(name), b"0123456789").unwrap();
+        }
+        fs::hard_link(tree.join("a"), tree.join("a1")).unwrap();
+        fs::hard_link(tree.join("a"), tree.join("a2")).unwrap();
+        let archive = match std::process::Command::new("tar").args(["-cf", "-", "."]).current_dir(&tree).output() {
+            Ok(out) if out.status.success() => out.stdout,
+            _ => {
+                eprintln!("no usable tar here; skipped");
+                return;
+            }
+        };
+        let run = |limits: PackLimits| {
+            let bundle = tmp.path().join("b.zip");
+            let mut file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&bundle).unwrap();
+            let mut zip = zip::ZipWriter::new(&mut file);
+            pack_tar_with(&mut zip, &archive[..], &WalkFilter::all(), &mut |_| {}, limits).map(|(pack, _)| pack.files)
+        };
+        // 6 files and the root entry; 5 x 10 bytes, three of them hard links.
+        assert_eq!(run(PackLimits { entries: 100, bytes: 1000 }), Ok(5));
+        let err = run(PackLimits { entries: 4, bytes: 1000 }).unwrap_err();
+        assert!(err.contains("too many entries"), "{err}");
+        let err = run(PackLimits { entries: 100, bytes: 49 }).unwrap_err();
+        assert!(err.contains("more than the limit"), "{err}");
+        assert_eq!(run(PackLimits { entries: 100, bytes: 50 }), Ok(5), "exactly full is fine");
+    }
+
+    /// The pruned-folder lookup keeps `starts_with("dir/")` semantics: strictly
+    /// below a pruned folder, whole components only, the folder itself and a
+    /// sibling that merely shares a prefix are not covered.
+    #[test]
+    fn a_pruned_folder_covers_what_is_below_it_and_only_that() {
+        let mut pruned = PrunedDirs::default();
+        assert!(!pruned.covers("a/b"), "an empty set covers nothing");
+        pruned.insert("a/node_modules");
+        pruned.insert("build");
+        for (rel, want) in [
+            ("a/node_modules", false),
+            ("a/node_modules/x", true),
+            ("a/node_modules/x/y/z", true),
+            ("a/node_modules_extra/x", false),
+            ("a/node", false),
+            ("a/other/node_modules/x", false),
+            ("a", false),
+            ("build", false),
+            ("build/out.o", true),
+            ("builder/out.o", false),
+        ] {
+            assert_eq!(pruned.covers(rel), want, "{rel}");
+        }
+        // An outer folder pruned after an inner one covers both.
+        pruned.insert("a");
+        assert!(pruned.covers("a/node_modules") && pruned.covers("a/z"));
+        assert!(!pruned.covers("a"));
+    }
+
+    /// The lookup does not grow with the number of pruned folders, and a hostile
+    /// path of many components never recurses: the set is an arena of
+    /// per-component maps, one node per distinct (parent, name), not a list
+    /// rescanned for every entry.
+    #[test]
+    fn the_pruned_lookup_is_a_trie_not_a_rescanned_list() {
+        let mut pruned = PrunedDirs::default();
+        for i in 0..5000 {
+            pruned.insert(&format!("d{i}/node_modules"));
+        }
+        // Root + 5000 folders + 5000 pruned children; a list would hold 5000 strings.
+        assert_eq!(pruned.nodes(), 1 + 2 * 5000);
+        assert!(pruned.covers("d4999/node_modules/pkg/index.js"));
+        assert!(!pruned.covers("d5000/node_modules/pkg/index.js"));
+        let deep = vec!["c"; 100_000].join("/");
+        pruned.insert(&deep);
+        assert!(pruned.covers(&format!("{deep}/x")));
+        assert!(!pruned.covers(&deep));
+        drop(pruned); // no recursive drop
+    }
+
     #[test]
     fn only_a_bundle_carrying_conversations_needs_the_new_format() {
         let mut contents = BundleContents::default();
@@ -3155,7 +3537,7 @@ mod tests {
     }
 
     /// An imported bundle never opens the project to a phone: the switch, its
-    /// list and the old switch name are all dropped, the rest is kept.
+    /// list and the old switch name are not in the allowlist, the rest is kept.
     #[test]
     fn imported_entries_carry_no_mobile_access() {
         let mut entry = serde_json::json!({
@@ -3164,9 +3546,9 @@ mod tests {
             crate::brand::MOBILE_DEVICES_KEY: ["a".repeat(27)],
             crate::brand::LEGACY_MOBILE_ACCESS_KEY: true,
         });
-        drop_mobile_keys(&mut entry);
+        assert!(adopt_imported_entry(&mut entry).is_empty());
         assert_eq!(entry, serde_json::json!({ "id": "p", "directory": "/d" }));
-        drop_mobile_keys(&mut Value::Null);
+        assert!(adopt_imported_entry(&mut Value::Null).is_empty());
         assert!(mobile_keys().iter().all(|key| key.contains("_mobile_")));
     }
 
@@ -3188,8 +3570,9 @@ mod tests {
     }
 
     /// Reviewer, gap 19: the agent push / CI confirmations stay on the
-    /// machine that gave them, either way; the push level and protected
-    /// branches travel.
+    /// machine that gave them, either way; the export keeps the push level and
+    /// protected branches (a bundle moved to another of the user's machines),
+    /// the import resets them (gap 74: the bundle's author is not the user).
     #[test]
     fn bundles_carry_no_push_or_ci_confirmations() {
         let entry = entry_with(
@@ -3208,12 +3591,138 @@ mod tests {
         assert_eq!(exported.extra["git_push_mcp"], serde_json::json!({ "level": "apply", "protected": ["release"] }));
         assert_eq!(entry.extra.len(), 3, "the registry's own entry is untouched");
         // What an import does with a bundle another build wrote.
-        let mut imported = entry.clone();
-        drop_imported_confirmations(&mut imported);
-        assert_eq!(imported.extra, exported.extra);
-        let mut plain = entry_with("p", &[("directory", Value::String("/d".into()))]);
-        drop_imported_confirmations(&mut plain);
-        assert_eq!(plain.extra.keys().collect::<Vec<_>>(), ["directory"], "nothing added to an entry without them");
+        let mut imported = serde_json::to_value(&exported).unwrap();
+        let notes = adopt_imported_entry(&mut imported);
+        assert_eq!(notes, ["pushReset"]);
+        assert!(imported.get("git_push_mcp").is_none() && imported.get("git_ci_repos").is_none());
+        assert_eq!(imported["directory"], "/d");
+        let mut plain = serde_json::to_value(entry_with("p", &[("directory", Value::String("/d".into()))])).unwrap();
+        assert!(adopt_imported_entry(&mut plain).is_empty(), "nothing reset, no note");
+    }
+
+    fn hostile_entry() -> Value {
+        serde_json::json!({
+            "id": "p", "name": "n", "status": "current", "position": 3, "local_file": "/x/project.json",
+            "directory": "/d", "description": "mine", "categories": ["a"], "git_type": "git",
+            "remote": { "host": "evil.example", "remote_path": "/r", "auto_connect": true, "key_auth": true, "user": "u" },
+            "compute_hosts": [
+                { "id": "w1", "host": "evil2.example", "remote_path": "/r", "auto_connect": true, "key_auth": true },
+                { "id": "w2", "host": "ok.example", "remote_path": "/r" },
+            ],
+            "sandbox": {
+                "enabled": true, "dockerfile": "Dockerfile", "image": "evil/img",
+                "spec_source_hash": "abc", "memory": "4g", "cpus": "2", "pids_limit": 64, "network": "none",
+            },
+            "git_push_mcp": { "level": "apply", "protected": [] },
+            "schedule_mcp": "apply",
+            "python_interpreter": "./evil",
+            "run_host": "remote", "default_apps": { "py": "evil" }, "agent_fence": false,
+            "remote_control": true, "hpc": { "workspace_id": "w" },
+            "some_future_key": { "runs": "this" },
+            crate::brand::MOBILE_ACCESS_KEY: true,
+        })
+    }
+
+    /// Gap 74: a hostile bundle's registry entry adopts only descriptive keys;
+    /// the connect flags, the container spec, the levels and the interpreter go.
+    #[test]
+    fn an_imported_entry_keeps_only_what_describes_the_project() {
+        let mut entry = hostile_entry();
+        let mut notes = adopt_imported_entry(&mut entry);
+        notes.sort();
+        assert_eq!(
+            notes,
+            ["connectReset", "interpreterReset", "pushReset", "sandboxReset", "scheduleReset", "syncCodeReset"]
+        );
+        for key in [
+            "git_push_mcp", "schedule_mcp", "python_interpreter", "run_host", "default_apps", "agent_fence",
+            "remote_control", "hpc", "some_future_key", crate::brand::MOBILE_ACCESS_KEY,
+        ] {
+            assert!(entry.get(key).is_none(), "{key} must not be adopted");
+        }
+        // Descriptive keys and the remote's address stay.
+        assert_eq!(entry["description"], "mine");
+        assert_eq!(entry["categories"], serde_json::json!(["a"]));
+        assert_eq!(entry["remote"]["host"], "evil.example");
+        assert_eq!(entry["compute_hosts"][1]["host"], "ok.example");
+        // No unattended connect on the primary or any worker.
+        for spec in [&entry["remote"], &entry["compute_hosts"][0], &entry["compute_hosts"][1]] {
+            assert!(spec.get("auto_connect").is_none() && spec.get("key_auth").is_none(), "{spec}");
+        }
+        // The container is off and unconfirmed; the caps stay.
+        assert_eq!(
+            entry["sandbox"],
+            serde_json::json!({ "enabled": false, "memory": "4g", "cpus": "2", "pids_limit": 64, "network": "none" })
+        );
+        // The registry's `ProjectEntry` still parses what is left.
+        serde_json::from_value::<ProjectEntry>(entry).expect("an adopted entry deserializes");
+    }
+
+    /// The `project.json` twin goes through the same allowlist (it is read
+    /// back), and a hostile network or unparsable cap is dropped.
+    #[test]
+    fn the_project_json_twin_is_adopted_the_same_way() {
+        let mut twin = hostile_entry();
+        twin["sandbox"]["network"] = "host".into();
+        twin["sandbox"]["memory"] = "--privileged".into();
+        let notes = adopt_imported_entry(&mut twin);
+        assert!(notes.contains(&"sandboxReset".to_string()));
+        assert!(notes.contains(&"sandboxPolicyReset".to_string()), "the host network went: {notes:?}");
+        assert_eq!(twin["sandbox"], serde_json::json!({ "enabled": false, "cpus": "2", "pids_limit": 64 }));
+        assert!(twin.get("python_interpreter").is_none() && twin["remote"].get("key_auth").is_none());
+        // A quiet container spec (already off, no source) is no reset.
+        let mut calm = serde_json::json!({ "id": "p", "sandbox": { "enabled": false, "memory": "2g" } });
+        assert!(adopt_imported_entry(&mut calm).is_empty());
+        assert_eq!(calm["sandbox"], serde_json::json!({ "enabled": false, "memory": "2g" }));
+        // A sandbox that is no object is dropped with a note.
+        let mut odd = serde_json::json!({ "id": "p", "sandbox": "yes" });
+        assert_eq!(adopt_imported_entry(&mut odd), ["sandboxReset"]);
+        assert!(odd.get("sandbox").is_none());
+    }
+
+    /// Gap 74 (user decision, 2026-11-05): the container's scope and a custom
+    /// network name go back to the defaults, and every worker's `sync_code` is
+    /// written off; each reset is reported.
+    #[test]
+    fn an_import_resets_the_container_scope_and_network_and_worker_code_sync() {
+        let mut entry = serde_json::json!({
+            "id": "p",
+            "sandbox": { "enabled": false, "scope": "agents", "network": "corp-egress", "readonly_rootfs": true },
+            "compute_hosts": [
+                { "id": "w1", "host": "a.example", "remote_path": "/r", "sync_code": true },
+                { "id": "w2", "host": "b.example", "remote_path": "/r" },
+                { "id": "w3", "host": "c.example", "remote_path": "/r", "sync_code": false, "pull_outputs": true },
+            ],
+        });
+        let mut notes = adopt_imported_entry(&mut entry);
+        notes.sort();
+        assert_eq!(notes, ["sandboxPolicyReset", "syncCodeReset"]);
+        // No scope key = the default (every tab); no network key = the default bridge.
+        assert_eq!(entry["sandbox"], serde_json::json!({ "enabled": false, "readonly_rootfs": true }));
+        // Written `false`, not removed: a missing key reads as ON.
+        for host in entry["compute_hosts"].as_array().unwrap() {
+            assert_eq!(host["sync_code"], false, "{host}");
+        }
+        assert_eq!(entry["compute_hosts"][2]["pull_outputs"], true, "the rest of the worker stays");
+        let worker = serde_json::from_value::<crate::schema::project::ComputeHost>(entry["compute_hosts"][1].clone());
+        assert!(worker.is_ok_and(|h| !h.sync_code), "a worker with no key now reads as off");
+
+        // The built-in networks and the default scope stay and say nothing.
+        for network in ["bridge", "none"] {
+            let mut calm = serde_json::json!({
+                "id": "p",
+                "sandbox": { "enabled": false, "scope": "all", "network": network },
+                "compute_hosts": [{ "id": "w", "host": "h", "remote_path": "/r", "sync_code": false }],
+            });
+            assert!(adopt_imported_entry(&mut calm).is_empty(), "{network}");
+            assert_eq!(calm["sandbox"], serde_json::json!({ "enabled": false, "network": network }));
+        }
+        // `host` and a name that is not valid are dropped like any custom one.
+        for network in ["host", "a b;rm", ""] {
+            let mut odd = serde_json::json!({ "id": "p", "sandbox": { "enabled": false, "network": network } });
+            assert_eq!(adopt_imported_entry(&mut odd), ["sandboxPolicyReset"], "{network:?}");
+            assert!(odd["sandbox"].get("network").is_none());
+        }
     }
 
     fn entry_with(id: &str, extra: &[(&str, Value)]) -> ProjectEntry {

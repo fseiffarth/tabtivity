@@ -50,8 +50,11 @@ type Agent = { kind: string; task: string; listed?: boolean; summary?: string };
  * goes to the conversation viewed. Agents not `listed` are only in `/tasks`,
  * whose Enter views one and lists it again.
  */
-function fakeClaude(agents: Agent[], pills = 1) {
+function fakeClaude(agents: Agent[], pills = 1, torn = 0) {
   const state = {
+    /** Reads still to come off a frame half drawn: the app reads xterm's
+     * buffer between the chunks of a redraw. */
+    tearing: 0,
     focus: "box" as "box" | "pill" | "list" | "tasks",
     pill: 0,
     cursor: 0,
@@ -64,6 +67,13 @@ function fakeClaude(agents: Agent[], pills = 1) {
   const listed = () => ["main", ...agents.filter((agent) => agent.listed !== false || agent.task === state.viewed).map((agent) => agent.task)];
   const kindOf = (task: string) => agents.find((agent) => agent.task === task)?.kind ?? "";
   const rows = () => {
+    const whole = frame();
+    if (state.tearing === 0) return whole;
+    state.tearing -= 1;
+    // Erased below the box's top rule, not yet drawn again.
+    return whole.slice(0, 2);
+  };
+  const frame = () => {
     if (state.focus === "tasks") {
       return [
         "❯ /tasks",
@@ -88,6 +98,7 @@ function fakeClaude(agents: Agent[], pills = 1) {
     ];
   };
   const key = async (k: string) => {
+    state.tearing = torn;
     const names = listed();
     if (state.focus === "tasks") {
       if (k === "\u001b[B") state.cursor = Math.min(agents.length - 1, state.cursor + 1);
@@ -162,6 +173,24 @@ describe("readTasksDialog", () => {
     expect(readTasksDialog(TASKS)).toEqual([
       { cursor: true, task: "Epsilon writer" },
       { cursor: false, task: "Delta waiter" },
+    ]);
+  });
+
+  it("stops at 2.1.318's ▔ border, the transcript above it no rows", () => {
+    expect(readTasksDialog([
+      "● 2 background agents launched (↓ to manage)",
+      "   ⎿  ◯ Sync resolver: change times",
+      "● Agent \"Sync resolver: change times\" finished · 5m 22s",
+      "  - Sync resolver: change times (a9ba82ac…) reported \"done.\"",
+      "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔",
+      "   Background",
+      "     Completed (2)",
+      "   ❯ ✔ Diff viewer: parser + word highlights   done · Sonnet 5.5",
+      "     ✔ Sync resolver: change times             done · Sonnet 5.5",
+      "   ↑/↓ to select · Enter to view · Esc to close",
+    ])).toEqual([
+      { cursor: true, task: "Diff viewer: parser + word highlights" },
+      { cursor: false, task: "Sync resolver: change times" },
     ]);
   });
 
@@ -240,14 +269,33 @@ describe("sendToSubagent", () => {
     expect(state.stopped).toEqual([]);
   });
 
+  it("reads past frames half drawn, never taking one for where a key landed", async () => {
+    const summaries = [
+      { kind: "general-purpose", task: "Alpha sleeper", summary: "Running tests" },
+      { kind: "general-purpose", task: "Theta long", summary: "Writing numbers.py script" },
+    ];
+    for (const [task, torn] of [["Alpha sleeper", 1], ["Theta long", 2], ["Theta long", 4]] as const) {
+      const { state, driver } = fakeClaude(summaries, 1, torn);
+      expect(await sendToSubagent(driver("stop"), { task, role: "general-purpose" }, FAST)).toEqual({ ok: true, backToMain: true });
+      expect(state.sent).toEqual([{ to: task, text: "stop" }]);
+      expect(state.viewed).toBe("main");
+      expect(state.focus).toBe("box");
+      expect(state.commands).toEqual([]);
+      expect(state.stopped).toEqual([]);
+      expect(state.escInBox).toBe(0);
+    }
+  });
+
   it("opens a finished background subagent from /tasks", async () => {
-    const { state, driver } = fakeClaude([agents[0], { kind: "general-purpose", task: "Delta waiter", listed: false }]);
-    expect(await sendToSubagent(driver("one more thing"), { task: "Delta waiter", role: "general-purpose" }, FAST)).toEqual({ ok: true, backToMain: true });
-    expect(state.commands).toEqual(["/tasks"]);
-    expect(state.sent).toEqual([{ to: "Delta waiter", text: "one more thing" }]);
-    expect(state.viewed).toBe("main");
-    expect(state.stopped).toEqual([]);
-    expect(state.escInBox).toBe(0);
+    for (const torn of [0, 2]) {
+      const { state, driver } = fakeClaude([agents[0], { kind: "general-purpose", task: "Delta waiter", listed: false }], 1, torn);
+      expect(await sendToSubagent(driver("one more thing"), { task: "Delta waiter", role: "general-purpose" }, FAST)).toEqual({ ok: true, backToMain: true });
+      expect(state.commands).toEqual(["/tasks"]);
+      expect(state.sent).toEqual([{ to: "Delta waiter", text: "one more thing" }]);
+      expect(state.viewed).toBe("main");
+      expect(state.stopped).toEqual([]);
+      expect(state.escInBox).toBe(0);
+    }
   });
 
   it("closes /tasks and types nothing for a subagent it does not list either", async () => {

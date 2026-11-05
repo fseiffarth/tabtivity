@@ -663,8 +663,11 @@ export function installCustomScrollbars(): () => void {
       entry.height = rect.height;
       entry.clip = ancestorClip(entry.el, clipCache);
       measureReach(entry);
-      applyScroll(entry);
     }
+    // Finish the bounding-box reads and hit tests before drawing any thumb:
+    // thumb writes can dirty layout in WebKitGTK. applyScroll still reads the
+    // scroll metrics, but those writes no longer precede the next hit test.
+    for (const entry of live) applyScroll(entry);
     // Recomputed here rather than on every scroll: containment only changes
     // when the tree does, and the tree changing is what got us here.
     for (const entry of live) {
@@ -840,13 +843,18 @@ export function installCustomScrollbars(): () => void {
   };
 
   const mutationObserver = new MutationObserver((records) => {
+    let changed = false;
     for (const record of records) {
+      // Creating/removing our own thumbs changes no content geometry. Feeding
+      // those mutations back into discovery adds another full-window pass.
+      if (layer.contains(record.target)) continue;
+      changed = true;
       for (const node of record.addedNodes) {
         if (node instanceof HTMLElement) scan(node);
       }
       if (record.addedNodes.length > 0) grownParents.add(record.target);
     }
-    queueGeometry();
+    if (changed) queueGeometry();
   });
 
   // A container can move without the tree changing: the side panel slides in
@@ -883,23 +891,24 @@ export function installCustomScrollbars(): () => void {
   };
   const onMotionEnd = (e: Event) => {
     const motion = motionOf(e);
-    if (motion) {
-      const mover = movers.get(motion.target);
-      // Retired only once the last of its box-moving motions has ended: a
-      // colour transition finishing early must not drop the slide it rides with.
-      if (mover && (mover.running.delete(motion.key), mover.running.size === 0)) {
-        movers.delete(motion.target);
-      }
-      // Discovery, not only measurement. A container is found when nodes are
-      // ADDED under it or when it is first scrolled; a box that grew scrollable
-      // through a class flip, a width change or a resize added no node and
-      // fired no scroll, so it went unnoticed — the side panel opened with a
-      // list that plainly overflowed and no bar on it until the wheel touched
-      // it. The element that just moved is the natural place to look, and once
-      // per slide is cheap.
-      if (motion.target instanceof HTMLElement && motion.target.isConnected) {
-        scan(motion.target);
-      }
+    // Hover colours/opacity and pseudo-element glows move no container. They
+    // must not trigger a full-window geometry and gutter hit-test pass either.
+    if (!motion) return;
+    const mover = movers.get(motion.target);
+    // Retired only once the last of its box-moving motions has ended: a
+    // colour transition finishing early must not drop the slide it rides with.
+    if (mover && (mover.running.delete(motion.key), mover.running.size === 0)) {
+      movers.delete(motion.target);
+    }
+    // Discovery, not only measurement. A container is found when nodes are
+    // ADDED under it or when it is first scrolled; a box that grew scrollable
+    // through a class flip, a width change or a resize added no node and
+    // fired no scroll, so it went unnoticed — the side panel opened with a
+    // list that plainly overflowed and no bar on it until the wheel touched
+    // it. The element that just moved is the natural place to look, and once
+    // per slide is cheap.
+    if (motion.target instanceof HTMLElement && motion.target.isConnected) {
+      scan(motion.target);
     }
     queueGeometry();
   };

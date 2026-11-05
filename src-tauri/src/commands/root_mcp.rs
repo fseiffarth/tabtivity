@@ -874,12 +874,15 @@ pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Opt
 }
 
 /// The push proposals of one project (the git bar's and the Agents view's
-/// card), pruned of expired and orphaned ones and of pushes the branch's
-/// remote already holds (that check runs git, hence off the UI thread).
+/// card), pruned of expired and orphaned ones. Pending cards the remote
+/// already holds are settled by a background `ls-remote` the call starts
+/// (gap 89): this is the only place that asks the remote about them.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_push_mcp_proposals(project_id: String) -> Result<Vec<crate::services::git_push_mcp::Proposal>, String> {
     app_core::rt::blocking("root console", move || {
-        crate::services::git_push_mcp::settle_pushed_elsewhere(Some(&project_id), None);
+        // The remote is asked about pending cards on a thread of its own (the
+        // answer reaches the window as a change event), never from here.
+        crate::services::git_push_mcp::settle_in_background(&project_id);
         crate::services::git_push_mcp::proposals_for(Some(&project_id), None)
     })
     .await

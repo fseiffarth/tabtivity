@@ -73,9 +73,43 @@ claim, and import treats the whole file as untrusted:
   only **after** every directory and file, so a link in the archive can never
   become the path a later file is written through.
 
-What import *does* adopt is the registry entry's settings. That is the feature,
-and it is a different risk class: none of those fields is executed by importing.
-The user still has to switch to the project and press something.
+What import adopts from the registry entry is an **allowlist of descriptive
+keys** (`project_transfer::ADOPTED_KEYS`, applied by `adopt_imported_entry` to
+the entry and to the `project.json` twin alike): the address of the project
+(`directory`, `mirror`, `remote`, `compute_hosts`), `git_type`/`git_provider`/
+`git_profile_url`, `description`, `categories`, `color`, `icon`, `favorite`,
+`weight` and the time/stat fields. An unknown key — one a later build adds
+included — does not travel. This replaced a drop-list (gap 74): the old
+reasoning "none of those fields is executed by importing" was wrong, because the
+registry entry is the record Tabtivity trusts for what runs and where. Reset,
+with a note in the import result (`ImportBundleResult.notes`, words in
+`transfer.note.*`, shown by both import dialogs, only when something was reset):
+
+- `auto_connect` and `key_auth` on the primary and every worker (`connectReset`;
+  the OpenVPN block and its `auto_connect` still go with `vpnDropped`). Together
+  they make the app dial the author's host at launch with `BatchMode` and
+  `accept-new`; the user turns them on again here.
+- `sandbox` comes in `enabled: false` with `dockerfile`, `image` and
+  `spec_source_hash` cleared (`sandboxReset`), keeping the resource caps and a
+  `network` of `bridge` or `none`. The `scope` goes back to the default (every
+  tab) and any other network name back to the default bridge
+  (`sandboxPolicyReset`): both are how far the author wanted this machine's
+  container to reach, not descriptive. A matching hash would answer the O#143
+  "docker build runs RUN as root" confirm in advance.
+- Every `compute_hosts` entry's `sync_code` is written `false` (`syncCodeReset`;
+  absent reads as on): a connected worker with it on gets the project's tracked
+  code pushed to the author's host.
+- `git_push_mcp` (level and protected list, `pushReset`) and `schedule_mcp`
+  (`scheduleReset`) are removed, i.e. the default level. The *export* still
+  keeps the push level (a bundle moved between one user's machines) and drops
+  only the confirmations.
+- `python_interpreter` (`interpreterReset`: Run executes it, and the path
+  rewrite would point it into the unpacked tree), `default_apps`, `agent_fence`,
+  `remote_control`, `hpc` and `run_host` are dropped without a note.
+
+The remote spec's host is kept (it is what the project is); the connect flag is
+the part that needed the user. Everything that remains is still not executed by
+importing: the user has to switch to the project and press something.
 
 ## What deliberately does not travel
 
@@ -190,7 +224,23 @@ The host is asked to leave out `./.git` and the always-rebuildable names, and
 the same filter runs again on the stream for nested ones. Folders whose
 rebuildability needs a proof (`build`, `dist`, `target`, venvs) travel from
 the host: an archive arrives in no order that could show the tool beside them.
-Both calls are user gestures (`ssh_common::user_dial`).
+Both calls are user gestures (`ssh_common::user_dial`). The stream is the
+host's to shape, so `pack_tar` bounds it (`PACK_LIMITS`, gap 86): every header
+counts against 200 000 entries and every file byte (a hard link copied from the
+bundle included, since the zip stores a full copy) against 32 GiB — the
+`tree_copy` limits. The `links`, `carried` and `skipped` collections
+hold one item per entry, so the entry bound bounds them. The pruned folders sit
+in a component trie (`PrunedDirs`), so a lookup costs the length of the path,
+not a rescan of every pruned folder per entry. A hit fails the export
+and the staged bundle is dropped, like any other export error.
+
+The user's own copies (`projects::copy_tree_core`: archive, move the mirror,
+Duplicate, the Remote -> Remote-only move-out) do not use these caps. They copy
+regular files only through no-follow handles, skip pipes and sockets, create a
+destination file `O_EXCL | O_NOFOLLOW` (refusing a link or FIFO there), fail on
+an unreadable file and never remove the source after a failed copy, but have no
+entry or byte cap (the user's decision, 2026-11-05: a `target/` or `node_modules/`
+passes 200 000 entries); the depth cap stays, as it bounds recursion.
 
 ## Nothing left out without a word
 

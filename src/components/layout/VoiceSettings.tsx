@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useT, type TranslationKey } from "../../lib/i18n";
+import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
 import {
@@ -7,13 +7,17 @@ import {
   VOICE_MODEL_LABELS,
   VOICE_MODELS,
   VOICE_PAUSE_MS,
+  naturalVoiceFor,
   retryVoiceGpu,
   voiceDeviceLabel,
   voiceDeviceWhy,
   voiceErrorKey,
   voiceLangOptions,
+  voiceLangTag,
   voiceModelInstallCommand,
+  voiceNaturalInstallCommand,
   voiceStatus,
+  type VoiceLangChoice,
   type VoiceStatus,
 } from "../../lib/voice/desktopVoice";
 import { useSettingsStore } from "../../stores/settings";
@@ -29,14 +33,16 @@ const PAUSES = [1000, 1500, 2000, 3000] as const;
 /**
  * Settings → Voice (docs/desktop_voice_plan.md, steps 3 and 4): the speech
  * model the Chat dictates with — installed in a tab, one click — and the
- * language it listens in; read-aloud's speed on the system voice (the one
- * voice engine of phase 1); headset mode, in which talking over the voice
+ * language it listens in; read-aloud's speed, and its natural voice (Piper,
+ * plan step 7: installed per language in a tab, the system voice
+ * otherwise); headset mode, in which talking over the voice
  * stops it; the pause after which hands-free sends; and whether speech may
  * use the GPU, with what the last dictation really ran on
  * (docs/voice_gpu_plan.md).
  */
 export function VoiceSettings() {
   const t = useT();
+  const uiLanguage = useI18nStore((s) => s.lang);
   const settings = useSettingsStore((s) => s.settings);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const [status, setStatus] = useState<VoiceStatus | null>(null);
@@ -53,6 +59,19 @@ export function VoiceSettings() {
   const install = async () => {
     try {
       runInstallInTab(t("terminal.reader.voice.installTab"), await voiceModelInstallCommand(model), IS_HOST_WINDOWS ? "powershell" : "bash");
+    } catch (error) {
+      setProblem(voiceErrorKey(error));
+    }
+  };
+
+  // Read-aloud's language, as `useReaderReadAloud` tells the voice.
+  const langTag = voiceLangTag(settings?.voice_lang as VoiceLangChoice | undefined, uiLanguage);
+  const readLang = langTag === "auto" ? uiLanguage : langTag;
+  const natural = settings?.voice_natural ?? true;
+  const naturalVoice = naturalVoiceFor(status, readLang);
+  const installNatural = async () => {
+    try {
+      runInstallInTab(t("settings.voice.naturalInstallTab"), await voiceNaturalInstallCommand(readLang), IS_HOST_WINDOWS ? "powershell" : "bash");
     } catch (error) {
       setProblem(voiceErrorKey(error));
     }
@@ -102,7 +121,7 @@ export function VoiceSettings() {
       />
       <SettingRow
         label={<>{t("settings.voice.rate")} <UntestedTag id="terminal.reader.voice.readAloud" /></>}
-        help={t(status?.speak ? voiceErrorKey(status.speak) : "settings.voice.rateHelp")}
+        help={t(status?.speak && !(natural && naturalVoice?.installed) ? voiceErrorKey(status.speak) : "settings.voice.rateHelp")}
         control={
           <Dropdown
             value={String(settings?.voice_rate ?? 1)}
@@ -112,6 +131,25 @@ export function VoiceSettings() {
           />
         }
       />
+      {status?.natural?.offered && (
+        <ToggleCard
+          label={<>{t("settings.voice.natural")} <UntestedTag id="terminal.reader.voice.piper" /></>}
+          checked={natural}
+          onChange={(e) => void updateSettings({ voice_natural: e.target.checked })}
+          help={t("settings.voice.naturalHelp")}
+        />
+      )}
+      {status?.natural?.offered && natural && naturalVoice && !naturalVoice.installed && (
+        <SettingRow
+          label={t("settings.voice.naturalMissing")}
+          help={t("settings.voice.naturalMissingHelp")}
+          control={
+            <button type="button" className="settings-btn" onClick={() => void installNatural()}>
+              {t("settings.voice.naturalInstall", { n: Math.ceil(naturalVoice.downloadBytes / 1_000_000) })}
+            </button>
+          }
+        />
+      )}
       <ToggleCard
         label={<>{t("settings.voice.headset")} <UntestedTag id="terminal.reader.voice.headsetBargeIn" /></>}
         checked={settings?.voice_headset ?? false}

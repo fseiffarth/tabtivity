@@ -11,7 +11,8 @@ use app_lib::commands::projects::{
     add_compute_host, archive_project_blocking, clear_archive, create_project_blocking, delete_archived_project_blocking, get_projects,
     import_project_blocking, list_archived_projects, load_project_blocking,
     restore_archived_project_blocking, save_projects,
-    set_project_auto_connect, set_project_description, set_project_remote_control,
+    set_project_auto_connect, set_project_description, set_project_git_push_mcp, set_project_remote_control,
+    set_project_schedule_mcp,
     set_project_git_disabled_blocking, set_project_sandbox_blocking, set_project_sandbox_spec, CreateProjectRequest, ImportProjectRequest,
     CLAUDE_SETTINGS, GITIGNORE_DEFAULT, SCAFFOLD_FILES,
 };
@@ -1241,6 +1242,64 @@ fn export_import_roundtrip_carries_files_settings_and_tabs() {
         let project = load_project_blocking(imported.local_file.clone()).expect("load imported project.json");
         assert_eq!(project.id, result.entry.id);
         assert_eq!(project.directory, result.directory);
+    });
+}
+
+/// Gap 74, through the whole import: a bundle carrying the author's container
+/// source (with the hash that answers the O#143 confirm), push and schedule
+/// levels and remote-control override comes in with the defaults, in the
+/// registry and in the `project.json` twin, and the result says so.
+#[test]
+fn an_imported_bundle_adopts_descriptive_keys_and_resets_the_rest() {
+    with_isolated_home("transfer-reset-home", |home| {
+        let target = tempdir_in_test_projects("transfer-reset-source");
+        let entry = new_local_project("transfer-reset-project", target.path());
+        let id = entry.id.clone();
+        set_project_description(id.clone(), Some("kept".to_string())).expect("description");
+        set_project_remote_control(id.clone(), Some(true)).expect("remote control");
+        set_project_schedule_mcp(id.clone(), "apply".to_string()).expect("schedule");
+        set_project_git_push_mcp(id.clone(), Some("apply".to_string()), Some(vec!["release".to_string()]))
+            .expect("push level");
+        set_project_sandbox_spec(
+            id.clone(),
+            SandboxSpec {
+                enabled: true,
+                dockerfile: Some("Dockerfile".to_string()),
+                image: Some("evil/image".to_string()),
+                spec_source_hash: Some("matches-the-shipped-dockerfile".to_string()),
+                memory: Some("4g".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("sandbox spec");
+
+        let bundle = home.join(concat!("transfer-reset.", app_lib::app_slug!(), "proj"));
+        export_project_blocking(full_export(&id, &bundle), &mut |_, _| {}).expect("export");
+        let landing = tempdir_in_test_projects("transfer-reset-landing");
+        let result = import_project_export_blocking(plain_import(&bundle, landing.path())).expect("import");
+
+        let list = get_projects().expect("projects");
+        let stored = list.iter().find(|p| p.id == result.entry.id).expect("registered");
+        assert_eq!(stored.extra.get("description").and_then(|v| v.as_str()), Some("kept"));
+        for key in ["remote_control", "schedule_mcp", "git_push_mcp"] {
+            assert!(!stored.extra.contains_key(key), "{key} must be reset on import");
+        }
+        let sandbox = stored.extra.get("sandbox").expect("the caps stay");
+        // `scope` is never adopted: the spec's default (every tab) applies.
+        assert_eq!(sandbox, &serde_json::json!({ "enabled": false, "memory": "4g" }));
+        for note in ["sandboxReset", "pushReset", "scheduleReset"] {
+            assert!(result.notes.iter().any(|n| n == note), "{note} in {:?}", result.notes);
+        }
+
+        // The twin is read back for the container spec: same reset there.
+        let project = load_project_blocking(stored.local_file.clone()).expect("load imported project.json");
+        let spec = project.sandbox.expect("project.json keeps the caps");
+        assert!(!spec.enabled && spec.dockerfile.is_none() && spec.image.is_none() && spec.spec_source_hash.is_none());
+        assert_eq!(spec.memory.as_deref(), Some("4g"));
+        assert_eq!(project.remote_control, None);
+        // The original is untouched.
+        let original = list.iter().find(|p| p.id == id).expect("original");
+        assert!(original.extra.contains_key("git_push_mcp"));
     });
 }
 
