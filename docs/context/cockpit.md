@@ -39,7 +39,10 @@ listeners that refresh them and the 15 s clock exist only while the view is on
 screen. Root's Needs-you icon rail and its tab lamp read the same live stores as
 the header badge and nothing else (the open rail adds the three loads, only
 while open). The icon rail is not
-drawn at all while no group has a count (the console keeps the 40 px); an open rail
+drawn at all while no group has a count (the console keeps the 40 px; the live count is
+the header badge's, schedule proposals the stores hold included), and the "Needs you N"
+chip stands in the window's bar instead, since push / schedule / markup need the open
+rail's reads and must stay one click away; an open rail
 stays, 280 px by default with Now's resize grip, its width in `cockpitRootRailWidth`
 (read tolerantly: a bad value is the default, an out-of-range one the nearest legal width). The header badge reads live stores only: it counts asking +
 interrupted + already-loaded schedule proposals + root approvals, and not push
@@ -148,6 +151,11 @@ closed both. Now an overlay that mounts while the window is up sets `stores/cons
 overlay and the dialogs it raises, which are later in DOM, stay above it), and the Escape
 handlers ask `lib/window/consoleFront`: the overlay closes on the first Escape, the window on
 the next. An overlay opened first with the window raised over it later (a terminal sign-in or
-install) is unchanged: the window opening afresh clears the flag and is in front. Known
-limit: the mail / calendar / to-do overlays are also at `--z-modal`, so with one of them open
-beneath, a lowered window can paint under it for as long as the overlay above is up.
+install) is unchanged: the window opening afresh clears the flag and is in front. So does
+`show(key)` on an already-open window (an install or sign-in tab the covering overlay starts).
+The mail / calendar / to-do overlays are also at `--z-modal` and precede the window in the
+DOM (Machines precedes them, Models follows), so while the window is under an overlay
+`RootOverlay` sets `html[data-console-under-overlay]` and `apps.css` drops those three to
+`--z-modal` - 2: window above them, the overlay above the window, as before. The window's
+Escape marks the key handled (`preventDefault`) so an overlay opened after it does not
+take the same press.

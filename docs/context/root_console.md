@@ -153,7 +153,8 @@ The pieces, and the rules they keep:
   an open app overlay is that column's. Root's slots in `CenterPanel` stand down
   for `open` (the window covers them) and wake by what is drawn.
 - **Root's Needs-you rail**: a 40 px icon rail of live-store
-  groups beside the console (not drawn at all while nothing waits), the full
+  groups beside the console (not drawn at all while nothing waits; the "Needs you N" chip
+  stands in the bar then, the way to the groups that need a read), the full
   `CockpitRail` on a click (fold remembered; resizable by Now's grip, width
   remembered); the Root tab wears the lamp of root's tabs (asking count, working
   ring). Neither reads anything the header badge does not. Narrower than 820 px the
