@@ -10,11 +10,15 @@ import { UntestedTag } from "./UntestedTag";
  * that port and would send its conversation to whoever holds it. The backend
  * has already ended the agent sessions that named it; this only tells the user
  * which, and who held the port. Read from a small file, not an event, so a
- * notice written before the window finished loading still arrives.
+ * notice written before the window finished loading still arrives. A server
+ * daemon's agent-tools listener keeps its port the same way and says so here
+ * too (`service: "agentTools"`).
  */
 
 /** Mirrors `services::api_proxy_port::PortNotice` (camelCase). */
 interface PortNotice {
+  /** Absent in a notice an older build wrote: the API proxy's. */
+  service?: "apiProxy" | "agentTools";
   ts: number;
   port: number;
   newPort: number;
@@ -52,14 +56,15 @@ export function ApiProxyPortDialog() {
     void invoke("api_proxy_port_notice_ack").catch(() => {});
   };
 
+  const tools = notice.service === "agentTools";
+  const vars = { port: notice.port, newPort: notice.newPort, holder: t(HOLDER_KEY[notice.holder]) };
   return (
     <DialogShell onDismiss={close}>
       <h2>
-        {t("apiProxyPort.title")} <UntestedTag id="apiProxyPortDialog.1" />
+        {t(tools ? "agentToolsPort.title" : "apiProxyPort.title")}{" "}
+        {tools ? <UntestedTag id="agentToolsPortDialog.1" /> : <UntestedTag id="apiProxyPortDialog.1" />}
       </h2>
-      <p className="file-delete-body">
-        {t("apiProxyPort.lede", { port: notice.port, newPort: notice.newPort, holder: t(HOLDER_KEY[notice.holder]) })}
-      </p>
+      <p className="file-delete-body">{t(tools ? "agentToolsPort.lede" : "apiProxyPort.lede", vars)}</p>
       <p className="file-delete-body">
         {notice.ended.length > 0
           ? t(notice.ended.length === 1 ? "apiProxyPort.endedOne" : "apiProxyPort.endedMany", { count: notice.ended.length })

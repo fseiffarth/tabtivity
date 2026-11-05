@@ -423,12 +423,62 @@ pub async fn pty_paste_clipboard_image(ctx: Ctx, id: String, agent: bool) -> Res
 }
 
 fn paste_image(dir: &Path, state_dir: &Path, png: &[u8], agent: bool) -> Result<String, String> {
-    const NAME: &str = "clipboard.png";
+    paste_image_named(dir, state_dir, "clipboard.png", png, agent)
+}
+
+fn paste_image_named(dir: &Path, state_dir: &Path, name: &str, bytes: &[u8], agent: bool) -> Result<String, String> {
     if agent {
-        return inbox::store(dir, NAME, png).map(|stored| stored.reference).map_err(|e| e.code().into());
+        return inbox::store(dir, name, bytes).map(|stored| stored.reference).map_err(|e| e.code().into());
     }
-    let stored = inbox::store_global(state_dir, NAME, png).map_err(|e| e.code().to_string())?;
+    let stored = inbox::store_global(state_dir, name, bytes).map_err(|e| e.code().to_string())?;
     Ok(state_dir.join(inbox::GLOBAL_INBOX_DIR).join(&stored.name).to_string_lossy().into_owned())
+}
+
+/// The file name a pasted picture is stored under, by its magic bytes: the
+/// picture formats a browser's clipboard hands out. `None` for anything else,
+/// so the browser path cannot be used to file arbitrary bytes as a "paste".
+fn pasted_image_name(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("clipboard.png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("clipboard.jpg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("clipboard.gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("clipboard.webp")
+    } else {
+        None
+    }
+}
+
+/// The browser client's form of [`pty_paste_clipboard_image`]: a server has
+/// no clipboard of the user's, so the page reads the picture from its own
+/// clipboard and sends it here (base64 `image`), and it is filed exactly as
+/// the window files the OS clipboard's — an agent tab's inbox, typed as the
+/// `@` reference; a shell's global inbox, typed as the path. The wire codes
+/// are the desktop command's, plus `not_an_image`; an inbox's size limit
+/// holds (`file_too_large`).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pty_paste_image(ctx: Ctx, id: String, agent: bool, image: String) -> Result<String, String> {
+    use base64::Engine as _;
+    // Base64 of the inbox limit, plus a margin: anything longer is refused
+    // before it is decoded.
+    if image.len() > inbox::MAX_INBOX_FILE / 3 * 4 + 8 {
+        return Err("file_too_large".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(image.trim()).map_err(|_| "not_an_image")?;
+    if bytes.is_empty() {
+        return Err("no_clipboard_image".into());
+    }
+    let name = pasted_image_name(&bytes).ok_or("not_an_image")?;
+    let dir = ctx
+        .get::<RegistryState>()
+        .lock_ok()
+        .drop_dir(&id)
+        .ok_or("no_terminal")?
+        .ok_or("remote_tab")?;
+    let state_dir = crate::storage::state_dir();
+    app_core::rt::blocking("terminal", move || paste_image_named(Path::new(&dir), &state_dir, name, &bytes, agent)).await?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -747,6 +797,45 @@ mod tests {
         assert_eq!(fs::read(path).unwrap(), b"png bytes");
         assert!(fs::read_dir(tab.path()).unwrap().next().is_none());
         assert_eq!(paste_image(tab.path(), state.path(), b"", true).unwrap_err(), "empty_file");
+    }
+
+    #[test]
+    fn a_browser_paste_is_named_by_what_its_bytes_are() {
+        assert_eq!(pasted_image_name(b"\x89PNG\r\n\x1a\nrest"), Some("clipboard.png"));
+        assert_eq!(pasted_image_name(&[0xFF, 0xD8, 0xFF, 0xE0, 0]), Some("clipboard.jpg"));
+        assert_eq!(pasted_image_name(b"GIF89a..."), Some("clipboard.gif"));
+        assert_eq!(pasted_image_name(b"RIFF\0\0\0\0WEBPVP8 "), Some("clipboard.webp"));
+        assert_eq!(pasted_image_name(b"#!/bin/sh\necho hi\n"), None);
+        assert_eq!(pasted_image_name(b"RIFF\0\0\0\0WAVE"), None);
+        assert_eq!(pasted_image_name(b""), None);
+    }
+
+    #[test]
+    fn a_browser_paste_is_filed_like_the_windows() {
+        let tab = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3];
+        let reference = paste_image_named(tab.path(), state.path(), "clipboard.jpg", &jpeg, true).unwrap();
+        assert!(reference.starts_with(&format!("{}/", inbox::INBOX_DIR)), "{reference}");
+        assert!(reference.ends_with(".jpg"), "{reference}");
+        assert_eq!(fs::read(tab.path().join(&reference)).unwrap(), jpeg);
+    }
+
+    fn browser_ctx() -> Ctx {
+        Ctx(app_core::CoreCtx::system(std::sync::Arc::new(crate::standalone_core_state()), std::sync::Arc::new(app_core::NullEvents)))
+    }
+
+    #[tokio::test]
+    async fn a_browser_paste_refuses_what_is_not_a_picture_before_looking_for_the_tab() {
+        use base64::Engine as _;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let paste = |image: String| pty_paste_image(browser_ctx(), "nope".into(), true, image);
+        assert_eq!(paste(b64(b"#!/bin/sh\nrm -rf ~\n")).await.unwrap_err(), "not_an_image");
+        assert_eq!(paste("%%% not base64".into()).await.unwrap_err(), "not_an_image");
+        assert_eq!(paste(String::new()).await.unwrap_err(), "no_clipboard_image");
+        assert_eq!(paste("A".repeat(inbox::MAX_INBOX_FILE / 3 * 4 + 12)).await.unwrap_err(), "file_too_large");
+        // A real picture gets as far as the tab, which this daemon does not have.
+        assert_eq!(paste(b64(b"\x89PNG\r\n\x1a\n")).await.unwrap_err(), "no_terminal");
     }
 
     #[test]

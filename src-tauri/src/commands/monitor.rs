@@ -165,6 +165,25 @@ pub async fn gpu_memory_snapshot() -> Result<Vec<GpuSample>, String> {
     Ok(gpustat::snapshot())
 }
 
+/// [`machine_load_snapshot`] and [`gpu_memory_snapshot`] of the machine the
+/// shared local models run on: the backend's own. The two bare readings are
+/// `client` (this machine's sensors, hosted plan §3.3), so a browser client
+/// reaching a server cannot have them, yet the Models & agents meters and
+/// the intro's model recommendation ask about the machine Ollama runs on,
+/// which there is the server. In the window it is the same machine, and the
+/// window keeps asking the two readings.
+#[derive(Serialize)]
+pub struct ModelsHostLoad {
+    pub machine: MachineLoadSample,
+    pub gpus: Vec<GpuSample>,
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn models_host_load() -> Result<ModelsHostLoad, String> {
+    let gpus = app_core::rt::spawn_blocking(gpustat::snapshot).await.unwrap_or_default();
+    Ok(ModelsHostLoad { machine: machine_load_snapshot().await?, gpus })
+}
+
 /// Per-process GPU memory for the monitor pane's process breakdown. A separate,
 /// heavier read (a `/proc` `fdinfo` walk for amdgpu, a `nvidia-smi` spawn for
 /// compute clients) than the whole-device snapshot, so only the pane calls it —

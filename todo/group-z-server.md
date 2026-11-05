@@ -380,6 +380,69 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+2443. **Browser client catch-up with `develop` since 2026-10-11.** 🤖 **Built**
+    (2026-11-03, never run live). Audit of every command and frontend event
+    `develop` added since the server work last synced: every new command has
+    a class and every `core` one a dispatcher wrapper (the tests hold both);
+    every new event the UI listens to is raised through `Ctx`; the daemon
+    starts the turn relay and the Reader's transcript watch itself. Fixed:
+    an image pasted into a terminal or the Reader composer in a browser
+    (was "image couldn't be handed to this tab": `pty_paste_clipboard_image`
+    is `client`) — the page reads its own clipboard, `pty_paste_image`
+    (`core`) files it into the tab's inbox; the file tree's ▶ run in
+    background (`run_script_detached`, did nothing) and PDF page drag/copy
+    between viewers (`pdf_clip_*`, errored) are served; the Models & agents
+    CPU/RAM/GPU meters and the intro's model recommendation read the
+    server's machine (`models_host_load`) instead of nothing; a dropped or
+    pasted file's path is quoted for the host's OS; the header's network
+    kind/SSID poll (`client`, refused every 10 s) is skipped. Still open:
+    read-aloud and dictation in a browser (hidden; the Web Speech API could
+    stand in for `voice_speak`), and the file tree's import picks a server
+    file rather than uploading one from the laptop — see #2444.
+    - [x] 🤖 Automated test — `core_dispatch` serves `pdf_clip_*`,
+      `run_script_detached` (a user's script and `cwd` held to their roots),
+      `pty_paste_image` and `models_host_load` while the bare sensors and the
+      OS clipboard stay `client`; `pty_paste_image` refuses non-pictures,
+      oversize and empty input before looking for the tab;
+      `TerminalDropText.test.ts` and `ModelsMachine.test.ts` cover the
+      browser branches.
+    - [ ] 🖐️ Manual test — in the browser client on a server: copy a
+      screenshot, Ctrl+Shift+V in a Claude tab (and paste into the Reader
+      composer): `@inbox/…png` is typed and the agent can read it; ▶ a
+      `.sh` in the file tree's run-in-background mode: the spinner clears
+      when it ends; drag a page from one PDF viewer into another; open
+      Models & agents: the CPU/RAM/GPU meters show the server's figures.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2444. **Browser client: read-aloud and laptop uploads.**
+    Read-aloud through the browser's `speechSynthesis` standing in for
+    `voice_speak` (and `voice:speaking` raised by the page itself), so the
+    Reader's chip can show in a browser; dictation stays hidden (the
+    server's whisper would need the browser's audio streamed up). An upload
+    path for the file tree's import and drop (a browser `File` → the
+    project, as `write_file_bytes` frames already carry bytes).
+    - [ ] 🤖 Automated test — the shim answers `voice_speak` from a fake
+      `speechSynthesis` and the Reader shows its chip under
+      `isServerClient()`.
+    - [ ] 🖐️ Manual test — in the browser client: Read aloud speaks an
+      answer; drop a laptop file onto the file tree and it lands in the
+      project.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 ### Z.3 — Left by P3 (multi-user; `docs/hosted_handoff.md` § P3)
 
 2349. **Finish the crate split; the daemon still links GTK.** ✅ **Done** (2026-10-03, `3c090785`): the library's toolkit deps sit behind a default `desktop` feature; the daemon is its own crate `src-serverd/` built with `default-features = false`, `ldd` shows libc/libm/libgcc_s only, and CI's test job fails on a desktop library (the box below is that step). Was: `tabtivity-serverd` is a second `[[bin]]` of `src-tauri`, so it links the
@@ -1166,3 +1229,149 @@ the desktop groundwork the hosted plan's P1 builds on.*
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2436. **The phone on a server: no "start the desktop", window-only requests
+    named as such.** ✅ **Built** (2026-11-03, the server catch-up of
+    `develop`'s phone features since 2026-10-11). A server daemon never has
+    a window, so every phone request only a window answers came back as
+    `503 desktop_unavailable` and the phone said "Tabtivity isn't running on
+    your desktop — start it". Now: `GET /api/v1/status` carries `server`;
+    on a server `host::server_window_codes` renames every phone-API `503
+    desktop_unavailable` to `501 server_no_window`, which the phone words
+    "That needs the Tabtivity window, which a server does not have" with a
+    hint to the browser client (`mobile-web/src/hostKind.ts`,
+    `connection.ts`); the project screen, Calendar, To-do and ＋ sheet notes
+    name the server and the browser client; Mail and the composer's From the
+    desktop tile are left out (desktop images answer `server_no_window`
+    instead of listing the server account's Pictures); the catalog offers no
+    ⎇ worktree or locality move (`Catalog::without_window_moves`) and the
+    project menu no Diverged. Tests: `host/tests.rs`
+    `a_server_names_window_only_requests_as_such`,
+    `only_the_window_refusal_is_renamed`; `MobileConnectionError`,
+    `MobileNewTabSheet`. `UntestedTag` `mobile.server.noWindow`.
+    - [ ] 🖐️ Manual test — pair a phone with a server account: Home has
+      no Mail tab; a project's screen says "On this server there is no
+      Tabtivity window…"; the ＋ sheet says "On this server an agent…
+      starts right away" and folds the modes under "In the browser client";
+      in a chat the facts row's branch is plain (no ⎇ sheet), the composer's
+      ＋ has no From the desktop; Tabby's model chip, when tapped, says it
+      needs the window. A paired desktop (window closed) still says "Desktop
+      unavailable".
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2456. **Agents on a server, caught up with `develop` (2026-11-03).** ✅ **Built**,
+    never run on a server. An audit of what `develop` added to agents, agent
+    CLIs, MCP lanes and the key path since the server work last synced
+    (2026-10-11), with these fixes:
+    - *The agent-tools port is kept across a daemon restart.* The daemon's
+      MCP listener (every lane) bound a random loopback port each start; the
+      tabs that outlived it in the tmux unit (an update restarts every
+      service) kept naming the old one, on a loopback every account shares —
+      another tenant who bound it in the gap got their tool calls and could
+      answer them. It now rebinds the port it remembers
+      (`<state>/root-mcp-port`); taken, it binds another, ends the sessions
+      naming the old one and tells the user (`api_proxy_port::Service::
+      AgentTools`, the API proxy's dialog with its own title, UntestedTag
+      `agentToolsPortDialog.1`). The desktop window's listener keeps a random
+      port (residual: a fenced agent or another account on a shared desktop
+      could take it after a crash).
+    - *A local-model agent's Ollama is judged by its owner before it starts*
+      (`launch_prep::local_model_spawn_judged`, server only): its CLI sends
+      prompts and project files to the loopback Ollama itself, so while the
+      administrator's was down another account's listener there would have
+      read and steered it. The desktop keeps relying on its other gates.
+    - *Tabby is refused on a server* (`Settings::assistant_enabled`,
+      `discovery::assistant_open`): not offered in v1, but on by default
+      since develop, so a server chat started with neither web nor help lane.
+    - *Codex and OpenCode never run on the administrator's key*, checked by
+      the daemon too (`agent_keys::admin_keyable`, `keys_wire::KEY_CLIS`):
+      both now take a user's own key through the proxy.
+    - *Self-updaters are off on a server whatever the tab's environment says*
+      (`agent_install::apply_fence_env_for`), and the OpenCode version probe
+      (before every first launch) runs with its update check off.
+    - The tmux < 3.2 refusals of keyed Codex/OpenCode tell a server user to
+      ask the administrator.
+    Checked and fine as they are: the web lane (served, never granted on a
+    server), git-push and its default-branch staging, help, markup and root
+    lanes (#2391), OpenCode 2's `--standalone` server (ephemeral port, random
+    password) and `service.json` off in every home, Codex/OpenCode on a
+    user's own key from the vault and the OpenAI meter refusals, the API
+    proxy's remembered port, voice (`Client` commands, never on a server),
+    reader fetches without a proxy (the guide says so), the MCP on/off hover
+    card and the ssh-hosts fix (both server-aware already).
+    - [x] 🤖 Automated test — `commands::root_mcp` `a_server_listener_rebinds_its_remembered_port_or_moves_off_a_taken_one`;
+      `api_proxy_port` `finds_a_session_whose_mcp_urls_name_the_tools_port`,
+      `a_remembered_port_is_a_real_port_or_none`;
+      `launch_prep` `only_a_servers_local_model_spawn_has_its_ollama_owner_judged`;
+      `settings` `a_hosted_server_offers_no_assistant`;
+      `agent_keys` `no_proxy_or_a_cli_it_cannot_serve_fails_the_spawn`;
+      `agent_install` `a_servers_fenced_spawn_switches_the_self_updaters_off_whatever_the_user_set`.
+    - [ ] 🖐️ Manual test — on a server with two accounts, alice and bob:
+      alice opens a Claude agent tab in a project and asks it to list its
+      tools; `sudo systemctl restart <slug>-serverd@alice`; the tab keeps
+      running and `cat ~alice/.local/share/<slug>-server/root-mcp-port` is
+      the port before the restart. Then stop alice's daemon, as bob bind
+      that port (`python3 -m http.server <port> --bind 127.0.0.1`), start
+      alice's daemon again: alice's browser shows "The agent tools' port was
+      taken" naming another account, the agent tab is ended, and the file
+      holds the new port. As alice, with the shared Ollama stopped and bob
+      listening on 11434, a local-model tab refuses to start naming another
+      account. Tabby is not offered to alice (new-chat menu, phone).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2437. **An agent in a worktree from the phone with no window.** ✅ **Built**
+    (2026-11-03). The ＋ sheet's "Agents start in" row needed the window;
+    with none (a closed desktop window, or always on a server) the host now
+    lists a local project's linked worktrees itself
+    (`git_overview::launch_worktrees`: the window's `agentWorktreeChoices`
+    rule, the ids `mobile_opaque_id` mints) and starts the picked agent in
+    that folder (`headless::create_tab_at`), labelled "<agent> · <branch>"
+    as the window labels it; a stale id is `404 worktree_not_found`. A
+    remote project's worktrees still wait for the window (its agent runs in
+    the mirror's root). Tests: `git_overview`
+    `launch_worktrees_are_the_windows_list_under_the_desktops_ids`,
+    `host/tests.rs` `an_agent_starts_in_a_worktree_with_no_window`,
+    `MobileNewTabSheet`. `UntestedTag` `mobile.headless.worktreeLaunch`.
+    - [ ] 🖐️ Manual test — a local git project with a linked worktree,
+      the desktop window closed (or a server): the phone's ＋ shows Agents
+      start in with the branch; pick it and Claude; the new tab is
+      "Claude · <branch>" and `pwd` in it is the worktree; the next window
+      shows the tab in that worktree.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2438. **Phone requests a server still cannot answer.** Open. Each answers
+    `501 server_no_window` (#2436) and the phone says so; the browser
+    client does them. In order of use: Mail (the window builds the snapshot
+    from its mail stores — the daemon runs the mail engine, so a daemon-side
+    snapshot is possible); Alerts and their ✓ (`src/lib/alerts.ts`, ~700
+    lines of selectors over calendar, to-do and urgent mail — Needs you has
+    no alert rows on a server); Tabby's model list and switch (Claude's rows
+    come from the TS `/model` picker reader; the switch is a kill + relaunch
+    the owner could do like Undo clear); the ⎇ worktree and locality moves
+    (the window carries the conversation between folders/hosts); the
+    Diverged list and its resolve actions (the window's sync store and SSH
+    session); a mode, cloud, local-model, API-key or sign-in launch (the
+    window builds those specs; on a server sign-in tabs and admin API keys
+    matter most); the CLI overview's Claude `/usage` note still says "needs
+    the desktop app".

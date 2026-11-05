@@ -304,6 +304,10 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("remote_download_to", "destDir", UserPath),
     ("remote_upload_file", "localPath", UserPath),
     ("resolve_tex_root", "path", UserPath),
+    // The file tree's ▶ "run in background": the body confines the script to
+    // its project too (`confine_project_path`); `cwd` is where bash starts.
+    ("run_script_detached", "scriptPath", UserPath),
+    ("run_script_detached", "cwd", UserPathOpt),
     ("set_remote_mirror_dir", "path", UserPath),
     ("skills_install", "target", SkillTarget),
     ("skills_list_installed", "target", SkillTarget),
@@ -817,17 +821,13 @@ mod tests {
     /// Commands classed `core` whose bodies still reach Tauri, so no wrapper
     /// exists yet. Each is a known P2/P3 gap (hosted handoff § P1 "Remaining"):
     /// the raw-body pair of `fs.rs` travels as binary frames through
-    /// `web_client` instead, the five mail dialogs have path-taking siblings,
-    /// and `apps.rs`/`browser.rs` keep their core halves for P3's split.
+    /// `web_client` instead, and the five mail dialogs have path-taking
+    /// siblings. (`pdf_clip_*` and `run_script_detached` were gaps until
+    /// 2026-11-03: a process-wide buffer and a `Ctx` replaced their Tauri
+    /// `State` and `AppHandle`.)
     const KNOWN_GAPS: &[&str] = &[
         "read_file_bytes",
         "write_file_bytes",
-        // `commands/pdf_clip.rs`: `State<PdfClipboard>`, a singleton the core
-        // state does not manage yet.
-        "pdf_clip_get",
-        "pdf_clip_set",
-        // `commands/apps.rs`: the core half of a mixed file (P3 splits it).
-        "run_script_detached",
         "mail_attach_pick",
         "mail_pgp_import_pick",
         "mail_contacts_import",
@@ -1219,6 +1219,43 @@ mod tests {
         assert_eq!(err, Value::String("invalid args `id` for command `agent_is_installed`: invalid type: null, expected a string".into()));
         let ok = dispatch(&ctx(), Role::User, "agent_is_installed", serde_json::json!({ "id": "no-such-cli-xyz" })).await.unwrap();
         assert_eq!(ok, Value::Bool(false));
+    }
+
+    #[tokio::test]
+    async fn the_page_clipboard_and_the_background_run_are_served() {
+        // Served since 2026-11-03 (a process-wide buffer and a `Ctx` replaced
+        // Tauri `State`/`AppHandle`): a browser drags PDF pages between its
+        // viewers and runs a script from the file tree's ▶.
+        let token = dispatch(&ctx(), Role::User, "pdf_clip_set", serde_json::json!({ "bytes": [1, 2, 3] })).await.unwrap();
+        let bytes = dispatch(&ctx(), Role::User, "pdf_clip_get", serde_json::json!({ "token": token })).await.unwrap();
+        assert_eq!(bytes, serde_json::json!([1, 2, 3]));
+        // The body's own refusal answers, not the dispatcher's: it was reached.
+        let err = dispatch(&ctx(), Role::Admin, "run_script_detached", serde_json::json!({ "scriptPath": "relative.sh" })).await.unwrap_err();
+        assert!(err.as_str().is_some_and(|e| e.contains("must be absolute")), "{err}");
+        // A user's script is held to their roots before it is even looked at.
+        let (_keep, paths) = outside_paths();
+        assert_held_for("run_script_detached", serde_json::json!({}), "scriptPath", paths);
+        assert_held("run_script_detached", serde_json::json!({ "scriptPath": inside_path("run.sh") }), "cwd");
+    }
+
+    #[tokio::test]
+    async fn the_models_machine_is_the_servers_while_the_bare_sensors_stay_the_clients() {
+        let out = dispatch(&ctx(), Role::User, "models_host_load", Value::Null).await.unwrap();
+        assert!(out["machine"]["supported"].is_boolean(), "{out}");
+        assert!(out["gpus"].is_array(), "{out}");
+        for bare in ["machine_load_snapshot", "gpu_memory_snapshot"] {
+            let err = dispatch(&ctx(), Role::User, bare, Value::Null).await.unwrap_err();
+            assert_eq!(err["code"], "client", "{bare}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_browser_paste_reaches_its_body() {
+        let err = dispatch(&ctx(), Role::User, "pty_paste_image", serde_json::json!({ "id": "t", "agent": true, "image": "aGk=" })).await.unwrap_err();
+        assert_eq!(err, Value::String("not_an_image".into()));
+        // The desktop's OS-clipboard read stays the client's.
+        let err = dispatch(&ctx(), Role::User, "pty_paste_clipboard_image", serde_json::json!({ "id": "t", "agent": true })).await.unwrap_err();
+        assert_eq!(err["code"], "client");
     }
 
     #[tokio::test]

@@ -185,12 +185,25 @@ fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
 /// read-only in every fence, whether Tabtivity or the host installed it (a
 /// payload one scope's agent could rewrite would run in every other scope
 /// and the user's own shell next). Updates go through Manage CLIs. A value
-/// the user set wins.
+/// the user set wins — except on a hosted server, where only the
+/// administrator installs or updates a CLI (plan §5.1): an updater let run
+/// there (OpenCode's writes its release into the agent home) would leave a
+/// per-user copy that the server-wide root no longer governs.
 pub fn apply_fence_env(cmd: &str, env: &mut std::collections::HashMap<String, String>) {
+    apply_fence_env_for(crate::services::server::is_server(), cmd, env);
+}
+
+/// [`apply_fence_env`] for a process that is (`server`) or is not a hosted
+/// server's. Pure.
+pub(crate) fn apply_fence_env_for(server: bool, cmd: &str, env: &mut std::collections::HashMap<String, String>) {
     let bin = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
     let bin = bin.strip_suffix(".exe").unwrap_or(bin);
     for (k, v) in autoupdate_off(bin) {
-        env.entry((*k).to_string()).or_insert_with(|| (*v).to_string());
+        if server {
+            env.insert((*k).to_string(), (*v).to_string());
+        } else {
+            env.entry((*k).to_string()).or_insert_with(|| (*v).to_string());
+        }
     }
 }
 
@@ -280,6 +293,20 @@ mod tests {
         let mut env = std::collections::HashMap::new();
         apply_fence_env("codex", &mut env);
         assert!(env.is_empty());
+    }
+
+    /// On a hosted server the switch is not the user's: only the
+    /// administrator updates a CLI.
+    #[test]
+    fn a_servers_fenced_spawn_switches_the_self_updaters_off_whatever_the_user_set() {
+        for (cmd, var, off) in [("opencode", "OPENCODE_DISABLE_AUTOUPDATE", "1"), ("claude", "DISABLE_AUTOUPDATER", "1"), ("copilot", "COPILOT_AUTO_UPDATE", "false")] {
+            let mut env = std::collections::HashMap::from([(var.to_string(), "0".to_string())]);
+            apply_fence_env_for(true, cmd, &mut env);
+            assert_eq!(env.get(var).map(String::as_str), Some(off), "{cmd}");
+            let mut env = std::collections::HashMap::from([(var.to_string(), "0".to_string())]);
+            apply_fence_env_for(false, cmd, &mut env);
+            assert_eq!(env.get(var).map(String::as_str), Some("0"), "the desktop keeps the user's value: {cmd}");
+        }
     }
 
     #[test]

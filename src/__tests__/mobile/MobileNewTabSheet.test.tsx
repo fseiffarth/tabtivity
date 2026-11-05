@@ -12,6 +12,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { NewTabSheet } from "../../../mobile-web/src/screens/NewTabSheet";
+import { setOnServer } from "../../../mobile-web/src/hostKind";
 import type { AgentRow, TabRow } from "../../../mobile-web/src/api";
 import { BRAND, NAMES, storageKey } from "../../lib/brand";
 
@@ -307,6 +308,41 @@ describe("Mobile ＋ sheet — API key", () => {
     render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} onPick={vi.fn()} onSendFile={() => undefined} onClose={() => undefined} />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(screen.queryByRole("group", { name: "API key" })).toBeNull();
+  });
+});
+
+describe("Mobile ＋ sheet — no window", () => {
+  const agents: AgentRow[] = [{ id: "claude", label: "Claude", modes: ["plan"] }];
+
+  it("starts an agent in a worktree the host listed with no window, and folds only the rest", async () => {
+    serve({
+      worktrees: [{ id: "w0", label: "", main: true }, { id: "w1", label: "fix", branch: "fix-build", main: false }],
+      cloud: [],
+      sign_in: [],
+      desktop_available: false,
+    });
+    const onPick = vi.fn();
+    render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} headless onPick={onPick} onSendFile={() => undefined} onClose={() => undefined} />);
+    const where = await screen.findByRole("group", { name: "Agents start in" });
+    fireEvent.click(within(where).getByText("fix-build"));
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }));
+    expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { worktree: "w1" });
+    // The mode still waits for the window; the worktree no longer does.
+    const held = document.querySelector(".new-tab-held") as HTMLDetailsElement;
+    expect(held.textContent).toContain("plan");
+    expect(held.textContent).not.toContain("fix-build");
+  });
+
+  it("names the browser client, not a window, on a server", async () => {
+    setOnServer(true);
+    try {
+      serve({ worktrees: [], cloud: [], sign_in: [], desktop_available: false });
+      render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} headless onPick={vi.fn()} onSendFile={() => undefined} onClose={() => undefined} />);
+      expect(await screen.findByText(/On this server an agent/)).toBeTruthy();
+      expect(document.querySelector(".new-tab-held summary")?.textContent).toContain("In the browser client (1)");
+    } finally {
+      setOnServer(false);
+    }
   });
 });
 

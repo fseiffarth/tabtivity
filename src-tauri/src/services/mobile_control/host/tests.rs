@@ -6587,3 +6587,134 @@ async fn an_agent_moves_between_this_computer_and_the_projects_machines() {
     assert_eq!(asked.lock().unwrap().as_slice(), ["local".to_string()], "the window was asked once, for this computer");
     desktop.abort();
 }
+
+/// This host as a server daemon serves it: behind the gateway, which is what
+/// makes `on_server` true (and never has a window).
+fn behind_gateway(host: &mut Fixture) {
+    host.state.web = host.state.web.clone().behind_gateway(web_client::ServerLink {
+        public_host: "desk.example.ts.net".into(),
+        content_origin: None,
+        auth: host.state.auth.clone(),
+    });
+}
+
+/// A phone on a server: the status says so; what only a window answers is
+/// `501 server_no_window`, not the desktop's "window closed"; the ⎇ and
+/// locality moves are not offered; the desktop images are not listed; and
+/// what the host answers itself with no window still answers.
+#[tokio::test]
+async fn a_server_names_window_only_requests_as_such() {
+    let mut host = headless_host(Arc::new(|_: PtyOptions| Box::pin(async { Ok(()) })));
+    let cookie = host.pair_device(&signing_key(91)).await.0;
+    let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+
+    // A desktop's host first: the window is only closed.
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert_eq!(json(&body)["server"], false);
+    let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+    assert_eq!(json(&body)["tabs"][0]["worktree_movable"], true, "{body}");
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/worktrees"), &cookie)).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("desktop_unavailable")));
+
+    behind_gateway(&mut host);
+    let (status, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body)["server"], true);
+    assert_eq!(json(&body)["desktop_available"], false);
+
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let detail = json(&body);
+    assert_eq!(detail["desktop_available"], false);
+    assert_eq!(detail["diverged"], false);
+    assert_ne!(detail["tabs"][0]["worktree_movable"], true, "the window's move is not offered: {body}");
+    assert_ne!(detail["tabs"][0]["location_movable"], true);
+
+    for uri in [
+        format!("/api/v1/tabs/{tab_id}/worktrees"),
+        format!("/api/v1/tabs/{tab_id}/desktop-images"),
+        "/api/v1/alerts".to_string(),
+    ] {
+        let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
+        assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_IMPLEMENTED, Some(SERVER_NO_WINDOW)), "{uri}: {body}");
+    }
+    let (status, _, body) = host
+        .send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie, Some(json!({ "image_id": "clipboard" }))))
+        .await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_IMPLEMENTED, Some(SERVER_NO_WINDOW)), "{body}");
+
+    // A create that needs the window: the same code. What the host
+    // answers itself still answers.
+    let claude = detail["agents"][0]["id"].clone();
+    let moded = json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "mode": "plan", "idempotency_key": "srv-moded-0123456789abcdef" });
+    let (status, _, body) = host.send(create_request(&project_id, &cookie, moded)).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_IMPLEMENTED, Some(SERVER_NO_WINDOW)), "{body}");
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/launch-options"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body)["desktop_available"], false);
+}
+
+/// The renamed refusal is the phone API's `desktop_unavailable` only.
+#[test]
+fn only_the_window_refusal_is_renamed() {
+    assert!(is_window_refusal(br#"{"error":"desktop_unavailable"}"#));
+    assert!(!is_window_refusal(br#"{"error":"catalog_unavailable"}"#));
+    assert!(!is_window_refusal(b"desktop_unavailable"));
+    assert!(!is_window_refusal(b""));
+}
+
+/// The ＋ sheet with no window offers a local project's linked worktrees
+/// under the desktop's ids, and an agent picked in one starts there,
+/// labelled as the window labels it; a stale id is `worktree_not_found`,
+/// and the main checkout is a plain agent in the project folder.
+#[tokio::test]
+async fn an_agent_starts_in_a_worktree_with_no_window() {
+    use crate::test_util::git;
+    let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = recorded.clone();
+    let host = headless_host(Arc::new(move |opts: PtyOptions| {
+        sink.lock().unwrap().push(opts);
+        Box::pin(async { Ok(()) })
+    }));
+    git(&host.root, &["init", "-q"]);
+    git(&host.root, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    let linked = host.root.join(crate::brand::WORKTREES_DIR).join("topic");
+    git(&host.root, &["worktree", "add", "-q", "-b", "topic", &linked.to_string_lossy()]);
+    let cookie = host.pair_device(&signing_key(92)).await.0;
+    let (project_id, _) = project_and_tab(&host, &cookie).await;
+
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}/launch-options"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = json(&body)["worktrees"].as_array().cloned().expect("worktrees");
+    assert_eq!(rows.len(), 2, "{body}");
+    assert_eq!((rows[0]["main"].as_bool(), rows[0]["label"].as_str()), (Some(true), Some("")));
+    assert_eq!((rows[1]["label"].as_str(), rows[1]["branch"].as_str()), (Some("topic"), Some("topic")));
+    assert!(!body.contains(&host.root.to_string_lossy().to_string()), "path leaked: {body}");
+    // The id is the one the window mints for the folder git lists.
+    let listed = git_overview::launch_worktrees_of(&host.root, &host_key(&host.state));
+    let desktop = super::super::discovery::opaque_control_id(&host.state.config.state_dir, "worktree", &listed[1].path).expect("desktop id");
+    assert_eq!(rows[1]["id"], desktop, "the window would name it the same");
+
+    let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+    let claude = json(&detail)["agents"].as_array().expect("agents").iter().find(|a| a["label"] == "Claude").expect("Claude")["id"].clone();
+    let create = |worktree: &Value, key: &str| {
+        create_request(&project_id, &cookie, json!({ "project_id": project_id, "kind": "agent", "agent_id": claude, "worktree": worktree, "idempotency_key": key }))
+    };
+    let (status, _, body) = host.send(create(&rows[1]["id"], "wt-topic-0123456789abcdef")).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(json(&body)["tab"]["label"], "Claude · topic");
+    assert!(!body.contains(&linked.to_string_lossy().to_string()), "path leaked: {body}");
+    let spawned = recorded.lock().unwrap().last().cloned().expect("spawn");
+    assert_eq!(std::path::Path::new(&spawned.cwd), std::path::Path::new(&listed[1].path));
+    assert_eq!(spawned.cmd, "claude");
+
+    let (status, _, body) = host.send(create(&rows[0]["id"], "wt-main-0123456789abcdef")).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(json(&body)["tab"]["label"], "Claude");
+    let spawned = recorded.lock().unwrap().last().cloned().expect("spawn");
+    assert!(std::path::Path::new(&spawned.cwd).ends_with("work"), "{}", spawned.cwd);
+
+    let (status, _, body) = host.send(create(&json!("no-such-worktree"), "wt-gone-0123456789abcdef")).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::NOT_FOUND, Some("worktree_not_found")), "{body}");
+    assert_eq!(recorded.lock().unwrap().len(), 2, "nothing started for a stale id");
+}

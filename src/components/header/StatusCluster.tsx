@@ -28,6 +28,7 @@ import {
   type HeaderStatusReport,
 } from "../../stores/headerStatus";
 import { useT } from "../../lib/i18n";
+import { isServerClient } from "../../lib/transport/linkState";
 import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 // Code-split (perf plan §6): the Machines menu renders nothing while switched
@@ -127,7 +128,10 @@ export function StatusCluster({ narrow = false }: { narrow?: boolean } = {}) {
     // The name is asked for only once the type probe has said "wlan": naming
     // the network costs its own process spawn on every platform, and an
     // Ethernet machine has no answer to give. Clearing it on any other type is
-    // what keeps a stale SSID from outliving the link it named.
+    // what keeps a stale SSID from outliving the link it named. The browser
+    // client has no backend for this machine's link (both are `client`
+    // readings): it keeps the browser's own online/offline state alone.
+    if (isServerClient()) return;
     const poll = () =>
       invoke<string>("network_conn_type")
         .then(async (kind) => {

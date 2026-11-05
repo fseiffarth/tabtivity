@@ -115,6 +115,7 @@ import { SignInSheet } from "./SignInSheet";
 import { hasSignInTab, readCloudLink, readCloudSession, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, type SignIn, type SignInPage } from "../terminal/signIn";
 import { type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
+import { isOnServer } from "../hostKind";
 import { ChatChanges } from "../components/ChatChanges";
 import { AnswerAlbum, type AnswerFiles } from "../components/AnswerFiles";
 import { readSlashCommands, slashCli } from "../slashCommands";
@@ -178,6 +179,7 @@ const UPLOAD_FAILURES: Record<string, TranslationKey> = {
 /** Why the desktop could not say what it has to attach. */
 const DESKTOP_LIST_FAILURES: Record<string, TranslationKey> = {
   desktop_unavailable: "mobile.desktopImages.failed.desktopDown",
+  server_no_window: "mobile.unavailable.serverNoWindowTitle",
   tab_not_found: "mobile.desktopImages.failed.tabGone",
   project_ineligible: "mobile.desktopImages.failed.notShared",
   timeout: "mobile.desktopImages.failed.timeout",
@@ -1733,7 +1735,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     getAssistantModels(tab.id).then(setAssistantModels, (error) => {
       const code = error instanceof ApiError ? error.code : "";
       setAssistantModels({ models: [] });
-      setAssistantNote(code === "desktop_unavailable" ? "mobile.assistantModel.offline" : "terminal.reader.assistantModelFailed");
+      setAssistantNote(code === "desktop_unavailable" ? "mobile.assistantModel.offline"
+        : code === "server_no_window" ? "mobile.unavailable.serverNoWindowTitle"
+        : "terminal.reader.assistantModelFailed");
     });
   };
   const chooseAssistantModel = (model: string) => {
@@ -1764,6 +1768,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         setAssistantSwitching("");
         setAssistantNote(code === "tab_busy" ? "mobile.assistantModel.busy"
           : code === "desktop_unavailable" ? "mobile.assistantModel.offline"
+          : code === "server_no_window" ? "mobile.unavailable.serverNoWindowTitle"
           : "terminal.reader.assistantModelFailed");
       });
   };
@@ -2304,9 +2309,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     { key: "project", tone: "project", label: t("mobile.add.project"), hint: t("mobile.add.projectHint"),
       icon: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8" /></svg> },
   ];
-  const attachTiles = tab.on_host ? allAttachTiles.filter((tile) => tile.key === "project")
-    : bare ? allAttachTiles.filter((tile) => tile.key !== "project").map((tile) => tile.untested ? tile : { ...tile, untested: "mobile.tabby.attach" })
-    : allAttachTiles;
+  // A server has no desktop screen to take a picture from.
+  const hostTiles = isOnServer() ? allAttachTiles.filter((tile) => tile.key !== "desktop") : allAttachTiles;
+  const attachTiles = tab.on_host ? hostTiles.filter((tile) => tile.key === "project")
+    : bare ? hostTiles.filter((tile) => tile.key !== "project").map((tile) => tile.untested ? tile : { ...tile, untested: "mobile.tabby.attach" })
+    : hostTiles;
   const desktopOptions: SheetOption[] = (desktopImages ?? []).map((image) => ({
     key: image.id,
     label: image.name,

@@ -518,6 +518,48 @@ fn probe_within(root: &Path, host_key: &[u8], tab_cwds: &[String], budget: Durat
     assemble(&worktrees, &branches, &dots, tab_cwds, host_key)
 }
 
+/// One folder the ＋ sheet can start an agent in, as the window's bridge
+/// lists it (`worktreesOf`): the phone's row and, host-side only, the folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchWorktree {
+    pub row: super::protocol::MobileWorktree,
+    pub path: String,
+}
+
+/// The ＋ sheet's worktrees out of what git listed, as the window answers
+/// them with no window to ask (`agentWorktreeChoices` + `withWorktreeIds`):
+/// every usable checkout — not bare, not prunable — and none at all unless a
+/// linked one is among them; each under the id `mobile_opaque_id` mints for
+/// its path (one too long for an id is left out), its leaf name ("" for the
+/// main one) and its branch. Git's order, main first.
+pub fn launch_worktrees(worktrees: &[Worktree], host_key: &[u8]) -> Vec<LaunchWorktree> {
+    let usable: Vec<&Worktree> = worktrees.iter().filter(|wt| !wt.is_bare && !wt.is_prunable && !wt.path.is_empty()).collect();
+    if !usable.iter().any(|wt| !wt.is_main) {
+        return Vec::new();
+    }
+    usable
+        .into_iter()
+        .filter(|wt| wt.path.len() <= MAX_ID_INPUT)
+        .map(|wt| LaunchWorktree {
+            row: super::protocol::MobileWorktree {
+                id: key_id(host_key, "worktree", &[&wt.path]),
+                label: if wt.is_main { String::new() } else { leaf(&wt.path) },
+                branch: (!wt.branch.is_empty()).then(|| wt.branch.clone()),
+                main: wt.is_main,
+            },
+            path: wt.path.clone(),
+        })
+        .collect()
+}
+
+/// [`launch_worktrees`] of the project at `root`: one hardened `git worktree
+/// list` (the `mirror` side, as the window asks). Blocking.
+pub fn launch_worktrees_of(root: &Path, host_key: &[u8]) -> Vec<LaunchWorktree> {
+    let dir = root.to_string_lossy().into_owned();
+    let worktrees = crate::commands::git::git_worktree_list_blocking(dir, Some("mirror".into()), None).unwrap_or_default();
+    launch_worktrees(&worktrees, host_key)
+}
+
 /// The host's overviews, per raw project id, each standing for [`TTL`].
 #[derive(Debug, Default)]
 pub struct Cache {
@@ -744,6 +786,35 @@ mod tests {
         assert_eq!(overview.worktrees[2].id, "", "too long for the desktop's id");
         let body = serde_json::to_string(&overview).expect("json");
         assert!(!body.contains(root) && !body.contains("secret-root") && !body.contains(SHA), "{body}");
+    }
+
+    /// The ＋ sheet's worktrees with no window: the window's rule (usable
+    /// checkouts, none unless a linked one is there), the desktop's ids, the
+    /// leaf name for a linked one and none for main; no path in the rows.
+    #[test]
+    fn launch_worktrees_are_the_windows_list_under_the_desktops_ids() {
+        let state = tempfile::tempdir().expect("state dir");
+        std::fs::create_dir_all(state.path().join("mobile-control")).expect("control dir");
+        std::fs::write(state.path().join("mobile-control/host.key"), KEY).expect("host key");
+        let root = "/home/someone/secret-root";
+        let linked = format!("{root}/{}/topic", crate::brand::WORKTREES_DIR);
+        let main = || Worktree { is_main: true, is_current: true, ..wt(root, "main", SHA) };
+        let gone = || Worktree { is_prunable: true, ..wt("/elsewhere/gone", "old", SHA) };
+        let bare = || Worktree { is_bare: true, ..wt("/srv/bare.git", "", "") };
+        let detached = wt("/work/loose", "", SHA);
+        let long = wt(&format!("/{}", "x".repeat(MAX_ID_INPUT + 1)), "long", SHA);
+
+        assert!(launch_worktrees(&[main()], &KEY).is_empty(), "main alone is no choice");
+        assert!(launch_worktrees(&[main(), gone(), bare()], &KEY).is_empty(), "no usable linked one");
+
+        let listed = launch_worktrees(&[main(), wt(&linked, "topic", SHA), gone(), bare(), detached, long], &KEY);
+        let rows: Vec<_> = listed.iter().map(|w| (w.row.label.as_str(), w.row.branch.as_deref(), w.row.main)).collect();
+        assert_eq!(rows, [("", Some("main"), true), ("topic", Some("topic"), false), ("loose", None, false)]);
+        let desktop = crate::services::mobile_control::discovery::opaque_control_id(state.path(), "worktree", &linked).expect("desktop id");
+        assert_eq!(listed[1].row.id, desktop, "a create names it as the window would");
+        assert_eq!(listed[1].path, linked);
+        let body = serde_json::to_string(&listed.iter().map(|w| &w.row).collect::<Vec<_>>()).expect("json");
+        assert!(!body.contains(root) && !body.contains("secret-root") && !body.contains("/work/"), "{body}");
     }
 
     #[test]

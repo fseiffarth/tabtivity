@@ -15,6 +15,7 @@ import { refreshPush } from "./push";
 import { hasLocalUnlock } from "./localLock";
 import { clearConnectGrace, clearConnectReload, isConnectReload, noteConnectGrace, noteUnlockedLeave, takeConnectGrace, takeConnectReload, takeReloadGrace } from "./reloadGrace";
 import { noteDesktopTheme } from "./theme";
+import { setOnServer } from "./hostKind";
 import { isUntested, setUntestedTagsVisible } from "../../src/lib/untested";
 import { useT, type TranslationKey } from "../../src/lib/i18n";
 import { Pair, noteOidcOutcome } from "./screens/Pair";
@@ -418,13 +419,17 @@ export function App() {
   useEffect(() => {
     if (auth !== "paired") return;
     const refresh = () => {
-      void getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections }) => {
+      void getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, server }) => {
         noteDesktopTheme(color_scheme);
-        const hidden = hideableSections(hidden_sections);
+        // A server has no window to read mail through (the browser client
+        // has it), so its phone leaves the section out as if hidden.
+        const onServer = server === true;
+        const hidden = hideableSections(onServer ? [...(Array.isArray(hidden_sections) ? hidden_sections : []), "mail"] : hidden_sections);
         setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
         try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
         const visible = show_untested_tags === true;
-        if (setUntestedTagsVisible(visible)) refreshTags((tick) => tick + 1);
+        const reworded = setOnServer(onServer);
+        if (setUntestedTagsVisible(visible) || reworded) refreshTags((tick) => tick + 1);
         try { localStorage.setItem(storageDashKey("show-untested-tags"), String(visible)); } catch { /* unavailable */ }
       }).catch(() => undefined);
     };

@@ -534,7 +534,18 @@ fn catalog_unfiltered(state: &HostState) -> Result<Catalog, (StatusCode, Json<se
             .lock_ok()
             .load(&state.config.state_dir, &key)
     })
+    .map(|catalog| windowless_listing(state, catalog))
     .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
+}
+
+/// A server daemon's catalog offers nothing only a window does
+/// (`Catalog::without_window_moves`); any other host's is as loaded.
+fn windowless_listing(state: &HostState, catalog: Catalog) -> Catalog {
+    if state.web.on_server() {
+        catalog.without_window_moves()
+    } else {
+        catalog
+    }
 }
 
 /// The create-tab poll is waiting for a tab the desktop has just been asked to
@@ -547,7 +558,7 @@ fn catalog_fresh(state: &HostState, phone: &Phone) -> Result<Catalog, (StatusCod
             .lock_ok()
             .load_fresh(&state.config.state_dir, &key)
     })
-    .map(|catalog| catalog.for_device(phone.device_id()))
+    .map(|catalog| windowless_listing(state, catalog).for_device(phone.device_id()))
     .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable"))
 }
 
@@ -899,7 +910,10 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
     (
         StatusCode::OK,
         Json(
-            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state) }),
+            // `server`: this host is a server daemon, which never has a window
+            // (`server_window_codes`): the phone words its "no window" notes
+            // for a server and leaves out what only a window answers.
+            json!({ "desktop_available": desktop_available, "server": state.web.on_server(), "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state) }),
         ),
     )
 }
@@ -1316,7 +1330,9 @@ async fn project(
         }
     }
     let host_files = has_host_files(project) && files::files_open(&state.config.state_dir);
-    let diverged_offered = has_diverged_list(project) && files::files_open(&state.config.state_dir);
+    // Only a window answers the Diverged list (it holds the host's session):
+    // a server daemon never has one, so its drawer leaves the entry out.
+    let diverged_offered = has_diverged_list(project) && files::files_open(&state.config.state_dir) && !state.web.on_server();
     (
         StatusCode::OK,
         Json(
@@ -1571,6 +1587,17 @@ async fn assistant_choices(state: &HostState) -> Vec<super::assistant::Choice> {
     }
 }
 
+/// The folders the owner may start `project`'s agent in with no window
+/// (`git_overview::launch_worktrees`, the window's own list), read off the
+/// async thread; empty where `headless::worktree_launches` says none.
+async fn launch_worktrees(state: &HostState, project: &super::discovery::ResolvedProject) -> Vec<git_overview::LaunchWorktree> {
+    if !headless::worktree_launches(project) {
+        return Vec::new();
+    }
+    let (root, key) = (project.root.clone(), host_key(state));
+    tokio::task::spawn_blocking(move || git_overview::launch_worktrees_of(&root, &key)).await.unwrap_or_default()
+}
+
 /// A create answered by the owner with no window: `headless::create_tab`
 /// through the host's spawn seam, then the new row once the catalog lists
 /// it (not `available` — no window is attached, and in a test no tmux
@@ -1590,7 +1617,14 @@ async fn create_headless(
     let state_dir = &state.config.state_dir;
     let agents = headless::agents(state_dir, &host_key(state), &*state.spawner.installed);
     let assistant = if request.assistant.is_some() { assistant_choices(state).await } else { Vec::new() };
-    let created = headless::create_tab(state_dir, &host_key(state), project, request, &agents, &assistant, &state.spawner.launch).await;
+    // The worktree a request names, among the ones `launch-options` listed.
+    let worktrees = if request.worktree.is_some() {
+        launch_worktrees(state, project).await
+    } else {
+        Vec::new()
+    };
+    let created =
+        headless::create_tab_at(state_dir, &host_key(state), project, request, &agents, &assistant, &worktrees, &state.spawner.launch).await;
     match created {
         Ok(created) => {
             poke_window(state, Some(&project.raw_id), &["workspace"]);
@@ -1639,6 +1673,7 @@ fn headless_create_error(refusal: headless::CreateRefusal) -> (StatusCode, Json<
     api_error(
         match refusal {
             headless::CreateRefusal::DesktopUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            headless::CreateRefusal::WorktreeNotFound => StatusCode::NOT_FOUND,
             headless::CreateRefusal::LaunchFailed(_) | headless::CreateRefusal::Persist(_) => StatusCode::BAD_GATEWAY,
             headless::CreateRefusal::UnknownAgent | headless::CreateRefusal::Assistant(_) => StatusCode::BAD_REQUEST,
             headless::CreateRefusal::NotAttachable => StatusCode::CONFLICT,
@@ -2229,11 +2264,13 @@ async fn launch_options(
     if desktop_down(&response) {
         // No window: the ＋ sheet offers what the owner can start — the
         // project folder, a shell or a plain agent (headless owner plan,
-        // H3). Worktrees, cloud sessions, sign-ins, local models and API-key
-        // agents wait for the window, so none is listed.
+        // H3), and a local project's agent in one of its linked worktrees
+        // (`headless::create_tab_at`). Cloud sessions, sign-ins, local models
+        // and API-key agents wait for the window, so none is listed.
+        let worktrees: Vec<_> = launch_worktrees(&state, project).await.into_iter().map(|wt| wt.row).collect();
         return (
             StatusCode::OK,
-            Json(json!({ "worktrees": [], "cloud": [], "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
+            Json(json!({ "worktrees": worktrees, "cloud": [], "sign_in": [], "local": null, "desktop_available": false, "here": !project.pinned })),
         );
     }
     match response {
@@ -6281,6 +6318,12 @@ async fn desktop_images(
         Ok(target) => target,
         Err(error) => return error,
     };
+    // A server has no desktop screen, clipboard or screenshots of the
+    // reader's: the folders a no-window answer would list are the server
+    // account's, which is not what "From the desktop" means.
+    if state.web.on_server() {
+        return api_error(StatusCode::NOT_IMPLEMENTED, SERVER_NO_WINDOW);
+    }
     let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
@@ -6335,6 +6378,9 @@ async fn attach_desktop_image(
         Ok(target) => target,
         Err(error) => return error,
     };
+    if state.web.on_server() {
+        return api_error(StatusCode::NOT_IMPLEMENTED, SERVER_NO_WINDOW);
+    }
     let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
@@ -8432,10 +8478,46 @@ fn router(state: HostState) -> Router {
         // The browser desktop client's routes (`/desktop/*`, its socket) sit
         // under the same limits and headers; `/desktop/…` outranks the PWA's
         // catch-all by its static prefix.
-        .merge(web_client::routes(state.web))
+        .merge(web_client::routes(state.web.clone()))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_MESSAGE))
+        .layer(middleware::from_fn_with_state(state.web.on_server(), server_window_codes))
         .layer(middleware::from_fn(feature_gate))
         .layer(middleware::from_fn_with_state(secure, security_headers))
+}
+
+/// What a phone request that only a window can answer gets on a server
+/// daemon, which never has one: `501 server_no_window` in place of `503
+/// desktop_unavailable`. "The window is closed" would have the reader open
+/// a desktop app the server does not run; the phone says the browser client
+/// does this instead. Everything a window-less host answers itself (the
+/// headless owner's paths) is untouched — only the refusal is renamed.
+pub(super) const SERVER_NO_WINDOW: &str = "server_no_window";
+
+/// The longest refusal body [`server_window_codes`] reads to tell what it is.
+const WINDOW_CODE_BODY_MAX: usize = 4 * 1024;
+
+/// [`SERVER_NO_WINDOW`] for a phone API answer on a server daemon; anything
+/// else as it was. A `503` is the only status looked into.
+async fn server_window_codes(State(on_server): State<bool>, request: Request<Body>, next: Next) -> Response<Body> {
+    let phone_api = request.uri().path().starts_with("/api/v1/");
+    let response = next.run(request).await;
+    if !on_server || !phone_api || response.status() != StatusCode::SERVICE_UNAVAILABLE {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, WINDOW_CODE_BODY_MAX).await else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable").into_response();
+    };
+    if is_window_refusal(&bytes) {
+        return api_error(StatusCode::NOT_IMPLEMENTED, SERVER_NO_WINDOW).into_response();
+    }
+    Response::from_parts(parts, Body::from(bytes))
+}
+
+/// Whether a refusal body is the phone API's `{ "error": "desktop_unavailable" }`.
+fn is_window_refusal(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .is_ok_and(|value| value.get("error").and_then(serde_json::Value::as_str) == Some("desktop_unavailable"))
 }
 
 /// The phone's mail, calendar and todo routes answer `403 feature_off` while

@@ -1288,9 +1288,18 @@ impl Settings {
 
     /// Whether the experimental chat assistant is on — the one gate the
     /// commands, the spawn and the web lane ask, read per request. On by
-    /// default ([`Self::experimental_on_by_default`]).
+    /// default ([`Self::experimental_on_by_default`]) — but never on a hosted
+    /// server, where it is not offered in v1 (`docs/assistant_plan.md`,
+    /// decision 6): a daemon serves no web lane, and a chat there would run
+    /// with neither its web nor its help tools.
     pub fn assistant_enabled(&self) -> bool {
-        Self::experimental_on_by_default(self.assistant)
+        self.assistant_enabled_on(crate::services::server::is_server())
+    }
+
+    /// [`Self::assistant_enabled`] for a process that is (`server`) or is not
+    /// a hosted server's. Pure.
+    pub fn assistant_enabled_on(&self, server: bool) -> bool {
+        !server && Self::experimental_on_by_default(self.assistant)
     }
 
     /// Whether a paired phone may use the assistant: the flag on and the
@@ -2042,5 +2051,15 @@ mod default_rule_tests {
         let json = format!(r#"{{"{}":{{"assistant_access":false}}}}"#, crate::brand::MOBILE_HOST_KEY);
         let s: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(s.app_mobile_host.unwrap().assistant_access, Some(false));
+    }
+
+    /// Not offered on a hosted server, whatever the flag says.
+    #[test]
+    fn a_hosted_server_offers_no_assistant() {
+        for flag in [None, Some(true), Some(false)] {
+            let s = Settings { assistant: flag, ..Default::default() };
+            assert!(!s.assistant_enabled_on(true), "{flag:?}");
+            assert_eq!(s.assistant_enabled_on(false), flag != Some(false), "{flag:?}");
+        }
     }
 }

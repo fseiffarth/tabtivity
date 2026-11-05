@@ -1,4 +1,5 @@
 import { ApiError } from "./api";
+import { isOnServer } from "./hostKind";
 import { type TranslationKey, translateNow } from "../../src/lib/i18n";
 
 /**
@@ -88,9 +89,15 @@ export interface UnavailableCopy {
  * readers to fix the wrong machine.
  */
 export function describeUnavailable(reason: UnavailableReason): UnavailableCopy {
-  const [title, hint] = UNAVAILABLE_KEYS[reason];
+  // A server never has a window to start: what it cannot answer is done in
+  // its browser client, so "start the app on your desktop" would mislead.
+  const [title, hint] = reason === "desktop_down" && isOnServer() ? SERVER_NO_WINDOW_KEYS : UNAVAILABLE_KEYS[reason];
   return { title: translateNow(title), hint: translateNow(hint) };
 }
+
+/** A server daemon's "only a window answers that" (`server_no_window`, and
+ * `desktop_unavailable` from a server). */
+const SERVER_NO_WINDOW_KEYS: [TranslationKey, TranslationKey] = ["mobile.unavailable.serverNoWindowTitle", "mobile.unavailable.serverNoWindowHint"];
 
 /** The title and hint of each reason. With Tailscale off, the desktop's 100.x
  * address routes nowhere and the request stalls instead of failing — so a
@@ -147,6 +154,9 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   host_not_found: "mobile.failure.hostNotFound",
   // The sidecar's own refusals (`host.rs`).
   desktop_unavailable: "mobile.unavailable.desktopDownTitle",
+  // A server daemon's refusal of what only a window answers (`host.rs`
+  // `server_window_codes`).
+  server_no_window: "mobile.unavailable.serverNoWindowTitle",
   launch_pending: "mobile.failure.launchPending",
   catalog_unavailable: "mobile.failure.catalogUnavailable",
   request_failed: "mobile.unavailable.serverErrorTitle",
@@ -211,6 +221,8 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   cloud_tab_required: "mobile.failure.cloudTabRequired",
   unsupported_teleport: "mobile.failure.unsupportedTeleport",
   worktree_failed: "mobile.failure.worktreeFailed",
+  // A worktree the ＋ sheet listed that the project no longer has.
+  worktree_not_found: "mobile.failure.worktreeNotFound",
   api_key_unavailable: "mobile.failure.apiKeyUnavailable",
   api_budget_reached: "mobile.failure.apiBudgetReached",
   // A project type whose tabs the phone cannot attach to yet (`create` in the

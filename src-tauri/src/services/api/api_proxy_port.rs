@@ -18,6 +18,14 @@
 //! Where the holder cannot be told (macOS, Windows, or a listener that is
 //! gone again) nothing is ended, but the notice is still written. `AppHandle`
 //! free; the matching and classifying are pure.
+//!
+//! A server daemon's agent-tools listener (`commands::root_mcp`, every MCP
+//! lane) keeps its port the same way ([`Service::AgentTools`]): a server's
+//! tabs live in the tmux unit across a daemon restart (an update restarts
+//! every server service), each still naming the old port in its MCP URLs, and
+//! every account on the box shares the loopback — a tenant who took the port
+//! in the gap would get their tool calls and could answer them. Its notice has
+//! a file of its own and the same dialog.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,10 +45,46 @@ pub enum Holder {
     Unknown,
 }
 
-/// What the window shows once, from `<state_dir>/api-proxy-port-notice.json`.
+/// Whose remembered port was taken.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Service {
+    /// The API proxy (`services::api_proxy`).
+    #[default]
+    ApiProxy,
+    /// A server daemon's agent MCP listener (`commands::root_mcp`).
+    AgentTools,
+}
+
+impl Service {
+    fn notice_file(self) -> &'static str {
+        match self {
+            Service::ApiProxy => "api-proxy-port-notice.json",
+            Service::AgentTools => "agent-tools-port-notice.json",
+        }
+    }
+
+    /// Whether `text` (a tmux session environment or launcher script) points
+    /// an agent at this service on `port`. Pure.
+    pub fn named_in(self, text: &str, port: u16) -> bool {
+        match self {
+            Service::ApiProxy => names_port(text, port),
+            Service::AgentTools => names_tools_port(text, port),
+        }
+    }
+}
+
+/// The order notices are shown (and acknowledged) in.
+const SERVICES: [Service; 2] = [Service::ApiProxy, Service::AgentTools];
+
+/// What the window shows once, from `<state_dir>/api-proxy-port-notice.json`
+/// (or the agent tools' own file, [`Service::notice_file`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortNotice {
+    /// Whose port it was; an older notice (no field) is the API proxy's.
+    #[serde(default)]
+    pub service: Service,
     /// Unix seconds.
     pub ts: u64,
     /// The remembered port that was taken.
@@ -56,18 +100,20 @@ pub struct PortNotice {
     pub failed: Vec<String>,
 }
 
-fn notice_path() -> std::path::PathBuf {
-    crate::storage::state_dir().join("api-proxy-port-notice.json")
+fn notice_path(service: Service) -> std::path::PathBuf {
+    crate::storage::state_dir().join(service.notice_file())
 }
 
-/// The pending notice, if any.
+/// The pending notice, if any: the API proxy's first.
 pub fn read_notice() -> Option<PortNotice> {
-    crate::storage::read_json(&notice_path()).ok()
+    SERVICES.iter().find_map(|s| crate::storage::read_json(&notice_path(*s)).ok())
 }
 
-/// The user saw it.
+/// The user saw it: the one [`read_notice`] answers goes.
 pub fn ack_notice() {
-    let _ = std::fs::remove_file(notice_path());
+    if let Some(service) = SERVICES.into_iter().find(|s| notice_path(*s).is_file()) {
+        let _ = std::fs::remove_file(notice_path(service));
+    }
 }
 
 /// Who holds the port, from what [`loopback_owner::occupants`] found. `None`
@@ -102,8 +148,16 @@ pub fn names_port(text: &str, port: u16) -> bool {
     })
 }
 
-/// The app's local tmux sessions whose environment names `port`.
-fn keyed_sessions(port: u16) -> Vec<String> {
+/// Whether `text` names an agent MCP URL on `port`
+/// (`http://127.0.0.1:<port>/mcp…`, as every lane's `*_MCP_URL` variable and a
+/// CLI's MCP config spell it). The `/mcp` right after the port keeps a longer
+/// port from matching. Pure.
+pub fn names_tools_port(text: &str, port: u16) -> bool {
+    text.contains(&format!("//127.0.0.1:{port}/mcp"))
+}
+
+/// The app's local tmux sessions whose environment names `port` for `service`.
+fn keyed_sessions(service: Service, port: u16) -> Vec<String> {
     use crate::services::tmux_local;
     if !tmux_local::tmux_available() {
         return Vec::new();
@@ -121,17 +175,22 @@ fn keyed_sessions(port: u16) -> Vec<String> {
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
                 .unwrap_or_default();
-            names_port(&environment, port) || tmux_local::launcher_text(name).is_some_and(|t| names_port(&t, port))
+            service.named_in(&environment, port) || tmux_local::launcher_text(name).is_some_and(|t| service.named_in(&t, port))
         })
         .map(str::to_string)
         .collect()
 }
 
-/// The remembered `port` could not be bound and `new_port` was. Ends the
-/// sessions that name `port` unless its holder is only another instance of
-/// this program, and writes the notice. Blocking (a `tmux` call per session):
-/// the start path, once, and only in this rare case.
+/// The API proxy's remembered `port` could not be bound and `new_port` was.
+/// Ends the sessions that name `port` unless its holder is only another
+/// instance of this program, and writes the notice. Blocking (a `tmux` call
+/// per session): the start path, once, and only in this rare case.
 pub fn on_fallback(port: u16, new_port: u16) {
+    on_fallback_for(Service::ApiProxy, port, new_port);
+}
+
+/// [`on_fallback`] for `service`.
+pub fn on_fallback_for(service: Service, port: u16, new_port: u16) {
     let holder = {
         #[cfg(unix)]
         // SAFETY: getuid has no preconditions.
@@ -143,7 +202,7 @@ pub fn on_fallback(port: u16, new_port: u16) {
     let Some(holder) = holder else { return };
     let (mut ended, mut failed) = (Vec::new(), Vec::new());
     if holder != Holder::Unknown {
-        for name in keyed_sessions(port) {
+        for name in keyed_sessions(service, port) {
             let killed = crate::services::tmux_local::tmux_command()
                 .args(crate::services::tmux_local::local_tmux_kill_args(&name))
                 .output()
@@ -157,9 +216,20 @@ pub fn on_fallback(port: u16, new_port: u16) {
             }
         }
     }
-    eprintln!("[api-proxy] port {port} is held by {holder:?}; serving on {new_port}; ended {} agent session(s)", ended.len());
+    let tag = match service {
+        Service::ApiProxy => "api-proxy",
+        Service::AgentTools => "root-mcp",
+    };
+    eprintln!("[{tag}] port {port} is held by {holder:?}; serving on {new_port}; ended {} agent session(s)", ended.len());
     let ts = crate::clock::now_secs();
-    let _ = crate::storage::write_json_atomic(&notice_path(), &PortNotice { ts, port, new_port, holder, ended, failed });
+    let notice = PortNotice { service, ts, port, new_port, holder, ended, failed };
+    let _ = crate::storage::write_json_atomic(&notice_path(service), &notice);
+}
+
+/// A remembered port from the one-line file at `path`; `0`, junk or no file
+/// is none.
+pub fn remembered_in(path: &std::path::Path) -> Option<u16> {
+    std::fs::read_to_string(path).ok().and_then(|s| s.trim().parse::<u16>().ok()).filter(|p| *p != 0)
 }
 
 #[cfg(test)]
@@ -194,11 +264,38 @@ mod tests {
 
     #[test]
     fn the_notice_round_trips_and_older_shapes_read() {
-        let notice = PortNotice { ts: 7, port: 41234, new_port: 41300, holder: Holder::OtherAccount, ended: vec!["s-1".into()], failed: vec![] };
+        let notice = PortNotice { service: Service::AgentTools, ts: 7, port: 41234, new_port: 41300, holder: Holder::OtherAccount, ended: vec!["s-1".into()], failed: vec![] };
         let json = serde_json::to_string(&notice).unwrap();
         assert!(json.contains("\"newPort\":41300") && json.contains("\"holder\":\"otherAccount\""), "{json}");
+        assert!(json.contains("\"service\":\"agentTools\""), "{json}");
         assert_eq!(serde_json::from_str::<PortNotice>(&json).unwrap(), notice);
         let bare: PortNotice = serde_json::from_str(r#"{"ts":1,"port":2,"newPort":3,"holder":"fenced"}"#).unwrap();
         assert!(bare.ended.is_empty() && bare.failed.is_empty());
+        assert_eq!(bare.service, Service::ApiProxy, "a notice an older build wrote is the API proxy's");
+    }
+
+    #[test]
+    fn finds_a_session_whose_mcp_urls_name_the_tools_port() {
+        let env = "X_ROOT_MCP_URL=http://127.0.0.1:41234/mcp\nHOME=/h\n";
+        assert!(Service::AgentTools.named_in(env, 41234));
+        assert!(Service::AgentTools.named_in("export X_HELP_MCP_URL='http://127.0.0.1:41234/mcp/help'\n", 41234));
+        assert!(Service::AgentTools.named_in(r#"exec claude --mcp-config '{"mcpServers":{"t":{"type":"http","url":"http://127.0.0.1:41234/mcp/git"}}}'"#, 41234));
+        assert!(!Service::AgentTools.named_in("X_ROOT_MCP_URL=http://127.0.0.1:412345/mcp\n", 41234), "a longer port is another port");
+        assert!(!Service::AgentTools.named_in("X_ROOT_MCP_URL=http://127.0.0.1:41235/mcp\n", 41234));
+        assert!(!Service::AgentTools.named_in("ANTHROPIC_BASE_URL=http://127.0.0.1:41234/anthropic\n", 41234), "the proxy's port is not the tools'");
+        assert!(!Service::ApiProxy.named_in(env, 41234), "nor the other way round");
+    }
+
+    #[test]
+    fn a_remembered_port_is_a_real_port_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("port");
+        assert_eq!(remembered_in(&file), None);
+        std::fs::write(&file, "41234\n").unwrap();
+        assert_eq!(remembered_in(&file), Some(41234));
+        for junk in ["0", "", "x", "70000"] {
+            std::fs::write(&file, junk).unwrap();
+            assert_eq!(remembered_in(&file), None, "{junk:?}");
+        }
     }
 }

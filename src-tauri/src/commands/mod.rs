@@ -44,8 +44,6 @@ pub mod network;
 pub mod ollama;
 pub mod openvpn;
 pub mod os_clock;
-// Window/OS-only (`client`): not in the server daemon's build.
-#[cfg(feature = "desktop")]
 pub mod pdf_clip;
 pub mod pdf_markup;
 pub mod persist_lane;

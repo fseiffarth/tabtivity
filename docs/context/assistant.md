@@ -95,6 +95,9 @@ own beside root, help and the rest.
   assistant spawn holds. It lives
   in the spawn env, never on a command line. The lane is served by the window and
   by a desktop's Mobile host (`Runtime.serves_web`), never by a server daemon.
+  On a server the assistant itself is off whatever the flag says
+  (`Settings::assistant_enabled`, the phone's `discovery::assistant_open`):
+  not offered in v1, and a chat there would have neither lane.
 - Search backend: the user's choice. A SearXNG URL (`web_lane::validate_searxng_url`:
   no query string, 512 bytes, no userinfo) or Ollama's web search API with a
   key in the keychain (account `web-search:ollama`, never in `settings.json`,

@@ -666,12 +666,15 @@ pub enum CreateRefusal {
     /// The tab was minted and then taken back out: the spawn failed.
     LaunchFailed(String),
     Persist(String),
+    /// The worktree the ＋ sheet named is not one of the project's now.
+    WorktreeNotFound,
 }
 
 impl CreateRefusal {
     pub fn code(&self) -> &'static str {
         match self {
             Self::DesktopUnavailable => "desktop_unavailable",
+            Self::WorktreeNotFound => "worktree_not_found",
             Self::UnknownAgent => "unknown_agent",
             Self::NotAttachable => "not_attachable",
             Self::Assistant(code) => code,
@@ -960,10 +963,11 @@ fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
 /// tab is minted into the scope's session file first (so a window opening
 /// meanwhile merges it in rather than overwriting it), then started
 /// detached through `launch`; a launch that fails takes the record back out.
-/// Everything that needs the window — a sign-in, a cloud session, a
-/// worktree, a local model, a mode, an API key, the root console — is refused with
+/// Everything that needs the window — a sign-in, a cloud session, a local
+/// model, a mode, an API key, the root console — is refused with
 /// `desktop_unavailable`, as before this existed. Idempotent on the
-/// request's key, like the desktop's create.
+/// request's key, like the desktop's create. A worktree is refused too;
+/// [`create_tab_at`] takes the ones it may start in.
 pub async fn create_tab(
     state_dir: &Path,
     host_key: &[u8],
@@ -971,6 +975,37 @@ pub async fn create_tab(
     request: &CreateTabRequest,
     agents: &[AgentChoice],
     assistant: &[super::assistant::Choice],
+    launch: &HeadlessLaunch,
+) -> Result<HeadlessCreated, CreateRefusal> {
+    create_tab_at(state_dir, host_key, project, request, agents, assistant, &[], launch).await
+}
+
+/// Whether the owner may start `project`'s agent in one of its linked
+/// worktrees with no window: a local project's only. A remote project's
+/// agent runs in the mirror's root (`discovery::launch_place`), which a
+/// worktree's folder would not survive, and the other kinds have none.
+pub fn worktree_launches(project: &ResolvedProject) -> bool {
+    project.public.kind == ScopeKind::Project
+        && project.host == super::discovery::ProjectHost::Local
+        && !project.pinned
+        && project.has_folder()
+}
+
+/// [`create_tab`] that may also start an agent in one of `worktrees` (the
+/// ＋ sheet's `launch-options` list, `git_overview::launch_worktrees`), the
+/// way the window's bridge does: the folder the request's opaque id names,
+/// the tab labelled "<agent> · <branch>" (the main checkout: a plain agent
+/// tab). Only where [`worktree_launches`] allows it; a stale id is
+/// `worktree_not_found`.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_tab_at(
+    state_dir: &Path,
+    host_key: &[u8],
+    project: &ResolvedProject,
+    request: &CreateTabRequest,
+    agents: &[AgentChoice],
+    assistant: &[super::assistant::Choice],
+    worktrees: &[super::git_overview::LaunchWorktree],
     launch: &HeadlessLaunch,
 ) -> Result<HeadlessCreated, CreateRefusal> {
     // The chat assistant (decision 12): the one scope that may start with no
@@ -984,7 +1019,7 @@ pub async fn create_tab(
     }
     if request.sign_in.is_some()
         || request.cloud.is_some()
-        || request.worktree.is_some()
+        || (request.worktree.is_some() && !worktree_launches(project))
         || request.local.is_some()
         || request.like_tab.is_some()
         || request.mode.is_some()
@@ -1001,6 +1036,14 @@ pub async fn create_tab(
     if project.pinned {
         return Err(CreateRefusal::NotAttachable);
     }
+    // `launch_shape_ok` keeps a worktree to an agent request.
+    let linked = match request.worktree.as_deref() {
+        None => None,
+        Some(id) => {
+            let chosen = worktrees.iter().find(|wt| wt.row.id == id).ok_or(CreateRefusal::WorktreeNotFound)?;
+            (!chosen.row.main).then_some(chosen)
+        }
+    };
     let agent = match request.kind {
         CreateTabKind::Shell => None,
         CreateTabKind::Agent => Some(
@@ -1011,7 +1054,13 @@ pub async fn create_tab(
         ),
     };
     let request_hash = key_id(host_key, "request", &[&request.idempotency_key]);
-    let mut record = tab_record(&request.kind, agent, &project.root, &request_hash);
+    let cwd = linked.map_or_else(|| project.root.clone(), |wt| std::path::PathBuf::from(&wt.path));
+    let mut record = tab_record(&request.kind, agent, &cwd, &request_hash);
+    // The window's `worktreeAgentSpec` label: the branch, else the folder.
+    if let (Some(wt), Some(agent)) = (linked, agent) {
+        let branch = wt.row.branch.as_deref().unwrap_or(&wt.row.label);
+        record.label = format!("{} · {branch}", agent.public.label);
+    }
     // A remote project's agent runs in the mirror (`project.root`), as the
     // window runs it; said on the record so a later change of the default
     // cannot move it (`discovery::tab_is_local`).

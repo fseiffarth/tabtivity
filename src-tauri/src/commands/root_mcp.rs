@@ -520,7 +520,56 @@ pub async fn start_headless(
         Some(ctx) => serve_everything(ctx, notify),
         None => notify,
     };
-    start_headless_on(LOOPBACK, notify, server.cloned(), shutdown).await
+    // Only a server daemon keeps its port (`api_proxy_port::Service::
+    // AgentTools`): its tabs outlive it in the tmux unit, naming the port, on
+    // a loopback every account shares. A desktop's Mobile host does not.
+    let remember = server
+        .filter(|_| crate::services::server::is_server())
+        .map(|_| storage::state_dir().join(TOOLS_PORT_FILE));
+    let on_taken = |taken, port| {
+        crate::services::api_proxy_port::on_fallback_for(crate::services::api_proxy_port::Service::AgentTools, taken, port)
+    };
+    start_headless_remembering(remember.as_deref(), on_taken, notify, server.cloned(), shutdown).await
+}
+
+/// Where a server daemon remembers its agent-tools port (not a secret).
+const TOOLS_PORT_FILE: &str = "root-mcp-port";
+
+/// [`start_headless_on`] on any free port, but first, when `remember` names a
+/// file, on the port it holds — so the agents of tabs that outlived the last
+/// daemon reach this listener (which refuses their dead tokens) rather than
+/// whoever else took the port. When that port is taken, `on_taken(taken,
+/// bound)` runs off the async workers before this returns — the daemon's
+/// ends the sessions naming it and tells the user
+/// (`api_proxy_port::on_fallback_for`), unless only another instance of this
+/// program holds it. The port bound is written back.
+async fn start_headless_remembering(
+    remember: Option<&std::path::Path>,
+    on_taken: impl FnOnce(u16, u16) + Send + 'static,
+    notify: NoticeSink,
+    ctx: Option<CoreCtx>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<u16, String> {
+    let Some(file) = remember else {
+        return start_headless_on(LOOPBACK, notify, ctx, shutdown).await;
+    };
+    let preferred = crate::services::api_proxy_port::remembered_in(file);
+    if let Some(port) = preferred {
+        let addr = std::net::SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        if let Ok(listener) = bind(addr).await {
+            let (port, server) = serve(listener, ctx.clone(), ctx.is_none(), notify.clone(), until_true(shutdown.clone()))?;
+            tokio::spawn(server);
+            return Ok(port);
+        }
+    }
+    let port = start_headless_on(LOOPBACK, notify, ctx, shutdown).await?;
+    if let Some(taken) = preferred {
+        let _ = tokio::task::spawn_blocking(move || on_taken(taken, port)).await;
+    }
+    if let Err(error) = std::fs::write(file, port.to_string()) {
+        eprintln!("[root-mcp] remember port {port} in {}: {error}", file.display());
+    }
+    Ok(port)
 }
 
 /// Any free loopback port.
@@ -618,7 +667,13 @@ fn serve(
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     let serves = ctx.is_some();
-    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves, serves_web });
+    #[cfg(test)]
+    let publish = !UNPUBLISHED.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    let publish = true;
+    if publish {
+        root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves, serves_web });
+    }
     let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
     let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
@@ -626,6 +681,13 @@ fn serve(
             eprintln!("[root-mcp] server stopped: {error}");
         }
     }))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's listeners stay off the process's one [`Runtime`] (set once):
+    /// the end-to-end host test asserts the runtime is its own listener's.
+    static UNPUBLISHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[derive(Serialize)]
@@ -1115,6 +1177,42 @@ mod security_tests {
         }
         // Nor does the process-wide store know them.
         assert!(root_mcp::authenticate(Some(&format!("Bearer {schedule}"))).is_none());
+    }
+
+    /// A server daemon's listener comes back on the port it remembered, so a
+    /// tab that outlived the last daemon reaches it and not a squatter; a
+    /// taken port is given up for a free one, which is remembered instead.
+    #[tokio::test]
+    async fn a_server_listener_rebinds_its_remembered_port_or_moves_off_a_taken_one() {
+        // Single-threaded test runtime: every bind below runs on this thread.
+        UNPUBLISHED.with(|flag| flag.set(true));
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(TOOLS_PORT_FILE);
+        let (_stop, stopped) = tokio::sync::watch::channel(false);
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<(u16, u16)>::new()));
+        let hook = || {
+            let seen = seen.clone();
+            move |taken, bound| seen.lock().unwrap().push((taken, bound))
+        };
+        let first = start_headless_remembering(Some(&file), hook(), Arc::new(|_| {}), None, stopped.clone()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), first.to_string(), "the port bound is remembered");
+        // A free remembered port is bound again.
+        let free = std::net::TcpListener::bind(LOOPBACK).unwrap().local_addr().unwrap().port();
+        std::fs::write(&file, free.to_string()).unwrap();
+        assert_eq!(start_headless_remembering(Some(&file), hook(), Arc::new(|_| {}), None, stopped.clone()).await.unwrap(), free);
+        assert!(seen.lock().unwrap().is_empty(), "nothing was taken yet");
+        // A taken one is left for any free port, which replaces it, and the
+        // hook that ends the sessions naming it runs.
+        let taken = std::net::TcpListener::bind(LOOPBACK).unwrap();
+        let held = taken.local_addr().unwrap().port();
+        std::fs::write(&file, held.to_string()).unwrap();
+        let moved = start_headless_remembering(Some(&file), hook(), Arc::new(|_| {}), None, stopped.clone()).await.unwrap();
+        assert_ne!(moved, held);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), moved.to_string());
+        assert_eq!(*seen.lock().unwrap(), [(held, moved)]);
+        // Without a file (the desktop's Mobile host) nothing is remembered.
+        assert!(start_headless_remembering(None, hook(), Arc::new(|_| {}), None, stopped).await.is_ok());
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
     /// A Mobile host whose first bind fails says so (a fixed prefix for the

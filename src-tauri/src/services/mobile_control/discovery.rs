@@ -1033,8 +1033,12 @@ pub(super) fn is_assistant_scope_id(id: &str) -> bool {
 /// detaches at `pty_bridge`'s next re-check. Raw JSON, the sidecar's way;
 /// [`crate::schema::Settings::assistant_phone_open`] is the same rule on the
 /// typed settings and a test holds the two together. The flag is on by
-/// default (unset → on). Missing or unreadable settings refuse.
+/// default (unset → on). Missing or unreadable settings refuse, and a hosted
+/// server never offers it (`Settings::assistant_enabled`).
 pub fn assistant_open(state_dir: &Path) -> bool {
+    if crate::services::server::is_server() {
+        return false;
+    }
     let Some(settings) = fs::read(state_dir.join("settings.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -1884,6 +1888,18 @@ impl Catalog {
     /// one device-agnostic snapshot; each request filters its own copy.
     pub fn for_device(mut self, device_id: &str) -> Self {
         self.projects.retain(|project| project.reaches(device_id));
+        self
+    }
+
+    /// This snapshot as a host that never has a window lists it (a server
+    /// daemon): the facts row's ⎇ worktree and locality moves are the
+    /// window's — it stops the CLI, carries the conversation and respawns
+    /// the tab — so no tab offers them, and the phone draws the plain branch.
+    pub fn without_window_moves(mut self) -> Self {
+        for tab in self.projects.iter_mut().flat_map(|project| project.tabs.iter_mut()) {
+            tab.public.worktree_movable = false;
+            tab.public.location_movable = false;
+        }
         self
     }
 
