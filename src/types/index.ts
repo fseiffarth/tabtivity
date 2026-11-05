@@ -551,8 +551,6 @@ export interface Settings {
    *  first, then menu order (`agentShortcutSlots`); keys it lacks follow the
    *  ones it names. Round-trips through the backend settings `extra`. */
   agent_order?: string[];
-  /** Explicit opt-in: skip confirmation on future CLI usage-limit handoffs. */
-  agent_limit_auto_handoff?: boolean;
   /** New agent tabs take the name of their first prompt (`lib/agents/autoTabName`).
    *  Unset = on; only an explicit `false` turns it off. Round-trips through the
    *  backend settings `extra`. */
@@ -728,6 +726,10 @@ export interface Settings {
    *  of each day. Turning it off stops the popup, not the counting — the recap
    *  stays reachable from Settings. */
   daily_stats_recap?: boolean;
+  /** When true (the default; absent = on), the app looks up the CLIs' and Ollama's
+   *  newest releases once a day by itself. Off: only a click in Manage CLIs or the
+   *  Ollama row asks. Read by the backend at every tick (Manage CLIs). */
+  daily_release_check?: boolean;
   /** UTC date ("YYYY-MM-DD") the recap was last auto-shown, so it opens once a day
    *  rather than once per window. Written by the recap host. */
   daily_stats_last_shown?: string;

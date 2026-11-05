@@ -1851,7 +1851,8 @@ const DAILY_CHECK_TICK: std::time::Duration = std::time::Duration::from_secs(60 
 /// GET per due CLI, nothing else leaves the machine; nothing is installed. When
 /// anything was asked, every window hears [`AGENT_UPDATES_CHECKED_EVENT`] and
 /// re-reads the stored answers: the Models & agents menu and a new tab of the
-/// CLI show them.
+/// CLI show them. Off with `Settings::daily_release_check` (Manage CLIs), read at
+/// every tick: then nothing is asked until a click.
 pub fn start_daily_update_check(ctx: CoreCtx) {
     app_core::rt::spawn(async move {
         tokio::time::sleep(DAILY_CHECK_FIRST_DELAY).await;
@@ -1862,8 +1863,28 @@ pub fn start_daily_update_check(ctx: CoreCtx) {
     });
 }
 
+/// Whether the user lets the app look up releases by itself
+/// (`Settings::daily_release_check`, Manage CLIs). No settings file is the
+/// default, on; a file that cannot be read counts as off, since the switch
+/// cannot be told and a lookup is a request out.
+fn release_check_enabled_in(path: &std::path::Path) -> bool {
+    if !path.exists() {
+        return crate::schema::Settings::default().daily_release_check();
+    }
+    crate::storage::read_json::<crate::schema::Settings>(path).is_ok_and(|settings| settings.daily_release_check())
+}
+
 async fn run_daily_update_check(ctx: &CoreCtx) {
     use crate::services::agent_latest;
+
+    // The switch is read at every tick, so a change applies without a restart.
+    // Off: neither Ollama's nor any CLI's registry is asked; a click still is.
+    let on = app_core::rt::spawn_blocking(|| release_check_enabled_in(&crate::storage::settings_path()))
+        .await
+        .unwrap_or(false);
+    if !on {
+        return;
+    }
 
     // Ollama's own release, beside the CLIs' (`commands::ollama`); windows
     // re-read it through `ollama_version_status`.
@@ -1903,31 +1924,32 @@ pub async fn dismiss_agent_version(agent: String, version: String) -> Result<(),
     Ok(())
 }
 
-/// `remembered_model_rows({ agent })` → `{ title?, rows }`, what `agent`'s own
-/// model picker drew last time in this build of it (`services::model_rows`),
-/// for a model sheet to list while the session draws its picker; `null` when
-/// none.
+/// `remembered_model_rows({ agent, scope })` → `{ title?, rows }`, what
+/// `agent`'s own model picker drew last time in this build of it, in a session
+/// of the same `scope` (`services::model_rows`), for a model sheet to list
+/// while the session draws its picker; `null` when none. Never what another
+/// scope's screen drew (gap 95).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn remembered_model_rows(agent: String) -> Option<crate::services::model_rows::Rows> {
+pub async fn remembered_model_rows(agent: String, scope: String) -> Option<crate::services::model_rows::Rows> {
     use crate::services::model_rows;
     app_core::rt::spawn_blocking(move || {
         let (id, source) = installed_source(&agent)?;
-        model_rows::rows_in(&model_rows::store_path(), id, Some(&source))
+        model_rows::rows_in(&model_rows::store_path(), id, &scope, Some(&source))
     })
     .await
     .ok()
     .flatten()
 }
 
-/// `remember_model_rows({ agent, rows: { title?, rows } })`: keep what
-/// `agent`'s picker just drew for its installed build. A patch of that one
-/// entry.
+/// `remember_model_rows({ agent, scope, rows: { title?, rows } })`: keep what
+/// `agent`'s picker just drew for its installed build, under the `scope` of
+/// the tab it was read in. A patch of that one entry.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn remember_model_rows(agent: String, rows: crate::services::model_rows::Rows) -> Result<(), String> {
+pub async fn remember_model_rows(agent: String, scope: String, rows: crate::services::model_rows::Rows) -> Result<(), String> {
     use crate::services::model_rows;
     app_core::rt::spawn_blocking(move || {
         let (id, source) = installed_source(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
-        model_rows::remember_rows_in(&model_rows::store_path(), id, Some(&source), rows)
+        model_rows::remember_rows_in(&model_rows::store_path(), id, &scope, Some(&source), rows)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2249,6 +2271,43 @@ mod tests {
         ] {
             assert!(text.contains("into_probe_home("), "{what} must run in the probe home");
         }
+    }
+
+    /// The daily release check's switch: absent is on, only an explicit false
+    /// is off, an unreadable file is off, and an old `agent_limit_auto_handoff`
+    /// beside it changes nothing.
+    #[test]
+    fn the_release_check_switch_reads_absent_as_on_and_false_as_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert!(release_check_enabled_in(&path), "no settings file: the default, on");
+        for (json, want) in [
+            ("{}", true),
+            (r#"{"daily_release_check":true}"#, true),
+            (r#"{"daily_release_check":false}"#, false),
+            (r#"{"agent_limit_auto_handoff":true}"#, true),
+            ("{not json", false),
+        ] {
+            std::fs::write(&path, json).unwrap();
+            assert_eq!(release_check_enabled_in(&path), want, "{json}");
+        }
+    }
+
+    /// The tick reads the switch before it asks Ollama or any registry, and
+    /// those requests have no other background caller.
+    #[test]
+    fn the_daily_tick_reads_the_switch_before_any_request() {
+        let this = include_str!("agents.rs");
+        let start = this.find("async fn run_daily_update_check(").expect("tick");
+        let end = this[start..].find("\n}\n").map_or(this.len(), |e| start + e);
+        let tick = &this[start..end];
+        let gate = tick.find("release_check_enabled_in(").expect("the tick reads the switch");
+        assert!(gate < tick.find("daily_release_check().await").unwrap());
+        assert!(gate < tick.find("check_updates_of(").unwrap());
+        assert!(tick.contains("if !on {\n        return;"));
+        let production = &this[..this.find("#[cfg(test)]").unwrap()];
+        assert_eq!(production.matches("daily_release_check().await").count(), 1);
+        assert_eq!(production.matches("run_daily_update_check(&ctx)").count(), 1);
     }
 
     #[test]
