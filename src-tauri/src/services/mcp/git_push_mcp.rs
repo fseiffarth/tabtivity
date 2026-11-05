@@ -416,20 +416,27 @@ pub(crate) fn workflow_names_branch(dir: &Path, head: &str, branch: &str) -> boo
         Ok(o) if o.status.success() => o.stdout,
         _ => return false,
     };
-    let blobs = String::from_utf8_lossy(&listing).split('\0').filter_map(|entry| {
+    let all_blobs = String::from_utf8_lossy(&listing).split('\0').filter_map(|entry| {
         let (meta, path) = entry.split_once('\t')?;
         let mut meta = meta.split(' ');
         let (mode, kind, oid) = (meta.next()?, meta.next()?, meta.next()?);
         let name = path.rsplit('/').next()?.to_ascii_lowercase();
         // A regular blob only: not a link (its text is a path) or a submodule.
         (matches!(mode, "100644" | "100755") && kind == "blob" && (name.ends_with(".yml") || name.ends_with(".yaml")) && validate_sha(oid).is_ok()).then(|| oid.to_string())
-    }).take(WORKFLOW_MAX_FILES).collect::<Vec<_>>();
-    blobs.iter().any(|oid| {
+    }).collect::<Vec<_>>();
+    // A bound is not a place to hide: the commit is the agent's, so padding a
+    // workflow past the byte cap or adding workflows past the file cap must not
+    // turn the check off. Past either bound the branch needs a card (the answer
+    // only ever adds one).
+    if all_blobs.len() > WORKFLOW_MAX_FILES { return true; }
+    all_blobs.iter().any(|oid| {
         let mut cmd = lane_git_command(dir, &["cat-file", "blob", oid]);
         let opts = crate::services::git_bounded::Opts { stdout_cap: Some(WORKFLOW_MAX_BYTES), timeout: Some(Duration::from_secs(10)), ..Default::default() };
         let Ok(ran) = crate::services::git_bounded::run(&mut cmd, opts) else { return false };
-        // A file past the cap is cut mid-line: never parsed.
-        if ran.cut || !ran.output.status.success() { return false; }
+        // A file past the cap is cut mid-line and cannot be read: it counts as
+        // naming the branch.
+        if ran.cut { return true; }
+        if !ran.output.status.success() { return false; }
         push_branch_patterns(&String::from_utf8_lossy(&ran.output.stdout)).iter().any(|pattern| pattern_names_branch(pattern, branch))
     })
 }
@@ -2452,7 +2459,8 @@ mod tests {
             remote_sha: sh(work, &["rev-parse", "origin/develop"]), to_default: false, default_branch: Some("main".into()), commits: vec!["b".into()], diffstat: String::new(), needs_url_confirm: false });
         id
     }
-    fn forget_settle_answers() { settle_asked().lock().unwrap().clear(); }
+    /// Forget the answer for one card only: the cache is process-wide and tests run in parallel.
+    fn forget_settle_answers(id: &str) { settle_asked().lock().unwrap().remove(id); }
 
     #[test]
     fn a_card_the_remote_already_holds_is_dismissed_and_stays_listed_as_the_systems() {
@@ -2460,13 +2468,13 @@ mod tests {
         let (_root, remote, work) = pair();
         let head = commit(&work, "b.txt");
         let id = staged_card("tab:elsewhere", &work, &remote, &head);
-        forget_settle_answers();
+        forget_settle_answers(&id);
         assert!(!settle_pushed_elsewhere(None, Some("tab:elsewhere")));
         assert_eq!(get(&id).unwrap().status, Status::Pending, "not on the remote yet");
         // The user pushes from a terminal, a commit past the card's.
         commit(&work, "c.txt");
         sh(&work, &["push", "-q", "origin", "develop"]);
-        forget_settle_answers();
+        forget_settle_answers(&id);
         assert!(settle_pushed_elsewhere(None, Some("tab:elsewhere")));
         let p = get(&id).unwrap();
         assert_eq!((p.status, p.category, p.dismissed_by), (Status::Dismissed, Some(Category::Dismissed), Some(DismissedBy::System)), "{}", p.message);
@@ -2484,7 +2492,7 @@ mod tests {
         let id = staged_card("tab:forged", &work, &remote, &head);
         // The agent writes the tracking ref to the card's commit; the remote never got it.
         sh(&work, &["update-ref", "refs/remotes/origin/develop", &head]);
-        forget_settle_answers();
+        forget_settle_answers(&id);
         assert!(!settle_pushed_elsewhere(None, Some("tab:forged")));
         assert_eq!(get(&id).unwrap().status, Status::Pending, "the remote does not hold the commit");
         // `remote.origin.url` re-read from the writable config is never asked: the card's own URL is.
@@ -2492,17 +2500,17 @@ mod tests {
         sh(_root.path(), &["init", "-q", "--bare", "-b", "main", other.to_str().unwrap()]);
         sh(&work, &["push", "-q", other.to_str().unwrap(), &format!("{head}:refs/heads/develop")]);
         sh(&work, &["config", "remote.origin.url", &format!("file://{}", other.display())]);
-        forget_settle_answers();
+        forget_settle_answers(&id);
         assert!(!settle_pushed_elsewhere(None, Some("tab:forged")));
         assert_eq!(get(&id).unwrap().status, Status::Pending, "a rewritten remote URL is not consulted");
         // A card whose URL the user has not confirmed is not asked at all.
         update(&id, |p| p.needs_url_confirm = true);
         sh(&work, &["push", "-q", remote.to_str().unwrap(), &format!("{head}:refs/heads/develop")]);
-        forget_settle_answers();
+        forget_settle_answers(&id);
         assert!(!settle_pushed_elsewhere(None, Some("tab:forged")));
         assert_eq!(get(&id).unwrap().status, Status::Pending);
         update(&id, |p| p.needs_url_confirm = false);
-        forget_settle_answers();
+        forget_settle_answers(&id);
         assert!(settle_pushed_elsewhere(None, Some("tab:forged")), "the remote does hold it now");
         proposals().lock().unwrap().retain(|p| p.tab != "tab:forged");
     }
@@ -2513,13 +2521,13 @@ mod tests {
         let (_root, remote, work) = pair();
         let head = commit(&work, "b.txt");
         let id = staged_card("tab:asked", &work, &remote, &head);
-        forget_settle_answers();
+        forget_settle_answers(&id);
         assert!(!settle_pushed_elsewhere(None, Some("tab:asked")));
         sh(&work, &["push", "-q", "origin", "develop"]);
         assert!(!settle_pushed_elsewhere(None, Some("tab:asked")), "an answer stands for the recheck window");
         assert_eq!(get(&id).unwrap().status, Status::Pending);
         // The agent's own poll asks nobody, however long since.
-        forget_settle_answers();
+        forget_settle_answers(&id);
         let s = session("tab:asked", &work);
         let status = call_status(&s, &work, &propose_policy());
         assert_eq!(status["proposals"][0]["status"], "pending", "git_push_status settles nothing");
@@ -2676,15 +2684,20 @@ mod tests {
         // Past the cap of bytes, a workflow is not read.
         let padded = format!("# {}\non:\n  push:\n    branches: [huge]\n", "x".repeat(WORKFLOW_MAX_BYTES as usize));
         let big = commit_files(&work, &[(".github/workflows/big.yml", padded.as_str())]);
-        assert!(!names(&big, "huge"), "a file past {WORKFLOW_MAX_BYTES} bytes is not parsed");
-        assert!(names(&big, "develop"), "the others still count");
-        // Past the cap of files, the rest are not read.
-        let mut many: Vec<(String, String)> = (0..WORKFLOW_MAX_FILES).map(|i| (format!(".github/workflows/a{i:02}.yml"), if i == 0 { "on:\n  push:\n    branches: [early]\n".into() } else { "on: push\n".to_string() })).collect();
-        many.push((".github/workflows/zz.yml".into(), "on:\n  push:\n    branches: [late]\n".into()));
-        let refs: Vec<(&str, &str)> = many.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
-        let crowded = commit_files(&work, &refs);
-        assert!(names(&crowded, "early"), "within the cap of {WORKFLOW_MAX_FILES} files");
-        assert!(!names(&crowded, "late"), "past it");
+        assert!(names(&big, "huge") && names(&big, "feature/x"), "a workflow past {WORKFLOW_MAX_BYTES} bytes cannot be read, so every branch needs a card");
+    }
+
+    /// Padding a commit with decoy workflows must not hide the real one.
+    #[test]
+    fn workflows_past_the_file_cap_make_every_branch_need_a_card() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        let (_root, _remote, work) = pair();
+        let names: Vec<String> = (0..WORKFLOW_MAX_FILES).map(|i| format!(".github/workflows/a{i:02}.yml")).collect();
+        let files: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), "on: push\n")).collect();
+        let at_cap = commit_files(&work, &files);
+        assert!(!workflow_names_branch(&work, &at_cap, "feature/x"), "within the cap, workflows with no branch filter name nothing");
+        let head = commit_files(&work, &[(".github/workflows/zz.yml", "on:\n  push:\n    branches: [late]\n")]);
+        assert!(workflow_names_branch(&work, &head, "late") && workflow_names_branch(&work, &head, "feature/x"), "past {WORKFLOW_MAX_FILES} files every branch needs a card");
     }
 
     #[cfg(unix)]

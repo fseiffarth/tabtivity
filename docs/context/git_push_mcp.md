@@ -94,7 +94,7 @@ listed `protected` one. The remote's default branch — `ls-remote --symref
 HEAD` — and `main`/`master` whatever the remote says, and any branch a workflow of
 the pushed commit names in its `on.push.branches` (a literal name or a literal
 prefix such as `release/**`; a bare `**`, a negation or no filter names nothing;
-read from the commit's committed blobs, 20 files of 64 KiB, `workflow_names_branch`;
+read from the commit's committed blobs, `workflow_names_branch`; past 20 files or 64 KiB a file the check cannot read in full makes every branch need a card;
 gap 103) are pushable but **always staged**,
 whatever the level (`Plan::to_default`, `must_stage`; the card says so). Until
 2026-10-26 it was refused outright, which left the lane useless in every
