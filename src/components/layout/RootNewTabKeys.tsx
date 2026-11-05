@@ -3,12 +3,13 @@ import { useT } from "../../lib/i18n";
 import {
   NEW_TAB_SHORTCUT_EVENT,
   NEW_TAB_SLOTS_EVENT,
+  ROOT_EMPTY_GROUP_ID,
   type NewTabRequest,
   type NewTabShortcutDetail,
   type NewTabSlotsDetail,
 } from "../../lib/shortcuts/newTabChord";
 import { SHELL_ITEMS, agentShortcutSlots, buildStaticTabSpec, onOwnLogin } from "../../lib/tabs/newTabItems";
-import { EMPTY_GROUP_ID, ROOT_SCOPE, type TabEntry } from "../../stores/tabs";
+import { ROOT_SCOPE, type TabEntry } from "../../stores/tabs";
 import { MONITOR_TAB_CMD } from "../../stores/tabs/tabKinds";
 import { useAddTabMenuData } from "../tabs/useAddTabMenuData";
 
@@ -51,7 +52,7 @@ export function RootNewTabKeys({
   live.current = { groupIds, rootDir, onAdd, onMenu, slots, t };
 
   useEffect(() => {
-    const mine = (groupId: string) => groupId === EMPTY_GROUP_ID || live.current.groupIds.includes(groupId);
+    const mine = (groupId: string) => groupId === ROOT_EMPTY_GROUP_ID || live.current.groupIds.includes(groupId);
     const open = (request: NewTabRequest, groupId: string): boolean => {
       const { rootDir: cwd, onAdd: add, onMenu: menu, slots: agentSlots, t: tr } = live.current;
       switch (request.kind) {

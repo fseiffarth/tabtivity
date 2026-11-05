@@ -51,6 +51,7 @@ import { RootRightsBadge, type RootMcpRights } from "./RootRightsBadge";
 import { RootStartAgent } from "./RootStartAgent";
 import { RootRail } from "../cockpit/RootRail";
 import { RootNewTabKeys } from "./RootNewTabKeys";
+import { ROOT_EMPTY_GROUP_ID } from "../../lib/shortcuts/newTabChord";
 import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 
@@ -370,7 +371,7 @@ export function RootView({
     return true;
   };
   const addTabTo = (spec: Omit<TabEntry, "key">, groupId: string) => {
-    if (groupId !== EMPTY_GROUP_ID) useTabsStore.getState().focusGroupInScope(ROOT_SCOPE, groupId);
+    if (groupId !== ROOT_EMPTY_GROUP_ID) useTabsStore.getState().focusGroupInScope(ROOT_SCOPE, groupId);
     addTab(spec);
   };
 

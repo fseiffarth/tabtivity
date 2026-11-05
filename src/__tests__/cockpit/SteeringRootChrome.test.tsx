@@ -38,7 +38,7 @@ import { clearRegionCursor } from "../../lib/shortcuts/steeringRegion";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useSettingsStore } from "../../stores/settings";
-import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { EMPTY_GROUP_ID, useTabsStore, type TabEntry } from "../../stores/tabs";
 import type { Settings } from "../../types";
 
 function Harness() {
@@ -192,6 +192,23 @@ describe("the new-tab keys open a tab in Root", () => {
     press({ key: " ", shiftKey: true });
     press({ key: "n" });
     expect(rootTabs().map((t) => t.kind)).toEqual(["shell"]);
+  });
+
+  it("an empty Root is not the empty workspace's placeholder bar: the key opens ONE tab", () => {
+    useTabsStore.setState({ tabsByScope: { p: [], root: [] }, layoutByScope: {}, focusedGroupByScope: {} });
+    // What the empty workspace's placeholder TabBar behind the window listens
+    // for (it answers to EMPTY_GROUP_ID).
+    const workspaceBar: string[] = [];
+    const heard = (e: Event) => {
+      const { groupId } = (e as CustomEvent<{ groupId: string }>).detail;
+      if (groupId === EMPTY_GROUP_ID) workspaceBar.push(groupId);
+    };
+    window.addEventListener("app:new-tab-shortcut", heard);
+    render(<><Harness /><RootOverlayHost /></>);
+    press({ key: "N", ctrlKey: true, shiftKey: true });
+    window.removeEventListener("app:new-tab-shortcut", heard);
+    expect(rootTabs().map((t) => t.kind)).toEqual(["shell"]);
+    expect(workspaceBar).toEqual([]);
   });
 
   it("the + key opens Root's + menu and walks it as the add-tab region", () => {
