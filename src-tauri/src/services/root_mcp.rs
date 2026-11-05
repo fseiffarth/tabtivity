@@ -91,13 +91,16 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// Each process that spawns agent tabs runs its own listener and serves the
 /// tabs it spawned (`docs/headless_mcp_plan.md`): the window, and the Mobile
 /// host for the tabs it starts with no window open. `serves_root` is false in
-/// the Mobile host, which serves the schedule, push and help lanes only — so
-/// [`grant_lanes`] hands out neither a root nor a reader token there.
+/// the Mobile host, which serves the schedule, push, help, web and markup
+/// lanes — so [`grant_lanes`] hands out neither a root nor a reader token
+/// there.
 /// `serves_markup`: this process holds the markup questions its tabs ask
-/// (`services::markup_mcp`) and answers the views that show them — the
-/// window, and a server daemon, which has no window and answers both the
-/// browser client and the phone itself. A desktop's Mobile host does not:
-/// the window's markup view could never see its asks.
+/// (`services::markup_mcp`) and answers the views that show them. Every
+/// listener does: the window, a server daemon (which has no window and
+/// answers both the browser client and the phone itself) and, since phase 1b,
+/// a desktop's Mobile host, whose asks the window's markup commands read over
+/// its admin socket (`commands::markup_mcp`) and whose phone routes answer
+/// them when no window is open (`host.rs` `markup_call`).
 /// `serves_web`: this process serves the chat assistant's web lane
 /// (`services::web_lane`, `/mcp/web`) and so grants its token
 /// ([`grant_lanes`]'s assistant arm). The window and a desktop's Mobile host
