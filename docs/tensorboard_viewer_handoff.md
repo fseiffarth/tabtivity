@@ -102,13 +102,13 @@ real finding (below, fixed).
 - Full `npx vitest run`: 1083 files / 11,133 tests passed. The one failure was
   `theme/TypeScale` (my `px` font sizes in `tensorboard.css`); fixed to tokens
   and re-run with the theme folder and the viewer tests: 196 tests pass.
-  New tests: `tensorboard.test.ts` (37), `TensorBoardView.test.tsx` (8),
+  New tests: `tensorboard.test.ts` (31), `TensorBoardView.test.tsx` (8),
   3 detection tests in `InternalViewer.test.ts`.
 - `cargo clippy -p tabtivity -p app-serverd --all-targets -- -D warnings`,
   `cargo clippy -p tabtivity --no-default-features --lib -- -D warnings`,
   `cargo clippy -p app-serverd --all-targets -- -D warnings`: pass.
 - `cargo test -p tabtivity -p app-serverd`: 5142 + 143 + 38 + 1 passed, 0 failed
-  (33 of the lib tests are the new `tfevents` ones).
+  (34 of the lib tests are the new `tfevents` ones).
 - `cargo test -p tabtivity --no-default-features --lib --test server_secrets`
   (the daemon build): 4972 + 1 passed, 0 failed.
 - `UPDATE_COMMAND_CLASSES=1 ... the_generated_command_classes_ts_is_current`
