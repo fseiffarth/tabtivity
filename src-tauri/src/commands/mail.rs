@@ -1982,13 +1982,20 @@ pub async fn mail_pgp_set_verified(
 /// file here, never from the caller: the keyring refuses a key whose user ids
 /// do not name the account's address, and verifies one only when every address
 /// on it is one of the user's own (`PgpKeyring::bind_account`).
+///
+/// A private key that was **imported** rather than generated here is bound only
+/// with `acknowledge_imported: true` (the Keys dialog's confirm, which names the
+/// risk) and is then still unverified. The check is the keyring's, not the
+/// dialog's, so a client that never shows the dialog meets it too. Returns the
+/// key as it is now, with a note when the bind left it unverified.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mail_pgp_bind(
     ctx: Ctx,
     fingerprint: String,
     account_id: String,
     bind: bool,
-) -> Result<(), String> {
+    acknowledge_imported: Option<bool>,
+) -> Result<PgpKeyInfo, String> {
     let state = ctx.get::<MailState>();
     let rt = state.clone();
     app_core::rt::try_blocking("mail", move || {
@@ -2003,7 +2010,14 @@ pub async fn mail_pgp_bind(
         } else {
             (String::new(), Vec::new())
         };
-        keyring_of(&rt)?.bind_account(&fingerprint, &account_id, bind, &address, &own)
+        keyring_of(&rt)?.bind_account(
+            &fingerprint,
+            &account_id,
+            bind,
+            &address,
+            &own,
+            acknowledge_imported.unwrap_or(false),
+        )
     })
     .await
 }

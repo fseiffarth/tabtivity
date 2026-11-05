@@ -106,8 +106,25 @@ struct StoredKey {
     accounts: Vec<String>,
     #[serde(default)]
     algorithm: String,
+    /// Where the key came from. Absent in files an older build wrote: read it
+    /// through [`origin_of`], never directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<KeyOrigin>,
     /// Base64 of the binary OpenPGP key packet stream.
     material: String,
+}
+
+/// Whether a key was made on this machine or came in from outside. Only the
+/// first is something the user watched happen; an imported *private* key is a
+/// file somebody else may hold the other copy of, so binding one as the
+/// account's identity needs an explicit acknowledgement and never earns
+/// Verified by itself (gap 91).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyOrigin {
+    Generated,
+    #[default]
+    Imported,
 }
 
 /// One key, as the UI sees it. Carries **no key material** — the panel and the
@@ -129,6 +146,21 @@ pub struct PgpKeyInfo {
     pub verified: bool,
     pub accounts: Vec<String>,
     pub algorithm: String,
+    /// Generated here or imported (see [`KeyOrigin`]).
+    #[serde(default)]
+    pub origin: KeyOrigin,
+    /// The key carries a verified revocation. Computed when read, never stored.
+    #[serde(default)]
+    pub revoked: bool,
+    /// The key's expiry has passed. Computed when read, never stored.
+    #[serde(default)]
+    pub expired: bool,
+    /// Machine tokens for what an import or a bind just did to the key's
+    /// trust, which the dialog turns into sentences: `identities-changed-
+    /// unverified`, `identities-changed-unbound`, `bound-imported-unverified`.
+    /// Only the answer to that one call carries any; a later read has none.
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 impl PgpKeyInfo {
@@ -306,6 +338,7 @@ impl PgpKeyring {
             verified: true,
             accounts: vec![account_id.to_string()],
             algorithm: "Curve25519".into(),
+            origin: Some(KeyOrigin::Generated),
             material: B64.encode(&material),
         };
         // One key per account. Generating a replacement takes the binding over
@@ -335,8 +368,17 @@ impl PgpKeyring {
     /// a secret key an attacker made with a friend's address on it. Only
     /// [`PgpKeyring::set_verified`] (an explicit "I compared this fingerprint"
     /// click) or [`PgpKeyring::bind_account`] (an explicit "this is my
-    /// identity", for a key naming only the user's own addresses) promotes it. Re-importing a key we already hold keeps its
-    /// flag either way, so it can neither verify nor un-verify a key.
+    /// identity", for a key naming only the user's own addresses, and for an
+    /// imported private key never) promotes it.
+    ///
+    /// Re-importing a key we already hold keeps its flag, its account bindings
+    /// and its origin **only while its user-id set is the same**. A fingerprint
+    /// does not cover the user ids: the key's owner can re-certify other ones
+    /// under it, so a copy naming somebody else's address would otherwise keep
+    /// the tick the user gave the old claim (gap 76). A changed set resets the
+    /// key to unverified and, for a secret key, drops its account bindings (the
+    /// bind checked the ids only when it was made); the returned info says so in
+    /// `notes`.
     pub fn import(&self, data: &[u8]) -> Result<Vec<PgpKeyInfo>, String> {
         let mut file = self.read()?;
         let mut added = Vec::new();
@@ -352,18 +394,23 @@ impl PgpKeyring {
                 .map_err(|e| format!("this key's own self-signatures do not check out: {e}"))?;
             let fingerprint = fingerprint_hex(&key.fingerprint());
             let material = key.to_bytes().map_err(|e| e.to_string())?;
+            let identities = user_ids_of_details(&key.details);
+            let (trust, mut notes) = carried_trust(&file, &fingerprint, &identities);
             let entry = StoredKey {
                 fingerprint: fingerprint.clone(),
-                identities: user_ids_of_details(&key.details),
+                identities,
                 secret: true,
-                verified: was_verified(&file, &fingerprint),
-                accounts: carry_accounts(&file, &fingerprint),
+                verified: trust.verified,
+                accounts: trust.accounts,
                 algorithm: algorithm_label(key.algorithm()),
+                origin: trust.origin,
                 material: B64.encode(&material),
             };
             file.entries.retain(|e| e.fingerprint != fingerprint);
             file.entries.push(entry.clone());
-            added.push(info_of(&entry));
+            let mut info = info_of(&entry);
+            info.notes.append(&mut notes);
+            added.push(info);
         }
 
         if added.is_empty() {
@@ -383,18 +430,23 @@ impl PgpKeyring {
                     continue;
                 }
                 let material = key.to_bytes().map_err(|e| e.to_string())?;
+                let identities = user_ids_of_details(&key.details);
+                let (trust, mut notes) = carried_trust(&file, &fingerprint, &identities);
                 let entry = StoredKey {
                     fingerprint: fingerprint.clone(),
-                    identities: user_ids_of_details(&key.details),
+                    identities,
                     secret: false,
-                    verified: was_verified(&file, &fingerprint),
+                    verified: trust.verified,
                     accounts: Vec::new(),
                     algorithm: algorithm_label(key.algorithm()),
+                    origin: trust.origin,
                     material: B64.encode(&material),
                 };
                 file.entries.retain(|e| e.fingerprint != fingerprint);
                 file.entries.push(entry.clone());
-                added.push(info_of(&entry));
+                let mut info = info_of(&entry);
+                info.notes.append(&mut notes);
+                added.push(info);
             }
         }
 
@@ -432,12 +484,22 @@ impl PgpKeyring {
     /// Binding needs the key's user ids to name `account_address`: a key that
     /// does not name the address it would sign for is not that account's
     /// identity, however it got into the keyring. Binding is also the user
-    /// saying "this key is mine", so it promotes the key to `Verified` — but
-    /// only when *every* address on it is one of `own_addresses` (all the
-    /// user's accounts). A key that also names somebody else stays as trusted
-    /// as it was, or binding it would vouch for that somebody too. Unbinding
-    /// does not demote: the key is still the user's, only no longer this
-    /// account's. `account_address` and `own_addresses` are unused for it.
+    /// saying "this key is mine", so it promotes a key **generated here** to
+    /// `Verified` — but only when *every* address on it is one of
+    /// `own_addresses` (all the user's accounts). A key that also names somebody
+    /// else stays as trusted as it was, or binding it would vouch for that
+    /// somebody too. Unbinding does not demote: the key is still the user's,
+    /// only no longer this account's. `account_address` and `own_addresses` are
+    /// unused for it.
+    ///
+    /// An **imported** private key is different (gap 91): whoever made the file
+    /// holds a copy of the private half, so binding it makes them able to sign
+    /// as the account and to read the copies encrypted to it. The call refuses
+    /// unless `acknowledge_imported` says the user was told so (the dialog's
+    /// confirm; enforced here, so a client that skips the dialog gets the
+    /// refusal too), and even then never sets `Verified`: the user ticks the
+    /// fingerprint like any key's. The returned info carries the note
+    /// `bound-imported-unverified` for that case.
     pub fn bind_account(
         &self,
         fingerprint: &str,
@@ -445,7 +507,8 @@ impl PgpKeyring {
         bind: bool,
         account_address: &str,
         own_addresses: &[String],
-    ) -> Result<(), String> {
+        acknowledge_imported: bool,
+    ) -> Result<PgpKeyInfo, String> {
         let fp = normalize_fingerprint(fingerprint);
         let mut file = self.read()?;
         let at = file
@@ -453,6 +516,7 @@ impl PgpKeyring {
             .iter()
             .position(|e| e.fingerprint == fp)
             .ok_or("no such key")?;
+        let mut notes = Vec::new();
         if bind {
             let entry = &file.entries[at];
             if !entry.secret {
@@ -460,12 +524,18 @@ impl PgpKeyring {
                     "only a key you hold the private half of can be an account's identity".into(),
                 );
             }
-            let addresses = info_of(entry).addresses;
+            let addresses = addresses_of(entry);
             let wanted = account_address.trim().to_ascii_lowercase();
             if !addresses.contains(&wanted) {
                 return Err(format!(
                     "this key's user ids do not name {wanted}, so it cannot be that account's identity"
                 ));
+            }
+            let imported = origin_of(entry) == KeyOrigin::Imported;
+            if imported && !acknowledge_imported {
+                return Err(
+                    "this private key was imported, not made here: whoever made the file can sign as this account and read what is encrypted to it. Confirm that you know where it came from to use it anyway".into(),
+                );
             }
             let all_ours = addresses
                 .iter()
@@ -477,13 +547,20 @@ impl PgpKeyring {
             }
             let entry = &mut file.entries[at];
             entry.accounts.push(account_id.to_string());
-            if all_ours {
+            if imported {
+                if !entry.verified {
+                    notes.push("bound-imported-unverified".to_string());
+                }
+            } else if all_ours {
                 entry.verified = true;
             }
         } else {
             file.entries[at].accounts.retain(|a| a != account_id);
         }
-        self.write(&file)
+        self.write(&file)?;
+        let mut info = info_of(&file.entries[at]);
+        info.notes = notes;
+        Ok(info)
     }
 
     pub fn delete(&self, fingerprint: &str) -> Result<(), String> {
@@ -586,16 +663,35 @@ impl PgpKeyring {
     ///
     /// A key id is the last 8 bytes of a v4 fingerprint, so one `ends_with`
     /// covers both spellings.
+    ///
+    /// A key with a verified revocation, or one whose expiry has passed, is not
+    /// a candidate (gap 88): [`PgpKeyring::verify_detached`] reports it as
+    /// such rather than as a good signature from a key nobody should trust.
     pub fn candidates_for(
         &self,
         key_ids: &[String],
     ) -> Result<Vec<(SignedPublicKey, PgpKeyInfo)>, String> {
+        Ok(self
+            .candidates_with_standing(key_ids)?
+            .into_iter()
+            .filter(|(_, _, standing)| *standing == Standing::Live)
+            .map(|(key, info, _)| (key, info))
+            .collect())
+    }
+
+    /// [`PgpKeyring::candidates_for`] without the revocation/expiry filter, each
+    /// key with its [`Standing`] now.
+    fn candidates_with_standing(
+        &self,
+        key_ids: &[String],
+    ) -> Result<Vec<(SignedPublicKey, PgpKeyInfo, Standing)>, String> {
         let file = self.read()?;
         let wanted: Vec<String> = key_ids
             .iter()
             .map(|k| normalize_fingerprint(k))
             .filter(|k| !k.is_empty())
             .collect();
+        let now = now_secs();
         let mut out = Vec::new();
         for entry in &file.entries {
             let key = parse_public(entry)?;
@@ -610,34 +706,45 @@ impl PgpKeyring {
                         })
                 });
             if hit {
-                out.push((key, info_of(entry)));
+                let (revoked, expired) = key_status(&key, now);
+                let info = info_with(entry, revoked, expired);
+                out.push((key, info, Standing::of(revoked, expired)));
             }
         }
         Ok(out)
     }
 
-    /// The public key to encrypt to for `address`, if we hold one.
+    /// The public key to encrypt to for `address`, if we hold one. A revoked or
+    /// expired key is never chosen, however much the user trusts it (gap 88).
     pub fn public_for_address(
         &self,
         address: &str,
     ) -> Result<Option<(SignedPublicKey, PgpKeyInfo)>, String> {
         let wanted = address.trim().to_ascii_lowercase();
         let file = self.read()?;
+        let now = now_secs();
         // Prefer a verified key over a merely known one with the same address:
         // if the user has checked one of them, that is the one they meant.
-        let mut best: Option<&StoredKey> = None;
+        let mut best: Option<(&StoredKey, SignedPublicKey, bool, bool)> = None;
         for entry in &file.entries {
-            if !info_of(entry).addresses.contains(&wanted) {
+            if !addresses_of(entry).contains(&wanted) {
                 continue;
             }
-            if best.is_none_or(|b| !b.verified && entry.verified) {
-                best = Some(entry);
+            let Ok(key) = parse_public(entry) else {
+                continue;
+            };
+            let (revoked, expired) = key_status(&key, now);
+            if revoked || expired {
+                continue;
+            }
+            if best
+                .as_ref()
+                .is_none_or(|(b, ..)| !b.verified && entry.verified)
+            {
+                best = Some((entry, key, revoked, expired));
             }
         }
-        match best {
-            Some(entry) => Ok(Some((parse_public(entry)?, info_of(entry)))),
-            None => Ok(None),
-        }
+        Ok(best.map(|(entry, key, revoked, expired)| (key, info_with(entry, revoked, expired))))
     }
 }
 
@@ -676,26 +783,54 @@ impl PgpKeyring {
             })
             .unwrap_or_default();
 
-        let candidates = match self.candidates_for(&issuers) {
+        let all = match self.candidates_with_standing(&issuers) {
             Ok(c) => c,
             Err(e) => return VerifyOutcome::Unusable(format!("keyring-unreadable:{e}")),
         };
-        if candidates.is_empty() {
+        if all.is_empty() {
             return VerifyOutcome::NoKey {
                 key_id: issuers.into_iter().next(),
             };
         }
+        // Only a key in good standing can vouch for anything (gap 88). One that
+        // could have signed it but was revoked or has expired is said so, not
+        // reported as a missing key and not as a pass.
+        let candidates: Vec<_> = all
+            .iter()
+            .filter(|(_, _, standing)| *standing == Standing::Live)
+            .collect();
+        if candidates.is_empty() {
+            let revoked = all.iter().any(|(_, _, s)| *s == Standing::Revoked);
+            return VerifyOutcome::Unusable(
+                if revoked { "signer-key-revoked" } else { "signer-key-expired" }.into(),
+            );
+        }
+        // When the signature says it was made. A signature with no creation
+        // time cannot be placed inside any key's life, so it passes nothing.
+        let Some(made) = sig.signature.created().map(|t| t.as_secs()) else {
+            return VerifyOutcome::Bad;
+        };
 
-        for (key, info) in &candidates {
+        for (key, info, _) in candidates {
+            let primary = key_window(key);
             // The primary key and every subkey: signing is normally done by a
             // *subkey*, so checking only the primary would fail every ordinary
             // modern key and report it as forged.
             if sig.verify(key, signed).is_ok() || sig.verify(&key.primary_key, signed).is_ok() {
-                return good_outcome(info);
+                if primary.holds_at(made) {
+                    return good_outcome(info);
+                }
+                continue;
             }
             for sub in &key.public_subkeys {
                 if sig.verify(sub, signed).is_ok() {
-                    return good_outcome(info);
+                    // The signature has to fall inside the life of the subkey
+                    // that made it and of the key that certifies it: a key
+                    // cannot sign before it existed or after it expired.
+                    let sub = subkey_window(sub.key.created_at().as_secs(), &sub.signatures);
+                    if primary.holds_at(made) && sub.holds_at(made) {
+                        return good_outcome(info);
+                    }
                 }
             }
         }
@@ -759,11 +894,17 @@ impl PgpKeyring {
         // The **signing subkey**, not the primary: the primary is generated as
         // certify-only (`can_sign(false)`), which is the conventional shape and
         // the one every other client expects.
+        let now = now_secs();
+        let primary = key_window(&SignedPublicKey::from(key.clone()));
         let signer = key
             .secret_subkeys
             .iter()
-            .find(|s| s.algorithm().can_sign())
-            .ok_or("this key has no signing subkey")?;
+            .find(|s| {
+                s.algorithm().can_sign()
+                    && primary.holds_at(now)
+                    && subkey_window(s.key.created_at().as_secs(), &s.signatures).holds_at(now)
+            })
+            .ok_or("this key has no signing subkey that is still valid (it has expired or been revoked)")?;
 
         // `sign_text_data` rather than `sign_binary_data`: the signature has to
         // survive an MTA rewriting line endings between CRLF and LF, which is
@@ -819,14 +960,22 @@ impl PgpKeyring {
 
         let mut builder = MessageBuilder::from_bytes("", body.to_vec())
             .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        let now = now_secs();
         for key in &keys {
             // The **encryption subkey**. Encrypting to a certify-only primary
-            // produces a message the recipient's own client cannot open.
+            // produces a message the recipient's own client cannot open. One
+            // that has expired or been revoked is passed over (gap 88): the
+            // owner has said it is no longer theirs to be written to.
+            let primary = key_window(key);
             let subkey = key
                 .public_subkeys
                 .iter()
-                .find(|s| s.algorithm().can_encrypt())
-                .ok_or("a recipient's key has no encryption subkey")?;
+                .find(|s| {
+                    s.algorithm().can_encrypt()
+                        && primary.holds_at(now)
+                        && subkey_window(s.key.created_at().as_secs(), &s.signatures).holds_at(now)
+                })
+                .ok_or("a recipient's key has no encryption subkey that is still valid (it has expired or been revoked)")?;
             builder
                 .encrypt_to_key(rand::rngs::OsRng, subkey)
                 .map_err(|e| format!("could not encrypt: {e}"))?;
@@ -1286,27 +1435,85 @@ fn parse_public(entry: &StoredKey) -> Result<SignedPublicKey, String> {
     }
 }
 
-fn carry_accounts(file: &KeyringFile, fingerprint: &str) -> Vec<String> {
-    file.entries
-        .iter()
-        .find(|e| e.fingerprint == fingerprint)
-        .map(|e| e.accounts.clone())
-        .unwrap_or_default()
+/// What a re-import of a held fingerprint keeps of the stored entry.
+struct CarriedTrust {
+    verified: bool,
+    accounts: Vec<String>,
+    origin: Option<KeyOrigin>,
 }
 
-fn was_verified(file: &KeyringFile, fingerprint: &str) -> bool {
-    file.entries
-        .iter()
-        .find(|e| e.fingerprint == fingerprint)
-        .map(|e| e.verified)
-        .unwrap_or(false)
+/// The trust a (re-)import of `fingerprint` with user ids `identities` inherits
+/// from the entry already stored, and the notes saying what it lost.
+///
+/// A new fingerprint inherits nothing and is `Imported`. A held one keeps its
+/// flag, its account bindings and its **stored** origin (an old entry's stays
+/// absent, so [`origin_of`] still reads it the old way) — but only while its
+/// user-id set is unchanged; see [`PgpKeyring::import`].
+fn carried_trust(
+    file: &KeyringFile,
+    fingerprint: &str,
+    identities: &[String],
+) -> (CarriedTrust, Vec<String>) {
+    let Some(prior) = file.entries.iter().find(|e| e.fingerprint == fingerprint) else {
+        return (
+            CarriedTrust {
+                verified: false,
+                accounts: Vec::new(),
+                origin: Some(KeyOrigin::Imported),
+            },
+            Vec::new(),
+        );
+    };
+    if same_identities(&prior.identities, identities) {
+        return (
+            CarriedTrust {
+                verified: prior.verified,
+                accounts: prior.accounts.clone(),
+                origin: prior.origin,
+            },
+            Vec::new(),
+        );
+    }
+    let mut notes = Vec::new();
+    if prior.verified {
+        notes.push("identities-changed-unverified".to_string());
+    }
+    if !prior.accounts.is_empty() {
+        notes.push("identities-changed-unbound".to_string());
+    }
+    (
+        CarriedTrust {
+            verified: false,
+            accounts: Vec::new(),
+            origin: prior.origin,
+        },
+        notes,
+    )
+}
+
+/// The same set of user ids, whatever their order or repetition.
+fn same_identities(a: &[String], b: &[String]) -> bool {
+    use std::collections::BTreeSet;
+    a.iter().collect::<BTreeSet<_>>() == b.iter().collect::<BTreeSet<_>>()
+}
+
+/// Where `entry` came from. A key an older build stored has no record: a
+/// private key counts as imported unless it already has an account binding
+/// (the user made that choice under the old rules), and a public key is always
+/// somebody else's.
+fn origin_of(entry: &StoredKey) -> KeyOrigin {
+    match entry.origin {
+        Some(o) => o,
+        None if entry.secret && !entry.accounts.is_empty() => KeyOrigin::Generated,
+        None => KeyOrigin::Imported,
+    }
 }
 
 /// Builds before the import fix stored every imported private key as
 /// Verified, and its user ids are claims like any other key's. Demote each
 /// unbound one to Known, once (`secret_trust_migrated` stops a key the user
-/// verifies afterwards from being demoted again). Nothing records whether a key
-/// was imported or generated, so this also demotes a generated key that a newer
+/// verifies afterwards from being demoted again). Keys of that age have no
+/// recorded origin (gap 91), so this also demotes a generated key that a newer
 /// one took the account binding from; it shows as Known until checked again.
 fn demote_imported_secrets(file: &mut KeyringFile) {
     for e in file.entries.iter_mut() {
@@ -1318,19 +1525,172 @@ fn demote_imported_secrets(file: &mut KeyringFile) {
 }
 
 fn info_of(entry: &StoredKey) -> PgpKeyInfo {
+    let (revoked, expired) = parse_public(entry)
+        .map(|key| key_status(&key, now_secs()))
+        .unwrap_or_default();
+    info_with(entry, revoked, expired)
+}
+
+fn info_with(entry: &StoredKey, revoked: bool, expired: bool) -> PgpKeyInfo {
     PgpKeyInfo {
         fingerprint: entry.fingerprint.clone(),
-        addresses: entry
-            .identities
-            .iter()
-            .filter_map(|u| address_of(u))
-            .collect(),
+        addresses: addresses_of(entry),
         identities: entry.identities.clone(),
         secret: entry.secret,
         verified: entry.verified,
         accounts: entry.accounts.clone(),
         algorithm: entry.algorithm.clone(),
+        origin: origin_of(entry),
+        revoked,
+        expired,
+        notes: Vec::new(),
     }
+}
+
+fn addresses_of(entry: &StoredKey) -> Vec<String> {
+    entry
+        .identities
+        .iter()
+        .filter_map(|u| address_of(u))
+        .collect()
+}
+
+// ── Revocation and expiry (gap 88) ──────────────────────────────────────────
+//
+// rPGP 0.20 parses all of it and applies none of it: a `SignedPublicKey` keeps
+// the key's revocation signatures (`details.revocation_signatures`), each user
+// id's certifications and revocations (`SignedUser.signatures`) and each
+// subkey's binding and revocation signatures, and `Signature` reads the
+// `KeyExpirationTime` subpacket (`key_expiration_time`) and the creation time.
+// `verify_bindings` (run at import) checks that every one of them is a genuine
+// signature by the key itself, so a revocation we see here was made by its
+// owner. What is missing is the reading, which is this section. Nothing is
+// stored: the flags are computed from the key material each time, against the
+// clock.
+
+/// A key's state against the clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Standing {
+    Live,
+    Expired,
+    Revoked,
+}
+
+impl Standing {
+    fn of(revoked: bool, expired: bool) -> Self {
+        if revoked {
+            Standing::Revoked
+        } else if expired {
+            Standing::Expired
+        } else {
+            Standing::Live
+        }
+    }
+}
+
+fn now_secs() -> u32 {
+    pgp::types::Timestamp::now().as_secs()
+}
+
+/// When a key or subkey may be used: from its creation to its expiry, and not
+/// at all once revoked. Seconds since the epoch.
+#[derive(Debug, Clone, Copy)]
+struct Window {
+    start: u32,
+    end: Option<u32>,
+    revoked: bool,
+}
+
+impl Window {
+    /// Whether the key was usable at `t`.
+    fn holds_at(&self, t: u32) -> bool {
+        !self.revoked && t >= self.start && self.end.is_none_or(|end| t < end)
+    }
+}
+
+/// The signature made last. Ties and missing times sort first, so a signature
+/// whose time cannot be read never outranks one that has it.
+fn latest<'a>(
+    sigs: impl Iterator<Item = &'a pgp::packet::Signature>,
+) -> Option<&'a pgp::packet::Signature> {
+    sigs.max_by_key(|s| s.created().map(|t| t.as_secs()).unwrap_or(0))
+}
+
+/// The absolute expiry a `KeyExpirationTime` of `d` seconds after `created`
+/// gives. Zero means "never", as the RFC has it.
+fn expiry_after(created: u32, d: pgp::types::Duration) -> Option<u32> {
+    (d.as_secs() != 0).then(|| created.saturating_add(d.as_secs()))
+}
+
+/// The primary key's window. The expiry is read the way OpenPGP implementations
+/// do: the newest direct-key signature that carries one, else the newest
+/// self-certification of the primary user id (or of the first, with none
+/// marked primary). A user-id revocation does not count as one.
+fn key_window(key: &SignedPublicKey) -> Window {
+    use pgp::packet::SignatureType;
+
+    let created = key.primary_key.created_at().as_secs();
+    let revoked = key
+        .details
+        .revocation_signatures
+        .iter()
+        .any(|s| s.typ() == Some(SignatureType::KeyRevocation));
+
+    let direct = latest(
+        key.details
+            .direct_signatures
+            .iter()
+            .filter(|s| s.typ() == Some(SignatureType::Key)),
+    )
+    .and_then(|s| s.key_expiration_time());
+
+    let expiry = direct.or_else(|| {
+        let certs = key.details.users.iter().filter_map(|u| {
+            latest(
+                u.signatures
+                    .iter()
+                    .filter(|s| s.typ() != Some(SignatureType::CertRevocation)),
+            )
+        });
+        let primary = certs
+            .clone()
+            .filter(|s| s.is_primary())
+            .max_by_key(|s| s.created().map(|t| t.as_secs()).unwrap_or(0))
+            .or_else(|| certs.clone().next());
+        primary.and_then(|s| s.key_expiration_time())
+    });
+    Window {
+        start: created,
+        end: expiry.and_then(|d| expiry_after(created, d)),
+        revoked,
+    }
+}
+
+/// A subkey's window from its own binding signatures: the newest binding gives
+/// the expiry, and any subkey revocation ends it.
+fn subkey_window(created: u32, signatures: &[pgp::packet::Signature]) -> Window {
+    use pgp::packet::SignatureType;
+
+    let revoked = signatures
+        .iter()
+        .any(|s| s.typ() == Some(SignatureType::SubkeyRevocation));
+    let expiry = latest(
+        signatures
+            .iter()
+            .filter(|s| s.typ() == Some(SignatureType::SubkeyBinding)),
+    )
+    .and_then(|s| s.key_expiration_time());
+    Window {
+        start: created,
+        end: expiry.and_then(|d| expiry_after(created, d)),
+        revoked,
+    }
+}
+
+/// Whether the key is revoked, and whether its expiry has passed, at `now`.
+fn key_status(key: &SignedPublicKey, now: u32) -> (bool, bool) {
+    let w = key_window(key);
+    (w.revoked, w.end.is_some_and(|end| now >= end))
 }
 
 /// The address out of an OpenPGP user id (`Name <a@b>` or a bare address).
@@ -1363,10 +1723,34 @@ fn user_id_for(name: &str, address: &str) -> String {
     }
 }
 
+/// The key's user ids, **without the ones its owner has revoked**: a revoked id
+/// is a claim the owner withdrew, and an address on it must not keep the key
+/// eligible for that address. A revocation older than the id's newest
+/// certification is a certification that came back and does not count.
 fn user_ids_of_details(details: &pgp::composed::SignedKeyDetails) -> Vec<String> {
+    use pgp::packet::SignatureType;
+
+    let time = |s: &pgp::packet::Signature| s.created().map(|t| t.as_secs()).unwrap_or(0);
     details
         .users
         .iter()
+        .filter(|u| {
+            let revoked = latest(
+                u.signatures
+                    .iter()
+                    .filter(|s| s.typ() == Some(SignatureType::CertRevocation)),
+            );
+            let certified = latest(
+                u.signatures
+                    .iter()
+                    .filter(|s| s.typ() != Some(SignatureType::CertRevocation)),
+            );
+            match (revoked, certified) {
+                (None, _) => true,
+                (Some(_), None) => false,
+                (Some(r), Some(c)) => time(c) > time(r),
+            }
+        })
         .map(|u| String::from_utf8_lossy(u.id.id()).into_owned())
         .collect()
 }
@@ -1416,6 +1800,16 @@ fn algorithm_label(alg: pgp::crypto::public_key::PublicKeyAlgorithm) -> String {
 /// interoperating with Thunderbird, GnuPG and Outlook is the point of using a
 /// standard and v6 support in the wild is not yet there.
 fn generate_curve25519(uid: &str) -> Result<SignedSecretKey, String> {
+    build_curve25519(uid, None)
+}
+
+/// [`generate_curve25519`] with the creation time of the primary and both
+/// subkeys given (`None`: now). Production passes none; the tests make keys that
+/// were created in the past.
+fn build_curve25519(
+    uid: &str,
+    created_at: Option<pgp::types::Timestamp>,
+) -> Result<SignedSecretKey, String> {
     let mut signing = SubkeyParamsBuilder::default();
     signing
         .key_type(KeyType::Ed25519Legacy)
@@ -1428,6 +1822,10 @@ fn generate_curve25519(uid: &str) -> Result<SignedSecretKey, String> {
         .can_sign(false)
         .can_encrypt(EncryptionCaps::All)
         .can_authenticate(false);
+    if let Some(at) = created_at {
+        signing.created_at(at);
+        encryption.created_at(at);
+    }
 
     let mut params = SecretKeyParamsBuilder::default();
     params
@@ -1440,6 +1838,10 @@ fn generate_curve25519(uid: &str) -> Result<SignedSecretKey, String> {
             signing.build().map_err(|e| e.to_string())?,
             encryption.build().map_err(|e| e.to_string())?,
         ]);
+
+    if let Some(at) = created_at {
+        params.created_at(at);
+    }
 
     // No passphrase on the key itself. The material is already sealed at rest
     // under the store key, so a second passphrase would protect nothing new and
@@ -1625,7 +2027,7 @@ mod tests {
             .clone();
         let own = vec!["bob@example.org".to_string()];
         assert!(mine
-            .bind_account(&fp, "acct-1", true, "bob@example.org", &own)
+            .bind_account(&fp, "acct-1", true, "bob@example.org", &own, false)
             .is_err());
     }
 
@@ -1668,7 +2070,7 @@ mod tests {
         let (_d, attacker) = keyring();
         attacker.import(&bytes).unwrap();
         attacker
-            .bind_account(&fp, "evil", true, "friend@corp.example", &["friend@corp.example".into()])
+            .bind_account(&fp, "evil", true, "friend@corp.example", &["friend@corp.example".into()], true)
             .unwrap();
         let sig = attacker.sign_detached("evil", b"wire the money").unwrap();
 
@@ -1732,26 +2134,105 @@ mod tests {
         assert!(mine.get(&fp).unwrap().unwrap().verified, "and still verified");
     }
 
-    /// Binding a private key to an account is the user naming it their own
-    /// identity, which is the check; unbinding takes the account, not the trust.
+    /// Binding an imported private key to an account is the user naming it their
+    /// own identity, after being told what that risks (gap 91); it leaves the key
+    /// unverified, the fingerprint tick is the user's own, and unbinding takes
+    /// the account, not the trust.
     #[test]
-    fn binding_a_secret_key_to_an_account_verifies_it() {
+    fn binding_an_imported_secret_key_needs_the_acknowledgement_and_never_verifies_it() {
         let (fp, bytes) = foreign_secret("Alice <alice@example.com>");
         let (_d, mine) = keyring();
         mine.import(&bytes).unwrap();
         assert!(!mine.get(&fp).unwrap().unwrap().verified);
+        assert_eq!(mine.get(&fp).unwrap().unwrap().origin, KeyOrigin::Imported);
 
         let own = vec!["Alice@Example.com".to_string(), "alice@work.example".to_string()];
-        mine.bind_account(&fp, "acct-1", true, "ALICE@example.com", &own)
-            .unwrap();
-        let bound = mine.get(&fp).unwrap().unwrap();
-        assert!(bound.verified);
-        assert_eq!(bound.accounts, vec!["acct-1"]);
+        let refused = mine
+            .bind_account(&fp, "acct-1", true, "ALICE@example.com", &own, false)
+            .unwrap_err();
+        assert!(refused.contains("imported"), "{refused}");
+        assert!(mine.get(&fp).unwrap().unwrap().accounts.is_empty(), "not bound");
 
-        mine.bind_account(&fp, "acct-1", false, "", &[]).unwrap();
+        let bound = mine
+            .bind_account(&fp, "acct-1", true, "ALICE@example.com", &own, true)
+            .unwrap();
+        assert!(!bound.verified, "the answer says it is still unverified");
+        assert_eq!(bound.notes, vec!["bound-imported-unverified"]);
+        let stored = mine.get(&fp).unwrap().unwrap();
+        assert!(!stored.verified, "and it is");
+        assert_eq!(stored.accounts, vec!["acct-1"]);
+        assert!(stored.notes.is_empty(), "a later read carries no notes");
+
+        // The user compares the fingerprint: that is what verifies it.
+        mine.set_verified(&fp, true).unwrap();
+        mine.bind_account(&fp, "acct-1", false, "", &[], false).unwrap();
         let unbound = mine.get(&fp).unwrap().unwrap();
         assert!(unbound.accounts.is_empty());
         assert!(unbound.verified, "unbinding does not demote");
+    }
+
+    /// A key made here is the one binding still verifies, with no confirm: the
+    /// user watched it being made.
+    #[test]
+    fn binding_a_key_generated_here_still_verifies_without_the_acknowledgement() {
+        let (_d, mine) = keyring();
+        let first = mine.generate("Alice", "alice@example.com", "acct-1").unwrap();
+        assert_eq!(first.origin, KeyOrigin::Generated);
+        let second = mine.generate("Alice", "alice@example.com", "acct-2").unwrap();
+        mine.set_verified(&second.fingerprint, false).unwrap();
+        let own = vec!["alice@example.com".to_string()];
+        let bound = mine
+            .bind_account(&second.fingerprint, "acct-2", true, "alice@example.com", &own, false)
+            .unwrap();
+        assert!(bound.verified);
+        assert!(bound.notes.is_empty());
+    }
+
+    /// Keyrings written before the origin was recorded: a private key counts as
+    /// imported unless it was already bound, and the stored file stays readable.
+    #[test]
+    fn an_entry_without_an_origin_is_read_the_old_way() {
+        let (_d, mine) = keyring();
+        let bound = mine.generate("Alice", "alice@example.com", "acct-1").unwrap();
+        let (loose, bytes) = foreign_secret("Bob <bob@example.org>");
+        mine.import(&bytes).unwrap();
+        let mut file = mine.read().unwrap();
+        for e in file.entries.iter_mut() {
+            e.origin = None;
+        }
+        mine.write(&file).unwrap();
+        // The field is simply absent on disk, as in an older file.
+        let json = serde_json::to_string(&mine.read().unwrap()).unwrap();
+        assert!(!json.contains("origin"), "{json}");
+        let again: KeyringFile = serde_json::from_str(&json).unwrap();
+        assert!(again.entries.iter().all(|e| e.origin.is_none()));
+
+        assert_eq!(mine.get(&bound.fingerprint).unwrap().unwrap().origin, KeyOrigin::Generated);
+        assert_eq!(mine.get(&loose).unwrap().unwrap().origin, KeyOrigin::Imported);
+        let own = vec!["bob@example.org".to_string()];
+        assert!(mine
+            .bind_account(&loose, "acct-2", true, "bob@example.org", &own, false)
+            .is_err());
+    }
+
+    /// Re-importing a held fingerprint keeps what was stored: an imported key is
+    /// not turned into a generated one, nor the reverse.
+    #[test]
+    fn a_re_import_keeps_the_stored_origin() {
+        let (_d, mine) = keyring();
+        let made = mine.generate("Alice", "alice@example.com", "acct-1").unwrap();
+        // The user's own key, imported back from a backup.
+        let mut file = mine.read().unwrap();
+        let material = B64.decode(&file.entries[0].material).unwrap();
+        mine.import(&material).unwrap();
+        file = mine.read().unwrap();
+        assert_eq!(file.entries[0].origin, Some(KeyOrigin::Generated));
+        assert_eq!(mine.get(&made.fingerprint).unwrap().unwrap().origin, KeyOrigin::Generated);
+        assert_eq!(
+            mine.get(&made.fingerprint).unwrap().unwrap().accounts,
+            vec!["acct-1"],
+            "same user ids: the binding stays"
+        );
     }
 
     /// The one-click path: a planted key naming a friend must not become an
@@ -1764,7 +2245,7 @@ mod tests {
         mine.import(&bytes).unwrap();
         let own = vec!["me@example.com".to_string()];
         assert!(mine
-            .bind_account(&fp, "acct-1", true, "me@example.com", &own)
+            .bind_account(&fp, "acct-1", true, "me@example.com", &own, false)
             .is_err());
         let after = mine.get(&fp).unwrap().unwrap();
         assert!(after.accounts.is_empty(), "not bound");
@@ -1794,7 +2275,7 @@ mod tests {
         let (_d, mine) = keyring();
         mine.import(&key.to_bytes().unwrap()).unwrap();
         let own = vec!["me@example.com".to_string()];
-        mine.bind_account(&fp, "acct-1", true, "me@example.com", &own)
+        mine.bind_account(&fp, "acct-1", true, "me@example.com", &own, true)
             .unwrap();
         let after = mine.get(&fp).unwrap().unwrap();
         assert_eq!(after.accounts, vec!["acct-1"], "bound: it does name the account");
@@ -2533,5 +3014,406 @@ mod tests {
             address_of("Alice (work) <a@b.example>").as_deref(),
             Some("a@b.example")
         );
+    }
+
+    // ── Re-import with other user ids (gap 76) and revocation / expiry (gap 88) ─
+
+    use pgp::packet::{PacketTrait as _, Signature, SignatureConfig, SignatureType, Subpacket, SubpacketData};
+    use pgp::types::{Duration as PgpDuration, Password as Pin, Timestamp};
+
+    const DAY: u32 = 86_400;
+
+    fn secs_ago(days: u32) -> Timestamp {
+        Timestamp::from_secs(now_secs() - days * DAY)
+    }
+
+    /// `config` with its creation time replaced and a key expiry added (or
+    /// dropped with `None`); the fields every self-signature of ours carries
+    /// stay as they were.
+    fn config_with(
+        old: &Signature,
+        created: u32,
+        key_expiry_days: Option<u32>,
+    ) -> SignatureConfig {
+        let mut config = old.config().unwrap().clone();
+        config.hashed_subpackets.retain(|p| {
+            !matches!(
+                p.data,
+                SubpacketData::KeyExpirationTime(_) | SubpacketData::SignatureCreationTime(_)
+            )
+        });
+        config.hashed_subpackets.push(
+            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::from_secs(created)))
+                .unwrap(),
+        );
+        if let Some(days) = key_expiry_days {
+            config.hashed_subpackets.push(
+                Subpacket::regular(SubpacketData::KeyExpirationTime(PgpDuration::from_secs(
+                    days * DAY,
+                )))
+                .unwrap(),
+            );
+        }
+        config
+    }
+
+    /// The primary key's certification of every user id re-issued so the key
+    /// expires `days` after it was created.
+    fn expiring_after(mut key: SignedSecretKey, days: u32) -> SignedSecretKey {
+        let public = key.primary_key.public_key().clone();
+        let created = key.primary_key.created_at().as_secs();
+        for user in key.details.users.iter_mut() {
+            let config = config_with(&user.signatures[0], created, Some(days));
+            let sig = config
+                .sign_certification(&key.primary_key, &public, &Pin::empty(), user.id.tag(), &user.id)
+                .unwrap();
+            user.signatures = vec![sig];
+        }
+        key
+    }
+
+    /// A user id added to `key` and certified by it: the same fingerprint, a new
+    /// claim (gap 76's "updated key").
+    fn with_extra_user(mut key: SignedSecretKey, uid: &str) -> SignedSecretKey {
+        let public = key.primary_key.public_key().clone();
+        let id = pgp::packet::UserId::from_str(Default::default(), uid).unwrap();
+        let config = config_with(&key.details.users[0].signatures[0], now_secs(), None);
+        let sig = config
+            .sign_certification(&key.primary_key, &public, &Pin::empty(), id.tag(), &id)
+            .unwrap();
+        key.details.users.push(id.into_signed(sig));
+        key
+    }
+
+    fn revoke_key(mut key: SignedSecretKey) -> SignedSecretKey {
+        let public = key.primary_key.public_key().clone();
+        let mut config = SignatureConfig::from_key(
+            rand::rngs::OsRng,
+            &key.primary_key,
+            SignatureType::KeyRevocation,
+        )
+        .unwrap();
+        config.hashed_subpackets = vec![
+            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::now())).unwrap(),
+            Subpacket::regular(SubpacketData::IssuerFingerprint(key.primary_key.fingerprint()))
+                .unwrap(),
+        ];
+        let sig = config
+            .sign_key(&key.primary_key, &Pin::empty(), &public)
+            .unwrap();
+        key.details.revocation_signatures.push(sig);
+        key
+    }
+
+    /// Subkey `index` (0: signing, 1: encryption) re-bound so it expires `days`
+    /// after its creation, or revoked (`revoke`).
+    fn rebind_subkey(
+        mut key: SignedSecretKey,
+        index: usize,
+        expires_days: Option<u32>,
+        revoke: bool,
+    ) -> SignedSecretKey {
+        let public = key.primary_key.public_key().clone();
+        let sub = &mut key.secret_subkeys[index];
+        let created = sub.key.created_at().as_secs();
+        let binding = sub.signatures[0].clone();
+        let mut config = config_with(&binding, created, expires_days);
+        if revoke {
+            config.typ = SignatureType::SubkeyRevocation;
+        }
+        let sig = config
+            .sign_subkey_binding(
+                &key.primary_key,
+                &public,
+                &Pin::empty(),
+                sub.key.public_key(),
+            )
+            .unwrap();
+        // A revocation comes in addition to the binding; a re-expiry replaces it.
+        if revoke {
+            sub.signatures.push(sig);
+        } else {
+            sub.signatures = vec![sig];
+        }
+        // The public copy the key carries beside the secret one is the secret
+        // subkey's own record, so nothing else to update.
+        key
+    }
+
+    /// A detached text signature over `data` by `key`'s signing subkey that says
+    /// it was made at `when` (seconds since the epoch).
+    fn signature_at(key: &SignedSecretKey, data: &[u8], when: u32) -> String {
+        use pgp::composed::DetachedSignature;
+        let signer = key
+            .secret_subkeys
+            .iter()
+            .find(|s| s.algorithm().can_sign())
+            .unwrap();
+        let mut config = SignatureConfig::from_key(rand::rngs::OsRng, &signer.key, SignatureType::Text)
+            .unwrap();
+        config.hashed_subpackets = vec![
+            Subpacket::regular(SubpacketData::SignatureCreationTime(Timestamp::from_secs(when)))
+                .unwrap(),
+            Subpacket::regular(SubpacketData::IssuerFingerprint(signer.key.fingerprint())).unwrap(),
+        ];
+        let sig = config
+            .sign(&signer.key, &Pin::empty(), data)
+            .unwrap();
+        DetachedSignature::new(sig)
+            .to_armored_string(Default::default())
+            .unwrap()
+    }
+
+    fn import_secret(ring: &PgpKeyring, key: &SignedSecretKey) -> PgpKeyInfo {
+        ring.import(&key.to_bytes().unwrap()).unwrap().remove(0)
+    }
+
+    fn import_public(ring: &PgpKeyring, key: &SignedSecretKey) -> PgpKeyInfo {
+        let public = SignedPublicKey::from(key.clone());
+        ring.import(&public.to_bytes().unwrap()).unwrap().remove(0)
+    }
+
+    // 76
+
+    /// The fingerprint does not cover the user ids: a correspondent the user
+    /// verified can send "my updated key" with someone else's address on it. The
+    /// copy must not keep the tick.
+    #[test]
+    fn a_re_import_with_other_user_ids_drops_verified_and_says_why() {
+        let key = generate_curve25519("Friend <friend@corp.example>").unwrap();
+        let updated = with_extra_user(key.clone(), "Boss <boss@corp.example>");
+        let (_d, mine) = keyring();
+        let first = import_public(&mine, &key);
+        mine.set_verified(&first.fingerprint, true).unwrap();
+
+        let again = import_public(&mine, &updated);
+        assert_eq!(again.fingerprint, first.fingerprint, "the same key");
+        assert!(again.addresses.contains(&"boss@corp.example".to_string()));
+        assert!(!again.verified, "a new claim is not the one the user compared");
+        assert_eq!(again.notes, vec!["identities-changed-unverified"]);
+        assert!(!mine.get(&first.fingerprint).unwrap().unwrap().verified, "and it is stored so");
+        assert_eq!(mine.get(&first.fingerprint).unwrap().unwrap().notes.len(), 0);
+    }
+
+    #[test]
+    fn a_re_import_with_the_same_user_ids_keeps_verified_in_any_order() {
+        let key = with_extra_user(
+            generate_curve25519("Friend <friend@corp.example>").unwrap(),
+            "Other <other@corp.example>",
+        );
+        let mut reordered = key.clone();
+        reordered.details.users.reverse();
+        let (_d, mine) = keyring();
+        let first = import_public(&mine, &key);
+        mine.set_verified(&first.fingerprint, true).unwrap();
+
+        let again = import_public(&mine, &reordered);
+        assert!(again.verified);
+        assert!(again.notes.is_empty());
+    }
+
+    /// For a private key the account bindings go too: the bind checked the ids
+    /// only when it was made.
+    #[test]
+    fn a_secret_re_import_with_other_user_ids_unbinds_and_unverifies() {
+        let key = generate_curve25519("Me <me@example.com>").unwrap();
+        let (_d, mine) = keyring();
+        let info = import_secret(&mine, &key);
+        let own = vec!["me@example.com".to_string()];
+        mine.bind_account(&info.fingerprint, "acct-1", true, "me@example.com", &own, true)
+            .unwrap();
+        mine.set_verified(&info.fingerprint, true).unwrap();
+        assert_eq!(mine.get(&info.fingerprint).unwrap().unwrap().accounts, vec!["acct-1"]);
+
+        let swapped = with_extra_user(key, "Boss <boss@corp.example>");
+        let again = import_secret(&mine, &swapped);
+        assert!(!again.verified);
+        assert!(again.accounts.is_empty(), "the binding is gone");
+        assert_eq!(
+            again.notes,
+            vec!["identities-changed-unverified", "identities-changed-unbound"]
+        );
+        assert!(mine.secret_for_account("acct-1").unwrap().is_none());
+    }
+
+    // 88
+
+    #[test]
+    fn an_expired_key_is_listed_as_expired_and_is_never_a_candidate_or_a_recipient() {
+        let made = build_curve25519("Old <old@example.org>", Some(secs_ago(100))).unwrap();
+        let key = expiring_after(made, 30);
+        let (_d, mine) = keyring();
+        let info = import_public(&mine, &key);
+        mine.set_verified(&info.fingerprint, true).unwrap();
+
+        let listed = mine.get(&info.fingerprint).unwrap().unwrap();
+        assert!(listed.expired && !listed.revoked);
+        assert!(mine.candidates_for(&[info.fingerprint.clone()]).unwrap().is_empty());
+        assert!(mine.public_for_address("old@example.org").unwrap().is_none());
+        let err = mine
+            .encrypt_to("none", &["old@example.org".to_string()], b"hi")
+            .unwrap_err();
+        assert!(err.contains("old@example.org"), "{err}");
+
+        // A mail it signed back when it was valid reads as expired, not as a pass.
+        let signed = b"hello";
+        let sig = signature_at(&key, signed, now_secs() - 90 * DAY);
+        assert_eq!(
+            mine.verify_detached(signed, sig.as_bytes()),
+            VerifyOutcome::Unusable("signer-key-expired".into())
+        );
+    }
+
+    #[test]
+    fn a_key_with_expiry_in_the_future_is_still_good() {
+        let made = build_curve25519("New <new@example.org>", Some(secs_ago(10))).unwrap();
+        let key = expiring_after(made, 365);
+        let (_d, mine) = keyring();
+        let info = import_public(&mine, &key);
+        assert!(!mine.get(&info.fingerprint).unwrap().unwrap().expired);
+        let sig = signature_at(&key, b"x", now_secs());
+        assert!(matches!(
+            mine.verify_detached(b"x", sig.as_bytes()),
+            VerifyOutcome::Good { .. }
+        ));
+        assert!(mine.public_for_address("new@example.org").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_signature_made_before_the_key_existed_or_after_its_expiry_is_bad() {
+        let made = build_curve25519("Live <live@example.org>", Some(secs_ago(10))).unwrap();
+        let key = expiring_after(made, 20);
+        let created = key.primary_key.created_at().as_secs();
+        let (_d, mine) = keyring();
+        import_public(&mine, &key);
+
+        let good = signature_at(&key, b"x", now_secs());
+        assert!(matches!(mine.verify_detached(b"x", good.as_bytes()), VerifyOutcome::Good { .. }));
+        let before = signature_at(&key, b"x", created - DAY);
+        assert_eq!(mine.verify_detached(b"x", before.as_bytes()), VerifyOutcome::Bad);
+        let after = signature_at(&key, b"x", created + 25 * DAY);
+        assert_eq!(mine.verify_detached(b"x", after.as_bytes()), VerifyOutcome::Bad);
+    }
+
+    #[test]
+    fn a_revoked_key_is_listed_as_revoked_and_no_signature_of_it_is_trusted() {
+        let key = generate_curve25519("Leaked <leaked@example.org>").unwrap();
+        let sig = signature_at(&key, b"x", now_secs());
+        let revoked = revoke_key(key.clone());
+        let (_d, mine) = keyring();
+        let info = import_public(&mine, &revoked);
+        mine.set_verified(&info.fingerprint, true).unwrap();
+
+        let listed = mine.get(&info.fingerprint).unwrap().unwrap();
+        assert!(listed.revoked, "shown as revoked");
+        assert!(listed.verified, "the tick is the user's; the revocation outranks it");
+        assert!(mine.candidates_for(&[]).unwrap().is_empty());
+        assert!(mine.public_for_address("leaked@example.org").unwrap().is_none());
+        assert_eq!(
+            mine.verify_detached(b"x", sig.as_bytes()),
+            VerifyOutcome::Unusable("signer-key-revoked".into())
+        );
+    }
+
+    /// With the genuine key only Known and a leaked copy of the same address
+    /// Verified-then-revoked, encryption goes to the genuine one.
+    #[test]
+    fn a_revoked_verified_key_does_not_win_the_address() {
+        let leaked = revoke_key(generate_curve25519("Friend <friend@corp.example>").unwrap());
+        let genuine = generate_curve25519("Friend <friend@corp.example>").unwrap();
+        let (_d, mine) = keyring();
+        let l = import_public(&mine, &leaked);
+        mine.set_verified(&l.fingerprint, true).unwrap();
+        let g = import_public(&mine, &genuine);
+        let (_k, info) = mine.public_for_address("friend@corp.example").unwrap().unwrap();
+        assert_eq!(info.fingerprint, g.fingerprint);
+    }
+
+    #[test]
+    fn a_subkey_outside_its_life_cannot_vouch_for_a_signature() {
+        // The signing subkey was created 10 days ago and expires after one.
+        let made = build_curve25519("Sub <sub@example.org>", Some(secs_ago(10))).unwrap();
+        let key = rebind_subkey(made, 0, Some(1), false);
+        let created = key.secret_subkeys[0].key.created_at().as_secs();
+        let (_d, mine) = keyring();
+        import_public(&mine, &key);
+
+        let inside = signature_at(&key, b"x", created + DAY / 2);
+        assert!(matches!(mine.verify_detached(b"x", inside.as_bytes()), VerifyOutcome::Good { .. }));
+        let outside = signature_at(&key, b"x", now_secs());
+        assert_eq!(mine.verify_detached(b"x", outside.as_bytes()), VerifyOutcome::Bad);
+    }
+
+    #[test]
+    fn a_revoked_subkey_cannot_vouch_and_is_not_signed_or_encrypted_with() {
+        let key = rebind_subkey(
+            rebind_subkey(generate_curve25519("Rev <rev@example.org>").unwrap(), 0, None, true),
+            1,
+            None,
+            true,
+        );
+        let (_d, mine) = keyring();
+        let info = import_secret(&mine, &key);
+        let own = vec!["rev@example.org".to_string()];
+        mine.bind_account(&info.fingerprint, "acct-1", true, "rev@example.org", &own, true)
+            .unwrap();
+
+        let sig = signature_at(&key, b"x", now_secs());
+        assert_eq!(mine.verify_detached(b"x", sig.as_bytes()), VerifyOutcome::Bad);
+        assert!(mine.sign_detached("acct-1", b"x").is_err(), "no signing with a revoked subkey");
+        let err = mine
+            .encrypt_to("acct-1", &["rev@example.org".to_string()], b"x")
+            .unwrap_err();
+        assert!(err.contains("encryption subkey"), "{err}");
+    }
+
+    #[test]
+    fn an_expired_encryption_subkey_is_passed_over_for_encryption() {
+        let made = build_curve25519("Enc <enc@example.org>", Some(secs_ago(10))).unwrap();
+        let key = rebind_subkey(made, 1, Some(1), false);
+        let (_d, mine) = keyring();
+        import_public(&mine, &key);
+        let (_d2, me) = keyring();
+        me.generate("Me", "me@example.com", "acct-1").unwrap();
+        // Hand `mine`'s view of the recipient to a ring that can sign.
+        let recipient = SignedPublicKey::from(key.clone());
+        me.import(&recipient.to_bytes().unwrap()).unwrap();
+        let err = me
+            .encrypt_to("acct-1", &["enc@example.org".to_string()], b"x")
+            .unwrap_err();
+        assert!(err.contains("encryption subkey"), "{err}");
+    }
+
+    #[test]
+    fn a_revoked_user_id_is_not_one_of_the_keys_identities() {
+        let key = with_extra_user(
+            generate_curve25519("Me <me@example.com>").unwrap(),
+            "Old <old@example.com>",
+        );
+        // The owner revokes the second id.
+        let mut revoked = key.clone();
+        let public = revoked.primary_key.public_key().clone();
+        let user = &mut revoked.details.users[1];
+        let mut config = config_with(&user.signatures[0], now_secs(), None);
+        config.typ = SignatureType::CertRevocation;
+        let sig = config
+            .sign_certification(&key.primary_key, &public, &Pin::empty(), user.id.tag(), &user.id)
+            .unwrap();
+        user.signatures.push(sig);
+
+        let (_d, mine) = keyring();
+        let info = import_public(&mine, &revoked);
+        assert_eq!(info.addresses, vec!["me@example.com"]);
+        assert!(mine.public_for_address("old@example.com").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_key_info_from_an_older_file_reads_without_the_new_fields() {
+        let info: PgpKeyInfo = serde_json::from_str(
+            r#"{"fingerprint":"AB","identities":[],"addresses":[],"secret":true,"verified":false,"accounts":[],"algorithm":"Curve25519"}"#,
+        )
+        .unwrap();
+        assert!(!info.revoked && !info.expired && info.notes.is_empty());
+        assert_eq!(info.origin, KeyOrigin::Imported);
     }
 }
