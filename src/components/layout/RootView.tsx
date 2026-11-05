@@ -50,6 +50,7 @@ import { TabMarkMenuItems } from "../tabs/TabMarkMenuItems";
 import { RootRightsBadge, type RootMcpRights } from "./RootRightsBadge";
 import { RootStartAgent } from "./RootStartAgent";
 import { RootRail } from "../cockpit/RootRail";
+import { RootNewTabKeys } from "./RootNewTabKeys";
 import { CloseIcon, PencilIcon } from "../common/icons/Icon";
 
 
@@ -357,6 +358,22 @@ export function RootView({
     [addMenu],
   );
 
+  /** The new-tab keys (`RootNewTabKeys`): open the + menu of one subwindow from
+   *  its button's place, or add a tab to it. */
+  const openMenuFor = (groupId: string) => {
+    const button = stripRefs.current
+      .get(groupId)
+      ?.closest(".tab-bar")
+      ?.querySelector<HTMLElement>(".tab-new-btn");
+    if (!button) return false;
+    openAddMenu(button.getBoundingClientRect(), groupId);
+    return true;
+  };
+  const addTabTo = (spec: Omit<TabEntry, "key">, groupId: string) => {
+    if (groupId !== EMPTY_GROUP_ID) useTabsStore.getState().focusGroupInScope(ROOT_SCOPE, groupId);
+    addTab(spec);
+  };
+
   const groupOfKey = useMemo(() => {
     const map = new Map<string, { groupId: string; active: boolean }>();
     for (const g of groups) {
@@ -566,6 +583,7 @@ export function RootView({
         </>,
         document.body,
       )}
+    <RootNewTabKeys groupIds={groups.map((g) => g.id)} rootDir={rootDir} onAdd={addTabTo} onMenu={openMenuFor} />
     {addMenu && (
       <NewTabMenu
         scope={ROOT_SCOPE}

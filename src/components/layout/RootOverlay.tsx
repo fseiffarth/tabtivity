@@ -297,6 +297,11 @@ function RootOverlay() {
       onMouseDown={(e) => {
         if (e.button === 0) pick(id);
       }}
+      // A click that is no mouse press (detail 0): steering's Enter on the
+      // window bar. A real one has already picked on its mouse-down.
+      onClick={(e) => {
+        if (e.detail === 0) pick(id);
+      }}
       onKeyDown={onTabKeys(id)}
     >
       {children}

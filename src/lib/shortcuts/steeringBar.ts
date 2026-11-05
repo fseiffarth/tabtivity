@@ -236,6 +236,7 @@ export const REGION_LABEL: Record<SteeringRegion, TranslationKey> = {
   addTab: "steering.newTabMenu.label",
   settings: "steering.settings.label",
   header: "steering.region.header",
+  chrome: "steering.region.chrome",
   card: "steering.region.card",
   overlay: "steering.region.overlay",
 };

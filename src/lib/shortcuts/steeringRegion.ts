@@ -51,6 +51,17 @@ export function steeringAppEnabled(app: SteeringApp, settings: Settings | null |
 
 let cursor: HTMLElement | null = null;
 
+/** The root window's frame while the chrome region walks it: the cursor then
+ *  lands only on the window's own controls (`CHROME_ZONE`), not on the Root
+ *  view's terminals or a cockpit view's rows. `regionRoot` sets and clears it
+ *  per region, ahead of every use of the root. */
+const chromeFrames = new WeakSet<HTMLElement>();
+/** What the chrome level walks: the title bar's view tabs and buttons, and the
+ *  rail's fold toggle. */
+const CHROME_ZONE = ".root-overlay-bar, .cockpit-rail-expand, .cockpit-rail-collapse";
+/** Root's own tab strip sits in the bar too: those tabs are the tab level's. */
+const CHROME_SKIP = ".root-overlay-slot .tab-strip, .root-overlay-slot .tab-new-wrap";
+
 function lastMatch(selector: string): HTMLElement | null {
   const all = document.querySelectorAll<HTMLElement>(selector);
   return all.length > 0 ? all[all.length - 1] : null;
@@ -66,10 +77,20 @@ export function regionRoot(region: SteeringRegion): HTMLElement | null {
       return lastMatch(".tab-add-menu");
     case "header":
       return document.querySelector<HTMLElement>(".app-header");
+    case "chrome": {
+      // The root window's frame, walked only over its chrome (`CHROME_ZONE`).
+      const frame = document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
+      if (frame) chromeFrames.add(frame);
+      return frame;
+    }
     case "card":
       return activeTabCard();
-    case "overlay":
-      return topLayer();
+    case "overlay": {
+      // The same frame, walked whole (a cockpit view opened with U).
+      const layer = topLayer();
+      if (layer) chromeFrames.delete(layer);
+      return layer;
+    }
     case "settings":
       // The page, not the whole dialog: ←/→ step the left-hand list
       // (`stepSettingsPage`), so ↑/↓ need not wade through it.
@@ -333,6 +354,7 @@ const NOT_A_TARGET = ".app-header .project-pill, .wm-controls";
  *  is one. */
 export function regionTargets(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];
+  const chrome = chromeFrames.has(root);
   // Every element's cursor is read once: a parent comes before its children
   // in document order, so its answer is already here when they ask. (The mail
   // overlay is thousands of elements; each step walks them all.)
@@ -347,6 +369,7 @@ export function regionTargets(root: HTMLElement): HTMLElement[] {
   };
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
     if (el.closest(NOT_A_TARGET)) continue;
+    if (chrome && (!el.closest(CHROME_ZONE) || el.closest(CHROME_SKIP))) continue;
     const pressable = el.matches(PRESSABLE);
     if (!pressable) {
       if (!pointerOf(el)) continue;

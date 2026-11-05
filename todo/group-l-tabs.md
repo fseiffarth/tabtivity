@@ -1062,9 +1062,25 @@ correctness/UX work atop the same layout model #42 detaches.*
   - [ ] 🖐️ Manual test — Steering in Root: with the Root view up press Shift+Space,
     then Q (next asking agent) or ←/→. The arrows walk Root's tabs, not the
     project tab bar behind the window; after leaving steering (Space) typing
-    goes to the root terminal. A key to a project's tab closes the window. The
-    new-tab keys do nothing there. Rebind a steering key in Settings: the new
-    key walks Root too.
+    goes to the root terminal. A key to a project's tab closes the window.
+    Rebind a steering key in Settings: the new key walks Root too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Steering in Root, window bar and new tabs: with the Root
+    view up press Shift+Space, then ↑ (once with several subwindows to reach the
+    tabs level first). The highlight lands on the Root view tab; ←/→ walk the
+    view tabs, ✓/⚿/fill/✕ and the rail's fold toggle, never Root's own tabs;
+    Enter on Now opens that view; ↓ drops a menu or goes back to Root's tabs; ↑
+    goes on to the projects, where 1 or ←/→ onto the root station open the Root
+    view and leave the workspace on its project. N, O, 1-9 and + (and
+    Ctrl+Shift+N / M, Ctrl+1-9) open the tab in Root's focused subwindow, the
+    same one the + menu would; the window stays up.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

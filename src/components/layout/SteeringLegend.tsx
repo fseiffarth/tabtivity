@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useKeyboardSteeringStore, type SteeringHandoff } from "../../stores/keyboardSteering";
-import { allGroups, useTabsStore } from "../../stores/tabs";
+import { ROOT_SCOPE, allGroups, useTabsStore } from "../../stores/tabs";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { steeringTabsActive } from "../../lib/shortcuts/steeringScope";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { voiceInputOffered } from "../../lib/voice/desktopVoice";
@@ -86,7 +88,10 @@ export function SteeringLegend() {
   const toggleLegend = useKeyboardSteeringStore((s) => s.toggleLegend);
   const handedTo = useKeyboardSteeringStore((s) => s.handedTo);
   const handoffReturn = useKeyboardSteeringStore((s) => s.handoffReturn);
-  const multiPane = useTabsStore((s) => allGroups(s.layout).length >= 2);
+  // While the Root view is up steering's tab levels are Root's, so the legend
+  // reads Root's subwindows and active tab (`steeringScope`).
+  const rootShown = useRootOverlayStore((s) => rootViewShown(s));
+  const multiPane = useTabsStore((s) => allGroups(rootShown ? (s.layoutByScope[ROOT_SCOPE] ?? null) : s.layout).length >= 2);
   const popouts = useTabsStore((s) => (s.detachedGroupsByScope[s.scope]?.length ?? 0) > 0);
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
   const mail = useSettingsStore((s) => steeringAppEnabled("mail", s.settings));
@@ -95,8 +100,9 @@ export function SteeringLegend() {
   const busyByTab = useActivityStore((s) => s.busyByTab);
   const attentionByTab = useActivityStore((s) => s.attentionByTab);
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
-  const tabScope = useTabsStore((s) => s.scope);
-  const activeTab = useTabsStore((s) => (s.activeKey ? s.tabs.find((tab) => tab.key === s.activeKey) : undefined));
+  const workspaceScope = useTabsStore((s) => s.scope);
+  const tabScope = rootShown ? ROOT_SCOPE : workspaceScope;
+  const activeTab = useTabsStore(() => steeringTabsActive()?.tab);
   const steerKeys = useSettingsStore((s) => s.settings?.steering_keys) as SteeringKeyMap | undefined;
   const handsFreeFlag = useExperimental("voice_hands_free");
   const handsFreeChip = useSettingsStore((s) => s.settings?.voice_hands_free_on ?? false);
@@ -113,7 +119,7 @@ export function SteeringLegend() {
     () => (inPane ? newTabSlotLabels() : []),
     // The focused pane decides which agents 1–9 open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inPane, focusedGroupId],
+    [inPane, focusedGroupId, rootShown],
   );
 
   // Publish where steering points on <html> (`data-steer`, plus
@@ -182,6 +188,8 @@ export function SteeringLegend() {
           sideRegion: region === "side",
           settingsRegion: region === "settings",
           headerRegion: region === "header",
+          chromeRegion: region === "chrome",
+          inRoot: rootShown,
           overlayRegion: region === "overlay",
           steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
           tabCard: inPane && !!activeTabCard(),

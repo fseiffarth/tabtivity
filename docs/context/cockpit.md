@@ -106,10 +106,18 @@ While the Root view is up steering's tab levels walk **Root's**
 tabs, not the workspace's (`lib/shortcuts/steeringScope`): the arrows,
 close / clear / plan / goal / prompt and the tab's right-click act on Root's
 focused subwindow, a status key's jump to a project's tab steps the window aside,
-the new-tab keys do nothing there, and typing after leaving steering goes to the
-root terminal. The root window is then the place steered, not a layer over it.
+and typing after leaving steering goes to the root terminal. The root window is then the place steered, not a layer over it.
 The project ring's first station (steering's projects level: 1, left/right, and
 the cycle-project chords) is the **Root view**, not the root scope: landing on it
 opens the window on Root and the workspace stays on its project; while the window
 shows Root the ring stands on that station, and landing on a project closes it
 (`useKeyboard.landOnStation`).
+
+Above Root's tabs steering has one more level, the window's **chrome** (the
+`chrome` region, `steeringRegion`): up from the tabs (or the subwindows) walks the
+view tabs, the bar's buttons and the rail toggle with left/right, Enter presses
+one (a view tab opens that view), down drops a menu or returns to the tabs, up
+goes on to the projects. It uses the ordinary steering keys, so rebinding them
+rebinds it. The new-tab keys (steering N / O / 1-9 / + and the Ctrl+Shift+N / M,
+Ctrl+1-9 chords) open the tab in Root's focused subwindow while the Root view is
+up (`RootNewTabKeys`, the same tab the + menu's row builds; the window stays).

@@ -811,6 +811,10 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *                its pages)
  *   headerRegion — the region cursor is on the top bar (←/→ walk it, ↓ drops
  *                a button's menu)
+ *   chromeRegion — the region cursor is on the root window's bar (the same
+ *                keys; ↑ goes on up to the projects)
+ *   upToChrome — where ↑ climbs to the root window's bar: the panes level, or
+ *                the tabs level with one subwindow, while the Root view is up
  *   overlayRegion — the region cursor is in a dialog or menu on top (←/→
  *                along a row)
  *   walkRegion — a region whose ↑/↓ walk the cursor (all but the top bar)
@@ -832,9 +836,11 @@ export type SteeringCondition =
   | "stepsTabs"
   | "tabsMultiPane"
   | "upToProjects"
+  | "upToChrome"
   | "sideRegion"
   | "settingsRegion"
   | "headerRegion"
+  | "chromeRegion"
   | "overlayRegion"
   | "steeringConfirm"
   | "walkRegion"
@@ -905,6 +911,11 @@ export interface SteeringLegendState {
   settingsRegion?: boolean;
   /** The region cursor is on the top bar. */
   headerRegion?: boolean;
+  /** The region cursor is on the root window's bar (Root view). */
+  chromeRegion?: boolean;
+  /** The Root view is up: steering's tab levels are Root's, and ↑ from them
+   *  climbs to the window's bar. */
+  inRoot?: boolean;
   /** The region cursor is in the dialog or menu on top. */
   overlayRegion?: boolean;
   /** That dialog is steering's own "are you sure" (W, K). */
@@ -934,19 +945,23 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
     case "tabsMultiPane":
       return s.level === "tabs" && s.multiPane;
     case "upToProjects":
-      return s.level === "panes" || (s.level === "tabs" && !s.multiPane);
+      return !s.inRoot && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
+    case "upToChrome":
+      return !!s.inRoot && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
     case "sideRegion":
       return s.sideRegion;
     case "settingsRegion":
       return !!s.settingsRegion;
     case "headerRegion":
       return !!s.headerRegion;
+    case "chromeRegion":
+      return !!s.chromeRegion;
     case "overlayRegion":
       return !!s.overlayRegion;
     case "steeringConfirm":
       return !!s.overlayRegion && !!s.steeringConfirm;
     case "walkRegion":
-      return !s.headerRegion;
+      return !s.headerRegion && !s.chromeRegion;
     case "tabCard":
       return !!s.tabCard;
     case "agentClear":
@@ -1032,6 +1047,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["down"], labelKey: "steering.intoDocument.label", descKey: "steering.intoDocument.desc", levels: PANE_LEVELS, when: "intoDocument", group: "move" },
   { actions: ["up"], labelKey: "steering.upPanes.label", descKey: "steering.upPanes.desc", levels: ["tabs"], when: "tabsMultiPane", group: "move" },
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: PANE_LEVELS, when: "upToProjects", group: "move" },
+  { actions: ["up"], labelKey: "steering.upChrome.label", descKey: "steering.upChrome.desc", levels: PANE_LEVELS, when: "upToChrome", group: "move" },
   { actions: ["newShell"], labelKey: "steering.newShell.label", descKey: "steering.newShell.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["newMonitor"], labelKey: "steering.newMonitor.label", descKey: "steering.newMonitor.desc", levels: PANE_LEVELS, group: "new" },
   { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, agentSlots: true, group: "new" },
@@ -1056,6 +1072,9 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["up", "down"], pair: true, labelKey: "steering.move.label", descKey: "steering.move.desc", levels: ["region"], when: "walkRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.headerWalk.desc", levels: ["region"], when: "headerRegion", group: "move" },
   { actions: ["down"], labelKey: "steering.headerOpen.label", descKey: "steering.headerOpen.desc", levels: ["region"], when: "headerRegion", group: "act" },
+  { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.chromeWalk.desc", levels: ["region"], when: "chromeRegion", group: "move" },
+  { actions: ["down"], labelKey: "steering.chromeOpen.label", descKey: "steering.chromeOpen.desc", levels: ["region"], when: "chromeRegion", group: "act" },
+  { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: ["region"], when: "chromeRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.overlayRow.label", descKey: "steering.overlayRow.desc", levels: ["region"], when: "overlayRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.sideView.label", descKey: "steering.sideView.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.settingsPage.label", descKey: "steering.settingsPage.desc", levels: ["region"], when: "settingsRegion", group: "move" },

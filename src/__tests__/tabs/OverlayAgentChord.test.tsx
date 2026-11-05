@@ -164,8 +164,8 @@ describe("Ctrl+1–9 inside an app overlay", () => {
     expect(useRootOverlayStore.getState().open).toBe(true);
   });
 
-  it("keeps the old path with no overlay up", () => {
-    useRootOverlayStore.setState({ open: true });
+  it("keeps the old path with no overlay up: the workspace pane takes the tab, a cockpit view steps aside", () => {
+    useRootOverlayStore.setState({ open: true, view: "now" });
     render(<Harness />);
     events = listen({ overlay: true, newTab: true });
     const ev = press(CTRL_1);
@@ -173,6 +173,16 @@ describe("Ctrl+1–9 inside an app overlay", () => {
     expect(events.newTab.map((d) => d.request)).toEqual([{ kind: "agent", slot: 0 }]);
     expect(ev.defaultPrevented).toBe(true);
     expect(useRootOverlayStore.getState().open).toBe(false);
+  });
+
+  it("with the Root view up the chord is addressed to Root's pane (RootNewTabKeys) and the window stays", () => {
+    useRootOverlayStore.setState({ open: true, view: "root" });
+    render(<Harness />);
+    events = listen({ overlay: true, newTab: true });
+    press(CTRL_1);
+    // Root has no subwindow in this fixture: the empty one, not the workspace's pane.
+    expect(events.newTab.map((d) => d.groupId)).toEqual(["__empty__"]);
+    expect(useRootOverlayStore.getState().open).toBe(true);
   });
 
   it("ignores an overlay whose setting is off", () => {

@@ -128,17 +128,16 @@ describe("steering with the Root view up", () => {
     expect(workspaceActive()).toBe("w1");
   });
 
-  it("the new-tab keys open nothing behind the window", () => {
-    const heard = vi.fn((e: Event) => e.preventDefault());
+  it("the new-tab keys are addressed to Root's subwindow, never the workspace's pane behind the window", () => {
+    const groups: string[] = [];
+    const heard = (e: Event) => groups.push((e as CustomEvent<{ groupId: string }>).detail.groupId);
     window.addEventListener("app:new-tab-shortcut", heard);
     render(<Harness />);
     press({ key: " ", shiftKey: true });
-    press({ key: "ArrowUp" }); // projects level cannot take them; back to tabs
-    press({ key: "ArrowDown" });
-    press({ key: "ArrowDown" });
     for (const key of ["n", "o", "1"]) press({ key });
     window.removeEventListener("app:new-tab-shortcut", heard);
-    expect(heard).not.toHaveBeenCalled();
+    // (`RootNewTabKeys` answers for Root; see SteeringRootChrome.test.)
+    expect(groups).toEqual(["gr", "gr", "gr"]);
   });
 
   it("in a split Root, the active tab element is the focused subwindow's, not the first one's", () => {

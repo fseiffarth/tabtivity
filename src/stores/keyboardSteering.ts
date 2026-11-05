@@ -21,7 +21,8 @@ import { barHiddenIdsNow } from "../lib/projects/barHidden";
  *   region   — a keyboard cursor walking the controls of one surface that
  *              has no tab bar: the side panel, the mail / calendar / to-do
  *              overlays, a pane's + menu, the settings dialog, the top bar
- *              (↑ from the projects), or whatever dialog or menu is on top
+ *              (↑ from the projects), the root window's chrome (↑ from
+ *              Root's tabs), or whatever dialog or menu is on top
  *              (`SteeringRegion`)
  */
 export type SteeringLevel = "projects" | "panes" | "tabs" | "scroll" | "region";
@@ -35,6 +36,9 @@ export type SteeringRegion =
   | "addTab"
   | "settings"
   | "header"
+  /** The root window's own chrome (Root view: the view tabs, the rail toggle,
+   *  the bar's buttons), above the Root tabs. */
+  | "chrome"
   /** The card over the active tab's terminal (Undo clear, a sign-in link, a
    *  CLI update notice). */
   | "card"

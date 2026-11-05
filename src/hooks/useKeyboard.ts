@@ -393,7 +393,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         if (settingsDialog()) window.dispatchEvent(new Event("app:close-settings"));
       } else if (region === "overlay") {
         dropOverlay();
-      } else if (region !== "header" && region !== "card") {
+      } else if (region !== "header" && region !== "card" && region !== "chrome") {
         closeApp(region);
       }
       returnFromRegion();
@@ -542,16 +542,27 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // behind it does nothing.
       const slot = steeringSlot(action);
       if (slot !== null) {
-        // The new-tab keys belong to the workspace's tab bars; a tab opened
-        // from here would land under the Root window, out of sight.
-        if (!inRoot) requestNewTab({ kind: "agent", slot: slot - 1 }, BESIDE_ACTIVE);
+        // In Root the request goes to Root's subwindow (`RootNewTabKeys`), the
+        // same tab the console's + menu would open.
+        requestNewTab({ kind: "agent", slot: slot - 1 }, BESIDE_ACTIVE);
         return;
       }
       switch (action) {
-        case "up":
+        case "up": {
           // One subwindow: the panes level would step the same tabs again.
-          steering.setLevel(level === "tabs" && ids.length >= 2 ? "panes" : "projects");
+          if (level === "tabs" && ids.length >= 2) {
+            steering.setLevel("panes");
+            return;
+          }
+          // Root: above its tabs is the window's own chrome (view tabs, rail
+          // toggle, bar buttons); the projects are one more up from there.
+          if (inRoot && regionRoot("chrome")) {
+            enterRegion("chrome");
+            return;
+          }
+          steering.setLevel("projects");
           return;
+        }
         // Work here — steering steps aside, focus stays where it was put.
         // (The mode opens on this level, so Escape climbing out through three
         // levels would be three presses to leave.)
@@ -605,13 +616,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         }
         case "newTabMenu":
           // The whole + menu, walked with the region cursor.
-          if (!inRoot && requestNewTab({ kind: "menu" }, BESIDE_ACTIVE)) enterRegion("addTab");
+          if (requestNewTab({ kind: "menu" }, BESIDE_ACTIVE)) enterRegion("addTab");
           return;
         case "newShell":
-          if (!inRoot) requestNewTab({ kind: "shell" }, BESIDE_ACTIVE);
+          requestNewTab({ kind: "shell" }, BESIDE_ACTIVE);
           return;
         case "newMonitor":
-          if (!inRoot) requestNewTab({ kind: "monitor" }, BESIDE_ACTIVE);
+          requestNewTab({ kind: "monitor" }, BESIDE_ACTIVE);
           return;
         case "files": // toggle the focused subwindow's docked file viewer
           if (focused && group) tabs.setGroupFilesInScope(scope, focused, !group.filesOpen);
@@ -749,6 +760,15 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
             // One row of buttons: ←/→ walk it, ↓ drops the menu of the one
             // under the cursor — or, on a plain button, goes back down.
             if (action === "down" && !openCursorPopup()) leaveRegion(region);
+            return;
+          }
+          if (region === "chrome") {
+            // The root window's bar, the same shape: ↓ drops a menu or goes
+            // back down to Root's tabs; ↑ goes on up to the projects.
+            if (action === "up") {
+              clearRegionCursor();
+              useKeyboardSteeringStore.getState().setLevel("projects");
+            } else if (!openCursorPopup()) leaveRegion(region);
             return;
           }
           if (region === "overlay") {
@@ -914,6 +934,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // aside either way, so the docked column shows.
       const newTab = modalUp ? null : newTabRequestFor(e, overrides);
       const overlayApp = newTab?.kind === "agent" ? frontAppOverlay() : null;
+      const toRoot = !overlayApp && steeringInRoot();
       if (
         newTab &&
         (overlayApp && newTab.kind === "agent"
@@ -923,8 +944,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         e.preventDefault();
         e.stopPropagation();
         if (steering.active) exitSteering();
+        // The chord went to Root's subwindow while the Root view is up
+        // (`RootNewTabKeys`), so the window stays; otherwise the tab is the
+        // workspace's and the console steps aside.
         const overlay = useRootOverlayStore.getState();
-        if (overlay.open) overlay.close();
+        if (overlay.open && !toRoot) overlay.close();
         return;
       }
       // Reopen the last agent tab closed in this scope — from a focused

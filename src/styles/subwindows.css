@@ -1171,6 +1171,7 @@ html[data-steer="scroll"] .focus-frame::before {
 }
 html[data-steer-region="side"] .side-panel.open,
 html[data-steer-region="header"] .app-header,
+html[data-steer-region="chrome"] .root-console-backdrop .root-overlay-bar:not(.root-overlay-subbar),
 html[data-steer-region="overlay"] .steer-layer,
 html[data-steer-region="card"] .subwindow.focused .terminal-sign-in,
 html[data-steer-region="addTab"] .tab-add-menu,

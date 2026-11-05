@@ -11,7 +11,8 @@
  * instead (`requestOverlayAgent`): it docks the agent beside the app, where a
  * workspace tab would open hidden under the overlay.
  */
-import { allGroups, useTabsStore } from "../../stores/tabs";
+import { EMPTY_GROUP_ID, allGroups, useTabsStore } from "../../stores/tabs";
+import { steeringInRoot, steeringTabs } from "./steeringScope";
 import type { SteeringApp } from "./steeringRegion";
 import {
   AGENT_TAB_ACTIONS,
@@ -108,8 +109,11 @@ export function requestOverlayAgent(app: SteeringApp, slot: number): boolean {
   return !window.dispatchEvent(event);
 }
 
-/** The pane a request goes to: the focused one, else the first. */
+/** The pane a request goes to: the focused one, else the first. While the Root
+ *  view is up it is Root's (`RootNewTabKeys` answers for it; an empty Root is
+ *  `EMPTY_GROUP_ID`), not a workspace pane hidden behind the window. */
 function targetGroupId(): string | undefined {
+  if (steeringInRoot()) return steeringTabs().focusedGroupId ?? EMPTY_GROUP_ID;
   const tabs = useTabsStore.getState();
   return tabs.focusedGroupId ?? allGroups(tabs.layout)[0]?.id;
 }
