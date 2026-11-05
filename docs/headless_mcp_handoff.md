@@ -159,6 +159,49 @@ Never run live. Commits: `335a9104` (the change), plus a docs-only follow-up rec
    per process, as they were; a tab keeps its budget across a respawn only
    within the process that spawned it.
 
+### Review — flagged for user
+
+An independent read of `c8a713ad..335a9104` (code, not only the docs) found no
+confirmed bug: the root lane is still unrouted in the host, tokens stay in
+memory and per process, the window's commands are async over `spawn_blocking`,
+no lock is held across an await or a socket call, and the admin frames fit
+(a tick is at most about 55 bytes, 1000 of them stay under 64 KiB). Open
+points, none changed:
+
+1. **A hung host slows every window markup read.** `ask_peer` waits up to 2 s
+   to connect and 5 s for the answer, with no negative cache: a stopped (not
+   dead) host makes each `markup_mcp_list` / `_ticks` / `_dismiss` take that
+   long, and every `markup-mcp-changed` re-lists. Absent or dead is instant.
+   A short breaker (skip the peer for some seconds after a timeout) would do.
+2. **A lost admin reply loses the answer.** If the host closes an ask over
+   `MarkupAnswer` and the reply is lost or late (5 s), the window reports
+   `gone` and the prompt is never queued; there is no receipt to reopen with.
+   Needs a host stalled mid-request; the card is then closed, not stuck.
+3. **Phone double answer / double dismiss, window down, host-held tab.**
+   `markup_held_here` counts open asks only, so a second device answering an
+   already answered ask gets `503 desktop_unavailable`, and a repeated dismiss
+   is not idempotent, where a window or a daemon gives `409 answered` / `200`.
+   Cosmetic (the card re-lists and hides). Fixing it takes a
+   `markup_mcp` lookup that also sees closed asks.
+4. **`admin_markup` is synchronous on the admin plane's task.** With a `path`
+   it reads `projects.json` (`project_root`) on a tokio worker, like the
+   neighbouring `agent_tab` lookup does. Wrap in `spawn_blocking` if the
+   handler ever becomes async.
+5. **Windows pipe name.** The window builds the peer as
+   `state_dir().join("mobile-control/admin.sock")` (a `/` in the literal); the
+   host binds `control_dir.join("admin.sock")`, and the pipe name is a hash of
+   the path string. On Windows the two strings may differ in a separator and
+   name different pipes. The same literal is in `admin_call_here` and the
+   `desktop-control.sock` lines of `commands/mobile_control.rs` (older code),
+   so check all of them in the Windows live test; a per-component join fixes it.
+6. **Tests that cover less than their name.** `MobileMarkupPoke.test.ts`
+   drives `emitMarkupChanged`, not the `markup` branch of `refreshSlices` (as
+   `MobileSchedulesPoke.test.ts` does for schedules); `the_hosts_markup_hook_notifies_its_sink`
+   drives `markup_notice_hook`, not `start_headless` installing it (the hook is
+   a process-wide `OnceLock`); `the_second_process_holds_its_own_asks_and_ticks`
+   exercises asks only (the ticks split is exercised by
+   `the_window_reaches_the_asks_and_ticks_the_host_holds`).
+
 ## Next — phase 2 (git requests queued for the window's card)
 
 Only if the user wants pushes from headless tabs (see "Decisions" below).
