@@ -212,6 +212,18 @@ function RootOverlay() {
   const view: RootOverlayView = useRootOverlayStore((s) => s.view);
   // An overlay opened from this window (Machines, Models) is in front of it.
   const under = useConsoleUnderOverlay();
+  // The mail / calendar / to-do overlays share the window's layer and sit
+  // before it in the DOM. With the window one layer down they would paint over
+  // it (and over a Machines overlay that precedes them), so they step down too
+  // (`apps.css`): window and overlay stay above them as they always were.
+  useEffect(() => {
+    if (!under) return;
+    const root = document.documentElement;
+    root.dataset.consoleUnderOverlay = "";
+    return () => {
+      delete root.dataset.consoleUnderOverlay;
+    };
+  }, [under]);
   const boxFilter = useCockpitStore((s) => s.boxFilter);
   const boxes = useBoxesStore((s) => s.boxes);
   // The window's frame — the one hook the header overlays use: moved by the

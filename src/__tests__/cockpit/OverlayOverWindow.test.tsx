@@ -7,6 +7,8 @@
  * class (`under-overlay`) the CSS lowers one layer; jsdom has no layout, so the
  * class and the Escape routing are what is asserted.
  */
+// @ts-expect-error node:fs has no type declarations in this project (no @types/node)
+import { readFileSync } from "node:fs";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -150,5 +152,42 @@ describe("the Models overlay opened from the window", () => {
     expect(useConsoleCover.getState().covered).toBe(false);
     escape();
     expect(models()).toBe(false);
+  });
+});
+
+describe("the app overlays under a lowered window", () => {
+  const flag = () => document.documentElement.hasAttribute("data-console-under-overlay");
+
+  it("mail, calendar and to-do step down with the window, and come back with it", async () => {
+    mountAll();
+    await act(async () => useRootOverlayStore.getState().openView("usage"));
+    expect(flag()).toBe(false);
+    await act(async () => void fireEvent.click(await screen.findByRole("button", { name: "door" })));
+    expect(consoleBackdrop()?.classList.contains("under-overlay")).toBe(true);
+    expect(flag()).toBe(true);
+    escape();
+    expect(consoleBackdrop()?.classList.contains("under-overlay")).toBe(false);
+    expect(flag()).toBe(false);
+  });
+
+  it("the flag does not outlive the window", async () => {
+    const view = mountAll();
+    await act(async () => useRootOverlayStore.getState().show());
+    await act(async () => useModelsOverlayStore.getState().openOverlay("agents"));
+    expect(flag()).toBe(true);
+    view.unmount();
+    expect(flag()).toBe(false);
+  });
+
+  it("the stylesheet lowers the three app overlays under the flag and leaves Machines / Models / the window at their own layers", () => {
+    const css: string = readFileSync("src/styles/apps.css", "utf8");
+    const rule = css.match(/html\[data-console-under-overlay\]\s+([^{]+)\{([^}]*)\}/);
+    expect(rule).toBeTruthy();
+    expect(rule?.[1]).toContain(".app-overlay-backdrop");
+    for (const keep of [".root-console-backdrop", ".machines-overlay-backdrop", ".models-overlay-backdrop"]) {
+      expect(rule?.[1]).toContain(keep);
+    }
+    expect(rule?.[2]).toContain("calc(var(--z-modal) - 2)");
+    expect(css).toContain("z-index: calc(var(--z-modal) - 1)");
   });
 });
