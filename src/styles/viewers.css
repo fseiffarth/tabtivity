@@ -3438,6 +3438,78 @@ select.file-viewer-run-args-input {
   opacity: 0.4;
   cursor: var(--cur-default, default);
 }
+/* Sync merge: a chip is coloured by the side it currently holds (remote = the
+   --warning of the right column's tint, local = the --success of the left's), the
+   same locality colours the Take pills and rulers use — not git's kept/reverted. */
+.file-viewer-compare.sync .file-viewer-compare-chip.accept {
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+  color: var(--warning);
+}
+.file-viewer-compare.sync .file-viewer-compare-chip.reject {
+  border-color: color-mix(in srgb, var(--success) 60%, transparent);
+  color: var(--success);
+}
+/* The newer side of a change: a small arrow on the chip pointing at its column. */
+.file-viewer-compare-chip-newer {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 2px;
+}
+.file-viewer-compare-chip-newer svg {
+  width: 9px;
+  height: 9px;
+}
+.file-viewer-compare-chip-newer.left {
+  color: var(--success);
+}
+.file-viewer-compare-chip-newer.right {
+  color: var(--warning);
+}
+/* Column header: title, then the side's modified time and a "newer" badge. */
+.file-viewer-compare-col-title {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-viewer-compare-stamp {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.file-viewer-compare-newer {
+  padding: 0 5px;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.file-viewer-compare-newer.left {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 60%, transparent);
+}
+.file-viewer-compare-newer.right {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+}
+/* Beside a Take pill: that side's time for the change, "newer" in bold. */
+.file-viewer-compare-take-when {
+  display: inline-flex;
+  gap: 4px;
+  padding-left: 4px;
+  border-left: 1px solid currentColor;
+  font-weight: 500;
+  opacity: 0.9;
+}
+.file-viewer-compare-take-when b {
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 9px;
+}
 
 /* #67 in-editor search: the match spans paint a translucent highlight behind the
    editable text (the layer sits below the textarea), the current match brighter —

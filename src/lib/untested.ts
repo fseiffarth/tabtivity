@@ -157,6 +157,7 @@ export const UNTESTED = {
   // --- embed — Viewers: PDF, TeX, decks, tables ---------------------
   "bibCards.1": { area: "embed", what: "BibCards · ＋ entry" },
   "compareView.1": { area: "embed", what: "CompareView · Select a commit" },
+  "compareView.sideTimes": { area: "embed", what: "CompareView · sync resolver: per-side modified time, \"newer\" badge, per-change commit/save times beside Take and on the numbered chips" },
   "deckView.presentationTitle": { area: "embed", what: "DeckView · Presentation" },
   "fileViewer.autocompleteLabel": { area: "embed", what: "FileViewerPane · Autocomplete" },
   "fileViewer.spellingAddLanguage": { area: "embed", what: "FileViewerPane · ＋ Language (download a spelling dictionary)" },

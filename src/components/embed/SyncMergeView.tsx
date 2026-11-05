@@ -7,6 +7,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { resolveProjectDirectory, resolveLocalMirror } from "../../types";
 import { relFromAbs } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
+import { useSyncSideTimes } from "./useSyncSideTimes";
 
 /** Join a remote directory and a project-relative path with a single `/`
  *  (POSIX — the host is always Unix here), tolerating a trailing slash on the
@@ -41,7 +42,7 @@ export function SyncMergeView({
 
   // Resolve the mirror root the same way FileViewerPane does, so `rel` keys the
   // sync backend exactly like the orange list's own pull/push calls.
-  const { rel, hostPath } = useMemo(() => {
+  const { rel, hostPath, mirrorRoot, projectDir } = useMemo(() => {
     const projectDir = resolveProjectDirectory(project);
     const mirrorRoot = resolveLocalMirror(project) ?? (projectDir ? `${projectDir}/mirror` : null);
     const r = mirrorRoot ? relFromAbs(mirrorRoot, path) : null;
@@ -49,6 +50,8 @@ export function SyncMergeView({
     return {
       rel: r,
       hostPath: r && remotePath ? joinRemote(remotePath, r) : null,
+      mirrorRoot,
+      projectDir: projectDir || null,
     };
   }, [project, path]);
 
@@ -112,6 +115,9 @@ export function SyncMergeView({
       cancelled = true;
     };
   }, [path, hostPath, projectId, t]);
+
+  // Per-side modified times + per-change blame times (which side is newer).
+  const sideTimes = useSyncSideTimes({ projectId, rel, mirrorRoot, projectDir, localText, hostText });
 
   const closeTab = () => {
     if (tabKey) useTabsStore.getState().removeTab(tabKey);
@@ -193,6 +199,7 @@ export function SyncMergeView({
           applyLabel={applying ? t("syncMergeView.resolving") : t("syncMergeView.resolve")}
           onApply={apply}
           onClose={closeTab}
+          sideTimes={sideTimes ?? undefined}
         />
       </div>
     </div>

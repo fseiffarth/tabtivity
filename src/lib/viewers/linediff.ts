@@ -277,3 +277,31 @@ export function applyBlockToggle(
   lines.splice(loc.start, loc.len, ...replacement);
   return { text: lines.join("\n"), decision: next };
 }
+
+/**
+ * The 1-based line numbers each change block spans on the left and the right
+ * text — the numbers `git blame` reports for that side's file, so a block can be
+ * dated per side. A pure addition has no left lines (and a pure deletion no
+ * right ones): that side's list is empty, never padded with a neighbour. One
+ * pass over the rows serves every block.
+ */
+export function blockSideLines(
+  rows: AlignRow[],
+  blocks: ChangeBlock[],
+): { left: number[]; right: number[] }[] {
+  const out: { left: number[]; right: number[] }[] = [];
+  let bi = 0;
+  let leftNo = 0;
+  let rightNo = 0;
+  for (let i = 0; i < rows.length && bi < blocks.length; i++) {
+    const b = blocks[bi];
+    const left = rows[i].left != null ? ++leftNo : 0;
+    const right = rows[i].right != null ? ++rightNo : 0;
+    if (i < b.startRow) continue;
+    if (i === b.startRow) out[bi] = { left: [], right: [] };
+    if (left) out[bi].left.push(left);
+    if (right) out[bi].right.push(right);
+    if (i === b.endRow - 1) bi++;
+  }
+  return out;
+}

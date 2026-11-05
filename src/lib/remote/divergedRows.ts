@@ -1,6 +1,7 @@
 import type { TranslationKey } from "../i18n";
 import { fmtModified } from "../viewers/fileUtils";
 import type { SyncEntryStatus } from "../../stores/remote/sync";
+import { newerFileSide } from "../viewers/syncSideTimes";
 
 /**
  * What a diverged file's row says and offers, from its status alone: the
@@ -84,12 +85,8 @@ export function splitByNewerSide(
   const local: string[] = [];
   for (const rel of relPaths) {
     const e = byPath?.[rel];
-    if (!e || e.hostMtime == null || e.localMtime == null) continue;
-    if (e.hostDiverged !== e.localDiverged) {
-      (e.hostDiverged ? host : local).push(rel);
-    } else if (e.hostMtime !== e.localMtime) {
-      (e.hostMtime > e.localMtime ? host : local).push(rel);
-    }
+    const newer = e ? newerFileSide(e) : null;
+    if (newer) (newer.side === "host" ? host : local).push(rel);
   }
   return { host, local };
 }
