@@ -348,6 +348,7 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/fileViewer/fontZoom.tsx` | Editor font size (Ctrl+wheel, controls) and the shared zoom-modifier wheel hook (one module-scope key listener). |
 | `embed/fileViewer/codeTools.tsx` | Editor jump, blame, breakpoints, Run/Debug buttons, the Slurm `#SBATCH` bar. |
 | `embed/fileViewer/TextView.tsx` | Code/YAML/JSON/table/SVG text viewer (tree/grid/card halves, rendered/SVG previews). |
+| `embed/fileViewer/pythonLinks.ts` | `usePythonLinks`: the Python editor's Ctrl+click go-to-definition; resolves outgoing (imported) names in the background and underlines only those that land, external libraries via the project interpreter's `site-packages` (`pythonRun.pythonLibRootsFor`; in-tree venvs only, since reads are confined). |
 | `embed/fileViewer/MarkdownView.tsx` | Markdown viewer/editor: follows local links and `#fragment`s (`stores/viewers/mdAnchor`), remote-image consent, link graph. |
 | `embed/fileViewer/TexView.tsx` | TeX editor: compile, SyncTeX, diagnostics, hover preview. On a host-pinned project Compile saves and opens the host build tab (`hostTexBuild.ts`), then watches the PDF's mtime over SFTP. |
 | `embed/fileViewer/texParts.tsx` | TeX helpers shared by TexView and the workspace: compile options, Beamer bar, create-ref banner, copy-diagnostic button. |
@@ -527,7 +528,7 @@ stores stay at the top. No `index.ts` barrels.
 | `lib/projects/projectJumpEvent.ts` | `tabtivity:project-jump` — steering asks `ProjectSearch` to take the keyboard in jump mode; carries the level to return to. |
 | `lib/projects/fileViewSnapshots.ts` | Side panel's last-known data in module scope so a reveal's first frame is populated (the panel unmounts when closed). Tests need `clearFileViewSnapshots()`. |
 | `lib/projects/downloadsShown.ts` | Remembered show/hide of the Downloads section under the file tree, per host kind (side panel / Files tab); shown by default. |
-| `lib/viewers/python.ts` | Python editor intelligence (#87), pure: breakpoints snap to executable lines and remap on edit; go-to-definition is a lexical import-graph walk (only followable names underlined). |
+| `lib/viewers/python.ts` | Python editor intelligence (#87), pure: breakpoints snap to executable lines and remap on edit; go-to-definition is a lexical import-graph walk (only followable names underlined), into `site-packages` too (`pythonLibRoots`, `.pyi`/`-stubs`). |
 | `lib/browser.ts` | Typed invoke surface for the browser (`browser_*`); no component invokes directly (`BrowserTripwire.test.ts`), no wrapper takes a path. `READER_FRAME_CSP` is `MAIL_FRAME_CSP` imported. |
 | `lib/linkTarget.ts` | Pure URI routing table (#33) + address-bar commit rule. URLs Tabtivity itself starts go external; URLs from untrusted content open in reader mode, never live in one click. |
 | `lib/hardenPrototype.ts` | Freezes `Object.prototype` from `main.tsx` before bootstrap (#159), methods turned into override-safe accessors first — a bare freeze (Tauri's `freezePrototype`) breaks pdf-lib and would also hit browsed pages. |
