@@ -24,8 +24,12 @@
  *     That dialog's `x` and `f` stop and foreground: never typed.
  *
  * Every step is read back off the screen before the next key goes in, and a
- * step that did not land stops the walk: the message is typed only once the
- * subagent is the one viewed, by the label over the box. Rows that may be it
+ * step that did not land stops the walk. A screen counts once two reads in a
+ * row agree: the app reads xterm's buffer between the chunks of a redraw, and
+ * a frame half drawn (no list, no box, no label) must not pass for where a
+ * key landed — viewing a subagent redraws the whole screen. The message is
+ * typed only once the subagent is the one viewed, by the label over the box.
+ * Rows that may be it
  * — its description, or a summary on a row of its type — are viewed in turn
  * until the label names it. Esc is pressed only while the list's
  * cursor or the `/tasks` dialog is on screen — in the box it would stop a
@@ -117,6 +121,9 @@ const TASKS_HINT = /Enter to view\b.*\bEsc to close/u;
 const TASKS_CLOSE = /\bEsc\b\S*\s+to close\b/u;
 const TASK_ROW = /^\s*(❯)?\s*[^\p{L}\p{N}\s]\s+(\S.*?)(?:\s{2,}\S.*)?$/u;
 const RULE = /^\s*─{3,}/u;
+/** The top border of `/tasks`: a rule up to 2.1.287, `▔▔▔` since (2.1.318).
+ * Read past it, the transcript above passes for task rows. */
+const DIALOG_TOP = /^\s*[─▔]{3,}/u;
 
 /**
  * The `/tasks` dialog at the bottom of the screen, its subagent rows in order;
@@ -130,7 +137,7 @@ export function readTasksDialog(rows: readonly string[]): TaskDialogRow[] | null
   while (end > 0 && !rows[end - 1].trim()) end -= 1;
   if (end === 0 || !TASKS_HINT.test(rows[end - 1])) return null;
   const found: TaskDialogRow[] = [];
-  for (let index = end - 2; index >= 0 && !RULE.test(rows[index]); index -= 1) {
+  for (let index = end - 2; index >= 0 && !DIALOG_TOP.test(rows[index]); index -= 1) {
     const match = TASK_ROW.exec(rows[index]);
     if (match) found.unshift({ cursor: !!match[1], task: match[2] });
   }
@@ -231,15 +238,24 @@ function sleep(ms: number): Promise<void> {
 function listWalker(driver: Pick<SubagentDriver, "rows" | "key">, timing: SubagentWalkTiming) {
   const list = () => readAgentList(driver.rows());
   const cursorAt = (rows: { cursor: boolean }[] | null) => rows?.findIndex((row) => row.cursor) ?? -1;
-  /** Reads the screen with `read` until `done` holds or the wait is over. */
+  /** Reads the screen with `read` until `done` holds on two reads in a row
+   * that agree, or the wait is over. */
   const until = async <T>(read: () => T, done: (value: T) => boolean): Promise<T> => {
     const deadline = Date.now() + timing.waitMs;
+    let last: string | undefined;
     for (;;) {
       const value = read();
-      if (done(value) || Date.now() >= deadline) return value;
+      const seen = JSON.stringify(value) ?? "";
+      if ((done(value) && seen === last) || Date.now() >= deadline) return value;
+      last = done(value) ? seen : undefined;
       await sleep(timing.pollMs);
     }
   };
+  /** What `read` finds once the screen has settled. */
+  const settled = <T>(read: () => T): Promise<T> => until(read, () => true);
+  /** The list, where one was on screen a moment ago: a read without it is a
+   * frame half drawn until the wait is over. */
+  const shownList = () => until(list, (rows) => rows !== null);
   /** The one index `matches` finds in `rows`, else -1. */
   const only = <T>(rows: T[], matches: (row: T) => boolean) => {
     const found = rows.flatMap((row, index) => (matches(row) ? [index] : []));
@@ -255,14 +271,15 @@ function listWalker(driver: Pick<SubagentDriver, "rows" | "key">, timing: Subage
       if (at < 0 || wanted < 0 || step > rows.length * 2) return null;
       if (at === wanted) return rows;
       if (!(await driver.key(wanted > at ? DOWN : UP))) return null;
-      rows = await until(read, (next) => cursorAt(next) !== at);
+      // A list unread or with no cursor is a frame half drawn, not a move.
+      rows = await until(read, (next) => cursorAt(next) >= 0 && cursorAt(next) !== at);
     }
     return null;
   };
   /** ↓ until the list's cursor shows; the pills crossed are walked back with
    * ↑ when it never does, or the list goes. */
   const enterList = async (): Promise<AgentListRow[] | null> => {
-    let rows = list();
+    let rows = await shownList();
     for (let downs = 0; rows && cursorAt(rows) < 0; downs += 1) {
       const before = driver.rows().join("\n");
       if (downs === MAX_PILLS || !(await driver.key(DOWN))) {
@@ -270,7 +287,7 @@ function listWalker(driver: Pick<SubagentDriver, "rows" | "key">, timing: Subage
         for (let up = 0; up < downs; up += 1) await driver.key(UP);
         break;
       }
-      rows = await until(list, (next) => cursorAt(next) >= 0 || driver.rows().join("\n") !== before);
+      rows = await until(list, (next) => next !== null && (cursorAt(next) >= 0 || driver.rows().join("\n") !== before));
     }
     return rows;
   };
@@ -291,11 +308,13 @@ function listWalker(driver: Pick<SubagentDriver, "rows" | "key">, timing: Subage
   /** Esc while the list holds the keyboard, which goes back to the box; true
    * once the box has it. In the box itself Esc would stop a turn. */
   const leaveList = async (): Promise<boolean> => {
-    if (cursorAt(list()) < 0) return true;
+    if (cursorAt(await shownList()) < 0) return true;
     if (!(await driver.key(ESCAPE))) return false;
-    return cursorAt(await until(list, (next) => cursorAt(next) < 0)) < 0;
+    // The list still there without its cursor; one gone stays gone till the
+    // wait is over.
+    return cursorAt(await until(list, (next) => next !== null && cursorAt(next) < 0)) < 0;
   };
-  return { list, cursorAt, until, only, walk, enterList, viewing, view, leaveList };
+  return { list, cursorAt, until, settled, only, walk, enterList, viewing, view, leaveList };
 }
 
 /**
@@ -310,15 +329,18 @@ export async function viewSession(
   driver: Pick<SubagentDriver, "rows" | "key">,
   timing: SubagentWalkTiming = TIMING,
 ): Promise<boolean> {
-  const { list, view, leaveList } = listWalker(driver, timing);
-  const first = list();
+  const { list, settled, view, leaveList } = listWalker(driver, timing);
+  // Every prompt for the session passes here: it waits only on a screen that
+  // seems to show a subagent, and reads it again once settled.
+  if (!subagentViewed(driver.rows())) return true;
+  const first = await settled(list);
   if (!first || first[0].viewed) return true;
   // Only from the box: in a dialog or picker ↓ and Enter would answer it.
-  if (first.every((row) => !row.cursor) && !inputBoxShown(driver.rows())) return false;
+  if (first.every((row) => !row.cursor) && !(await settled(() => inputBoxShown(driver.rows())))) return false;
   const main = await view((rows) => rows.findIndex((row) => row.main));
   const left = await leaveList();
   // A list gone with the subagent's view leaves the session viewed.
-  const now = list();
+  const now = await settled(list);
   return main && left && (!now || now[0].viewed);
 }
 
@@ -340,13 +362,13 @@ export async function sendToSubagent(
   target: { task: string; role?: string },
   timing: SubagentWalkTiming = TIMING,
 ): Promise<SubagentSendResult> {
-  const { list, until, only, walk, enterList, viewing, view, leaveList } = listWalker(driver, timing);
+  const { list, until, settled, only, walk, enterList, viewing, view, leaveList } = listWalker(driver, timing);
   /** Esc while `/tasks` — its list, or a task's details — is up, which
    * closes it. */
   const closeTasks = async () => {
-    for (let tries = 0; tries < 2 && tasksShown(driver.rows()); tries += 1) {
+    for (let tries = 0; tries < 2 && (await settled(() => tasksShown(driver.rows()))); tries += 1) {
       if (!(await driver.key(ESCAPE))) return;
-      await until(driver.rows, (rows) => !tasksShown(rows));
+      await until(driver.rows, (rows) => !tasksShown(rows) && inputBoxShown(rows));
     }
   };
   const tasks = () => readTasksDialog(driver.rows());
@@ -354,7 +376,7 @@ export async function sendToSubagent(
   /** The subagent opened from `/tasks`: its row walked to, then Enter, which
    * closes the dialog onto the subagent's view. */
   const openFromTasks = async (): Promise<SubagentSendFailure | null> => {
-    if (!inputBoxShown(driver.rows()) || !(await driver.command("/tasks"))) return "not_opened";
+    if (!(await settled(() => inputBoxShown(driver.rows()))) || !(await driver.command("/tasks"))) return "not_opened";
     const dialog = await until(tasks, (rows) => rows !== null);
     if (!dialog) return "not_opened";
     const matching = dialog.filter((row) => sameTask(row.task, target.task)).length;
@@ -380,8 +402,7 @@ export async function sendToSubagent(
    * in turn — those that read as it first, then the summaries of its type —
    * until the label names it. "missing" when none did, the session viewed
    * again and the keyboard back in the box. */
-  const fromList = async (): Promise<"viewed" | "missing" | "failed"> => {
-    const first = list();
+  const fromList = async (first: AgentListRow[] | null): Promise<"viewed" | "missing" | "failed"> => {
     if (!first) return "missing";
     const size = first.length;
     const exact = first.flatMap((row, index) => (rowMatches(row, target) ? [index] : []));
@@ -394,21 +415,22 @@ export async function sendToSubagent(
       const pick = (rows: AgentListRow[]) => (rows.length === size ? index : -1);
       const rows = await walk(list, pick);
       if (!rows) return "failed";
-      const before = viewLabel(driver.rows());
+      const before = await settled(() => viewLabel(driver.rows()));
       if (!rows[index].viewed) {
         if (!(await driver.key(ENTER))) return "failed";
         if (!viewing(await until(list, (next) => viewing(next, pick)), pick)) return "failed";
       }
-      const label = await until(() => viewLabel(driver.rows()), (next) => next !== before || isTarget(next, rows[index]));
+      // No label is a box half drawn: the view switch redraws the whole screen.
+      const label = await until(() => viewLabel(driver.rows()), (next) => next !== null && (next !== before || isTarget(next, rows[index])));
       if (isTarget(label, rows[index])) return "viewed";
     }
     const main = await view((rows) => rows.findIndex((row) => row.main));
     return main && (await leaveList()) ? "missing" : "failed";
   };
 
-  const first = list();
+  const first = await settled(list);
   if (first && first.filter((row) => rowMatches(row, target)).length > 1) return { ok: false, reason: "ambiguous" };
-  const listed = await fromList();
+  const listed = await fromList(first);
   if (listed === "failed") {
     await leaveList();
     return { ok: false, reason: "not_opened" };
@@ -424,7 +446,7 @@ export async function sendToSubagent(
   // goes where it did before. A subagent that left the list took the view
   // back with it; with no list on screen ↓ and ↑ would walk the box's history.
   await sleep(timing.waitMs / 3);
-  const after = list();
+  const after = await settled(list);
   if (!after) return { ok: true, backToMain: false };
   if (after[0].viewed) return { ok: true, backToMain: true };
   const main = await view((rows) => rows.findIndex((row) => row.main));
