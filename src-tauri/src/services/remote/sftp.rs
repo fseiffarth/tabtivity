@@ -788,6 +788,52 @@ pub async fn read_file_on(sftp: &Sftp, path: &str) -> Result<Vec<u8>, String> {
     Ok(bytes.to_vec())
 }
 
+/// Read a remote file's contents, but never more than `limit` bytes into memory.
+/// `Ok(None)` when the file holds more than `limit` bytes (nothing is returned
+/// then: a caller treats it as "too large", not as a prefix). The listing's size
+/// is the host's word and the file can grow after it, and `/proc` files report
+/// size 0, so the bound is on the bytes actually read: at most `limit + 1` plus
+/// one chunk are ever held, whatever the host sends.
+pub async fn read_file_up_to(sftp: &Sftp, path: &str, limit: u64) -> Result<Option<Vec<u8>>, String> {
+    let file = sftp.open(path).await.map_err(|e| format!("sftp read failed: {e}"))?;
+    read_bounded(limit, file, |mut file, want| async move {
+        let chunk = file
+            .read(want, bytes::BytesMut::with_capacity(want as usize))
+            .await
+            .map(|chunk| chunk.map(|c| c.to_vec()))
+            .map_err(|e| format!("sftp read failed: {e}"));
+        (file, chunk)
+    })
+    .await
+}
+
+/// The loop behind [`read_file_up_to`], over any chunk source `S` (handed to `next`
+/// and handed back with each answer; `None` or an empty chunk is the end):
+/// `Ok(None)` as soon as more than `limit` bytes were seen.
+async fn read_bounded<S, F, Fut>(limit: u64, mut source: S, mut next: F) -> Result<Option<Vec<u8>>, String>
+where
+    F: FnMut(S, u32) -> Fut,
+    Fut: std::future::Future<Output = (S, Result<Option<Vec<u8>>, String>)>,
+{
+    let mut bytes: Vec<u8> = Vec::new();
+    loop {
+        // One byte past the limit is read so that "exactly limit" and "more" differ.
+        let room = limit.saturating_add(1).saturating_sub(bytes.len() as u64);
+        let want = u32::try_from(room).unwrap_or(u32::MAX).min(STREAM_CHUNK as u32);
+        let (back, chunk) = next(source, want).await;
+        source = back;
+        match chunk? {
+            Some(chunk) if !chunk.is_empty() => {
+                bytes.extend_from_slice(&chunk);
+                if bytes.len() as u64 > limit {
+                    return Ok(None);
+                }
+            }
+            _ => return Ok(Some(bytes)),
+        }
+    }
+}
+
 /// Write (create/truncate) a remote file with `bytes`, creating missing parent
 /// directories first — mirrors the local writers' `create_dir_all` + `write`.
 pub async fn write_file_on(sftp: &Sftp, path: &str, bytes: &[u8]) -> Result<(), String> {
@@ -1031,9 +1077,10 @@ pub async fn read_file(
     port: Option<u16>,
     password: Option<&str>,
     path: &str,
-) -> Result<Vec<u8>, String> {
+    limit: u64,
+) -> Result<Option<Vec<u8>>, String> {
     with_oneshot(user, host, port, password, |sftp| async move {
-        let r = read_file_on(&sftp, path).await;
+        let r = read_file_up_to(&sftp, path, limit).await;
         (sftp, r)
     })
     .await
@@ -1157,6 +1204,33 @@ mod tests {
             size: 0,
             modified_secs: None,
         }
+    }
+
+    /// A host that never stops sending is cut off one chunk past the limit; a file
+    /// of exactly `limit` bytes still reads whole. (Without the bound this loop
+    /// would run until the 10 GiB the fake source claims.)
+    #[test]
+    fn a_bounded_read_stops_at_the_limit_however_much_the_host_sends() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        // `S` is the bytes asked for so far.
+        let endless = |asked: u64, want: u32| {
+            assert!(asked < 10 << 30, "read past every sane bound");
+            async move { (asked + u64::from(want), Ok(Some(vec![7u8; want as usize]))) }
+        };
+        let limit = 3 * STREAM_CHUNK as u64 + 5;
+        assert_eq!(rt.block_on(read_bounded(limit, 0u64, endless)).unwrap(), None);
+
+        // `S` is what the fake file has left: exactly `limit` bytes still reads whole.
+        let exact = |left: u64, want: u32| {
+            let n = u64::from(want).min(left);
+            async move { (left - n, Ok(Some(vec![1u8; n as usize]))) }
+        };
+        let whole = rt.block_on(read_bounded(limit, limit, exact)).unwrap().expect("exactly the limit is allowed");
+        assert_eq!(whole.len() as u64, limit);
+        assert_eq!(rt.block_on(read_bounded(limit, limit + 1, exact)).unwrap(), None);
+
+        let failing = |s: (), _: u32| async move { (s, Err::<Option<Vec<u8>>, String>("boom".into())) };
+        assert_eq!(rt.block_on(read_bounded(10, (), failing)), Err("boom".to_string()));
     }
 
     #[test]

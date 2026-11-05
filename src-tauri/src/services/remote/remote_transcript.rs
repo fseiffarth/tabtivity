@@ -63,6 +63,9 @@ const SESSIONS: &str = ".claude/sessions";
 /// The most session records one ask reads, and the largest one it reads.
 const MAX_SESSION_RECORDS: usize = 200;
 const MAX_SESSION_RECORD_BYTES: u64 = 64 * 1024;
+/// A running CLI's `/proc/<pid>/environ` is read for one variable; a real environment
+/// is far below this (it is limited by the stack), a host's stream is not.
+const MAX_ENVIRON_BYTES: u64 = 2 * 1024 * 1024;
 /// The most slug folders one scan looks into.
 const MAX_SEARCHED_DIRS: usize = 400;
 /// The most subagent records one read copies, and the most workflow runs a
@@ -252,7 +255,12 @@ async fn grow_subagents(
         if copy.files.get(&entry.name) == Some(&stamp) && to.is_file() {
             continue;
         }
-        let bytes = crate::services::sftp::read_file_on(sftp, &format!("{remote}/{}", entry.name)).await?;
+        // The listing said `entry.size <= MAX_SESSION_RECORD_BYTES`; the read holds the host to it.
+        let Some(bytes) =
+            crate::services::sftp::read_file_up_to(sftp, &format!("{remote}/{}", entry.name), MAX_SESSION_RECORD_BYTES).await?
+        else {
+            continue;
+        };
         tokio::fs::create_dir_all(folder).await.map_err(|e| e.to_string())?;
         tokio::fs::write(&to, &bytes).await.map_err(|e| e.to_string())?;
         copy.files.insert(entry.name.clone(), stamp);
@@ -408,13 +416,16 @@ pub(crate) async fn running_session(sftp: &Sftp, launch_id: &str) -> Option<(Str
     });
     let mut best: Option<SessionRecord> = None;
     for pid in pids.take(MAX_SESSION_RECORDS) {
-        let Ok(environ) = crate::services::sftp::read_file_on(sftp, &format!("/proc/{pid}/environ")).await else {
+        // `/proc` files list as size 0, so only the read can bound them.
+        let Ok(Some(environ)) = crate::services::sftp::read_file_up_to(sftp, &format!("/proc/{pid}/environ"), MAX_ENVIRON_BYTES).await else {
             continue;
         };
         if !runs_tab(&environ, launch_id) {
             continue;
         }
-        let Ok(bytes) = crate::services::sftp::read_file_on(sftp, &format!("{SESSIONS}/{pid}.json")).await else {
+        let Ok(Some(bytes)) =
+            crate::services::sftp::read_file_up_to(sftp, &format!("{SESSIONS}/{pid}.json"), MAX_SESSION_RECORD_BYTES).await
+        else {
             continue;
         };
         let Some(record) = session_record(&bytes) else {
