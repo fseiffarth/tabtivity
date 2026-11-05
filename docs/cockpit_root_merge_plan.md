@@ -576,3 +576,25 @@ Fixed in this document:
 
 No Fixed decision was undone; two were refined (CenterPanel's wake rule, the
 `drawnElsewhere` source) and one added (hydration).
+
+## Follow-up round (user's answers, 2026-11-05)
+
+The merge landed on develop (70c25a3a..5ec871f3, never run live; build log and
+flags in `docs/cockpit_root_merge_handoff.md`). The user answered the nine
+flagged items. **Not implemented yet.**
+
+| # | Item | Decision |
+|---|---|---|
+| F1 | Project ring (steering projects level station 1, ←/→, cycle-project chord) still `setActive(null)` on root | Landing on root opens the **Root view**; the workspace stays on its project |
+| F2 | Flag-off jumps open the console | **Make the cockpit non-experimental**: drop the `cockpit` experiment gate. The flag-off path goes away, so the window is always "Cockpit" (decision 3) and a never-dragged frame gets the wide default (decision 5); a saved `rootConsoleFrame` is kept. `UntestedTag` rows stay: graduating ≠ tested |
+| F3 | Narrow band unmounts Now's detail, unsent composer text may be lost | Verify first; if lost, **keep the draft** per tab across the unmount (test) |
+| F4 | Steering in Root can't reach window chrome; new-tab keys inert | Add a **chrome steering level** (view tabs, rail, buttons) and make the new-tab keys open a tab **in Root** |
+| F5 | Root below 820 px has no Needs-you access | Root's sub-bar gets the same **"Needs you N" chip** Now uses (rail as popover) |
+| F6 | Ctrl+W and tab-cycling chords act on the workspace behind the window | While the Root view is in front they **act on Root's tabs** |
+| F7 | Narrow Tonight "Show" lands on the roster | **Open the detail** (row selected, back returns) |
+| F8 | Root's 40 px rail always present; open rail fixed 280 px | **Hide the column when empty**; the open rail gets Now's **resize grip**, width remembered |
+| F9 | Machines from Usage stacks under the window; one Escape closes both | **Bring Machines/Models to the front** when opened from the window; Escape closes only the top one |
+
+Order: F2 first (it removes the flag-off branches the rest would otherwise
+handle twice), then F1 + F4 + F6 (steering/keyboard, `useKeyboard.ts`,
+`lib/shortcuts/*`), then F3 + F5 + F7 + F8 (cockpit/Root layout), then F9.
