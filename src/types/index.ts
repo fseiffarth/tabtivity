@@ -1319,13 +1319,20 @@ export interface GitPushProposal {
   remote_sha: string | null;
   commits: string[];
   diffstat: string;
+  /** The changed files as `"<status> <path>"` lines, workflow, hook and
+   *  manifest paths first and capped; `files_total` counts all of them. */
+  files?: string[];
+  files_total?: number;
   note: string;
   needs_url_confirm: boolean;
-  /** The push goes to the remote's default branch: it always waits for a click. */
+  /** The push goes to a branch that always waits for a click: the remote's
+   *  default, main or master, or one a release workflow runs on. */
   to_default?: boolean;
   created_at: string;
   /** `allowed`: an "Allow CI" card the user allowed. */
   status: "running" | "pending" | "pushed" | "failed" | "dismissed" | "expired" | "allowed";
+  /** Who closed a `dismissed` card. Absent (an older record) reads as the user. */
+  dismissed_by?: "user" | "system" | null;
   category: string | null;
   message: string;
   output: string;
