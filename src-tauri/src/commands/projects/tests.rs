@@ -339,6 +339,34 @@ fn a_planted_fifo_does_not_hang_a_copy_or_a_move() {
     assert_eq!(std::fs::read(moved.join("a.txt")).unwrap(), b"a");
 }
 
+/// Review of gap 83: a file the copy cannot read (a root-owned `0600` file a
+/// container left behind) is an error, never a silent skip — a skip would let
+/// `move_tree` remove the source holding the only copy of its bytes.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_file_fails_the_copy_and_the_source_stays() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.txt"), b"a").unwrap();
+    let secret = src.join("secret.txt");
+    std::fs::write(&secret, b"only copy").unwrap();
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&secret).is_ok() {
+        eprintln!("running as root: a 0000 file is still readable; skipped");
+        return;
+    }
+    let err = copy_tree_core(&src, &tmp.path().join("copy"), true).unwrap_err();
+    assert!(err.contains("secret.txt"), "{err}");
+    let moved = tmp.path().join("moved");
+    std::fs::create_dir_all(&moved).unwrap();
+    std::fs::write(moved.join("stale.txt"), b"s").unwrap();
+    assert!(move_tree(&src, &moved).is_err());
+    assert!(src.join("secret.txt").exists(), "the source is kept");
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
 /// Gap 83: a link planted at a destination file name is replaced, not written
 /// through, when a resumed pass copies a regular file over it.
 #[cfg(unix)]

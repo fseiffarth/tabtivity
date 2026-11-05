@@ -905,6 +905,42 @@ fn copy_dir_core(
     Ok(())
 }
 
+/// Open `from` (listed as a regular file) for reading the way
+/// [`crate::services::home_io::open_regular`] does — no link followed, no wait
+/// on a FIFO, regular on the handle — but telling "not there to copy" from
+/// "could not be read": `Ok(None)` only for a file that vanished or stopped
+/// being a regular file since the directory read (a swapped-in link, pipe or
+/// socket); an unreadable file (permissions, I/O) is an `Err`, so the move
+/// that called never removes a source holding bytes it could not copy.
+fn open_source_file(from: &Path) -> Result<Option<fs::File>, String> {
+    #[cfg(unix)]
+    let opened = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(from)
+    };
+    #[cfg(not(unix))]
+    let opened = match fs::symlink_metadata(from) {
+        Ok(m) if m.is_file() => fs::File::open(from),
+        Ok(_) => return Ok(None),
+        Err(e) => Err(e),
+    };
+    match opened {
+        Ok(file) => Ok(file
+            .metadata()
+            .map_err(|e| format!("{}: {e}", from.display()))?
+            .is_file()
+            .then_some(file)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        #[cfg(unix)]
+        // ELOOP: a link where the file was; ENXIO: a socket or an unopened pipe.
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENXIO)) => Ok(None),
+        Err(e) => Err(format!("{}: {e}", from.display())),
+    }
+}
+
 /// One regular file, through a no-follow, non-blocking handle that is checked
 /// regular once open. A file that stopped being regular (or vanished) between
 /// the directory read and the open is skipped, like a special file. The
@@ -912,7 +948,7 @@ fn copy_dir_core(
 /// a link planted there is replaced, never written through.
 fn copy_file_core(from: &Path, to: &Path, limits: CopyLimits, tally: &mut CopyTally) -> Result<(), String> {
     use std::io::Read;
-    let Some(input) = crate::services::home_io::open_regular(from) else {
+    let Some(input) = open_source_file(from)? else {
         tally.skipped += 1;
         return Ok(());
     };
