@@ -5,7 +5,8 @@ rationale for the shipped shape: `docs/context/port_forwards.md`. **Never run li
 
 ## Commits
 
-See `git log localhost-viewer` (one feature commit and one handoff/docs commit if split).
+- `314f2bd9` feat(remote): forward a tab's localhost server and open it
+- the commit adding this sha to the handoff (docs only)
 
 ## Choices where the plan was silent
 
