@@ -479,6 +479,7 @@ export const UNTESTED = {
   "mail.filters.title": { area: "mail", what: "MailFiltersDialog · Mail filters" },
   "mail.keys.title": { area: "mail", what: "MailKeysDialog · OpenPGP keys" },
   "mail.keys.ownKeyUnverified": { area: "mail", what: "MailKeysDialog · an imported private key is listed under Your keys as untrusted, with the fingerprint checkbox; Use for this account appears only for a key naming the account's address and trusts it only when every address on it is one of your accounts (then it shows as your key); re-importing keeps its trust" },
+  "mail.keys.trust": { area: "mail", what: "MailKeysDialog · a revoked or expired key is labelled and not offered for an account; Use for this account on an imported private key asks a confirm naming the risk and leaves it unchecked; a re-import with other user IDs drops the tick and the binding and says so; mail signed by a revoked or expired key reads Unusable with a note" },
   "mail.contacts.title": { area: "mail", what: "MailAddressBook · Address Book tab (Personal / Collected books, lists, card editor, Write)" },
   "mail.contacts.importExport": { area: "mail", what: "MailAddressBook · vCard Import… / Export… (backend-raised file dialogs)" },
   "mail.contacts.fromInbox": { area: "mail", what: "MailAddressBook · Add from Inbox (senders of indexed Inbox mail → Collected; robots and own addresses skipped)" },

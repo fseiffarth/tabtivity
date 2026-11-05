@@ -938,12 +938,19 @@ export function mailPgpSetVerified(fingerprint: string, verified: boolean): Prom
   return invoke<PgpKeyInfo>("mail_pgp_set_verified", { fingerprint, verified });
 }
 
+/**
+ * Bind (or unbind) one of the user's private keys to an account. A key that was
+ * *imported* rather than generated here is refused unless `acknowledgeImported`
+ * is true, which the Keys dialog sends only after a confirm that names the risk;
+ * the backend enforces it, and even then leaves the key unverified.
+ */
 export function mailPgpBind(
   fingerprint: string,
   accountId: string,
   bind: boolean,
-): Promise<void> {
-  return invoke<void>("mail_pgp_bind", { fingerprint, accountId, bind });
+  acknowledgeImported = false,
+): Promise<PgpKeyInfo> {
+  return invoke<PgpKeyInfo>("mail_pgp_bind", { fingerprint, accountId, bind, acknowledgeImported });
 }
 
 export function mailPgpDelete(fingerprint: string): Promise<void> {
@@ -1012,6 +1019,8 @@ export function mailCryptoNoteKey(note: string): TranslationKey | null {
     "signer-not-aligned": "mail.crypto.noteUnaligned",
     "signer-key-missing": "mail.crypto.noteNoKey",
     "signature-invalid": "mail.crypto.noteInvalid",
+    "signer-key-revoked": "mail.crypto.noteKeyRevoked",
+    "signer-key-expired": "mail.crypto.noteKeyExpired",
     "format-not-supported": "mail.crypto.noteUnsupported",
     "inline-signature-not-checked": "mail.crypto.noteInlineUnchecked",
     "decrypt-failed": "mail.crypto.noteDecryptFailed",
