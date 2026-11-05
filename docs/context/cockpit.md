@@ -90,7 +90,8 @@ Escape on it returns), Tonight and Usage stack, the title bar drops its label an
 folds the box filter into a ▾ icon, and Root has no icon rail. The band is written
 on the frame (`data-band`) for the CSS and provided by context for the views that
 swap what they mount, so a column that is not shown mounts nothing (a hidden detail
-attaches no terminal).
+attaches no terminal). Unsent composer text survives that unmount: the Reader keeps
+it per tab in `lib/agents/readerDrafts`, not in the pane (`NowDraft.test`).
 
 ## Keys and entry points
 
