@@ -39,6 +39,11 @@ below are fixed: reviewers may not undo them.
      in the Agent steps table (at most 5 agents, 3 building), then the final review.
   Reports: `tmp/threat_recheck_2026_11_04/step-<step>.md` in the main checkout.
   Say "continue the threat recheck" to pick up here.
+- 2026-11-05, resumed: running I1 (finish, Sonnet), I2b (Sonnet) and the I3 review
+  (Opus, runs I3's missing gates first; report `review-I3.md`). Agents must never
+  `pkill -f`: kill only their own PIDs.
+- 2026-11-05: **I3 landed** on develop `f01652f9` (review `review-I3.md`: one gap-103
+  bypass fixed, `5ac217bc`). I1 finished (`14fa850f`), its review running; I2b running.
 
 ## Decisions (user, 2026-11-05)
 
