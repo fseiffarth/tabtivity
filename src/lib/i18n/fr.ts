@@ -1408,6 +1408,7 @@ export const dict: Dict = {
   "errors.authFailed": "La connexion a été refusée. Vérifiez le nom du compte et le mot de passe ou le jeton.",
   "errors.programMissing": "Un programme nécessaire n'est pas installé ou n'est pas dans le PATH.",
   "errors.diskFull": "Le disque, ou votre quota dessus, est plein. Libérez de l'espace, puis réessayez.",
+  "errors.pullNeedsSpace": "Le téléchargement demande plus de place que le disque de la copie locale de ce projet n'en a de libre. Libérez de l'espace ou récupérez un dossier plus petit.",
   "errors.permission": "Votre compte n'a pas le droit de faire cela ici : le fichier ou le dossier appartient à quelqu'un d'autre ou est en lecture seule.",
   "errors.exists": "Un élément portant ce nom existe déjà à cet endroit.",
   "errors.notFound": "Le fichier ou le dossier n'est pas là. Il a peut-être été déplacé, renommé ou supprimé.",

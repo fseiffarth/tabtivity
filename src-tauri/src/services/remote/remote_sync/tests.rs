@@ -1701,3 +1701,19 @@ mod mirror_reads {
         assert_eq!(mirror_skips(&id), MirrorSkips::default());
     }
 }
+
+/// A manual pull whose listed total exceeds the disk's free space is refused before
+/// a byte is written; one that fits (or whose disk cannot be read) is not. The
+/// mirror need not exist yet: the nearest existing ancestor is asked.
+#[test]
+fn a_pull_larger_than_the_free_space_is_refused_up_front() {
+    let dir = tempfile::tempdir().unwrap();
+    let mirror = dir.path().join("not").join("created").join("yet");
+    let refusal = pull_space_refusal(&mirror, u64::MAX).expect("a pull of u64::MAX bytes cannot fit");
+    assert!(refusal.contains("sync_pull_needs_space"), "{refusal}");
+    assert!(refusal.contains("TiB"), "{refusal}");
+    assert_eq!(pull_space_refusal(&mirror, 0), None);
+    assert_eq!(pull_space_refusal(dir.path(), 1), None);
+    assert_eq!(human_bytes(1536), "1.5 KiB");
+    assert_eq!(human_bytes(12), "12 B");
+}

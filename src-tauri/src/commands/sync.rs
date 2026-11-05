@@ -158,7 +158,8 @@ async fn verify_amber_identical(
     if !remote_sync::content_verify_worth_it(host, local, CONTENT_VERIFY_MAX_BYTES) {
         return None;
     }
-    let host_bytes = sftp::read_file_on(sftp, host_abs).await.ok()?;
+    // Bounded by the cutoff, not by the listing: the host's word for the size is stale by now.
+    let host_bytes = sftp::read_file_up_to(sftp, host_abs, CONTENT_VERIFY_MAX_BYTES).await.ok()??;
     let local_bytes = read_mirror_bytes(project_id, rel).await?;
     (host_bytes == local_bytes).then(|| ContentRebase {
         rel: rel.to_string(),
@@ -1205,7 +1206,8 @@ pub async fn sync_resolve_if_identical(
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     // Read both sides fully. A side that can't be read (deleted on the host, never
     // pulled locally) is not "identical" — leave it amber for the merge viewer.
-    let Ok(host_bytes) = sftp::read_file_on(&sftp, &host_abs).await else {
+    // A file past the sync cap is never compared in memory: not provably identical.
+    let Ok(Some(host_bytes)) = sftp::read_file_up_to(&sftp, &host_abs, remote_sync::MAX_SYNC_FILE_BYTES).await else {
         return Ok(false);
     };
     let Some(local_bytes) = read_mirror_bytes(&project_id, &rel_path).await else {
@@ -1901,9 +1903,16 @@ pub async fn sync_diff(
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     // Host bytes now (empty if the host no longer has the file → shown as a full
     // deletion by the diff).
-    let host_bytes = sftp::read_file_on(&sftp, &host_abs)
-        .await
-        .unwrap_or_default();
+    let host_bytes = match sftp::read_file_up_to(&sftp, &host_abs, remote_sync::MAX_SYNC_FILE_BYTES).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            return Err(format!(
+                "'{rel_path}' is larger than {} MiB on the host — too large to diff here",
+                remote_sync::MAX_SYNC_FILE_BYTES / (1024 * 1024)
+            ));
+        }
+        Err(_) => Vec::new(),
+    };
     let mirror_root = remote_sync::mirror_dir(&project_id);
     // Compute the diff LOCALLY (never over SSH — the mirror is on disk and the
     // host bytes are already in memory). Off the async thread: git spawns a
@@ -2042,6 +2051,16 @@ async fn pull_subtree(
         } else {
             format!("'{rel}' has nothing to pull — the host holds no regular file there")
         });
+    }
+
+    // Room for it, before anything is written (gap 86): the listing's sizes are the
+    // host's word and the preview the user confirmed is the only other bound, so a
+    // pull that cannot fit is refused here rather than filling the disk part-way.
+    if let Some(refusal) = remote_sync::pull_space_refusal(
+        &remote_sync::mirror_dir(project_id),
+        files.iter().map(|f| f.size).fold(0u64, u64::saturating_add),
+    ) {
+        return Err(refusal);
     }
 
     let total = files.len();
