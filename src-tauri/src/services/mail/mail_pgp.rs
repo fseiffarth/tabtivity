@@ -389,10 +389,19 @@ impl PgpKeyring {
             .ok()
             .map(|(iter, _)| iter.flatten().collect::<Vec<_>>())
             .unwrap_or_default();
-        for key in secrets {
+        for mut key in secrets {
             key.verify_bindings()
                 .map_err(|e| format!("this key's own self-signatures do not check out: {e}"))?;
             let fingerprint = fingerprint_hex(&key.fingerprint());
+            carry_revocations(
+                &file,
+                &fingerprint,
+                &mut key.details,
+                key.secret_subkeys
+                    .iter_mut()
+                    .map(|s| (s.key.fingerprint(), &mut s.signatures))
+                    .collect(),
+            );
             let material = key.to_bytes().map_err(|e| e.to_string())?;
             let identities = user_ids_of_details(&key.details);
             let (trust, mut notes) = carried_trust(&file, &fingerprint, &identities);
@@ -416,7 +425,7 @@ impl PgpKeyring {
         if added.is_empty() {
             let (publics, _) = SignedPublicKey::from_reader_many(data)
                 .map_err(|_| "this does not look like an OpenPGP key".to_string())?;
-            for key in publics.flatten() {
+            for mut key in publics.flatten() {
                 key.verify_bindings()
                     .map_err(|e| format!("this key's own self-signatures do not check out: {e}"))?;
                 let fingerprint = fingerprint_hex(&key.fingerprint());
@@ -429,6 +438,15 @@ impl PgpKeyring {
                 {
                     continue;
                 }
+                carry_revocations(
+                    &file,
+                    &fingerprint,
+                    &mut key.details,
+                    key.public_subkeys
+                        .iter_mut()
+                        .map(|s| (s.key.fingerprint(), &mut s.signatures))
+                        .collect(),
+                );
                 let material = key.to_bytes().map_err(|e| e.to_string())?;
                 let identities = user_ids_of_details(&key.details);
                 let (trust, mut notes) = carried_trust(&file, &fingerprint, &identities);
@@ -1495,6 +1513,54 @@ fn carried_trust(
 fn same_identities(a: &[String], b: &[String]) -> bool {
     use std::collections::BTreeSet;
     a.iter().collect::<BTreeSet<_>>() == b.iter().collect::<BTreeSet<_>>()
+}
+
+/// Keep the revocations of the copy already held when another copy of the same
+/// key replaces it (gap 88). A revocation is permanent, but it is a signature
+/// *in* the copy: an older copy made before the owner revoked (a backup, a
+/// keyserver, a "here is my key" attachment) carries none, and replacing the
+/// stored one with it would bring a revoked key back, with whatever tick the
+/// user gave it still on it. So the held key's revocations (of the key, of a
+/// subkey, of a user id) are added to the incoming copy, as GnuPG merges them.
+/// Their signatures were checked when that copy was imported, against the same
+/// primary key (the fingerprint is equal).
+fn carry_revocations(
+    file: &KeyringFile,
+    fingerprint: &str,
+    details: &mut pgp::composed::SignedKeyDetails,
+    subkeys: Vec<(pgp::types::Fingerprint, &mut Vec<pgp::packet::Signature>)>,
+) {
+    use pgp::packet::{Signature, SignatureType};
+
+    fn add(into: &mut Vec<Signature>, from: &[Signature], typ: SignatureType) {
+        for sig in from.iter().filter(|s| s.typ() == Some(typ)) {
+            if !into.contains(sig) {
+                into.push(sig.clone());
+            }
+        }
+    }
+
+    let Some(prior) = file.entries.iter().find(|e| e.fingerprint == fingerprint) else {
+        return;
+    };
+    let Ok(old) = parse_public(prior) else {
+        return;
+    };
+    add(
+        &mut details.revocation_signatures,
+        &old.details.revocation_signatures,
+        SignatureType::KeyRevocation,
+    );
+    for old_user in &old.details.users {
+        if let Some(user) = details.users.iter_mut().find(|u| u.id == old_user.id) {
+            add(&mut user.signatures, &old_user.signatures, SignatureType::CertRevocation);
+        }
+    }
+    for (fp, sigs) in subkeys {
+        if let Some(old_sub) = old.public_subkeys.iter().find(|s| s.key.fingerprint() == fp) {
+            add(sigs, &old_sub.signatures, SignatureType::SubkeyRevocation);
+        }
+    }
 }
 
 /// Where `entry` came from. A key an older build stored has no record: a
@@ -3415,5 +3481,67 @@ mod tests {
         .unwrap();
         assert!(!info.revoked && !info.expired && info.notes.is_empty());
         assert_eq!(info.origin, KeyOrigin::Imported);
+    }
+
+    // ── Review probes (I2 review) ────────────────────────────────────────────
+
+    /// A mailing-list footer after the closing boundary and a preamble before
+    /// the first one are outside the multipart; a genuine signed mail with them
+    /// must still read Verified, and show only the signed part.
+    #[test]
+    fn a_preamble_and_an_epilogue_outside_the_multipart_do_not_spoil_a_genuine_signature() {
+        use crate::schema::mail::MailCryptoState;
+        let (_d, ring) = verified_alice();
+        let raw = signed_mail_with(&ring, "");
+        let raw = raw.replacen("\r\n\r\n--", "\r\n\r\nThis is a multi-part message.\r\n\r\n--", 1)
+            + "\r\n-- \r\nlist footer: UNSUBSCRIBE\r\n";
+        let (shown, info) = check(&ring, &raw, "alice@example.com");
+        assert_eq!(info.state, MailCryptoState::Verified, "{info:?}");
+        let shown = String::from_utf8(shown.unwrap()).unwrap();
+        assert!(!shown.contains("UNSUBSCRIBE") && !shown.contains("multi-part message"), "{shown}");
+    }
+
+    /// A revocation is permanent: re-importing an older copy of the same key
+    /// (one made before the owner revoked it) must not bring it back.
+    #[test]
+    fn re_importing_an_older_copy_does_not_undo_a_revocation() {
+        let key = generate_curve25519("Alice <alice@example.org>").unwrap();
+        let revoked = revoke_key(key.clone());
+        let (_d, mine) = keyring();
+        let first = import_public(&mine, &revoked);
+        mine.set_verified(&first.fingerprint, true).unwrap();
+        assert!(mine.get(&first.fingerprint).unwrap().unwrap().revoked);
+
+        // The same fingerprint and user ids, without the revocation.
+        let again = import_public(&mine, &key);
+        assert_eq!(again.fingerprint, first.fingerprint);
+        let now = mine.get(&first.fingerprint).unwrap().unwrap();
+        assert!(now.revoked, "the older copy brought a revoked key back");
+        assert!(mine.public_for_address("alice@example.org").unwrap().is_none());
+    }
+
+    /// The same for a secret copy, and for a revoked subkey.
+    #[test]
+    fn an_older_secret_or_subkey_copy_does_not_undo_a_revocation_either() {
+        let key = generate_curve25519("Alice <alice@example.org>").unwrap();
+        let (_d, mine) = keyring();
+        import_secret(&mine, &revoke_key(key.clone()));
+        let fp = import_secret(&mine, &key).fingerprint;
+        assert!(mine.get(&fp).unwrap().unwrap().revoked, "secret re-import");
+
+        let key = generate_curve25519("Bob <bob@example.org>").unwrap();
+        let sub_revoked = rebind_subkey(key.clone(), 1, None, true);
+        let (_d2, mine) = keyring();
+        import_public(&mine, &sub_revoked);
+        import_public(&mine, &key);
+        let held = mine.read().unwrap().entries.remove(0);
+        let stored = parse_public(&held).unwrap();
+        assert!(
+            stored.public_subkeys[1]
+                .signatures
+                .iter()
+                .any(|s| s.typ() == Some(SignatureType::SubkeyRevocation)),
+            "the subkey revocation survived the older copy"
+        );
     }
 }
