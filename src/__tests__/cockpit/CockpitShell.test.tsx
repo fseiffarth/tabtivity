@@ -28,6 +28,7 @@ import { useActivityStore } from "../../stores/activity";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
+import { useSettingsStore } from "../../stores/settings";
 
 const agent = (key: string): TabEntry => ({ key, label: key, cmd: "claude", cwd: "/p", kind: "agent" });
 
@@ -73,12 +74,13 @@ describe("the merged window", () => {
   });
 
   it("opens on a cockpit view: the strip, only that view mounted, Escape closes and stamps 'away since'", async () => {
+    useSettingsStore.setState({ settings: { mail_client: true } as never });
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().openView("now"));
     expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Cockpit");
     const tabs = screen.getAllByRole("tab");
-    // Now Projects Tonight Usage │ Root
-    expect(tabs).toHaveLength(5);
+    // Now Projects Tonight │ Mail Calendar To-do │ Agents Models Machines │ Root
+    expect(tabs).toHaveLength(10);
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
     expect(await screen.findByTestId("cockpit-body")).toBeTruthy();
     fireEvent.mouseDown(tabs[2], { button: 0 });
@@ -92,9 +94,9 @@ describe("the merged window", () => {
 
   it("the Root tab shows the console; the cockpit body unmounts and the window stays up", async () => {
     render(<RootOverlayHost />);
-    await act(async () => useRootOverlayStore.getState().openView("usage"));
+    await act(async () => useRootOverlayStore.getState().openView("tonight"));
     expect(await screen.findByTestId("cockpit-body")).toBeTruthy();
-    fireEvent.mouseDown(screen.getAllByRole("tab")[4], { button: 0 });
+    fireEvent.mouseDown(document.querySelector('[data-root-view="root"]')!, { button: 0 });
     expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "root" });
     expect(screen.queryByTestId("cockpit-body")).toBeNull();
     expect(document.querySelector(".root-overlay-region")).toBeTruthy();

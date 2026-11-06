@@ -65,13 +65,14 @@ export function cockpitBadge(input: CockpitBadgeInput): CockpitBadge {
 }
 
 /** The Decisions inbox's groups, in the rail's urgency order (the phone's
- *  Needs you order, with the desktop's extra groups slotted in). */
+ *  Needs you order, with the desktop's extra groups slotted in). Root
+ *  approvals are not a group: they live in the title-bar pill and are counted
+ *  for the header badge (`cockpitBadge`) only. */
 export const DECISION_GROUPS = [
   "asking",
   "interrupted",
   "push",
   "schedule",
-  "approvals",
   "markup",
   "unseen",
   "alerts",
@@ -105,8 +106,6 @@ export interface DecisionsInput {
   rows: readonly RosterRow[];
   push: readonly PushRequestRef[];
   schedules: readonly ScheduleProposalRef[];
-  /** Root approvals waiting. */
-  approvals: number;
   markup: readonly MarkupAskRef[];
   alerts: readonly AlertItem[];
   /** Scope id → the name its rows show. */
@@ -118,7 +117,6 @@ export type DecisionItems = {
   interrupted: RosterRow[];
   push: PushRequestRef[];
   schedule: ScheduleProposalRef[];
-  approvals: number;
   markup: MarkupAskRef[];
   unseen: RosterRow[];
   alerts: AlertItem[];
@@ -139,7 +137,7 @@ const newest = (at: (row: RosterRow) => number | undefined) => (a: RosterRow, b:
   (at(b) ?? Number.NEGATIVE_INFINITY) - (at(a) ?? Number.NEGATIVE_INFINITY) || 0;
 
 /**
- * The rail model: the eight groups, each in its own order — asking and
+ * The rail model: the seven groups, each in its own order — asking and
  * interrupted newest first (by the last working edge before they stopped),
  * unseen finished turns by when they finished. A push request counts while it
  * waits (pending or running); a finished one is history the card's own
@@ -156,7 +154,6 @@ export function buildDecisions(input: DecisionsInput): Decisions {
     interrupted,
     push,
     schedule: [...input.schedules],
-    approvals: input.approvals,
     markup: [...input.markup],
     unseen,
     alerts: [...input.alerts],
@@ -166,7 +163,6 @@ export function buildDecisions(input: DecisionsInput): Decisions {
     interrupted: interrupted.length,
     push: waitingPush,
     schedule: items.schedule.length,
-    approvals: items.approvals,
     markup: items.markup.length,
     unseen: unseen.length,
     alerts: items.alerts.length,

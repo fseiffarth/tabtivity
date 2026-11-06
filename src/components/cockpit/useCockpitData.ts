@@ -19,7 +19,6 @@ import { buildDecisions, type Decisions, type MarkupAskRef, type PushRequestRef,
 import { buildRoster, type RosterInput, type RosterScope } from "../../lib/cockpit/roster";
 import { useCockpitStore } from "../../stores/cockpit";
 import { useAlertsFeed, type AlertsFeed } from "../files/useAlertsFeed";
-import { useDomainReview } from "../layout/RootReviewStrip";
 import { useT } from "../../lib/i18n";
 import type { GitPushProposal } from "../../types";
 import { GIT_PUSH_MCP_CHANGED } from "../agents/GitPushMcp";
@@ -155,7 +154,7 @@ const NO_EXTRAS: DecisionExtras = { push: [], schedules: [], markup: [] };
 
 /**
  * The Needs-you groups (`buildDecisions`) over `scopes`, for a rail that is not
- * the Now view: the live-store groups — asking, interrupted, root approvals,
+ * the Now view: the live-store groups — asking, interrupted,
  * finished-not-seen, alerts — plus whatever `extras` a caller loaded. It
  * carries no `useCockpitNow` clock, asks the model store for nothing and reads
  * nothing from the backend, so a rail built on it costs a re-derivation when a
@@ -169,7 +168,6 @@ export function useDecisionsFor(
   const sort = useCockpitStore((s) => s.sort);
   const minute = Math.floor(Date.now() / 60_000) * 60_000;
   const inputs = useRosterInputs(scopes, minute, { refresh: false });
-  const { waiting } = useDomainReview();
   const alerts = useAlertsFeed();
   const rows = useMemo(
     () => buildRoster(inputs, { stateFilter: "all", sort, mode: "flat", query: "", boxFilter: null, scopeFilter: null }).rows,
@@ -182,12 +180,11 @@ export function useDecisionsFor(
         rows,
         push: extras.push,
         schedules: extras.schedules,
-        approvals: waiting,
         markup: extras.markup,
         alerts: alerts.enabled ? alerts.items : [],
         names,
       }),
-    [rows, extras, waiting, alerts.enabled, alerts.items, names],
+    [rows, extras, alerts.enabled, alerts.items, names],
   );
   return { decisions, alerts };
 }

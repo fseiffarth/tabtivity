@@ -1,25 +1,22 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { useRootOverlayStore, type RootOverlayView } from "../../stores/rootOverlay";
 import { useCockpitStore } from "../../stores/cockpit";
 import { useBoxesStore } from "../../stores/boxes";
-import { COCKPIT_VIEWS, type CockpitView } from "../../lib/cockpit/views";
+import { isCockpitView } from "../../lib/cockpit/views";
+import { viewEnabled } from "../../lib/cockpit/viewGates";
+import { useSettingsStore } from "../../stores/settings";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { FrameBandContext, useFrameBand } from "../../lib/window/frameBand";
-import { consoleUnderOverlay, useConsoleUnderOverlay } from "../../lib/window/consoleFront";
 import { storageKey } from "../../lib/brand";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { ARRIVAL_MS, useArrivalsStore } from "../../stores/calendar/arrivals";
 import { ROOT_SCOPE, allGroups, useTabsStore } from "../../stores/tabs";
-import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
-import { scopeLamp, type ScopeLamp } from "../../lib/cockpit/scopeLamp";
-import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { notifyCalendarWrite } from "../../lib/calendar/calendarWriteHook";
 import type { Calendar, CalendarEvent, CalendarTask } from "../../types";
-import { useT, type TranslationKey } from "../../lib/i18n";
+import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
-import { StarIcon } from "./StarIcon";
 import { CockpitGlyph } from "../header/HeaderGlyphs";
 import { OverlayApprovals } from "./OverlayApprovals";
 import { useRootReviewStore } from "../../stores/rootReview";
@@ -28,19 +25,18 @@ import { useRootMcpRights } from "./RootRightsBadge";
 import { usePoll } from "../../lib/usePoll";
 import { ChevronDownIcon, CloseIcon } from "../common/icons/Icon";
 import { RootView, type RootBarSlots } from "./RootView";
+import { RootViewStrip } from "./RootViewStrip";
+import { ViewBarSlotsContext } from "./viewBarSlots";
 
 // The cockpit's views' graph stays out of the startup chunk and only the shown
 // one mounts.
+const MailView = lazy(() => import("../mail/MailView").then((m) => ({ default: m.MailView })));
 const CockpitViewBody = lazy(() =>
   import("../cockpit/CockpitViews").then((m) => ({ default: m.CockpitViewBody })),
 );
 
-const VIEW_LABEL: Record<CockpitView, TranslationKey> = {
-  now: "cockpit.view.now",
-  projects: "cockpit.view.projects",
-  tonight: "cockpit.view.tonight",
-  usage: "cockpit.view.usage",
-};
+/** The views whose own tabs ride in the sub-bar under the title bar. */
+const SUBBAR_VIEWS: ReadonlySet<RootOverlayView> = new Set(["mail", "agents", "models"]);
 
 /** What the backend's `root-mcp-changed` event carries (`services::root_mcp::Change`). */
 type RootMcpChange = (
@@ -169,61 +165,35 @@ export function RootOverlayHost() {
     }));
   }, []);
 
-  return open ? <RootOverlay /> : null;
-}
-
-/**
- * The Root tab's lamp: one scope's activity (root's) rolled into the tab's own
- * state classes, so it is the tab strip's ring and `?` / ▶ mark and inherits
- * its rules (a static dotted ring; the ▶ breathing stops under
- * `[data-software-paint]`). It reads the activity store and root's tab list
- * only, so it costs nothing while another view is shown, and it lives in its
- * own component so a busy terminal re-renders this tab and not the window.
- */
-function RootTabLamp({ children }: { children: (lamp: ScopeLamp, stateClass: string) => React.ReactNode }) {
-  const tabs = useTabsStore((s) => s.tabsByScope[ROOT_SCOPE]);
-  const busy = useActivityStore((s) => s.busyByTab);
-  const attention = useActivityStore((s) => s.attentionByTab);
-  const lamp = useMemo(
-    () => scopeLamp(ROOT_SCOPE, tabs ?? [], busy, attention),
-    [tabs, busy, attention],
-  );
-  // A question outranks work (the strip's own order for a tab that does both).
-  const stateClass =
-    lamp.asking > 0
-      ? attentionStateClass("decision")
-      : lamp.working > 0
-        ? busyStateClass(lamp.agentWorking ? "agent" : "shell", "agent")
-        : "";
-  return <>{children(lamp, stateClass)}</>;
+  // Mail's unsent composers outlive the window: their text lives in the mounted
+  // composer, so with a composer tab open the window stays mounted, hidden.
+  const mailKeepAlive = useMailStore((s) => s.mailTabs.some((tab) => tab.kind === "compose"));
+  if (!open && !mailKeepAlive) return null;
+  return <RootOverlay hidden={!open} />;
 }
 
 /**
  * The window: backdrop, the shared floating frame (move, eight grips, fill), the
  * title bar with its slots, the ✓ Approvals pill, and the one Escape rule. It
- * shows ONE of five views (`rootOverlay.view`): the cockpit's Now / Projects /
- * Tonight / Usage, or Root — the root console proper, `RootView`, which portals
- * its strip, ⚿ badge and ◫ toggle into the bar's slots. Only the shown view is
- * mounted.
+ * shows ONE of ten views (`rootOverlay.view`, `lib/cockpit/views`): the cockpit's
+ * Now / Projects / Tonight, the apps (Mail, Calendar, To-do), the system pages
+ * (Agents, Models, Machines), or Root — the root console proper, `RootView`,
+ * which portals its strip, ⚿ badge and ◫ toggle into the bar's slots. Only the
+ * shown view is mounted.
  */
-function RootOverlay() {
+function RootOverlay({ hidden }: { hidden: boolean }) {
   const t = useT();
   const close = useRootOverlayStore((s) => s.close);
   const view: RootOverlayView = useRootOverlayStore((s) => s.view);
-  // An overlay opened from this window (Machines, Models) is in front of it.
-  const under = useConsoleUnderOverlay();
-  // The mail / calendar / to-do overlays share the window's layer and sit
-  // before it in the DOM. With the window one layer down they would paint over
-  // it (and over a Machines overlay that precedes them), so they step down too
-  // (`apps.css`): window and overlay stay above them as they always were.
+  const settings = useSettingsStore((s) => s.settings);
+  // A view whose feature gate goes off while it is shown (mail_client,
+  // calendar_global_app, todo_board, machines_enabled) is gone: back to Now.
+  const gateOff = !hidden && !viewEnabled(view, settings);
   useEffect(() => {
-    if (!under) return;
-    const root = document.documentElement;
-    root.dataset.consoleUnderOverlay = "";
-    return () => {
-      delete root.dataset.consoleUnderOverlay;
-    };
-  }, [under]);
+    if (gateOff) useRootOverlayStore.getState().openView("now");
+  }, [gateOff]);
+  const mailShown = !hidden && view === "mail";
+  const keepMail = useMailStore((s) => s.mailTabs.some((tab) => tab.kind === "compose"));
   const boxFilter = useCockpitStore((s) => s.boxFilter);
   const boxes = useBoxesStore((s) => s.boxes);
   // The window's frame — the one hook the header overlays use: moved by the
@@ -244,12 +214,16 @@ function RootOverlay() {
   // A split layout keeps a strip in every subwindow and has no sole strip to
   // move, so it drops the sub-bar and the badge stays where it always was.
   const split = useTabsStore((s) => allGroups(s.layoutByScope[ROOT_SCOPE] ?? null).length > 1);
-  const subBar = view === "root" && !split;
+  // Mail, Agents and Models keep their own tabs (mail's inbox and composers,
+  // the sections) in the same sub-bar.
+  const subBar = (view === "root" && !split) || SUBBAR_VIEWS.has(view);
   // Callback refs into state: the view portals into these once they exist.
   const [stripEl, setStripEl] = useState<HTMLElement | null>(null);
   const [chipEl, setChipEl] = useState<HTMLElement | null>(null);
   const [rightsEl, setRightsEl] = useState<HTMLElement | null>(null);
   const [filesEl, setFilesEl] = useState<HTMLElement | null>(null);
+  // Before the approvals pill: where an app view's ✦ docked-agent button sits.
+  const [agentEl, setAgentEl] = useState<HTMLElement | null>(null);
   const [controlsStyle, setControlsStyle] = useState<React.CSSProperties | undefined>(undefined);
 
   useEffect(() => {
@@ -257,28 +231,31 @@ function RootOverlay() {
   }, []);
 
   useEffect(() => {
+    if (hidden) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       // Escape inside a pane is the pane's (an agent TUI's cancel key; the
-      // cockpit's detail pane hosts one too); the toggle chord closes from there.
-      if (e.target instanceof Element && e.target.closest(".root-overlay-region, .cockpit-detail-pane")) return;
+      // cockpit's detail pane and an app view's docked agent column host one
+      // too); the toggle chord closes from there.
+      if (
+        e.target instanceof Element &&
+        e.target.closest(".root-overlay-region, .cockpit-detail-pane, .overlay-agent-column")
+      ) {
+        return;
+      }
       // A menu, dialog or drag of the view goes first, then a gesture of ours,
       // then the proposals panel (the portal's own handler, on the document,
       // marks it handled) — closing the console under an open panel would take
       // the pending decision with it.
       if (busyRef.current || framing || e.defaultPrevented) return;
-      // The Machines / Models overlay opened from this window is in front of it
-      // and takes this Escape; the window waits for the next.
-      if (consoleUnderOverlay()) return;
-      // Handled: an overlay opened after this window (its listener runs later)
-      // must not take the same Escape for its own.
+      // Handled: nothing else may take the same Escape for its own.
       e.preventDefault();
       e.stopPropagation();
       close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [close, framing]);
+  }, [close, framing, hidden]);
 
   const { title: moveHint, ...barRest } = barProps;
   const slots: RootBarSlots = {
@@ -290,50 +267,11 @@ function RootOverlay() {
     onBarDoubleClick: barProps.onDoubleClick,
     setControlsStyle,
   };
-  const pick = (id: RootOverlayView) => useRootOverlayStore.getState().openView(id);
-  const onTabKeys = (id: RootOverlayView) => (e: React.KeyboardEvent<HTMLElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      pick(id);
-      return;
-    }
-    // Roving focus: the arrows walk the tabs (Enter / Space choose).
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    const tabs = Array.from(
-      e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
-    );
-    const at = tabs.indexOf(e.currentTarget);
-    const next = tabs[(at + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
-    if (next) {
-      e.preventDefault();
-      next.focus();
-    }
-  };
-  const viewTab = (id: RootOverlayView, children: React.ReactNode, extra = "") => (
-    <div
-      key={id}
-      role="tab"
-      tabIndex={view === id ? 0 : -1}
-      aria-selected={view === id}
-      className={`tab root-view-tab${extra}${view === id ? " active" : ""}`}
-      data-root-view={id}
-      onMouseDown={(e) => {
-        if (e.button === 0) pick(id);
-      }}
-      // A click that is no mouse press (detail 0): steering's Enter on the
-      // window bar. A real one has already picked on its mouse-down.
-      onClick={(e) => {
-        if (e.detail === 0) pick(id);
-      }}
-      onKeyDown={onTabKeys(id)}
-    >
-      {children}
-    </div>
-  );
-
   return (
     <div
-      className={`modal-backdrop root-overlay-backdrop root-console-backdrop app-overlay-backdrop${under ? " under-overlay" : ""}`}
+      className="modal-backdrop root-overlay-backdrop root-console-backdrop app-overlay-backdrop"
+      // Hidden, not unmounted, while an unsent mail waits (`MailView`).
+      style={hidden ? { display: "none" } : undefined}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}
@@ -360,38 +298,12 @@ function RootOverlay() {
             <span className="app-overlay-label">{t("cockpit.title")}</span>
             <UntestedTag id="cockpit.title" />
           </div>
-          <div className="tab-strip root-view-strip" role="tablist" aria-label={t("rootConsole.viewStrip")}>
-            {COCKPIT_VIEWS.map((id) =>
-              viewTab(id, <span className="tab-label">{t(VIEW_LABEL[id])}</span>, " cockpit-view-tab"),
-            )}
-            <span className="root-view-divider" role="presentation" />
-            <RootTabLamp>
-              {(lamp, stateClass) =>
-                viewTab(
-                  "root",
-                  <>
-                    <TabStatusMark stateClass={stateClass} />
-                    <span className="root-view-star"><StarIcon /></span>
-                    <span className="tab-label">{t("rootConsole.view.root")}</span>
-                    {lamp.asking > 0 && (
-                      <span
-                        className="root-view-count"
-                        title={t("cockpit.view.rootAsking", { count: lamp.asking })}
-                        aria-label={t("cockpit.view.rootAsking", { count: lamp.asking })}
-                      >
-                        {lamp.asking}
-                      </span>
-                    )}
-                  </>,
-                  ` root-view-tab-root${stateClass}`,
-                )
-              }
-            </RootTabLamp>
-          </div>
+          <RootViewStrip view={view} band={band} />
+          <UntestedTag id="cockpit.viewGroups" />
           <UntestedTag id="rootConsole.viewStrip" />
           {!subBar && <div className="root-overlay-slot" ref={setStripEl} />}
           <div className="tab-controls root-overlay-controls" style={subBar ? undefined : controlsStyle}>
-            {view !== "root" && boxes.length > 0 && (
+            {isCockpitView(view) && boxes.length > 0 && (
               <span className={`cockpit-box-filter-wrap${boxFilter ? " on" : ""}`}>
                 {/* Narrow, the select folds into this ▾ (CSS, `data-band`): the
                     native control stays, invisible, over the icon. */}
@@ -419,6 +331,7 @@ function RootOverlay() {
                 in Settings, where it always was. */}
             {!subBar && <span className="root-overlay-slot" ref={setChipEl} />}
             {!subBar && <span className="root-overlay-slot" ref={setRightsEl} />}
+            <span className="root-overlay-slot" ref={setAgentEl} />
             <OverlayApprovals advisory={rights.reviewAdvisory} />
             {view === "root" && <UntestedTag id="rootOverlay.1" />}
             {view === "root" && <UntestedTag id="rootOverlay.viewers" />}
@@ -445,15 +358,32 @@ function RootOverlay() {
           </div>
         )}
         <FrameBandContext.Provider value={band}>
-          {view === "root" ? (
-            <RootView rights={rights} slots={slots} busyRef={busyRef} />
-          ) : (
-            <div className="subwindow-body cockpit-overlay-body">
+          <ViewBarSlotsContext.Provider
+            value={{
+              strip: stripEl,
+              agent: agentEl,
+              onBarPointerDown: barProps.onPointerDown,
+              onBarDoubleClick: barProps.onDoubleClick,
+            }}
+          >
+            {hidden ? null : view === "root" ? (
+              <RootView rights={rights} slots={slots} busyRef={busyRef} />
+            ) : view === "mail" ? null : (
+              <div className="subwindow-body cockpit-overlay-body">
+                <Suspense fallback={null}>
+                  <CockpitViewBody view={view} />
+                </Suspense>
+              </div>
+            )}
+            {/* Mail is the one view that is not just "mounted while shown": its
+                composers keep their text while the window is on another view or
+                closed (hidden, above). */}
+            {(mailShown || keepMail) && (
               <Suspense fallback={null}>
-                <CockpitViewBody view={view} />
+                <MailView shown={mailShown} />
               </Suspense>
-            </div>
-          )}
+            )}
+          </ViewBarSlotsContext.Provider>
         </FrameBandContext.Provider>
       </div>
     </div>

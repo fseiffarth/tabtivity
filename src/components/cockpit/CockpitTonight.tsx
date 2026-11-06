@@ -25,7 +25,7 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { useSettingsStore } from "../../stores/settings";
 import { useAlertsFeed } from "../files/useAlertsFeed";
-import { CockpitViewHeading } from "./CockpitViewHeading";
+import { CockpitUntested } from "./CockpitUntested";
 import { formatAgo, formatClock, formatTurn } from "./cockpitFormat";
 import { jumpToRow } from "./CockpitRoster";
 import { useCockpitNow, useCockpitScopes, useLoadSchedules, usePushRequests, useRosterInputs, type CockpitScopeTabs } from "./useCockpitData";
@@ -156,10 +156,13 @@ export function CockpitTonight() {
 
   return (
     <div className="cockpit-view cockpit-view-tonight">
-      <CockpitViewHeading view="tonight" />
       {error && <p className="cockpit-empty" role="alert">{error}</p>}
       <div className="cockpit-tonight">
         <section className="cockpit-tonight-col" aria-label={t("cockpit.tonight.heading")}>
+          <div className="cockpit-section-head">
+            <span className="tab-new-menu-group-label">{t("cockpit.tonight.heading")}</span>
+            <CockpitUntested view="tonight" />
+          </div>
           {comingUp.length === 0 && <p className="cockpit-empty">{t("cockpit.tonight.nothing")}</p>}
           {comingUp.map((group) => (
             <div key={group.bucket} className="cockpit-tonight-group">

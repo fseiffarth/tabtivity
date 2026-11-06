@@ -25,12 +25,11 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 import { RemoteMachinesDialogHost } from "../../components/projects/RemoteMachinesWindow";
 import { RemoteConnMenu } from "../../components/header/RemoteConnMenu";
-import { MachinesOverlayHost } from "../../components/header/MachinesIndicator";
+import { MachinesView } from "../../components/header/MachinesIndicator";
 import { useProjectsStore } from "../../stores/projects";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
-import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
 import { useHostBusyStore } from "../../stores/remote/hostBusy";
 import { useSettingsStore } from "../../stores/settings";
 import type { ComputeHost, ProjectEntry } from "../../types";
@@ -73,7 +72,6 @@ beforeEach(() => {
   useProjectsStore.setState({ projects: [project], activeId: "p1" });
   useRemoteStatusStore.setState({ byProject: { p1: { ssh: "connected", vpn: "off" } }, byHost: {} });
   useRemoteMachinesStore.setState({ projectId: null, pendingDrop: null, extendTarget: null });
-  useMachinesOverlayStore.setState({ open: false });
 });
 
 afterEach(() => cleanup());
@@ -119,8 +117,7 @@ describe("adding a global machine to a remote project", () => {
     useProjectsStore.setState({ projects: [{ ...project, compute_hosts: [worker] }] });
 
     // The Machines menu's picker: the project is there, but disabled.
-    useMachinesOverlayStore.setState({ open: true });
-    render(<MachinesOverlayHost />);
+    render(<MachinesView />);
     fireEvent.click(screen.getByRole("button", { name: "Add this machine to a project" }));
     const pick = screen.getByRole("button", { name: /Proj/ }) as HTMLButtonElement;
     expect(pick.disabled).toBe(true);

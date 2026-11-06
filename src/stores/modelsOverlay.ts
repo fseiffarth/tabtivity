@@ -1,41 +1,62 @@
 import { create } from "zustand";
+import { useRootOverlayStore } from "./rootOverlay";
 
 /**
- * Open/closed state and the current view of the **Models & agents overlay**
- * (`components/models/ModelsOverlay`), opened by a click on the header's
- * processor-chip button (`layout/LocalModelMenu`) or one of its dropdown's
- * doors.
+ * Which section the **Agents** and **Models** views of the console window
+ * (`components/models/AgentsView`, `ModelsView`) show, and the doors into them.
+ * These two views are what the Models & agents overlay was: Agents & CLIs,
+ * Usage (the CLIs' plan and tokens) and Skills went to Agents, Local models and
+ * Ollama to Models, and the overview grid of tiles went away.
  *
- * The overlay is a grid of sections, not a tab strip: a plain open lands on
- * the overview (`"home"`, one tile per section with its live summary), a tile
- * opens its section, and the bar's back button returns to the grid. A door
- * deep-links straight into its section.
+ * Whether either view is OPEN is not kept here: it is `rootOverlay.open` and
+ * `rootOverlay.view` (`useViewShown`), the one source of truth for the window. What is kept is the section each view is on, so a door can deep-link
+ * ("Manage CLIs…" lands on Agents & CLIs, a dropdown's Skills row on Skills)
+ * and a plain open finds the section last used. Session-only.
  *
- * A store rather than a prop for the reason the other header overlays use one:
- * the button lives in the header and the overlay is mounted at the shell. It
- * holds no data copies — the sections read their own (Settings' panels, the
- * skills library) or the shared `stores/agents/ollamaActivity`.
+ * `ModelsOverlaySection` is the callers' vocabulary — the old overlay's four
+ * plus `usage` — and maps to a view: agents / usage / skills -> Agents,
+ * models / ollama -> Models.
  */
-export type ModelsOverlaySection = "agents" | "models" | "ollama" | "skills";
-export type ModelsOverlayView = "home" | ModelsOverlaySection;
+export type AgentsSection = "agents" | "usage" | "skills";
+export type ModelsSection = "models" | "ollama";
+export type ModelsOverlaySection = AgentsSection | ModelsSection;
 
-export const MODELS_OVERLAY_SECTIONS: readonly ModelsOverlaySection[] = ["agents", "models", "ollama", "skills"];
+/** The view a section lives in. */
+export function viewOfSection(section: ModelsOverlaySection): "agents" | "models" {
+  return section === "agents" || section === "usage" || section === "skills" ? "agents" : "models";
+}
 
 interface ModelsOverlayState {
-  open: boolean;
-  /** The overview grid, or one section. */
-  view: ModelsOverlayView;
-  /** No argument opens the overview grid; a section deep-links to it. */
+  /** The Agents view's section. */
+  agentsSection: AgentsSection;
+  /** The Models view's section. */
+  modelsSection: ModelsSection;
+  setAgentsSection: (section: AgentsSection) => void;
+  setModelsSection: (section: ModelsSection) => void;
+  /** No argument opens the Models view on the section it was last on; a
+   *  section deep-links to it (and opens the view that holds it). */
   openOverlay: (section?: ModelsOverlaySection) => void;
-  /** Switches the view (a tile, the back button, a door inside a section). */
-  show: (view: ModelsOverlayView) => void;
+  /** Close the window if it is on one of these two views. */
   close: () => void;
 }
 
 export const useModelsOverlayStore = create<ModelsOverlayState>((set) => ({
-  open: false,
-  view: "home",
-  openOverlay: (section) => set({ open: true, view: section ?? "home" }),
-  show: (view) => set({ view }),
-  close: () => set({ open: false }),
+  agentsSection: "agents",
+  modelsSection: "models",
+  setAgentsSection: (agentsSection) => set({ agentsSection }),
+  setModelsSection: (modelsSection) => set({ modelsSection }),
+  openOverlay: (section) => {
+    if (!section) {
+      useRootOverlayStore.getState().openView("models");
+      return;
+    }
+    const view = viewOfSection(section);
+    if (view === "agents") set({ agentsSection: section as AgentsSection });
+    else set({ modelsSection: section as ModelsSection });
+    useRootOverlayStore.getState().openView(view);
+  },
+  close: () => {
+    const { open, view } = useRootOverlayStore.getState();
+    if (open && (view === "agents" || view === "models")) useRootOverlayStore.getState().close();
+  },
 }));

@@ -1,6 +1,6 @@
-// The to-do window (`todo/TodoOverlay`) wears mail's root-console chrome: mark,
-// a single fixed Board tab, the controls' ×. Escape and a backdrop press close
-// it; a press inside the frame does not. Its bar's agent button docks a root
+// The To-do view of the console window (`todo/TodoView`): the board fills the
+// window's body, the window's × closes it, Escape and a backdrop press close the
+// window; a press inside the frame does not. The bar's agent button docks a root
 // agent beside the board (`OverlayAgentColumn`), whose Escape is the agent's,
 // and whose drawn width leaves the board room.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +40,7 @@ vi.mock("../../components/todo/TodoPane", () => ({
 vi.mock("../../components/layout/OverlayApprovals", () => ({ OverlayApprovals: () => null }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { TodoOverlayHost } from "../../components/todo/TodoOverlay";
+import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { useSettingsStore } from "../../stores/settings";
 import { useTodoStore } from "../../stores/todo";
 import { useTabsStore } from "../../stores/tabs";
@@ -54,7 +54,7 @@ const agentButton = () => screen.getByRole("button", { name: "Agent (Ctrl+1)" })
 
 /** Render the board and let the root agent probe answer. */
 async function mountWithAgents() {
-  render(<TodoOverlayHost />);
+  render(<RootOverlayHost />);
   await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("list_agents"));
   await act(async () => {});
 }
@@ -67,7 +67,6 @@ beforeEach(() => {
     settings: { todo_board: true, default_agent_cmd: "claude", root_agents: ["claude"] },
     loaded: true,
   } as never);
-  useTodoStore.setState({ overlayOpen: true });
   useTabsStore.setState({
     scope: "p1",
     tabsByScope: { root: [] },
@@ -75,7 +74,7 @@ beforeEach(() => {
     focusedGroupByScope: { root: null },
   });
   useProjectsStore.setState({ rootDir: "/r", activeId: "p1" });
-  useRootOverlayStore.setState({ open: false });
+  useRootOverlayStore.setState({ open: true, view: "todo" });
   useOverlayAgentStore.setState({
     docks: {
       mail: { key: null, open: false },
@@ -88,39 +87,54 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("the to-do window", () => {
-  it("has mail's bar: mark, one active Board tab, and the subwindow ×", () => {
-    render(<TodoOverlayHost />);
-    const frame = screen.getByRole("dialog", { name: "To-do board" });
+describe("the To-do view", () => {
+  it("fills the window's body under the window's own bar, and the window's × closes it", async () => {
+    render(<RootOverlayHost />);
+    await screen.findByTestId("todo-pane");
+    const frame = screen.getByRole("dialog", { name: "Cockpit" });
     expect(frame.classList.contains("root-overlay")).toBe(true);
-    expect(frame.querySelector(".root-overlay-bar .app-overlay-label")?.textContent).toBe("To-do");
-    const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(1);
-    expect(tabs[0].textContent).toBe("Board");
-    expect(tabs[0].classList.contains("active")).toBe(true);
-    // Never closable: no × on the tab itself.
-    expect(tabs[0].querySelector("button")).toBeNull();
+    expect(frame.querySelector(".app-view-todo")).not.toBeNull();
+    // The view strip marks it as the selected one.
+    expect(screen.getByRole("tab", { name: "To-do" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(useTodoStore.getState().overlayOpen).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
-  it("closes on Escape and on a backdrop press, not on a press inside", () => {
-    render(<TodoOverlayHost />);
-    fireEvent.mouseDown(screen.getByTestId("todo-pane"));
-    expect(useTodoStore.getState().overlayOpen).toBe(true);
+  it("closes on Escape and on a backdrop press, not on a press inside", async () => {
+    render(<RootOverlayHost />);
+    fireEvent.mouseDown(await screen.findByTestId("todo-pane"));
+    expect(useRootOverlayStore.getState().open).toBe(true);
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(useTodoStore.getState().overlayOpen).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
 
     act(() => useTodoStore.getState().openOverlay());
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "todo" });
     const backdrop = document.querySelector(".app-overlay-backdrop")!;
     fireEvent.mouseDown(backdrop);
-    expect(useTodoStore.getState().overlayOpen).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
-  it("renders nothing while the board is switched off", () => {
+  it("does not open while the board is switched off, and falls back to Now when it goes off", async () => {
     useSettingsStore.setState({ settings: { todo_board: false } } as never);
-    render(<TodoOverlayHost />);
+    useRootOverlayStore.setState({ open: false, view: "root" });
+    render(<RootOverlayHost />);
+    act(() => useTodoStore.getState().openOverlay());
+    expect(useRootOverlayStore.getState().open).toBe(false);
     expect(screen.queryByRole("dialog")).toBeNull();
+
+    useSettingsStore.setState({ settings: { todo_board: true } } as never);
+    act(() => useTodoStore.getState().openOverlay());
+    expect(await screen.findByTestId("todo-pane")).toBeTruthy();
+    act(() => useSettingsStore.setState({ settings: { todo_board: false } } as never));
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "now" });
+  });
+
+  it("leaving the view drops an in-flight drag and an unconsumed card request", async () => {
+    render(<RootOverlayHost />);
+    await screen.findByTestId("todo-pane");
+    act(() => useTodoStore.setState({ focusTaskId: "c1", cardDrag: { id: "c1" } as never }));
+    act(() => useRootOverlayStore.getState().openView("now"));
+    expect(useTodoStore.getState()).toMatchObject({ focusTaskId: null, cardDrag: null });
   });
 
   it("docks the default root agent beside the board from the bar's button", async () => {
@@ -128,6 +142,7 @@ describe("the to-do window", () => {
     const button = agentButton();
     // Before the approvals pill, a subwindow button like ⤢ and ×.
     expect(button.classList.contains("subwindow-hide")).toBe(true);
+    expect(button.closest(".root-overlay-controls")).not.toBeNull();
     expect(button.getAttribute("aria-pressed")).toBe("false");
     expect(column()).toBeNull();
 
@@ -157,10 +172,10 @@ describe("the to-do window", () => {
     fireEvent.click(agentButton());
 
     fireEvent.keyDown(screen.getByTestId("agent-pane"), { key: "Escape" });
-    expect(useTodoStore.getState().overlayOpen).toBe(true);
+    expect(useRootOverlayStore.getState().open).toBe(true);
 
     fireEvent.keyDown(screen.getByTestId("todo-pane"), { key: "Escape" });
-    expect(useTodoStore.getState().overlayOpen).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
   it("caps the column's drawn width to leave the board room, without saving the cap", async () => {

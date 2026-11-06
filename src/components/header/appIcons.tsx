@@ -7,6 +7,7 @@ import { InboxIndicator } from "./InboxIndicator";
 import { HelpAgentButton } from "./HelpAgentButton";
 import { SettingsMenu } from "./SettingsMenu";
 import { LocalModelMenu } from "../layout/LocalModelMenu";
+import { AgentsButton } from "./AgentsButton";
 import type { HeaderItemId } from "../../lib/headerPins";
 
 /** The global apps and menus by top-bar id. `HeaderBar` draws the pinned ones in
@@ -18,6 +19,7 @@ export const APP_ICONS: Partial<Record<HeaderItemId, ReactNode>> = {
   todo: <TodoIndicator />,
   cockpit: <CockpitIndicator />,
   inbox: <InboxIndicator />,
+  agents: <AgentsButton />,
   models: <LocalModelMenu />,
   help: <HelpAgentButton />,
   settings: <SettingsMenu />,

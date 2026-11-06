@@ -6,7 +6,9 @@ import type { Settings } from "../types";
  * Which top-bar items stay in the bar and which fold behind the ‹ chevron.
  *
  * Every item a user may place has an id. By default the global apps and menus
- * (✉ 🗓 ☑ 📥 🧠 ? ⚙) and the VPN and Machines menus are pinned; the other
+ * (✉ 🗓 ☑ the cockpit, 📥, Agents, 🧠 ? ⚙) and the VPN and Machines menus are
+ * pinned — the six that open a view of the console window (mail, calendar,
+ * to-do, agents, models, machines) among them; the other
  * machine-state readouts (alerts, connection, battery, Mobile, CPU/RAM/GPU)
  * fold. `Settings.header_pins` holds only the user's overrides — `true` pins an
  * item, `false` folds it — so an id the user never touched follows this table
@@ -23,6 +25,7 @@ export const HEADER_ITEM_IDS = [
   "todo",
   "cockpit",
   "inbox",
+  "agents",
   "models",
   "help",
   "settings",
@@ -44,6 +47,7 @@ const PINNED_BY_DEFAULT: ReadonlySet<HeaderItemId> = new Set([
   "todo",
   "cockpit",
   "inbox",
+  "agents",
   "models",
   "help",
   "settings",
@@ -100,7 +104,7 @@ export function toggleHeaderPin(
  *  folded). An item's built-in place is the group listed here; a drag across
  *  the boundary moves it to the other one. */
 export const HEADER_GROUPS = {
-  apps: ["mail", "calendar", "todo", "cockpit", "inbox", "models", "help", "settings"],
+  apps: ["mail", "calendar", "todo", "cockpit", "inbox", "agents", "models", "help", "settings"],
   status: ["alerts", "conn", "battery", "mobile", "vpn", "machines", "resources", "devBuild"],
 } as const satisfies Record<string, readonly HeaderItemId[]>;
 

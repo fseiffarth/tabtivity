@@ -103,7 +103,7 @@ describe("steering reaches the root window's chrome", () => {
     press({ key: " ", shiftKey: true });
     press({ key: "ArrowUp" });
     const seen: string[] = [];
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 30; i++) {
       press({ key: "ArrowRight" });
       const el = cursor();
       expect(el).not.toBeNull();
@@ -112,9 +112,10 @@ describe("steering reaches the root window's chrome", () => {
       expect(el!.closest(".root-overlay-slot .tab-strip")).toBeNull();
       seen.push(el!.getAttribute("data-root-view") ?? el!.className);
     }
-    // The five view tabs are all on the walk, in order (it wraps).
-    const views = seen.filter((s) => ["now", "projects", "tonight", "usage", "root"].includes(s));
-    expect(views.slice(0, 5)).toEqual(["now", "projects", "tonight", "usage", "root"]);
+    // The ten view tabs are all on the walk, in the strip's order (it wraps).
+    const order = ["now", "projects", "tonight", "mail", "calendar", "todo", "agents", "models", "machines", "root"];
+    const views = seen.filter((s) => order.includes(s));
+    expect(views.slice(0, 10)).toEqual(order);
     // ... and the bar's buttons and the rail toggle sit on the same walk.
     expect(seen.some((c) => c.includes("cockpit-rail-expand"))).toBe(true);
     expect(seen.some((c) => c.includes("root-overlay-approvals"))).toBe(true);
@@ -125,7 +126,7 @@ describe("steering reaches the root window's chrome", () => {
     render(<><Harness /><RootOverlayHost /></>);
     press({ key: " ", shiftKey: true });
     press({ key: "ArrowUp" });
-    for (let i = 0; i < 8 && cursor()?.getAttribute("data-root-view") !== "now"; i++) press({ key: "ArrowLeft" });
+    for (let i = 0; i < 14 && cursor()?.getAttribute("data-root-view") !== "now"; i++) press({ key: "ArrowLeft" });
     expect(cursor()?.getAttribute("data-root-view")).toBe("now");
     press({ key: "Enter" });
     expect(view()).toBe("now");

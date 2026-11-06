@@ -1,8 +1,8 @@
-// The mail window (`mail/MailOverlay`): a composer tab's text outlives closing
-// the window, its × asks only when there is something to lose, and opening a
-// composer is not an edit — not even under StrictMode's double mount. Its bar's
-// agent button docks a root agent beside the mailbox, only while the window
-// shows; Escape typed into that agent is the agent's.
+// The Mail view of the console window (`mail/MailView`): a composer tab's text
+// outlives leaving the view and closing the window, its × asks only when there
+// is something to lose, and opening a composer is not an edit — not even under
+// StrictMode's double mount. Its bar's agent button docks a root agent beside the
+// mailbox, only while the view shows; Escape typed into that agent is the agent's.
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -31,7 +31,7 @@ vi.mock("../../components/tabs/TabPane", () => ({
   },
 }));
 
-import { MailOverlayHost } from "../../components/mail/MailOverlay";
+import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { MAIL_INBOX_TAB, useMailStore } from "../../stores/mail";
 import { requestOverlayAgent } from "../../lib/shortcuts/newTabChord";
 import { useSettingsStore } from "../../stores/settings";
@@ -60,28 +60,32 @@ beforeEach(() => {
     selectedAccountId: "a1",
     mailTabs: [],
     activeMailTab: MAIL_INBOX_TAB,
-    overlayOpen: false,
     accountDialog: null,
   });
+  useRootOverlayStore.setState({ open: false, view: "root" });
+  useSettingsStore.setState({ settings: { mail_client: true } } as never);
 });
 afterEach(cleanup);
 
 const body = () => document.querySelector<HTMLTextAreaElement>(".mail-compose-body")!;
 const closeX = () => screen.getByRole("button", { name: "Close tab" });
 
-function openComposer(mode: "new" | "reply" = "new") {
+/** Show Mail and open a composer in it (the view is a lazy chunk: wait for it). */
+async function openComposer(mode: "new" | "reply" = "new") {
+  const before = useMailStore.getState().mailTabs.length;
   act(() => {
     useMailStore.getState().openOverlay();
     useMailStore
       .getState()
       .openComposeTab(mode === "new" ? { mode, accountId: "a1" } : { mode, accountId: "a1", source: { header: source, body: null } });
   });
+  await waitFor(() => expect(document.querySelectorAll(".mail-compose-body").length).toBe(before + 1));
 }
 
-describe("the mail window", () => {
-  it("keeps a composer's text across closing and reopening the window", () => {
-    render(<MailOverlayHost />);
-    openComposer();
+describe("the Mail view", () => {
+  it("keeps a composer's text across closing and reopening the window", async () => {
+    render(<RootOverlayHost />);
+    await openComposer();
     fireEvent.change(body(), { target: { value: "Half a thought" } });
     act(() => useMailStore.getState().closeOverlay());
     // Hidden, not unmounted.
@@ -92,13 +96,13 @@ describe("the mail window", () => {
   });
 
   it("asks before × throws away an edited composer, and not for a clean one", async () => {
-    render(<MailOverlayHost />);
-    openComposer();
+    render(<RootOverlayHost />);
+    await openComposer();
     fireEvent.click(closeX());
     await waitFor(() => expect(useMailStore.getState().mailTabs).toHaveLength(0));
     expect(screen.queryByText("Close this unsent mail?")).toBeNull();
 
-    openComposer();
+    await openComposer();
     fireEvent.change(body(), { target: { value: "Something" } });
     fireEvent.click(closeX());
     await screen.findByText("Close this unsent mail?");
@@ -108,22 +112,22 @@ describe("the mail window", () => {
   });
 
   it("routes the composer's Cancel through the same question", async () => {
-    render(<MailOverlayHost />);
-    openComposer();
+    render(<RootOverlayHost />);
+    await openComposer();
     fireEvent.change(body(), { target: { value: "Something" } });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await screen.findByText("Close this unsent mail?");
     expect(useMailStore.getState().mailTabs).toHaveLength(1);
   });
 
-  it("does not count opening a new mail or a reply as an edit under StrictMode", () => {
+  it("does not count opening a new mail or a reply as an edit under StrictMode", async () => {
     render(
       <StrictMode>
-        <MailOverlayHost />
+        <RootOverlayHost />
       </StrictMode>,
     );
-    openComposer("new");
-    openComposer("reply");
+    await openComposer("new");
+    await openComposer("reply");
     const tabs = useMailStore.getState().mailTabs;
     expect(tabs).toHaveLength(2);
     expect(tabs.every((tab) => tab.kind === "compose" && !tab.dirty)).toBe(true);
@@ -135,8 +139,8 @@ describe("the mail window", () => {
     invoke.mockImplementation((cmd: string, args: { draft: object }) =>
       Promise.resolve(cmd === "mail_draft_save" ? { ...args.draft, id: "d1", staged: [] } : []),
     );
-    render(<MailOverlayHost />);
-    openComposer();
+    render(<RootOverlayHost />);
+    await openComposer();
     fireEvent.change(body(), { target: { value: "Keep this" } });
     const dirty = () => {
       const tab = useMailStore.getState().mailTabs[0];
@@ -149,39 +153,68 @@ describe("the mail window", () => {
     expect(dirty()).toBe(true);
   });
 
-  it("hides on Escape and keeps its tabs", () => {
-    render(<MailOverlayHost />);
-    openComposer();
+  it("hides on Escape and keeps its tabs", async () => {
+    render(<RootOverlayHost />);
+    await openComposer();
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(useMailStore.getState().overlayOpen).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
     expect(useMailStore.getState().mailTabs).toHaveLength(1);
     expect(body()).toBeTruthy();
   });
 
-  it("tells the Inbox pane it is visible whenever the window is, on any tab", () => {
-    render(<MailOverlayHost />);
-    openComposer();
+  it("tells the Inbox pane it is visible whenever the view is, on any tab", async () => {
+    render(<RootOverlayHost />);
+    await openComposer();
+    expect(screen.getByTestId("mail-pane").dataset.visible).toBe("true");
+    // On another view the composer waits, hidden, and the pane is told.
+    act(() => useRootOverlayStore.getState().openView("now"));
+    expect(screen.getByTestId("mail-pane").dataset.visible).toBe("false");
+    expect(body()).toBeTruthy();
+    expect(body().closest(".app-view-mail")?.getAttribute("style")).toContain("display: none");
+    act(() => useRootOverlayStore.getState().openView("mail"));
     expect(screen.getByTestId("mail-pane").dataset.visible).toBe("true");
   });
 
-  it("names the account right of the ✉, as a dropdown", () => {
+  it("mounts nothing while hidden with no composer waiting", async () => {
+    render(<RootOverlayHost />);
     act(() => useMailStore.getState().openOverlay());
-    render(<MailOverlayHost />);
-    const mark = document.querySelector(".mail-overlay-mark")!;
-    const trigger = mark.querySelector<HTMLButtonElement>(".mail-account-trigger")!;
-    expect(mark.querySelector(".mail-overlay-glyph")?.nextElementSibling).toBe(trigger);
+    await screen.findByTestId("mail-pane");
+    act(() => useRootOverlayStore.getState().openView("now"));
+    expect(screen.queryByTestId("mail-pane")).toBeNull();
+  });
+
+  it("does not open while the experimental switch is off, and falls back to Now when it goes off", async () => {
+    // (`useExperimental` is stubbed on above; the window reads the setting itself.
+    // The view's own sweep of its composers is `dropComposeTabs`, in `MailView`.)
+    render(<RootOverlayHost />);
+    await openComposer();
+    act(() => useSettingsStore.setState({ settings: { mail_client: false } } as never));
+    expect(useRootOverlayStore.getState().view).toBe("now");
+    act(() => useMailStore.getState().openOverlay());
+    expect(useRootOverlayStore.getState().view).toBe("now");
+  });
+
+  it("names the account at the start of the sub-bar's strip, as a dropdown", async () => {
+    act(() => useMailStore.getState().openOverlay());
+    render(<RootOverlayHost />);
+    const trigger = await waitFor(() => {
+      const el = document.querySelector<HTMLButtonElement>(".root-overlay-subbar .mail-account-trigger");
+      expect(el).not.toBeNull();
+      return el!;
+    });
     expect(trigger.textContent).toContain("Me");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("lists every account with a ✎ each, and Add account last", () => {
+  it("lists every account with a ✎ each, and Add account last", async () => {
     const work = { id: "a2", label: "Work", address: "me@work.example" } as MailAccount;
     act(() => {
       useMailStore.setState({ accounts: [account, work] });
       useMailStore.getState().openOverlay();
     });
-    render(<MailOverlayHost />);
-    fireEvent.click(document.querySelector(".mail-account-trigger")!);
+    render(<RootOverlayHost />);
+    await screen.findByTestId("mail-pane");
+    fireEvent.click(await waitFor(() => document.querySelector(".mail-account-trigger")!));
     const menu = document.querySelector(".mail-account-menu")!;
     const rows = [...menu.querySelectorAll(".mail-account-menu-row")];
     expect(rows.map((r) => r.querySelector(".mail-menu-name")?.textContent)).toEqual(["Me", "Work"]);
@@ -197,14 +230,15 @@ describe("the mail window", () => {
     expect(useMailStore.getState().accountDialog).toEqual({ account: null });
   });
 
-  it("a row opens that account's inbox", () => {
+  it("a row opens that account's inbox", async () => {
     const work = { id: "a2", label: "Work", address: "me@work.example" } as MailAccount;
     act(() => {
       useMailStore.setState({ accounts: [account, work] });
       useMailStore.getState().openOverlay();
     });
-    render(<MailOverlayHost />);
-    fireEvent.click(document.querySelector(".mail-account-trigger")!);
+    render(<RootOverlayHost />);
+    await screen.findByTestId("mail-pane");
+    fireEvent.click(await waitFor(() => document.querySelector(".mail-account-trigger")!));
     fireEvent.click(screen.getByTitle("Open me@work.example"));
     expect(useMailStore.getState().selectedAccountId).toBe("a2");
     expect(useMailStore.getState().activeMailTab).toBe(MAIL_INBOX_TAB);
@@ -237,7 +271,7 @@ describe("the mail window", () => {
         }
       });
       useSettingsStore.setState({
-        settings: { default_agent_cmd: "claude", root_agents: ["claude"] },
+        settings: { mail_client: true, default_agent_cmd: "claude", root_agents: ["claude"] },
         loaded: true,
       } as never);
       useTabsStore.setState({
@@ -247,7 +281,7 @@ describe("the mail window", () => {
         focusedGroupByScope: { root: null },
       });
       useProjectsStore.setState({ rootDir: "/r", activeId: "p1" });
-      useRootOverlayStore.setState({ open: false });
+      useRootOverlayStore.setState({ open: false, view: "root" });
       useOverlayAgentStore.setState({
         docks: {
           mail: { key: null, open: false },
@@ -262,14 +296,15 @@ describe("the mail window", () => {
     /** Open the window and let the root agent probe answer. */
     async function mountOpen() {
       act(() => useMailStore.getState().openOverlay());
-      render(<MailOverlayHost />);
+      render(<RootOverlayHost />);
+      await screen.findByTestId("mail-pane");
       await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_agents"));
       await act(async () => {});
     }
 
     it("docks beside the mail panes from the bar's button", async () => {
       await mountOpen();
-      fireEvent.click(agentButton());
+      fireEvent.click(await screen.findByRole("button", { name: "Agent (Ctrl+1)" }));
 
       expect(rootTabs()).toHaveLength(1);
       const tab = rootTabs()[0];
@@ -288,13 +323,13 @@ describe("the mail window", () => {
 
     it("leaves Escape typed in the docked agent to the agent, and still hides on any other", async () => {
       await mountOpen();
-      fireEvent.click(agentButton());
+      fireEvent.click(await screen.findByRole("button", { name: "Agent (Ctrl+1)" }));
 
       fireEvent.keyDown(screen.getByTestId("agent-pane"), { key: "Escape" });
-      expect(useMailStore.getState().overlayOpen).toBe(true);
+      expect(useRootOverlayStore.getState().open).toBe(true);
 
       fireEvent.keyDown(screen.getByTestId("mail-pane"), { key: "Escape" });
-      expect(useMailStore.getState().overlayOpen).toBe(false);
+      expect(useRootOverlayStore.getState().open).toBe(false);
     });
 
     it("answers nothing and draws no column while hidden with a composer waiting", async () => {
@@ -303,9 +338,9 @@ describe("the mail window", () => {
       const key = useOverlayAgentStore.getState().docks.mail.key;
       expect(column()).not.toBeNull();
 
-      openComposer();
+      await openComposer();
       act(() => useMailStore.getState().closeOverlay());
-      // Still mounted (the composer), but the column is gone with the window…
+      // Still mounted (the composer), but the column is gone with the view…
       expect(body()).toBeTruthy();
       expect(column()).toBeNull();
       // …and a chord for it goes on, opening nothing.

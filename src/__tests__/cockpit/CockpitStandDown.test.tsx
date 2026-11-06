@@ -48,8 +48,6 @@ import { CockpitDetailPane, cockpitDetailMode, popoutLabelOf } from "../../compo
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
-import { AttachedAgentPane } from "../../components/layout/AttachedAgentPane";
-import { useMailStore } from "../../stores/mail";
 import { isShownElsewhere, useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useSettingsStore } from "../../stores/settings";
@@ -227,7 +225,7 @@ describe("the detail pane", () => {
     const remote = { ...project, remote: { host: "gpu" } } as unknown as ProjectEntry;
     useProjectsStore.setState({ projects: [remote] });
     const sshTab = st().addTabToScope(P, { label: "ssh", cmd: "bash", cwd: "/p", kind: "shell", location: "remote" });
-    expect(cockpitDetailMode(sshTab, { popout: null, held: true, docked: null })).toBe("held");
+    expect(cockpitDetailMode(sshTab, { popout: null, held: true })).toBe("held");
     render(<CockpitDetailPane ptyId={`${P}:${sshTab.key}`} focused={false} />);
     await act(async () => {});
     expect(useOverlayAgentStore.getState().scopeShownKeys.size).toBe(0);
@@ -245,23 +243,13 @@ describe("a root tab in the detail pane", () => {
   const shownRoot = () => [...useOverlayAgentStore.getState().shownKeys];
   const attachedViews = (key: string) => document.querySelectorAll(`[data-testid="attached-${key}"]`).length;
   let rootTab: TabEntry;
-  /** What `OverlayAgentColumn` does for the mail overlay, reduced to its ownership rule. */
-  function MailColumn({ tab }: { tab: TabEntry }) {
-    const open = useMailStore((s) => s.overlayOpen);
-    const dock = useOverlayAgentStore((s) => s.docks.mail);
-    return open && dock.open && dock.key === tab.key ? <AttachedAgentPane scope={ROOT_SCOPE} tab={tab} focused={false} /> : null;
-  }
-
   beforeEach(() => {
     rootTab = st().addTabToScope(ROOT_SCOPE, { label: "Rooty", cmd: "claude", cwd: "", kind: "agent" });
     useRootOverlayStore.setState({ open: true, view: "now", installTabs: {} });
-    useMailStore.setState({ overlayOpen: false });
-    useSettingsStore.setState({ settings: { mail_client: true, experimental_explicit: true } as never });
     useOverlayAgentStore.setState({
       docks: { mail: { key: null, open: false }, calendar: { key: null, open: false }, todo: { key: null, open: false } },
     });
   });
-  afterEach(() => useMailStore.setState({ overlayOpen: false }));
 
   it("is attached like any tab, through root's own shown set, and unmarked on unmount", async () => {
     const { unmount } = render(<CockpitDetailPane ptyId={`${ROOT_SCOPE}:${rootTab.key}`} focused={false} />);
@@ -271,57 +259,6 @@ describe("a root tab in the detail pane", () => {
     expect(useOverlayAgentStore.getState().scopeShownKeys.size).toBe(0);
     unmount();
     expect(shownRoot()).toEqual([]);
-  });
-
-  it("draws nothing when an open overlay's docked column shows it, and says which overlay", async () => {
-    useOverlayAgentStore.setState({
-      docks: { mail: { key: rootTab.key, open: true }, calendar: { key: null, open: false }, todo: { key: null, open: false } },
-    });
-    useMailStore.setState({ overlayOpen: true });
-    render(
-      <>
-        <MailColumn tab={rootTab} />
-        <CockpitDetailPane ptyId={`${ROOT_SCOPE}:${rootTab.key}`} focused={false} />
-      </>,
-    );
-    await act(async () => {});
-    expect(attachedViews(rootTab.key)).toBe(1);
-    expect(screen.getByText("Shown in the Mail overlay.")).toBeTruthy();
-    expect(shownRoot()).toEqual([rootTab.key]);
-  });
-
-  it("hands the PTY over, never two views at once, as the overlay opens and closes", async () => {
-    useOverlayAgentStore.setState({
-      docks: { mail: { key: rootTab.key, open: true }, calendar: { key: null, open: false }, todo: { key: null, open: false } },
-    });
-    render(
-      <>
-        <MailColumn tab={rootTab} />
-        <CockpitDetailPane ptyId={`${ROOT_SCOPE}:${rootTab.key}`} focused={false} />
-      </>,
-    );
-    await act(async () => {});
-    // The overlay is shut: the pane draws it.
-    expect(attachedViews(rootTab.key)).toBe(1);
-    expect(screen.queryByText("Shown in the Mail overlay.")).toBeNull();
-    expect(shownRoot()).toEqual([rootTab.key]);
-    await act(async () => useMailStore.setState({ overlayOpen: true }));
-    expect(attachedViews(rootTab.key)).toBe(1);
-    expect(screen.getByText("Shown in the Mail overlay.")).toBeTruthy();
-    expect(shownRoot()).toEqual([rootTab.key]);
-    await act(async () => useMailStore.setState({ overlayOpen: false }));
-    expect(attachedViews(rootTab.key)).toBe(1);
-    expect(shownRoot()).toEqual([rootTab.key]);
-  });
-
-  it("a project tab is never 'docked', whatever the overlays hold", async () => {
-    useOverlayAgentStore.setState({
-      docks: { mail: { key: drawn.key, open: true }, calendar: { key: null, open: false }, todo: { key: null, open: false } },
-    });
-    useMailStore.setState({ overlayOpen: true });
-    render(<CockpitDetailPane ptyId={`${P}:${drawn.key}`} focused={false} />);
-    await act(async () => {});
-    expect(attachedViews(drawn.key)).toBe(1);
   });
 });
 

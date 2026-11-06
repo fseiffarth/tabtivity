@@ -1,12 +1,13 @@
 import { create } from "zustand";
-import { uncoverConsole } from "./consoleCover";
 import { invoke } from "@tauri-apps/api/core";
 import { isDetachedWindow } from "./detachedContext";
 import { ROOT_SCOPE, hydrateScopeFromDisk, useTabsStore, type TabEntry } from "./tabs";
 import { boxScopeId, useBoxesStore } from "./boxes";
 import { useProjectsStore } from "./projects";
 import { BOX_SCOPE_PREFIX } from "../lib/terminal/ptyId";
-import type { CockpitView } from "../lib/cockpit/views";
+import type { WindowView } from "../lib/cockpit/views";
+import { viewEnabled } from "../lib/cockpit/viewGates";
+import { useSettingsStore } from "./settings";
 import { resolveLocalMirror, resolveProjectDirectory } from "../types";
 
 /**
@@ -40,17 +41,18 @@ import { resolveLocalMirror, resolveProjectDirectory } from "../types";
  * (`rootConsoleFrame`), never `settings.json` — it is where a window sits on one
  * desk, not a preference worth syncing.
  */
-/** What the shared window shows: the root console itself, or one of the
- *  cockpit's four views (`lib/cockpit/views`). */
-export type RootOverlayView = "root" | CockpitView;
+/** What the shared window shows: the root console itself, or one of the other
+ *  ten views (`lib/cockpit/views`). */
+export type RootOverlayView = WindowView;
 
 interface RootOverlayState {
   open: boolean;
   /** The view the window shows (or opens on next). Session-only: a relaunch
    *  starts on Root, and the cockpit's doors name their view when they open. */
   view: RootOverlayView;
-  /** Open the window on `view`. `"root"` is `show()`; a cockpit view never
-   *  restores the root scope (opening it must not bring root's agents up). */
+  /** Open the window on `view`. `"root"` is `show()`; any other view never
+   *  restores the root scope (opening it must not bring root's agents up). A
+   *  view whose feature gate is off (`lib/cockpit/viewGates`) does not open. */
   openView: (view: RootOverlayView) => void;
   /** Open the console on Root; with a `key`, bring that root tab to the front
    *  of its subwindow. Which tab each subwindow shows is the root LAYOUT's, so
@@ -73,17 +75,11 @@ export const useRootOverlayStore = create<RootOverlayState>((set) => ({
   show: (key) => {
     void ensureRootScopeHydrated();
     if (key) useTabsStore.getState().revealTabInScope(ROOT_SCOPE, key);
-    // Asked for again while an overlay opened from the window covers it (a
-    // sign-in or install tab the overlay started): the window comes to the front.
-    uncoverConsole();
     set({ open: true, view: "root" });
   },
   openView: (view) => {
     if (view === "root") useRootOverlayStore.getState().show();
-    else {
-      uncoverConsole();
-      set({ open: true, view });
-    }
+    else if (viewEnabled(view, useSettingsStore.getState().settings)) set({ open: true, view });
   },
   // `view` stays: the next plain open of a cockpit view is the caller's choice.
   close: () => set({ open: false }),
@@ -98,10 +94,27 @@ export const useRootOverlayStore = create<RootOverlayState>((set) => ({
     }),
 }));
 
-/** Is the root layout itself on screen — the window is up AND on Root? The
- *  question "is root's layout drawn" (as opposed to "is the window up", `open`). */
+/** Is `view` on screen — the window is up AND on it? The one definition of
+ *  "mail / calendar / to-do / models / machines is open" (the stores' old
+ *  `overlayOpen` flags are gone), and of "root's layout is drawn" as opposed
+ *  to "the window is up" (`open`). */
+export function viewShown(s: Pick<RootOverlayState, "open" | "view">, view: RootOverlayView): boolean {
+  return s.open && s.view === view;
+}
+
+/** `viewShown` for Root. */
 export function rootViewShown(s: Pick<RootOverlayState, "open" | "view">): boolean {
-  return s.open && s.view === "root";
+  return viewShown(s, "root");
+}
+
+/** `viewShown` outside React. */
+export function isViewShown(view: RootOverlayView): boolean {
+  return viewShown(useRootOverlayStore.getState(), view);
+}
+
+/** `viewShown` as a subscription. */
+export function useViewShown(view: RootOverlayView): boolean {
+  return useRootOverlayStore((s) => viewShown(s, view));
 }
 
 /** Ctrl+Shift+R: closed -> Root; up on another view -> switch to Root; on

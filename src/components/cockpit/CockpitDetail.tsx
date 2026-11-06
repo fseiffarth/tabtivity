@@ -17,9 +17,21 @@ const NO_PROMPTS: readonly { text: string }[] = [];
  * The Now view's right column: the shown tab's header (scope · tab, ↗ Jump,
  * the facts the roster has for it), its live Chat through `CockpitDetailPane`,
  * and, folded below, its schedules and last prompts. Nothing to show: the top
- * Asking row, else one line.
+ * Asking row, else the latest working agent (a one-line strip says it is
+ * following; picking a row pins), else one line.
  */
-export function CockpitDetail({ row, focused, now }: { row: RosterRow | undefined; focused: boolean; now: number }) {
+export function CockpitDetail({
+  row,
+  focused,
+  now,
+  following = false,
+}: {
+  row: RosterRow | undefined;
+  focused: boolean;
+  now: number;
+  /** Nothing is picked and nothing asks: the pane shows the latest working agent. */
+  following?: boolean;
+}) {
   const t = useT();
   const target = row?.tab.scheduleTargetId;
   const schedules = useAgentSchedulesStore((s) => (row && target ? s.byTarget[scheduleCacheKey(row.scope.id, target)] : undefined));
@@ -54,6 +66,12 @@ export function CockpitDetail({ row, focused, now }: { row: RosterRow | undefine
           <ArrowUpRightIcon /> {t(jumpKey)}
         </button>
       </div>
+      {following && (
+        <div className="cockpit-detail-follow">
+          <span className="cockpit-meta">{t("cockpit.detail.following")}</span>
+          <UntestedTag id="cockpit.now.follow" />
+        </div>
+      )}
       <CockpitDetailPane key={row.ptyId} ptyId={row.ptyId} focused={focused} />
       <details className="cockpit-detail-fold">
         <summary>{t("cockpit.detail.schedules", { count: upcoming.length })}</summary>

@@ -1,7 +1,8 @@
 /**
- * The Projects view (C4): a project not restored this session says "not
- * open", shows no agent counts, and is hydrated only by its Restore button;
- * a loaded one shows its counts and opens the Now view narrowed to it.
+ * The Projects view (C4, compact rows): a project not restored this session is
+ * folded into its box's "Not open" line, shows no agent counts, and is hydrated
+ * only by Restore; a loaded one has a row with its counts and opens the Now
+ * view narrowed to it.
  */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,24 +34,51 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("CockpitProjects", () => {
-  it("shows a loaded project's counts and an inactive one as not open", async () => {
+  it("gives a loaded project a compact row with its counts and folds a not-open one into the Not open line", async () => {
     render(<CockpitProjects />);
     await act(async () => {});
-    const loaded = screen.getByRole("article", { name: "loaded" });
-    expect(loaded.textContent).toContain("1 agents · 1 working");
-    const asleep = screen.getByRole("article", { name: "asleep" });
-    expect(asleep.textContent).toContain("not open");
-    expect(asleep.textContent).not.toMatch(/\d agents/);
+    const loaded = screen.getByRole("listitem", { name: "loaded" });
+    expect(loaded.textContent).toContain("1 working");
+    expect(loaded.textContent).toContain("1 agents");
+    expect(screen.queryByRole("listitem", { name: "asleep" })).toBeNull();
+    const fold = document.querySelector(".cockpit-pfold")!;
+    expect(fold.textContent).toContain("Not open · 1");
+    expect(fold.textContent).toContain("asleep");
+    expect(fold.textContent).not.toMatch(/\d agents/);
+    expect(document.querySelector(".cockpit-ptoolbar")?.textContent).toContain("2 projects · 1 open · 1 working");
   });
 
-  it("hydrates only on Restore, and Agents narrows the Now view", async () => {
+  it("opens a project on a click of its row, and a not-open one from the fold", async () => {
+    const setActive = vi.fn<(id: string | null) => Promise<void>>(() => Promise.resolve());
+    useProjectsStore.setState({ setActive });
+    render(<CockpitProjects />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("listitem", { name: "loaded" }));
+    expect(setActive).toHaveBeenLastCalledWith("loaded");
+    fireEvent.click(screen.getByRole("button", { name: "asleep" }));
+    expect(setActive).toHaveBeenLastCalledWith("asleep");
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("hydrates only on Restore (the fold button's menu), and Agents narrows the Now view", async () => {
     render(<CockpitProjects />);
     await act(async () => {});
     expect(activate).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Restore tabs" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "asleep" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Restore tabs" }));
     expect(activate).toHaveBeenCalledWith("asleep");
     fireEvent.click(screen.getByRole("button", { name: "Agents" }));
     expect(useCockpitStore.getState()).toMatchObject({ scopeFilter: "loaded" });
     expect(useRootOverlayStore.getState().view).toBe("now");
+  });
+
+  it("filters the rows and the fold by name", async () => {
+    render(<CockpitProjects />);
+    await act(async () => {});
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter projects" }), { target: { value: "asl" } });
+    expect(screen.queryByRole("listitem", { name: "loaded" })).toBeNull();
+    expect(screen.getByRole("button", { name: "asleep" })).toBeTruthy();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter projects" }), { target: { value: "zzz" } });
+    expect(screen.getByText("No project matches.")).toBeTruthy();
   });
 });

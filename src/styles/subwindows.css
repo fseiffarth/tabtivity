@@ -1512,8 +1512,9 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   height: min(93vh, calc(100vh - 24px));
   max-height: min(93vh, calc(100vh - 24px));
 }
-/* The view strip: the shipped `.tab` strip, the four
-   cockpit views, a divider, then Root. Roving focus, no motion. */
+/* The view strip: the shipped `.tab` strip, the cockpit's three views, the
+   apps, the system pages, a divider between each group, then Root. Roving
+   focus, no motion. */
 .root-view-strip {
   flex: 0 0 auto;
   align-items: center;
@@ -1524,6 +1525,13 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   margin: 8px 6px;
   background: var(--border-color);
   flex-shrink: 0;
+}
+/* A view's icon beside its label (`cockpit/viewIcons`). */
+.root-view-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-right: 5px;
 }
 .root-view-star {
   display: inline-flex;
@@ -1556,6 +1564,59 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
 }
 .root-view-tab .tab-status-mark {
   margin-right: 4px;
+}
+/* Middle band (820 to 1179 px, `data-band` on the frame): icons only. The label
+   stays as the tab's tooltip and accessible name; the Root tab keeps its
+   star, lamp and asking count. */
+.root-overlay[data-band="mid"] .root-view-tab .tab-label {
+  display: none;
+}
+.root-overlay[data-band="mid"] .root-view-tab .root-view-icon {
+  margin-right: 0;
+}
+.root-overlay[data-band="mid"] .root-view-tab .root-view-star {
+  margin-right: 0;
+}
+/* Narrow band (under 820 px): the current view's tab and a ▾ for the rest. */
+.root-view-more {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+.root-view-more:hover,
+.root-view-more[aria-expanded="true"] {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+.root-view-more:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.root-view-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.root-view-menu-item .root-view-icon {
+  margin-right: 0;
+}
+.root-view-menu-item.active {
+  color: var(--accent);
+}
+.root-view-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-color);
 }
 .root-view-tab:focus-visible {
   outline: 2px solid var(--focus-ring);

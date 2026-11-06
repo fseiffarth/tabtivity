@@ -1,8 +1,9 @@
-// The calendar window (`calendar/CalendarOverlay`) and its docked agent: the
-// bar's agent button (and Ctrl+1–9 while the calendar is in front) docks a root
-// agent beside the calendar (`OverlayAgentColumn`). Escape typed into that agent
-// is its own cancel key; anywhere else it still closes the window. A chord is
-// answered only by the overlay it names, and only while that overlay is up.
+// The Calendar view of the console window (`calendar/CalendarView`) and its
+// docked agent: the bar's agent button (and Ctrl+1–9 while the calendar is shown)
+// docks a root agent beside the calendar (`OverlayAgentColumn`). Escape typed
+// into that agent is its own cancel key; anywhere else it still closes the
+// window. A chord is answered only by the view it names, and only while that
+// view is shown.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
@@ -41,12 +42,9 @@ vi.mock("../../components/tabs/TabPane", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { CalendarOverlayHost } from "../../components/calendar/CalendarOverlay";
-import { TodoOverlayHost } from "../../components/todo/TodoOverlay";
+import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { requestOverlayAgent } from "../../lib/shortcuts/newTabChord";
-import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useSettingsStore } from "../../stores/settings";
-import { useTodoStore } from "../../stores/todo";
 import { useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
@@ -76,8 +74,6 @@ beforeEach(() => {
     },
     loaded: true,
   } as never);
-  useCalendarStore.setState({ overlayOpen: true });
-  useTodoStore.setState({ overlayOpen: false });
   useTabsStore.setState({
     scope: "p1",
     tabsByScope: { root: [] },
@@ -85,7 +81,7 @@ beforeEach(() => {
     focusedGroupByScope: { root: null },
   });
   useProjectsStore.setState({ rootDir: "/r", activeId: "p1" });
-  useRootOverlayStore.setState({ open: false });
+  useRootOverlayStore.setState({ open: true, view: "calendar" });
   useOverlayAgentStore.setState({
     docks: {
       mail: { key: null, open: false },
@@ -98,13 +94,12 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("the calendar window's docked agent", () => {
+describe("the Calendar view's docked agent", () => {
   it("docks the default root agent beside the calendar from the bar's button", async () => {
-    await mountWithAgents(<CalendarOverlayHost />);
-    const button = screen.getByRole("button", { name: "Agent (Ctrl+1)" });
-    // First in the controls, before the approvals pill and ⤢ / ×.
-    expect(button.parentElement?.classList.contains("root-overlay-controls")).toBe(true);
-    expect(button.parentElement?.firstElementChild).toBe(button);
+    await mountWithAgents(<RootOverlayHost />);
+    const button = await screen.findByRole("button", { name: "Agent (Ctrl+1)" });
+    // In the window's controls, before the approvals pill and ⤢ / ×.
+    expect(button.closest(".root-overlay-controls")).not.toBeNull();
 
     fireEvent.click(button);
 
@@ -112,6 +107,7 @@ describe("the calendar window's docked agent", () => {
     const tab = rootTabs()[0];
     expect(docks().calendar).toEqual({ key: tab.key, open: true });
     const body = document.querySelector(".calendar-overlay-body")!;
+    await screen.findByTestId("calendar-pane");
     expect(body.classList.contains("app-overlay-body-row")).toBe(true);
     expect(body.firstElementChild).toBe(screen.getByTestId("calendar-pane"));
     expect(body.lastElementChild).toBe(column());
@@ -122,28 +118,24 @@ describe("the calendar window's docked agent", () => {
   });
 
   it("leaves Escape typed in the docked agent to the agent, and still closes on any other", async () => {
-    await mountWithAgents(<CalendarOverlayHost />);
-    fireEvent.click(screen.getByRole("button", { name: "Agent (Ctrl+1)" }));
+    await mountWithAgents(<RootOverlayHost />);
+    fireEvent.click(await screen.findByRole("button", { name: "Agent (Ctrl+1)" }));
 
     fireEvent.keyDown(screen.getByTestId("agent-pane"), { key: "Escape" });
-    expect(useCalendarStore.getState().overlayOpen).toBe(true);
+    expect(useRootOverlayStore.getState().open).toBe(true);
     // The column's own buttons are inside it too.
     fireEvent.keyDown(screen.getByRole("button", { name: "Hide the agent column" }), { key: "Escape" });
-    expect(useCalendarStore.getState().overlayOpen).toBe(true);
+    expect(useRootOverlayStore.getState().open).toBe(true);
 
-    fireEvent.keyDown(screen.getByTestId("calendar-pane"), { key: "Escape" });
-    expect(useCalendarStore.getState().overlayOpen).toBe(false);
+    fireEvent.keyDown(await screen.findByTestId("calendar-pane"), { key: "Escape" });
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
-  it("answers Ctrl+1 only in the overlay that is up", async () => {
-    await mountWithAgents(
-      <>
-        <CalendarOverlayHost />
-        <TodoOverlayHost />
-      </>,
-    );
+  it("answers Ctrl+1 only in the view that is shown", async () => {
+    await mountWithAgents(<RootOverlayHost />);
+    await screen.findByTestId("calendar-pane");
 
-    // The board is not up: its number goes on, and nothing docks there.
+    // The board is not shown: its number goes on, and nothing docks there.
     let answered = true;
     act(() => {
       answered = requestOverlayAgent("todo", 0);
@@ -158,6 +150,6 @@ describe("the calendar window's docked agent", () => {
     expect(rootTabs()).toHaveLength(1);
     expect(docks().calendar.key).toBe(rootTabs()[0].key);
     expect(docks().todo).toEqual({ key: null, open: false });
-    expect(column()?.closest(".calendar-overlay")).not.toBeNull();
+    expect(column()?.closest(".app-view-calendar")).not.toBeNull();
   });
 });

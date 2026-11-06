@@ -1,10 +1,10 @@
 /**
- * Ctrl+1–9 inside a mail / calendar / to-do overlay: the chord goes to the
- * front overlay (`OVERLAY_AGENT_EVENT`), which docks that slot's root agent
- * beside the app — never to the workspace pane hidden under the overlay. An
- * unanswered request passes the key on; with no overlay up (or its setting
- * off) the old new-tab path is unchanged, and the shell / monitor chords
- * always take it.
+ * Ctrl+1–9 inside a mail / calendar / to-do view of the console window: the
+ * chord goes to the shown app (`OVERLAY_AGENT_EVENT`), which docks that slot's
+ * root agent beside it — never to the workspace pane hidden under the window.
+ * An unanswered request passes the key on; with no app view shown (or its
+ * setting off) the old new-tab path is unchanged, and the shell / monitor
+ * chords always take it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -26,14 +26,11 @@ import {
   type NewTabShortcutDetail,
   type OverlayAgentDetail,
 } from "../../lib/shortcuts/newTabChord";
-import { frontAppOverlay } from "../../lib/shortcuts/appOverlays";
+import { shownApp } from "../../lib/shortcuts/appViews";
 import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import { useMailStore } from "../../stores/mail";
-import { useCalendarStore } from "../../stores/calendar/calendar";
-import { useTodoStore } from "../../stores/todo";
 
 function Harness() {
   useKeyboard({ onTogglePanels: () => {} });
@@ -62,21 +59,10 @@ function onePane() {
   useTabsStore.getState().focusGroup(allGroups(useTabsStore.getState().layout)[0].id);
 }
 
-function openOverlays(...apps: ("mail" | "calendar" | "todo")[]) {
-  useMailStore.setState({ overlayOpen: apps.includes("mail") });
-  useCalendarStore.setState({ overlayOpen: apps.includes("calendar") });
-  useTodoStore.setState({ overlayOpen: apps.includes("todo") });
-}
-
-/** An overlay's frame, as its `<App>Overlay` renders it, with a focusable
- *  field inside. */
-function frame(app: "mail" | "calendar" | "todo"): HTMLInputElement {
-  const div = document.createElement("div");
-  div.className = `root-overlay subwindow focused ${app}-overlay`;
-  const input = document.createElement("input");
-  div.appendChild(input);
-  document.body.appendChild(div);
-  return input;
+/** Show an app's view in the window (or none: the window closed). The store
+ *  is set directly, as the settings gate is the test's own business. */
+function showApp(app?: "mail" | "calendar" | "todo") {
+  useRootOverlayStore.setState(app ? { open: true, view: app } : { open: false, view: "root" });
 }
 
 function press(init: KeyboardEventInit, target: EventTarget = document.body): KeyboardEvent {
@@ -111,16 +97,15 @@ function listen(answer: { overlay: boolean; newTab: boolean }) {
   return { overlay, newTab, off };
 }
 
-describe("Ctrl+1–9 inside an app overlay", () => {
+describe("Ctrl+1–9 inside an app view", () => {
   let events: ReturnType<typeof listen> | null = null;
 
   beforeEach(() => {
     cleanup();
     document.body.innerHTML = "";
     onePane();
-    openOverlays();
     setSettings(ALL_ON);
-    useRootOverlayStore.setState({ open: false });
+    showApp();
     useKeyboardSteeringStore.getState().exit();
   });
 
@@ -129,8 +114,8 @@ describe("Ctrl+1–9 inside an app overlay", () => {
     events = null;
   });
 
-  it("asks the overlay for the slot, not the workspace pane", () => {
-    openOverlays("calendar");
+  it("asks the view for the slot, not the workspace pane", () => {
+    showApp("calendar");
     render(<Harness />);
     events = listen({ overlay: true, newTab: true });
     const ev = press(CTRL_3);
@@ -139,21 +124,19 @@ describe("Ctrl+1–9 inside an app overlay", () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
-  it("closes the root console and leaves steering once the overlay docked", () => {
-    openOverlays("todo");
-    useRootOverlayStore.setState({ open: true });
+  it("keeps the window up (the docked column is in it) and leaves steering once the view docked", () => {
+    showApp("todo");
     render(<Harness />);
     act(() => useKeyboardSteeringStore.getState().enter());
     events = listen({ overlay: true, newTab: true });
     press(CTRL_1);
     expect(events.overlay).toEqual([{ app: "todo", slot: 0 }]);
-    expect(useRootOverlayStore.getState().open).toBe(false);
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "todo" });
     expect(useKeyboardSteeringStore.getState().active).toBe(false);
   });
 
   it("passes an unanswered request on, without a hidden workspace tab", () => {
-    openOverlays("mail");
-    useRootOverlayStore.setState({ open: true });
+    showApp("mail");
     render(<Harness />);
     events = listen({ overlay: false, newTab: true });
     const before = useTabsStore.getState().tabs.length;
@@ -165,7 +148,7 @@ describe("Ctrl+1–9 inside an app overlay", () => {
     expect(useRootOverlayStore.getState().open).toBe(true);
   });
 
-  it("keeps the old path with no overlay up: the workspace pane takes the tab, a cockpit view steps aside", () => {
+  it("keeps the old path with no app view shown: the workspace pane takes the tab, a cockpit view steps aside", () => {
     useRootOverlayStore.setState({ open: true, view: "now" });
     render(<Harness />);
     events = listen({ overlay: true, newTab: true });
@@ -186,8 +169,8 @@ describe("Ctrl+1–9 inside an app overlay", () => {
     expect(useRootOverlayStore.getState().open).toBe(true);
   });
 
-  it("ignores an overlay whose setting is off", () => {
-    openOverlays("calendar");
+  it("ignores an app view whose setting is off", () => {
+    showApp("calendar");
     setSettings({ ...ALL_ON, calendar_global_app: false });
     render(<Harness />);
     events = listen({ overlay: true, newTab: true });
@@ -197,7 +180,7 @@ describe("Ctrl+1–9 inside an app overlay", () => {
   });
 
   it("leaves the shell and monitor chords to the workspace pane", () => {
-    openOverlays("calendar");
+    showApp("calendar");
     render(<Harness />);
     events = listen({ overlay: true, newTab: true });
     press({ key: "N", ctrlKey: true, shiftKey: true });
@@ -207,16 +190,15 @@ describe("Ctrl+1–9 inside an app overlay", () => {
   });
 });
 
-describe("steering's agent numbers under an app overlay", () => {
+describe("steering's agent numbers under an app view", () => {
   let events: ReturnType<typeof listen> | null = null;
 
   beforeEach(() => {
     cleanup();
     document.body.innerHTML = "";
     onePane();
-    openOverlays();
     setSettings(ALL_ON);
-    useRootOverlayStore.setState({ open: false });
+    showApp();
     useKeyboardSteeringStore.getState().exit();
     // jsdom has no layout; steering only sees a layer with a box.
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
@@ -231,14 +213,17 @@ describe("steering's agent numbers under an app overlay", () => {
     vi.restoreAllMocks();
   });
 
-  // The bare 1–9 belong to the tabs levels. An overlay on top pulls steering
+  // The bare 1–9 belong to the tabs levels. The window on top pulls steering
   // into its region before the key is read (`syncLayer`), where they mean
-  // nothing — so they never open an agent hidden under the overlay.
+  // nothing — so they never open an agent hidden under the window.
   it("opens no hidden workspace agent", () => {
-    openOverlays("calendar");
+    showApp("calendar");
     const backdrop = document.createElement("div");
-    backdrop.className = "modal-backdrop app-overlay-backdrop calendar-overlay-backdrop";
-    backdrop.appendChild(frame("calendar").parentElement!);
+    backdrop.className = "modal-backdrop app-overlay-backdrop root-console-backdrop";
+    const frame = document.createElement("div");
+    frame.className = "root-overlay subwindow focused";
+    frame.appendChild(document.createElement("input"));
+    backdrop.appendChild(frame);
     document.body.appendChild(backdrop);
     render(<Harness />);
     act(() => useKeyboardSteeringStore.getState().enter());
@@ -248,7 +233,7 @@ describe("steering's agent numbers under an app overlay", () => {
     expect(useKeyboardSteeringStore.getState()).toMatchObject({ level: "region", region: "calendar" });
   });
 
-  it("still opens one with no overlay up", () => {
+  it("still opens one with no app view shown", () => {
     render(<Harness />);
     act(() => useKeyboardSteeringStore.getState().enter());
     events = listen({ overlay: true, newTab: true });
@@ -270,50 +255,36 @@ describe("requestOverlayAgent", () => {
   });
 });
 
-describe("frontAppOverlay", () => {
+describe("shownApp", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
-    openOverlays();
+    showApp();
     setSettings(ALL_ON);
   });
 
-  it("is null with no overlay open", () => {
-    expect(frontAppOverlay()).toBeNull();
+  it("is null with the window closed or on another view", () => {
+    expect(shownApp()).toBeNull();
+    useRootOverlayStore.setState({ open: true, view: "now" });
+    expect(shownApp()).toBeNull();
+    useRootOverlayStore.setState({ open: true, view: "root" });
+    expect(shownApp()).toBeNull();
   });
 
-  it("counts an open overlay only while its setting is on", () => {
-    openOverlays("mail");
-    expect(frontAppOverlay()).toBe("mail");
+  it("is the shown app view, only while the window is up", () => {
+    showApp("mail");
+    expect(shownApp()).toBe("mail");
+    showApp("calendar");
+    expect(shownApp()).toBe("calendar");
+    useRootOverlayStore.setState({ open: false });
+    expect(shownApp()).toBeNull();
+  });
+
+  it("counts a shown app only while its setting is on", () => {
+    showApp("mail");
     setSettings({ ...ALL_ON, mail_client: false });
-    expect(frontAppOverlay()).toBeNull();
-    openOverlays("todo");
+    expect(shownApp()).toBeNull();
+    showApp("todo");
     setSettings({ ...ALL_ON, todo_board: false });
-    expect(frontAppOverlay()).toBeNull();
-  });
-
-  it("picks the topmost by mount order: board, then calendar, then mail", () => {
-    openOverlays("mail", "calendar", "todo");
-    expect(frontAppOverlay()).toBe("todo");
-    openOverlays("mail", "calendar");
-    expect(frontAppOverlay()).toBe("calendar");
-    setSettings({ ...ALL_ON, todo_board: false });
-    openOverlays("mail", "todo");
-    expect(frontAppOverlay()).toBe("mail");
-  });
-
-  it("prefers the overlay holding the focus", () => {
-    openOverlays("mail", "calendar", "todo");
-    frame("todo");
-    const inMail = frame("mail");
-    frame("calendar");
-    inMail.focus();
-    expect(frontAppOverlay()).toBe("mail");
-  });
-
-  it("ignores the focus inside an overlay that does not count", () => {
-    openOverlays("calendar", "todo");
-    const inMail = frame("mail");
-    inMail.focus();
-    expect(frontAppOverlay()).toBe("todo");
+    expect(shownApp()).toBeNull();
   });
 });

@@ -99,7 +99,7 @@ describe("the icon rail", () => {
 
   it("is not there on a cockpit view", async () => {
     render(<RootOverlayHost />);
-    await act(async () => useRootOverlayStore.getState().openView("usage"));
+    await act(async () => useRootOverlayStore.getState().openView("tonight"));
     expect(await screen.findByTestId("cockpit-body")).toBeTruthy();
     expect(icons()).toBeNull();
   });

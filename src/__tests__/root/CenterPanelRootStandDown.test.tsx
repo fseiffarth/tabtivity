@@ -97,7 +97,7 @@ describe("CenterPanel root stand-down", () => {
   it("hides the whole root scope for a cockpit view too (the window owns the keyboard)", async () => {
     render(<CenterPanel />);
     await act(async () => {
-      useRootOverlayStore.setState({ open: true, view: "usage" });
+      useRootOverlayStore.setState({ open: true, view: "tonight" });
     });
     expect(visible(other.key)).toBe("false");
     expect(visible(docked.key)).toBe("false");

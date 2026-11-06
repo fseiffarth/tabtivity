@@ -7,7 +7,7 @@ import type { OllamaModelUpdate, OllamaVersionStatus } from "../../lib/agents/lo
 /**
  * The session's local-model facts that must outlive either surface showing
  * them — the header's hover dropdown (`layout/LocalModelMenu`) and the Models &
- * agents overlay (`models/ModelsOverlay`). Both render through the same
+ * agents views (`models/ModelsView`). Both render through the same
  * `useModelsHub`, and before this store each of them would have kept its own
  * copy: a download started from the dropdown then never showed in the overlay,
  * and — the one that mattered — an unload done in the overlay never reached the

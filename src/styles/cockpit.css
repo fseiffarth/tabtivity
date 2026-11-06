@@ -11,6 +11,21 @@
   color: var(--text-primary);
 }
 
+/* The apps' and system pages' views (`app-view-<id>`): one box filling the
+   window's body, like `.cockpit-view`, that clips and lets the hosted pane
+   scroll its own regions. They keep the old overlays' body classes
+   (`mail-overlay-body`, `models-overlay-body`, …) for the pane rules written
+   against them. */
+.app-view {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  color: var(--text-primary);
+}
+
 .cockpit-view {
   flex: 1;
   min-width: 0;
@@ -20,20 +35,6 @@
   overflow: auto;
   padding: 10px 14px;
   gap: 8px;
-}
-
-.cockpit-view-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.cockpit-view-heading h2 {
-  margin: 0;
-  font-size: var(--text-md);
-  font-weight: 600;
-  color: var(--text-primary);
 }
 
 .cockpit-empty {
@@ -76,13 +77,16 @@
   min-height: 0;
   display: flex;
 }
+/* The columns are flat: no panel fill, border or radius. The one hairline
+   between two of them is drawn in the middle of their grip (the grip stays the
+   6 px drag target). */
 .cockpit-grip {
   flex: 0 0 6px;
   cursor: var(--cur-col-resize, col-resize);
-  border-radius: 6px;
+  background: linear-gradient(var(--border-subtle), var(--border-subtle)) center / 1px 100% no-repeat;
 }
 .cockpit-grip:hover {
-  background: var(--control-hover-bg);
+  background-color: var(--control-hover-bg);
 }
 .cockpit-rail,
 .cockpit-roster,
@@ -92,9 +96,6 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-secondary);
   overflow: hidden;
 }
 .cockpit-column-head {
@@ -105,7 +106,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .cockpit-column-head > .cockpit-meta {
   margin-left: auto;
@@ -181,6 +182,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.cockpit-rail-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cockpit-rail-refresh {
+  margin-left: auto;
+}
+.cockpit-rail .alerts-menu-head.bare {
+  display: flex;
+  padding: 0 4px 2px;
+}
 .cockpit-rail-fold > summary {
   cursor: var(--cur-pointer, pointer);
   padding: 2px 4px;
@@ -194,7 +207,28 @@
   gap: 6px;
   align-items: center;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cockpit-view-menu-btn svg {
+  width: 0.8em;
+  height: 0.8em;
+  vertical-align: -0.1em;
+}
+/* The grouping / sort popover: the shared menu rows, the picked one marked
+   like the mail account menu's current row. */
+.cockpit-view-menu .tab-new-menu-item.selected {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  font-weight: 600;
+}
+.cockpit-menu-check {
+  width: 1em;
+  flex-shrink: 0;
+  display: inline-flex;
+}
+.cockpit-menu-check svg {
+  width: 1em;
+  height: 1em;
 }
 .cockpit-filter {
   flex: 1 1 140px;
@@ -270,6 +304,7 @@
 .cockpit-roster-row.state-working .cockpit-state-mark { color: var(--status-working); }
 .cockpit-roster-row.state-interrupted .cockpit-state-mark { color: var(--status-interrupted); }
 .cockpit-roster-row.state-done .cockpit-state-mark { color: var(--status-done); }
+.cockpit-roster-row.state-idle .cockpit-state-mark { color: var(--text-muted); }
 
 /* Detail */
 .cockpit-detail-head {
@@ -283,6 +318,15 @@
 }
 .cockpit-detail-head > button {
   margin-left: auto;
+}
+/* The "following the latest working agent" line above the pane. */
+.cockpit-detail-follow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 10px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 .cockpit-detail-pane {
   flex: 1;
@@ -307,7 +351,7 @@
   flex: 0 0 auto;
 }
 .cockpit-detail-fold {
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--border-subtle);
   padding: 4px 10px;
   font-size: var(--text-sm);
 }
@@ -338,43 +382,161 @@
 .cockpit-card-group + .cockpit-card-group {
   margin-top: 8px;
 }
-.cockpit-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 8px;
-}
-.cockpit-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  min-width: 0;
-}
-.cockpit-card.not-open {
-  opacity: 0.75;
-}
-.cockpit-card-head,
-.cockpit-card-row {
+.cockpit-ptoolbar {
   display: flex;
   align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
 }
-.cockpit-card-name {
+.cockpit-ptoolbar .cockpit-filter {
+  flex: 0 1 260px;
+}
+.cockpit-ptoolbar .cockpit-meta {
+  margin-left: auto;
+}
+/* One row per project, ~34 px, on a grid the column header shares. The widest
+   band has every column; mid drops Today and Last active; narrow keeps name,
+   agents and git, the actions living in the row's menu. */
+.cockpit-prow-grid {
+  display: grid;
+  align-items: center;
+  column-gap: 10px;
+  padding: 0 8px;
+  grid-template-columns: 14px minmax(150px, 1.5fr) minmax(120px, 1.1fr) minmax(110px, 1fr) minmax(140px, 1.6fr) 72px 88px 230px;
+}
+.cockpit-prow-grid.mid {
+  grid-template-columns: 14px minmax(150px, 1.5fr) minmax(120px, 1.1fr) minmax(110px, 1fr) minmax(140px, 1.6fr) 230px;
+}
+.cockpit-prow-grid.narrow {
+  grid-template-columns: 14px minmax(0, 1.5fr) minmax(0, 1.1fr) minmax(0, 1fr) 32px;
+}
+.cockpit-prow-head {
+  min-height: 22px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cockpit-prow {
+  min-height: 34px;
+  border-radius: 6px;
+  font-size: var(--text-sm);
+  cursor: var(--cur-pointer, pointer);
+}
+.cockpit-prow:hover,
+.cockpit-prow:focus-within {
+  background: var(--control-hover-bg);
+}
+.cockpit-prow > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cockpit-prow .cockpit-state-mark {
+  color: var(--text-muted);
+}
+.cockpit-prow .cockpit-state-mark.state-question { color: var(--status-decision); }
+.cockpit-prow .cockpit-state-mark.state-working { color: var(--status-working); }
+.cockpit-prow .cockpit-state-mark.state-interrupted { color: var(--status-interrupted); }
+.cockpit-prow .cockpit-state-mark.state-done { color: var(--status-done); }
+.cockpit-prow-open {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
 }
-.cockpit-card-actions {
+.cockpit-prow-open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.cockpit-kind {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.cockpit-prow-agents {
+  color: var(--text-secondary);
+}
+.cockpit-prow-agents.dim,
+.cockpit-prow .dim {
+  color: var(--text-muted);
+}
+.cockpit-prow-agents .working {
+  color: var(--status-working);
+}
+.cockpit-prow-agents .asking {
+  color: var(--status-decision);
+}
+.cockpit-prow-today,
+.cockpit-prow-last {
+  color: var(--text-muted);
+}
+.cockpit-git-dot,
+.cockpit-lamp {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.cockpit-git-dot svg,
+.cockpit-lamp svg {
+  width: 0.7em;
+  height: 0.7em;
+}
+.cockpit-git-dot.git-clean {
+  color: var(--success);
+}
+.cockpit-git-dot.git-dirty,
+.cockpit-git-dot.git-staged,
+.cockpit-git-dot.git-unpushed {
+  color: var(--warning);
+}
+.cockpit-git-dot.git-broken {
+  color: var(--danger);
+}
+.cockpit-lamp.lamp-connected {
+  color: var(--success);
+}
+.cockpit-lamp.lamp-connecting {
+  color: var(--warning);
+}
+.cockpit-lamp.lamp-error {
+  color: var(--danger);
+}
+/* Row actions appear on hover and on keyboard focus within the row (the narrow
+   band's lone ⋯ stays drawn). Opacity flips, nothing animates. */
+.cockpit-prow-actions {
+  justify-content: flex-end;
+}
+.cockpit-prow-grid:not(.narrow) .cockpit-prow-actions {
+  opacity: 0;
+}
+.cockpit-prow:hover .cockpit-prow-actions,
+.cockpit-prow:focus-within .cockpit-prow-actions {
+  opacity: 1;
+}
+.cockpit-prow-more {
+  min-width: 28px;
+}
+.cockpit-pfold {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 2px;
+  gap: 4px 6px;
+  padding: 4px 8px;
 }
 .cockpit-chip.git-dirty,
 .cockpit-chip.git-broken,
@@ -390,20 +552,32 @@
 }
 
 /* ── Tonight view ─────────────────────────────────────────────────────── */
+/* One centred column, the sections stacked and only as tall as what they
+   hold; the view scrolls as a whole. An empty section is its head and one
+   muted line. */
 .cockpit-tonight {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 8px;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 .cockpit-tonight-col {
-  min-height: 0;
-  overflow: auto;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  padding: 0 8px 8px;
+  min-width: 0;
+}
+.cockpit-tonight-col + .cockpit-tonight-col {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+.cockpit-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.cockpit-section-head > .settings-btn {
+  margin-left: auto;
 }
 .cockpit-tonight-group + .cockpit-tonight-group {
   margin-top: 6px;
@@ -438,32 +612,54 @@
   flex-shrink: 0;
 }
 
-/* ── Usage view ───────────────────────────────────────────────────────── */
-.cockpit-usage {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
-}
-.cockpit-usage-col {
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.cockpit-usage-section {
+/* ── Machines view: the cards above the tiles ────────────────────────── */
+.machines-view-section {
   border: 1px solid var(--border-color);
   border-radius: 10px;
   background: var(--bg-secondary);
   padding: 0 8px 8px;
+  margin-bottom: 12px;
 }
-.cockpit-usage-models {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 6px;
-  margin-top: 6px;
+/* The machine list (`CockpitMachineList`): one row per machine. */
+.cockpit-mrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: var(--text-sm);
+}
+.cockpit-mrow:hover {
+  background: var(--control-hover-bg);
+}
+.cockpit-mrow-name {
+  flex: 0 1 220px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.cockpit-mrow-projects {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cockpit-mchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cockpit-mchip .dim {
+  color: var(--text-muted);
+  white-space: pre;
+}
+.cockpit-mrow-connect {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* ── Root view: the Needs-you rail ─────────────────────────
@@ -594,7 +790,7 @@
   cursor: var(--cur-pointer, pointer);
 }
 
-/* Now, middle band: the rail is the icon rail in its own rounded column, the
+/* Now, middle band: the rail is the flat icon rail, the
    full rail in the popover; roster and detail share the rest. */
 .cockpit-now-icons {
   flex: 0 0 auto;
@@ -602,8 +798,10 @@
   margin-right: 6px;
 }
 .cockpit-now-icons .cockpit-rail-icons {
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: none;
 }
 /* Now, narrow: master or detail, never both. */
 .cockpit-now.narrow .cockpit-now-detail {
@@ -612,6 +810,9 @@
 }
 .cockpit-narrow-back {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding-bottom: 6px;
 }
 .cockpit-narrow-back .settings-btn svg {
@@ -660,14 +861,7 @@
   display: flex;
   padding: 4px;
 }
-/* Tonight and Usage stack their two columns; the view scrolls as a whole
-   instead of two short panes scrolling inside it. */
-.root-overlay[data-band="narrow"] .cockpit-tonight,
-.root-overlay[data-band="narrow"] .cockpit-usage {
-  flex: 0 0 auto;
-  grid-template-columns: minmax(0, 1fr);
-}
-.root-overlay[data-band="narrow"] .cockpit-tonight-col,
-.root-overlay[data-band="narrow"] .cockpit-usage-col {
-  overflow: visible;
+/* The machine list wraps its rows. */
+.root-overlay[data-band="narrow"] .cockpit-mrow {
+  flex-wrap: wrap;
 }
