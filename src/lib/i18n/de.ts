@@ -2014,6 +2014,7 @@ export const dict: Dict = {
   "mobile.files.folder.undoFailed": "Nur ein leerer Ordner, der in der letzten Stunde von diesem Telefon erstellt wurde, kann zurückgenommen werden.",
   "mobile.files.zip.tooLarge": "Dieser Ordner ist zu groß für einen ZIP-Download (über 2.000 Dateien oder 1 GB).",
   "mobile.files.zip.failed": "Das ZIP konnte nicht erstellt werden.",
+  "mobile.files.zip.skipped": "{count} Dateien wurden nicht in das ZIP aufgenommen, weil ihre Namen beim Entpacken nicht sicher sind (Backslash, Steuerzeichen oder ein führendes - oder ~).",
   "mobile.files.library.layout": "Darstellung",
   "mobile.files.library.grid": "Raster",
   "mobile.files.library.list": "Liste",

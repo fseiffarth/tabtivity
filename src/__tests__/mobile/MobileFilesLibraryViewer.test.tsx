@@ -237,7 +237,7 @@ describe("Files library — drop, new folder, zip and selecting files", () => {
   });
 
   /** A desktop whose root takes uploads, answering the write routes. */
-  function stubWriter(id: string, zip: "ok" | "too_large" = "ok") {
+  function stubWriter(id: string, zip: "ok" | "too_large" | "skipping" = "ok") {
     const calls: { method: string; url: string }[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
@@ -252,6 +252,7 @@ describe("Files library — drop, new folder, zip and selecting files", () => {
         return reply({ file: { token: "tok-up", name: "drop.bin", kind: "application/octet-stream", size: 3, modified: 1_770_000_000 } }, 201);
       }
       if (url === `/api/v1/projects/${id}/files/zip?check=1`) {
+        if (zip === "skipping") return reply({ files: 2, bytes: 21, skipped: 3 });
         return zip === "ok" ? reply({ files: 2, bytes: 21 }) : reply({ error: "folder_too_large" }, 413);
       }
       return reply({ error: "file_not_found" }, 404);
@@ -325,6 +326,27 @@ describe("Files library — drop, new folder, zip and selecting files", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download this folder as a zip" }));
     expect((await within(again).findByRole("alert")).textContent).toContain("too large to download as a zip");
     expect(clicked).toHaveLength(1);
+  });
+
+  it("says how many files the zip left out for their names, and says nothing when none", async () => {
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    stubWriter("skip", "skipping");
+    render(<FilesLibrary projectId="skip" label="Alpha" onClose={() => {}} />);
+    const library = screen.getByRole("dialog", { name: "Files" });
+    await within(library).findByRole("button", { name: "Open notes.md" });
+    openViewMenu(library);
+    fireEvent.click(screen.getByRole("button", { name: "Download this folder as a zip" }));
+    expect((await within(library).findByRole("status")).textContent).toContain("3 files were left out of the zip");
+    cleanup();
+
+    stubWriter("plain");
+    render(<FilesLibrary projectId="plain" label="Alpha" onClose={() => {}} />);
+    const plain = screen.getByRole("dialog", { name: "Files" });
+    await within(plain).findByRole("button", { name: "Open notes.md" });
+    openViewMenu(plain);
+    fireEvent.click(screen.getByRole("button", { name: "Download this folder as a zip" }));
+    await waitFor(() => expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(2));
+    expect(within(plain).queryByText(/left out of the zip/)).toBeNull();
   });
 
   it("uploads files dropped on the list, past the chat's 24 MB and up to 1 GB", async () => {

@@ -1981,6 +1981,7 @@ export const enSource = {
   "mobile.files.folder.undoFailed": "Only an empty folder made from this phone in the last hour can be taken back.",
   "mobile.files.zip.tooLarge": "This folder is too large to download as a zip (over 2,000 files or 1 GB).",
   "mobile.files.zip.failed": "The zip could not be made.",
+  "mobile.files.zip.skipped": "{count} files were left out of the zip because their names are not safe to unpack (a backslash, a control character, or a leading - or ~).",
   "mobile.files.library.layout": "Layout",
   "mobile.files.library.grid": "Grid",
   "mobile.files.library.list": "List",
