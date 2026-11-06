@@ -59,6 +59,13 @@ pub const MAX_UPLOAD_FILE: u64 = MAX_UPLOADS_PER_DAY;
 const STAGING_DIR: &str = "upload-staging";
 /// How long the phone may take back a folder it made (`remove_made_folder`).
 const FOLDER_UNDO: Duration = Duration::from_secs(60 * 60);
+/// Stagings in flight for one project, and in all (`reserve`).
+pub const MAX_STAGINGS_PER_PROJECT: usize = 4;
+pub const MAX_STAGINGS: usize = 8;
+/// Folders **New folder** may make in one project within [`CAP_WINDOW`].
+pub const MAX_FOLDERS_PER_DAY: usize = 200;
+/// The log's `kind` of a **New folder** line; an upload line has none.
+const KIND_FOLDER: &str = "folder";
 
 /// Serializes the sidecar's log writes (cap check, file creation, append,
 /// compaction): two uploads at once must not both pass the cap.
@@ -104,6 +111,17 @@ pub struct Record {
     /// The phone's device label, when the auth layer had one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
+    /// `"folder"` for a **New folder** line (size 0, no hash); absent on an
+    /// upload line, so an older log reads as uploads only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+impl Record {
+    /// Whether this line is a folder the phone made rather than a file.
+    pub fn is_folder(&self) -> bool {
+        self.kind.as_deref() == Some(KIND_FOLDER)
+    }
 }
 
 /// What the route answers for a landed file.
@@ -132,8 +150,13 @@ pub enum UploadError {
     TooLarge,
     /// **New folder**: the name is taken.
     Exists,
-    /// The project already took [`MAX_UPLOADS_PER_DAY`] in the last 24 h.
+    /// The project already took [`MAX_UPLOADS_PER_DAY`] in the last 24 h, or
+    /// what is in flight would leave too little for this body.
     Full,
+    /// Too many bodies are being staged at once ([`reserve`]).
+    Busy,
+    /// The project already got [`MAX_FOLDERS_PER_DAY`] new folders in 24 h.
+    FoldersFull,
     /// The project root is gone.
     Unavailable,
     /// No logged, unchanged upload at that path (undo).
@@ -150,12 +173,108 @@ impl UploadError {
             UploadError::Empty => "empty_file",
             UploadError::TooLarge => "file_too_large",
             UploadError::Full => "uploads_full",
+            UploadError::Busy => "uploads_busy",
+            UploadError::FoldersFull => "folders_full",
             UploadError::Unavailable => "project_unavailable",
             UploadError::NotFound => "file_not_found",
             UploadError::Exists => "already_exists",
             UploadError::Io(_) => "write_failed",
         }
     }
+}
+
+/// Bytes reserved and bodies in flight, by project raw id.
+#[derive(Debug, Default)]
+struct InFlight {
+    by_project: HashMap<String, (u64, usize)>,
+    total: usize,
+}
+
+type FlightTable = Mutex<Option<InFlight>>;
+static IN_FLIGHT: FlightTable = Mutex::new(None);
+
+/// A project's claim on its day's upload budget for one body on its way
+/// (`reserve`). Dropped, it is released: a refused, failed, cut-off or
+/// finished upload leaves nothing held.
+#[derive(Debug)]
+pub struct Reservation {
+    table: &'static FlightTable,
+    project: String,
+    bytes: u64,
+}
+
+impl Reservation {
+    /// The most the body may be: staging stops past it.
+    pub fn limit(&self) -> u64 {
+        self.bytes
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let mut flight = self.table.lock_ok();
+        let flight = flight.get_or_insert_with(Default::default);
+        flight.total = flight.total.saturating_sub(1);
+        if let Some(entry) = flight.by_project.get_mut(&self.project) {
+            entry.0 = entry.0.saturating_sub(self.bytes);
+            entry.1 = entry.1.saturating_sub(1);
+            if entry.1 == 0 {
+                flight.by_project.remove(&self.project);
+            }
+        }
+    }
+}
+
+/// What the project has written in the last [`CAP_WINDOW`], by the log alone
+/// (an undone upload still counts). Caller holds [`LOG_LOCK`].
+fn written_within(records: &[Record], raw_id: &str, now: u64) -> u64 {
+    records
+        .iter()
+        .filter(|record| record.project == raw_id && record.at.saturating_add(CAP_WINDOW) > now)
+        .fold(0u64, |total, record| total.saturating_add(record.size))
+}
+
+/// Claims room for one body **before** it is staged: its `declared` length
+/// (none declared: all the day has left) against what the project may still
+/// take today, less what other bodies in flight already claimed. `Full` when
+/// it does not fit, `Busy` past [`MAX_STAGINGS_PER_PROJECT`] /
+/// [`MAX_STAGINGS`] bodies at once. The switch is the caller's check.
+pub fn reserve(state_dir: &Path, raw_id: &str, declared: Option<u64>) -> Result<Reservation, UploadError> {
+    reserve_at(&IN_FLIGHT, state_dir, raw_id, declared, crate::clock::now_secs())
+}
+
+fn reserve_at(
+    table: &'static FlightTable,
+    state_dir: &Path,
+    raw_id: &str,
+    declared: Option<u64>,
+    now: u64,
+) -> Result<Reservation, UploadError> {
+    if declared.is_some_and(|length| length > MAX_UPLOAD_FILE) {
+        return Err(UploadError::TooLarge);
+    }
+    // The log lock first, as `store_with` takes it: the figures are read under it.
+    let _guard = LOG_LOCK.lock_ok();
+    let written = written_within(&read_log(state_dir).0, raw_id, now);
+    let mut flight = table.lock_ok();
+    let flight = flight.get_or_insert_with(Default::default);
+    let (held, count) = flight.by_project.get(raw_id).copied().unwrap_or_default();
+    if count >= MAX_STAGINGS_PER_PROJECT || flight.total >= MAX_STAGINGS {
+        return Err(UploadError::Busy);
+    }
+    let left = MAX_UPLOADS_PER_DAY.saturating_sub(written).saturating_sub(held);
+    let bytes = match declared {
+        Some(length) if length > left => return Err(UploadError::Full),
+        Some(length) => length,
+        // A body that does not say its length may take what is left, no more.
+        None if left == 0 => return Err(UploadError::Full),
+        None => left.min(MAX_UPLOAD_FILE),
+    };
+    let entry = flight.by_project.entry(raw_id.to_string()).or_default();
+    entry.0 = entry.0.saturating_add(bytes);
+    entry.1 += 1;
+    flight.total += 1;
+    Ok(Reservation { table, project: raw_id.to_string(), bytes })
 }
 
 /// An upload's body, staged in the sidecar's private folder while it
@@ -195,9 +314,10 @@ fn sweep_staging(dir: &Path) {
 }
 
 /// Streams `body` into a new private staging file, hashing as it goes, and
-/// stops at [`MAX_UPLOAD_FILE`] (`TooLarge`) or an empty body (`Empty`). A
-/// body cut off mid-way is an `Io` error; nothing is left behind.
-pub async fn stage_body(state_dir: &Path, body: axum::body::Body) -> Result<Staged, UploadError> {
+/// stops at the `reservation`'s limit (`TooLarge`: a body sending more than
+/// it declared is cut off) or an empty body (`Empty`). A body cut off
+/// mid-way is an `Io` error; nothing is left behind.
+pub async fn stage_body(state_dir: &Path, body: axum::body::Body, reservation: &Reservation) -> Result<Staged, UploadError> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
     let dir = state_dir.join(CONTROL_DIR).join(STAGING_DIR);
@@ -230,7 +350,7 @@ pub async fn stage_body(state_dir: &Path, body: axum::body::Body) -> Result<Stag
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| UploadError::Io(error.to_string()))?;
         staged.size = staged.size.saturating_add(chunk.len() as u64);
-        if staged.size > MAX_UPLOAD_FILE {
+        if staged.size > reservation.limit() {
             return Err(UploadError::TooLarge);
         }
         hasher.update(&chunk);
@@ -402,11 +522,7 @@ fn store_with(
     let _guard = LOG_LOCK.lock_ok();
     let log = read_log(state_dir);
     // The log alone, not the disk: an undone upload still counts.
-    let written: u64 = log
-        .0
-        .iter()
-        .filter(|record| record.project == raw_id && record.at.saturating_add(CAP_WINDOW) > now)
-        .fold(0u64, |total, record| total.saturating_add(record.size));
+    let written = written_within(&log.0, raw_id, now);
     if written.saturating_add(body.size) > MAX_UPLOADS_PER_DAY {
         return Err(UploadError::Full);
     }
@@ -424,6 +540,7 @@ fn store_with(
         sha256: body.sha256.clone(),
         at: now,
         phone: phone.map(|phone| phone.chars().take(MAX_PHONE).collect()),
+        kind: None,
     };
     if let Err(error) = append(state_dir, log, &record, now) {
         // Unlogged, the file could be neither listed nor undone, nor would it
@@ -482,12 +599,15 @@ pub fn undo(state_dir: &Path, root: &Path, raw_id: &str, rel: &str) -> Result<()
         return Err(UploadError::NotFound);
     };
     // Newest first: a name freed by an undo and taken by a later upload.
-    let logged = records
-        .iter()
-        .rev()
-        .filter(|record| record.project == raw_id && record.rel == rel)
-        .any(|record| unchanged(&dir, leaf, record.size, &record.sha256));
-    if !logged {
+    let mut matching = records.iter().rev().filter(|record| record.project == raw_id && record.rel == rel);
+    if matching.clone().any(Record::is_folder) {
+        // A folder the phone made: `rmdir` refuses one with anything in it.
+        return dir.remove_empty_dir(leaf).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => UploadError::NotFound,
+            _ => UploadError::Refused,
+        });
+    }
+    if !matching.any(|record| unchanged(&dir, leaf, record.size, &record.sha256)) {
         return Err(UploadError::NotFound);
     }
     dir.remove_file(leaf).map_err(|error| match error.kind() {
@@ -540,6 +660,14 @@ fn recent_at(
             .or_insert_with(|| root_of(&record.project))
             .clone();
         let Some(root) = root else { continue };
+        if record.is_folder() {
+            // A folder line stands while the folder does (reached without links).
+            if ProjectDir::open(&root, &record.rel).is_ok() {
+                listed.insert((record.project.clone(), record.rel.clone()));
+                out.push(record);
+            }
+            continue;
+        }
         let Some((dir, leaf)) = held_parent(&root, &record.rel) else { continue };
         let Some((_, meta)) = dir.open_file(leaf) else { continue };
         let stamp = (meta.len(), meta.modified().ok());
@@ -566,8 +694,29 @@ static MADE: Mutex<Option<HashMap<(String, String), std::time::Instant>>> = Mute
 /// **New folder**: makes the folder `raw_name` (sanitized as an upload's
 /// name, never a dot name) inside `rel_dir`, which must take uploads
 /// ([`accepts`]). Add-only: a taken name is `Exists`, nothing is replaced.
-/// Answers the new folder's project-relative path.
-pub fn make_folder(root: &Path, raw_id: &str, rel_dir: &str, raw_name: &str) -> Result<String, UploadError> {
+/// At most [`MAX_FOLDERS_PER_DAY`] a project a day (`FoldersFull`), and each
+/// one is logged (kind `folder`, size 0) so the desktop lists it with the
+/// uploads. Answers the new folder's project-relative path.
+pub fn make_folder(
+    state_dir: &Path,
+    root: &Path,
+    raw_id: &str,
+    rel_dir: &str,
+    raw_name: &str,
+    phone: Option<&str>,
+) -> Result<String, UploadError> {
+    make_folder_at(state_dir, root, raw_id, rel_dir, raw_name, phone, crate::clock::now_secs())
+}
+
+fn make_folder_at(
+    state_dir: &Path,
+    root: &Path,
+    raw_id: &str,
+    rel_dir: &str,
+    raw_name: &str,
+    phone: Option<&str>,
+    now: u64,
+) -> Result<String, UploadError> {
     if !accepts(rel_dir) {
         return Err(UploadError::Refused);
     }
@@ -579,11 +728,41 @@ pub fn make_folder(root: &Path, raw_id: &str, rel_dir: &str, raw_name: &str) -> 
         FilesError::Unavailable => UploadError::Unavailable,
         _ => UploadError::Refused,
     })?;
+    // Counted and logged under the log lock, as an upload is: two requests
+    // at once must not both pass the cap.
+    let _guard = LOG_LOCK.lock_ok();
+    let log = read_log(state_dir);
+    let made = log
+        .0
+        .iter()
+        .filter(|record| record.is_folder() && record.project == raw_id && record.at.saturating_add(CAP_WINDOW) > now)
+        .count();
+    if made >= MAX_FOLDERS_PER_DAY {
+        return Err(UploadError::FoldersFull);
+    }
     dir.create_new_dir(&name).map_err(|error| match error.kind() {
         std::io::ErrorKind::AlreadyExists => UploadError::Exists,
         _ => UploadError::Io(error.to_string()),
     })?;
     let rel = files::child(rel_dir, &name);
+    let id = super::auth::random_bytes::<16>()
+        .map(|bytes| Base64UrlUnpadded::encode_string(&bytes))
+        .map_err(UploadError::Io);
+    let record = id.map(|id| Record {
+        id,
+        project: raw_id.to_string(),
+        rel: rel.clone(),
+        size: 0,
+        sha256: String::new(),
+        at: now,
+        phone: phone.map(|phone| phone.chars().take(MAX_PHONE).collect()),
+        kind: Some(KIND_FOLDER.to_string()),
+    });
+    // Unlogged, the folder would not count against the cap: take it back.
+    if let Err(error) = record.and_then(|record| append(state_dir, log, &record, now).map_err(UploadError::Io)) {
+        let _ = dir.remove_empty_dir(&name);
+        return Err(error);
+    }
     let mut made = MADE.lock_ok();
     let made = made.get_or_insert_with(HashMap::new);
     made.retain(|_, at| at.elapsed() < FOLDER_UNDO);
@@ -659,6 +838,7 @@ mod tests {
             sha256: "0".repeat(64),
             at,
             phone: None,
+            kind: None,
         }
     }
 
@@ -1006,6 +1186,144 @@ mod tests {
         assert_eq!(put(&f, "alias", "a.txt", b"x"), Err(UploadError::Refused));
         assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
         assert!(fs::read_dir(f.root.join("docs")).unwrap().next().is_none());
+    }
+
+    /// A flight table of its own, so tests do not count each other's bodies.
+    fn table() -> &'static FlightTable {
+        Box::leak(Box::new(Mutex::new(None)))
+    }
+
+    fn in_flight(table: &FlightTable) -> usize {
+        table.lock_ok().as_ref().map_or(0, |flight| flight.total)
+    }
+
+    /// The log holds `size` bytes of `project`, written just now.
+    fn spend(f: &Fixture, project: &str, size: u64) {
+        write_log(f, &[record(project, "docs/big.bin", size, NOW)]);
+    }
+
+    #[test]
+    fn a_body_is_reserved_against_the_days_budget_left_by_what_is_in_flight() {
+        let f = fixture();
+        let table = table();
+        spend(&f, "p1", MAX_UPLOADS_PER_DAY - 100);
+        let first = reserve_at(table, &f.state, "p1", Some(60), NOW).unwrap();
+        assert_eq!(first.limit(), 60);
+        // 40 are left once the first is counted: a second 60 does not fit.
+        assert_eq!(reserve_at(table, &f.state, "p1", Some(60), NOW).unwrap_err(), UploadError::Full);
+        let second = reserve_at(table, &f.state, "p1", Some(40), NOW).unwrap();
+        assert_eq!(reserve_at(table, &f.state, "p1", Some(1), NOW).unwrap_err(), UploadError::Full);
+        // Another project has its own budget.
+        assert!(reserve_at(table, &f.state, "p2", Some(MAX_UPLOAD_FILE), NOW).is_ok());
+        // A refused or finished body gives its room back.
+        drop(first);
+        assert!(reserve_at(table, &f.state, "p1", Some(60), NOW).is_ok());
+        drop(second);
+        // The window rolls: a day later the log's bytes no longer count.
+        assert_eq!(reserve_at(table, &f.state, "p1", Some(MAX_UPLOAD_FILE), NOW + CAP_WINDOW + 1).unwrap().limit(), MAX_UPLOAD_FILE);
+    }
+
+    #[test]
+    fn a_declared_length_past_the_cap_or_an_empty_budget_is_refused_before_staging() {
+        let f = fixture();
+        let table = table();
+        assert_eq!(reserve_at(table, &f.state, "p1", Some(MAX_UPLOAD_FILE + 1), NOW).unwrap_err(), UploadError::TooLarge);
+        // No length declared: the body may take what the day has left.
+        spend(&f, "p1", MAX_UPLOADS_PER_DAY - 7);
+        let claim = reserve_at(table, &f.state, "p1", None, NOW).unwrap();
+        assert_eq!(claim.limit(), 7);
+        // ... and that is all of it while the claim stands.
+        assert_eq!(reserve_at(table, &f.state, "p1", None, NOW).unwrap_err(), UploadError::Full);
+        spend(&f, "p1", MAX_UPLOADS_PER_DAY);
+        assert_eq!(reserve_at(table, &f.state, "p1", None, NOW).unwrap_err(), UploadError::Full);
+        assert_eq!(reserve_at(table, &f.state, "p1", Some(1), NOW).unwrap_err(), UploadError::Full);
+        assert_eq!(in_flight(table), 1, "a refusal holds nothing: only the live claim counts");
+        drop(claim);
+        assert_eq!(in_flight(table), 0);
+    }
+
+    #[test]
+    fn only_so_many_bodies_are_staged_at_once() {
+        let f = fixture();
+        let table = table();
+        let mut held = Vec::new();
+        for _ in 0..MAX_STAGINGS_PER_PROJECT {
+            held.push(reserve_at(table, &f.state, "p1", Some(1), NOW).unwrap());
+        }
+        assert_eq!(reserve_at(table, &f.state, "p1", Some(1), NOW).unwrap_err(), UploadError::Busy);
+        // Other projects go on until all are taken.
+        for project in 0..(MAX_STAGINGS - MAX_STAGINGS_PER_PROJECT) {
+            held.push(reserve_at(table, &f.state, &format!("q{project}"), Some(1), NOW).unwrap());
+        }
+        assert_eq!(in_flight(table), MAX_STAGINGS);
+        assert_eq!(reserve_at(table, &f.state, "other", Some(1), NOW).unwrap_err(), UploadError::Busy);
+        held.pop();
+        assert!(reserve_at(table, &f.state, "other", Some(1), NOW).is_ok());
+        drop(held);
+        assert_eq!(in_flight(table), 0);
+    }
+
+    #[tokio::test]
+    async fn a_body_sending_more_than_it_declared_is_cut_off() {
+        let f = fixture();
+        let table = table();
+        let claim = reserve_at(table, &f.state, "p1", Some(5), NOW).unwrap();
+        let staged = stage_body(&f.state, axum::body::Body::from(vec![1u8; 10]), &claim).await;
+        assert_eq!(staged.err(), Some(UploadError::TooLarge));
+        let exact = stage_body(&f.state, axum::body::Body::from(vec![1u8; 5]), &claim).await.unwrap();
+        assert_eq!(exact.size, 5);
+        drop(exact);
+        let staging = f.state.join(CONTROL_DIR).join(STAGING_DIR);
+        assert_eq!(fs::read_dir(staging).unwrap().count(), 0, "nothing is left staged");
+    }
+
+    fn folder(f: &Fixture, name: &str, now: u64) -> Result<String, UploadError> {
+        make_folder_at(&f.state, &f.root, "p1", "docs", name, Some("Pixel"), now)
+    }
+
+    #[test]
+    fn new_folder_is_counted_per_day_and_logged_for_the_desktop() {
+        let f = fixture();
+        for n in 0..MAX_FOLDERS_PER_DAY {
+            assert_eq!(folder(&f, &format!("f{n}"), NOW).unwrap(), format!("docs/f{n}"));
+        }
+        assert_eq!(folder(&f, "one-too-many", NOW).unwrap_err(), UploadError::FoldersFull);
+        assert!(!f.root.join("docs").join("one-too-many").exists());
+        // Another project and a later day have their own count.
+        assert!(make_folder_at(&f.state, &f.root, "p2", "docs", "mine", None, NOW).is_ok());
+        assert!(folder(&f, "next-day", NOW + CAP_WINDOW + 1).is_ok());
+        // Each folder is a log line of kind `folder`, size 0 ...
+        let (records, garbage) = read_log(&f.state);
+        assert!(!garbage);
+        let first = records.iter().find(|r| r.rel == "docs/f0").unwrap();
+        assert!(first.is_folder() && first.size == 0 && first.phone.as_deref() == Some("Pixel"));
+        assert!(log_lines(&f)[0].contains("\"kind\":\"folder\""));
+        // ... the desktop lists while the folder stands, and takes it back
+        // only while it is empty.
+        let listed = recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW + 1).unwrap();
+        assert!(rels(&listed).contains(&"docs/f0"));
+        fs::write(f.root.join("docs").join("f0").join("x.txt"), b"x").unwrap();
+        assert_eq!(undo(&f.state, &f.root, "p1", "docs/f0"), Err(UploadError::Refused));
+        fs::remove_file(f.root.join("docs").join("f0").join("x.txt")).unwrap();
+        undo(&f.state, &f.root, "p1", "docs/f0").unwrap();
+        assert!(!f.root.join("docs").join("f0").exists());
+        let listed = recent_at(&f.state, Duration::from_secs(CAP_WINDOW), root_of(&f), NOW + 1).unwrap();
+        assert!(!rels(&listed).contains(&"docs/f0"), "a folder that is gone is not listed");
+    }
+
+    #[test]
+    fn a_log_from_before_folders_still_reads_and_counts() {
+        let f = fixture();
+        fs::create_dir_all(f.state.join(CONTROL_DIR)).unwrap();
+        let old = r#"{"id":"a","project":"p1","rel":"docs/a.txt","size":3,"sha256":"00","at":1788177600}"#;
+        fs::write(log_path(&f.state), format!("{old}\n")).unwrap();
+        let (records, garbage) = read_log(&f.state);
+        assert!(!garbage && records.len() == 1 && !records[0].is_folder());
+        assert_eq!(folder(&f, "new", NOW).unwrap(), "docs/new");
+        assert_eq!(read_log(&f.state).0.len(), 2);
+        // An upload line is written as before: no `kind`.
+        put(&f, "docs", "b.txt", b"b").unwrap();
+        assert!(!log_lines(&f).last().unwrap().contains("kind"));
     }
 
     #[cfg(windows)]

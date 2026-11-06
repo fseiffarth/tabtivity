@@ -7818,7 +7818,8 @@ fn upload_error(error: uploads::UploadError) -> (StatusCode, Json<serde_json::Va
             uploads::UploadError::Empty => StatusCode::BAD_REQUEST,
             uploads::UploadError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             uploads::UploadError::Exists => StatusCode::CONFLICT,
-            uploads::UploadError::Full => StatusCode::INSUFFICIENT_STORAGE,
+            uploads::UploadError::Full | uploads::UploadError::FoldersFull => StatusCode::INSUFFICIENT_STORAGE,
+            uploads::UploadError::Busy => StatusCode::TOO_MANY_REQUESTS,
             uploads::UploadError::Unavailable => StatusCode::CONFLICT,
             uploads::UploadError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         },
@@ -7879,9 +7880,17 @@ async fn project_files_upload(
     if declared.is_some_and(|length| length > uploads::MAX_UPLOAD_FILE) {
         return upload_error(uploads::UploadError::TooLarge);
     }
+    // The room is claimed before a byte is staged: the declared length
+    // against the day's budget left after the bodies already on their way
+    // (`Full`), and only so many bodies at once (`Busy`). Held until the
+    // file has landed or the request has failed.
+    let reservation = match uploads::reserve(&state.config.state_dir, &raw_id, declared) {
+        Ok(reservation) => reservation,
+        Err(error) => return upload_error(error),
+    };
     // Staged in the sidecar's private folder as it arrives, hashed on the
-    // way: never held whole in memory.
-    let staged = match uploads::stage_body(&state.config.state_dir, body).await {
+    // way: never held whole in memory; a body past its claim is cut off.
+    let staged = match uploads::stage_body(&state.config.state_dir, body, &reservation).await {
         Ok(staged) => staged,
         Err(error) => return upload_error(error),
     };
@@ -7896,6 +7905,8 @@ async fn project_files_upload(
     // The staged body copied into the project under the sidecar-wide log
     // lock: off the connection executor. The staging file goes with `staged`.
     let landed = tokio::task::spawn_blocking(move || {
+        // The claim goes once the file is logged (or has failed to be).
+        let _reservation = reservation;
         uploads::store_staged(&state_dir, &root, &raw_id, &rel_dir, &query.name, &staged, label.as_deref())
             .map(|landed| files::entry(&root, &landed.rel, &key, &raw_id))
     })
@@ -7919,7 +7930,7 @@ async fn project_files_folder(
     Path(project_id): Path<String>,
     Query(query): Query<UploadQuery>,
 ) -> impl IntoResponse {
-    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+    let (phone, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
         Ok(scope) => scope,
         Err(error) => return error,
     };
@@ -7927,9 +7938,15 @@ async fn project_files_folder(
         Ok(rel) => rel,
         Err(error) => return error,
     };
-    let key = state.auth.lock_ok().host_key().to_vec();
+    let (label, key) = {
+        let auth = state.auth.lock_ok();
+        let label = auth.devices().into_iter().find(|device| device.id == phone.device_id()).map(|device| device.name);
+        (label, auth.host_key().to_vec())
+    };
+    let state_dir = state.config.state_dir.clone();
     let made = tokio::task::spawn_blocking(move || {
-        uploads::make_folder(&root, &raw_id, &rel_dir, &query.name).map(|rel| files::lookup(&root, &rel, &key, &raw_id))
+        uploads::make_folder(&state_dir, &root, &raw_id, &rel_dir, &query.name, label.as_deref())
+            .map(|rel| files::lookup(&root, &rel, &key, &raw_id))
     })
     .await
     .unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string())));

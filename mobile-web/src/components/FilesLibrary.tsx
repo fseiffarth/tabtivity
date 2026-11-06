@@ -168,6 +168,7 @@ const UPLOAD_FAILURES: Record<string, TranslationKey> = {
   files_off: "mobile.files.upload.off",
   upload_refused: "mobile.files.upload.refused",
   uploads_full: "mobile.files.upload.full",
+  uploads_busy: "mobile.files.upload.busy",
   file_too_large: "mobile.sendToDesktop.tooLarge",
   empty_file: "mobile.sendToDesktop.empty",
   project_unavailable: "mobile.projectInbox.unavailable",
@@ -195,6 +196,7 @@ const codeOf = (reason: unknown) => reason instanceof ApiError ? reason.code : "
 const FOLDER_FAILURES: Record<string, TranslationKey> = {
   already_exists: "mobile.files.folder.exists",
   upload_refused: "mobile.files.folder.refused",
+  folders_full: "mobile.files.folder.full",
   uploads_off: "mobile.files.upload.off",
   files_off: "mobile.files.upload.off",
   timeout: "mobile.sendToDesktop.timeout",
