@@ -150,10 +150,19 @@ closed by `, `Connection reset by `); a rejection marker on any other line
 (they are INFO, and so are `kex_exchange_identification: …` for a reset or close),
 while `ssh: connect to host`, `Could not resolve hostname` and `Connection timed out
 during banner exchange` stay (the last is a client prefix too). So a connection that is
-reset or closed mid-handshake, with nothing else printed, now reads as "not unreachable"
-(no re-try; a `MaxStartups` drop is such a case, re-tried by Reconnect all instead),
-which is the safe side of the VPN step. The exit code is not read: only a failed
-run gets here, and ssh exits 255 for every connection and authentication failure.
+reset or closed mid-handshake prints nothing. The exit status is read for that
+(2026-11-06, the user's decision): `capture_raw` appends a marker line
+(`SSH_EXIT_255`) to the raw half of a run that exited 255, ssh's status for every
+connection or authentication failure, and `ssh_unreachable` reads a 255 exit with no
+client-prefixed line as **unreachable**, whether the stderr is empty (a reset, a
+close, a `MaxStartups` drop) or holds only a server's text. So auto-connect re-tries
+it, and on the first attempt the project's own configured VPN step may run. A rejection
+marker (permission denied, authentication, host key) on a non-client line still wins, a
+banner never decides, and ssh's complaints about this machine's own config (`Bad owner
+or permissions on …`, `Bad configuration option`) are not the network. A run that
+never got to a 255 exit (ssh not spawned, another status) has no marker, so silence
+alone is not unreachable there. The marker starts with a control byte that `capture_raw`
+strips from what the run printed, so no output can spell it.
 
 That made the headless VPN step live for those failures, so it has its own limits.
 It runs on the first attempt only, never from a re-try: polkit authenticates each

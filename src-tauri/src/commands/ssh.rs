@@ -302,6 +302,12 @@ fn web_url_to_open(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 
+/// Last line of the raw half of a failed run that exited 255, ssh's status for a
+/// connection or authentication failure. ssh never prints it; [`ssh_unreachable`]
+/// reads it so a failure that said nothing ssh-prefixed (a reset or close
+/// mid-handshake, which `LogLevel=ERROR` leaves silent) still reads as unreachable.
+const SSH_EXIT_255: &str = "\u{1e}ssh-exit-255";
+
 /// Run a built command, returning stdout on success or `(explained, raw stderr)`
 /// on failure (a generic message and no stderr when it printed nothing). `what`
 /// names the binary for error messages. The explained form is deliberately lossy,
@@ -315,15 +321,26 @@ fn capture_raw(mut cmd: Command, what: &str) -> Result<String, (String, String)>
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // ssh exits 255 for every connection failure; the classifier reads that through
+        // a marker line on the raw half (see `SSH_EXIT_255`). The explained half and the
+        // `stderr` the caller shows never carry it.
+        // The marker's control byte is dropped from what the run printed first, so no
+        // output can spell the marker itself.
+        let clean = stderr.replace('\u{1e}', "");
+        let raw = if output.status.code() == Some(255) {
+            if clean.is_empty() { SSH_EXIT_255.to_string() } else { format!("{clean}\n{SSH_EXIT_255}") }
+        } else {
+            clean
+        };
         if stderr.is_empty() {
-            return Err((format!("{what} command failed"), stderr));
+            return Err((format!("{what} command failed"), raw));
         }
         // Headless has no terminal for the user to read, so translate what OpenSSH
         // said into what they got wrong. Unrecognized stderr passes through
         // verbatim rather than being flattened into a vague guess.
         let explained = crate::services::ssh_common::explain_ssh_error(&stderr)
             .unwrap_or_else(|| stderr.clone());
-        return Err((explained, stderr));
+        return Err((explained, raw));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -718,10 +735,12 @@ pub struct SshProbe {
 /// disconnect, and a substring match anywhere let it write itself an "unreachable"
 /// (which raises the project's VPN tunnel once) or a "rejected" verdict. The
 /// markers are OpenSSH's own words, which `explain_ssh_error` rewrites (see
-/// [`probe_verdict`]). Only a failed run reaches this (ssh's exit is 255 for every
-/// connection or authentication failure, and the probe's `true` cannot fail), so the
-/// exit code adds nothing to the lines. A quiet run that printed nothing is not
-/// unreachable: it may be an auth failure whose notes sit below ERROR.
+/// [`probe_verdict`]). A failed run that exited 255 (ssh's status for every connection
+/// or authentication failure; [`SSH_EXIT_255`] carries it) and has no line starting with
+/// a client prefix is unreachable as well, whether it printed nothing or only a server's
+/// text (a reset or close mid-handshake prints nothing at ERROR): a rejection marker on
+/// a non-client line still wins. A run that never got to exit 255 (ssh not run at all,
+/// any other status) has no marker and is not unreachable on silence.
 fn ssh_unreachable(err: &str) -> bool {
     const CLIENT_PREFIXES: [&str; 7] = [
         "ssh: connect to host ",
@@ -734,15 +753,28 @@ fn ssh_unreachable(err: &str) -> bool {
         "Connection closed by ",
         "Connection reset by ",
     ];
+    // ssh's complaints about this machine's own configuration also exit 255; no network
+    // or tunnel changes them, so they are not "unreachable" however quiet the rest is.
+    const LOCAL_CONFIG: [&str; 3] = ["Bad owner or permissions on ", "Bad configuration option", "Unsupported option"];
     const REJECTED: [&str; 3] = ["permission denied", "authentication", "host key"];
     let client = |line: &str| CLIENT_PREFIXES.iter().any(|prefix| line.starts_with(prefix));
+    let mut lines = err.lines().filter(|line| *line != SSH_EXIT_255);
+    let exit_255 = err.lines().any(|line| line == SSH_EXIT_255);
     // A client line names the host dialled, which may spell anything ("authentication.example"):
     // only the other lines can say "no".
-    let rejected = err.lines().filter(|line| !client(line)).any(|line| {
+    let rejected = lines.clone().filter(|line| !client(line)).any(|line| {
         let line = line.to_ascii_lowercase();
         REJECTED.iter().any(|m| line.contains(m))
     });
-    !rejected && err.lines().any(client)
+    if rejected {
+        return false;
+    }
+    // A client line says so. So does a 255 exit with no rejection marker on any line, whether
+    // it printed nothing (a reset or close mid-handshake, sshd's `MaxStartups` drop) or only
+    // a server's text: what a host writes never decides the verdict, and no credential was
+    // judged, so a re-try replays nothing.
+    lines.clone().any(client)
+        || (exit_255 && !lines.any(|line| LOCAL_CONFIG.iter().any(|p| line.starts_with(p))))
 }
 
 /// The probe's answer from one authenticated run: the explained message is what
@@ -1132,6 +1164,66 @@ mod tests {
         // that accepts the connection and then says nothing is not "rejected".
         assert!(ssh_unreachable("Connection timed out during banner exchange"));
         assert!(!ssh_unreachable("Welcome\n  Connection timed out during banner exchange"));
+    }
+
+    /// A connection that dies before authentication prints nothing at `LogLevel=ERROR` and
+    /// ssh exits 255: that reads as unreachable (user decision 2026-11-06), through the same
+    /// two steps the probe takes (`capture_raw` marks the 255, `probe_verdict` classifies).
+    #[cfg(unix)]
+    fn run_probe(script: &str) -> SshProbe {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", script]);
+        probe_verdict(capture_raw(cmd, "ssh"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn empty_stderr_with_exit_255_is_unreachable() {
+        let probe = run_probe("exit 255");
+        assert!(!probe.ok && probe.unreachable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn banner_only_stderr_with_exit_255_is_unreachable() {
+        let probe = run_probe("echo 'Welcome to build.example' >&2; exit 255");
+        assert!(!probe.ok && probe.unreachable);
+        assert_eq!(probe.error, "Welcome to build.example", "the shown text carries no marker");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_client_rejection_with_exit_255_stays_rejected() {
+        let probe = run_probe("echo 'alice@build.example: Permission denied (publickey,password).' >&2; exit 255");
+        assert!(!probe.ok && !probe.unreachable, "permission denied");
+        assert!(!run_probe("echo 'Host key verification failed.' >&2; exit 255").unreachable);
+        assert!(!run_probe("echo 'Welcome' >&2; echo 'Too many authentication failures' >&2; exit 255").unreachable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn silence_alone_is_not_unreachable_without_a_255_exit() {
+        // Not a connection failure (another status), and ssh never having run, say nothing.
+        assert!(!run_probe("exit 1").unreachable);
+        assert!(!run_probe("echo 'Welcome' >&2; exit 1").unreachable);
+        // Output cannot spell the exit marker itself.
+        assert!(!run_probe("printf '\\036ssh-exit-255\\n' >&2; exit 1").unreachable);
+        assert!(!probe_verdict(Err(("failed to run ssh".to_string(), String::new()))).unreachable);
+        // This machine's own ssh config being unusable is not the network.
+        assert!(!run_probe("echo 'Bad owner or permissions on /etc/ssh/ssh_config.d/x.conf' >&2; exit 255").unreachable);
+    }
+
+    #[test]
+    fn the_exit_marker_decides_only_with_no_rejection_on_a_non_client_line() {
+        let marked = |text: &str| format!("{text}\n{SSH_EXIT_255}");
+        assert!(ssh_unreachable(SSH_EXIT_255));
+        assert!(ssh_unreachable(&marked("*** Maintenance: Connection closed by 192.0.2.10 port 22 ***")));
+        assert!(!ssh_unreachable(&marked("Permission denied (publickey).")));
+        assert!(!ssh_unreachable(&marked("Welcome\nToo many authentication failures")));
+        assert!(ssh_unreachable(&marked("ssh: connect to host authentication.example port 22: Connection timed out")));
+        // No marker, no say: the same texts without a 255 exit stay as they were.
+        assert!(!ssh_unreachable(""));
+        assert!(!ssh_unreachable("*** Maintenance: Connection closed by 192.0.2.10 port 22 ***"));
     }
 
     /// The probe asks ssh for `LogLevel=ERROR` (which keeps the banner and the INFO notes
