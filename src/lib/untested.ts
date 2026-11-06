@@ -128,7 +128,7 @@ export const UNTESTED = {
   "caldavConflict.title": { area: "calendar", what: "CalDavConflictDialog · Changed somewhere else too" },
   "caldavConflict.serverDeleted": { area: "calendar", what: "CalDavConflictDialog · a synced event/card edited here but deleted on the server: kept local-only, Keep mine puts it back, Use the server's deletes it; a failed push stays marked and is pushed again before the next sync (gap 32)" },
   "caldav.httpRefused": { area: "calendar", what: "CalDavAccountDialog · an http:// server URL is refused with the reason (https required); an existing http account stops syncing and says so in the sidebar (E2b)" },
-  "calendar.overlayTitle": { area: "calendar", what: "CalendarOverlay · Calendar" },
+  "calendar.overlayTitle": { area: "calendar", what: "Console window · Calendar view (header 🗓 click, steering C, an alarm popup, the to-do board's agenda rail: the same CalendarPane a tab renders; docked root agent beside it from the window's ✦ or Ctrl+1-9; Escape and a backdrop press close the window)" },
   "calendarSidebar.alerts": { area: "calendar", what: "CalendarSidebar · Alerts on/off per calendar (reminders + header badge)" },
   "calendarContextMenu.1": { area: "calendar", what: "CalendarContextMenu · Edit" },
   "calendarContextMenu.2": { area: "calendar", what: "CalendarContextMenu · Copy" },
@@ -497,9 +497,9 @@ export const UNTESTED = {
   "mail.contacts.thunderbird": { area: "mail", what: "MailAddressBook · From Thunderbird (reads every profile's abook/history.sqlite from a temp copy) + LDIF/abook.sqlite in Import…" },
   "mail.contacts.autocomplete": { area: "mail", what: "MailRecipientField · To/Cc/Bcc autocomplete from the address book (lists expand to members)" },
   "mail.contacts.addSender": { area: "mail", what: "MailMessageView · ☆/★ beside the sender: add to / open in the Address Book" },
-  "mail.overlayTitle": { area: "mail", what: "MailOverlay · Mail" },
-  "mail.overlayTabs": { area: "mail", what: "MailOverlay · Inbox / message / unsent-mail tabs" },
-  "mail.accountMenu": { area: "mail", what: "MailOverlay · title-bar accounts dropdown (switch, ✎ edit, Add account)" },
+  "mail.overlayTitle": { area: "mail", what: "Console window · Mail view (header ✉ click, steering M, the to-do board's mail rail: Inbox, message and composer tabs in the sub-bar; an unsent composer keeps its text across switching to another view and across closing the window; docked root agent from the window's ✦ or Ctrl+1-9; not offered while mail_client is off)" },
+  "mail.overlayTabs": { area: "mail", what: "Mail view · the sub-bar's Inbox / message / unsent-mail tabs with the + (middle click or × closes; an edited composer asks first)" },
+  "mail.accountMenu": { area: "mail", what: "Mail view · the accounts dropdown at the start of the sub-bar (switch, ✎ edit, Add account)" },
   "mailAi.notesLabel": { area: "mail", what: "MailComposeDialog · Notes for a drafted reply" },
   "mailAi.settingsTitle": { area: "mail", what: "MailAiSettings · Mail AI (local)" },
   "mailAi.settingsTitle#2": { area: "mail", what: "MailAiSettingsDialog · Mail AI (local)" },
@@ -1041,7 +1041,7 @@ export const UNTESTED = {
   "tabLocality.syncedCopyPinned": { area: "tabs", what: "Tab badge / + ▾ machine list: on a remote-only project a synced-copy worker is offered disabled ('sync off', new pinned tooltip); a shared-filesystem worker stays runnable" },
 
   // --- todo — The to-do board ---------------------------------------
-  "todo.overlayTitle": { area: "todo", what: "TodoOverlay · To-do board" },
+  "todo.overlayTitle": { area: "todo", what: "Console window · To-do view (header ☑ click, steering T: the board; docked root agent from the window's ✦ or Ctrl+1-9; switching view or closing the window drops a card drag)" },
 
   // --- cockpit — the desktop cockpit overlay (docs/desktop_cockpit_plan.md) ---
   "cockpit.viewGroups": { area: "cockpit", what: "Root console window · the grouped view strip: icon + label at 1180 px and up, icons only from 820 to 1179 px (the label is the tooltip), under 820 px the current view's tab and a ▾ that opens the others as a menu; Mail / Calendar / To-do / Machines are not offered while their feature switch is off, and a shown view whose switch goes off falls back to Now; left / right walk every tab across the groups" },

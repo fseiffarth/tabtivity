@@ -23,9 +23,9 @@ import { BookIcon, KeyIcon, LockIcon, SparkleIcon, UnlockIcon } from "../common/
 
 /**
  * The mail client's Inbox tab: folder rail / full-width header list. A message
- * opens in a tab of its own (`MailOverlay`), never in a preview pane here.
+ * opens in a tab of its own (`MailView`), never in a preview pane here.
  *
- * **There is no mail *tab*.** This pane has exactly one host — `MailOverlayHost`,
+ * **There is no mail *tab*.** This pane has exactly one host — `MailView`,
  * behind the header's ✉ button. It was a tab too, once, and the tab was the half
  * that did not earn its keep: the store below is global (one mailbox across every
  * scope), so a mail tab showed the same mailbox everywhere while still belonging

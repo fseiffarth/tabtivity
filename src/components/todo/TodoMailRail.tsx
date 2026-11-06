@@ -67,9 +67,7 @@ export function TodoMailRail({ tasks, defaultCalendarId, intakeColumnId }: Props
   }
 
   const openInMail = async (header: MailHeader) => {
-    // Close first: all three overlays are `.modal-backdrop` at the same
-    // z-index, so leaving this one up would stack a board over the mailbox.
-    useTodoStore.getState().closeOverlay();
+    // No closing first: opening the Mail view takes the window off the board.
     const mail = useMailStore.getState();
     // Awaited in this order on purpose: `openMessage` resolves its header out
     // of the loaded page, so opening before the page lands opens nothing.

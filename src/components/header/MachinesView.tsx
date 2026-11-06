@@ -87,7 +87,7 @@ function ProjectHosts() {
 
 /**
  * The **Machines** view's layout — what the Machines overlay's frame was, with
- * the cockpit's Usage view's machine parts above the tiles: this machine's
+ * the cockpit's former Usage view's machine parts above the tiles: this machine's
  * meters, the project hosts with their lamps, then the global machines.
  *
  * It owns no machine state. `header/MachinesIndicator` renders its own list into

@@ -136,7 +136,7 @@ export function TodoAgendaRail({ tasks, defaultCalendarId, intakeColumnId }: Pro
       {section(t("todoAgenda.today"), window_.today)}
       {section(t("todoAgenda.tomorrow"), window_.tomorrow)}
 
-      {/* Only when the calendar overlay can actually open — `CalendarOverlayHost`
+      {/* Only when the Calendar view can actually open — `viewEnabled("calendar")`
           computes `live = enabled && open`, so without the setting this button
           would be one that visibly does nothing. */}
       {calendarApp && (
@@ -144,7 +144,6 @@ export function TodoAgendaRail({ tasks, defaultCalendarId, intakeColumnId }: Pro
           type="button"
           className="cal-link-btn todo-agenda-open"
           onClick={() => {
-            useTodoStore.getState().closeOverlay();
             useCalendarStore.getState().openOverlay();
           }}
         >

@@ -21,7 +21,7 @@ const SECTION_LABEL: Record<AgentsSection, TranslationKey> = {
 /**
  * The **Agents** view of the console window: what the Models & agents overlay's
  * Agents & CLIs and Skills sections were, plus the CLIs' plan and token usage
- * the cockpit's Usage view used to hold. Three sections, shown as tabs in the
+ * the cockpit's former Usage view held. Three sections, shown as tabs in the
  * window's sub-bar, each a surface that already exists:
  *  - **Agents & CLIs** — Settings' `AgentsPanel`, each installed card carrying
  *    the header dropdown's Default · + tab · Root · MCP chips (`AgentChips`);

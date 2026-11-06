@@ -94,7 +94,7 @@ let composeSeq = 0;
  * belongs to a scope, so a mail tab could only ever show the same mailbox this
  * store already holds while behaving as though it belonged to a project you then
  * switched away from. The single surface is the header overlay
- * (`MailOverlayHost`), and this store is what makes it stateful across it.
+ * (`MailView`), and this store is what makes it stateful across it.
  *
  * Three rules distinguish it from the calendar store, all of them consequences
  * of mail being the app's first *network* store:
@@ -1044,7 +1044,7 @@ export const useMailStore = create<MailStore>((set, get) => ({
   openMessage: (messageId) => {
     set({ selectedMessageId: messageId });
     // The tab reads its own body and marks the message seen once it has it
-    // (`MailOverlay`'s `MailMessageTabBody`).
+    // (`MailView`'s `MailMessageTabBody`).
     const header = get().headers.find((h) => h.id === messageId);
     if (header) get().openMessageTab(header);
   },

@@ -25,7 +25,7 @@ import { CloseIcon, DotIcon } from "../common/icons/Icon";
 /**
  * The Models & agents sections, rendered by both surfaces: the header's hover
  * dropdown (`layout/LocalModelMenu`) and the overlay's tabs
- * (`models/ModelsOverlay`). Moved out of the dropdown verbatim — same markup,
+ * (`models/ModelsView`). Moved out of the dropdown verbatim — same markup,
  * same classes — so the dropdown stays pixel-identical and the overlay's rows
  * are the dropdown's rows, never a second design of them. The data and the
  * verbs come from `useModelsHub`; these only draw.

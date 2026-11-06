@@ -31,7 +31,7 @@ const TICK_MS = 60_000;
  * way for the same reason: a calendar tab belongs to a scope and is left behind
  * by a project switch, while your calendar is not a property of the project you
  * happen to be looking at. One button in the header, always in the same place,
- * opening the same `CalendarPane` as an overlay (`CalendarOverlayHost`).
+ * opening the same `CalendarPane` as a view of the console window (`CalendarView`).
  *
  * On by default (`calendar_global_app`), with **no experimental gate above it**
  * — unlike mail, the calendar is shipped and its store reads one local file, so

@@ -39,7 +39,7 @@ export function CliOverviewView({ active }: { active: boolean }) {
 
 /**
  * The CLIs overview's body — one component for its two hosts, the side
- * panel's CLIs view and the cockpit's Usage view: per agent CLI in use, its plan, the account it
+ * panel's CLIs view and the Agents view's Usage section: per agent CLI in use, its plan, the account it
  * is signed in as, its usage windows with when each rolls over, and how many
  * of its tabs are open (`docs/cli_overview_plan.md`). Account-wide, so the
  * same in every scope. Read while shown, every few minutes; ⟳ asks again.

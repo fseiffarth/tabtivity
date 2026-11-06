@@ -25,7 +25,7 @@ const MENU_ID = "mail";
  * another leaves it behind. Mail does not belong to a project — its store is one
  * global mailbox — so the tab only ever duplicated this button, and it is gone.
  * What is left is one button in the header, always in the same place, opening
- * `MailPane` as an overlay over whatever is on screen (`MailOverlayHost`).
+ * `MailPane` as a view of the console window (`MailView`).
  *
  * One gate: `mail_client`, the experimental flag that owns the whole feature (off
  * for a non-debug user, so a header slot is not spent on mail for someone who

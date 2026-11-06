@@ -523,7 +523,7 @@ svg.alerts-toggle-icon {
   flex: 1;
   min-width: 0;
 }
-/* The Models & agents overlay's panes (`models/ModelsOverlay`). The hosted
+/* The Agents and Models views' panes (`models/AgentsView`, `ModelsView`). The hosted
    Settings panels render a title row and a `.dialog-scroll`, which only scrolls
    inside a flex column — so the pane is that column. `:not([hidden])` because
    an author `display` would beat the `hidden` attribute a kept pane wears. */
@@ -536,19 +536,6 @@ svg.alerts-toggle-icon {
   background: var(--bg-elevated);
   color: var(--text-primary);
 }
-/* Each tab's one-line intro, on the same 880px column as the pane under it
-   (its `padding-inline` is the column rule in apps.css — no `padding`
-   shorthand here, so the result doesn't hang on the @import order). */
-.models-overlay-body .models-overlay-intro {
-  margin: 0;
-  padding-top: var(--space-3);
-  flex-shrink: 0;
-}
-/* …except Skills, whose pane is full-width: the intro lines up with its
-   toolbar's 10px inset instead. */
-.models-overlay-body #models-overlay-pane-skills > .models-overlay-intro {
-  padding-inline: 10px;
-}
 /* The window's title already names this surface — the label beside the
    window's tab strip — so the pane's own
    toolbar title would say it twice, one line apart. The calendar needs no
@@ -560,61 +547,6 @@ svg.alerts-toggle-icon {
   display: none;
 }
 
-/* ── Models & agents: the overview grid and the bar's trail ──────────────────
-   The overlay opens on a grid of section tiles rather than a tab strip; a tile
-   opens its section and the bar's back button returns. The tiles copy the
-   disk-usage home's `.du-target` (control surface, accent border on hover),
-   larger, with the section's live state on each. */
-.models-overlay-trail {
-  align-self: center;
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 6px;
-  font-size: var(--text-md);
-}
-.models-overlay-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 10px 0 var(--space-2);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-full);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font: inherit;
-  white-space: nowrap;
-}
-.models-overlay-back:hover {
-  background: var(--control-hover-bg);
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-.models-overlay-trail-sep {
-  color: var(--text-muted);
-}
-.models-overlay-trail-current {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.models-section-glyph {
-  display: inline-flex;
-  flex-shrink: 0;
-}
-.models-section-glyph-svg {
-  width: 100%;
-  height: 100%;
-}
 
 .models-home {
   overflow-y: auto;
@@ -628,23 +560,6 @@ svg.alerts-toggle-icon {
   max-width: 1120px;
   margin: 0 auto;
   padding: 36px 28px 40px;
-}
-.models-home-machine .local-model-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 12px;
-  padding: 0;
-  margin: 0;
-}
-.models-home-machine .local-model-stat {
-  gap: 8px;
-  padding: var(--space-3) 14px;
-  background: var(--control-bg);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-lg);
-}
-.models-home-machine .local-model-meter {
-  height: 6px;
 }
 .models-home-lead {
   margin: 0;
@@ -788,17 +703,14 @@ svg.alerts-toggle-icon {
   border-style: dashed;
 }
 
-/* ── Global machines: the overlay's tile grid (header/MachinesOverlay) ───────
+/* ── Global machines: the Machines view's tile grid (header/MachinesView) ────
    The Machines dropdown's own rows (`header/MachinesIndicator`,
-   `surface="overlay"`), dressed as the Models overlay's tiles above — the same
-   `.models-home` page, `.models-tile` card and icon box — but a tile is not one
-   button: it holds the row's actions, toggles and forms, so it keeps a plain
-   cursor and loses the menu row's hairline. Selectors are two classes deep so
-   they outrank `.vpn-indicator-row + .vpn-indicator-row` and the grab cursor
-   in header-menus.css whatever the @import order. */
-.machines-overlay-spacer {
-  flex: 1 1 auto;
-}
+   `surface="view"`), laid out as tiles on the `.models-home` page with a
+   `.models-tile` card and icon box — but a tile is not one button: it holds the
+   row's actions, toggles and forms, so it keeps a plain cursor and loses the
+   menu row's hairline. Selectors are two classes deep so they outrank
+   `.vpn-indicator-row + .vpn-indicator-row` and the grab cursor in
+   header-menus.css whatever the @import order. */
 .machines-home-inner {
   max-width: 1320px;
 }
@@ -926,7 +838,7 @@ svg.alerts-toggle-icon {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
-/* ── The header overlays' tabs (mail/MailOverlay and its three siblings) ─────
+/* ── The apps' views (mail/MailView and its siblings) ────────────────────────
    The overlays wear the root console's chrome (`.root-overlay.subwindow`, its
    `.tab-bar` / `.tab-strip` / `.tab`), so only what they add is here: the
    shared backdrop, mark and label, then mail's Inbox / message / unsent-mail

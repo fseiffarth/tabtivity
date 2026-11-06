@@ -1011,7 +1011,7 @@
   gap: 0;
   padding: 0;
 }
-/* The Models & agents overlay (`models/ModelsOverlay`) hosts Settings' Agents
+/* The Agents and Models views (`models/AgentsView`, `ModelsView`) host Settings' Agents
    and Ollama panels as tabs, so its body takes the same scroll frame. */
 :is(.settings-dialog, .models-overlay-body) .dialog-scroll {
   flex: 1;
@@ -2091,129 +2091,7 @@
   border-color: var(--accent);
 }
 
-/* ── Models overlay: frame, overview & Local models redesign ── */
-/* The bar. The way back is the first thing in it and wears the accent, so it
-   reads as the one control that leaves the section; the trail after the title
-   is plain text — section name, then its one-line purpose. Two classes deep so
-   it outranks the single-class rules in mail-todo.css whatever the order. */
-.models-overlay .models-overlay-back {
-  align-self: center;
-  flex-shrink: 0;
-  height: 26px;
-  padding: 0 11px 0 var(--space-2);
-  margin-right: 2px;
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--control-border));
-  background: color-mix(in srgb, var(--accent) 12%, var(--control-bg));
-  color: var(--accent);
-  font-weight: 600;
-  cursor: var(--cur-pointer, pointer);
-}
-.models-overlay .models-overlay-back:hover {
-  background: color-mix(in srgb, var(--accent) 22%, var(--control-bg));
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.models-overlay .models-overlay-trail {
-  gap: 8px;
-  padding-left: var(--space-1);
-}
-.models-overlay .models-overlay-trail-sep {
-  color: var(--text-muted);
-  font-size: var(--text-xl);
-  line-height: 1;
-}
-.models-overlay .models-overlay-trail-current {
-  flex-shrink: 0;
-}
-.models-overlay .models-overlay-trail-sub {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: var(--text-md);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 
-/* The overview: four equal cards, each icon + name + purpose, one status line
-   with its state dot, and a foot with what is in it and an explicit "Open".
-   Scoped to `.models-home-sections`: the Machines overlay reuses `.models-tile`. */
-.models-home-sections {
-  gap: 16px;
-}
-.models-home-sections .models-tile {
-  min-height: 176px;
-  gap: 14px;
-  padding: 18px 20px;
-}
-.models-home-sections .models-tile-head {
-  align-items: flex-start;
-}
-.models-home-sections .models-tile-titles {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.models-home-sections .models-tile-title {
-  flex: none;
-  font-size: var(--text-lg);
-}
-.models-home-sections .models-tile-intro {
-  font-size: var(--text-md);
-  line-height: 1.4;
-  color: var(--text-muted);
-}
-.models-home-sections .models-tile-stat {
-  font-size: var(--text-base);
-  font-weight: 600;
-}
-.models-home-sections .models-tile-foot {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: auto;
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--border-subtle);
-}
-/* What is inside: quiet text with a state dot, not outlined pills. */
-.models-home-sections .models-tile-chips {
-  flex: 1;
-  min-width: 0;
-  margin-top: 0;
-  gap: 4px 14px;
-}
-.models-home-sections .models-tile-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 170px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  color: var(--text-secondary);
-  font-size: var(--text-md);
-}
-.models-home-sections .models-tile-chip::before {
-  content: "";
-  flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-}
-.models-home-sections .models-tile-chip.on::before {
-  background: var(--success);
-}
-.models-home-sections .models-tile-chip.off,
-.models-home-sections .models-tile-chip.more {
-  color: var(--text-muted);
-}
-.models-home-sections .models-tile-chip.more::before {
-  content: none;
-}
 .models-tile-open {
   display: inline-flex;
   align-items: center;
