@@ -50,7 +50,26 @@ requests, whose read runs git per project.
 
 Remote projects take part in a git read only while their session is connected.
 The cockpit never hydrates a scope: a project that is not restored is not
-listed (the Projects view says "not open"), and Restore is an explicit button.
+given a row (the Projects view folds it into its box's "Not open" line), and
+Restore is an explicit action (that fold button's right-click, or a row's ⋯ menu).
+
+## Layout (the declutter pass)
+
+`docs/cockpit_declutter_plan.md` made the views quieter without adding a read.
+No view has a heading row (the strip names it; the untested pill rides each view's
+first row, `CockpitUntested`). Now's columns are flat, one hairline apart; the
+Needs-you rail has no root-approvals group (they are the title-bar pill and the
+header badge only) and draws the Alerts heading once (`AlertsMenu bare`); the
+roster toolbar is a filter, the state chips and one `<grouping> · <sort> ▾`
+menu; the status dot is filled in the state's colour. With nothing picked and
+nothing asking, the detail pane follows the latest working agent: `pickFollow`
+keeps it while it works and re-points only once it stops, since every switch
+re-attaches a terminal. Projects is one ~34 px row per open project (actions on
+hover / focus; Today and Last active drop under the mid band, the actions move into
+⋯ under narrow) with the not-open projects as one line per box; a project's
+`run_host` is shown by name (`runHostLabel`), never as `host:<id>`. Tonight is one
+centred column; Usage is a top strip (CLIs, this machine) over `CockpitMachineList`,
+one row per machine with project hosts and global machines merged by host name.
 
 ## The detail pane is the real Chat
 
@@ -92,7 +111,7 @@ and up is the full layout; 820 to 1179 px Now's Needs-you column is the 40 px ic
 rail (the full rail in a `ContextMenuPortal` popover, `NeedsYouPopover`) beside
 roster and detail (detail floors at 360 px); under 820 px Now is master / detail
 (a "Needs you N" chip, a click or Space on a row opens the detail, the back bar or
-Escape on it returns), Tonight and Usage stack, the title bar drops its label and
+Escape on it returns), Usage's top strip stacks (Tonight is one column at every width), the title bar drops its label and
 folds the box filter into a ▾ icon, and Root swaps its icon rail for the same
 "Needs you N" chip in its sub-bar (or, in a split Root with no sub-bar, in the title
 bar's cluster), opening the rail as the same popover (`NeedsYouChip` /
@@ -143,7 +162,7 @@ subwindow, Close all tabs and app fullscreen do nothing; on the other views
 
 ## Machines and Models over the window
 
-The Usage view's "Open Machines" and the Root view's "Add agent..." open the Machines /
+The Usage view's "Manage machines…" and the Root view's "Add agent..." open the Machines /
 Models & agents overlay from the window. All three are `.modal-backdrop`s at one z-index
 with the window last in DOM order, so the overlay used to land under it and one Escape
 closed both. Now an overlay that mounts while the window is up sets `stores/consoleCover`
