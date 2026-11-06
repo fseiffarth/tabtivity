@@ -1,5 +1,8 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+// Vite `?raw` loads a source as a string (no node:fs in the tsc types).
+import phone from "../../../mobile-web/src/screens/terminal/useHandsFree.ts?raw";
+import desktop from "../../components/terminal/TerminalReaderView.tsx?raw";
+import voice from "../../components/terminal/ReaderVoice.tsx?raw";
 import { handsFreeTurnOver, questionSpeech, voicePick, voicePickable } from "../../../mobile-web/src/handsFree";
 import type { SelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
 import { readSelectPrompt, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
@@ -143,10 +146,7 @@ describe("the phone's hands-free loop", () => {
   });
 
   it("keeps both callers on the staged path: a pick is never answered inside the utterance", () => {
-        const phone = readFileSync("mobile-web/src/screens/terminal/useHandsFree.ts", "utf8");
-    const desktop = readFileSync("src/components/terminal/TerminalReaderView.tsx", "utf8");
-    const voice = readFileSync("src/components/terminal/ReaderVoice.tsx", "utf8");
-    for (const source of [phone, desktop]) expect(source).toContain("voicePickable(");
+        for (const source of [phone, desktop]) expect(source).toContain("voicePickable(");
     // The pick only stages; the window's close answers (commit*).
     expect(phone).toMatch(/staged\.current\.stage\(/);
     expect(voice).toMatch(/staged\.current\.stage\(/);
