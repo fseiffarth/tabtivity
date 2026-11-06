@@ -1409,6 +1409,7 @@ export const dict: Dict = {
   "errors.authFailed": "Se rechazó el inicio de sesión. Comprueba el nombre de la cuenta y la contraseña o el token.",
   "errors.programMissing": "Un programa necesario no está instalado o no está en el PATH.",
   "errors.diskFull": "El disco, o tu cuota en él, está lleno. Libera espacio e inténtalo de nuevo.",
+  "errors.pullNeedsSpace": "La descarga necesita más espacio del que queda libre en el disco de la copia local de este proyecto. Libera espacio o descarga una carpeta más pequeña.",
   "errors.permission": "Tu cuenta no puede hacer esto aquí: el archivo o la carpeta pertenece a otra persona o es de solo lectura.",
   "errors.exists": "Ya existe algo con ese nombre ahí.",
   "errors.notFound": "El archivo o la carpeta no está. Puede que se haya movido, renombrado o borrado.",

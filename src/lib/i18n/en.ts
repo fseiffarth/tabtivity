@@ -1406,6 +1406,7 @@ export const enSource = {
   "errors.authFailed": "Sign-in was rejected. Check the account name and the password or token.",
   "errors.programMissing": "A program this needs isn't installed, or isn't on the PATH.",
   "errors.diskFull": "The disk, or your quota on it, is full. Free some space, then try again.",
+  "errors.pullNeedsSpace": "The pull needs more room than the disk holding this project's local copy has free. Free some space, or pull a smaller folder.",
   "errors.permission": "Your account isn't allowed to do this here: the file or folder belongs to someone else or is read-only.",
   "errors.exists": "Something with that name already exists there.",
   "errors.notFound": "The file or folder isn't there. It may have been moved, renamed or deleted.",

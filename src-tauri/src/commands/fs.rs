@@ -686,16 +686,22 @@ pub(crate) async fn pooled(
     crate::services::remote::pooled_sftp(pool, &target.project_id).await
 }
 
+/// A host file's bytes, never more than `limit` of them: the callers size-check
+/// from a stat that the host answers and the file can outgrow, so the read is
+/// bounded by what actually arrives (the caps stay each caller's: the text view's
+/// `MAX_TEXT_VIEW_BYTES`, the binary view's `MAX_BINARY_VIEW_BYTES`).
 pub(crate) async fn remote_read(
     pool: &RemotePoolState,
     target: &RemoteTarget,
     path: &str,
+    limit: u64,
 ) -> Result<Vec<u8>, String> {
     let s = &target.spec;
-    match pooled(pool, target).await {
-        Some(sftp) => crate::services::sftp::read_file_on(&sftp, path).await,
-        None => crate::services::sftp::read_file(&s.user, &s.host, s.port, None, path).await,
-    }
+    let read = match pooled(pool, target).await {
+        Some(sftp) => crate::services::sftp::read_file_up_to(&sftp, path, limit).await?,
+        None => crate::services::sftp::read_file(&s.user, &s.host, s.port, None, path, limit).await?,
+    };
+    read.ok_or_else(|| format!("file too large to view (limit {limit} bytes)"))
 }
 
 async fn remote_write(
@@ -1588,7 +1594,7 @@ pub async fn read_file_text(
                         "file too large to view ({size} bytes; limit {MAX_TEXT_VIEW_BYTES})"
                     ));
                 }
-                let bytes = remote_read(pool, &target, &path).await?;
+                let bytes = remote_read(pool, &target, &path, MAX_TEXT_VIEW_BYTES).await?;
                 return String::from_utf8(bytes)
                     .map_err(|_| "file is not valid UTF-8 text".to_string());
             }
@@ -1855,7 +1861,7 @@ async fn read_file_bytes_any(
                 "file too large to view ({size} bytes; limit {MAX_BINARY_VIEW_BYTES})"
             ));
         }
-        return remote_read(pool, &target, &path).await;
+        return remote_read(pool, &target, &path, MAX_BINARY_VIEW_BYTES).await;
     }
     read_file_bytes_local(&path, project_id.as_deref())
 }

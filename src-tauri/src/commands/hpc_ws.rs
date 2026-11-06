@@ -867,6 +867,9 @@ fn pull_logs_refusal(spec: Option<&crate::schema::project::RemoteSpec>) -> Optio
     })
 }
 
+/// The most one [`hpc_ws_pull_logs`] call reads from the host in all.
+const LOGS_PULL_BUDGET: u64 = 256 * 1024 * 1024;
+
 /// Copy the anchor's `logs/` into the local mirror's `logs/` — the provenance
 /// record on the machine the user actually reads logs on. Small by construction
 /// (SLURM out/err only), so it is a plain per-file SFTP read, not a sync pass;
@@ -891,6 +894,7 @@ pub async fn hpc_ws_pull_logs(
     let entries = crate::services::sftp::list_dir_on(&sftp, &dir).await?;
     let mirror = crate::services::remote_sync::mirror_dir(&project_id);
     let mut copied = 0u32;
+    let mut budget = LOGS_PULL_BUDGET;
     for entry in entries {
         // #863: the name is joined onto the mirror — one component only, and the
         // write is confined (no `..`, no symlinked `logs/`, a planted file link is
@@ -899,9 +903,13 @@ pub async fn hpc_ws_pull_logs(
             continue;
         }
         let remote = format!("{dir}/{}", entry.name);
-        let Ok(bytes) = crate::services::sftp::read_file_on(&sftp, &remote).await else {
+        // Each log is bounded by the sync cap and the batch by `LOGS_PULL_BUDGET`, whatever
+        // the host's listing said.
+        let limit = crate::services::remote_sync::MAX_SYNC_FILE_BYTES.min(budget);
+        let Ok(Some(bytes)) = crate::services::sftp::read_file_up_to(&sftp, &remote, limit).await else {
             continue;
         };
+        budget -= bytes.len() as u64;
         let rel = format!("logs/{}", entry.name);
         if crate::services::remote_sync::write_mirror_file(&mirror, &rel, &bytes).is_ok() {
             copied += 1;

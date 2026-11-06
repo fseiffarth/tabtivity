@@ -2307,6 +2307,11 @@ pub enum AdminRequest {
         target: String,
         ask_id: String,
         answers: Vec<crate::services::markup_mcp::Answer>,
+        /// The receipt the window minted for this answer, so it can reopen
+        /// the ask should this reply never reach it. Absent: the sidecar
+        /// mints one (and a lost reply leaves the ask closed).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt: Option<String>,
     },
     MarkupReopen {
         project_id: String,

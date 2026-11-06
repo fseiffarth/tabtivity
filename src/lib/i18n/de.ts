@@ -1409,6 +1409,7 @@ export const dict: Dict = {
   "errors.authFailed": "Die Anmeldung wurde abgelehnt. Prüfe Kontoname und Passwort oder Token.",
   "errors.programMissing": "Ein benötigtes Programm ist nicht installiert oder nicht im PATH.",
   "errors.diskFull": "Die Festplatte oder dein Kontingent darauf ist voll. Schaffe Platz und versuche es erneut.",
+  "errors.pullNeedsSpace": "Der Abruf braucht mehr Platz, als auf dem Datenträger mit der lokalen Kopie dieses Projekts frei ist. Schaffe Platz oder rufe einen kleineren Ordner ab.",
   "errors.permission": "Dein Konto darf das hier nicht: Die Datei oder der Ordner gehört jemand anderem oder ist schreibgeschützt.",
   "errors.exists": "Dort gibt es bereits etwas mit diesem Namen.",
   "errors.notFound": "Die Datei oder der Ordner ist nicht da. Vielleicht wurde sie verschoben, umbenannt oder gelöscht.",
