@@ -1,25 +1,29 @@
 /**
- * The Machines overlay (`header/MachinesOverlay` framing `header/MachinesIndicator`
- * with `surface="overlay"`): the room a click on the header's Machines button
- * opens. Locked in here:
+ * The Machines view of the console window (`header/MachinesView` framing
+ * `header/MachinesIndicator` with `surface="view"`): the room a click on the
+ * header's Machines button opens. Locked in here:
  *
- *  - closed, it renders nothing; open, it is a labelled dialog whose machines
- *    are tiles in one grid, each with its target, its state in words, its
- *    actions and its details (no ▸ fold, but the drag grip: tiles reorder
- *    across the grid);
- *  - the header button's click opens it and puts the hover dropdown away; the
- *    dropdown's ⤢ door does the same;
- *  - Escape and a press on the backdrop close it, a press inside does not;
+ *  - its machines are tiles in one grid, each with its target, its state in
+ *    words, its actions and its details (no ▸ fold, but the drag grip: tiles
+ *    reorder across the grid), under this machine's meters;
+ *  - the header button's click opens the view and puts the hover dropdown away;
+ *    the dropdown's ⤢ door does the same; a click while it is shown closes the
+ *    window;
  *  - it never takes over the header's status report: unmounting it leaves the
  *    `machines` key the header's own instance published;
  *  - a hand Check made in it is the header's answer too (shared checks);
  *  - handing a machine to a project opens that project's window ON TOP of it:
- *    the overlay stays open to come back to.
+ *    the view stays open to come back to.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, act, waitFor, within } from "@testing-library/react";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
+// The view's own meters read the machine and GPU snapshots.
+const { base } = vi.hoisted(() => ({
+  base: (cmd: string): unknown =>
+    cmd === "gpu_memory_snapshot" ? [] : cmd === "machine_load_snapshot" ? { supported: false } : null,
+}));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn((cmd: string) => Promise.resolve(base(cmd))) }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
   emit: vi.fn(() => Promise.resolve()),
@@ -27,8 +31,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { MachinesIndicator, MachinesOverlayHost } from "../../components/header/MachinesIndicator";
-import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
+import { MachinesIndicator, MachinesView } from "../../components/header/MachinesIndicator";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useGlobalMachinesStore } from "../../stores/remote/globalMachines";
 import { useSettingsStore } from "../../stores/settings";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
@@ -47,7 +51,8 @@ const MACHINES = [
 ];
 
 beforeEach(() => {
-  invokeMock.mockClear();
+  invokeMock.mockReset();
+  invokeMock.mockImplementation(((cmd: string) => Promise.resolve(base(cmd))) as never);
   useSettingsStore.setState({ settings: { machines_enabled: true } as never, loaded: true });
   useGlobalMachinesStore.setState({
     machines: MACHINES,
@@ -58,7 +63,7 @@ beforeEach(() => {
     load: vi.fn(async () => {}),
     probeAll: vi.fn(async () => {}),
   });
-  useMachinesOverlayStore.setState({ open: false });
+  useRootOverlayStore.setState({ open: false, view: "root" });
   useHeaderHoverMenuStore.setState({ openId: null });
   useHeaderStatusStore.setState({ reports: {} });
   useHostBusyStore.setState({ readings: {}, inFlight: {}, probeGlobal: vi.fn(async () => {}) });
@@ -68,17 +73,11 @@ afterEach(() => {
   cleanup();
 });
 
-const dialog = () => screen.getByRole("dialog", { name: "Global machines" });
+const dialog = () => document.querySelector<HTMLElement>(".app-view-machines")!;
 
-describe("Machines overlay", () => {
-  it("renders nothing while closed", () => {
-    render(<MachinesOverlayHost />);
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
+describe("Machines view", () => {
   it("lays every machine out as a tile with its target, state and actions", async () => {
-    useMachinesOverlayStore.setState({ open: true });
-    const { container } = render(<MachinesOverlayHost />);
+    const { container } = render(<MachinesView />);
     await act(async () => {});
     const grid = container.querySelector(".machines-grid");
     expect(grid).not.toBeNull();
@@ -100,10 +99,9 @@ describe("Machines overlay", () => {
     expect(within(tiles[1] as HTMLElement).getByText("build.example.org:2222")).toBeTruthy();
   });
 
-  it.each(["menu", "overlay"] as const)("puts creation controls and the add form before machines in the %s", (surface) => {
-    useMachinesOverlayStore.setState({ open: surface === "overlay" });
+  it.each(["menu", "view"] as const)("puts creation controls and the add form before machines in the %s", (surface) => {
     useHeaderHoverMenuStore.setState({ openId: surface === "menu" ? "machines" : null });
-    const { container } = render(surface === "overlay" ? <MachinesOverlayHost /> : <MachinesIndicator />);
+    const { container } = render(surface === "view" ? <MachinesView /> : <MachinesIndicator />);
     const firstMachine = container.querySelector(".machines-indicator-row")!;
     const add = screen.getByRole("button", { name: "Add machine…" });
     for (const control of [add, screen.getByRole("button", { name: "Import…" }), screen.getByRole("button", { name: "Export…" })]) {
@@ -123,24 +121,10 @@ describe("Machines overlay", () => {
     useHostBusyStore.setState({
       readings: { [targetKey(MACHINES[0])]: { sessions: count, names, at: Date.now() } },
     });
-    useMachinesOverlayStore.setState({ open: true });
-    render(<MachinesOverlayHost />);
+    render(<MachinesView />);
     const summary = dialog().querySelector(".machines-tile-busy")!;
     expect(summary.textContent).toBe(`${count} session${count === 1 ? "" : "s"} running`);
     expect(summary.getAttribute("title")).toContain(names.join(", "));
-  });
-
-  it("closes on Escape and on a backdrop press, not on a press inside", () => {
-    useMachinesOverlayStore.setState({ open: true });
-    render(<MachinesOverlayHost />);
-    fireEvent.mouseDown(dialog());
-    expect(useMachinesOverlayStore.getState().open).toBe(true);
-    fireEvent.mouseDown(dialog().parentElement!);
-    expect(useMachinesOverlayStore.getState().open).toBe(false);
-
-    act(() => useMachinesOverlayStore.setState({ open: true }));
-    fireEvent.keyDown(dialog(), { key: "Escape" });
-    expect(useMachinesOverlayStore.getState().open).toBe(false);
   });
 
   it("opens from the header button's click and from the dropdown's door", () => {
@@ -155,40 +139,41 @@ describe("Machines overlay", () => {
     vi.useRealTimers();
     expect(useHeaderHoverMenuStore.getState().openId).toBe("machines");
     fireEvent.click(button);
-    expect(useMachinesOverlayStore.getState().open).toBe(true);
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "machines" });
     expect(useHeaderHoverMenuStore.getState().openId).toBeNull();
 
     act(() => {
-      useMachinesOverlayStore.setState({ open: false });
+      useRootOverlayStore.setState({ open: false, view: "root" });
       useHeaderHoverMenuStore.setState({ openId: "machines" });
     });
     fireEvent.click(screen.getByRole("button", { name: "Open the Machines overview" }));
-    expect(useMachinesOverlayStore.getState().open).toBe(true);
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "machines" });
     expect(useHeaderHoverMenuStore.getState().openId).toBeNull();
   });
 
+  it("closes the window on a click on the header button while the view is shown", () => {
+    render(<MachinesIndicator />);
+    act(() => useRootOverlayStore.getState().openView("machines"));
+    fireEvent.click(screen.getByRole("button", { name: /Global machines — click/ }));
+    expect(useRootOverlayStore.getState().open).toBe(false);
+  });
+
   it("leaves the header's status report alone", () => {
-    render(
-      <>
-        <MachinesIndicator />
-        <MachinesOverlayHost />
-      </>,
-    );
+    render(<MachinesIndicator />);
+    const view = render(<MachinesView />);
     expect(useHeaderStatusStore.getState().reports.machines).toBeDefined();
-    act(() => useMachinesOverlayStore.setState({ open: true }));
-    act(() => useMachinesOverlayStore.setState({ open: false }));
+    view.unmount();
     expect(useHeaderStatusStore.getState().reports.machines).toBeDefined();
   });
 
   it("shares a hand Check with the header's lamps", async () => {
     invokeMock.mockImplementation((cmd: string) =>
-      Promise.resolve(cmd === "ssh_probe" ? { ok: true, error: "" } : null) as never,
+      Promise.resolve(cmd === "ssh_probe" ? { ok: true, error: "" } : base(cmd)) as never,
     );
-    useMachinesOverlayStore.setState({ open: true });
     render(
       <>
         <MachinesIndicator />
-        <MachinesOverlayHost />
+        <MachinesView />
       </>,
     );
     const tile = within(dialog().querySelectorAll<HTMLElement>(".machines-tile")[1]);
@@ -217,13 +202,12 @@ describe("Machines overlay", () => {
     });
     useGlobalMachinesStore.setState({ machines: [open, cluster], status: {}, probeAll });
     invokeMock.mockImplementation((cmd: string) =>
-      Promise.resolve(cmd === "ssh_probe" ? { ok: true, error: "" } : null) as never,
+      Promise.resolve(cmd === "ssh_probe" ? { ok: true, error: "" } : base(cmd)) as never,
     );
-    useMachinesOverlayStore.setState({ open: true });
     render(
       <>
         <MachinesIndicator />
-        <MachinesOverlayHost />
+        <MachinesView />
       </>,
     );
     // The sweep is out when the Check is pressed, and lands after its answer.
@@ -243,7 +227,7 @@ describe("Machines overlay", () => {
     expect(labels).toMatch(/up, not connected — login\.example\.org/);
   });
 
-  it("stays open when a machine is handed to a project", () => {
+  it("stays put when a machine is handed to a project", () => {
     useProjectsStore.setState({
       projects: [
         {
@@ -257,18 +241,16 @@ describe("Machines overlay", () => {
       activeId: "p1",
     });
     useRemoteMachinesStore.setState({ projectId: null, pendingDrop: null, extendTarget: null });
-    useMachinesOverlayStore.setState({ open: true });
-    render(<MachinesOverlayHost />);
+    render(<MachinesView />);
     const tile = within(dialog().querySelectorAll<HTMLElement>(".machines-tile")[0]);
     fireEvent.click(tile.getByRole("button", { name: "Add this machine to a project" }));
     fireEvent.click(tile.getByRole("button", { name: /Proj/ }));
     expect(useRemoteMachinesStore.getState().projectId).toBe("p1");
     expect(useRemoteMachinesStore.getState().pendingDrop?.id).toBe("m1");
-    expect(useMachinesOverlayStore.getState().open).toBe(true);
   });
 });
 
-describe("reordering tiles in the overlay", () => {
+describe("reordering tiles in the view", () => {
   const rect = (left: number, top: number) =>
     ({ left, top, right: left + 100, bottom: top + 100, width: 100, height: 100, x: left, y: top }) as DOMRect;
   const ptr = (el: Element, type: string, x: number, y: number) =>
@@ -279,8 +261,7 @@ describe("reordering tiles in the overlay", () => {
   it("drags a tile across the grid into another slot and persists the new order", async () => {
     const reorder = vi.fn(async () => {});
     useGlobalMachinesStore.setState({ reorder });
-    useMachinesOverlayStore.setState({ open: true });
-    const { container } = render(<MachinesOverlayHost />);
+    const { container } = render(<MachinesView />);
     await act(async () => {});
     const tiles = [...container.querySelectorAll(".machines-tile")] as HTMLElement[];
     // Two tiles side by side: m1 at x 0–100, m2 at x 200–300.
@@ -301,8 +282,7 @@ describe("reordering tiles in the overlay", () => {
   it("nudges a tile with the arrow keys from its grip", async () => {
     const reorder = vi.fn(async () => {});
     useGlobalMachinesStore.setState({ reorder });
-    useMachinesOverlayStore.setState({ open: true });
-    const { container } = render(<MachinesOverlayHost />);
+    const { container } = render(<MachinesView />);
     await act(async () => {});
     const grip = container.querySelector(".machines-tile .machines-row-grip") as HTMLElement;
     fireEvent.keyDown(grip, { key: "ArrowRight" });

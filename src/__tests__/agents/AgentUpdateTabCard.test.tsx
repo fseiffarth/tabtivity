@@ -39,6 +39,7 @@ import {
   useAgentVersionNoticeStore,
 } from "../../stores/agents/agentVersionNotice";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -80,7 +81,8 @@ describe("agent tab update card", () => {
     invokeMock.mockImplementation(((cmd: string) =>
       Promise.resolve(cmd === "agent_versions" ? rows : null)) as never);
     resetAgentVersionNotice();
-    useModelsOverlayStore.setState({ open: false, view: "home" });
+    useModelsOverlayStore.setState({ agentsSection: "usage", modelsSection: "models" });
+    useRootOverlayStore.setState({ open: false, view: "root" });
     document.body.innerHTML = "";
   });
 
@@ -92,7 +94,8 @@ describe("agent tab update card", () => {
     expect(card(pane)?.textContent).toContain("Installed 2.1.316");
 
     await userEvent.click(screen.getByRole("button", { name: "Update…" }));
-    expect(useModelsOverlayStore.getState()).toMatchObject({ open: true, view: "agents" });
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "agents" });
+    expect(useModelsOverlayStore.getState().agentsSection).toBe("agents");
   });
 
   it("× hides that release on every tab until restart, and a later release speaks again", async () => {

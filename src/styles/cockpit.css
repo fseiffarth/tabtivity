@@ -11,6 +11,21 @@
   color: var(--text-primary);
 }
 
+/* The apps' and system pages' views (`app-view-<id>`): one box filling the
+   window's body, like `.cockpit-view`, that clips and lets the hosted pane
+   scroll its own regions. They keep the old overlays' body classes
+   (`mail-overlay-body`, `models-overlay-body`, …) for the pane rules written
+   against them. */
+.app-view {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  color: var(--text-primary);
+}
+
 .cockpit-view {
   flex: 1;
   min-width: 0;
@@ -438,32 +453,13 @@
   flex-shrink: 0;
 }
 
-/* ── Usage view ───────────────────────────────────────────────────────── */
-.cockpit-usage {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
-}
-.cockpit-usage-col {
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.cockpit-usage-section {
+/* ── Machines view: the cards above the tiles ────────────────────────── */
+.machines-view-section {
   border: 1px solid var(--border-color);
   border-radius: 10px;
   background: var(--bg-secondary);
   padding: 0 8px 8px;
-}
-.cockpit-usage-models {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 6px;
-  margin-top: 6px;
+  margin-bottom: 12px;
 }
 
 /* ── Root view: the Needs-you rail ─────────────────────────
@@ -660,14 +656,12 @@
   display: flex;
   padding: 4px;
 }
-/* Tonight and Usage stack their two columns; the view scrolls as a whole
+/* Tonight stacks its two columns; the view scrolls as a whole
    instead of two short panes scrolling inside it. */
-.root-overlay[data-band="narrow"] .cockpit-tonight,
-.root-overlay[data-band="narrow"] .cockpit-usage {
+.root-overlay[data-band="narrow"] .cockpit-tonight {
   flex: 0 0 auto;
   grid-template-columns: minmax(0, 1fr);
 }
-.root-overlay[data-band="narrow"] .cockpit-tonight-col,
-.root-overlay[data-band="narrow"] .cockpit-usage-col {
+.root-overlay[data-band="narrow"] .cockpit-tonight-col {
   overflow: visible;
 }

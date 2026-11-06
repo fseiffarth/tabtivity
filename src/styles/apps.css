@@ -798,22 +798,6 @@
   z-index: var(--z-modal-elevated);
 }
 
-/* The console window (Cockpit) steps one layer down while the Machines or Models
-   overlay opened from it is up (`stores/consoleCover`): the overlay is the front
-   one, and the dialogs it raises (later in DOM, at --z-modal) still land on top. */
-.modal-backdrop.root-console-backdrop.under-overlay {
-  z-index: calc(var(--z-modal) - 1);
-}
-/* The mail / calendar / to-do overlays are plain .modal-backdrops at --z-modal
-   too, ahead of the window in the DOM (Machines is ahead of them, Models after).
-   With the window at -1 they would cover it, and Machines with it, where they
-   used to lie beneath. They step down to -2 for as long as the window is under
-   an overlay (RootOverlay writes the attribute): window above them, the
-   overlay above the window. */
-html[data-console-under-overlay] .app-overlay-backdrop:not(.root-console-backdrop, .machines-overlay-backdrop, .models-overlay-backdrop) {
-  z-index: calc(var(--z-modal) - 2);
-}
-
 /* One dialog surface for the whole app — the shells differ only in size.
    Shared chrome (elevated surface, soft border, large radius, floating shadow)
    lives here so every modal reads identically. `.project-dialog`/`.stats-dialog`
@@ -1050,7 +1034,7 @@ html[data-console-under-overlay] .app-overlay-backdrop:not(.root-console-backdro
    wider column in the same grid language instead of stacking in the reading
    one; their prose keeps the 880px measure. */
 .models-overlay-body
-  :is(.models-overlay-pane-agents, .models-overlay-pane-models, .models-overlay-pane-ollama)
+  :is(.models-overlay-pane-agents, .models-overlay-pane-usage, .models-overlay-pane-models, .models-overlay-pane-ollama)
   :is(.dialog-scroll, .models-overlay-intro) {
   padding-inline: max(18px, calc((100% - 1320px) / 2));
 }

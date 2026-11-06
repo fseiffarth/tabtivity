@@ -309,7 +309,9 @@ export const UNTESTED = {
   "machinesIndicator.5": { area: "header", what: "MachinesIndicator · Use a row's ⇥ button", tested: "2026-09-20" },
   "machinesIndicator.6": { area: "header", what: "MachinesIndicator · on every connected machine and disconnects them. Can't be undone." },
   "machines.utilAria": { area: "header", what: "MachinesIndicator · inline CPU/GPU utilization bars on Detailed machines", tested: "2026-09-24" },
-  "machines.overlayTitle": { area: "header", what: "MachinesOverlay · Global machines overlay (header button click, the dropdown's ⤢ or the Usage view's \"Open Machines\" door, which puts it in front of the console window so Escape closes only it; one tile per machine with its actions, forms and toggles, fleet actions, add/import/export, Escape, host-key prompt and system monitor on top)" },
+  "machines.overlayTitle": { area: "header", what: "Console window · Machines view (header Machines button click, which closes the window again while it is shown, or the dropdown's ⤢): this machine's CPU / RAM / GPU meters, the project hosts with their lamps and a Connect button, then one tile per global machine with its actions, forms and toggles, fleet actions, add/import/export; the host-key prompt, HPC guard, system monitor and Remote machines manager land above the window; Escape closes the window" },
+  "agentsView.tabs": { area: "layout", what: "Console window · Agents view (header Agents button, Manage CLIs…, a tab's Update… card): sub-bar tabs Agents & CLIs (install, log in, defaults, the Default · + tab · Root · MCP chips), Usage (every CLI's plan and token readings, ⟳) and Skills (the machine-level skills library); a visited tab stays mounted, hidden, so an install log survives a switch; leaving the view ends them; the dropdown's Skills library… row opens Skills" },
+  "modelsView.tabs": { area: "layout", what: "Console window · Models view (header Models button click, which closes the window again while it is shown): sub-bar tabs Local models (status bar, machine meters, a card per model with Load / Unload and load-on-start, pulls in flight) and Ollama (install, storage, catalog); Manage models… and Install Ollama… open the Ollama tab; a plain open lands on the tab last used" },
   "machinesIndicator.7": { area: "header", what: "MachinesIndicator · Remote host usage — check who's logged in and what's running on every machine here: CPU, …" },
   "machinesIndicator.8": { area: "header", what: "MachinesIndicator · — off while tagged HPC" },
   "machinesIndicator.9": { area: "header", what: "MachinesIndicator · HPC cluster (login node)" },
@@ -326,8 +328,6 @@ export const UNTESTED = {
   "localModel.manageAgents": { area: "layout", what: "LocalModelMenu · Manage CLIs… opens the Models & agents overlay's Agents & CLIs tab" },
   "localModel.agentUpdates": { area: "layout", what: "LocalModelMenu · Agents section: once a day (90 s after launch, then hourly for any CLI last checked over a day ago) each installed CLI's newest release is checked; each row reads up to date / → <latest> (opens Manage CLIs) / couldn't check, and a line says when the releases were last checked; an installed Ollama is checked the same way and its section shows Upgrade to <latest> without a click" },
   "localModel.manageLocalModels": { area: "layout", what: "LocalModelMenu · Manage local models… / Install Ollama… opens the overlay's Ollama tab" },
-  "modelsOverlay.machine": { area: "layout", what: "ModelsOverlay · live CPU, RAM and GPU machine meters below the four overview cards" },
-  "modelsOverlay.title": { area: "layout", what: "ModelsOverlay · Models & agents (header button click, or the Root view's Add agent, which puts it in front of the console window so Escape closes only it; overview tile grid with live summaries, back button, tiled agent cards, Escape, focus return)" },
   "localModelMenu.1": { area: "layout", what: "LocalModelMenu · MCP", tested: "2026-09-20" },
   "localModelMenu.2": { area: "layout", what: "LocalModelMenu · Dismiss this notice" },
   "localModelMenu.3": { area: "layout", what: "LocalModelMenu · Dismiss this notice" },
@@ -1020,7 +1020,6 @@ export const UNTESTED = {
   "remoteMachines.syncCopyRemoteOnly": { area: "projects", what: "Remote-only project · Remote machines: Sync a copy is disabled with the reason, in the add form and on shared workers" },
 
   // --- skills — The skills library ----------------------------------
-  "skillsLibrary.overlayTitle": { area: "skills", what: "ModelsOverlay · Skills tab (the machine-level Skills Library)" },
 
   // --- tabs — Tabs and the new-tab menus ----------------------------
   "tabBar.1": { area: "tabs", what: "TabBar · Duplicate tab" },

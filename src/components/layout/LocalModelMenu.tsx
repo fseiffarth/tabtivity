@@ -13,6 +13,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
 import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
+import { isViewShown, useRootOverlayStore, useViewShown } from "../../stores/rootOverlay";
 import { BrainGlyph } from "../header/HeaderGlyphs";
 import { LOCAL_MODEL_MENU_ID, useAutoloadNotice, useModelsHub } from "../models/useModelsHub";
 import { AgentChips, LocalModelsSection, MachineMeters, MODEL_ROLES } from "../models/ModelsHubSections";
@@ -36,13 +37,13 @@ const MENU_ID = LOCAL_MODEL_MENU_ID;
  * to specific loaded models, so several can run different tasks in parallel. A
  * task with no tag falls back to the default model. Always shown: when Ollama
  * isn't installed (or no models are present yet) the menu offers an "Install
- * Ollama…" entry that opens the overlay's Ollama tab, where Ollama itself and
+ * Ollama…" entry that opens the Models view's Ollama section, where Ollama itself and
  * any model can be installed.
  *
- * A **click** opens the Models & agents overlay (`models/ModelsOverlay`); the
- * hover dropdown stays as it was, and every door in it opens one of the
- * overlay's tabs. The menu's body lives in `models/useModelsHub` and
- * `models/ModelsHubSections`, shared with that overlay; what stays here is the
+ * A **click** opens the console window's Models view (`models/ModelsView`); the
+ * hover dropdown stays as it was, and every door in it opens a section of the
+ * Models or the Agents view. The menu's body lives in `models/useModelsHub` and
+ * `models/ModelsHubSections`, shared with those views; what stays here is the
  * button, the hover frame, the `installed` poll, the progress-event
  * subscription (`stores/agents/ollamaActivity`) and the sole-resident →
  * every-role effect, which has one owner by construction.
@@ -78,8 +79,8 @@ export function LocalModelMenu() {
   // tab (`models/useModelsHub`); its polls run while the menu is open.
   const hub = useModelsHub(open);
   const closeTimer = useRef<number | null>(null);
-  // The click's surface: the Models & agents overlay (`models/ModelsOverlay`).
-  const overlayOpen = useModelsOverlayStore((s) => s.open);
+  // The click's surface: the console window's Models view (`models/ModelsView`).
+  const overlayOpen = useViewShown("models");
   const btnRef = useRef<HTMLButtonElement>(null);
   // Set for the one focus that returns the button its focus after the overlay
   // closes, so that focus does not pop the dropdown open (`onFocus` reveals).
@@ -124,7 +125,7 @@ export function LocalModelMenu() {
   const reveal = () => {
     // One consumer at a time: while the overlay is up it is the surface, and
     // keyboard focus can still reach this button under it.
-    if (useModelsOverlayStore.getState().open) return;
+    if (isViewShown("models")) return;
     if (closeTimer.current !== null) {
       window.clearTimeout(closeTimer.current);
       closeTimer.current = null;
@@ -342,9 +343,8 @@ export function LocalModelMenu() {
             window.clearTimeout(closeTimer.current);
             closeTimer.current = null;
           }
-          const store = useModelsOverlayStore.getState();
-          if (store.open) store.close();
-          else store.openOverlay();
+          if (isViewShown("models")) useRootOverlayStore.getState().close();
+          else useModelsOverlayStore.getState().openOverlay();
         }}
         // Keyboard reach: tabbing to the button is the one way in that no
         // pointer will ever open — except the focus handed back on close.

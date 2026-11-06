@@ -9,7 +9,6 @@ import { viewEnabled } from "../../lib/cockpit/viewGates";
 import { useSettingsStore } from "../../stores/settings";
 import { useFloatingFrame } from "../common/useFloatingFrame";
 import { FrameBandContext, useFrameBand } from "../../lib/window/frameBand";
-import { consoleUnderOverlay, useConsoleUnderOverlay } from "../../lib/window/consoleFront";
 import { storageKey } from "../../lib/brand";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { ARRIVAL_MS, useArrivalsStore } from "../../stores/calendar/arrivals";
@@ -27,12 +26,16 @@ import { usePoll } from "../../lib/usePoll";
 import { ChevronDownIcon, CloseIcon } from "../common/icons/Icon";
 import { RootView, type RootBarSlots } from "./RootView";
 import { RootViewStrip } from "./RootViewStrip";
+import { ViewBarSlotsContext } from "./viewBarSlots";
 
 // The cockpit's views' graph stays out of the startup chunk and only the shown
 // one mounts.
 const CockpitViewBody = lazy(() =>
   import("../cockpit/CockpitViews").then((m) => ({ default: m.CockpitViewBody })),
 );
+
+/** The views whose own tabs ride in the sub-bar under the title bar. */
+const SUBBAR_VIEWS: ReadonlySet<RootOverlayView> = new Set(["mail", "agents", "models"]);
 
 /** What the backend's `root-mcp-changed` event carries (`services::root_mcp::Change`). */
 type RootMcpChange = (
@@ -184,20 +187,6 @@ function RootOverlay() {
   useEffect(() => {
     if (gateOff) useRootOverlayStore.getState().openView("now");
   }, [gateOff]);
-  // An overlay opened from this window (Machines, Models) is in front of it.
-  const under = useConsoleUnderOverlay();
-  // The mail / calendar / to-do overlays share the window's layer and sit
-  // before it in the DOM. With the window one layer down they would paint over
-  // it (and over a Machines overlay that precedes them), so they step down too
-  // (`apps.css`): window and overlay stay above them as they always were.
-  useEffect(() => {
-    if (!under) return;
-    const root = document.documentElement;
-    root.dataset.consoleUnderOverlay = "";
-    return () => {
-      delete root.dataset.consoleUnderOverlay;
-    };
-  }, [under]);
   const boxFilter = useCockpitStore((s) => s.boxFilter);
   const boxes = useBoxesStore((s) => s.boxes);
   // The window's frame — the one hook the header overlays use: moved by the
@@ -218,12 +207,16 @@ function RootOverlay() {
   // A split layout keeps a strip in every subwindow and has no sole strip to
   // move, so it drops the sub-bar and the badge stays where it always was.
   const split = useTabsStore((s) => allGroups(s.layoutByScope[ROOT_SCOPE] ?? null).length > 1);
-  const subBar = view === "root" && !split;
+  // Mail, Agents and Models keep their own tabs (mail's inbox and composers,
+  // the sections) in the same sub-bar.
+  const subBar = (view === "root" && !split) || SUBBAR_VIEWS.has(view);
   // Callback refs into state: the view portals into these once they exist.
   const [stripEl, setStripEl] = useState<HTMLElement | null>(null);
   const [chipEl, setChipEl] = useState<HTMLElement | null>(null);
   const [rightsEl, setRightsEl] = useState<HTMLElement | null>(null);
   const [filesEl, setFilesEl] = useState<HTMLElement | null>(null);
+  // Before the approvals pill: where an app view's ✦ docked-agent button sits.
+  const [agentEl, setAgentEl] = useState<HTMLElement | null>(null);
   const [controlsStyle, setControlsStyle] = useState<React.CSSProperties | undefined>(undefined);
 
   useEffect(() => {
@@ -241,11 +234,7 @@ function RootOverlay() {
       // marks it handled) — closing the console under an open panel would take
       // the pending decision with it.
       if (busyRef.current || framing || e.defaultPrevented) return;
-      // The Machines / Models overlay opened from this window is in front of it
-      // and takes this Escape; the window waits for the next.
-      if (consoleUnderOverlay()) return;
-      // Handled: an overlay opened after this window (its listener runs later)
-      // must not take the same Escape for its own.
+      // Handled: nothing else may take the same Escape for its own.
       e.preventDefault();
       e.stopPropagation();
       close();
@@ -266,7 +255,7 @@ function RootOverlay() {
   };
   return (
     <div
-      className={`modal-backdrop root-overlay-backdrop root-console-backdrop app-overlay-backdrop${under ? " under-overlay" : ""}`}
+      className="modal-backdrop root-overlay-backdrop root-console-backdrop app-overlay-backdrop"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}
@@ -326,6 +315,7 @@ function RootOverlay() {
                 in Settings, where it always was. */}
             {!subBar && <span className="root-overlay-slot" ref={setChipEl} />}
             {!subBar && <span className="root-overlay-slot" ref={setRightsEl} />}
+            <span className="root-overlay-slot" ref={setAgentEl} />
             <OverlayApprovals advisory={rights.reviewAdvisory} />
             {view === "root" && <UntestedTag id="rootOverlay.1" />}
             {view === "root" && <UntestedTag id="rootOverlay.viewers" />}
@@ -352,15 +342,24 @@ function RootOverlay() {
           </div>
         )}
         <FrameBandContext.Provider value={band}>
-          {view === "root" ? (
-            <RootView rights={rights} slots={slots} busyRef={busyRef} />
-          ) : (
-            <div className="subwindow-body cockpit-overlay-body">
-              <Suspense fallback={null}>
-                <CockpitViewBody view={view} />
-              </Suspense>
-            </div>
-          )}
+          <ViewBarSlotsContext.Provider
+            value={{
+              strip: stripEl,
+              agent: agentEl,
+              onBarPointerDown: barProps.onPointerDown,
+              onBarDoubleClick: barProps.onDoubleClick,
+            }}
+          >
+            {view === "root" ? (
+              <RootView rights={rights} slots={slots} busyRef={busyRef} />
+            ) : (
+              <div className="subwindow-body cockpit-overlay-body">
+                <Suspense fallback={null}>
+                  <CockpitViewBody view={view} />
+                </Suspense>
+              </div>
+            )}
+          </ViewBarSlotsContext.Provider>
         </FrameBandContext.Provider>
       </div>
     </div>
