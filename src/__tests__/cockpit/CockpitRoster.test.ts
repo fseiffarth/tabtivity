@@ -5,7 +5,7 @@
  * reads a clock.
  */
 import { describe, expect, it } from "vitest";
-import { buildRoster, rosterCounts, stepSelection, toRosterRow, type RosterInput, type RosterOptions } from "../../lib/cockpit/roster";
+import { buildRoster, pickFollow, rosterCounts, stepSelection, toRosterRow, type RosterInput, type RosterOptions } from "../../lib/cockpit/roster";
 import { buildDecisions, DECISION_GROUPS } from "../../lib/cockpit/decisions";
 import type { AgentRosterFacts } from "../../lib/agents/agentRoster";
 import type { TabEntry } from "../../stores/tabs";
@@ -96,7 +96,7 @@ describe("buildDecisions", () => {
   const proposal = (id: string, status: GitPushProposal["status"]) => ({ id, status, commits: [] }) as unknown as GitPushProposal;
 
   it("draws only non-empty groups, in the rail's order, and says nothing is waiting when empty", () => {
-    const empty = buildDecisions({ rows: [], push: [], schedules: [], approvals: 0, markup: [], alerts: [], names: {} });
+    const empty = buildDecisions({ rows: [], push: [], schedules: [], markup: [], alerts: [], names: {} });
     expect(empty.groups).toEqual([]);
     expect(empty.total).toBe(0);
     expect(empty.topAsking).toBeNull();
@@ -104,27 +104,57 @@ describe("buildDecisions", () => {
       rows: all,
       push: [{ projectId: "p1", proposal: proposal("x", "pending") }, { projectId: "p1", proposal: proposal("y", "dismissed") }],
       schedules: [],
-      approvals: 2,
       markup: [],
       alerts: [],
       names: {},
     });
     const order = d.groups.map((g) => g.id);
-    expect(order).toEqual(["asking", "interrupted", "push", "approvals", "unseen"]);
+    expect(order).toEqual(["asking", "interrupted", "push", "unseen"]);
     expect(order).toEqual(DECISION_GROUPS.filter((id) => order.includes(id)));
     expect(d.items.push.map((p) => p.proposal.id)).toEqual(["x"]);
   });
 
   it("puts the newest question first and makes it the pane's default", () => {
-    const d = buildDecisions({ rows: all, push: [], schedules: [], approvals: 0, markup: [], alerts: [], names: {} });
+    const d = buildDecisions({ rows: all, push: [], schedules: [], markup: [], alerts: [], names: {} });
     expect(d.items.asking.map((r) => r.tab.key)).toEqual(["q2", "b"]);
     expect(d.topAsking).toBe("p1:q2");
     expect(d.items.unseen.map((r) => r.tab.key)).toEqual(["u2", "a"]);
   });
 
   it("lists a finished push request without counting it", () => {
-    const d = buildDecisions({ rows: [], push: [{ projectId: "p1", proposal: proposal("z", "pushed") }], schedules: [], approvals: 0, markup: [], alerts: [], names: {} });
+    const d = buildDecisions({ rows: [], push: [{ projectId: "p1", proposal: proposal("z", "pushed") }], schedules: [], markup: [], alerts: [], names: {} });
     expect(d.groups).toEqual([{ id: "push", count: 0 }]);
     expect(d.total).toBe(0);
+  });
+});
+
+describe("pickFollow", () => {
+  const row = (key: string, state: AgentRosterFacts["state"], turnStartedAt?: number) =>
+    toRosterRow(input("p1", key, { state, turnStartedAt, workingAt: state === "working" ? 9_000 : undefined }));
+
+  it("follows the working agent whose turn began last", () => {
+    const list = [row("a", "working", 1_000), row("b", "working", 3_000), row("c", "done")];
+    expect(pickFollow(list, null)).toBe("p1:b");
+  });
+
+  it("keeps the followed agent while it works, even when a newer one starts", () => {
+    const list = [row("a", "working", 1_000), row("b", "working", 3_000)];
+    expect(pickFollow(list, "p1:a")).toBe("p1:a");
+  });
+
+  it("re-points at the newest working agent once the followed one stops", () => {
+    const list = [row("a", "done"), row("b", "working", 3_000), row("c", "working", 2_000)];
+    expect(pickFollow(list, "p1:a")).toBe("p1:b");
+  });
+
+  it("stays on the followed agent when nothing else works, and is null for nothing at all", () => {
+    expect(pickFollow([row("a", "done"), row("b", "idle")], "p1:a")).toBe("p1:a");
+    expect(pickFollow([row("a", "done")], null)).toBeNull();
+    expect(pickFollow([row("a", "done")], "p1:gone")).toBeNull();
+  });
+
+  it("ranks a stamped turn above an unstamped one and keeps the first among ties", () => {
+    expect(pickFollow([row("a", "working"), row("b", "working", 1)], null)).toBe("p1:b");
+    expect(pickFollow([row("a", "working", 5), row("b", "working", 5)], null)).toBe("p1:a");
   });
 });

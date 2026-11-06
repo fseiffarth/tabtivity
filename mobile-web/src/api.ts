@@ -159,14 +159,22 @@ const SYNC_RESOLVE_TIMEOUT = 130_000;
 export function getDiverged(projectId: string, signal?: AbortSignal): Promise<DivergedList> {
   return api<DivergedList>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged`, { signal }, DIVERGED_READ_TIMEOUT);
 }
-/** `POST …/diverged/preview` — what moving these files would do. */
-export async function previewDiverged(projectId: string, direction: SyncDirection, files: string[]): Promise<SyncPreview> {
-  const { preview } = await api<{ preview: SyncPreview }>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/preview`, { method: "POST", body: JSON.stringify({ direction, files }) }, SYNC_PREVIEW_TIMEOUT);
-  return preview;
+/** `POST …/diverged/preview` — what this act would do to these files. `token`
+ * is the preview's receipt: every act but forgetting must echo it to `resolve`
+ * within ten minutes, over exactly these files, or it is refused
+ * (`preview_required`, `preview_stale`). For a deletion `preview` only lists
+ * the files it would remove. */
+export async function previewDiverged(projectId: string, op: Exclude<SyncOp, "forget">, files: string[]): Promise<{ preview: SyncPreview; token: string }> {
+  const { preview, token } = await api<{ preview: SyncPreview; token?: string }>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/preview`, { method: "POST", body: JSON.stringify({ op, files }) }, SYNC_PREVIEW_TIMEOUT);
+  // A desktop older than the token answers without one; the resolve would be
+  // refused, so say so now rather than after the confirmation.
+  if (!token) throw new ApiError(409, "preview_required");
+  return { preview, token };
 }
-/** `POST …/diverged/resolve` — never sent twice: a timeout is an unknown outcome. */
-export function resolveDiverged(projectId: string, op: SyncOp, files: string[]): Promise<SyncOutcome> {
-  return api<SyncOutcome>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/resolve`, { method: "POST", body: JSON.stringify({ op, files }) }, SYNC_RESOLVE_TIMEOUT);
+/** `POST …/diverged/resolve` — never sent twice: a timeout is an unknown outcome.
+ * `token`: the preview's, for every op but `forget`. */
+export function resolveDiverged(projectId: string, op: SyncOp, files: string[], token?: string): Promise<SyncOutcome> {
+  return api<SyncOutcome>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/resolve`, { method: "POST", body: JSON.stringify(token ? { op, files, token } : { op, files }) }, SYNC_RESOLVE_TIMEOUT);
 }
 /** `GET …/diverged/diff?file=` — the local copy against the host's. */
 export function getDivergedDiff(projectId: string, file: string): Promise<{ diff: string; cut: boolean }> {

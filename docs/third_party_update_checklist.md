@@ -35,6 +35,9 @@ How to use it:
 Automated gates cover none of this — `cargo test` / `npm test` pin *our* parsers
 to *sample* output, not to what the current binary prints. Only running the real
 tool does that; the **Verify** steps say how without needing a window.
+The tools for that live in `scripts/verify-cli/` (README there): a private
+tmux with a scratch HOME, stub models, `--help` snapshots, and a replay of
+captured frames through our own readers that compares two versions.
 
 ---
 

@@ -1,6 +1,4 @@
-import { useModalFocus } from "../../hooks/useModalFocus";
 import { useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import type { ProjectEntry } from "../../types";
 import { useProjectsStore } from "../../stores/projects";
 import {
@@ -11,6 +9,7 @@ import {
 } from "../../lib/theme/categoryColor";
 import { useT } from "../../lib/i18n";
 import { CloseIcon } from "../common/icons/Icon";
+import { DialogShell } from "../common/PromptDialogs";
 
 /**
  * Modal to manage a project's category tags. Categories color/group a project in
@@ -27,7 +26,6 @@ export function CategoryEditor({
   onClose: () => void;
 }) {
   const t = useT();
-  const modalRef = useModalFocus(onClose);
   const projects = useProjectsStore((s) => s.projects);
   const setProjectCategories = useProjectsStore((s) => s.setProjectCategories);
 
@@ -75,21 +73,14 @@ export function CategoryEditor({
     }
   };
 
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div
-        ref={modalRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        className="project-dialog dialog-framed category-editor"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="settings-title-row">
-          <h2>{project.name} — {t("categoryEditor.titleSuffix")}</h2>
-          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
-        </div>
-        <div className="dialog-scroll">
+  return (
+    <DialogShell
+      frame="project-dialog"
+      className="category-editor"
+      scroll
+      title={<>{project.name} — {t("categoryEditor.titleSuffix")}</>}
+      onDismiss={onClose}
+    >
         <div className="project-dialog-path">{t("categoryEditor.desc")}</div>
 
         {known.length > 0 && (
@@ -140,9 +131,6 @@ export function CategoryEditor({
             {saving ? t("categoryEditor.saving") : t("categoryEditor.save")}
           </button>
         </div>
-        </div>
-      </div>
-    </div>,
-    document.body,
+    </DialogShell>
   );
 }

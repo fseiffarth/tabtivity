@@ -4585,7 +4585,7 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
 
     let socket = host.state.config.control_dir.join("desktop-control.sock");
     let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
-    type Resolved = Vec<(SyncOp, Vec<String>)>;
+    type Resolved = Vec<(SyncOp, Vec<String>, Option<String>)>;
     let resolved: Arc<Mutex<Resolved>> = Arc::default();
     let seen = resolved.clone();
     let desktop = tokio::spawn(async move {
@@ -4608,12 +4608,15 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
                     assert_eq!(project_id, RAW_PROJECT);
                     DesktopResponse::Diverged { connected: true, files: vec![row("src/a.txt", "amber"), row(".env", "amber"), row("new.txt", "localnew")] }
                 }
-                DesktopRequest::SyncPreview { direction, paths, .. } => {
-                    assert_eq!((direction, paths.as_slice()), (SyncDirection::Pull, ["src/a.txt".to_string()].as_slice()));
-                    DesktopResponse::SyncPreview { preview: crate::services::mobile_control::protocol::SyncPreviewFacts { files: 1, exact: true, ..Default::default() } }
+                DesktopRequest::SyncPreview { op, paths, .. } => {
+                    assert_eq!((op, paths.as_slice()), (SyncOp::Pull, ["src/a.txt".to_string()].as_slice()));
+                    DesktopResponse::SyncPreview {
+                        preview: crate::services::mobile_control::protocol::SyncPreviewFacts { files: 1, exact: true, ..Default::default() },
+                        fingerprint: "abc123".into(),
+                    }
                 }
-                DesktopRequest::SyncResolve { op, paths, .. } => {
-                    seen.lock().unwrap().push((op, paths));
+                DesktopRequest::SyncResolve { op, paths, expect, .. } => {
+                    seen.lock().unwrap().push((op, paths, expect));
                     DesktopResponse::SyncResolved { done: 1, failed: 0, skipped: 0 }
                 }
                 DesktopRequest::SyncDiff { path, .. } => DesktopResponse::SyncDiff { diff: format!("diff of {path}"), cut: false },
@@ -4641,6 +4644,7 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
     let token = rows[0]["id"].as_str().expect("token").to_string();
     let act = json!({ "op": "pull", "files": [token] });
     assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await), (StatusCode::FORBIDDEN, json!("sync_off")));
+    // `direction` is what an older phone says for `op`.
     let price = json!({ "direction": "pull", "files": [token] });
     assert_eq!(refused(host.send(request_as("POST", &format!("{base}/preview"), &cookie, Some(price.clone()))).await), (StatusCode::FORBIDDEN, json!("sync_off")));
     let (status, _, body) = host.send(get_as(&format!("{base}/diff?file={token}"), &cookie)).await;
@@ -4650,9 +4654,14 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
     switches(true, true);
     let (status, _, body) = host.send(request_as("POST", &format!("{base}/preview"), &cookie, Some(price))).await;
     assert_eq!((status, json(&body)["preview"]["files"].as_u64()), (StatusCode::OK, Some(1)), "{body}");
+    let receipt = json(&body)["token"].as_str().expect("a preview hands back its token").to_string();
+    // A resolve without the receipt moves nothing, whatever else is right.
+    assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await), (StatusCode::CONFLICT, json!("preview_required")));
+    assert!(resolved.lock().unwrap().is_empty(), "nothing reached the window");
+    let act = json!({ "op": "pull", "files": [token], "token": receipt });
     let (status, _, body) = host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await;
     assert_eq!((status, json(&body)["done"].as_u64()), (StatusCode::OK, Some(1)), "{body}");
-    assert_eq!(resolved.lock().unwrap().as_slice(), [(SyncOp::Pull, vec!["src/a.txt".to_string()])]);
+    assert_eq!(resolved.lock().unwrap().as_slice(), [(SyncOp::Pull, vec!["src/a.txt".to_string()], Some("abc123".to_string()))], "the window gets the fingerprint to hold the rows to");
 
     // Not this list's token, not a shape it knows, not this origin: nothing reaches the window.
     let browser = files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "src/a.txt").unwrap();
@@ -4670,6 +4679,147 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
         .expect("request");
     assert_eq!(refused(host.send(foreign_origin).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
     assert_eq!(resolved.lock().unwrap().len(), 1, "only the good request got through");
+    desktop.abort();
+}
+
+/// Gap 97: every Diverged act but forgetting is authorised by a receipt the
+/// preview hands out (an HMAC of the window's fingerprint of the rows it read,
+/// bound to the op and exactly those files, good for ten minutes). Without one,
+/// or with one for another op or other files, nothing reaches the window; with
+/// one, the window gets the fingerprint to hold the rows to. The window's own
+/// refusals (an HPC host, rows that moved) keep their names.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_destructive_resolve_needs_the_receipt_of_a_preview_of_exactly_that() {
+    let host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let mirror = state_dir.join("mirrors").join(RAW_PROJECT);
+    std::fs::create_dir_all(&mirror).unwrap();
+    std::fs::write(
+        state_dir.join("projects.json"),
+        serde_json::to_vec(&json!([{
+            "id": RAW_PROJECT,
+            "name": "Aurora",
+            "status": "active",
+            "directory": state_dir.join("remote-projects").join(RAW_PROJECT).to_string_lossy(),
+            "mirror": mirror.to_string_lossy(),
+            concat!(crate::app_slug!(), "_mobile_access"): true,
+            "remote": { "user": "alice", "host": "primary.example", "remote_path": "/srv/aurora" },
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        state_dir.join("settings.json"),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_sync": true } }).to_string(),
+    )
+    .unwrap();
+    let cookie = host.pair_device(&signing_key(74)).await.0;
+    let (_, _, projects) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    let p = json(&projects)["projects"][0]["id"].as_str().expect("project id").to_string();
+    let base = format!("/api/v1/projects/{p}/diverged");
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    type Resolved = Vec<(SyncOp, Vec<String>, Option<String>)>;
+    let resolved: Arc<Mutex<Resolved>> = Arc::default();
+    let seen = resolved.clone();
+    // What the window answers to the next preview or resolve instead of its
+    // usual answer: an error code, or a fingerprint it should have sent.
+    let forced: Arc<Mutex<Option<DesktopResponse>>> = Arc::default();
+    let override_with = forced.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let row = |rel: &str| crate::services::mobile_control::protocol::DivergedFile {
+                rel: rel.into(),
+                state: "amber".into(),
+                host_mtime: Some(20),
+                local_mtime: None,
+                host_diverged: true,
+                local_diverged: false,
+                host_checked: true,
+            };
+            let forced = override_with.lock().unwrap().take();
+            let answer = match request {
+                DesktopRequest::SyncDiverged { .. } => DesktopResponse::Diverged { connected: true, files: vec![row("src/a.txt"), row("src/b.txt")] },
+                DesktopRequest::SyncPreview { .. } => forced.unwrap_or(DesktopResponse::SyncPreview {
+                    preview: crate::services::mobile_control::protocol::SyncPreviewFacts { files: 1, exact: true, ..Default::default() },
+                    fingerprint: "00ff".into(),
+                }),
+                DesktopRequest::SyncResolve { op, paths, expect, .. } => {
+                    seen.lock().unwrap().push((op, paths, expect));
+                    forced.unwrap_or(DesktopResponse::SyncResolved { done: 1, failed: 0, skipped: 0 })
+                }
+                _ => DesktopResponse::Seen,
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    let rows = json(&body)["rows"].clone();
+    let (a, b) = (rows[0]["id"].as_str().expect("a").to_string(), rows[1]["id"].as_str().expect("b").to_string());
+    let post = |what: &str, body: serde_json::Value| request_as("POST", &format!("{base}/{what}"), &cookie, Some(body));
+    let answer = |reply: (StatusCode, HeaderMap, String)| (reply.0, json(&reply.2));
+    let code = |reply: (StatusCode, serde_json::Value)| (reply.0, reply.1["error"].clone());
+    let receipt = |reply: &(StatusCode, serde_json::Value)| reply.1["token"].as_str().expect("a receipt").to_string();
+
+    // A preview prices every op but forgetting, and hands back a receipt.
+    let delete_a = answer(host.send(post("preview", json!({ "op": "delete_host", "files": [a] }))).await);
+    assert_eq!(delete_a.0, StatusCode::OK, "{delete_a:?}");
+    let delete_a_token = receipt(&delete_a);
+    let pull_a = answer(host.send(post("preview", json!({ "op": "pull", "files": [a] }))).await);
+    let pull_a_token = receipt(&pull_a);
+    for wrong in [json!({ "op": "forget", "files": [a] }), json!({ "files": [a] }), json!({ "op": "pull", "direction": "pull", "files": [a] })] {
+        assert_eq!(code(answer(host.send(post("preview", wrong)).await)), (StatusCode::BAD_REQUEST, json!("invalid_request")));
+    }
+
+    // No receipt, a malformed one, one for another op or other files: refused here.
+    let refusals = [
+        (json!({ "op": "delete_host", "files": [a] }), json!("preview_required")),
+        (json!({ "op": "delete_host", "files": [a], "token": "" }), json!("preview_required")),
+        (json!({ "op": "delete_local", "files": [a] }), json!("preview_required")),
+        (json!({ "op": "push", "files": [a] }), json!("preview_required")),
+        (json!({ "op": "delete_host", "files": [a], "token": "nonsense" }), json!("preview_stale")),
+        (json!({ "op": "delete_host", "files": [a], "token": pull_a_token }), json!("preview_stale")),
+        (json!({ "op": "delete_local", "files": [a], "token": delete_a_token }), json!("preview_stale")),
+        (json!({ "op": "delete_host", "files": [a, b], "token": delete_a_token }), json!("preview_stale")),
+        (json!({ "op": "delete_host", "files": [b], "token": delete_a_token }), json!("preview_stale")),
+    ];
+    for (act, expected) in refusals {
+        assert_eq!(code(answer(host.send(post("resolve", act.clone())).await)), (StatusCode::CONFLICT, expected), "{act}");
+    }
+    assert!(resolved.lock().unwrap().is_empty(), "none of those reached the window");
+
+    // Its own receipt: through, with the fingerprint for the window to hold the rows to.
+    let (status, done) = answer(host.send(post("resolve", json!({ "op": "delete_host", "files": [a], "token": delete_a_token }))).await);
+    assert_eq!((status, done["done"].as_u64()), (StatusCode::OK, Some(1)), "{done}");
+    assert_eq!(resolved.lock().unwrap().as_slice(), [(SyncOp::DeleteHost, vec!["src/a.txt".to_string()], Some("00ff".to_string()))]);
+    // Forgetting a record destroys nothing and takes none.
+    let (status, _) = answer(host.send(post("resolve", json!({ "op": "forget", "files": [a] }))).await);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resolved.lock().unwrap().last(), Some(&(SyncOp::Forget, vec!["src/a.txt".to_string()], None)));
+
+    // The window repeats the checks and says which one stopped it.
+    let window_says = |code: &str| Some(DesktopResponse::Error { code: code.into(), message: "words that may name a path".into() });
+    *forced.lock().unwrap() = window_says("hpc_host");
+    assert_eq!(code(answer(host.send(post("preview", json!({ "op": "delete_local", "files": [a] }))).await)), (StatusCode::FORBIDDEN, json!("hpc_host")));
+    *forced.lock().unwrap() = window_says("preview_stale");
+    assert_eq!(code(answer(host.send(post("resolve", json!({ "op": "delete_host", "files": [a], "token": delete_a_token }))).await)), (StatusCode::CONFLICT, json!("preview_stale")));
+    *forced.lock().unwrap() = window_says("sync_off");
+    assert_eq!(code(answer(host.send(post("resolve", json!({ "op": "forget", "files": [a] }))).await)), (StatusCode::FORBIDDEN, json!("sync_off")));
+    *forced.lock().unwrap() = window_says("something with /srv/aurora in it");
+    let (status, other) = answer(host.send(post("resolve", json!({ "op": "forget", "files": [a] }))).await);
+    assert_eq!((status, other["error"].clone()), (StatusCode::CONFLICT, json!("sync_failed")));
+    assert!(!other.to_string().contains("/srv"), "{other}");
+
+    // A window that sends no usable fingerprint gets no receipt minted for it.
+    *forced.lock().unwrap() = Some(DesktopResponse::SyncPreview { preview: Default::default(), fingerprint: String::new() });
+    assert_eq!(code(answer(host.send(post("preview", json!({ "op": "delete_host", "files": [a] }))).await)), (StatusCode::SERVICE_UNAVAILABLE, json!("desktop_unavailable")));
     desktop.abort();
 }
 
@@ -4942,6 +5092,50 @@ async fn upload_here_streams_a_file_past_the_inbox_limit_and_refuses_past_its_ow
     // Nothing is left in the staging folder, landed or refused.
     let staging = host.state.config.state_dir.join("mobile-control").join("upload-staging");
     assert_eq!(std::fs::read_dir(&staging).map(|dir| dir.count()).unwrap_or(0), 0);
+}
+
+/// An upload claims its room (`uploads::reserve`) under the log lock, which a
+/// copy into a project holds for its whole length: the claim is made off the
+/// connection executor, so a copy in progress does not stall every other
+/// request on it (on a current-thread runtime, the clock stops if it does).
+#[tokio::test]
+async fn an_upload_waiting_for_the_log_lock_does_not_stall_the_connection_executor() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(77)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
+    )
+    .unwrap();
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        uploads::while_log_locked(|| {
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+        });
+    });
+    locked_rx.recv().unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/projects/{project_id}/files/upload?name=late.bin"))
+        .header(header::ORIGIN, ORIGIN)
+        .header(header::COOKIE, cookie_pair(&cookie))
+        .body(Body::from(vec![1u8; 16]))
+        .expect("request");
+    let send = host.send(request);
+    tokio::pin!(send);
+    let mut ticks = 0;
+    let (status, _, answer) = loop {
+        tokio::select! {
+            reply = &mut send => break reply,
+            () = tokio::time::sleep(Duration::from_millis(10)) => ticks += 1,
+        }
+    };
+    holder.join().unwrap();
+    assert_eq!(status, StatusCode::CREATED, "answered: {answer}");
+    assert!(ticks >= 5, "the executor was stalled while the upload waited for the log lock: {ticks} ticks");
 }
 
 /// **New folder** makes an empty folder in a folder that takes uploads, never

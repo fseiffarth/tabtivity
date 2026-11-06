@@ -1,8 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
+import { MOBILE_HOST_KEY } from "./brand";
+import { primaryTargetOf } from "./remote/carefulHost";
 import { deleteSideOf } from "./remote/divergedRows";
+import { isHpcHost } from "./remote/hpc/hpcHost";
+import { sha256Hex } from "./sha256";
+import { useProjectsStore } from "../stores/projects";
 import { useRemoteStatusStore } from "../stores/remote/remoteStatus";
+import { useSettingsStore } from "../stores/settings";
 import { amberPaths, localNewPaths, useSyncStore, type SyncEntryStatus, type SyncResolveOutcome } from "../stores/remote/sync";
-import type { SyncDirection, SyncTransferPreview } from "../stores/remote/syncConfirm";
+import type { SyncTransferPreview } from "../stores/remote/syncConfirm";
 
 /**
  * The window's half of the phone's Diverged list (`mobile_control::diverged`):
@@ -23,6 +29,20 @@ export interface MobileDivergedFile {
 }
 
 export type MobileSyncOp = "pull" | "push" | "delete_host" | "delete_local" | "forget";
+/** The ops a preview prices: all but `forget`. */
+export type MobilePreviewOp = Exclude<MobileSyncOp, "forget">;
+
+/** A refusal the window repeats from the sidecar, by code (the sidecar maps
+ *  each to its own answer): `sync_off`, `hpc_host`, `preview_stale`. */
+export interface MobileSyncRefusal {
+  status: "error";
+  code: "sync_off" | "hpc_host" | "preview_stale";
+  message: string;
+}
+
+function refusal(code: MobileSyncRefusal["code"], message: string): MobileSyncRefusal {
+  return { status: "error", code, message };
+}
 
 export interface MobileSyncPreview {
   files: number;
@@ -99,18 +119,80 @@ export async function divergedList(projectId: string) {
   };
 }
 
-export async function divergedPreview(projectId: string, direction: SyncDirection, paths: string[]) {
-  const status = statusOf(projectId);
+/** Whether the phone may resolve at all: `project_sync`, which only counts
+ *  while `project_files` is on. The sidecar checks both per request; the
+ *  bridge is reachable without going through it, so this repeats them. Unset
+ *  settings read as off. */
+export function syncWritesOpen(): boolean {
+  const host = useSettingsStore.getState().settings?.[MOBILE_HOST_KEY];
+  return host?.project_files === true && host?.project_sync === true;
+}
+
+/** Whether a delete (of the host account's copy or the mirror's) from the
+ *  phone is refused for this project: its primary host is HPC-tagged. Only
+ *  `hpc_hosts` counts (user decision 2026-11-06): "careful" is the default of
+ *  every remote host, so refusing on it would refuse everywhere, and
+ *  `hpc_hosts` outranks `careful_hosts` anyway. A project the window cannot
+ *  place is refused too. */
+export function phoneDeleteRefused(projectId: string): boolean {
+  const settings = useSettingsStore.getState().settings;
+  const project = useProjectsStore.getState().projects.find((entry) => entry.id === projectId);
+  const target = primaryTargetOf(project);
+  if (!settings || !target) return true;
+  return isHpcHost(settings, target);
+}
+
+/** The refusal that applies to `op` on this project before anything is read or
+ *  moved, or `undefined`. */
+function blocked(projectId: string, op: MobileSyncOp): MobileSyncRefusal | undefined {
+  if (!syncWritesOpen()) return refusal("sync_off", "Resolving from the phone is off");
+  if ((op === "delete_host" || op === "delete_local") && phoneDeleteRefused(projectId)) {
+    return refusal("hpc_host", "Deleting files from the phone is not allowed on an HPC host");
+  }
+  return undefined;
+}
+
+/**
+ * What a preview or a resolve bound itself to: the op, and for each named path
+ * the row's state and the two mtimes the fresh status pass read (a path with no
+ * row reads as absent). The sidecar seals this into the phone's token at
+ * preview and hands it back at resolve, where it is recomputed: a file that
+ * changed, appeared or vanished between the two changes it, and the act is
+ * refused. Order does not matter; the hash is over the sorted rows.
+ */
+export function previewFingerprint(op: MobileSyncOp, paths: string[], status: Record<string, SyncEntryStatus>): string {
+  const rows = [...paths].sort().map((rel) => {
+    const entry = status[rel];
+    return [rel, entry?.state ?? null, entry?.hostMtime ?? null, entry?.localMtime ?? null];
+  });
+  return sha256Hex(JSON.stringify([op, rows]));
+}
+
+export async function divergedPreview(projectId: string, op: MobilePreviewOp, paths: string[]) {
+  const refused = blocked(projectId, op);
+  if (refused) return refused;
+  const status = await freshStatus(projectId);
+  const fingerprint = previewFingerprint(op, paths, status);
+  if (op === "delete_host" || op === "delete_local") {
+    // A deletion has no transfer to price: it removes the files that still
+    // stand as the phone's row offered, which are all it lists.
+    const standing = paths.filter((rel) => stillStands(op, status[rel]));
+    return {
+      status: "sync_preview" as const,
+      preview: { files: standing.length, bytes: 0, overwrites: 0, destructive: standing.slice(0, 20), destructive_total: standing.length, conflicts: 0, tracked: 0, exact: true },
+      fingerprint,
+    };
+  }
   const preview = await invoke<SyncTransferPreview>("sync_transfer_preview", {
     projectId,
     relPath: "",
-    direction,
+    direction: op,
     // Only a diverged file overwrites the other side's changes on purpose.
-    force: paths.some((rel) => status?.[rel]?.state === "amber"),
+    force: paths.some((rel) => status[rel]?.state === "amber"),
     relPaths: paths,
   });
   const { destructiveTotal, ...facts } = preview;
-  return { status: "sync_preview" as const, preview: { ...facts, destructive_total: destructiveTotal } };
+  return { status: "sync_preview" as const, preview: { ...facts, destructive_total: destructiveTotal }, fingerprint };
 }
 
 /** Whether `op` still does what the phone's row offered. A list can be minutes
@@ -130,8 +212,16 @@ export function stillStands(op: MobileSyncOp, entry: SyncEntryStatus | undefined
   }
 }
 
-export async function divergedResolve(projectId: string, op: MobileSyncOp, paths: string[]) {
+export async function divergedResolve(projectId: string, op: MobileSyncOp, paths: string[], expect?: string | null) {
+  const refused = blocked(projectId, op);
+  if (refused) return refused;
   const status = await freshStatus(projectId);
+  // Everything but forgetting acts only on the rows the phone confirmed: the
+  // sidecar has checked its token, and the rows it vouched for must still be
+  // the ones on this side now.
+  if (op !== "forget" && (!expect || previewFingerprint(op, paths, status) !== expect)) {
+    return refusal("preview_stale", "The files changed since the preview");
+  }
   const standing = paths.filter((rel) => stillStands(op, status[rel]));
   const store = useSyncStore.getState();
   const outcomes: SyncResolveOutcome[] = [];

@@ -7,11 +7,11 @@ import { useCockpitStore } from "../../stores/cockpit";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { GitPushProposalCard } from "../agents/GitPushMcp";
 import { AgentScheduleProposal } from "../agents/AgentScheduleProposal";
-import { RootReviewStrip } from "../layout/RootReviewStrip";
 import { AlertsMenu } from "../header/AlertsMenu";
 import { jumpToRow } from "./CockpitRoster";
 import { TabContinueButton } from "../tabs/TabLocalityBadges";
 import type { AlertsFeed } from "../files/useAlertsFeed";
+import { RefreshIcon } from "../common/icons/Icon";
 
 /** Each group's heading, also the icon rail's labels. */
 export const GROUP_LABEL: Record<DecisionGroupId, TranslationKey> = {
@@ -19,19 +19,20 @@ export const GROUP_LABEL: Record<DecisionGroupId, TranslationKey> = {
   interrupted: "cockpit.rail.interrupted",
   push: "cockpit.rail.push",
   schedule: "cockpit.rail.schedule",
-  approvals: "cockpit.rail.approvals",
   markup: "cockpit.rail.markup",
   unseen: "cockpit.rail.unseen",
   alerts: "cockpit.rail.alerts",
 };
 
-/** One group: its heading with the count, then its rows. */
-function Group({ id, count, children }: { id: DecisionGroupId; count: number; children: ReactNode }) {
+/** One group: its heading with the count (and an optional control at its
+ *  right end), then its rows. */
+function Group({ id, count, trailing, children }: { id: DecisionGroupId; count: number; trailing?: ReactNode; children: ReactNode }) {
   const t = useT();
   return (
     <section className="cockpit-rail-group" data-group={id} aria-label={t(GROUP_LABEL[id])}>
       <div className="tab-new-menu-group-label cockpit-rail-heading">
         {t(GROUP_LABEL[id])} <span className="cockpit-count">{count}</span>
+        {trailing}
       </div>
       {children}
     </section>
@@ -68,7 +69,7 @@ function TabRow({
 
 /**
  * The Decisions inbox (`docs/desktop_cockpit_plan.md`, View 1 · Needs you): the
- * eight groups in the phone's urgency order, each with its own action in place
+ * seven groups in the phone's urgency order, each with its own action in place
  * — the existing cards, never a second answering UI. Empty groups are not
  * drawn; a rail with nothing says so in one line.
  */
@@ -141,15 +142,6 @@ export function CockpitRail({
                   ))}
                 </Group>
               );
-            case "approvals":
-              return (
-                <Group key={id} id={id} count={count}>
-                  <details className="cockpit-rail-fold">
-                    <summary>{t("cockpit.rail.approvalsLine", { count })}</summary>
-                    <RootReviewStrip />
-                  </details>
-                </Group>
-              );
             case "markup":
               return (
                 <Group key={id} id={id} count={count}>
@@ -175,8 +167,23 @@ export function CockpitRail({
               );
             case "alerts":
               return (
-                <Group key={id} id={id} count={count}>
-                  <AlertsMenu feed={alerts} onNavigate={close} />
+                <Group
+                  key={id}
+                  id={id}
+                  count={count}
+                  trailing={
+                    <button
+                      type="button"
+                      className="toolbar-btn toolbar-btn--sm cockpit-rail-refresh"
+                      onClick={alerts.refresh}
+                      title={t("filesAlerts.refresh")}
+                      aria-label={t("filesAlerts.refresh")}
+                    >
+                      <RefreshIcon />
+                    </button>
+                  }
+                >
+                  <AlertsMenu feed={alerts} onNavigate={close} bare />
                 </Group>
               );
           }

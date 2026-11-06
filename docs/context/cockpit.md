@@ -55,7 +55,26 @@ requests, whose read runs git per project.
 
 Remote projects take part in a git read only while their session is connected.
 The cockpit never hydrates a scope: a project that is not restored is not
-listed (the Projects view says "not open"), and Restore is an explicit button.
+given a row (the Projects view folds it into its box's "Not open" line), and
+Restore is an explicit action (that fold button's right-click, or a row's ⋯ menu).
+
+## Layout (the declutter pass)
+
+`docs/cockpit_declutter_plan.md` made the views quieter without adding a read.
+No view has a heading row (the strip names it; the untested pill rides each view's
+first row, `CockpitUntested`). Now's columns are flat, one hairline apart; the
+Needs-you rail has no root-approvals group (they are the title-bar pill and the
+header badge only) and draws the Alerts heading once (`AlertsMenu bare`); the
+roster toolbar is a filter, the state chips and one `<grouping> · <sort> ▾`
+menu; the status dot is filled in the state's colour. With nothing picked and
+nothing asking, the detail pane follows the latest working agent: `pickFollow`
+keeps it while it works and re-points only once it stops, since every switch
+re-attaches a terminal. Projects is one ~34 px row per open project (actions on
+hover / focus; Today and Last active drop under the mid band, the actions move into
+⋯ under narrow) with the not-open projects as one line per box; a project's
+`run_host` is shown by name (`runHostLabel`), never as `host:<id>`. Tonight is one
+centred column; Usage is a top strip (CLIs, this machine) over `CockpitMachineList`,
+one row per machine with project hosts and global machines merged by host name.
 
 ## The detail pane is the real Chat
 
@@ -100,7 +119,7 @@ as a menu. In the middle band Now's Needs-you column is the 40 px icon
 rail (the full rail in a `ContextMenuPortal` popover, `NeedsYouPopover`) beside
 roster and detail (detail floors at 360 px); under 820 px Now is master / detail
 (a "Needs you N" chip, a click or Space on a row opens the detail, the back bar or
-Escape on it returns), Tonight stacks, the title bar drops its label and
+Escape on it returns), Tonight is one column at every width, the title bar drops its label and
 folds the box filter into a ▾ icon (the view strip folds too, below), and Root swaps its icon rail for the same
 "Needs you N" chip in its sub-bar (or, in a split Root with no sub-bar, in the title
 bar's cluster), opening the rail as the same popover (`NeedsYouChip` /
@@ -179,10 +198,12 @@ construction. The pieces:
   with `AgentChips`, `CliOverviewBody`, the personal skills library); Models:
   `models/ModelsView` (the Local models section, Settings' `OllamaPanel`); Machines:
   `header/MachinesIndicator`'s `MachinesSurface surface="view"` in
-  `header/MachinesView`'s frame, under this machine's meters and the project hosts
-  the Usage view used to list. The Usage view is deleted: its CLI overview went to
-  Agents, the running models (with Unload) were already in Models, the meters and
-  hosts went to Machines.
+  `header/MachinesView`'s frame, under this machine's meters and the machine list
+  the Usage view used to show (`cockpit/CockpitMachineList`, `lib/cockpit/machines`:
+  one row per machine, project hosts and global machines merged by host name, the
+  stores' lamps, one Connect per row). The Usage view is deleted: its CLI overview
+  went to Agents, the running models (with Unload) were already in Models, the
+  meters and the machine list went to Machines.
 - **Sub-bar.** Mail's inbox/message/composer tabs and the Agents and Models
   sections ride in the sub-bar under the title bar, portaled through
   `layout/viewBarSlots` (`ViewBarStrip`, `ViewSubTabs`), as Root's strip is; a view

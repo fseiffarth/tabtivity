@@ -72,6 +72,14 @@ cards and toasts, `--radius-lg` 14 px for dialogs and the palette), `--shadow-2`
 member, follow the comment at the top of the recipe;
 `theme/FloatingRecipe.test.ts` holds the lists together.
 
+The frames that wear it carry the behaviour too, so a new surface picks one
+rather than building its own: `DialogShell` for a modal dialog (`title` for
+the title row, `scroll` for an overflowing body), `useDialogs()` for a
+question, `ContextMenuPortal` for a menu or popover, `useHeaderMenu` for a
+header menu, `Dropdown` for a select. `theme/DialogShellRatchet.test.ts` lists
+the dialogs that still build `.modal-backdrop` by hand and refuses new ones;
+the `add-menu` skill walks through it.
+
 The corners were two painted 10 px cuts until 2026-11-02, when the user asked
 for round; `--radius-sm/--radius/--radius-lg` went from 0 to 6 / 10 / 14 px on
 `:root` at the same time, so buttons and fields soften too. Never a

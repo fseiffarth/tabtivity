@@ -1486,12 +1486,15 @@ pub enum DesktopRequest {
         request_id: String,
         project_id: String,
     },
-    /// What a transfer of `paths` would do (`sync_transfer_preview`), for the
-    /// phone's confirmation.
+    /// What `op` (never `forget`) would do to `paths`, for the phone's
+    /// confirmation: a transfer's price (`sync_transfer_preview`), or the
+    /// files a deletion would remove. The answer carries the window's
+    /// fingerprint of the rows it read, which the sidecar seals into the
+    /// phone's preview token.
     SyncPreview {
         request_id: String,
         project_id: String,
-        direction: SyncDirection,
+        op: SyncOp,
         paths: Vec<String>,
     },
     /// One take-a-side, deletion or forget over `paths`. The window checks
@@ -1502,6 +1505,12 @@ pub enum DesktopRequest {
         project_id: String,
         op: SyncOp,
         paths: Vec<String>,
+        /// The fingerprint from the preview the phone confirmed, unsealed from
+        /// its token by the sidecar. The window recomputes it from a fresh
+        /// status pass and moves nothing on a mismatch. Every op but
+        /// `forget` carries one; a window never acts on one without.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<String>,
     },
     /// The mirror's copy of one diverged file against the host's (`sync_diff`).
     SyncDiff {
@@ -1533,6 +1542,41 @@ pub enum SyncOp {
     DeleteLocal,
     /// Stop tracking a file gone from both sides.
     Forget,
+}
+
+impl SyncOp {
+    /// The wire spelling, which a preview token binds to.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pull => "pull",
+            Self::Push => "push",
+            Self::DeleteHost => "delete_host",
+            Self::DeleteLocal => "delete_local",
+            Self::Forget => "forget",
+        }
+    }
+
+    /// Whether the phone must have previewed this op before resolving it:
+    /// everything but `forget`, which only drops a record of a file that is
+    /// gone from both sides.
+    pub fn needs_preview(self) -> bool {
+        self != Self::Forget
+    }
+
+    /// Whether this op deletes a copy of a file (the host account's, or the
+    /// mirror's).
+    pub fn deletes(self) -> bool {
+        matches!(self, Self::DeleteHost | Self::DeleteLocal)
+    }
+}
+
+impl From<SyncDirection> for SyncOp {
+    fn from(direction: SyncDirection) -> Self {
+        match direction {
+            SyncDirection::Pull => Self::Pull,
+            SyncDirection::Push => Self::Push,
+        }
+    }
 }
 
 /// One row of the window's diverged list. `state` is `amber` (both sides have
@@ -2225,8 +2269,13 @@ pub enum DesktopResponse {
         #[serde(default)]
         files: Vec<DivergedFile>,
     },
+    /// Answer to [`DesktopRequest::SyncPreview`]. `fingerprint`: the window's
+    /// hash of the state and mtimes of the rows it read (hex); empty from a
+    /// window that predates it, which the sidecar will not seal a token for.
     SyncPreview {
         preview: SyncPreviewFacts,
+        #[serde(default)]
+        fingerprint: String,
     },
     /// Answer to [`DesktopRequest::SyncResolve`], in counts: why a file failed
     /// is the backend's sentence, which may name a full path. `skipped` no

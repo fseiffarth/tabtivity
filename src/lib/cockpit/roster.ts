@@ -180,3 +180,30 @@ export function stepSelection(rows: readonly { ptyId: string }[], selected: stri
   if (at < 0) return rows[delta === 1 ? 0 : rows.length - 1].ptyId;
   return rows[(at + delta + rows.length) % rows.length].ptyId;
 }
+
+/**
+ * The agent the Now view's detail pane follows while nothing is picked and
+ * nothing asks (`shownId = selected ?? topAsking ?? follow`): the latest
+ * working agent, "latest" by when its turn began (`workingAt` is `now` for
+ * every working row, so it cannot tell them apart).
+ *
+ * **Sticky.** Every switch re-attaches a terminal, so `followId` is kept for as
+ * long as that agent is still working, and a newer working agent does not take
+ * the pane from it. Only when it stops is the pane re-pointed: at the newest
+ * working agent, else (nothing works) it stays on the one it had, so a
+ * finished turn does not blank the pane. null when there never was one, or the
+ * followed row is gone.
+ */
+export function pickFollow(rows: readonly RosterRow[], followId: string | null): string | null {
+  const followed = followId ? rows.find((row) => row.ptyId === followId) : undefined;
+  if (followed?.state === "working") return followed.ptyId;
+  let best: RosterRow | undefined;
+  for (const row of rows) {
+    if (row.state !== "working") continue;
+    // A later start wins, a row with no stamp loses to one with; ties keep the
+    // roster's own order (the first stays).
+    const at = row.facts.turnStartedAt ?? Number.NEGATIVE_INFINITY;
+    if (!best || at > (best.facts.turnStartedAt ?? Number.NEGATIVE_INFINITY)) best = row;
+  }
+  return best?.ptyId ?? followed?.ptyId ?? null;
+}

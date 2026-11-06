@@ -98,4 +98,30 @@ describe("desktop modal focus", () => {
     expect(input.value).toBe("new.tex");
     expect(screen.getByText(/No space/)).toBeTruthy();
   });
+
+  it("draws the title row and the scroll frame when asked, and labels the dialog by the title", () => {
+    const dismiss = vi.fn();
+    const close = vi.fn();
+    render(
+      <DialogShell frame="project-dialog" className="wide" title="Categories" onClose={close} onDismiss={dismiss} scroll>
+        <p>Body</p>
+      </DialogShell>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Categories" });
+    expect(dialog.className).toBe("project-dialog dialog-framed wide");
+    // The title row stays outside the scrolling body, so it holds still.
+    expect(dialog.querySelector(".settings-title-row > h2")?.textContent).toBe("Categories");
+    expect(screen.getByText("Body").parentElement?.className).toBe("dialog-scroll");
+    expect(dialog.querySelector(".dialog-scroll .settings-title-row")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(dismiss).not.toHaveBeenCalled();
+  });
+
+  it("keeps its old shape without the new props", () => {
+    render(<DialogShell onDismiss={() => {}}><h2>Delete?</h2></DialogShell>);
+    const dialog = screen.getByRole("dialog", { name: "Delete?" });
+    expect(dialog.className).toBe("file-delete-dialog");
+    expect(dialog.querySelector(".settings-title-row, .dialog-scroll")).toBeNull();
+  });
 });

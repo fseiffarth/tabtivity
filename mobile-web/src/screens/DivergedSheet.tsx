@@ -18,7 +18,11 @@ type Translate = ReturnType<typeof useT>;
 interface NameList { heading: string; names: string[]; more?: number }
 
 /** A confirmation waiting on its second tap: what it says, then what it runs. */
-interface Ask { title: string; lines: string[]; lists: NameList[]; label: string; steps: { op: SyncOp; ids: string[] }[] }
+interface Ask { title: string; lines: string[]; lists: NameList[]; label: string; steps: Step[] }
+
+/** One act of a confirmation. `token` is its preview's receipt, which the
+ * resolve must echo (every op but `forget`). */
+interface Step { op: SyncOp; ids: string[]; token?: string }
 
 /** A file's diff as the sheet holds it once asked for. */
 type DiffState = { loading: true } | { loading?: false; diff: string; cut: boolean } | { loading?: false; error: string };
@@ -39,10 +43,8 @@ function statusOf(row: DivergedRow): SyncEntryStatus {
   };
 }
 
-/** What a preview says, in the desktop's own sentences. `null`: it failed,
- * which is said and never reads as nothing to lose. */
-function previewLines(t: Translate, direction: SyncDirection, preview: SyncPreview | null, why: string): string[] {
-  if (!preview) return [t("syncConfirm.previewFailed", { error: why })];
+/** What a preview says, in the desktop's own sentences. */
+function previewLines(t: Translate, direction: SyncDirection, preview: SyncPreview): string[] {
   const lines = [t("syncConfirm.willTransfer", { count: preview.files, size: formatBytes(preview.bytes) })];
   if (preview.tracked > 0) lines.push(t("syncConfirm.trackedAsCommits", { count: preview.tracked }));
   if (!preview.exact) lines.push(t("syncConfirm.notInspected"));
@@ -51,8 +53,8 @@ function previewLines(t: Translate, direction: SyncDirection, preview: SyncPrevi
 }
 
 /** The files a transfer would lose changes in, by name. */
-function lossList(t: Translate, direction: SyncDirection, preview: SyncPreview | null): NameList[] {
-  if (!preview || preview.destructive_total === 0) return [];
+function lossList(t: Translate, direction: SyncDirection, preview: SyncPreview): NameList[] {
+  if (preview.destructive_total === 0) return [];
   return [{
     heading: t(direction === "pull" ? "syncConfirm.lossLocalTitle" : "syncConfirm.lossHostTitle", { count: preview.destructive_total }),
     names: preview.destructive,
@@ -69,8 +71,10 @@ function lossList(t: Translate, direction: SyncDirection, preview: SyncPreview |
  * desktop, and so does the host scan for files only the host holds.
  *
  * Every take-a-side and deletion asks first with the desktop's confirmation,
- * priced by the same preview, and the window checks each file against a fresh
- * status pass before it moves anything. Without `project_sync` the list is
+ * priced by the same preview, which hands back a receipt (`token`) the act
+ * echoes: the desktop refuses an act without one, or one for other files or
+ * grown stale, and checks each file against a fresh status pass before it
+ * moves anything. A failed preview asks nothing. Without `project_sync` the list is
  * read-only.
  */
 export function DivergedSheet({ projectId, label, onClose, onChanged }: { projectId: string; label: string; onClose: () => void; onChanged: () => void }) {
@@ -144,7 +148,7 @@ export function DivergedSheet({ projectId, label, onClose, onChanged }: { projec
       let failed = 0;
       let skipped = 0;
       for (const step of steps) {
-        const outcome = await resolveDiverged(projectId, step.op, step.ids);
+        const outcome = await resolveDiverged(projectId, step.op, step.ids, step.token);
         done += outcome.done;
         failed += outcome.failed;
         skipped += outcome.skipped;
@@ -165,19 +169,30 @@ export function DivergedSheet({ projectId, label, onClose, onChanged }: { projec
     }
   };
 
-  /** One transfer's question, priced first: a preview that fails still asks. */
+  /** A failed preview is said and nothing is asked: with no receipt the
+   * desktop would refuse the act, and a price that failed must never read as
+   * nothing to lose. */
+  const previewFailed = (cause: unknown) => {
+    setWorking(false);
+    setNotice("");
+    setError(t("syncConfirm.previewFailed", { error: describeFailure(cause) }));
+  };
+
+  /** One transfer's question, priced first. */
   const askTransfer = async (direction: SyncDirection, paths: string[], isNew: boolean) => {
     const single = paths.length === 1;
     const name = paths[0] ?? "";
     setWorking(true);
-    let preview: SyncPreview | null = null;
-    let why = "";
+    setError("");
+    let priced: { preview: SyncPreview; token: string };
     try {
-      preview = await previewDiverged(projectId, direction, ids(paths));
+      priced = await previewDiverged(projectId, direction, ids(paths));
     } catch (cause) {
-      why = describeFailure(cause);
+      previewFailed(cause);
+      return;
     }
     setWorking(false);
+    const { preview, token } = priced;
     const body: TranslationKey = direction === "pull"
       ? (single ? "syncConfirm.pullFile" : "syncConfirm.pullSelected")
       : isNew
@@ -188,11 +203,11 @@ export function DivergedSheet({ projectId, label, onClose, onChanged }: { projec
       lines: [
         t(body, { name, count: paths.length }),
         ...(isNew ? [] : [t("syncConfirm.forceNote")]),
-        ...previewLines(t, direction, preview, why),
+        ...previewLines(t, direction, preview),
       ],
       lists: lossList(t, direction, preview),
       label: t(direction === "pull" ? "syncConfirm.confirmPull" : isNew ? "syncConfirm.confirmPushNew" : "syncConfirm.confirmPush"),
-      steps: [{ op: direction, ids: ids(paths) }],
+      steps: [{ op: direction, ids: ids(paths), token }],
     });
   };
 
@@ -200,34 +215,48 @@ export function DivergedSheet({ projectId, label, onClose, onChanged }: { projec
   const askNewer = async () => {
     const directions = [["pull", newer.host], ["push", newer.local]] as const;
     setWorking(true);
-    const priced = await Promise.all(directions.filter(([, paths]) => paths.length > 0).map(async ([direction, paths]) => {
-      try {
-        return { direction, paths, preview: await previewDiverged(projectId, direction, ids(paths)), why: "" };
-      } catch (cause) {
-        return { direction, paths, preview: null, why: describeFailure(cause) };
-      }
-    }));
+    setError("");
+    let priced: { direction: SyncDirection; paths: string[]; preview: SyncPreview; token: string }[];
+    try {
+      priced = await Promise.all(directions.filter(([, paths]) => paths.length > 0).map(async ([direction, paths]) => ({
+        direction, paths, ...await previewDiverged(projectId, direction, ids(paths)),
+      })));
+    } catch (cause) {
+      previewFailed(cause);
+      return;
+    }
     setWorking(false);
     setAsk({
       title: t("syncConfirm.newerTitle"),
       lines: [
         t("syncConfirm.newerBody", { count: newer.host.length + newer.local.length }),
-        ...priced.flatMap(({ direction, paths, preview, why }) => [
+        ...priced.flatMap(({ direction, paths, preview }) => [
           t(direction === "pull" ? "syncConfirm.newerPull" : "syncConfirm.newerPush", { count: paths.length }),
-          ...previewLines(t, direction, preview, why),
+          ...previewLines(t, direction, preview),
         ]),
       ],
       lists: priced.flatMap(({ direction, preview }) => lossList(t, direction, preview)),
       label: t("syncConfirm.confirmNewer"),
-      steps: priced.map(({ direction, paths }) => ({ op: direction, ids: ids(paths) })),
+      steps: priced.map(({ direction, paths, token }) => ({ op: direction, ids: ids(paths), token })),
     });
   };
 
-  /** Complete deletions: each named, since each removes the file's last copy. */
-  const askDelete = (split: { host: string[]; local: string[] }) => {
+  /** Complete deletions: each named, since each removes the file's last copy.
+   * Previewed like a transfer, for the receipt the desktop asks for. */
+  const askDelete = async (split: { host: string[]; local: string[] }) => {
     const sides = [["host", split.host], ["local", split.local]] as const;
     const present = sides.filter(([, paths]) => paths.length > 0);
     const only = present.length === 1 && present[0][1].length === 1 ? present[0] : null;
+    setWorking(true);
+    setError("");
+    let tokens: string[];
+    try {
+      tokens = (await Promise.all(present.map(([side, paths]) => previewDiverged(projectId, side === "host" ? "delete_host" : "delete_local", ids(paths))))).map(({ token }) => token);
+    } catch (cause) {
+      previewFailed(cause);
+      return;
+    }
+    setWorking(false);
     setAsk({
       title: t(present[0]?.[0] === "host" ? "syncConfirm.deleteHostTitle" : "syncConfirm.deleteLocalTitle"),
       lines: only ? [t(only[0] === "host" ? "syncConfirm.deleteHostBody" : "syncConfirm.deleteLocalBody", { name: only[1][0] })] : [],
@@ -236,7 +265,7 @@ export function DivergedSheet({ projectId, label, onClose, onChanged }: { projec
         names: paths,
       })),
       label: t("mobile.diverged.delete"),
-      steps: present.map(([side, paths]) => ({ op: side === "host" ? "delete_host" as const : "delete_local" as const, ids: ids(paths) })),
+      steps: present.map(([side, paths], index) => ({ op: side === "host" ? "delete_host" as const : "delete_local" as const, ids: ids(paths), token: tokens[index] })),
     });
   };
 
@@ -284,7 +313,7 @@ export function DivergedSheet({ projectId, label, onClose, onChanged }: { projec
               <button disabled={!canAct || bulk.length === 0} aria-label={t("projectFilesView.takeRemoteAllAria")} onClick={() => void askTransfer("pull", bulk, false)}><ArrowDownIcon /> {t("mobile.diverged.useHost")}</button>
               <button disabled={!canAct || bulk.length === 0} aria-label={t("projectFilesView.keepLocalAllAria")} onClick={() => void askTransfer("push", bulk, false)}><ArrowUpIcon /> {t("mobile.diverged.useLocal")}</button>
               <button disabled={!canAct || newer.host.length + newer.local.length === 0} aria-label={t("projectFilesView.takeNewerAllAria")} onClick={() => void askNewer()}><ArrowsHorizontalIcon /> {t("mobile.diverged.useNewer")}</button>
-              <button className="danger" disabled={!canAct || deletable.host.length + deletable.local.length === 0} aria-label={t("projectFilesView.deleteAllAria")} onClick={() => askDelete(deletable)}><TrashIcon /> {t("mobile.diverged.delete")}</button>
+              <button className="danger" disabled={!canAct || deletable.host.length + deletable.local.length === 0} aria-label={t("projectFilesView.deleteAllAria")} onClick={() => void askDelete(deletable)}><TrashIcon /> {t("mobile.diverged.delete")}</button>
             </div>
           </div>}
           <ul className="git-rows">
@@ -311,7 +340,7 @@ export function DivergedSheet({ projectId, label, onClose, onChanged }: { projec
                   : <div className="diverged-actions">
                     <button disabled={!canAct || noHost} aria-label={t("projectFilesView.takeRemoteAria")} onClick={() => void askTransfer("pull", [row.path], false)}><ArrowDownIcon /> {t("mobile.diverged.useHost")}</button>
                     <button disabled={!canAct || noLocal} aria-label={t("projectFilesView.keepLocalAria")} onClick={() => void askTransfer("push", [row.path], false)}><ArrowUpIcon /> {t("mobile.diverged.useLocal")}</button>
-                    {deleteSide && <button className="danger" disabled={!canAct} aria-label={t(deleteSide === "host" ? "projectFilesView.deleteHostAria" : "projectFilesView.deleteLocalAria")} onClick={() => askDelete(deleteSide === "host" ? { host: [row.path], local: [] } : { host: [], local: [row.path] })}><TrashIcon /> {t("mobile.diverged.delete")}</button>}
+                    {deleteSide && <button className="danger" disabled={!canAct} aria-label={t(deleteSide === "host" ? "projectFilesView.deleteHostAria" : "projectFilesView.deleteLocalAria")} onClick={() => void askDelete(deleteSide === "host" ? { host: [row.path], local: [] } : { host: [], local: [row.path] })}><TrashIcon /> {t("mobile.diverged.delete")}</button>}
                   </div>)}
               </li>;
             })}

@@ -1,7 +1,7 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
-import { CheckIcon, CloseIcon, ClockIcon, CloudIcon, DotIcon, QuestionIcon, RefreshIcon, RingIcon, StopIcon, type IconProps } from "../common/icons/Icon";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { CheckIcon, ChevronDownIcon, CloseIcon, ClockIcon, CloudIcon, DotIcon, RefreshIcon } from "../common/icons/Icon";
 
-import { AGENT_SORTS, isAgentSort } from "../../../shared/agentSort";
+import { AGENT_SORTS } from "../../../shared/agentSort";
 import { formatClock, rosterTurnLabel } from "./cockpitFormat";
 import type { Roster, RosterRow } from "../../lib/cockpit/roster";
 import { stepSelection } from "../../lib/cockpit/roster";
@@ -17,16 +17,10 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { ROOT_SCOPE } from "../../stores/tabs";
 import { StarIcon } from "../layout/StarIcon";
+import { ContextMenuPortal } from "../common/ContextMenuPortal";
+import { CockpitUntested } from "./CockpitUntested";
 import { CONTINUE_PROMPT } from "../tabs/TabLocalityBadges";
 import { tabColorCss } from "../../lib/theme/tabColors";
-
-const STATE_MARK: Record<RosterRow["state"], (p: IconProps) => ReactElement> = {
-  question: QuestionIcon,
-  working: RingIcon,
-  interrupted: StopIcon,
-  done: CheckIcon,
-  idle: DotIcon,
-};
 
 const STATE_LABEL: Record<RosterRow["state"], TranslationKey> = {
   question: "cockpit.state.asking",
@@ -82,11 +76,69 @@ export function ScopeChip({ scope }: { scope: RosterRow["scope"] }) {
   );
 }
 
+/**
+ * Grouping and sort in one button, `<grouping> · <sort> ▾`, and the shared
+ * popover (`ContextMenuPortal`, `.tab-new-menu`) under it. The same two
+ * choices stay reachable by their rebindable steering keys' own store
+ * setters; this is only the mouse's way.
+ */
+function RosterViewMenu({ mode, sort }: { mode: CockpitRosterMode; sort: string }) {
+  const t = useT();
+  const ref = useRef<HTMLButtonElement>(null);
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+  const close = () => setAnchor(null);
+  const toggle = () => {
+    if (anchor) return close();
+    const rect = ref.current?.getBoundingClientRect();
+    if (rect) setAnchor({ x: rect.left, y: rect.bottom + 4 });
+  };
+  const modeLabel = t(MODES.find((m) => m.id === mode)?.label ?? "cockpit.mode.flat");
+  const sortLabel = t(SORT_LABEL[sort] ?? SORT_LABEL.lastWorking);
+  const item = (key: string, on: boolean, label: string, pick: () => void) => (
+    <button
+      key={key}
+      type="button"
+      role="menuitemradio"
+      aria-checked={on}
+      className={`tab-new-menu-item${on ? " selected" : ""}`}
+      onClick={() => {
+        pick();
+        close();
+      }}
+    >
+      <span className="cockpit-menu-check">{on && <CheckIcon />}</span>
+      {label}
+    </button>
+  );
+  return (
+    <>
+      <button
+        type="button"
+        ref={ref}
+        className="settings-btn sm cockpit-view-menu-btn"
+        aria-haspopup="menu"
+        aria-expanded={anchor != null}
+        title={`${t("cockpit.roster.grouping")} · ${t("cockpit.roster.sort")}`}
+        onClick={toggle}
+      >
+        {modeLabel} · {sortLabel} <ChevronDownIcon />
+      </button>
+      {anchor && (
+        <ContextMenuPortal x={anchor.x} y={anchor.y} keepBelow className="tab-new-menu cockpit-view-menu" onClose={close}>
+          <div className="tab-new-menu-group-label">{t("cockpit.roster.grouping")}</div>
+          {MODES.map((m) => item(m.id, mode === m.id, t(m.label), () => useCockpitStore.getState().setRosterMode(m.id)))}
+          <div className="tab-new-menu-group-label">{t("cockpit.roster.sort")}</div>
+          {AGENT_SORTS.map((id) => item(id, sort === id, t(SORT_LABEL[id]), () => useCockpitStore.getState().setSort(id)))}
+        </ContextMenuPortal>
+      )}
+    </>
+  );
+}
+
 function Row({ row, selected, now, onOpen }: { row: RosterRow; selected: boolean; now: number; onOpen?: (ptyId: string) => void }) {
   const t = useT();
   const { facts } = row;
   const turn = rosterTurnLabel(row, now, t);
-  const Mark = STATE_MARK[row.state];
   return (
     <div
       role="option"
@@ -101,8 +153,9 @@ function Row({ row, selected, now, onOpen }: { row: RosterRow; selected: boolean
       onDoubleClick={() => jumpToRow(row.ptyId)}
     >
       <div className="cockpit-roster-line">
-        <span className="cockpit-state-mark" title={t(STATE_LABEL[row.state])} aria-label={t(STATE_LABEL[row.state])}>
-          <Mark />
+        {/* One filled dot in the state's colour (CSS, `.state-*`); the word is its title. */}
+        <span className="cockpit-state-mark" title={t(STATE_LABEL[row.state])} role="img" aria-label={t(STATE_LABEL[row.state])}>
+          <DotIcon />
         </span>
         <span className="cockpit-roster-tab">{row.tab.label}</span>
         <ScopeChip scope={row.scope} />
@@ -141,6 +194,7 @@ export function CockpitRoster({
   now,
   onShow,
   onOpen,
+  headExtra,
 }: {
   roster: Roster;
   selected: string | null;
@@ -148,6 +202,8 @@ export function CockpitRoster({
   onShow: (ptyId: string) => void;
   /** A click on a row (after it was selected): the narrow window opens the detail on it. */
   onOpen?: (ptyId: string) => void;
+  /** Controls at the right end of the head (the narrow band's Needs-you chip). */
+  headExtra?: ReactNode;
 }) {
   const t = useT();
   const mode = useCockpitStore((s) => s.rosterMode);
@@ -202,11 +258,18 @@ export function CockpitRoster({
     <section className="cockpit-roster" aria-label={t("cockpit.roster.title")}>
       <div className="cockpit-column-head">
         <span>
-          {t("cockpit.roster.title")} <span className="cockpit-count">{roster.counts.total}</span>
+          {t("cockpit.roster.title")}{" "}
+          <span className="cockpit-count">
+            {roster.rows.length < roster.counts.total
+              ? t("cockpit.roster.countOf", { shown: roster.rows.length, total: roster.counts.total })
+              : roster.counts.total}
+          </span>
         </span>
+        <CockpitUntested view="now" />
         <span className="cockpit-meta">
           {t("cockpit.roster.summary", { working: roster.counts.working, asking: roster.counts.asking })}
         </span>
+        {headExtra}
       </div>
       <div className="cockpit-roster-controls">
         {scopeFilter && (
@@ -232,21 +295,7 @@ export function CockpitRoster({
             }
           }}
         />
-        <select
-          className="settings-select sm"
-          value={sort}
-          aria-label={t("cockpit.roster.sort")}
-          onChange={(e) => isAgentSort(e.target.value) && useCockpitStore.getState().setSort(e.target.value)}
-        >
-          {AGENT_SORTS.map((id) => <option key={id} value={id}>{t(SORT_LABEL[id])}</option>)}
-        </select>
-        <div className="cockpit-chips" role="group" aria-label={t("cockpit.roster.grouping")}>
-          {MODES.map((m) => (
-            <button key={m.id} type="button" className={`cockpit-chip-btn${mode === m.id ? " on" : ""}`} aria-pressed={mode === m.id} onClick={() => useCockpitStore.getState().setRosterMode(m.id)}>
-              {t(m.label)}
-            </button>
-          ))}
-        </div>
+        <RosterViewMenu mode={mode} sort={sort} />
         <div className="cockpit-chips" role="group" aria-label={t("cockpit.roster.stateFilter")}>
           {FILTERS.map((f) => (
             <button key={f.id} type="button" className={`cockpit-chip-btn${stateFilter === f.id ? " on" : ""}`} aria-pressed={stateFilter === f.id} onClick={() => useCockpitStore.getState().setStateFilter(f.id)}>
