@@ -9,6 +9,14 @@
 //! (`ProjectDir`), so a link swapped in after the walk is never read. A
 //! folder past [`MAX_ZIP_FILES`] files or [`MAX_ZIP_BYTES`] bytes is refused
 //! before a byte is sent.
+//!
+//! An entry name is written as the folder holds it (`zip::ZipWriter::start_file`
+//! stores the bytes it is given: it neither turns `\` into `/` nor refuses a
+//! control character), and on Unix a project file may be named with a `\` or a
+//! control character that some phone extractors read as a separator, or with a
+//! leading `-` or `~` that a shell on the phone would take for an option or a
+//! home folder. A file with such a name in any segment of its path is left out
+//! ([`unsafe_entry`]) and counted ([`Planned::skipped`]) so the phone can say so.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -26,12 +34,22 @@ pub const MAX_ZIP_BYTES: u64 = 1024 * 1024 * 1024;
 pub struct Planned {
     files: Vec<(String, String)>,
     pub bytes: u64,
+    /// Files left out for an entry name that is not safe to write ([`unsafe_entry`]).
+    pub skipped: usize,
 }
 
 impl Planned {
     pub fn count(&self) -> usize {
         self.files.len()
     }
+}
+
+/// Whether a file's path inside the zip has a segment a phone's extractor or
+/// shell could take for something else: a `\` (a separator to some
+/// extractors), a control character (any `char::is_control`, so C0, DEL and C1),
+/// or a leading `-` (an option) or `~` (a home folder).
+pub fn unsafe_entry(inside: &str) -> bool {
+    inside.split('/').any(|segment| segment.starts_with(['-', '~']) || segment.chars().any(|c| c == '\\' || c.is_control()))
 }
 
 /// The files of the folder `under` (`""` is the root), walked as the drawer
@@ -43,16 +61,20 @@ pub fn plan(root: &Path, under: &str) -> Result<Planned, FilesError> {
     if stopped {
         return Err(FilesError::TooLarge);
     }
-    let mut planned = Planned { files: Vec::new(), bytes: 0 };
+    let mut planned = Planned { files: Vec::new(), bytes: 0, skipped: 0 };
     for (rel, is_dir) in walked {
         if is_dir {
             continue;
         }
         let (parent, leaf) = rel.rsplit_once('/').unwrap_or(("", rel.as_str()));
+        let inside = if under.is_empty() { rel.clone() } else { rel[under.len() + 1..].to_string() };
+        if unsafe_entry(&inside) {
+            planned.skipped += 1;
+            continue;
+        }
         let Ok(dir) = ProjectDir::open(root, parent) else { continue };
         let Some((_file, meta)) = dir.open_file(leaf) else { continue };
         planned.bytes = planned.bytes.saturating_add(meta.len());
-        let inside = if under.is_empty() { rel.clone() } else { rel[under.len() + 1..].to_string() };
         planned.files.push((rel, inside));
         if planned.files.len() > MAX_ZIP_FILES || planned.bytes > MAX_ZIP_BYTES {
             return Err(FilesError::TooLarge);
@@ -171,6 +193,43 @@ mod tests {
         }
         assert_eq!(plan(dir.path(), "many").unwrap_err(), FilesError::TooLarge);
         assert!(plan(dir.path(), "gone").is_err());
+    }
+
+    /// `zip` 9.0.5 `start_file` stores the name's bytes as given (no `\` -> `/`),
+    /// so the walk is where an unsafe name is stopped: left out, counted, and
+    /// the safe files around it still zipped.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_named_with_a_backslash_control_character_or_leading_dash_or_tilde_is_left_out_and_counted() {
+        let dir = tree();
+        let paper = dir.path().join("paper");
+        for name in ["a\\b.txt", "bell\u{7}.txt", "new\nline.txt", "del\u{7f}.txt", "-rf", "~root", "~"] {
+            fs::write(paper.join(name), "x").unwrap();
+        }
+        fs::create_dir(paper.join("-dir")).unwrap();
+        fs::write(paper.join("-dir").join("inside.txt"), "x").unwrap();
+        fs::create_dir(paper.join("back\\slash")).unwrap();
+        fs::write(paper.join("back\\slash").join("inside.txt"), "x").unwrap();
+        fs::write(paper.join("dash-in-the-middle~and.txt"), "ok").unwrap();
+        let planned = plan(dir.path(), "paper").unwrap();
+        assert_eq!(planned.skipped, 9);
+        let mut bytes = Vec::new();
+        write(dir.path(), &planned, &mut bytes).unwrap();
+        // The raw bytes, not `name()`: nothing unsafe is in the archive at all.
+        assert!(!bytes.windows(2).any(|w| w == b"\\b" || w == b"\\s"), "no backslash name written");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(names_in(&mut archive), [".latexmkrc", "dash-in-the-middle~and.txt", "figs/a.png", "main.tex"]);
+    }
+
+    /// What `zip` 9.0.5 does with a name it is handed: nothing. A `\` is
+    /// written as it is, which is why [`unsafe_entry`] must stop it first.
+    #[test]
+    fn start_file_writes_a_backslash_name_unchanged() {
+        let mut out = Vec::new();
+        let mut zip = zip::ZipWriter::new_stream(&mut out);
+        zip.start_file("a\\b/c.txt", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
+        zip.finish().unwrap();
+        assert!(out.windows(9).any(|w| w == b"a\\b/c.txt"), "the name is stored verbatim");
     }
 
     #[cfg(unix)]

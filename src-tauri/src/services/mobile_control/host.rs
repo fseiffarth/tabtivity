@@ -7991,8 +7991,9 @@ async fn project_files_folder_undo(
 /// **Download as zip**: the folder's files as a stored zip, streamed
 /// (`files_zip`). This computer's side only; past `files_zip::MAX_ZIP_FILES`
 /// files or `MAX_ZIP_BYTES` bytes it is `folder_too_large`, before anything
-/// is sent. `check=1` answers only `{ files, bytes }` (or the refusal), so the
-/// phone can say so before it hands the browser a download.
+/// is sent. `check=1` answers only `{ files, bytes, skipped }` (or the
+/// refusal), so the phone can say so before it hands the browser a download,
+/// and how many files `files_zip::unsafe_entry` leaves out of it by name.
 async fn project_files_zip(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -8026,7 +8027,7 @@ async fn project_files_zip(
         Err(error) => return files_error(error).into_response(),
     };
     if query.get("check").is_some_and(|on| on == "1") {
-        return (StatusCode::OK, Json(json!({ "files": planned.count(), "bytes": planned.bytes }))).into_response();
+        return (StatusCode::OK, Json(json!({ "files": planned.count(), "bytes": planned.bytes, "skipped": planned.skipped }))).into_response();
     }
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
     tokio::task::spawn_blocking(move || {

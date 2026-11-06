@@ -2015,6 +2015,7 @@ export const dict: Dict = {
   "mobile.files.folder.undoFailed": "Solo se puede retirar una carpeta vacía creada desde este teléfono en la última hora.",
   "mobile.files.zip.tooLarge": "Esta carpeta es demasiado grande para descargarla como zip (más de 2.000 archivos o 1 GB).",
   "mobile.files.zip.failed": "No se pudo crear el zip.",
+  "mobile.files.zip.skipped": "{count} archivos se dejaron fuera del zip porque sus nombres no son seguros al extraer (barra invertida, carácter de control, o - o ~ al principio).",
   "mobile.files.library.layout": "Diseño",
   "mobile.files.library.grid": "Cuadrícula",
   "mobile.files.library.list": "Lista",
