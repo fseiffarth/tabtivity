@@ -239,6 +239,8 @@ export const UNTESTED = {
   "fileTree.5": { area: "files", what: "FileTree · Download to…" },
   "fileTree.downloadExcludedFolder": { area: "files", what: "FileTree · Download folder (stays excluded) — one-off pull of an excluded folder, or one inside an excluded tree, from the Remote or Local tree menu" },
   "fileTree.pasteFromSystem": { area: "files", what: "FileTree · Paste files/folders copied in the OS file manager (system clipboard)" },
+  "fileTree.copyToSystem": { area: "files", what: "FileTree · Copy also puts the files on the system clipboard, to paste into another app (Teams, mail, a file manager)" },
+  "tabDrag.dragOutToApp": { area: "files", what: "FileTree drag · Dragging a file out of the window hands it to the app under the cursor (Teams, browser, mail); ⇧ Shift while leaving keeps it in the app (new window / popout); Wayland included" },
   "gitHistory.1": { area: "files", what: "GitHistory · Worktrees", tested: "2026-09-28" },
   "gitHistory.worktreeSelection": { area: "files", what: "Git · Select a worktree; branches, history and actions follow its checkout" },
   "gitHistory.loadMoreCommits": { area: "files", what: "GitHistory · Load older commits" },

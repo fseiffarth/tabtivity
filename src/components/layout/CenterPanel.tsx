@@ -1483,16 +1483,17 @@ export function DragGhost() {
   // During a file drag (pointer-based drag-to-tab) the ghost lists the available
   // drop options so the user can see what each release will do.
   const isFileDrag = useDragStore((s) => s.drag?.kind === "file");
+  const copyOut = useDragStore((s) => s.drag?.copyOut === true);
   const node = useDragStore((s) => s.drag?.previewNode ?? null);
   const srcW = useDragStore((s) => s.drag?.previewW ?? 0);
   const srcH = useDragStore((s) => s.drag?.previewH ?? 0);
   const thumbRef = useRef<HTMLDivElement>(null);
 
-  // Track Shift/Ctrl live so the options legend can highlight "force new
-  // window" / "copy out to another app" while the file drag is in flight (a
-  // modifier can toggle without a pointer move, which wouldn't otherwise
-  // re-render the ghost). Ctrl only marks the option here — FileTree's own
-  // drag gesture decides when to actually hand off to the native OS drag.
+  // Track Shift/Ctrl live so the options legend can highlight "into another
+  // app" / "keep it in the app" while the file drag is in flight (a modifier
+  // can toggle without a pointer move, which wouldn't otherwise re-render the
+  // ghost). The legend only marks the option — fileTreeDrag's gesture decides
+  // when to actually hand off to the native OS drag.
   const [shiftHeld, setShiftHeld] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   useEffect(() => {
@@ -1531,22 +1532,34 @@ export function DragGhost() {
   return createPortal(
     <div className="tab-drag-ghost" style={{ left: pointerX, top: pointerY }}>
       <div className="tab-drag-ghost-label">{label}</div>
-      {isFileDrag ? (
+      {isFileDrag && copyOut ? (
         <div className="tab-drag-ghost-opts">
-          {/* Exactly ONE option is marked at a time — it is what THIS release
-              would do. Ctrl (copy out) wins over Shift (force a new window),
-              matching the drag itself: once the cursor leaves the window with
-              Ctrl held, the OS drag owns the drop and the in-app targets are
-              out of the picture. */}
+          {/* A local file: leaving the window hands it to the OS drag (the app
+              under the cursor), unless Shift keeps it in the app — the
+              rule fileTreeDrag's `exportOnLeave` applies. Ctrl still forces
+              the export, so it wins over Shift here too. The marked line is
+              what leaving the window would do now. */}
           <div className="tab-drag-ghost-opt">{t("tabDrag.dropFolder")}</div>
-          <div className={`tab-drag-ghost-opt${!shiftHeld && !ctrlHeld ? " active" : ""}`}>
-            {t("tabDrag.dropOpen")}
+          <div className="tab-drag-ghost-opt">{t("tabDrag.dropPane")}</div>
+          <div className={`tab-drag-ghost-opt${!shiftHeld || ctrlHeld ? " active" : ""}`}>
+            {t("tabDrag.dragOutToApp")}
+            <UntestedTag id="tabDrag.dragOutToApp" />
           </div>
           <div className={`tab-drag-ghost-opt${shiftHeld && !ctrlHeld ? " active" : ""}`}>
-            {t("tabDrag.shiftNewWindow")}
+            {t("tabDrag.shiftKeepInApp")}
           </div>
-          <div className={`tab-drag-ghost-opt${ctrlHeld ? " active" : ""}`}>
-            {t("tabDrag.ctrlCopyOut")}
+        </div>
+      ) : isFileDrag ? (
+        <div className="tab-drag-ghost-opts">
+          {/* A host (SFTP) listing never leaves for another app: a release
+              outside opens a window or docks into a popout, Shift forcing a
+              new window. Exactly one modifier line is marked. */}
+          <div className="tab-drag-ghost-opt">{t("tabDrag.dropFolder")}</div>
+          <div className={`tab-drag-ghost-opt${!shiftHeld ? " active" : ""}`}>
+            {t("tabDrag.dropOpen")}
+          </div>
+          <div className={`tab-drag-ghost-opt${shiftHeld ? " active" : ""}`}>
+            {t("tabDrag.shiftNewWindow")}
           </div>
         </div>
       ) : null}

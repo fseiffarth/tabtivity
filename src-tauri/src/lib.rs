@@ -2230,6 +2230,7 @@ pub fn run() {
             commands::clipboard::save_clipboard_image,
             commands::clipboard::clipboard_file_paths,
             commands::clipboard::copy_text_to_clipboard,
+            commands::clipboard::copy_files_to_clipboard,
             commands::connect::connect_status,
             commands::connect::connect_pair,
             commands::connect::connect_forget,

@@ -64,7 +64,7 @@ import { FileIcon } from "../common/icons/FileIcon";
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, RefreshIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
-import { storageKey } from "../../lib/brand";
+import { BRAND, storageKey } from "../../lib/brand";
 import type { GitStatusMap, MoveTargetAttrs, RowActions, SharedTreeSearch } from "./fileTreeTypes";
 import { beginNativeFileDrag, startEntryPointerDrag } from "./fileTreeDrag";
 import { useFileTreeFsWatch, useFileTreeListingState, useFileTreeMountLoad } from "./useFileTreeListing";
@@ -1299,7 +1299,7 @@ export function FileTree({
       selected.has(entry.path) && selected.size > 1
         ? entries.filter((en) => selected.has(en.path)).map((en) => en.path)
         : [entry.path];
-    beginNativeFileDrag(paths);
+    void beginNativeFileDrag(paths);
   }
 
   // The pointer drag a row starts: see `startEntryPointerDrag` (fileTreeDrag.ts).
@@ -1878,6 +1878,14 @@ export function FileTree({
   function copyEntries(targets: FileEntry[], op: "copy" | "cut") {
     setContextMenu(null);
     if (targets.length === 0) return;
+    // A Copy also goes on the system clipboard as files, so another app
+    // (Teams, mail, a browser upload) can paste them. Local listings only: a
+    // host listing's paths don't exist on this machine. Best-effort — the
+    // in-app Paste below works without it.
+    if (op === "copy" && !remoteListing) {
+      void invoke("copy_files_to_clipboard", { paths: targets.map((entry) => entry.path) })
+        .catch((err) => console.warn(`[${BRAND.slug}] system clipboard copy failed:`, err));
+    }
     setClipboardEntries(
       targets.map((entry) => ({
         projectDir,
@@ -2105,7 +2113,12 @@ export function FileTree({
     setSystemFiles([]);
     if (remoteListing) return;
     invoke<SystemClipboardFile[]>("clipboard_file_paths")
-      .then((files) => setSystemFiles(Array.isArray(files) ? files : []))
+      .then((files) => {
+        // The tree's own Copy put these there too (`copyEntries`): its in-app
+        // Paste already offers them, so don't list them twice.
+        const inApp = new Set(useFileClipboardStore.getState().entries.map((entry) => entry.path));
+        setSystemFiles(Array.isArray(files) ? files.filter((file) => !inApp.has(file.path)) : []);
+      })
       .catch(() => setSystemFiles([]));
   }
 
@@ -3318,8 +3331,13 @@ export function FileTree({
               const n = menuEntries.length;
               return (
                 <>
-                  <button onClick={() => copyEntries(menuEntries, "copy")}>
+                  <button
+                    className={remoteListing ? undefined : "untested"}
+                    title={remoteListing ? undefined : t("fileTree.copyToOtherAppsHint")}
+                    onClick={() => copyEntries(menuEntries, "copy")}
+                  >
                     {t("fileTree.copyItemsCount", { count: n })}
+                    {!remoteListing && <UntestedTag id="fileTree.copyToSystem" />}
                   </button>
                   <button onClick={() => copyEntries(menuEntries, "cut")}>
                     {t("fileTree.cutItemsCount", { count: n })}
@@ -3554,8 +3572,13 @@ export function FileTree({
                   </>
                 )}
                 <hr />
-                <button onClick={() => copyEntries([entry], "copy")}>
+                <button
+                  className={remoteListing ? undefined : "untested"}
+                  title={remoteListing ? undefined : t("fileTree.copyToOtherAppsHint")}
+                  onClick={() => copyEntries([entry], "copy")}
+                >
                   {t("common.copy")}
+                  {!remoteListing && <UntestedTag id="fileTree.copyToSystem" />}
                 </button>
                 <button onClick={() => copyEntries([entry], "cut")}>
                   {t("common.cut")}
