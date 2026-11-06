@@ -56,6 +56,46 @@ below are fixed: reviewers may not undo them.
   Running: I5, I6, I9 (Sonnet). Next: I6 review, I9 review, I5 review, then I6b,
   I7a, I7b (after I6 lands), I8, I10, final review. Threat-model row conflicts on merge:
   resolve row by row (keep the "Fixed" side).
+- 2026-11-06: **I6 landed** `085f91c9` (review clean, docs fix `60a9409a`). I9 reviewed
+  (`c5a0bbad`: banner-exchange timeout prefix, pull space counts only missing bytes);
+  its follow-up (empty-stderr decision + full gates) running, then land. I5 done
+  (`49372863`), its review running. I7a running on `085f91c9`. Next: I7b, I6b, I8,
+  I10, then the final review.
+- 2026-11-06: a login expiry killed the I5 review, the I9 follow-up and I7a. Relaunched:
+  I5 review fresh (Opus); I9 follow-up and I7a finish their uncommitted edits in
+  place (Sonnet). Next as before: land I9, I5, then I7b, I6b, I8, I10, final review.
+- 2026-11-06: **I5 landed** `8e460689` (review clean; test-only `08e16307`). Eight of
+  fourteen in. Running: I9 follow-up, I7a, I6b. Landing helpers (after the scratchpad
+  was wiped): `tmp/threat_recheck_2026_11_04/tools/land.sh <branch>` and
+  `resolve_rows.py docs/threat_model.md` (keeps each row's "Fixed" side).
+- 2026-11-06: **I9 landed** `16833be0` (follow-up `1bab0606`: exit 255 without a client
+  line = unreachable). Its merge hit code conflicts with develop's TensorBoard viewer
+  (`fs.rs` routing moved to `ByteRoute`, `sftp.rs` gained `read_range_on`); resolved by
+  keeping both and bounding `read_file_bytes_any`'s remote read. Nine of fourteen in.
+  Running: I7a, I6b, I8. Left: I7b (after I7a), I10, final review.
+- 2026-11-06: **I6b landed** `433f41bc`. Ten of fourteen in. I7a done (`2c260949`, not
+  landed: shares the I7 review). Running: I8, I7b (on I7a), I10. Then: I7a+I7b review,
+  land I7, I8, I10, final review. Develop is red on 3 tests from other sessions
+  (`cd8088a1` Hugging Face core_dispatch gap; `62c4e649` help corpus), not this run.
+- 2026-11-06: **I8 landed** `52ddb823` (merged tree: 5260 Rust tests pass, only the 3
+  known develop failures). Eleven of fourteen in. Running: I7b, I10. Then the I7a+I7b
+  review, land I7 and I10, final review.
+- 2026-11-06: **I10 landed** `d6eefa36`. Twelve of fourteen in. I7b done (`5520b323`);
+  the I7a+I7b review is running (Opus, also applies the 97 phone-delete decision). Then
+  land I7, then the final review.
+- 2026-11-06: **I7a+I7b landed** `a88baaa9` (review: off-executor upload claim, per-state
+  in-flight key, HPC-only phone deletes; `f57b84c1`, `435d3127`). **All fourteen agent
+  steps are on develop.** Final review running in `.claude/worktrees/tr1104-final`
+  (report `review-final.md`); the run's 50 commits are listed in
+  `tmp/threat_recheck_2026_11_04/run-commits.txt`. Then: land its fixes, backend:stale,
+  final report.
+- 2026-11-06: **DONE.** Final review landed `1416bba3` (`ab5a6862`: stalled-upload idle
+  timeout, threat-model header/section text, unbounded `read_file_on` removed). Gates on
+  the tip: brand, whitespace, lint, clippy x3, build pass; vitest 11202/11205 (3 load
+  flakes pass alone); Rust all binaries pass except the 3 develop failures from other
+  sessions (`cd8088a1`, `62c4e649`). Nothing live-verified. Consolidated flags:
+  `tmp/threat_recheck_2026_11_04/review-final.md` (its "sync_code kept" line is stale:
+  import resets it). Click-through steps: each `step-*.md`.
 
 ## Decisions (user, 2026-11-05)
 
@@ -79,6 +119,8 @@ below are fixed: reviewers may not undo them.
 | 93 updates (2026-11-05) | **Keep the install home.** Updates keep `HOME` = the install home (`into_install_home`) plus the new refusal; the login-holding probe home is for `/usage`, `--version` and the warm-up. |
 | 88 old mail (2026-11-05) | **Expired: keep; revoked: no.** A signature dated inside the key's validity still verifies after the key expires; a revoked key, subkey or (all) user IDs make every signature by it Unusable, whatever its date. |
 | 83 copy cap (2026-11-05) | **Only on untrusted input.** The 200 000-entry / 32 GiB cap applies to bundle/set import and the host-copy export; the user's own archive, mirror move, Duplicate and move-out copies keep the FIFO/link/source guards but have no size cap. |
+| 85 empty ssh error (2026-11-06) | **Unreachable.** Exit 255 with no client-prefixed line (a reset or close mid-handshake, sshd MaxStartups) reads as unreachable, as the 2026-10-29 fix intended; a client-line rejection still wins and a banner never decides. |
+| 97 phone deletes (2026-11-06) | **HPC hosts only.** Phone-driven Diverged deletes are refused on `hpc_hosts` only, not on careful hosts (careful is every host's default); the switch, preview token and `local_loss` record stay. |
 
 ## No decision needed
 
