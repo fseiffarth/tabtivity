@@ -755,6 +755,19 @@ export function noteTurnCutOff(ptyId: string) {
   useActivityStore.getState().recompute();
 }
 
+/** Record that the tab only reattached a session whose agent is mid-turn right
+ *  now (`pty_spawn`'s `turn`: the headless owner kept it running while no
+ *  window was open, or the window crashed). Its hook record is current, not a
+ *  leftover, and the watcher reports only changes: take its state as the
+ *  agent's verdict, as if the hook had just written it. */
+export function noteLiveTurn(ptyId: string, state: "working" | "decision") {
+  if (isDetachedWindow()) {
+    void emit(DETACHED_ACTIVITY_EVENT, { ptyId, kind: state === "working" ? "live-working" : "live-decision" });
+    return;
+  }
+  noteAgentTurn(ptyId, state);
+}
+
 /** Record that the tab's pane was resized: its agent repaints the screen, which
  *  is not work (see `REPAINT_SETTLE_MS`). */
 export function notePtyResize(ptyId: string) {

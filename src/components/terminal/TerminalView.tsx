@@ -12,7 +12,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { reportFrontendIssue } from "../../crashReporter";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, noteLiveTurn, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { notePrompted } from "../../lib/agents/emptyAgentTab";
@@ -1814,7 +1814,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // stayed unstamped and never wore the running ▶.
       if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
-        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
+        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean; turn?: "working" | "decision" } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
           opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, api_key: apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
@@ -1830,6 +1830,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // Its last run finished its turn: the agent is at its composer, and
         // the conversation a resume or reattach repaints is not a question.
         if (spawned?.resting === true) noteAgentResting(id);
+        // It only reattached a session whose agent is mid-turn right now (the
+        // headless owner kept it running while no window was open): the turn
+        // its hooks last reported, which the watcher will not repeat.
+        if (spawned?.turn === "working" || spawned?.turn === "decision") noteLiveTurn(id, spawned.turn);
       };
       try {
         await spawn();

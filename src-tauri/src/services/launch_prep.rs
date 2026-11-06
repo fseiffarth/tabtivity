@@ -601,6 +601,9 @@ pub struct PreparedLaunch {
     pub interrupted: bool,
     /// The tab's previous process left its turn finished (`agent_turn::LeftTurn`).
     pub resting: bool,
+    /// The tab's process still runs mid-turn (a reattach): the state its
+    /// hooks last wrote, `working` or `decision` (`agent_turn::LeftTurn::live`).
+    pub live_turn: Option<crate::services::agent_turn::TurnState>,
     /// The local folder the tab works in, `None` for a remote tab.
     pub drop_dir: Option<String>,
     /// The tab runs an AI ([`is_ai_spawn`]): while the AI switch is off its
@@ -1098,12 +1101,31 @@ pub async fn prepare(
 
     // The agent's hooks report its turn state under its tab uid; bind that uid
     // to this PTY so the report reaches the tab's own marks, and drop any
-    // record a previous run of the same tab left behind (see agent_turn).
+    // record a previous run of the same tab left behind (see agent_turn). A
+    // turn in flight is a leftover only if its process died: a tab whose tmux
+    // session still runs (the headless owner kept it while no window was
+    // open, or the window crashed) only reattaches, and its agent may well be
+    // mid-turn right now.
     let left = match opts.env.get(crate::app_env!("TAB_UID")).cloned() {
-        Some(uid) => crate::services::agent_turn::bind_tab(&uid, &opts.id, opts.project_id.as_deref()),
+        Some(uid) => {
+            let project = opts.project_id.clone();
+            let session_runs = match opts.tmux_session.clone() {
+                Some(session) if crate::services::agent_turn::turn_in_flight(&uid, project.as_deref()) => {
+                    let (host, local_only) = (opts.remote_host_id.clone(), opts.local_only);
+                    let project = project.clone();
+                    app_core::rt::spawn_blocking(move || {
+                        reattaches_session(project.as_deref(), host.as_deref(), &session, local_only)
+                    })
+                    .await
+                    .unwrap_or(false)
+                }
+                _ => false,
+            };
+            crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs)
+        }
         None => Default::default(),
     };
-    let (interrupted, resting) = (left.cut_off, left.resting);
+    let (interrupted, resting, live_turn) = (left.cut_off, left.resting, left.live);
 
     // Codex resume, without the hook. Codex will not run Tabtivity's SessionStart
     // hook until the user trusts it (`/hooks`), and an untrusted hook fails
@@ -1449,6 +1471,7 @@ pub async fn prepare(
         named,
         interrupted,
         resting,
+        live_turn,
         mcp_spawn_guard,
         resume_claim,
         fenced_scope,
@@ -1549,7 +1572,7 @@ mod tests {
             local_model: false, schedule_target_id: None, host_session: false, api_key: None,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, drop_dir: None, ai: true, mcp_spawn_guard: None,
+            opts, named: false, interrupted: false, resting: false, live_turn: None, drop_dir: None, ai: true, mcp_spawn_guard: None,
             resume_claim: None, fenced_scope, host_agent_tab: None, features: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
@@ -1569,7 +1592,7 @@ mod tests {
         let new_seq = new.seq;
         let (mcp_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
         let proxy_token = api_proxy::issue_for_test("lp-gen", tab).unwrap();
-        agent_turn::bind_tab(uid, tab, None);
+        agent_turn::bind_tab(uid, tab, None, false);
         assert!(!on_tab_gone(tab, old_seq), "the old spawn's teardown is stale");
         committed(tab, Some("lp-gen".into()), new);
         assert!(!on_tab_gone(tab, old_seq));
@@ -1612,7 +1635,7 @@ mod tests {
         let respawn = SpawnGeneration::begin(tab);
         assert!(!on_tab_gone(tab, old_seq), "the old spawn's kill lands stale");
         let (mcp_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
-        agent_turn::bind_tab(uid, tab, None);
+        agent_turn::bind_tab(uid, tab, None, false);
         drop(respawn);
         assert!(root_mcp::authenticate(Some(&format!("Bearer {mcp_token}"))).is_none());
         assert_eq!(agent_turn::pty_for(uid), None);
@@ -1620,7 +1643,7 @@ mod tests {
         let live = SpawnGeneration::begin(tab);
         committed(tab, None, live);
         let (live_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
-        agent_turn::bind_tab(uid, tab, None);
+        agent_turn::bind_tab(uid, tab, None, false);
         drop(SpawnGeneration::begin(tab));
         assert!(root_mcp::authenticate(Some(&format!("Bearer {live_token}"))).is_some());
         assert_eq!(agent_turn::pty_for(uid).as_deref(), Some(tab));
