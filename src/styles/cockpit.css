@@ -367,43 +367,161 @@
 .cockpit-card-group + .cockpit-card-group {
   margin-top: 8px;
 }
-.cockpit-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 8px;
-}
-.cockpit-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  min-width: 0;
-}
-.cockpit-card.not-open {
-  opacity: 0.75;
-}
-.cockpit-card-head,
-.cockpit-card-row {
+.cockpit-ptoolbar {
   display: flex;
   align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
 }
-.cockpit-card-name {
+.cockpit-ptoolbar .cockpit-filter {
+  flex: 0 1 260px;
+}
+.cockpit-ptoolbar .cockpit-meta {
+  margin-left: auto;
+}
+/* One row per project, ~34 px, on a grid the column header shares. The widest
+   band has every column; mid drops Today and Last active; narrow keeps name,
+   agents and git, the actions living in the row's menu. */
+.cockpit-prow-grid {
+  display: grid;
+  align-items: center;
+  column-gap: 10px;
+  padding: 0 8px;
+  grid-template-columns: 14px minmax(150px, 1.5fr) minmax(120px, 1.1fr) minmax(110px, 1fr) minmax(140px, 1.6fr) 72px 88px 230px;
+}
+.cockpit-prow-grid.mid {
+  grid-template-columns: 14px minmax(150px, 1.5fr) minmax(120px, 1.1fr) minmax(110px, 1fr) minmax(140px, 1.6fr) 230px;
+}
+.cockpit-prow-grid.narrow {
+  grid-template-columns: 14px minmax(0, 1.5fr) minmax(0, 1.1fr) minmax(0, 1fr) 32px;
+}
+.cockpit-prow-head {
+  min-height: 22px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cockpit-prow {
+  min-height: 34px;
+  border-radius: 6px;
+  font-size: var(--text-sm);
+  cursor: var(--cur-pointer, pointer);
+}
+.cockpit-prow:hover,
+.cockpit-prow:focus-within {
+  background: var(--control-hover-bg);
+}
+.cockpit-prow > span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cockpit-prow .cockpit-state-mark {
+  color: var(--text-muted);
+}
+.cockpit-prow .cockpit-state-mark.state-question { color: var(--status-decision); }
+.cockpit-prow .cockpit-state-mark.state-working { color: var(--status-working); }
+.cockpit-prow .cockpit-state-mark.state-interrupted { color: var(--status-interrupted); }
+.cockpit-prow .cockpit-state-mark.state-done { color: var(--status-done); }
+.cockpit-prow-open {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
 }
-.cockpit-card-actions {
+.cockpit-prow-open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.cockpit-kind {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.cockpit-prow-agents {
+  color: var(--text-secondary);
+}
+.cockpit-prow-agents.dim,
+.cockpit-prow .dim {
+  color: var(--text-muted);
+}
+.cockpit-prow-agents .working {
+  color: var(--status-working);
+}
+.cockpit-prow-agents .asking {
+  color: var(--status-decision);
+}
+.cockpit-prow-today,
+.cockpit-prow-last {
+  color: var(--text-muted);
+}
+.cockpit-git-dot,
+.cockpit-lamp {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.cockpit-git-dot svg,
+.cockpit-lamp svg {
+  width: 0.7em;
+  height: 0.7em;
+}
+.cockpit-git-dot.git-clean {
+  color: var(--success);
+}
+.cockpit-git-dot.git-dirty,
+.cockpit-git-dot.git-staged,
+.cockpit-git-dot.git-unpushed {
+  color: var(--warning);
+}
+.cockpit-git-dot.git-broken {
+  color: var(--danger);
+}
+.cockpit-lamp.lamp-connected {
+  color: var(--success);
+}
+.cockpit-lamp.lamp-connecting {
+  color: var(--warning);
+}
+.cockpit-lamp.lamp-error {
+  color: var(--danger);
+}
+/* Row actions appear on hover and on keyboard focus within the row (the narrow
+   band's lone ⋯ stays drawn). Opacity flips, nothing animates. */
+.cockpit-prow-actions {
+  justify-content: flex-end;
+}
+.cockpit-prow-grid:not(.narrow) .cockpit-prow-actions {
+  opacity: 0;
+}
+.cockpit-prow:hover .cockpit-prow-actions,
+.cockpit-prow:focus-within .cockpit-prow-actions {
+  opacity: 1;
+}
+.cockpit-prow-more {
+  min-width: 28px;
+}
+.cockpit-pfold {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 2px;
+  gap: 4px 6px;
+  padding: 4px 8px;
 }
 .cockpit-chip.git-dirty,
 .cockpit-chip.git-broken,
