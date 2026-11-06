@@ -20,9 +20,10 @@ import { matchReading } from "../../../../src/lib/voice/voiceCommands";
 import { transcriptTurns } from "../../terminal/transcriptTurns";
 import { type SelectOption, type SelectPrompt } from "../../terminal/selectPrompt";
 import { type ReadableLine } from "../../terminal/readableScreen";
-import { createSendGuard, type GuardPhase, type SendGuard } from "../../../../shared/handsFree";
+import { createPickStage, createSendGuard, type GuardPhase, type SendGuard, type VoicePick } from "../../../../shared/handsFree";
+import { isStopWord } from "../../../../shared/voice";
 import { playChime } from "../../../../src/lib/voice/chime";
-import { HANDS_FREE_PAUSE_MS, TURN_SETTLE_MS, handsFreeTurnOver, questionSpeech, voicePick } from "../../handsFree";
+import { HANDS_FREE_PAUSE_MS, TURN_SETTLE_MS, handsFreeTurnOver, questionSpeech, voicePick, voicePickable } from "../../handsFree";
 import { type DictationSession } from "../../voiceSession";
 
 /** Hands-free (`focusHandsFree`): the send guard the dictation feeds, the wait
@@ -56,6 +57,10 @@ export function useHandsFree({
   const handsFreeRef = useRef(handsFree);
   handsFreeRef.current = handsFree;
   const [guardPhase, setGuardPhase] = useState<GuardPhase>("idle");
+  /** A spoken pick of a row waits here for the guard's chime and cancel
+   * window (gap 80); `pickHeard` is what the line shows meanwhile. */
+  const staged = useRef(createPickStage<VoicePick>());
+  const [pickHeard, setPickHeard] = useState("");
   /** Hands-free sent at this time and waits for the turn to end, to open the
    * mic again; `sawWork` once the agent was seen at work on it, `answer` the
    * newest answer's key at the send, `since` the answer its reading starts
@@ -102,29 +107,66 @@ export function useHandsFree({
   /** The send guard (`shared/handsFree.ts`), made on first use: its pause
    * ends in the chime and the cancel window, the window in a send. */
   const handsFreeGuard = () => {
-    sendGuard.current ??= createSendGuard(HANDS_FREE_PAUSE_MS, {
-      hasDraft: () => draftRef.current.trim() !== "",
-      onWindow: () => playChime(),
-      onSend: () => {
-        if (submitDraftRef.current()) awaitTurnRef.current();
-      },
-      onCancel: () => {},
-      onPhase: setGuardPhase,
-    });
+    if (!sendGuard.current) {
+      const guard = createSendGuard(HANDS_FREE_PAUSE_MS, {
+        hasDraft: () => staged.current.pending() !== null || draftRef.current.trim() !== "",
+        onWindow: () => playChime(),
+        onSend: () => {
+          const pick = staged.current.take();
+          if (pick) commitPickRef.current(pick);
+          else if (submitDraftRef.current()) awaitTurnRef.current();
+        },
+        onCancel: () => staged.current.clear(),
+        onPhase: (next) => {
+          setGuardPhase(next);
+          if (next === "idle") setPickHeard("");
+        },
+      });
+      // Whatever resets the guard (a typed send, the mic's stop) drops a
+      // staged pick with it.
+      const reset = guard.reset;
+      guard.reset = () => {
+        staged.current.clear();
+        reset();
+      };
+      const cancel = guard.cancel;
+      guard.cancel = () => {
+        staged.current.clear();
+        cancel();
+      };
+      sendGuard.current = guard;
+    }
     return sendGuard.current;
   };
-  /** A settled utterance that picks a row of the question on screen answers
-   * it as a tap would; the mic then waits for the turn the answer resumes.
-   * False when it picks none — the words are dictation. */
-  const voicePickRef = useRef<(utterance: string) => boolean>(() => false);
+  /** The window closed on a staged pick: it answers only the dialog it was
+   * heard on, and only while that is still a question a voice may answer. */
+  const commitPickRef = useRef<(pick: VoicePick) => void>(() => {});
+  commitPickRef.current = (pick) => {
+    if (!liveQuestion || questionHeld || questionSignature !== pick.key || !voicePickable(liveQuestion)) return;
+    const option = liveQuestion.options.find((entry) => entry.index === pick.index);
+    if (!option) return;
+    answerQuestion(option);
+    endDictation();
+    awaitTurn();
+  };
+  /** A settled utterance that picks a row of a question on screen is staged —
+   * "Heard: 2", the chime, the cancel window — and answers it as a tap would
+   * only when the window closes; the mic then waits for the turn the answer
+   * resumes. Voice never answers a dialog that is not positively a question
+   * (`voicePickable`): "refused", the words are dropped. False when it picks
+   * none — the words are dictation. "done": a reading command ran. */
+  const voicePickRef = useRef<(utterance: string) => "done" | "staged" | "refused" | false>(() => false);
   voicePickRef.current = (utterance) => {
+    // Any new utterance supersedes a staged pick; "stop" is the guard's.
+    staged.current.heard();
     if (liveQuestion && !questionHeld) {
+      if (!voicePickable(liveQuestion)) return isStopWord(utterance) ? false : "refused";
       const option = voicePick(utterance, liveQuestion);
       if (!option) return false;
-      answerQuestion(option);
-      endDictation();
-      awaitTurn();
-      return true;
+      const heard = `${option.number}. ${option.label.trim()}`;
+      staged.current.stage({ key: questionSignature, index: option.index, heard });
+      setPickHeard(heard);
+      return "staged";
     }
     // A reading command is a whole utterance before anything was dictated,
     // and only where something was read: otherwise "next" is a word to type.
@@ -134,7 +176,7 @@ export function useHandsFree({
     if (!command || command === "stop" || !runReadingCommand(command, tab.id)) return false;
     endDictation();
     awaitReading();
-    return true;
+    return "done";
   };
   /** The user's stop ends the loop until the mic is tapped again. */
   const stopLoop = () => {
@@ -220,7 +262,7 @@ export function useHandsFree({
       spokenQuestion.current = "";
       return;
     }
-    if (!handsFree || !readAloud || !liveQuestion || questionHeld || spokenQuestion.current === questionSignature) return;
+    if (!handsFree || !readAloud || !liveQuestion || questionHeld || spokenQuestion.current === questionSignature || !voicePickable(liveQuestion)) return;
     spokenQuestion.current = questionSignature;
     const text = questionSpeech(questionAsk.map((line) => line.text), liveQuestion);
     if (!text) return;
@@ -240,6 +282,8 @@ export function useHandsFree({
    * the agent goes on), or the wait for the turn to end. */
   const handsFreeLine = (voiceProblem: boolean): { text: string; run?: () => void } | null => (
     !handsFree || voiceProblem ? null
+      : pickHeard && guardPhase === "pausing" ? { text: t("mobile.voice.handsFreePickHeard", { text: pickHeard }) }
+      : pickHeard && (guardPhase === "window" || guardPhase === "holding") ? { text: t("mobile.voice.handsFreePickWindow", { text: pickHeard }), run: () => sendGuard.current?.cancel() }
       : guardPhase === "window" || guardPhase === "holding" ? { text: t("mobile.voice.handsFreeWindow"), run: () => sendGuard.current?.cancel() }
       : handsFreeWait !== null && speaking ? { text: t("mobile.voice.handsFreeSpeaking"), run: stopSpeaking }
       : handsFreeWait !== null && !listening && !preparingVoice ? { text: t("mobile.voice.handsFreeWaiting") }

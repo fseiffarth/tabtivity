@@ -72,7 +72,9 @@ import { useReaderReadAloud } from "./ReaderReadAloud";
 import { useAgentTurn } from "../../lib/voice/agentTurn";
 import { useExperimental } from "../../lib/experimental";
 import { useSettingsStore } from "../../stores/settings";
-import { questionSpeech, voicePick } from "../../../mobile-web/src/handsFree";
+import { questionSpeech, voicePick, voicePickable } from "../../../mobile-web/src/handsFree";
+import { isStopWord } from "../../../shared/voice";
+import type { VoicePick, VoicePickResult } from "../../../shared/handsFree";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
@@ -537,7 +539,8 @@ interface ReaderVoiceLoop {
   /** The newest answer's key in the conversation. */
   lastAnswer: string | null;
   /** Answers the question on screen when an utterance picks one of its rows. */
-  pick: (utterance: string) => boolean;
+  pick: (utterance: string) => VoicePickResult;
+  commitPick: (pick: VoicePick) => void;
   stopReading: () => void;
   /** Why read-aloud could not speak, if it could not. */
   readProblem: TranslationKey | null;
@@ -755,6 +758,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     onSend: () => void send(),
     hasDraft: () => draftRef.current.trim() !== "",
     pick: voiceLoop.pick,
+    commitPick: voiceLoop.commitPick,
     readProblem: voiceLoop.readProblem,
   });
   const { onListening } = voiceLoop;
@@ -1771,19 +1775,34 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     turnStart: agentTurn.startKey,
     workingLine,
   });
-  /** Hands-free: a settled utterance that picks a row of the dialog on screen
-   * answers it as a click would. */
-  const pickByVoice = (utterance: string) => {
+  /** Hands-free: a settled utterance that picks a row of a question on screen
+   * is *staged* — "Heard: 2", then the send guard's chime and cancel window —
+   * and answers it as a click would only when the window closes
+   * (`commitVoicePick`). Voice never answers a dialog that is not positively a
+   * question (`voicePickable`: a permission dialog, a picker, an unrecognised
+   * shape): such a segment is dropped, never typed as a prompt (a digit sent
+   * while the dialog is up would answer it). "refused" drops; null is dictation. */
+  const pickByVoice = (utterance: string): VoicePickResult => {
     const question = live.question;
-    if (!question || answered || held || picking) return false;
+    if (!question || answered || held || picking) return null;
+    if (!voicePickable(question)) return isStopWord(utterance) ? null : "refused";
     const option = voicePick(utterance, question);
-    if (!option) return false;
-    answer(option.index);
-    return true;
+    if (!option) return null;
+    return { key: live.signature, index: option.index, heard: `${option.number}. ${option.label.trim()}` };
   };
   const pickRef = useRef(pickByVoice);
   pickRef.current = pickByVoice;
   const pickVoice = useCallback((utterance: string) => pickRef.current(utterance), []);
+  /** The window closed on a staged pick: it answers only the dialog it was
+   * heard on, and only if that is still a question nothing else answered. */
+  const commitVoicePick = (pick: VoicePick) => {
+    const question = live.question;
+    if (!question || live.signature !== pick.key || !voicePickable(question)) return;
+    answer(pick.index);
+  };
+  const commitPickRef = useRef(commitVoicePick);
+  commitPickRef.current = commitVoicePick;
+  const commitVoice = useCallback((pick: VoicePick) => commitPickRef.current(pick), []);
   // Hands-free with read-aloud: a dialog waiting on the user is read out, its
   // rows by number, once per dialog, so it can be answered by voice.
   const spokenQuestion = useRef("");
@@ -1792,7 +1811,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       spokenQuestion.current = "";
       return;
     }
-    if (!handsFreeOn || !readAloudOn || !visible || held || spokenQuestion.current === live.signature) return;
+    if (!handsFreeOn || !readAloudOn || !visible || held || spokenQuestion.current === live.signature || !voicePickable(live.question)) return;
     spokenQuestion.current = live.signature;
     readAloud.say(`question:${live.signature}`, questionSpeech(live.ask, live.question));
   }, [live.question, live.signature, live.ask, picking, handsFreeOn, readAloudOn, visible, held, readAloud]);
@@ -1828,6 +1847,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     reading: readAloud.owed,
     lastAnswer,
     pick: pickVoice,
+    commitPick: commitVoice,
     stopReading: readAloud.stop,
     readProblem: readAloud.problem,
     onListening: onVoiceListening,
