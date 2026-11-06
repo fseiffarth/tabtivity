@@ -499,6 +499,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["prepare_local_launch", "core"],
   ["prepare_text_completion", "core"],
   ["pull_ollama_model", "admin"],
+  ["search_huggingface_models", "core"],
   ["search_ollama_registry", "core"],
   ["stop_ollama_model", "admin"],
   ["vibe_install_strategy", "core"],

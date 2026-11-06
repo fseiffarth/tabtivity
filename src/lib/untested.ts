@@ -341,6 +341,7 @@ export const UNTESTED = {
   "updates.legacyNames": { area: "layout", what: "UpdatesPanel · Names from before the rename (fallback log and unfinished migration steps; only shown once the app's name has changed)" },
   "ollama.autostartTitle": { area: "layout", what: "SettingsSubPanels · Load on Tabtivity start" },
   "ollama.browseRegistry": { area: "layout", what: "SettingsSubPanels · Browse the Ollama registry: community models (user/name) listed with a community chip and pullable; Type (all of), Runs (local/cloud) and Download size filters and the Popular/Newest/Name sort applied by ollama.com; scrolling loads page after page until End of results" },
+  "ollama.filterSource": { area: "layout", what: "SettingsSubPanels · Browse the Ollama registry → Source: Hugging Face lists GGUF repos (Hugging Face badge, parameter count, gated note) with their single-file quantizations in the picker; Pull downloads hf.co/<user>/<repo>:<quant>; the size line shows on hover; Check for updates answers for it; scrolling loads more; the type/runs/size filters hide; Popular/Newest/Name sort applies" },
   "ollama.modelLocationTitle": { area: "layout", what: "SettingsSubPanels · Model download location" },
   "projectSwitcher.addProjectsToBox": { area: "layout", what: "ProjectSwitcher · Add projects to Box" },
   "projectSwitcher.hpcPipeline": { area: "layout", what: "ProjectSwitcher · HPC pipeline…" },

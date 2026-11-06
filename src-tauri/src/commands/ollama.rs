@@ -1257,7 +1257,8 @@ fn pull_blocking(ctx: &CoreCtx, model: &str) -> Result<(), String> {
 // means the only way to *ask* without transferring gigabytes is to compare
 // manifest digests. `/api/tags` reports the digest of the manifest on disk and
 // the registry answers the same value in the `ollama-content-digest` response
-// header, so one HEAD per model settles it.
+// header, so one HEAD per model settles it. Hugging Face sends no such header,
+// so an `hf.co/` model's manifest is fetched (a few hundred bytes) and hashed.
 //
 // This is the one part of the local-model feature that reaches the network
 // without a model being installed or run, so it is **on demand only** — a
@@ -1291,7 +1292,11 @@ pub struct OllamaModelUpdate {
 /// `validate_model_name` already restricting the characters that reach the
 /// URL); its caller runs it off the async runtime.
 fn registry_head(model: &str) -> Result<(String, Option<i64>), String> {
-    let url = registry_manifest_url(model)?;
+    let at = registry_ref(model)?;
+    if at.hugging_face() {
+        return Ok((hf::manifest_digest(&at.manifest_url())?, None));
+    }
+    let url = at.manifest_url();
     let output = crate::paths::command_no_window("curl")
         .args(["-sSI", "--max-time", "15", &url])
         .output()
@@ -1617,30 +1622,73 @@ pub async fn delete_ollama_model(model: String) -> Result<(), String> {
     app_core::rt::try_blocking("delete", move || ollama_http("DELETE", "/api/delete", Some(&body)).map(drop)).await
 }
 
-/// Split a model ref into its registry repo path and tag, applying the implicit
-/// `library/` namespace and defaulting the tag to `latest`. Shared by the
-/// manifest and config-blob fetches so both address the exact same repo.
-fn registry_repo_tag(model: &str) -> Result<(String, String), String> {
+/// Ollama's own registry, where every model ref without a host lives.
+const OLLAMA_REGISTRY: &str = "https://registry.ollama.ai/v2";
+
+/// Where one model ref's manifest and blobs are served: the registry's `/v2`
+/// root, the repo path under it and the tag.
+#[derive(Debug, PartialEq)]
+struct RegistryRef {
+    base: &'static str,
+    repo: String,
+    tag: String,
+}
+
+impl RegistryRef {
+    fn manifest_url(&self) -> String {
+        format!("{}/{}/manifests/{}", self.base, self.repo, self.tag)
+    }
+
+    fn blob_url(&self, hex: &str) -> String {
+        format!("{}/{}/blobs/sha256:{hex}", self.base, self.repo)
+    }
+
+    fn hugging_face(&self) -> bool {
+        self.base == hf::REGISTRY
+    }
+}
+
+/// Address a model ref on its registry, applying the implicit `library/`
+/// namespace and defaulting the tag to `latest`. Shared by the manifest and
+/// config-blob fetches so both address the exact same repo. A ref whose first
+/// part is a host (`hf.co/user/repo:Q4_K_M`) is pulled by Ollama from that
+/// host, so its manifest is read there too: Hugging Face is the one such host
+/// answered; any other is refused rather than asked of Ollama's registry,
+/// which would only ever say "not found".
+fn registry_ref(model: &str) -> Result<RegistryRef, String> {
     validate_model_name(model)?;
 
-    let (name, tag) = match model.split_once(':') {
-        Some((n, t)) => (n, t),
-        None => (model, "latest"),
+    // The tag follows the last `:` of the last path part, so a host's port
+    // (`host:5000/ns/m`) is never taken for one.
+    let (name, tag) = match model.rsplit_once(':') {
+        Some((n, t)) if !t.contains('/') => (n, t),
+        _ => (model, "latest"),
     };
+    if let Some((host, rest)) = name.split_once('/').filter(|(host, _)| host.contains('.')) {
+        if !hf::is_hf_host(host) {
+            return Err(format!("{host} is not a registry whose models can be looked up"));
+        }
+        return Ok(RegistryRef {
+            base: hf::REGISTRY,
+            repo: rest.to_string(),
+            tag: tag.to_string(),
+        });
+    }
     // Bare names live under the implicit `library/` namespace on the registry.
     let repo = if name.contains('/') {
         name.to_string()
     } else {
         format!("library/{name}")
     };
-    Ok((repo, tag.to_string()))
+    Ok(RegistryRef {
+        base: OLLAMA_REGISTRY,
+        repo,
+        tag: tag.to_string(),
+    })
 }
 
 fn registry_manifest_url(model: &str) -> Result<String, String> {
-    let (repo, tag) = registry_repo_tag(model)?;
-    Ok(format!(
-        "https://registry.ollama.ai/v2/{repo}/manifests/{tag}"
-    ))
+    Ok(registry_ref(model)?.manifest_url())
 }
 
 /// How long one request to the registry or ollama.com may take, connect
@@ -1654,6 +1702,15 @@ const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
 /// connection (code screen B2). `Ok(None)` is an HTTP error status, what
 /// `curl -f` failed on. `headers` are sent as given (fixed names and values).
 async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<u8>>, String> {
+    Ok(registry_response(url, headers).await?.map(|(_, body)| body))
+}
+
+/// [`registry_get`] with the response headers kept, for the Hugging Face
+/// search, which hands its next page out in a `Link` header.
+async fn registry_response(
+    url: &str,
+    headers: &[(&str, &str)],
+) -> Result<Option<(reqwest::header::HeaderMap, Vec<u8>)>, String> {
     crate::services::mail_engine::install_crypto_provider();
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -1673,11 +1730,12 @@ async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<
     if !response.status().is_success() {
         return Ok(None);
     }
+    let head = response.headers().clone();
     let body = response
         .bytes()
         .await
         .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
-    Ok(Some(body.to_vec()))
+    Ok(Some((head, body.to_vec())))
 }
 
 /// Fetch the Ollama registry manifest (config + layers) for a model ref, through
@@ -1695,15 +1753,15 @@ async fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, Strin
 }
 
 /// Fetch a registry blob (here: a manifest's config object) by digest. The
-/// `repo` comes from `registry_repo_tag` (already `validate_model_name`d) and the
+/// repo comes from [`registry_ref`] (already `validate_model_name`d) and the
 /// digest is checked to be a bare `sha256:<hex>`, so nothing user-typed reaches
 /// the URL unvalidated — the same bounded [`registry_get`] the manifest uses.
-async fn fetch_registry_blob(repo: &str, digest: &str) -> Result<serde_json::Value, String> {
+async fn fetch_registry_blob(at: &RegistryRef, digest: &str) -> Result<serde_json::Value, String> {
     let hex = digest
         .strip_prefix("sha256:")
         .filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or_else(|| "invalid config digest".to_string())?;
-    let url = format!("https://registry.ollama.ai/v2/{repo}/blobs/sha256:{hex}");
+    let url = at.blob_url(hex);
     let body = registry_get(&url, &[])
         .await?
         .ok_or_else(|| "registry returned no config blob".to_string())?;
@@ -1735,7 +1793,7 @@ pub struct RegistryDetails {
 /// though it has nothing to download. Two small HTTP reads, fetched lazily.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, String> {
-    let (repo, _tag) = registry_repo_tag(&model)?;
+    let at = registry_ref(&model)?;
     let manifest = fetch_registry_manifest(&model).await?;
 
     // Only the layer bytes are the download; the config blob is a few hundred
@@ -1752,18 +1810,22 @@ pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, S
 
     let (mut params, mut quant) = (None, None);
     if let Some(digest) = manifest["config"]["digest"].as_str() {
-        if let Ok(cfg) = fetch_registry_blob(&repo, digest).await {
+        if let Ok(cfg) = fetch_registry_blob(&at, digest).await {
             params = cfg["model_type"]
                 .as_str()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(String::from);
+            // Hugging Face writes `unknown` here: the tag is the quantization.
             quant = cfg["file_type"]
                 .as_str()
                 .map(str::trim)
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("unknown"))
                 .map(String::from);
         }
+    }
+    if quant.is_none() && at.hugging_face() && at.tag != "latest" {
+        quant = Some(at.tag.to_ascii_uppercase());
     }
 
     Ok(RegistryDetails {
@@ -1805,6 +1867,15 @@ pub struct RegistryModel {
     pub pulls: String,
     /// Relative update label, e.g. "1 week ago".
     pub updated: String,
+    /// A Hugging Face GGUF repo (`hf.co/<user>/<repo>`, [`hf`]), whose `sizes`
+    /// are its quantization tags.
+    pub hugging_face: bool,
+    /// Parameter count when the search already says it ("7.6B"): Hugging Face
+    /// only. An Ollama row's sizes are its parameter counts.
+    pub params: Option<String>,
+    /// A gated Hugging Face repo: Ollama's key must be added to the user's
+    /// account before it pulls.
+    pub gated: bool,
 }
 
 /// One page of ollama.com/search results.
@@ -2048,6 +2119,9 @@ fn parse_search_html(html: &str) -> RegistrySearchPage {
                 sizes,
                 pulls: card_pulls(card).unwrap_or_default(),
                 updated: card_updated(card).unwrap_or_default(),
+                hugging_face: false,
+                params: None,
+                gated: false,
             })
         })
         .collect();
@@ -3731,6 +3805,8 @@ mod owned_server_tests {
         assert!(OWNED_SERVER.lock().unwrap().is_none());
     }
 }
+
+pub mod hf;
 
 #[cfg(test)]
 mod tests;
