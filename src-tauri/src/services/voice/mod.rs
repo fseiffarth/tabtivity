@@ -467,6 +467,9 @@ pub fn stop_for_exit() {
     // bounded — and Piper once more, in case the thread was left behind.
     tts::stop_for_exit(Duration::from_millis(500));
     piper::kill_current();
+    // The speech-dispatcher this run started (it forked, so no child is held).
+    #[cfg(target_os = "linux")]
+    ssip::transport::stop_started_server();
 }
 
 #[cfg(test)]
