@@ -90,7 +90,7 @@ import { finishAlert } from "../../lib/alertDone";
 import { useAlertsFeed, type AlertsFeed } from "../files/useAlertsFeed";
 import { agentTurnEdges, type AgentTurnEdge, type MobileAgentState } from "../../lib/mobileAgentTurns";
 import { freshGitDot, gitDotRows, type MobileGitDot, type MobileGitStateRow } from "../../lib/mobileGitDots";
-import { divergedCount, divergedDiff, divergedList, divergedPreview, divergedResolve, type MobileDivergedFile, type MobileSyncOp, type MobileSyncPreview } from "../../lib/mobileDiverged";
+import { divergedCount, divergedDiff, divergedList, divergedPreview, divergedResolve, type MobileDivergedFile, type MobilePreviewOp, type MobileSyncOp, type MobileSyncPreview } from "../../lib/mobileDiverged";
 import { agentRosterFacts, agentRosterState, isRosterAgentKind, type AgentRosterFacts } from "../../lib/agents/agentRoster";
 import {
   desktopTimeZone,
@@ -327,15 +327,15 @@ type DesktopRequest =
   | { type: "local_model_mutate"; request_id: string; action: LocalModelAction }
   | { type: "cli_overview"; request_id: string; refresh?: boolean }
   | { type: "sync_diverged"; request_id: string; project_id: string }
-  | { type: "sync_preview"; request_id: string; project_id: string; direction: "pull" | "push"; paths: string[] }
-  | { type: "sync_resolve"; request_id: string; project_id: string; op: MobileSyncOp; paths: string[] }
+  | { type: "sync_preview"; request_id: string; project_id: string; op: MobilePreviewOp; paths: string[] }
+  | { type: "sync_resolve"; request_id: string; project_id: string; op: MobileSyncOp; paths: string[]; expect?: string | null }
   | { type: "sync_diff"; request_id: string; project_id: string; path: string };
 type DesktopResponse =
 | { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot; diverged?: number }
   | { status: "activity"; statuses: AgentTabStatus[]; prompts: AgentTabPrompts[] }
   | { status: "git_states"; states: MobileGitStateRow[] }
   | { status: "diverged"; connected: boolean; files: MobileDivergedFile[] }
-  | { status: "sync_preview"; preview: MobileSyncPreview }
+  | { status: "sync_preview"; preview: MobileSyncPreview; fingerprint: string }
   | { status: "sync_resolved"; done: number; failed: number; skipped: number }
   | { status: "sync_diff"; diff: string; cut: boolean }
   | { status: "activated" }
@@ -3076,10 +3076,14 @@ async function handleRequest(
     // Both check the host-wide switch first (`lib/mobileLocalModels`).
     case "local_models": return localModelsList();
     case "local_model_mutate": return localModelMutate(request.action);
-    // The phone's Diverged list; the sidecar has checked its switches.
+    // The phone's Diverged list. The sidecar has checked its switches and
+    // sealed the preview token; the preview and the resolve repeat
+    // `project_sync`, refuse a delete on a careful or HPC host, and a resolve
+    // moves nothing unless the preview's fingerprint still holds
+    // (`lib/mobileDiverged`).
     case "sync_diverged": return divergedList(request.project_id);
-    case "sync_preview": return divergedPreview(request.project_id, request.direction, request.paths);
-    case "sync_resolve": return divergedResolve(request.project_id, request.op, request.paths);
+    case "sync_preview": return divergedPreview(request.project_id, request.op, request.paths);
+    case "sync_resolve": return divergedResolve(request.project_id, request.op, request.paths, request.expect);
     case "sync_diff": return divergedDiff(request.project_id, request.path);
     // The side panel's CLIs view's reading; the sidecar cuts it for the phone
     // (no account, no path-naming panel line).
