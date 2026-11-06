@@ -224,6 +224,34 @@ mod tests {
         assert!(!attached_in(tmp.path(), "../escape"));
     }
 
+    /// The recorder is only worth what calls it: every way an attachment
+    /// enters a chat (the window's keystrokes, a drop, a pasted picture, the
+    /// phone's bytes, its upload and desktop-picture routes) must name it. A
+    /// source scan, as `nav_gate` does; a removed call fails here.
+    #[test]
+    fn every_way_an_attachment_enters_a_chat_names_the_recorder() {
+        fn body<'a>(src: &'a str, start: &str) -> &'a str {
+            let at = src.find(start).unwrap_or_else(|| panic!("`{start}` moved: update this scan"));
+            let rest = &src[at..];
+            &rest[..rest.find("\n}\n").unwrap_or(rest.len())]
+        }
+        let terminal = include_str!("../../commands/terminal.rs");
+        let host = include_str!("../mobile_control/host.rs");
+        let bridge = include_str!("../mobile_control/pty_bridge.rs");
+        let launch = include_str!("../launch_prep.rs");
+        for (what, text, needle) in [
+            ("the window's keystrokes", body(terminal, "pub async fn pty_write("), "assistant_attach::note_tab_input"),
+            ("a drop on the tab", body(terminal, "pub async fn pty_drop_files("), "assistant_attach::note_tab_file"),
+            ("a pasted picture", body(terminal, "pub async fn pty_paste_clipboard_image("), "assistant_attach::note_tab_file"),
+            ("the phone's bytes", body(bridge, "pub async fn attach("), "assistant_attach::note_input_in"),
+            ("the phone's upload", body(host, "async fn inbox_upload("), "note_chat_file("),
+            ("the phone's desktop picture", body(host, "async fn attach_desktop_image("), "assistant_attach::note_attachment_in"),
+            ("the spawn that ties a tab to its chat", body(launch, "fn assistant_gate("), "assistant_attach::note_chat"),
+        ] {
+            assert!(text.contains(needle), "{what} no longer calls {needle}");
+        }
+    }
+
     #[test]
     fn a_chat_is_found_by_its_tab_and_by_its_tmux_session() {
         note_chat("assistant:t-attach", UID);
