@@ -21,14 +21,16 @@ run and pass alone: `terminal/TerminalAiSwitch`, `pdf/PdfZoomRaster`,
 | S2 | 6ff58f38 | Agents / Models / Machines views; overlay hosts, `consoleCover`, `consoleFront`, `.under-overlay` deleted |
 | S3 | 00a44101 | Mail / Calendar / To-do views; derived open state; `appOverlays` -> `appViews`; docked-column stand-downs deleted |
 | S4 | 213cc7bd | `agents` header item and `AgentsButton`; headerPins defaults |
-| S5 | see `git log` | docs, filemap, register rows, comment pass, dead CSS, to-do close-then-open removal |
+| S5 | 69bf72ac | docs, filemap, register rows, comment pass, dead CSS, to-do close-then-open removal |
 
 Gate results (`scripts/gates.sh`, frontend gates: brand, whitespace, lint, build,
 vitest `--changed`): S1 806 files / 7890 tests, S2 806 / 7884, S3 806 / 7880, S4
 807 / 7883. Each had only the flakes named above failing (all pass alone).
 Lint: no new warnings (28 warnings repo-wide, all pre-existing; the
-`MachinesIndicator` unused-disable directive is on develop too). Full `npm test`
-count after S5 is at the foot of this file.
+`MachinesIndicator` unused-disable directive is on develop too). Full `npm test` after S5 (the tree at 69bf72ac): 1088 files, 11174 tests, only
+`MobileTerminalTranscript` failing (baseline 1088 / 11187, same single failure). The
+13 fewer tests are the deleted machinery's cases net of the new ones (strip, views,
+Agents button, shownApp); no suite shrank beyond that.
 
 ## Choices the plan left open
 
