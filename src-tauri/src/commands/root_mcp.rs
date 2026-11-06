@@ -109,6 +109,9 @@ pub enum Notice {
     Schedules,
     /// A push or release proposal changed (`services::git_push_mcp`).
     GitPush,
+    /// A markup ask or tick of a tab this process spawned opened, closed or
+    /// went (`services::markup_mcp`): the window's markup views re-read.
+    Markup,
 }
 pub type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 
@@ -116,10 +119,11 @@ pub type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 struct ServerState {
     /// The context of a process with no other listener to defer to — the
     /// window, or a server daemon (no window at all): the root and reader
-    /// lanes' mail and events, and the markup lane's views. `None` in a
-    /// desktop's Mobile host, whose listener serves the schedule, push and
-    /// help lanes only (`docs/headless_mcp_plan.md`) — `/mcp` and
-    /// `/mcp/markup` are not even routed there.
+    /// lanes' mail and events. `None` in a desktop's Mobile host, whose
+    /// listener serves the schedule, push, help, web and markup lanes
+    /// (`docs/headless_mcp_plan.md`) — `/mcp` is not even routed there. The
+    /// markup lane needs no context: its views are the window's commands and
+    /// the phone routes, which reach the host's store (phase 1b).
     ctx: Option<CoreCtx>,
     port: u16,
     /// The process's token store, the only one this listener accepts.
@@ -460,6 +464,9 @@ pub fn stop_for_exit() {
 }
 
 pub fn start(ctx: CoreCtx) {
+    // The tabs the Mobile host spawns keep their markup asks in its memory;
+    // the window's markup commands read them over its admin socket.
+    crate::commands::markup_mcp::use_host_peer(storage::state_dir().join("mobile-control/admin.sock"));
     let notify = serve_everything(&ctx, Arc::new(|_| {}));
     let handle = app_core::rt::spawn(async move {
         let served = match bind(LOOPBACK).await {
@@ -494,19 +501,22 @@ fn serve_everything(ctx: &CoreCtx, notify: NoticeSink) -> NoticeSink {
         match notice {
             Notice::Schedules => events.emit("agent-schedules-changed", ()),
             Notice::GitPush => events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()),
+            // The markup hook installed above rings its own event.
+            Notice::Markup => {}
         };
     })
 }
 
 /// The Mobile host's listener (`docs/headless_mcp_plan.md`): the schedule,
-/// push and help lanes for the tabs it spawns with no window open, on its own
-/// loopback port and token store. `server` is the host's context when it is
-/// a server daemon: there is no window to defer to, so the listener serves
-/// every lane the window would — root, reader and markup too — and rings
-/// their events to the browser clients ([`serve_everything`]). A desktop's
-/// Mobile host passes `None` and never serves those: a second root listener
-/// would sweep the window's review copies, and asks it held would be
-/// invisible to the window. Bound before this
+/// push, help, web and markup lanes for the tabs it spawns with no window
+/// open, on its own loopback port and token store. `server` is the host's
+/// context when it is a server daemon: there is no window to defer to, so the
+/// listener serves every lane the window would — root and reader too — and
+/// rings their events to the browser clients ([`serve_everything`]). A
+/// desktop's Mobile host passes `None` and never serves those: a second root
+/// listener would sweep the window's review copies. Its markup asks stay in
+/// its own memory and reach an open window through `notify` ([`Notice::Markup`])
+/// and the window's reads of its admin socket. Bound before this
 /// returns, so a spawn after it is wired; the server runs until `shutdown`
 /// turns true. When the first bind fails, the error is returned (for the
 /// journal) and a task keeps retrying with [`bind_retry_delay`] until a bind
@@ -518,9 +528,22 @@ pub async fn start_headless(
 ) -> Result<u16, String> {
     let notify = match server {
         Some(ctx) => serve_everything(ctx, notify),
-        None => notify,
+        None => {
+            markup_mcp_changes(notify.clone());
+            notify
+        }
     };
     start_headless_on(LOOPBACK, notify, server.cloned(), shutdown).await
+}
+
+/// A desktop's Mobile host: whenever one of its tabs' asks or ticks changes,
+/// say so to `notify` (which pokes an open window).
+fn markup_mcp_changes(notify: NoticeSink) {
+    crate::services::markup_mcp::set_change_hook(markup_notice_hook(notify));
+}
+
+fn markup_notice_hook(notify: NoticeSink) -> Box<dyn Fn() + Send + Sync> {
+    Box::new(move || notify(Notice::Markup))
 }
 
 /// Any free loopback port.
@@ -582,10 +605,10 @@ async fn until_true(mut flag: tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-/// The routes a listener answers: the schedule, push, help and web lanes
-/// everywhere, the root (and reader) and markup lanes where this process
-/// serves the views and controls they need — the window, or a server daemon,
-/// which has no window ([`ServerState::ctx`]).
+/// The routes a listener answers: the schedule, push, help, web and markup
+/// lanes everywhere, the root (and reader) lane where this process serves the
+/// mail and controls it needs — the window, or a server daemon, which has no
+/// window ([`ServerState::ctx`]).
 fn router(state: ServerState) -> Router {
     let mut router = Router::new()
         .route("/mcp/schedule", post(handle))
@@ -594,8 +617,12 @@ fn router(state: ServerState) -> Router {
         // The assistant's web lane is served by every listener, the window's
         // and the Mobile host's: a phone chat runs with no window.
         .route("/mcp/web", post(handle));
+    // The markup lane holds its asks in this process's memory and needs no
+    // context: its views are the window's commands (which read the Mobile
+    // host's store over the admin socket) and the phone's routes.
+    router = router.route("/mcp/markup", post(handle));
     if state.ctx.is_some() {
-        router = router.route("/mcp", post(handle)).route("/mcp/markup", post(handle));
+        router = router.route("/mcp", post(handle));
     }
     router.layer(axum::middleware::map_response(close_connection)).with_state(state)
 }
@@ -618,7 +645,7 @@ fn serve(
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     let serves = ctx.is_some();
-    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves, serves_web });
+    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: true, serves_web });
     let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
     let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
@@ -1142,9 +1169,10 @@ mod security_tests {
         drop(taken);
     }
 
-    /// A desktop's Mobile host listener has no root or markup lane at all:
-    /// `/mcp` and `/mcp/markup` are not routed (404 before any handler). A
-    /// server daemon's routes every lane.
+    /// A desktop's Mobile host listener has no root lane at all: `/mcp` is
+    /// not routed (404 before any handler), while the markup lane is
+    /// (`docs/headless_mcp_plan.md`, phase 1b). A server daemon's routes
+    /// every lane.
     #[tokio::test]
     async fn the_headless_router_does_not_route_the_root_lane() {
         use tower::ServiceExt;
@@ -1154,9 +1182,7 @@ mod security_tests {
             .body(axum::body::Body::from("{}")).unwrap();
         let root = router(state.clone()).oneshot(req("/mcp")).await.unwrap();
         assert_eq!(root.status(), StatusCode::NOT_FOUND);
-        let markup = router(state.clone()).oneshot(req("/mcp/markup")).await.unwrap();
-        assert_eq!(markup.status(), StatusCode::NOT_FOUND, "a desktop's Mobile host never serves the markup lane");
-        for path in ["/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/web"] {
+        for path in ["/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/web", "/mcp/markup"] {
             let side = router(state.clone()).oneshot(req(path)).await.unwrap();
             assert_eq!(side.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
@@ -1169,6 +1195,18 @@ mod security_tests {
             let served = router(server.clone()).oneshot(req(path)).await.unwrap();
             assert_eq!(served.status(), StatusCode::UNAUTHORIZED, "a server daemon serves {path}");
         }
+    }
+
+    /// A desktop's Mobile host tells its sink whenever a markup ask or tick of
+    /// one of its tabs changes, which pokes an open window.
+    #[test]
+    fn the_hosts_markup_hook_notifies_its_sink() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let hook = markup_notice_hook(Arc::new(move |notice| log.lock().unwrap().push(notice)));
+        hook();
+        hook();
+        assert_eq!(*seen.lock().unwrap(), vec![Notice::Markup, Notice::Markup]);
     }
 
     use super::*;

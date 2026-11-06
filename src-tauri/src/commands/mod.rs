@@ -49,6 +49,7 @@ pub mod os_clock;
 pub mod pdf_clip;
 pub mod pdf_markup;
 pub mod persist_lane;
+pub mod port_forward;
 pub mod power;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
@@ -88,6 +89,7 @@ pub mod connect;
 pub mod sync;
 pub mod sync_handoff;
 pub mod synctex;
+pub mod tfevents;
 pub mod terminal;
 pub mod tex;
 pub mod timer;

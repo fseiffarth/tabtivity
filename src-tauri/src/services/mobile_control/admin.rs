@@ -24,6 +24,11 @@ pub type AgentTabLookup = Arc<dyn Fn(&str) -> Option<AgentTabRef> + Send + Sync>
 /// lately as `(device_id, project_id)`, and the tabs held.
 pub type PresenceLookup = Arc<dyn Fn() -> (Vec<(String, String)>, Vec<HeldTab>) + Send + Sync>;
 
+/// The markup questions this process holds for the tabs it spawned, answered
+/// to the window (`commands::markup_mcp::admin_markup`). Takes only the
+/// markup variants of [`AdminRequest`].
+pub type MarkupHandler = Arc<dyn Fn(&AdminRequest) -> AdminResponse + Send + Sync>;
+
 /// Everything the admin plane answers from, shared by every transport.
 #[derive(Clone)]
 pub struct AdminContext {
@@ -41,6 +46,10 @@ pub struct AdminContext {
     /// for what the phone left behind (`phone_origin`, #2348). `None` sweeps
     /// nothing.
     pub state_dir: Option<PathBuf>,
+    /// The markup asks and ticks this process holds, for the window's markup
+    /// views (`docs/headless_mcp_plan.md`, phase 1b). `None` answers that
+    /// there are none.
+    pub markup: Option<MarkupHandler>,
 }
 
 /// After a revoke or Lock down: cancel the prompts and schedules a phone
@@ -262,6 +271,16 @@ fn admin_response(request: Result<AdminRequest, String>, context: &AdminContext)
                 ),
             }
         }
+        Ok(
+            request @ (AdminRequest::MarkupList { .. }
+            | AdminRequest::MarkupTicks { .. }
+            | AdminRequest::MarkupAnswer { .. }
+            | AdminRequest::MarkupReopen { .. }
+            | AdminRequest::MarkupDismiss { .. }),
+        ) => match context.markup.as_ref() {
+            Some(handler) => handler(&request),
+            None => AdminResponse::Error { message: "no markup questions here".into() },
+        },
         Err(message) => AdminResponse::Error { message },
     }
 }
@@ -1096,6 +1115,7 @@ mod frame_tests {
             })),
             presence: None,
             state_dir: Some(dir.path().to_path_buf()),
+            markup: None,
         };
         let respond = |request| admin_response(request, &context);
         // A phone's held prompt and a desktop rule, for Lock down below.

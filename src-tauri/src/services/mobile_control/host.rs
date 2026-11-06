@@ -631,15 +631,17 @@ fn poke_window(state: &HostState, raw_id: Option<&str>, slices: &[&str]) {
 
 /// [`poke_window`] from where there is no `HostState`: the MCP listener's
 /// notices (`docs/headless_mcp_plan.md`) — a schedule proposal a headless
-/// tab made shows in an open window at once. Must run inside the runtime.
+/// tab made shows in an open window at once. Does nothing off the runtime
+/// (a thread the host did not start has no window to hurry).
 fn poke_desktop(control_dir: &std::path::Path, raw_id: Option<&str>, slices: &[&str]) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
     let socket = control_dir.join("desktop-control.sock");
     let request = DesktopRequest::Refresh {
         request_id: new_request_id(),
         project_id: raw_id.map(str::to_string),
         slices: slices.iter().map(|s| s.to_string()).collect(),
     };
-    tokio::spawn(async move {
+    runtime.spawn(async move {
         let _ = admin::desktop_call(&socket, &request).await;
     });
 }
@@ -4281,6 +4283,8 @@ async fn close_tab(
                 if crate::services::workspace::owns_tmux_session(&closed) {
                     // Its MCP tokens go with it (`docs/headless_mcp_plan.md`).
                     crate::services::root_mcp::revoke_tab(&format!("{}{tmux_session}", headless::LAUNCH_ID_PREFIX));
+                    // Its markup asks and ticks die with the session.
+                    crate::services::markup_mcp::sweep();
                     let runner = state.runner.clone();
                     let ended = tokio::task::spawn_blocking(move || runner.kill(&tmux_session)).await;
                     if let Ok(Err(why)) = ended {
@@ -7077,19 +7081,30 @@ fn markup_desktop_error(code: &str) -> ApiRefusal {
     )
 }
 
-/// Ask the window. The asks live in its process, beside the root MCP
-/// listener that took them; with no window there is no listener and so no
-/// ask, and the owner has nothing to answer from (headless owner plan) — a
-/// closed desktop is `desktop_unavailable`, which the phone reads as "no
-/// card". Never an error the phone would show. A server daemon has no window
-/// and serves the markup lane itself (`Runtime::serves_markup`), so it
-/// answers from its own asks ([`markup_here`]).
+/// Ask the window. The asks of a tab it spawned live in its process, beside
+/// the root MCP listener that took them; its markup commands also read the
+/// asks of the tabs this host spawned (`commands::markup_mcp`, over the admin
+/// socket), so an open window answers for both. With no window open, the asks
+/// this process holds for the tab are answered here ([`markup_here`]) — a tab
+/// the host spawned asks with no window at all — and a tab that has none is
+/// `desktop_unavailable`, which the phone reads as "no card". Never an error
+/// the phone would show. A server daemon has no window and serves the markup
+/// lane itself (`Runtime::serves_markup`), so it always answers from its own
+/// asks.
 async fn markup_call(state: &HostState, request: DesktopRequest, tab: &ResolvedTab) -> Result<DesktopResponse, ApiRefusal> {
     let response = if state.web.on_server() {
         Ok(markup_here(state, request, tab).await)
     } else {
         let desktop_socket = state.config.control_dir.join("desktop-control.sock");
-        admin::desktop_call(&desktop_socket, &request).await
+        let asked = admin::desktop_call(&desktop_socket, &request).await;
+        // No window, or one that does not know the tab (a tab this host just
+        // spawned): what this process holds for the tab is the answer.
+        let lacks_tab = matches!(&asked, Ok(DesktopResponse::Error { code, .. }) if code == "tab_not_found");
+        if (desktop_down(&asked) || lacks_tab) && markup_held_here(&request, tab).await {
+            Ok(markup_here(state, request, tab).await)
+        } else {
+            asked
+        }
     };
     if desktop_down(&response) {
         return Err(api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"));
@@ -7101,8 +7116,30 @@ async fn markup_call(state: &HostState, request: DesktopRequest, tab: &ResolvedT
     }
 }
 
-/// A markup request answered in this process — a server daemon's, which
-/// holds the asks its tabs made (`services::markup_mcp`). The window's bridge
+/// Whether this process holds something a markup request is about: an open
+/// ask or a tick for the tab (a list), the open ask the request names (an
+/// answer or a dismissal). Asked before [`markup_here`] answers in a window's
+/// place, so a tab with nothing to show stays the quiet `desktop_unavailable`.
+async fn markup_held_here(request: &DesktopRequest, tab: &ResolvedTab) -> bool {
+    use crate::commands::markup_mcp as commands;
+    let Some(target) = tab.schedule_target_id.clone().filter(|id| !id.is_empty()) else { return false };
+    let (project_id, ask_id) = match request {
+        DesktopRequest::MarkupQuestions { project_id, .. } => (project_id.clone(), None),
+        DesktopRequest::MarkupAnswer { project_id, ask_id, .. } | DesktopRequest::MarkupDismiss { project_id, ask_id, .. } => {
+            (project_id.clone(), Some(ask_id.clone()))
+        }
+        _ => return false,
+    };
+    let asks = commands::markup_mcp_list(project_id.clone(), target.clone(), None).await.unwrap_or_default();
+    match ask_id {
+        Some(id) => asks.iter().any(|ask| ask.id == id),
+        None => !asks.is_empty() || !commands::markup_mcp_ticks(project_id, target, None).await.unwrap_or_default().is_empty(),
+    }
+}
+
+/// A markup request answered in this process — a server daemon's, or a
+/// desktop's Mobile host with no window open: it holds the asks its tabs made
+/// (`services::markup_mcp`). The window's bridge
 /// steps (`MobileBridgeHost.tsx`: `markupQuestionsFor`,
 /// `answerMarkupFromPhone`, `dismissMarkupFromPhone`) over the same
 /// `markup_mcp_*` commands, keyed by the tab's schedule target; an answer's
@@ -7153,7 +7190,7 @@ async fn markup_here(state: &HostState, request: DesktopRequest, tab: &ResolvedT
                 .into_iter()
                 .map(|a| Answer { options: a.options.into_iter().map(|i| i as usize).collect(), other: a.other })
                 .collect();
-            let taken = match commands::markup_mcp_answer(project_id.clone(), target.clone(), ask_id.clone(), answers) {
+            let taken = match commands::markup_mcp_answer(project_id.clone(), target.clone(), ask_id.clone(), answers).await {
                 Ok(taken) => taken,
                 Err(code) if ask_codes.contains(&code.as_str()) => return error(&code, "The agent's questions did not take this answer"),
                 Err(code) => return error(&code, "The answer could not be taken"),
@@ -7167,14 +7204,14 @@ async fn markup_here(state: &HostState, request: DesktopRequest, tab: &ResolvedT
                 }
                 Err(why) => {
                     eprintln!("mobile: holding a markup answer failed: {why}");
-                    match commands::markup_mcp_reopen(project_id, target, ask_id, taken.receipt) {
+                    match commands::markup_mcp_reopen(project_id, target, ask_id, taken.receipt).await {
                         Ok(()) => error("delivery_failed", "The answer could not be queued; the questions are open again"),
                         Err(_) => error("not_delivered", "The answer could not be queued, and the questions have closed"),
                     }
                 }
             }
         }
-        DesktopRequest::MarkupDismiss { project_id, ask_id, .. } => match commands::markup_mcp_dismiss(project_id, target, ask_id) {
+        DesktopRequest::MarkupDismiss { project_id, ask_id, .. } => match commands::markup_mcp_dismiss(project_id, target, ask_id).await {
             Ok(()) => DesktopResponse::Seen,
             Err(code) if ask_codes.contains(&code.as_str()) => error(&code, "The agent's questions are no longer open"),
             Err(code) => error(&code, "The questions could not be closed"),
@@ -8437,6 +8474,8 @@ async fn sweep_mcp_tokens(runner: Arc<dyn scheduler::Runner>, mut shutdown: toki
             for id in sessions {
                 let _ = crate::services::root_mcp::revoke_session(&id);
             }
+            // What the tab asked or ticked goes with its tokens (phase 1b).
+            crate::services::markup_mcp::sweep();
         }
     }
 }
@@ -8634,6 +8673,9 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
             (presence_state.sightings.current(), presence_state.terminal_registry.viewers())
         })),
         state_dir: Some(state_dir.clone()),
+        // The window's markup views read the asks of the tabs this process
+        // spawned from here (`commands::markup_mcp`).
+        markup: Some(Arc::new(crate::commands::markup_mcp::admin_markup)),
     };
     tokio::spawn(async move {
         let _ = admin::serve(&admin_path, admin_context).await;
@@ -8651,8 +8693,13 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     let on_server = matches!(listen, Listen::Unix { .. });
     let listener = crate::commands::root_mcp::start_headless(
         Arc::new(move |notice| {
-            if notice == crate::commands::root_mcp::Notice::Schedules {
-                poke_desktop(&notice_dir, None, &["schedules"]);
+            use crate::commands::root_mcp::Notice;
+            match notice {
+                Notice::Schedules => poke_desktop(&notice_dir, None, &["schedules"]),
+                // A tab of this host asked or ticked: an open window's markup
+                // views re-read (their event, `markup-mcp-changed`).
+                Notice::Markup => poke_desktop(&notice_dir, None, &["markup"]),
+                Notice::GitPush => {}
             }
         }),
         on_server.then_some(&core_ctx),

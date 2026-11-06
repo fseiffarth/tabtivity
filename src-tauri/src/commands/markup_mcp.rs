@@ -8,11 +8,25 @@
 //! codes (`superseded`, `answered`, `gone`, `invalid_answer`,
 //! `invalid_target`, `markup_failed`). The service rings `markup-mcp-changed`
 //! through the hook installed here, so it stays context-free.
+//!
+//! **Two processes.** A tab's asks live in the process that spawned it: the
+//! window, or the Mobile host for a tab it started with no window open
+//! (`docs/headless_mcp_plan.md`, phase 1b). The window's commands below read
+//! its own store and then its peer's — the Mobile host's, over the admin
+//! socket ([`use_host_peer`], `AdminRequest::Markup*`) — and merge; an
+//! answer, reopen or dismissal goes to whichever process holds the ask. The
+//! host and a server daemon set no peer and answer from their own store
+//! (the host's phone routes ask the window themselves, `markup_call`).
+
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::Serialize;
 use app_core::CoreCtx;
 
-use crate::services::markup_mcp::{self, Answer, AskView, Shown, TickView};
+use crate::services::markup_mcp::{self, Answer, AnswerError, AskView, Shown, TickView};
+use crate::services::mobile_control::admin;
+use crate::services::mobile_control::protocol::{AdminRequest, AdminResponse};
 
 /// Called once from the listener's start (`commands::root_mcp::start`).
 pub fn install_change_hook(ctx: &CoreCtx) {
@@ -21,6 +35,12 @@ pub fn install_change_hook(ctx: &CoreCtx) {
         ctx.emit(markup_mcp::CHANGED_EVENT, ());
     }));
 }
+
+/// The Mobile host's admin socket, whose store holds the asks of the tabs it
+/// spawned. Set by the window only; once.
+static HOST_PEER: OnceLock<PathBuf> = OnceLock::new();
+pub fn use_host_peer(socket: PathBuf) { let _ = HOST_PEER.set(socket); }
+fn host_peer() -> Option<&'static Path> { HOST_PEER.get().map(PathBuf::as_path) }
 
 fn valid_target(project_id: &str, schedule_target_id: &str) -> Result<(), String> {
     crate::services::agent_tasks::validate_id("project", project_id)
@@ -49,16 +69,54 @@ fn with_shown<T>(project_id: &str, path: Option<&str>, read: impl FnOnce(Shown) 
     })
 }
 
+/// What this process holds, blocking.
+fn asks_here(project_id: &str, target: &str, path: Option<&str>) -> Vec<AskView> {
+    with_shown(project_id, path, |shown| markup_mcp::list(project_id, target, shown))
+}
+fn ticks_here(project_id: &str, target: &str, path: Option<&str>) -> Vec<TickView> {
+    with_shown(project_id, path, |shown| markup_mcp::ticks(project_id, target, shown))
+}
+
+/// One request to the peer. Anything but its answer — no peer, it is not
+/// running, an older build that does not know the request — is `None`: the
+/// peer holds nothing for this window to show.
+async fn ask_peer(peer: Option<&Path>, request: AdminRequest) -> Option<AdminResponse> {
+    admin::admin_call(peer?, &request).await.ok()
+}
+
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    app_core::rt::spawn_blocking(work).await.map_err(|_| "markup_failed".to_string())
+}
+
+/// [`markup_mcp_list`] against a given peer.
+pub async fn list_with(peer: Option<&Path>, project_id: String, schedule_target_id: String, path: Option<String>) -> Result<Vec<AskView>, String> {
+    valid_target(&project_id, &schedule_target_id)?;
+    let (p, t, pa) = (project_id.clone(), schedule_target_id.clone(), path.clone());
+    let here = blocking(move || asks_here(&p, &t, pa.as_deref())).await?;
+    let theirs = match ask_peer(peer, AdminRequest::MarkupList { project_id, target: schedule_target_id, path }).await {
+        Some(AdminResponse::MarkupAsks { asks }) => asks,
+        _ => Vec::new(),
+    };
+    Ok(markup_mcp::merge_asks(here, theirs))
+}
+
+/// [`markup_mcp_ticks`] against a given peer.
+pub async fn ticks_with(peer: Option<&Path>, project_id: String, schedule_target_id: String, path: Option<String>) -> Result<Vec<TickView>, String> {
+    valid_target(&project_id, &schedule_target_id)?;
+    let (p, t, pa) = (project_id.clone(), schedule_target_id.clone(), path.clone());
+    let here = blocking(move || ticks_here(&p, &t, pa.as_deref())).await?;
+    let theirs = match ask_peer(peer, AdminRequest::MarkupTicks { project_id, target: schedule_target_id, path }).await {
+        Some(AdminResponse::MarkupTicks { ticks }) => ticks,
+        _ => Vec::new(),
+    };
+    Ok(markup_mcp::merge_ticks(here, theirs))
+}
+
 /// `markup_mcp_list({ projectId, scheduleTargetId, path? })` → the open asks
 /// (`[{ id, file, fileName, createdAt, questions }]`; at most one per tab).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn markup_mcp_list(project_id: String, schedule_target_id: String, path: Option<String>) -> Result<Vec<AskView>, String> {
-    valid_target(&project_id, &schedule_target_id)?;
-    app_core::rt::spawn_blocking(move || {
-        with_shown(&project_id, path.as_deref(), |shown| markup_mcp::list(&project_id, &schedule_target_id, shown))
-    })
-    .await
-    .map_err(|_| "markup_failed".to_string())
+    list_with(host_peer(), project_id, schedule_target_id, path).await
 }
 
 /// `markup_mcp_ticks({ projectId, scheduleTargetId, path? })` → the marks
@@ -67,12 +125,7 @@ pub async fn markup_mcp_list(project_id: String, schedule_target_id: String, pat
 /// The view maps each onto the mark it sent in that round.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn markup_mcp_ticks(project_id: String, schedule_target_id: String, path: Option<String>) -> Result<Vec<TickView>, String> {
-    valid_target(&project_id, &schedule_target_id)?;
-    app_core::rt::spawn_blocking(move || {
-        with_shown(&project_id, path.as_deref(), |shown| markup_mcp::ticks(&project_id, &schedule_target_id, shown))
-    })
-    .await
-    .map_err(|_| "markup_failed".to_string())
+    ticks_with(host_peer(), project_id, schedule_target_id, path).await
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -82,16 +135,52 @@ pub struct MarkupAnswered {
     pub receipt: String,
 }
 
+/// [`markup_mcp_answer`] against a given peer: this process's ask first; one
+/// it does not hold (`gone`) is the peer's to take.
+pub async fn answer_with(
+    peer: Option<&Path>,
+    project_id: String,
+    schedule_target_id: String,
+    ask_id: String,
+    answers: Vec<Answer>,
+) -> Result<MarkupAnswered, String> {
+    valid_target(&project_id, &schedule_target_id)?;
+    let (p, t, a, ans) = (project_id.clone(), schedule_target_id.clone(), ask_id.clone(), answers.clone());
+    let here = blocking(move || markup_mcp::answer(&p, &t, &a, &ans)).await?;
+    match here {
+        Ok(taken) => Ok(MarkupAnswered { prompt: taken.prompt, receipt: taken.receipt }),
+        Err(AnswerError::Gone) => match ask_peer(peer, AdminRequest::MarkupAnswer { project_id, target: schedule_target_id, ask_id, answers }).await {
+            Some(AdminResponse::MarkupAnswered { prompt, receipt }) => Ok(MarkupAnswered { prompt, receipt }),
+            Some(AdminResponse::MarkupRefused { code }) => Err(code),
+            _ => Err(AnswerError::Gone.code().to_string()),
+        },
+        Err(other) => Err(other.code().to_string()),
+    }
+}
+
 /// `markup_mcp_answer({ projectId, scheduleTargetId, askId, answers:
 /// [{ options: number[], other? }] })` → `{ prompt, receipt }`, one answer
 /// per question in order. The ask is closed before the prompt is returned; a
 /// caller that then fails to queue the prompt reopens it with `receipt`.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn markup_mcp_answer(project_id: String, schedule_target_id: String, ask_id: String, answers: Vec<Answer>) -> Result<MarkupAnswered, String> {
+pub async fn markup_mcp_answer(project_id: String, schedule_target_id: String, ask_id: String, answers: Vec<Answer>) -> Result<MarkupAnswered, String> {
+    answer_with(host_peer(), project_id, schedule_target_id, ask_id, answers).await
+}
+
+/// [`markup_mcp_reopen`] against a given peer.
+pub async fn reopen_with(peer: Option<&Path>, project_id: String, schedule_target_id: String, ask_id: String, receipt: String) -> Result<(), String> {
     valid_target(&project_id, &schedule_target_id)?;
-    markup_mcp::answer(&project_id, &schedule_target_id, &ask_id, &answers)
-        .map(|taken| MarkupAnswered { prompt: taken.prompt, receipt: taken.receipt })
-        .map_err(|e| e.code().to_string())
+    let (p, t, a, r) = (project_id.clone(), schedule_target_id.clone(), ask_id.clone(), receipt.clone());
+    let here = blocking(move || markup_mcp::reopen(&p, &t, &a, &r)).await?;
+    match here {
+        Ok(()) => Ok(()),
+        Err(AnswerError::Gone) => match ask_peer(peer, AdminRequest::MarkupReopen { project_id, target: schedule_target_id, ask_id, receipt }).await {
+            Some(AdminResponse::Ok) => Ok(()),
+            Some(AdminResponse::MarkupRefused { code }) => Err(code),
+            _ => Err(AnswerError::Gone.code().to_string()),
+        },
+        Err(other) => Err(other.code().to_string()),
+    }
 }
 
 /// `markup_mcp_reopen({ projectId, scheduleTargetId, askId, receipt })`: the
@@ -99,17 +188,67 @@ pub fn markup_mcp_answer(project_id: String, schedule_target_id: String, ask_id:
 /// again so its card stays usable. Refused (`answered`, `superseded`, `gone`)
 /// when anything else closed or replaced it since.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn markup_mcp_reopen(project_id: String, schedule_target_id: String, ask_id: String, receipt: String) -> Result<(), String> {
+pub async fn markup_mcp_reopen(project_id: String, schedule_target_id: String, ask_id: String, receipt: String) -> Result<(), String> {
+    reopen_with(host_peer(), project_id, schedule_target_id, ask_id, receipt).await
+}
+
+/// [`markup_mcp_dismiss`] against a given peer: both processes close it (an
+/// ask id is held by at most one, and dismissing an unknown one is not an
+/// error).
+pub async fn dismiss_with(peer: Option<&Path>, project_id: String, schedule_target_id: String, ask_id: String) -> Result<(), String> {
     valid_target(&project_id, &schedule_target_id)?;
-    markup_mcp::reopen(&project_id, &schedule_target_id, &ask_id, &receipt).map_err(|e| e.code().to_string())
+    let (p, t, a) = (project_id.clone(), schedule_target_id.clone(), ask_id.clone());
+    blocking(move || markup_mcp::dismiss(&p, &t, &a)).await?.map_err(|e| e.code().to_string())?;
+    ask_peer(peer, AdminRequest::MarkupDismiss { project_id, target: schedule_target_id, ask_id }).await;
+    Ok(())
 }
 
 /// `markup_mcp_dismiss({ projectId, scheduleTargetId, askId })`: **Answer in
 /// chat instead**. Idempotent.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn markup_mcp_dismiss(project_id: String, schedule_target_id: String, ask_id: String) -> Result<(), String> {
-    valid_target(&project_id, &schedule_target_id)?;
-    markup_mcp::dismiss(&project_id, &schedule_target_id, &ask_id).map_err(|e| e.code().to_string())
+pub async fn markup_mcp_dismiss(project_id: String, schedule_target_id: String, ask_id: String) -> Result<(), String> {
+    dismiss_with(host_peer(), project_id, schedule_target_id, ask_id).await
+}
+
+/// The Mobile host's answer to the window's markup requests
+/// (`AdminRequest::Markup*`): this process's own store only, never its
+/// peer's. Blocking (it may look at the project folder).
+pub fn admin_markup(request: &AdminRequest) -> AdminResponse {
+    let refused = |code: &str| AdminResponse::MarkupRefused { code: code.to_string() };
+    let checked = |project: &str, target: &str| valid_target(project, target).is_ok();
+    match request {
+        AdminRequest::MarkupList { project_id, target, path } if checked(project_id, target) => {
+            AdminResponse::MarkupAsks { asks: asks_here(project_id, target, path.as_deref()) }
+        }
+        AdminRequest::MarkupTicks { project_id, target, path } if checked(project_id, target) => {
+            let mut ticks = ticks_here(project_id, target, path.as_deref());
+            // Oldest first, so the newest are what stays.
+            let over = ticks.len().saturating_sub(markup_mcp::MAX_PEER_TICKS);
+            ticks.drain(..over);
+            AdminResponse::MarkupTicks { ticks }
+        }
+        AdminRequest::MarkupAnswer { project_id, target, ask_id, answers } if checked(project_id, target) => {
+            match markup_mcp::answer(project_id, target, ask_id, answers) {
+                Ok(taken) => AdminResponse::MarkupAnswered { prompt: taken.prompt, receipt: taken.receipt },
+                Err(error) => refused(error.code()),
+            }
+        }
+        AdminRequest::MarkupReopen { project_id, target, ask_id, receipt } if checked(project_id, target) => {
+            match markup_mcp::reopen(project_id, target, ask_id, receipt) {
+                Ok(()) => AdminResponse::Ok,
+                Err(error) => refused(error.code()),
+            }
+        }
+        AdminRequest::MarkupDismiss { project_id, target, ask_id } if checked(project_id, target) => {
+            match markup_mcp::dismiss(project_id, target, ask_id) {
+                Ok(()) => AdminResponse::Ok,
+                Err(error) => refused(error.code()),
+            }
+        }
+        AdminRequest::MarkupList { .. } | AdminRequest::MarkupTicks { .. } | AdminRequest::MarkupAnswer { .. }
+        | AdminRequest::MarkupReopen { .. } | AdminRequest::MarkupDismiss { .. } => refused("invalid_target"),
+        _ => AdminResponse::Error { message: "not a markup request".into() },
+    }
 }
 
 #[cfg(test)]
@@ -129,10 +268,11 @@ mod tests {
             assert!(serde_json::from_str::<Vec<Answer>>(bad).is_err(), "{bad}");
         }
         assert_eq!(serde_json::to_value(MarkupAnswered { prompt: "p".into(), receipt: "r".into() }).unwrap(), serde_json::json!({"prompt": "p", "receipt": "r"}));
-        assert_eq!(markup_mcp_answer("p".into(), "t".into(), "ask-none".into(), vec![]), Err("gone".into()));
-        assert_eq!(markup_mcp_dismiss("p".into(), "t".into(), "ask-none".into()), Ok(()));
-        assert_eq!(markup_mcp_reopen("p".into(), "t".into(), "ask-none".into(), "r".into()), Err("gone".into()));
-        assert_eq!(markup_mcp_reopen("p".into(), "".into(), "ask-none".into(), "r".into()), Err("invalid_target".into()));
+        use app_core::rt::block_on;
+        assert_eq!(block_on(markup_mcp_answer("p".into(), "t".into(), "ask-none".into(), vec![])), Err("gone".into()));
+        assert_eq!(block_on(markup_mcp_dismiss("p".into(), "t".into(), "ask-none".into())), Ok(()));
+        assert_eq!(block_on(markup_mcp_reopen("p".into(), "t".into(), "ask-none".into(), "r".into())), Err("gone".into()));
+        assert_eq!(block_on(markup_mcp_reopen("p".into(), "".into(), "ask-none".into(), "r".into())), Err("invalid_target".into()));
     }
 
     #[test]
@@ -148,5 +288,106 @@ mod tests {
         // test does not read; `markup_mcp::ticks` is tested per `Shown`.)
         assert!(with_shown("p-cmd-ticks", Some(" "), |shown| shown == Shown::All));
         assert!(with_shown("p-cmd-ticks", None, |shown| shown == Shown::All));
+    }
+
+    /// The window and the Mobile host are two processes, each with its own
+    /// asks and ticks (`markup_mcp::as_host` models the second store here):
+    /// the window's commands read, answer, reopen and dismiss the host's
+    /// through its admin socket, and its own through memory.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_window_reaches_the_asks_and_ticks_the_host_holds() {
+        use crate::services::markup_mcp::{as_host, test_open_ask, test_tick};
+        use crate::services::mobile_control::auth::AuthStore;
+        use std::sync::{Arc, Mutex};
+        let dir = tempfile::tempdir().unwrap();
+        let auth = AuthStore::open(&dir.path().join("mobile-control"), "https://desk.example".into()).expect("auth store");
+        let (shutdown, _watch) = tokio::sync::watch::channel(false);
+        let socket = dir.path().join("admin.sock");
+        let context = admin::AdminContext {
+            auth: Arc::new(Mutex::new(auth)),
+            port: 8443,
+            origin: None,
+            shutdown,
+            agent_tab: None,
+            presence: None,
+            state_dir: None,
+            markup: Some(Arc::new(|request: &AdminRequest| as_host::run(|| admin_markup(request)))),
+        };
+        let served = socket.clone();
+        let server = tokio::spawn(async move { let _ = admin::serve(&served, context).await; });
+        while !socket.exists() { tokio::time::sleep(std::time::Duration::from_millis(10)).await; }
+
+        let project = "p-two-processes";
+        let (host_tab, window_tab) = ("t-two-host", "t-two-window");
+        let questions = |question: &str| serde_json::json!([{ "question": question, "options": [{ "label": "Figure" }, { "label": "Paragraph" }] }]);
+        // The host's tab asked and ticked; so did the window's. (A tab holds one
+        // session per lane, so the ticking sessions are other tabs of the same target.)
+        let host_ask = as_host::run(|| test_open_ask("two-host", project, host_tab, questions("Which, host?")));
+        let window_ask = test_open_ask("two-window", project, window_tab, questions("Which, window?"));
+        let files = tempfile::tempdir().unwrap();
+        std::fs::write(files.path().join("draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        let ticked = as_host::run(|| test_tick("two-host-ticks", project, host_tab, files.path(), "draft.pdf", "k3x9a0b1", &[(2, 1), (3, 2)]));
+        assert_eq!(ticked["count"], 2, "{ticked}");
+        test_tick("two-window-ticks", project, window_tab, files.path(), "draft.pdf", "k3x9a0b2", &[(1, 1)]);
+
+        let peer = Some(socket.as_path());
+        async fn list(peer: Option<&Path>, target: &str) -> Result<Vec<AskView>, String> {
+            list_with(peer, "p-two-processes".into(), target.into(), None).await
+        }
+        async fn ticks(peer: Option<&Path>, target: &str) -> Result<Vec<TickView>, String> {
+            ticks_with(peer, "p-two-processes".into(), target.into(), None).await
+        }
+        // Window open (a peer): both tabs' asks and ticks show.
+        let seen = list(peer, host_tab).await.unwrap();
+        assert_eq!(seen.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [host_ask.as_str()]);
+        assert_eq!(list(peer, window_tab).await.unwrap()[0].id, window_ask);
+        assert_eq!(ticks(peer, host_tab).await.unwrap().len(), 2);
+        assert_eq!(ticks(peer, window_tab).await.unwrap().len(), 1);
+        // No Mobile host running (no peer, a socket nobody listens on): the
+        // window shows what it holds itself, and nothing breaks.
+        assert!(list(None, host_tab).await.unwrap().is_empty());
+        let nobody = dir.path().join("nobody.sock");
+        let nobody = nobody.as_path();
+        assert!(list(Some(nobody), host_tab).await.unwrap().is_empty());
+        assert!(ticks(Some(nobody), host_tab).await.unwrap().is_empty());
+        assert_eq!(list(Some(nobody), window_tab).await.unwrap()[0].id, window_ask);
+        assert_eq!(list(peer, "a\nb").await, Err("invalid_target".into()));
+
+        // The host's answer: the prompt comes back for the window to queue;
+        // the host's ask is closed; the window's own is untouched.
+        let one = || vec![Answer { options: vec![1], other: None }];
+        let answered = answer_with(peer, project.into(), host_tab.into(), host_ask.clone(), one()).await.unwrap();
+        assert!(answered.prompt.contains("Paragraph"), "{}", answered.prompt);
+        assert!(as_host::run(|| markup_mcp::list(project, host_tab, Shown::All)).is_empty());
+        assert_eq!(list(peer, window_tab).await.unwrap().len(), 1);
+        assert_eq!(answer_with(peer, project.into(), host_tab.into(), host_ask.clone(), one()).await, Err("answered".into()));
+        // The prompt never reached the tab: reopening goes back to the host.
+        reopen_with(peer, project.into(), host_tab.into(), host_ask.clone(), answered.receipt.clone()).await.unwrap();
+        assert_eq!(list(peer, host_tab).await.unwrap().len(), 1, "open again");
+        assert_eq!(reopen_with(peer, project.into(), host_tab.into(), host_ask.clone(), "wrong".into()).await, Ok(()), "already open is not an error");
+        // The answer needs the host: without one the ask is `gone` here.
+        assert_eq!(answer_with(None, project.into(), host_tab.into(), host_ask.clone(), one()).await, Err("gone".into()));
+        assert_eq!(answer_with(peer, project.into(), host_tab.into(), host_ask.clone(), vec![]).await, Err("invalid_answer".into()), "the host checks the answers");
+        // The window's own ask is answered in memory, never through the peer.
+        let own = answer_with(Some(nobody), project.into(), window_tab.into(), window_ask.clone(), one()).await.unwrap();
+        assert!(own.prompt.contains("Paragraph"));
+        // Dismissing closes whichever holds it; an unknown ask is no error.
+        dismiss_with(peer, project.into(), host_tab.into(), host_ask.clone()).await.unwrap();
+        assert!(as_host::run(|| markup_mcp::list(project, host_tab, Shown::All)).is_empty());
+        dismiss_with(peer, project.into(), host_tab.into(), "ask-unknown".into()).await.unwrap();
+        // A request the host does not take: not a markup request, a bad target.
+        assert!(matches!(admin_markup(&AdminRequest::Status), AdminResponse::Error { .. }));
+        let bad = AdminRequest::MarkupDismiss { project_id: "p".into(), target: "a\nb".into(), ask_id: "x".into() };
+        assert!(matches!(admin_markup(&bad), AdminResponse::MarkupRefused { code } if code == "invalid_target"));
+        server.abort();
+    }
+
+    /// A peer answer carries at most the newest ticks that fit its frame.
+    #[test]
+    fn the_hosts_tick_answer_keeps_the_newest_ticks_that_fit_a_frame() {
+        use crate::services::mobile_control::protocol::MAX_CONTROL_MESSAGE;
+        let one = serde_json::to_string(&TickView { round: "k3x9a0b1".into(), page: 100_000, mark: 9_999 }).unwrap().len() + 1;
+        assert!(markup_mcp::MAX_PEER_TICKS * one < MAX_CONTROL_MESSAGE, "{one} bytes a tick");
     }
 }
