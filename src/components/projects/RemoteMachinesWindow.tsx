@@ -33,6 +33,7 @@ import { isHostPinned } from "../../lib/projectTabHost";
 import type { ComputeHost, GlobalMachine, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { PortForwardList } from "./PortForwardList";
 import { useDialogs } from "../common/PromptDialogs";
 import { CloseIcon } from "../common/icons/Icon";
 
@@ -763,6 +764,7 @@ export function RemoteMachinesWindow({
                   {ssh === "connected" ? t("remoteMachines.manage") : t("remoteMachines.connectEllipsis")}
                 </button>
               </div>
+              <PortForwardList project={project} hostId={PRIMARY_HOST} connected={ssh === "connected"} />
             </div>
           );
         })()}
@@ -937,6 +939,7 @@ export function RemoteMachinesWindow({
                   />
                 </label>
               )}
+              <PortForwardList project={project} hostId={w.id} connected={ssh === "connected"} />
               {pullNote[w.id] && <div className="settings-help">{pullNote[w.id]}</div>}
             </div>
           );

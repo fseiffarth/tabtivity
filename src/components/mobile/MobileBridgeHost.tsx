@@ -32,7 +32,7 @@ import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
-import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
+import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, MARKUP_MCP_CHANGED, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
 import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
@@ -2903,8 +2903,9 @@ async function attachDesktopImage(projectId: string, imageId: string, chat?: str
  * file. `workspace` re-fetches the scope's shared tab set (`refreshWorkspaceScope`,
  * which also adds a tab created elsewhere); `projects` the registry;
  * `calendar` the board and month; `schedules` and `prompts` every loaded
- * project's rows. Best-effort — a slice that fails to load is the next
- * poll's problem. */
+ * project's rows; `markup` rings the markup views (the host's own tabs'
+ * asks and ticks changed). Best-effort — a slice that fails to load is the
+ * next poll's problem. */
 /** Broadcast `agent-schedules-changed` to every window of this app; where the
  * event cannot be sent, at least re-read this window's rows. */
 export async function emitSchedulesChanged(): Promise<void> {
@@ -2912,6 +2913,18 @@ export async function emitSchedulesChanged(): Promise<void> {
     await emit("agent-schedules-changed");
   } catch {
     await useAgentSchedulesStore.getState().refreshLoaded();
+  }
+}
+
+/** A tab the Mobile host spawned asked or ticked (`markup_ask` /
+ * `markup_done` in the host's own memory, `docs/headless_mcp_plan.md` phase
+ * 1b): ring the event the markup views already re-read on, as the window's own
+ * listener does for its tabs. Best-effort. */
+export async function emitMarkupChanged(): Promise<void> {
+  try {
+    await emit(MARKUP_MCP_CHANGED);
+  } catch {
+    // No IPC to ring over: the views re-read on their next trigger.
   }
 }
 
@@ -2927,6 +2940,7 @@ async function refreshSlices(projectId: string | null | undefined, slices: strin
     // (`docs/headless_mcp_plan.md`, the Mobile host's schedule notices).
     else if (slice === "schedules") jobs.push(emitSchedulesChanged());
     else if (slice === "prompts") jobs.push(useAgentPromptsStore.getState().refreshLoaded());
+    else if (slice === "markup") jobs.push(emitMarkupChanged());
   }
   await Promise.all(jobs.map((job) => job.catch(() => undefined)));
   return { status: "seen" };

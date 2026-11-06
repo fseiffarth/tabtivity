@@ -850,71 +850,59 @@ async fn a_phone_creates_a_project_by_name_only() {
     assert_eq!(json(&body)["error"], "invalid_name");
 }
 
+/// The phone's model sheet acts on the live tab only (threat model gap 81):
+/// saved launch defaults are a host-wide write that reaches every later launch
+/// of the CLI, so they are set on the desktop alone. The routes are gone, and
+/// an older phone calling them is refused without anything written.
+#[tokio::test]
+async fn the_phone_has_no_route_to_the_saved_launch_defaults() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(63)).await.0;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let settings_file = host.state.config.state_dir.join("settings.json");
+    let before = std::fs::read(&settings_file).ok();
+    let uri = format!("/api/v1/tabs/{tab_id}/launch-defaults");
+
+    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "opus", "effort": "high" })))).await;
+    assert!(matches!(status, StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED), "answered {status}: {body}");
+    let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+    assert!(!body.contains("saved"), "{body}");
+    assert_eq!(std::fs::read(&settings_file).ok(), before, "nothing was written");
+    if let Some(bytes) = before {
+        let stored: Value = serde_json::from_slice(&bytes).expect("json");
+        assert!(stored.get("agent_launch_defaults").is_none(), "{stored}");
+    }
+}
+
+/// The phone's chat shows the running shells like the desktop's, but the
+/// command line never crosses the browser API (threat model gap 79): what the
+/// agent said the shell does and whether it runs in the background do.
+#[tokio::test]
+async fn a_phone_transcript_keeps_the_running_shells_without_their_command_lines() {
+    use crate::services::agent_transcript::{AgentTranscript, RunningShell};
+    let host = Fixture::with_project();
+    let transcript = AgentTranscript {
+        shells: vec![
+            RunningShell { command: "cat ~/.ssh/config".into(), description: Some("Check the config".into()), cut: true, ..Default::default() },
+            RunningShell { command: "npm run dev".into(), background: true, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone("d1".into()), "t1", transcript).await;
+    assert_eq!(wire["shells"][0]["description"], "Check the config");
+    assert_eq!(wire["shells"][1]["background"], true);
+    assert!(!wire.to_string().contains("ssh"), "{wire}");
+    assert!(!wire.to_string().contains("npm run dev"), "{wire}");
+    assert!(wire["shells"][0].get("cut").is_none());
+}
+
 /// H3 (headless owner plan §3): with no window open, the phone's tab
 /// edits — rename, colour, close, reopen — are the owner's: they land in
 /// the session file through the workspace service, answered as stored
 /// and flagged; a close ends the tab's session and remembers an agent
 /// tab; a reopen brings it back as a new tab started detached on its
 /// resume args. Nothing raw crosses.
-/// The model sheet's launch defaults: read and saved for the tab's CLI only,
-/// refused as the desktop form refuses them, never by a stranger.
-#[tokio::test]
-async fn launch_defaults_are_the_tabs_cli_and_keep_every_other_setting() {
-    let host = Fixture::with_project();
-    let cookie = host.pair_device(&signing_key(63)).await.0;
-    let (_, tab_id) = project_and_tab(&host, &cookie).await;
-    let settings_file = host.state.config.state_dir.join("settings.json");
-    let mut seeded: Value = std::fs::read(&settings_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_else(|| json!({}));
-    seeded["a_later_key"] = json!(7);
-    seeded["agent_launch_defaults"] = json!({ "codex": { "model": "gpt", "effort": "" } });
-    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
-    let uri = format!("/api/v1/tabs/{tab_id}/launch-defaults");
-
-    let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(status, StatusCode::OK, "answered: {body}");
-    assert_eq!(json(&body)["saved"], json!({ "model": "", "effort": "" }));
-    assert_eq!(json(&body)["cli"], "claude");
-    assert!(json(&body)["models"].is_null(), "{body}");
-    seeded["agent_models"] = json!({ "claude": ["opus", "haiku"], "codex": ["gpt"] });
-    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
-    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(json(&body)["models"], json!(["opus", "haiku"]));
-    assert_eq!(json(&body)["capabilities"]["model"], true);
-    assert!(json(&body)["capabilities"]["efforts"].as_array().expect("efforts").contains(&json!("high")));
-
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": " opus ", "effort": "high" })))).await;
-    assert_eq!(status, StatusCode::OK, "answered: {body}");
-    let stored: Value = serde_json::from_slice(&std::fs::read(&settings_file).expect("read")).expect("json");
-    assert_eq!(stored["agent_launch_defaults"]["claude"], json!({ "model": "opus", "effort": "high" }));
-    assert_eq!(stored["agent_launch_defaults"]["codex"]["model"], "gpt");
-    assert_eq!(stored["a_later_key"], 7);
-    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(json(&body)["saved"], json!({ "model": "opus", "effort": "high" }));
-
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "", "effort": "ultra" })))).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(json(&body)["error"], "invalid_effort");
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "--x", "cmd": "codex" })))).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(json(&body)["error"], "invalid_request");
-    let (status, _, _) = host.send(request_as("PUT", "/api/v1/tabs/nope/launch-defaults", &cookie, Some(json!({})))).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-
-    let (status, _, _) = host.send(request_as("PUT", &uri, &cookie, Some(json!({})))).await;
-    assert_eq!(status, StatusCode::OK);
-    let stored: Value = serde_json::from_slice(&std::fs::read(&settings_file).expect("read")).expect("json");
-    assert!(stored["agent_launch_defaults"].get("claude").is_none(), "{stored}");
-
-    let stranger = Request::builder()
-        .method("PUT")
-        .uri(&uri)
-        .header(header::ORIGIN, ORIGIN)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(r#"{"model":"opus"}"#))
-        .expect("request");
-    assert_eq!(host.send(stranger).await.0, StatusCode::UNAUTHORIZED);
-}
-
 #[tokio::test]
 async fn tab_edits_close_and_reopen_are_the_owners_with_no_window() {
     let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2424,15 +2412,17 @@ async fn mcp_status(port: u16, path: &str, token: &str) -> u16 {
     String::from_utf8_lossy(&answer).get(9..12).and_then(|code| code.parse().ok()).expect("status line")
 }
 
-/// #2339 (`docs/headless_mcp_plan.md`), end to end in this process:
+/// #2339 (`docs/headless_mcp_plan.md`, phases 1 and 1b), end to end in this
+/// process:
 /// a) the Mobile host's `start_headless` binds a listener and publishes it
 ///    as the process's `runtime()`, with no root lane;
 /// b) a Claude tab the phone creates with no window goes through the spawn
 ///    seam into `root_mcp::grant_lanes` — the call `launch_prep::prepare`
 ///    makes — against the fixture's state dir, passes the real gates
 ///    (agent, `schedule_mcp` and the project's level, `git_push_mcp`,
-///    `help_mcp`) and records `PtyOptions` naming the schedule, git and
-///    help servers; the listener admits each token on its own route over
+///    `help_mcp`, `markup_mcp`) and records `PtyOptions` naming the
+///    schedule, git, help and markup servers; the listener admits each
+///    token on its own route over
 ///    HTTP, and a fresh store (the window, or this host after a restart)
 ///    refuses them;
 /// c) the same grant with this runtime withholds the root and reader
@@ -2503,18 +2493,25 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     assert_eq!(opts.cmd, "claude");
     let token = |key: &str| opts.env.get(key).unwrap_or_else(|| panic!("{key} missing: {:?}", opts.env.keys())).clone();
     let (schedule, git, help) = (token(root_mcp::SCHEDULE_TOKEN_ENV), token(root_mcp::GIT_TOKEN_ENV), token(root_mcp::HELP_TOKEN_ENV));
+    // Phase 1b: the markup lane too — its asks live in this process.
+    let markup = token(root_mcp::MARKUP_TOKEN_ENV);
+    assert_eq!(opts.env[root_mcp::MARKUP_URL_ENV], format!("http://127.0.0.1:{port}/mcp/markup"));
     assert_eq!(opts.env[root_mcp::SCHEDULE_URL_ENV], format!("http://127.0.0.1:{port}/mcp/schedule"));
     assert_eq!(opts.env[root_mcp::HELP_URL_ENV], format!("http://127.0.0.1:{port}/mcp/help"));
     assert!(!opts.env.contains_key(root_mcp::TOKEN_ENV), "never the root lane");
-    assert!(!opts.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "never the markup lane: its asks live in the window");
     let argv = opts.args.join(" ");
     assert_eq!(opts.args.iter().filter(|a| *a == "--mcp-config").count(), 1, "{argv}");
-    for server in [crate::services::schedule_mcp::SERVER_NAME, crate::services::git_push_mcp::SERVER_NAME, crate::services::help_mcp::SERVER_NAME] {
+    for server in [crate::services::schedule_mcp::SERVER_NAME, crate::services::git_push_mcp::SERVER_NAME, crate::services::help_mcp::SERVER_NAME, crate::services::markup_mcp::SERVER_NAME] {
         assert!(argv.contains(&format!("\"{server}\":")), "{server} missing: {argv}");
     }
-    for token in [&schedule, &git, &help] {
+    for token in [&schedule, &git, &help, &markup] {
         assert!(!argv.contains(token.as_str()), "a token is never in argv");
     }
+    let marker = root_mcp::tokens().authenticate(Some(&format!("Bearer {markup}"))).expect("the host knows its markup token");
+    assert_eq!(marker.identity.caller, root_mcp::Caller::Marker);
+    assert_eq!(marker.identity.tab, opts.id);
+    assert_eq!(marker.identity.project.as_deref(), Some(RAW_PROJECT));
+    assert_eq!(marker.identity.schedule_target.as_ref().map(|b| b.target.as_str()), opts.schedule_target_id.as_deref());
     let session = root_mcp::tokens().authenticate(Some(&format!("Bearer {schedule}"))).expect("the host knows its token");
     assert_eq!(session.identity.tab, opts.id);
     assert_eq!(session.identity.project.as_deref(), Some(RAW_PROJECT));
@@ -2522,18 +2519,20 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
 
     // The bound listener admits each token on its own route, over HTTP
     // (past admission: whatever the handler then answers, never 401) …
-    for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help)] {
+    for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help), ("/mcp/markup", &markup)] {
         assert_ne!(mcp_status(port, path, token).await, 401, "{path}");
     }
     assert_eq!(mcp_status(port, "/mcp/help", &schedule).await, 401, "a token is good on its own route only");
+    assert_eq!(mcp_status(port, "/mcp/markup", &schedule).await, 401, "the markup route takes the markup token only");
+    assert_eq!(mcp_status(port, "/mcp/schedule", &markup).await, 401);
     assert_eq!(mcp_status(port, "/mcp", &schedule).await, 404, "no root route on the host");
-    assert_eq!(mcp_status(port, "/mcp/markup", &schedule).await, 404, "no markup route on the host");
+    assert_eq!(mcp_status(port, "/mcp", &markup).await, 404, "the markup token does not open the root route");
     // … and no other process's listener does: the window's, or this host's
     // after a restart (a fresh store).
     let admission = crate::commands::root_mcp::admission;
     assert_eq!(admission(root_mcp::tokens(), "/mcp/schedule", &schedule).await, Ok(()));
     let other: &'static TokenStore = Box::leak(Box::default());
-    for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help)] {
+    for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help), ("/mcp/markup", &markup)] {
         assert_eq!(admission(other, path, token).await, Err(StatusCode::UNAUTHORIZED), "{path}");
     }
 
@@ -2555,17 +2554,27 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
         root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
         assert!(window.env.contains_key(root_mcp::TOKEN_ENV), "{project:?}: the settings do grant it");
     }
-    // The markup lane likewise: a project tab with a schedule target gets
-    // it from the window's runtime (or a server daemon's), never from a
-    // desktop's Mobile host.
+    // The markup lane is the host's too (phase 1b): a project tab with a
+    // schedule target gets it from this runtime as from the window's — and
+    // none without a target, or from a runtime that does not hold the asks.
     let mut here = spawn("headless:m", Some(RAW_PROJECT));
     here.schedule_target_id = Some("target-m".into());
     let mut window = here.clone();
     window.id = "window:m".into();
+    let mut targetless = here.clone();
+    targetless.id = "headless:m-none".into();
+    targetless.schedule_target_id = None;
+    let mut unserved = here.clone();
+    unserved.id = "headless:m-unserved".into();
     root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
     root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
-    assert!(!here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
+    root_mcp::grant_lanes(&mut targetless, true, root_mcp::runtime(), other, &state_dir);
+    let not_markup = crate::services::root_mcp::Runtime { port: 9, serves_root: false, serves_markup: false, serves_web: true };
+    root_mcp::grant_lanes(&mut unserved, true, Some(&not_markup), other, &state_dir);
+    assert!(here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
     assert!(window.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", window.env.keys());
+    assert!(!targetless.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "no schedule target to key the asks by");
+    assert!(!unserved.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "a runtime that holds no asks grants no lane");
 
     // The assistant's web and help lanes: a phone-made chat with no window
     // gets them from this host's listener (the `assistant` flag on, a
@@ -2617,10 +2626,11 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     let (status, _, body) = host.send(request_as("DELETE", &format!("/api/v1/tabs/{tab_id}"), &cookie, None)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(host.runner.killed.lock().unwrap().len(), 1, "the session was ended");
-    for token in [&schedule, &git, &help] {
+    for token in [&schedule, &git, &help, &markup] {
         assert!(root_mcp::tokens().authenticate(Some(&format!("Bearer {token}"))).is_none(), "revoked on close");
     }
     assert_eq!(mcp_status(port, "/mcp/help", &help).await, 401);
+    assert_eq!(mcp_status(port, "/mcp/markup", &markup).await, 401);
     let _ = stop.send(true);
 }
 
@@ -5402,10 +5412,16 @@ async fn a_server_daemon_answers_markup_from_its_own_asks() {
     let question = &asks[0].questions[0];
     assert_eq!((question.header.as_deref(), question.page, question.quote.as_deref()), (Some("Word"), Some(2), Some("the lede")));
     assert_eq!(question.options[1].description.as_deref(), Some("as written"));
-    // Without the server link the same request goes to a window, and
-    // there is none: the desktop's quiet `desktop_unavailable`.
+    // Without the server link the same request goes to a window first, and
+    // there is none: a desktop's Mobile host answers from the asks it holds
+    // for the tab itself, and a tab it holds nothing for is the desktop's
+    // quiet `desktop_unavailable`.
     let desktop = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
-    let refused = markup_call(&host.state, desktop, &tab).await.expect_err("no window");
+    let Ok(DesktopResponse::MarkupQuestions { asks, .. }) = markup_call(&host.state, desktop.clone(), &tab).await else { panic!("the host answers") };
+    assert_eq!(asks.len(), 1);
+    let mut quiet = tab.clone();
+    quiet.schedule_target_id = Some("t-server-markup-quiet".into());
+    let refused = markup_call(&host.state, desktop, &quiet).await.expect_err("no window, nothing asked");
     assert_eq!(refused.0, StatusCode::SERVICE_UNAVAILABLE);
 
     let answer = DesktopRequest::MarkupAnswer {
@@ -5448,6 +5464,99 @@ async fn a_server_daemon_answers_markup_from_its_own_asks() {
     let list = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
     let none = markup_call(&state, list, &tab).await.expect_err("no target");
     assert_eq!(refused_code(&none), "tab_not_found");
+}
+
+/// A tab the Mobile host spawned asks of the host (`docs/headless_mcp_plan.md`
+/// phase 1b), so its asks and ticks live in this process: with no window open
+/// the phone's markup routes answer from them (the answer held for the tab
+/// as a phone prompt is with no window); a tab with nothing asked stays the
+/// quiet `desktop_unavailable`. With a window open the request goes to the
+/// window — whose commands read this store over the admin socket — and this
+/// process holds nothing; a window that does not know the tab is no answer
+/// either, so the host answers.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_tab_the_host_spawned_gets_its_markup_answered_by_the_host_without_a_window() {
+    use crate::services::markup_mcp::{test_open_ask, test_tick};
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(67)).await.0;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let mut tab = catalog_unfiltered(&host.state).expect("catalog").tab(&tab_id).expect("the tab").1.clone();
+    let target = "t-host-markup";
+    tab.schedule_target_id = Some(target.into());
+    let questions = || json!([{ "question": "Which word?", "options": [{ "label": "lead" }, { "label": "lede" }] }]);
+    let ask = test_open_ask("host-markup", RAW_PROJECT, target, questions());
+    std::fs::write(host.root.join("draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+    let ticked = test_tick("host-markup-ticks", RAW_PROJECT, target, &host.root, "draft.pdf", "k3x9a0b1", &[(1, 1), (2, 3)]);
+    assert_eq!(ticked["count"], 2, "{ticked}");
+    let rid = || "r".to_string();
+    let list = || DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
+    let answer = |ask_id: &str| DesktopRequest::MarkupAnswer {
+        request_id: rid(),
+        project_id: RAW_PROJECT.into(),
+        tmux_session: tab.tmux_name.clone(),
+        ask_id: ask_id.into(),
+        answers: vec![super::super::protocol::MobileMarkupAnswer { options: vec![1], other: None }],
+        device_id: Some("phone-1".into()),
+    };
+
+    // No window: the host's own ask and ticks.
+    let Ok(DesktopResponse::MarkupQuestions { asks, ticks }) = markup_call(&host.state, list(), &tab).await else { panic!("the host answers") };
+    assert_eq!(asks.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [ask.as_str()]);
+    assert_eq!(ticks.len(), 2);
+    // A tab that asked nothing is the quiet `desktop_unavailable`, for a
+    // list, an answer and a dismissal alike.
+    let mut quiet = tab.clone();
+    quiet.schedule_target_id = Some("t-host-markup-quiet".into());
+    let dismiss = |ask_id: &str| DesktopRequest::MarkupDismiss { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), ask_id: ask_id.into() };
+    for request in [list(), answer(&ask), dismiss(&ask)] {
+        let refused = markup_call(&host.state, request, &quiet).await.expect_err("nothing asked by that tab");
+        assert_eq!((refused.0, refused_code(&refused)), (StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable".to_string()));
+    }
+    // The answer is held for the tab, typed at once, and the ask is closed.
+    assert!(matches!(markup_call(&host.state, answer(&ask), &tab).await, Ok(DesktopResponse::Seen)));
+    let held = crate::services::agent_tasks::list_at(&host.state.config.state_dir, RAW_PROJECT, target).expect("the tab's rules");
+    assert_eq!(held.len(), 1, "the answer's prompt is held for the tab");
+    assert!(held[0].message.contains("lede"), "{}", held[0].message);
+    assert_eq!(held[0].phone_device.as_deref(), Some("phone-1"));
+    assert!(host.state.holds.due(&held[0].id));
+    let Ok(DesktopResponse::MarkupQuestions { asks, ticks }) = markup_call(&host.state, list(), &tab).await else { panic!("ticks stay") };
+    assert!(asks.is_empty());
+    assert_eq!(ticks.len(), 2, "answering an ask does not clear the ticks");
+
+    // A window open: the request goes there, and the host holds nothing more.
+    let second = test_open_ask("host-markup", RAW_PROJECT, target, questions());
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let seen: Arc<Mutex<Vec<DesktopRequest>>> = Arc::default();
+    let log = seen.clone();
+    let desktop = tokio::spawn(async move {
+        for turn in 0..3 {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else { continue };
+            let response = match (&request, turn) {
+                // A window that has not met the tab yet.
+                (DesktopRequest::MarkupQuestions { .. }, 2) => DesktopResponse::Error { code: "tab_not_found".into(), message: "unknown".into() },
+                (DesktopRequest::MarkupQuestions { .. }, _) => DesktopResponse::MarkupQuestions { asks: Vec::new(), ticks: Vec::new() },
+                (DesktopRequest::MarkupAnswer { .. }, _) => DesktopResponse::Seen,
+                (other, _) => panic!("unexpected request {other:?}"),
+            };
+            log.lock().unwrap().push(request);
+            admin::write_frame(&mut stream, &response).await.expect("answer");
+        }
+    });
+    assert!(matches!(markup_call(&host.state, answer(&second), &tab).await, Ok(DesktopResponse::Seen)));
+    let Ok(DesktopResponse::MarkupQuestions { asks, .. }) = markup_call(&host.state, list(), &tab).await else { panic!("the window answers") };
+    assert!(asks.is_empty(), "the window's answer stands: it reads the host's asks itself");
+    let held = crate::services::agent_tasks::list_at(&host.state.config.state_dir, RAW_PROJECT, target).expect("the tab's rules");
+    assert_eq!(held.len(), 1, "the window queued it, not the host");
+    // The window does not know the tab: the host's own ask is the answer.
+    let Ok(DesktopResponse::MarkupQuestions { asks, .. }) = markup_call(&host.state, list(), &tab).await else { panic!("the host answers") };
+    assert_eq!(asks.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [second.as_str()]);
+    desktop.await.expect("fake window");
+    let seen = seen.lock().unwrap();
+    assert!(matches!(&seen[0], DesktopRequest::MarkupAnswer { ask_id, .. } if *ask_id == second));
+    assert!(matches!(&seen[1], DesktopRequest::MarkupQuestions { .. }));
 }
 
 #[cfg(unix)]

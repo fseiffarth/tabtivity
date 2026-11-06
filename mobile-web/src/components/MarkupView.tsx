@@ -375,7 +375,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat, startMarking = false, paned = false }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, share, adoptFrom, toChat, startMarking = false, paned = false }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -411,6 +411,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** Opens reading: the head's actions (Save, Share), and what went wrong
    * with one of them. */
   reader?: { actions: ReactNode; alert?: string };
+  /** Share… while marking, in the palette's ⋯ menu: the reader's head (and
+   * its Share) gives way to Submit/Done then. The file as stored is shared,
+   * not the marks on screen. `OutboxViewer`'s `useOutboxShare` runs it. */
+  share?: { run: () => void; busy: boolean; ready: boolean; failed: boolean };
   /** The layer key of the outbox copy this project file is shown in place of
    * (`OutboxViewer`): marks drawn on the copy before the swap move over once,
    * while the project file has none of its own — never merged into some. */
@@ -2343,6 +2347,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </p>}
       {failure && <p role="alert">{t(FAILURE_KEYS[failure])}</p>}
       {reader?.alert && <p role="alert">{reader.alert}</p>}
+      {share?.failed && !reader?.alert && <p role="alert">{t("mobile.outbox.shareError")}</p>}
       {printing && <p role="status">{t("mobile.outbox.printing", { n: printing.n, count: printing.count })}</p>}
       {printFailure && <p role="alert">{printFailure}</p>}
     </div>
@@ -2479,6 +2484,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         </div>
       </div>}
       {popover === "more" && <div className="markup-popover markup-more">
+        {share && <button onClick={() => { setPopover(null); share.run(); }} disabled={share.busy}>
+          <span aria-hidden="true">⇪</span>{t(share.ready ? "mobile.outbox.shareReady" : "mobile.outbox.share")}
+          {isUntested("mobile.markup.share") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </button>}
         <button onClick={() => { setHistory((now) => commit(now, clearPage(now.present, current, showSent))); setPopover(null); }}
           disabled={!history.present.pages[current] && !(showSent && history.present.sent?.pages[current])}>
           <span aria-hidden="true">⌧</span>{t("mobile.markup.clearPage", { n: current })}

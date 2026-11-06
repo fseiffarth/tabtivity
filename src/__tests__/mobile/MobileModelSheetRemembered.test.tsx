@@ -177,6 +177,24 @@ describe(`${BRAND.display} Mobile — the model sheet before the session draws i
     expect(kept).toEqual([]);
   });
 
+  it("only ever acts on the live tab: no saved-defaults fold, no request for them (gap 81)", async () => {
+    const asked: string[] = [];
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      asked.push(`${init?.method ?? "GET"} ${String(input)}`);
+      return inner(input, init);
+    });
+    render(<Terminal tab={claudeTab} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await settle(400);
+    await paint(PICKER);
+    expect(rows().length).toBeGreaterThan(0);
+    expect(document.querySelector("details.launch-defaults")).toBeNull();
+    expect(screen.queryByText(/Default for new tabs/u)).toBeNull();
+    expect(asked.filter((call) => call.includes("launch-defaults"))).toEqual([]);
+  });
+
   it("lists the remembered rows until a windowed picker's walk has shown every live one", async () => {
     // Claude Code in an 80×24 pane draws three rows of the four.
     const windowed = (rows: string[], below?: number) => [

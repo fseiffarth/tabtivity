@@ -1,0 +1,381 @@
+/* Native TensorBoard viewer (components/embed/TensorBoardView.tsx).
+
+   Series colours are the validated categorical palette from the data-viz
+   reference (eight hues in a fixed order, a run keeps its slot): the dark set
+   is the default, the three light themes get the light set. Text and grid wear
+   the theme's own tokens, so only the marks carry a run's colour. */
+.tb-viewer {
+  --tb-series-1: #3987e5;
+  --tb-series-2: #d95926;
+  --tb-series-3: #199e70;
+  --tb-series-4: #c98500;
+  --tb-series-5: #d55181;
+  --tb-series-6: #008300;
+  --tb-series-7: #9085e9;
+  --tb-series-8: #e66767;
+  position: relative;
+}
+
+[data-theme="light"] .tb-viewer,
+[data-theme="fancy_light"] .tb-viewer,
+[data-theme="light_lavender"] .tb-viewer {
+  --tb-series-1: #2a78d6;
+  --tb-series-2: #eb6834;
+  --tb-series-3: #1baf7a;
+  --tb-series-4: #eda100;
+  --tb-series-5: #e87ba4;
+  --tb-series-6: #008300;
+  --tb-series-7: #6250d6;
+  --tb-series-8: #e34948;
+}
+
+.tb-controls {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tb-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tb-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--text-muted);
+  background: transparent;
+}
+
+.tb-live.is-on .tb-live-dot {
+  background: var(--success, var(--accent));
+  border-color: var(--success, var(--accent));
+}
+
+.file-viewer-zoom-btn.is-on {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.tb-smooth {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.tb-range {
+  width: 90px;
+}
+
+.tb-subbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+}
+
+.tb-filter {
+  min-width: 160px;
+  flex: 0 1 240px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: var(--text-sm);
+}
+
+.tb-filter[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.tb-filter-bad {
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+.tb-runs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.tb-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+  font-size: var(--text-xs);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.tb-run.is-off {
+  color: var(--text-muted);
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.tb-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.tb-status {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.tb-body {
+  padding: var(--space-2);
+}
+
+.tb-group {
+  margin-bottom: var(--space-3);
+}
+
+.tb-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: 3px 2px;
+  text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+
+.tb-group-count {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: var(--text-xs);
+}
+
+.tb-grid-wrap {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.tb-more {
+  margin-top: var(--space-2);
+}
+
+.tb-chart {
+  min-width: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 8px);
+  padding: 6px 8px 4px;
+}
+
+.tb-chart-title {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0 0 2px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tb-chart-title-btn {
+  cursor: var(--cur-pointer, pointer);
+}
+
+.tb-chart-title-btn:hover {
+  color: var(--text-primary);
+}
+
+.tb-chart-nodata {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  padding: 24px 0;
+  text-align: center;
+}
+
+.tb-chart-plot {
+  position: relative;
+}
+
+.tb-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+  cursor: var(--cur-pointer, pointer);
+}
+
+.tb-grid {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+
+.tb-axis {
+  stroke: var(--border-color);
+  stroke-width: 1;
+}
+
+.tb-tick {
+  fill: var(--text-muted);
+  /* In the chart's own units (the SVG scales with its box), so a token, not px. */
+  font-size: var(--text-xs);
+}
+
+.tb-chart-big .tb-tick {
+  font-size: var(--text-sm);
+}
+
+.tb-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.tb-line-raw {
+  stroke-width: 1;
+  opacity: 0.28;
+}
+
+.tb-cross {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.tb-marker {
+  stroke: var(--bg-elevated);
+  stroke-width: 2;
+}
+
+.tb-tooltip {
+  position: absolute;
+  top: 6px;
+  transform: translateX(10px);
+  z-index: 2;
+  max-width: 75%;
+  pointer-events: none;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  font-size: var(--text-xs);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.tb-tooltip-left {
+  transform: translateX(calc(-100% - 10px));
+}
+
+.tb-tip-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "sw run val"
+    ". meta meta";
+  gap: 0 6px;
+  align-items: center;
+}
+
+.tb-tip-row .tb-swatch { grid-area: sw; }
+.tb-tip-run { grid-area: run; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-tip-val { grid-area: val; font-variant-numeric: tabular-nums; }
+.tb-tip-meta { grid-area: meta; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.tb-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  padding: 3px var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  flex-shrink: 0;
+}
+
+.tb-footer:empty {
+  display: none;
+}
+
+.tb-note-warn {
+  color: var(--warning);
+}
+
+.tb-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+}
+
+.tb-overlay-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-color);
+  font-size: var(--text-sm);
+}
+
+.tb-overlay-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tb-overlay-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2);
+}
+
+.tb-table {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.tb-table table {
+  border-collapse: collapse;
+  margin-top: 4px;
+}
+
+.tb-table th,
+.tb-table td {
+  border: 1px solid var(--border-subtle);
+  padding: 1px 8px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

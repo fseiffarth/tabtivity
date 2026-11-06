@@ -7,9 +7,8 @@ import { agentModelsFor } from "../../lib/agents/agentPrefaces";
 import type { AgentInfo } from "./agentTypes";
 import type { Settings } from "../../types";
 
-/** The phone saves these straight to the file (`launch-defaults`): the latest
- * is read into this window's store when the form opens and before it saves,
- * so a phone save shows here and is kept. */
+/** The latest saved defaults are read into this window's store when the form
+ * opens and before it saves, so another window's save shows here and is kept. */
 async function latestLaunchDefaults(): Promise<Settings["agent_launch_defaults"]> {
   const fresh = await invoke<Settings>("get_settings");
   useSettingsStore.setState((s) => (s.settings ? { settings: { ...s.settings, agent_launch_defaults: fresh.agent_launch_defaults } } : {}));

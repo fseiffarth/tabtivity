@@ -37,6 +37,11 @@ pub struct PtySpawned {
     /// its composer, so the window reads no question off its screen until
     /// the hooks speak again (`agent_turn::LeftTurn`).
     pub resting: bool,
+    /// The tab only reattached a session whose agent is mid-turn right now:
+    /// the state its hooks last wrote (`working`/`decision`), which the tab
+    /// starts out in. Left out of the answer when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<&'static str>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -98,6 +103,7 @@ pub async fn pty_spawn(
 
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
+    let turn = prepared.live_turn.map(crate::services::agent_turn::TurnState::as_str);
     let drop_dir = prepared.drop_dir.clone();
     let result = crate::terminal::spawn_pty(
         ctx.0.clone(),
@@ -125,7 +131,7 @@ pub async fn pty_spawn(
             ctx.emit(crate::commands::root_mcp::SESSIONS_EVENT, ());
         }
     }
-    result.map(|()| PtySpawned { named, interrupted, attached: false, resting })
+    result.map(|()| PtySpawned { named, interrupted, attached: false, resting, turn })
 }
 
 /// Whether a server client's spawn of `id` would join the tab another client

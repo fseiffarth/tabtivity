@@ -515,6 +515,45 @@
   content: none;
 }
 
+/* The server chips (TerminalServerChips): the sign-in card's look, stacked at the
+   pane's bottom-left so the two never overlap. Static cards like the sign-in
+   one: a fade in, no breathing glow. */
+.terminal-server-chips {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100% - 32px));
+  pointer-events: none;
+}
+.hint-bubble.terminal-server-chip {
+  position: relative;
+  pointer-events: auto;
+}
+.hint-bubble.terminal-server-chip::after {
+  content: none;
+}
+.terminal-server-chip-name {
+  font-weight: 600;
+  margin: 0 16px 0 0;
+  overflow-wrap: anywhere;
+}
+.terminal-server-chip-forward {
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  margin-top: 2px;
+}
+.terminal-server-chip .hint-bubble-actions {
+  margin-top: 6px;
+}
+.terminal-server-chip .hint-bubble-actions .hint-bubble-got-it {
+  margin-left: 0;
+}
+
 /* The version-drift and undo-clear cards sit over a running agent, whose input
    box and footer fill the pane's last rows: lift them clear of it. The % caps
    the lift in a short pane, where 120px would push the card off the top. */

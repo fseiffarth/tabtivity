@@ -1862,6 +1862,10 @@ fn teardown_with(taken: Vec<TakenPty>, mode: ReapMode) {
         // a respawn that fails first ends it in `launch_prep`), so a stale
         // kill touches neither.
         if crate::services::launch_prep::on_tab_gone(&id, entry.seq) {
+            // The server it printed is gone with it: end the port forwards
+            // only this tab asked for (the registry at once, `ssh -O cancel`
+            // on a thread of its own).
+            crate::services::port_forward::close_for_tab(&id);
             // The tab is gone for good, so stop watching for its Codex session.
             crate::services::codex_bind::untrack_now(&id);
             // Containerized tab: killing the child above only killed the
@@ -2172,6 +2176,8 @@ fn launch(
         if current_spawn_ended {
             if is_tab {
                 crate::services::agent_fence::on_tab_gone(&id, route_seq);
+                // The program ended by itself: the server it ran is gone too.
+                crate::services::port_forward::close_for_tab(&id);
             }
             // A login PTY whose login ended is no paste target any more.
             crate::commands::credentials::forget_login_pty_spawn(&id, route_seq);

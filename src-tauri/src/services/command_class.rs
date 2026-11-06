@@ -98,6 +98,9 @@ pub enum OffReason {
     /// Reads the CLI config or login files of *this computer's* own user; on a
     /// server the user signs in through sign-in tabs instead (§5.1).
     LocalCliFiles,
+    /// Binds a listener on the machine's own loopback (a port forward); a
+    /// daemon's loopback is not the browser user's.
+    DaemonLoopback,
 }
 
 impl CommandClass {
@@ -125,6 +128,7 @@ impl OffReason {
             OffReason::WholeDocumentSave => "whole-document-save",
             OffReason::HeadlessOwner => "headless-owner",
             OffReason::LocalCliFiles => "local-cli-files",
+            OffReason::DaemonLoopback => "daemon-loopback",
         }
     }
 }
@@ -370,6 +374,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/clipboard.rs
     ("clipboard_file_paths", Client),
     ("clipboard_has_image", Client),
+    ("copy_files_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
     ("save_clipboard_image", Client),
     // commands/connect.rs — this desktop as a server's client (plan §7.2):
@@ -713,6 +718,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("prepare_local_launch", Core),
     ("prepare_text_completion", Core),
     ("pull_ollama_model", Admin),
+    ("search_huggingface_models", Core),
     ("search_ollama_registry", Core),
     ("stop_ollama_model", Admin),
     ("vibe_install_strategy", Core),
@@ -741,6 +747,10 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("pdf_markup_undo", Core),
     ("pdf_markup_undo_preview", Core),
     ("pdf_markup_undo_settle", Core),
+    // commands/port_forward.rs
+    ("port_forward_close", Off(OffReason::DaemonLoopback)),
+    ("port_forward_list", Off(OffReason::DaemonLoopback)),
+    ("port_forward_open", Off(OffReason::DaemonLoopback)),
     // commands/power.rs
     ("get_power_state", Client),
     // commands/presenter.rs
@@ -999,6 +1009,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("tex_capability", Core),
     ("tex_auto_engine", Core),
     ("tex_preview_snippet", Core),
+    // commands/tfevents.rs
+    ("tfevents_discover", Core),
+    ("tfevents_read", Core),
     // commands/timer.rs
     ("get_project_activity", Core),
     ("get_time_activity_all", Core),

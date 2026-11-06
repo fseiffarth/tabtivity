@@ -281,6 +281,12 @@ export function forgetSlashCommand(cli: string, line: string, storage?: SlashSto
   save(storage, all);
 }
 
+/** Every kept line of every CLI, gone — this device was unpaired
+ * (`forgetDeviceData`). */
+export function forgetSlashCommands(storage?: SlashStorage): void {
+  writeJson(KEY, undefined, storage);
+}
+
 /**
  * What the menu offers for this draft: nothing unless the draft is one line
  * that starts with `/`; then the reader's own lines that continue it, newest
