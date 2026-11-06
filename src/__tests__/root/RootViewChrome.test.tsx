@@ -131,7 +131,7 @@ describe("the Root view", () => {
   it("no sub-bar on a cockpit view", async () => {
     seed();
     render(<RootOverlayHost />);
-    await act(async () => useRootOverlayStore.getState().openView("usage"));
+    await act(async () => useRootOverlayStore.getState().openView("tonight"));
     expect(await screen.findByTestId("cockpit-body")).toBeTruthy();
     expect(subBar()).toBeNull();
   });
