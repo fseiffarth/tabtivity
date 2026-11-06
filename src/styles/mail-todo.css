@@ -53,6 +53,7 @@
 .calendar-indicator-btn,
 .todo-indicator-btn,
 .cockpit-indicator-btn,
+.agents-indicator-btn,
 .inbox-indicator-btn,
 .alerts-toggle-btn {
   /* Positioning context for the badge. It must be the BUTTON and not the
@@ -64,6 +65,7 @@
 .mail-indicator-btn[aria-pressed="true"],
 .todo-indicator-btn[aria-pressed="true"],
 .cockpit-indicator-btn[aria-pressed="true"],
+.agents-indicator-btn[aria-pressed="true"],
 .calendar-indicator-btn[aria-pressed="true"],
 .alerts-toggle-btn[aria-pressed="true"] {
   background: var(--control-hover-bg);
@@ -80,6 +82,7 @@
 .calendar-indicator-btn,
 .todo-indicator-btn,
 .cockpit-indicator-btn,
+.agents-indicator-btn,
 .inbox-indicator-btn,
 .alerts-toggle-btn,
 .local-model-btn,
@@ -99,6 +102,7 @@
 .calendar-indicator-icon,
 .todo-indicator-icon,
 .cockpit-indicator-icon,
+.agents-indicator-icon,
 .inbox-indicator-icon,
 .help-agent-icon,
 .settings-menu-icon,
