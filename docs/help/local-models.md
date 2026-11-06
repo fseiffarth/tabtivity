@@ -49,6 +49,24 @@ passwordless sudo, so prefer **Run in terminal**.
    the home disk is small). For a systemd-managed server, **Apply to the
    service…** runs the one-time service change in a terminal tab.
 
+### Models from Hugging Face
+
+Ollama also pulls GGUF models straight from Hugging Face. In **Browse the
+Ollama registry**, switch **Source** to **Hugging Face**: the list shows GGUF
+repos, and each card's picker lists the repo's quantizations (`Q4_K_M` first
+when there is one). **Pull** downloads `hf.co/<user>/<repo>:<quant>`. You can
+also type such a name into the pull field, for example
+`hf.co/bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M`.
+
+- Only GGUF files work; a repo with only safetensors is not listed. A
+  quantization split into several files (`-00001-of-00003`) is not offered:
+  Hugging Face does not serve it to Ollama.
+- A **gated** repo needs its terms accepted on Hugging Face and Ollama's public
+  key added to your account (Settings → SSH keys): `~/.ollama/id_ed25519.pub`,
+  or `/usr/share/ollama/.ollama/id_ed25519.pub` for the system service.
+- Once downloaded, a Hugging Face model works like any other: load it, open a
+  Local Model tab with it, check it for updates.
+
 Delete a model from **Downloaded Models** with **Delete**; **Update**
 re-pulls it.
 

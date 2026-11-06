@@ -2284,6 +2284,41 @@ pub enum AdminRequest {
     /// phone marks (`presence.rs`). A sidecar older than this answers an
     /// error, which the desktop shows as no marks.
     Presence,
+    /// The window's half of the markup questions of tabs the sidecar spawned
+    /// (`docs/headless_mcp_plan.md`, phase 1b): the sidecar holds those
+    /// tabs' asks and ticks in its own memory, and the window's markup views
+    /// read, answer and dismiss them through these. Keyed as the window's own
+    /// commands are, by project and schedule target. A sidecar older than
+    /// this answers an error, which the window reads as no asks.
+    MarkupList {
+        project_id: String,
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    MarkupTicks {
+        project_id: String,
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    MarkupAnswer {
+        project_id: String,
+        target: String,
+        ask_id: String,
+        answers: Vec<crate::services::markup_mcp::Answer>,
+    },
+    MarkupReopen {
+        project_id: String,
+        target: String,
+        ask_id: String,
+        receipt: String,
+    },
+    MarkupDismiss {
+        project_id: String,
+        target: String,
+        ask_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2307,6 +2342,26 @@ pub enum AdminResponse {
     Presence {
         projects: Vec<ProjectPresence>,
         tabs: Vec<TabPresence>,
+    },
+    /// Answer to [`AdminRequest::MarkupList`].
+    MarkupAsks {
+        asks: Vec<crate::services::markup_mcp::AskView>,
+    },
+    /// Answer to [`AdminRequest::MarkupTicks`], newest
+    /// `markup_mcp::MAX_PEER_TICKS` at most.
+    MarkupTicks {
+        ticks: Vec<crate::services::markup_mcp::TickView>,
+    },
+    /// Answer to [`AdminRequest::MarkupAnswer`]: the prompt for the caller to
+    /// queue into the tab and the receipt that reopens the ask.
+    MarkupAnswered {
+        prompt: String,
+        receipt: String,
+    },
+    /// A markup request the ask did not take, by its wire code (`gone`,
+    /// `answered`, `superseded`, `invalid_answer`, `invalid_target`).
+    MarkupRefused {
+        code: String,
     },
     Error {
         message: String,

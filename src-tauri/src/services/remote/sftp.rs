@@ -834,6 +834,43 @@ where
     }
 }
 
+/// Up to `max` bytes of a remote file from byte `offset`, on an already-open
+/// session: the ranged read a growing log or event file needs, where
+/// [`read_file_on`] would move the whole file again on every refresh. Short at
+/// the end of the file, empty when `offset` is at or past it.
+///
+/// The offset is set before every request rather than trusting the handle to
+/// advance by what arrived: it advances by what was *asked*, and a server may
+/// answer with less.
+pub async fn read_range_on(
+    sftp: &Sftp,
+    path: &str,
+    offset: u64,
+    max: usize,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncSeekExt;
+    let mut file = sftp
+        .open(path)
+        .await
+        .map_err(|e| format!("sftp open failed: {e}"))?;
+    let mut out: Vec<u8> = Vec::with_capacity(max.min(STREAM_CHUNK));
+    while out.len() < max {
+        file.seek(std::io::SeekFrom::Start(offset.saturating_add(out.len() as u64)))
+            .await
+            .map_err(|e| format!("sftp seek failed: {e}"))?;
+        let want = (max - out.len()).min(STREAM_CHUNK) as u32;
+        match file
+            .read(want, bytes::BytesMut::with_capacity(want as usize))
+            .await
+            .map_err(|e| format!("sftp read failed: {e}"))?
+        {
+            Some(chunk) if !chunk.is_empty() => out.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
 /// Write (create/truncate) a remote file with `bytes`, creating missing parent
 /// directories first — mirrors the local writers' `create_dir_all` + `write`.
 pub async fn write_file_on(sftp: &Sftp, path: &str, bytes: &[u8]) -> Result<(), String> {
@@ -1081,6 +1118,23 @@ pub async fn read_file(
 ) -> Result<Option<Vec<u8>>, String> {
     with_oneshot(user, host, port, password, |sftp| async move {
         let r = read_file_up_to(&sftp, path, limit).await;
+        (sftp, r)
+    })
+    .await
+}
+
+/// One-shot [`read_range_on`].
+pub async fn read_range(
+    user: &Option<String>,
+    host: &str,
+    port: Option<u16>,
+    password: Option<&str>,
+    path: &str,
+    offset: u64,
+    max: usize,
+) -> Result<Vec<u8>, String> {
+    with_oneshot(user, host, port, password, |sftp| async move {
+        let r = read_range_on(&sftp, path, offset, max).await;
         (sftp, r)
     })
     .await

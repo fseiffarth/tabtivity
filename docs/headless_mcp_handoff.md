@@ -56,6 +56,152 @@ Plan: [`docs/headless_mcp_plan.md`](headless_mcp_plan.md). TODO #2339
     (direct calls and `handle_message`).
   - `MobileSchedulesPoke.test.ts`, `RootMcpSecurity.test.tsx` (the note's gate).
 
+## Done — phase 1b (the markup lane in the Mobile host)
+
+Plan: "Phase 1b" in [`docs/headless_mcp_plan.md`](headless_mcp_plan.md).
+Never run live. Commits: `335a9104` (the change), plus a docs-only follow-up recording the gate results.
+
+- **The bug.** A tab the Mobile host spawned never got `markup_ask` /
+  `markup_withdraw` / `markup_done`: the host routed no `/mcp/markup` and
+  published `serves_markup: false`, so `grant_lanes` skipped the lane, and a
+  CLI reads its MCP config once. The phone's ✓ badges and **Approve all** need
+  `markup_done`, so they never showed.
+- **Choice: (b), the host serves its own asks.** `/mcp/markup` is routed
+  unconditionally (only `/mcp` keeps the `ctx.is_some()` gate); `serve`
+  publishes `serves_markup: true` for every listener; asks and ticks stay in
+  memory in the process that took them; tokens never touch disk and are valid
+  only in the minting process. Rejected (a), a shared on-disk store: liveness
+  would need an owner process per entry, change notification needs a second
+  channel for window→host, and it turns the phone's 3-s poll into locked
+  file reads (reasons in the plan).
+- **Window side.** `commands/markup_mcp.rs`: `markup_mcp_list/_ticks/_answer/
+  _reopen/_dismiss` are now `async`, same names and payloads (TS unchanged,
+  no new `command_class` row, `commandClasses.ts` unchanged); they read the
+  window's store then the host's over the admin socket
+  (`AdminRequest::MarkupList/Ticks/Answer/Reopen/Dismiss`,
+  `AdminResponse::MarkupAsks/Ticks/Answered/Refused`, `AdminContext::markup`
+  = `admin_markup` in the host). `use_host_peer` is set once by the window's
+  `root_mcp::start`; the host and a daemon set none. Answer: local first, on
+  `gone` the host's (which returns `{ prompt, receipt }` for the window to
+  queue); reopen likewise; dismiss goes to both.
+- **Host side.** `Notice::Markup` (the host's change hook, installed by
+  `start_headless` when there is no server context) → `poke_desktop(["markup"])`
+  → the window's `refreshSlices` `markup` → `emitMarkupChanged` →
+  `markup-mcp-changed`. `markup_mcp::sweep()` after the phone's close and
+  after the 60-s sweep's revokes. `markup_call`: window down (or
+  `tab_not_found` from it) and `markup_held_here` → `markup_here`, else the
+  old `desktop_unavailable`. `poke_desktop` no longer panics off the runtime.
+- **Tests.** `host/tests.rs` `a_headless_claude_tab_is_handed_the_hosts_mcp_servers`
+  (extended), `a_tab_the_host_spawned_gets_its_markup_answered_by_the_host_without_a_window`;
+  `commands::markup_mcp` `the_window_reaches_the_asks_and_ticks_the_host_holds`
+  (a real admin socket, two stores), `the_hosts_tick_answer_keeps_the_newest_ticks_that_fit_a_frame`;
+  `commands::root_mcp` `the_headless_router_does_not_route_the_root_lane`
+  (now: markup routed), `the_hosts_markup_hook_notifies_its_sink`; `markup_mcp`
+  `two_processes_asks_merge_to_the_newest_and_ticks_to_a_union`,
+  `the_second_process_holds_its_own_asks_and_ticks`; `MobileMarkupPoke.test.ts`.
+- **Gotchas.**
+  - `markup_mcp::as_host::run` (tests only) switches the asks/ticks stores
+    **per thread** to a second set, to model the host. The test's "window" side
+    runs on `app_core::rt` blocking-pool threads (never inside `run`), the
+    host's admin handler wraps `admin_markup` in `run`. Anything a test drives
+    on another thread (HTTP handlers) sees the default store.
+  - `markup_mcp::set_change_hook` is a `OnceLock`: the first hook wins. The
+    #2339 test's `start_headless` installs the host's (a no-op sink).
+  - The ask id is random and unique per process, so "local first, then the
+    peer on `gone`" cannot confuse two stores; `gone` also means withdrawn,
+    expired or dismissed, which the peer answers `gone` too.
+  - The admin frame is 64 KiB: the host answers at most `MAX_PEER_TICKS` (the
+    newest 1000) ticks of a tab.
+  - A window older than this build never reads the host's asks (the host's
+    phone path still answers with no window); a host older than this answers
+    an error, read as no asks.
+  - The window's list/ticks now do one admin-socket connect per call; with
+    Mobile off the connect fails at once (`ENOENT`/`ECONNREFUSED`).
+  - A tab the window closes while the host owns it keeps its card up to about
+    three minutes (the host's sweep needs three missed looks).
+  - `backend:stale`: the host must restart to serve the lane; a tab spawned
+    before keeps lacking it (its MCP config is fixed at start).
+- **Gate results.** All green at zero warnings, in the worktree on `tr2339/markup`
+  (`scripts/gates.sh`, change selection): brand-check, `git diff --check`,
+  `npm run lint` (no new warnings), `cargo clippy -p tabtivity -p app-serverd
+  --all-targets -D warnings`, `cargo clippy -p tabtivity --no-default-features
+  --lib`, `cargo clippy -p app-serverd`, `npm run build`, vitest (the
+  changed-related set: 32 files, 249 tests), `cargo test -p tabtivity -p
+  app-serverd` (lib 5160 passed, 11 ignored; 143 + 39 + 1 in the other
+  suites). `cargo test -p tabtivity --no-default-features --lib --test
+  server_secrets` (the daemon's build): 4990 + 1 passed on the rerun; its first
+  run in the gate script failed one timing test,
+  `deadline::tests::a_stalled_call_times_out_and_enough_of_them_turn_new_ones_away`,
+  while another cargo build loaded the machine; it passes alone and on the
+  rerun (unrelated to this change).
+
+### Flagged for user
+
+1. Nothing was run live. Manual steps: `docs/context/markup_mcp.md` QA 8c and
+   the 🖐️ box under #2339 (needs a rebuilt desktop **and** a restarted Mobile
+   host; host-spawned tabs started before then stay without the tools until
+   restarted).
+2. `markup_mcp_answer` / `_reopen` / `_dismiss` changed from sync to `async`
+   commands (the wire name and payload are unchanged); they now may take an
+   admin-socket round trip.
+3. A tab that exists in both processes (a window respawn of a host tab, or
+   the reverse) shows only the newest card until the older process's session
+   is swept; asks are not otherwise merged across processes.
+4. No `UntestedTag` row: nothing user-visible was added (no new strings);
+   the behaviour is covered by the 🖐️ box instead. Say if a pill is wanted.
+5. With the window open, the phone's answer to a **host** tab's ask goes
+   phone → host → window → host (admin socket) → window's scheduler, three
+   hops; if the window is wedged the phone gets `desktop_unavailable` rather
+   than the host answering. Deliberate (the host's scheduler does not run
+   while a window holds the timer lease), but say if the host should take
+   over after a timeout.
+6. The host-side `ask` rate limits (20 asks / 60 ticks per tab per hour) are
+   per process, as they were; a tab keeps its budget across a respawn only
+   within the process that spawned it.
+
+### Review — flagged for user
+
+An independent read of `c8a713ad..335a9104` (code, not only the docs) found no
+confirmed bug: the root lane is still unrouted in the host, tokens stay in
+memory and per process, the window's commands are async over `spawn_blocking`,
+no lock is held across an await or a socket call, and the admin frames fit
+(a tick is at most about 55 bytes, 1000 of them stay under 64 KiB). Open
+points, none changed:
+
+1. **A hung host slows every window markup read.** `ask_peer` waits up to 2 s
+   to connect and 5 s for the answer, with no negative cache: a stopped (not
+   dead) host makes each `markup_mcp_list` / `_ticks` / `_dismiss` take that
+   long, and every `markup-mcp-changed` re-lists. Absent or dead is instant.
+   A short breaker (skip the peer for some seconds after a timeout) would do.
+2. **A lost admin reply loses the answer.** If the host closes an ask over
+   `MarkupAnswer` and the reply is lost or late (5 s), the window reports
+   `gone` and the prompt is never queued; there is no receipt to reopen with.
+   Needs a host stalled mid-request; the card is then closed, not stuck.
+3. **Phone double answer / double dismiss, window down, host-held tab.**
+   `markup_held_here` counts open asks only, so a second device answering an
+   already answered ask gets `503 desktop_unavailable`, and a repeated dismiss
+   is not idempotent, where a window or a daemon gives `409 answered` / `200`.
+   Cosmetic (the card re-lists and hides). Fixing it takes a
+   `markup_mcp` lookup that also sees closed asks.
+4. **`admin_markup` is synchronous on the admin plane's task.** With a `path`
+   it reads `projects.json` (`project_root`) on a tokio worker, like the
+   neighbouring `agent_tab` lookup does. Wrap in `spawn_blocking` if the
+   handler ever becomes async.
+5. **Windows pipe name.** The window builds the peer as
+   `state_dir().join("mobile-control/admin.sock")` (a `/` in the literal); the
+   host binds `control_dir.join("admin.sock")`, and the pipe name is a hash of
+   the path string. On Windows the two strings may differ in a separator and
+   name different pipes. The same literal is in `admin_call_here` and the
+   `desktop-control.sock` lines of `commands/mobile_control.rs` (older code),
+   so check all of them in the Windows live test; a per-component join fixes it.
+6. **Tests that cover less than their name.** `MobileMarkupPoke.test.ts`
+   drives `emitMarkupChanged`, not the `markup` branch of `refreshSlices` (as
+   `MobileSchedulesPoke.test.ts` does for schedules); `the_hosts_markup_hook_notifies_its_sink`
+   drives `markup_notice_hook`, not `start_headless` installing it (the hook is
+   a process-wide `OnceLock`); `the_second_process_holds_its_own_asks_and_ticks`
+   exercises asks only (the ticks split is exercised by
+   `the_window_reaches_the_asks_and_ticks_the_host_holds`).
+
 ## Next — phase 2 (git requests queued for the window's card)
 
 Only if the user wants pushes from headless tabs (see "Decisions" below).

@@ -263,8 +263,9 @@ pub fn stem(cmd: &str) -> &str {
         .unwrap_or(cmd)
 }
 
-/// One CLI's saved startup choices, as the phone's model sheet reads and edits
-/// them (`mobile_control` `launch-defaults`). Blank leaves it to the CLI.
+/// One CLI's saved startup choices, as the desktop's forms read and edit them.
+/// The phone has no route to them (threat model gap 81). Blank leaves it to
+/// the CLI.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Saved {

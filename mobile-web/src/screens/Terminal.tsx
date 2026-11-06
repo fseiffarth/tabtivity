@@ -8,7 +8,6 @@ import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type TapHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
-import { LaunchDefaultsFold } from "../components/LaunchDefaultsFold";
 import { ConfirmSheet } from "../components/ConfirmSheet";
 import { AttachSheet, type AttachTile } from "../components/AttachSheet";
 import { QuestionRows } from "../components/QuestionRows";
@@ -1767,10 +1766,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           : "terminal.reader.assistantModelFailed");
       });
   };
-  // Manage CLIs' startup defaults for this CLI, under the model sheet's rows.
-  const launchDefaults = tab.kind === "agent" && !tab.local_model && !tab.assistant_launch && !tab.on_host
-    ? <LaunchDefaultsFold tabId={tab.id} modelNames={(modelPreview ?? listedStep)?.options.map((option) => option.label.replace(/\s*\(current\)\s*$/iu, "").replace(/\s*[✔✓]\s*$/u, "").trim().toLowerCase())} />
-    : undefined;
   const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
@@ -2392,7 +2387,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 background subagent works on. */}
             {sessionBusy && stopButton}
           </div>}
-          <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} />
+          <RunningShells shells={shownShells(subTranscript.shells, subagentWorking)} untested={shellsUntested} onShowTerminal={() => setView("terminal")} />
         </div>}
   </>;
   const shownBranch = statusBranch ?? linkedBranch ?? cwdBranch;
@@ -2605,7 +2600,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                     </small>}
                     {stopButton}
                   </div>}
-                  <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} />
+                  <RunningShells shells={shownShells(transcript?.shells, sessionBusy)} untested={shellsUntested} onShowTerminal={() => setView("terminal")} />
                   {/* A prompt sent while the agent worked waits below its work
                       until the desktop types it in: not taken yet. */}
                   {/* Both act on the CLI's whole queue, so every queued bubble
@@ -2849,7 +2844,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         options={effortOptions}
         waiting={t(connected ? "mobile.model.waitingSession" : "mobile.model.waitingConnection")}
         busy={effortOptions.length === 0}
-        footer={launchDefaults}
         onPick={chooseEffort}
         onClose={closeModelSheet}
       />
@@ -2872,7 +2866,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           ? "mobile.model.waitingConnection"
           : answered ? "mobile.model.waitingSession" : "terminal.reader.modelWaiting")}
         busy={modelPreview ? heldPick !== null : shownStep != null && (pickerStep == null || reveal != null || effortFor != null)}
-        footer={<>{effortRow}{launchDefaults}</>}
+        footer={effortRow}
         onPick={chooseModel}
         onClose={closeModelSheet}
       />}</div>}

@@ -7,7 +7,7 @@ pub use agent::{
     agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
     agent_install, agent_latest, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,
-    assistant_model_probe, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
+    assistant_attach, assistant_model_probe, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
     model_rows, opencode_models, opencode_session, opencode_store, transcript_watch,
 };
 #[cfg(unix)]
@@ -68,6 +68,9 @@ pub mod home_io;
 // special file is read, and bytes and entries are bounded.
 pub mod tree_copy;
 pub mod hpc_mode;
+// Local port forwards over a remote project's ControlMaster, so a server a
+// remote tab prints opens in this machine's browser (docs/context/port_forwards.md).
+pub mod port_forward;
 // Which IDE a project tree belongs to (`.idea/`, `.vs/` + `*.sln`, `.vscode/`)
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
@@ -141,6 +144,8 @@ pub mod window_registry;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;
 pub mod state_gc;
+// TensorBoard event files read natively (the training-curves viewer).
+pub mod tfevents;
 pub mod terminal_service;
 pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share

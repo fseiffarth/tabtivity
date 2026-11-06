@@ -12,7 +12,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { reportFrontendIssue } from "../../crashReporter";
 import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, noteLiveTurn, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
 import { notePrompted } from "../../lib/agents/emptyAgentTab";
@@ -62,6 +62,12 @@ import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
+import { SERVER_CHIPS_CLASS, TerminalServerChips } from "./TerminalServerChips";
+import { isLoopbackServerHost, localPageUrl, forwardedUrl, type ServerUrl } from "../../lib/terminal/serverUrls";
+import { watchServers } from "../../lib/terminal/serverWatch";
+import { routeLink, tabLocality, type LinkRoute } from "../../lib/terminal/linkRoute";
+import { forwardAndOpen, hostLabelOf } from "../../lib/remote/portForward";
+import { usePortForwardStore } from "../../stores/remote/portForwards";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { changesOffered, readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
@@ -99,10 +105,10 @@ const WRAPPED_URL_LOOKBACK_ROWS = 40;
  *  time makes it a double-click, which copies the link instead. */
 const LINK_OPEN_DELAY_MS = 300;
 
-/** Whether a pane-level mouse event came from the sign-in card, which the
- *  terminal's own mouse handling must leave alone. */
+/** Whether a pane-level mouse event came from the sign-in card or a server
+ *  chip, which the terminal's own mouse handling must leave alone. */
 function fromSignInCard(e: Event): boolean {
-  return e.target instanceof Element && !!e.target.closest(`.${SIGN_IN_CARD_CLASS}`);
+  return e.target instanceof Element && !!e.target.closest(`.${SIGN_IN_CARD_CLASS}, .${SERVER_CHIPS_CLASS}`);
 }
 
 interface PtyScrollback {
@@ -412,6 +418,84 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     return confirmAction(spec);
   };
 
+  // Where this tab's program runs, from its explicit props and its project —
+  // never from the cwd. A loopback link or server chip means the tab's own
+  // loopback: forwarded for a remote host, refused for a container, opened as
+  // is for a local tab (`lib/terminal/linkRoute`).
+  const projectEntry = useProjectsStore((s) => (projectId ? s.projects.find((p) => p.id === projectId) : undefined));
+  const locality = tabLocality({
+    projectId,
+    localOnly,
+    sandbox,
+    remoteHostId,
+    login: !!login,
+    hostSession,
+    project: projectEntry
+      ? { remote: !!projectEntry.remote, workerIds: (projectEntry.compute_hosts ?? []).map((h) => h.id) }
+      : null,
+  });
+  const localityRef = useRef(locality);
+  localityRef.current = locality;
+  const toast = (text: string) => useProjectsStore.setState({ switchToast: text });
+  // Forward a remote server (confirmed once per session, naming both ends) and
+  // open it in the system browser. Read through a ref by the link handlers.
+  const forwardServerRef = useRef<(forward: Extract<LinkRoute, { forward: unknown }>["forward"], open: boolean, viaLink?: boolean) => Promise<number | null>>(
+    () => Promise.resolve(null),
+  );
+  forwardServerRef.current = (forward, open, viaLink = false) => {
+    const hostLabel = hostLabelOf(projectEntry, forward.hostId);
+    const loopback = isLoopbackServerHost(forward.remoteHost);
+    return forwardAndOpen({
+      target: { projectId: forward.projectId, hostId: forward.hostId, remoteHost: forward.remoteHost, remotePort: forward.remotePort },
+      page: forward,
+      tabUid: id,
+      open,
+      notify: toast,
+      onForwarded: () => void usePortForwardStore.getState().refresh(),
+      confirm: () =>
+        confirmAction({
+          title: (
+            <>
+              {t("portForward.confirm.title")}
+              <UntestedTag id="remote.portForward" />
+              {viaLink && <UntestedTag id="terminal.remoteLoopbackLink" />}
+            </>
+          ),
+          body: (
+            <>
+              {loopback
+                ? t("portForward.confirm.bodyLoopback", { port: forward.remotePort, host: hostLabel })
+                : t("portForward.confirm.bodyNamed", { port: forward.remotePort, remoteHost: forward.remoteHost, host: hostLabel })}
+              <span style={{ display: "block", marginTop: 8 }}>{t("portForward.confirm.note")}</span>
+            </>
+          ),
+          confirmLabel: t("portForward.confirm.confirm"),
+        }),
+    });
+  };
+  // One entry for every clicked link: the OAuth-style confirmation for an
+  // ordinary page, the forward for a remote tab's own server, a message where
+  // a container's loopback cannot be reached yet.
+  const openLinkRef = useRef<(url: string) => Promise<void>>(() => Promise.resolve());
+  openLinkRef.current = async (url) => {
+    const route = routeLink(url, localityRef.current);
+    if (route === "unsupported") {
+      toast(t("terminal.remoteLoopback.unsupported"));
+      return;
+    }
+    if (route !== "external") {
+      await forwardServerRef.current(route.forward, true, true);
+      return;
+    }
+    if (await confirmLinkRef.current(url)) await invoke("open_external_url", { url });
+  };
+
+  // The local servers the program printed (`watchServers`), and the ones whose
+  // chip the user closed.
+  const [servers, setServers] = useState<ServerUrl[]>([]);
+  const [dismissedServers, setDismissedServers] = useState<string[]>([]);
+  const forwardRows = usePortForwardStore((s) => s.rows);
+
   // The sign-in link the program on screen is waiting on (see
   // `TerminalSignInCard`), and the links the user already closed the card for.
   const [signIn, setSignIn] = useState<SignInRequest | null>(null);
@@ -583,9 +667,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       cancelLinkOpen();
       linkOpenTimer = setTimeout(() => {
         linkOpenTimer = null;
-        void confirmLinkRef.current(url).then((ok) => {
-          if (ok) return invoke("open_external_url", { url });
-        }).catch(() => {});
+        void openLinkRef.current(url).catch(() => {});
       }, LINK_OPEN_DELAY_MS);
     };
     const linkHover = {
@@ -701,6 +783,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       termDisposables.push(term.onWriteParsed(() => {
         signInScanTimer ??= setTimeout(scanForSignIn, 300);
       }));
+    });
+
+    // Local servers the program printed (JupyterLab, Vite, TensorBoard, …): a
+    // chip per server, from the same coalesced parse tick as the sign-in scan.
+    setServers([]);
+    onBuild.push((term) => {
+      termDisposables.push(watchServers(term, setServers));
     });
 
     openedRef.current = false;
@@ -1725,7 +1814,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // stayed unstamped and never wore the running ▶.
       if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
-        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
+        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean; turn?: "working" | "decision" } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
           opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, api_key: apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
@@ -1741,6 +1830,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // Its last run finished its turn: the agent is at its composer, and
         // the conversation a resume or reattach repaints is not a question.
         if (spawned?.resting === true) noteAgentResting(id);
+        // It only reattached a session whose agent is mid-turn right now (the
+        // headless owner kept it running while no window was open): the turn
+        // its hooks last reported, which the watcher will not repeat.
+        if (spawned?.turn === "working" || spawned?.turn === "decision") noteLiveTurn(id, spawned.turn);
       };
       try {
         await spawn();
@@ -2374,6 +2467,62 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     setSignIn(null);
   };
 
+  // ── Server chips ───────────────────────────────────────────────────────────
+  // The Ports list is read when a remote tab shows (a forward may have ended
+  // with its host) and whenever the set of servers on screen changes.
+  const remoteForPorts = locality.kind === "remote";
+  useEffect(() => {
+    if (visible && remoteForPorts) void usePortForwardStore.getState().refresh();
+  }, [visible, remoteForPorts, servers]);
+  const forwardOfServer = (server: ServerUrl) =>
+    locality.kind !== "remote"
+      ? null
+      : (forwardRows.find(
+          (r) =>
+            r.projectId === locality.projectId &&
+            r.hostId === locality.hostId &&
+            r.remoteHost === server.host &&
+            r.remotePort === server.port,
+        ) ?? null);
+  const serverForward = (server: ServerUrl) =>
+    locality.kind === "remote"
+      ? { projectId: locality.projectId, hostId: locality.hostId, remoteHost: server.host, remotePort: server.port, scheme: server.scheme, pathAndQuery: server.pathAndQuery }
+      : null;
+  const copyText = (text: string) => {
+    invoke("copy_text_to_clipboard", { text })
+      .then(() => useProjectsStore.setState({ switchToast: linkCopiedRef.current }))
+      .catch(() => {});
+  };
+  const openServer = (server: ServerUrl) => {
+    const forward = serverForward(server);
+    if (forward) {
+      void forwardServerRef.current(forward, true);
+    } else if (locality.kind === "local") {
+      // A server on this machine opens as printed: its host is the loopback, so
+      // no confirmation; a node name is another machine and asks like any link.
+      if (isLoopbackServerHost(server.host)) {
+        void invoke("open_external_url", { url: localPageUrl(server) }).catch(() => {});
+      } else {
+        void openLinkRef.current(localPageUrl(server)).catch(() => {});
+      }
+    } else {
+      toast(t("terminal.remoteLoopback.unsupported"));
+    }
+  };
+  const copyServer = (server: ServerUrl) => {
+    const forward = serverForward(server);
+    if (!forward) {
+      if (locality.kind === "local") copyText(localPageUrl(server));
+      else toast(t("terminal.remoteLoopback.unsupported"));
+      return;
+    }
+    // A remote server's printed address is not reachable from here: forward it
+    // (asking as Open does) and copy the forwarded one.
+    void forwardServerRef.current(forward, false).then((localPort) => {
+      if (localPort !== null) copyText(forwardedUrl(forward, localPort));
+    });
+  };
+
   const agentPane = paneKind === "agent" || paneKind === "local_agent";
 
   // One-time empty-AGENTS.md card: only agent panes of a real project probe,
@@ -2551,9 +2700,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         onShowFiles={readerTopBar ? () => setPanelPicked("files") : undefined}
         onFilesKnown={setFilesKnown}
         onOpenUrl={(url) => {
-          void confirmLinkRef.current(url).then((ok) => {
-            if (ok) return invoke("open_external_url", { url });
-          }).catch(() => {});
+          void openLinkRef.current(url).catch(() => {});
         }}
         navigationSlot={readerNavigationSlot}
         actionSlot={readerActionSlot}
@@ -2564,7 +2711,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         key={signIn.url}
         host={host}
         request={signIn}
-        onOpen={() => void invoke("open_external_url", { url: signIn.url }).catch(() => {})}
+        onOpen={() => {
+          // A sign-in link on the tab's own loopback (a dev server's login) is
+          // routed like any link: a remote tab's is forwarded, never this machine's port.
+          if (routeLink(signIn.url, localityRef.current) !== "external") {
+            void openLinkRef.current(signIn.url).catch(() => {});
+          } else {
+            void invoke("open_external_url", { url: signIn.url }).catch(() => {});
+          }
+        }}
         onCopy={() => {
           invoke("copy_text_to_clipboard", { text: signIn.url })
             .then(() => useProjectsStore.setState({ switchToast: signInCopiedRef.current }))
@@ -2582,6 +2737,20 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           term.focus();
         }}
         onDismiss={() => dismissSignIn(signIn.url)}
+      />
+    )}
+    {host && visible && !signIn && (
+      <TerminalServerChips
+        host={host}
+        servers={servers.filter((server) => !dismissedServers.includes(server.url))}
+        forwardedLocalPort={(server) => forwardOfServer(server)?.localPort ?? null}
+        onOpen={openServer}
+        onCopy={copyServer}
+        onStop={(server) => {
+          const row = forwardOfServer(server);
+          if (row) void usePortForwardStore.getState().stop(row.id);
+        }}
+        onDismiss={(server) => setDismissedServers((prev) => [...prev, server.url])}
       />
     )}
     {signInDone && !signIn && host && (

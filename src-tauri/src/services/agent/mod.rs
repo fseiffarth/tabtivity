@@ -80,6 +80,8 @@ pub mod google_chat;
 pub mod transcript_watch;
 // The chat assistant's profiles, system prompt and chat folder (docs/assistant_plan.md).
 pub mod assistant;
+// Whether a chat has had an `@` attachment: the backend's own record, read by the web lane.
+pub mod assistant_attach;
 // Claude's own `/model` list for the assistant's chats, read by a short-lived probe.
 pub mod assistant_model_probe;
 // The rows each CLI's own model picker last drew, per installed build.

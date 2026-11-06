@@ -46,6 +46,16 @@ export function shareAs(file: OutboxFile): { name: string; type: string } | null
   return null;
 }
 
+/**
+ * What goes to the share sheet: the files, titled by their names. The title
+ * is for apps whose share extension skips a share of bare files — Teams on
+ * iPadOS listed Signal but not itself for one (untested whether a title is
+ * what it waits for). No URL: a link to this page opens for nobody else.
+ */
+export function shareData(files: File[]): ShareData {
+  return { files, title: files.map((file) => file.name).join(", ") };
+}
+
 /** The one file held for sharing: which it is, its bytes, and whether they are here. */
 type Held = { key: string; file: Promise<File>; loaded: boolean };
 
@@ -109,7 +119,7 @@ export function useOutboxShare(scope: ViewerScope) {
       setBusy(null);
     }
     try {
-      await navigator.share({ files: [prepared] });
+      await navigator.share(shareData([prepared]));
     } catch (error) {
       const name = error instanceof DOMException ? error.name : "";
       // Closing the sheet is not a failure; the bytes stay for another try.
@@ -140,7 +150,7 @@ export function useShareMany(scope: ViewerScope) {
     const key = keyOf(files);
     const send = async (prepared: File[], waited: boolean) => {
       try {
-        await navigator.share({ files: prepared });
+        await navigator.share(shareData(prepared));
         setState(null);
       } catch (error) {
         const name = error instanceof DOMException ? error.name : "";

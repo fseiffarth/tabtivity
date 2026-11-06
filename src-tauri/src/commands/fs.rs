@@ -591,7 +591,7 @@ fn walk_dir_size_breakdown(
 /// Join a remote project root (`remote_path`) with a project-relative path,
 /// mirroring `ssh_exec::remote_subdir`-style joining: trim a trailing '/', then
 /// append the non-empty rel. Pure, so it is unit-tested without a live host.
-fn join_remote_dir(remote_path: &str, rel: &str) -> String {
+pub(crate) fn join_remote_dir(remote_path: &str, rel: &str) -> String {
     let base = remote_path.trim_end_matches('/');
     let rel = rel.trim_start_matches('/');
     if rel.is_empty() {
@@ -679,7 +679,7 @@ fn confine_remote_abs(remote_root: &str, path: &str) -> Result<(), String> {
 }
 
 /// Clone the pooled SFTP session for the target's project, or `None` (cold pool).
-async fn pooled(
+pub(crate) async fn pooled(
     pool: &RemotePoolState,
     target: &RemoteTarget,
 ) -> Option<std::sync::Arc<openssh_sftp_client::Sftp>> {
@@ -1854,22 +1854,119 @@ async fn read_file_bytes_any(
     project_id: Option<String>,
     pool: &RemotePoolState,
 ) -> Result<Vec<u8>, String> {
-    if let Some(pid) = project_id.as_deref() {
+    if let ByteRoute::Remote(target) = byte_route(&path, project_id.as_deref())? {
+        let (size, _) = remote_metadata(pool, &target, &path).await?;
+        if size > MAX_BINARY_VIEW_BYTES {
+            return Err(format!(
+                "file too large to view ({size} bytes; limit {MAX_BINARY_VIEW_BYTES})"
+            ));
+        }
+        return remote_read(pool, &target, &path, MAX_BINARY_VIEW_BYTES).await;
+    }
+    read_file_bytes_local(&path, project_id.as_deref())
+}
+
+/// Where a viewer's absolute path is read from: this machine, or a remote
+/// project's host over SFTP. The routing the byte readers share, kept in one
+/// place so a new reader cannot drift from the confinement the others hold.
+pub(crate) enum ByteRoute {
+    Local,
+    Remote(Box<RemoteTarget>),
+}
+
+/// Route `path` for project `project_id` and run the remote half of the guard.
+///
+/// A remote project's path is held to its remote root ([`confine_remote_abs`]);
+/// a path under the local mirror (SSH-sync G2) reads from the LOCAL mirror. A
+/// `Local` answer still has to pass [`open_confined`] when it is opened. Remoteness
+/// is read from the project's record, never inferred from the path.
+pub(crate) fn byte_route(path: &str, project_id: Option<&str>) -> Result<ByteRoute, String> {
+    if let Some(pid) = project_id {
         if let Some(target) = crate::services::remote::remote_target_for(pid) {
-            // SSH-sync G2: a mirror-local path reads from the LOCAL mirror.
-            if !crate::services::remote_sync::is_under_mirror(pid, &path) {
-                confine_remote_abs(&target.spec.remote_path, &path)?;
-                let (size, _) = remote_metadata(pool, &target, &path).await?;
-                if size > MAX_BINARY_VIEW_BYTES {
-                    return Err(format!(
-                        "file too large to view ({size} bytes; limit {MAX_BINARY_VIEW_BYTES})"
-                    ));
-                }
-                return remote_read(pool, &target, &path, MAX_BINARY_VIEW_BYTES).await;
+            if !crate::services::remote_sync::is_under_mirror(pid, path) {
+                confine_remote_abs(&target.spec.remote_path, path)?;
+                return Ok(ByteRoute::Remote(Box::new(target)));
             }
         }
     }
-    read_file_bytes_local(&path, project_id.as_deref())
+    Ok(ByteRoute::Local)
+}
+
+/// `(size, mtime secs)` of a file, then a window of its bytes: the read a file
+/// that grows (a log, a TensorBoard event file) is followed by.
+pub(crate) struct RangeRead {
+    pub size: u64,
+    pub mtime: u64,
+    pub bytes: Vec<u8>,
+}
+
+/// Stat `path`, let `window` pick `(offset, max)` from its `(size, mtime)`, and
+/// read that window, through the same routing and confinement as
+/// [`read_file_bytes_any`]. `window` runs once, after the stat, before any
+/// bytes move; a `max` of 0 reads nothing.
+pub(crate) async fn read_range_routed(
+    path: String,
+    project_id: Option<String>,
+    pool: &RemotePoolState,
+    window: impl FnOnce(u64, u64) -> (u64, usize) + Send + 'static,
+) -> Result<RangeRead, String> {
+    match byte_route(&path, project_id.as_deref())? {
+        ByteRoute::Remote(target) => {
+            let (size, mtime) = remote_metadata(pool, &target, &path).await?;
+            let mtime = mtime.unwrap_or(0);
+            let (offset, max) = window(size, mtime);
+            let bytes = if max == 0 {
+                Vec::new()
+            } else {
+                let s = &target.spec;
+                match pooled(pool, &target).await {
+                    Some(sftp) => {
+                        crate::services::sftp::read_range_on(&sftp, &path, offset, max).await?
+                    }
+                    None => {
+                        crate::services::sftp::read_range(&s.user, &s.host, s.port, None, &path, offset, max)
+                            .await?
+                    }
+                }
+            };
+            Ok(RangeRead { size, mtime, bytes })
+        }
+        ByteRoute::Local => {
+            app_core::rt::try_blocking("fs", move || {
+                read_range_local(&path, project_id.as_deref(), window)
+            })
+            .await
+        }
+    }
+}
+
+/// Local-fs window read through [`open_confined`] (see [`read_range_routed`]).
+pub(crate) fn read_range_local(
+    path: &str,
+    scope_id: Option<&str>,
+    window: impl FnOnce(u64, u64) -> (u64, usize),
+) -> Result<RangeRead, String> {
+    let p = PathBuf::from(path);
+    let file = open_confined(&p, &allowed_roots(scope_id), Confined::Read)?;
+    read_range_opened(file, window)
+}
+
+/// The window read of an already confined handle (see [`read_range_routed`]).
+pub(crate) fn read_range_opened(
+    mut file: fs::File,
+    window: impl FnOnce(u64, u64) -> (u64, usize),
+) -> Result<RangeRead, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    let size = meta.len();
+    let mtime = meta.modified().map(crate::clock::unix_secs).unwrap_or(0);
+    let (offset, max) = window(size, mtime);
+    let mut bytes = Vec::new();
+    if max > 0 && offset < size {
+        file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
+        file.take(max as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(RangeRead { size, mtime, bytes })
 }
 
 /// Local-fs byte read through [`open_confined`] (an in-root link still reads).

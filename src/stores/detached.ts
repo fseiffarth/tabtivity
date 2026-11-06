@@ -52,7 +52,7 @@ import {
   type HostConnState,
 } from "./remote/remoteStatus";
 import { BOX_SCOPE_PREFIX, boxFolderOfScope, newTabTarget, useBoxesStore, type NewTabTarget } from "./boxes";
-import { useActivityStore, noteAgentResting, notePtyResize, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
+import { useActivityStore, noteAgentResting, noteLiveTurn, notePtyResize, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
 import { bumpUsage } from "./usage";
 import { useRemoteMachinesStore } from "./remote/remoteMachines";
 import { useBigFoldersStore } from "./bigFolders";
@@ -177,8 +177,9 @@ export interface DetachedActivityEnvelope {
    *  `activity.noteUserInput`). `cutoff` is a spawn that found the tab's
    *  previous process died mid-turn (`activity.noteTurnCutOff`), `resting`
    *  one whose previous process finished its turn (`activity.noteAgentResting`),
-   *  `resize` a pane resize (`activity.notePtyResize`). */
-  kind: "input" | "interrupt" | "seen" | "bell" | "cutoff" | "resting" | "resize";
+   *  `resize` a pane resize (`activity.notePtyResize`), `live-working` /
+   *  `live-decision` a reattach to an agent mid-turn (`activity.noteLiveTurn`). */
+  kind: "input" | "interrupt" | "seen" | "bell" | "cutoff" | "resting" | "resize" | "live-working" | "live-decision";
 }
 
 /**
@@ -1253,6 +1254,8 @@ export async function listenDetachedHost(): Promise<() => void> {
     else if (kind === "cutoff") noteTurnCutOff(ptyId);
     else if (kind === "resting") noteAgentResting(ptyId);
     else if (kind === "resize") notePtyResize(ptyId);
+    else if (kind === "live-working") noteLiveTurn(ptyId, "working");
+    else if (kind === "live-decision") noteLiveTurn(ptyId, "decision");
   });
 
   // #234: a popout's usage counters land in the one accumulator that is flushed.

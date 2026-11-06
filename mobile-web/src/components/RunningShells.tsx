@@ -1,4 +1,3 @@
-import { useId, useState } from "react";
 import { useT } from "../../../src/lib/i18n";
 import type { RunningShell } from "../api";
 
@@ -11,19 +10,23 @@ export function shownShells(shells: readonly RunningShell[] | undefined, waited:
 }
 
 /** The desktop Reader's "Shell is running…" lines, one per shell: the agent's
- * own few words on what it does (else the command's first line), and on a tap
- * the whole command, as the desktop Reader's line opens it. */
-export function RunningShells({ shells, untested }: { shells: readonly RunningShell[]; untested?: string }) {
+ * own few words on what it does and whether it runs in the background. The
+ * command line itself never crosses the browser API (it carries host paths and
+ * whatever the agent put inline), so the row offers the Terminal view, which
+ * shows the screen, in its place. */
+export function RunningShells({ shells, untested, onShowTerminal }: {
+  shells: readonly RunningShell[];
+  untested?: string;
+  onShowTerminal?: () => void;
+}) {
   return <>
-    {shells.map((shell, index) => <ShellRow key={`${shell.at ?? ""}:${shell.description ?? ""}:${index}`} shell={shell} untested={untested} />)}
+    {shells.map((shell, index) => <ShellRow key={`${shell.at ?? ""}:${shell.description ?? ""}:${index}`} shell={shell} untested={untested} onShowTerminal={onShowTerminal} />)}
   </>;
 }
 
-function ShellRow({ shell, untested }: { shell: RunningShell; untested?: string }) {
+function ShellRow({ shell, untested, onShowTerminal }: { shell: RunningShell; untested?: string; onShowTerminal?: () => void }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
-  const commandId = useId();
-  const summary = shell.description || shell.command.split("\n", 1)[0];
+  const summary = shell.description;
   return <div className="transcript-shell-item">
     <div className="transcript-working transcript-shell" role="status">
       <span className="transcript-shell-mark" aria-hidden="true">$</span>
@@ -32,10 +35,7 @@ function ShellRow({ shell, untested }: { shell: RunningShell; untested?: string 
         {summary}
         {untested && <em>{summary && " · "}{untested}</em>}
       </small>}
-      {shell.command && <button type="button" className="transcript-shell-toggle" aria-expanded={open} aria-controls={commandId}
-        aria-label={t(open ? "terminal.reader.shellHide" : "terminal.reader.shellShow")} title={t(open ? "terminal.reader.shellHide" : "terminal.reader.shellShow")}
-        onClick={() => setOpen((shown) => !shown)}><span aria-hidden="true">{open ? "▴" : "▾"}</span></button>}
+      {onShowTerminal && <button type="button" className="transcript-shell-toggle transcript-shell-terminal" onClick={onShowTerminal}>{t("mobile.focus.shellInTerminal")}</button>}
     </div>
-    {open && shell.command && <pre id={commandId} className="transcript-shell-command">{shell.command}{shell.cut && "…"}</pre>}
   </div>;
 }

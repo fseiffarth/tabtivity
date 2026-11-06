@@ -795,6 +795,11 @@ async fn teardown_pooled(conn: PooledRemote) {
         }
         Err(arc) => drop(arc),
     }
+    // The master's port forwards end with its connection (`ssh -O cancel` needs
+    // the master, so before the client goes). Blocking: off the async worker.
+    if let Some(path) = control_path.clone() {
+        let _ = tokio::task::spawn_blocking(move || crate::services::port_forward::close_for_master(&path)).await;
+    }
     let _ = child.kill().await;
     // The socket is NOT this entry's to delete just because this entry is going
     // away, and both halves of that sentence were once wrong here.

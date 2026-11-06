@@ -62,6 +62,7 @@ const VIEWER_LABEL_KEY: Record<InternalViewer, TranslationKey> = {
   texworkspace: "viewerLabel.texworkspace",
   table: "viewerLabel.table",
   notebook: "viewerLabel.notebook",
+  tensorboard: "viewerLabel.tensorboard",
   diff: "viewerLabel.diff",
   syncdiff: "viewerLabel.syncdiff",
   syncmerge: "viewerLabel.syncmerge",

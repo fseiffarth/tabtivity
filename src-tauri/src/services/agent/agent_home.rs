@@ -347,6 +347,12 @@ fn prepare_home_with(
     if let Some(dir) = trust {
         trust_chat_folder(home, dir)?;
     }
+    // The assistant's Claude may not read the home's login files, not even
+    // through an `@` mention (threat recheck 2026-11-04, gap 78); a deny that
+    // cannot be written refuses the spawn like the trust above.
+    if seed == Seed::Assistant {
+        deny_login_reads(home)?;
+    }
     // The probe home runs no tab, so it has no turn state to report. It still
     // gets what is not a hook: OpenCode 2's managed service listens on one
     // fixed loopback port shared by every home, so a warm-up's or a version
@@ -583,6 +589,62 @@ fn trust_chat_folder(home: &Path, chat_dir: &Path) -> io::Result<()> {
     trust_claude_json(&claude, &dirs)?;
     let codex = HomeFile::open(home, ".codex/config.toml").ok_or_else(|| not_plain(".codex/config.toml"))?;
     trust_codex_config(&codex, &dirs)
+}
+
+/// Claude's `permissions.deny` rules for `Read` of every login path the
+/// registry knows (`agent_auth::registry`), `~/`-relative: a file by its path,
+/// a login directory by everything under it. Generated, so a CLI added to the
+/// registry is covered without a second list.
+pub(crate) fn login_read_deny_rules() -> Vec<String> {
+    use crate::services::agent_auth::AuthKind;
+    let mut rules: Vec<String> = crate::services::agent_registry::auth_registry()
+        .into_iter()
+        .flat_map(|(_, paths)| paths.iter())
+        .map(|path| match path.kind {
+            AuthKind::File => format!("Read(~/{})", path.rel),
+            AuthKind::Dir(_) => format!("Read(~/{}/**)", path.rel),
+        })
+        .collect();
+    rules.sort();
+    rules.dedup();
+    rules
+}
+
+/// Add [`login_read_deny_rules`] to `permissions.deny` of the home's Claude
+/// `settings.json`, keeping every other key and rule. Idempotent.
+fn deny_login_reads(home: &Path) -> io::Result<()> {
+    use serde_json::{json, Value};
+    let file = HomeFile::open(home, ".claude/settings.json")
+        .ok_or_else(|| io::Error::other(format!(".claude/settings.json in {} is not a plain path", home.display())))?;
+    let existing = file.read();
+    let mut root = match existing.as_deref().map(serde_json::from_slice::<Value>) {
+        Some(Ok(v)) if v.is_object() => v,
+        Some(_) => {
+            file.rename_aside(".unreadable")?;
+            json!({})
+        }
+        None if file.exists() => return Err(io::Error::other(".claude/settings.json cannot be read")),
+        None => json!({}),
+    };
+    let Some(obj) = root.as_object_mut() else { return Ok(()) };
+    if !obj.get("permissions").is_some_and(Value::is_object) {
+        obj.insert("permissions".into(), json!({}));
+    }
+    let Some(permissions) = obj.get_mut("permissions").and_then(Value::as_object_mut) else { return Ok(()) };
+    if !permissions.get("deny").is_some_and(Value::is_array) {
+        permissions.insert("deny".into(), json!([]));
+    }
+    let Some(deny) = permissions.get_mut("deny").and_then(Value::as_array_mut) else { return Ok(()) };
+    for rule in login_read_deny_rules() {
+        if !deny.iter().any(|d| d.as_str() == Some(rule.as_str())) {
+            deny.push(Value::String(rule));
+        }
+    }
+    let body = serde_json::to_vec_pretty(&root).map_err(io::Error::other)?;
+    if existing.as_deref() == Some(body.as_slice()) {
+        return Ok(());
+    }
+    file.write(&body)
 }
 
 /// `.claude.json`: `projects.<dir>.hasTrustDialogAccepted = true` for each of
@@ -884,6 +946,41 @@ mod tests {
     fn write_file(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    /// Gap 78: the assistant home's Claude may not `Read` a login file (an `@`
+    /// mention included, where the CLI honours the deny); other rules and keys
+    /// stay, and a second spawn adds nothing.
+    #[test]
+    fn the_assistant_home_denies_reading_every_login_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let chat = crate::services::assistant::chat_dir(state, CHAT).unwrap();
+        let home = scope_home_in(state, "assistant");
+        write_file(&home.join(".claude/settings.json"), r#"{"model":"x","permissions":{"deny":["Read(./mine)"],"allow":["Bash(ls)"]}}"#);
+        let deny_of = |home: &Path| -> Vec<String> {
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude/settings.json")).unwrap()).unwrap();
+            v["permissions"]["deny"].as_array().unwrap().iter().map(|d| d.as_str().unwrap().to_string()).collect()
+        };
+        prepare_assistant_home_in(state, false, &chat).unwrap();
+        let first = deny_of(&home);
+        for rule in ["Read(./mine)", "Read(~/.claude/.credentials.json)", "Read(~/.codex/auth.json)"] {
+            assert!(first.iter().any(|d| d == rule), "{rule} in {first:?}");
+        }
+        assert!(first.len() > 5, "every registry login path: {first:?}");
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join(".claude/settings.json")).unwrap()).unwrap();
+        assert_eq!(v["model"], "x");
+        assert_eq!(v["permissions"]["allow"][0], "Bash(ls)");
+        assert!(v.get("hooks").is_some(), "the session hooks are still registered");
+        prepare_assistant_home_in(state, false, &chat).unwrap();
+        assert_eq!(deny_of(&home), first, "idempotent");
+        // The local-model home gets it too; an ordinary scope's home does not.
+        prepare_assistant_home_in(state, true, &chat).unwrap();
+        assert!(deny_of(&local_model_home_in(state, "assistant")).iter().any(|d| d == "Read(~/.codex/auth.json)"));
+        let scope = scope_home_in(state, "p1");
+        prepare_home_in(state, &scope, "p1", &[], Seed::Scope).unwrap();
+        let text = std::fs::read_to_string(scope.join(".claude/settings.json")).unwrap();
+        assert!(!text.contains("Read(~/"), "{text}");
     }
 
     /// The Tabtivity-wide layer never reaches the assistant's home, not even

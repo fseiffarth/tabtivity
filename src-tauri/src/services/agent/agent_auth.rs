@@ -50,7 +50,9 @@
 //! into a home, the home's copy before it is left there), and a tab's copy is
 //! adopted only as a token rotation of an `oauth` entry the store already
 //! holds ([`opencode_adoption`]) — never a new entry, a changed key, type,
-//! `enterpriseUrl` or `accountId`. [`sweep_unadmissible_in`] moves failing
+//! `enterpriseUrl` or `accountId`, nor a token whose identity claim
+//! ([`access_identity`], decoded unsigned) differs from the stored one's
+//! (gap 94). [`sweep_unadmissible_in`] moves failing
 //! copies aside at startup and flags a V2 database that already took a
 //! `wellknown` source. AppHandle-free and unit-testable.
 
@@ -344,13 +346,49 @@ struct Adoption {
     refused: Option<String>,
 }
 
+/// The longest access-token payload (base64) read for an identity.
+const MAX_JWT_PAYLOAD: usize = 16 * 1024;
+
+/// Who an OpenCode `oauth` entry's access token names: the `sub`, and where
+/// the token carries one a ChatGPT account id (`account_id`, `accountId`,
+/// `https://api.openai.com/auth`.`chatgpt_account_id`), joined into one
+/// string. `None` for a token with no such claim (opaque, `gho_…`).
+/// The token is decoded, never verified: a rotation is compared against the
+/// **stored** entry's identity, which is as strong as the unsigned claim —
+/// it stops accounts mixing and a lazy swap, not an agent that forges a
+/// token to match (it reads its own home's copy, so it can).
+fn access_identity(entry: &serde_json::Value) -> Option<String> {
+    use base64::Engine as _;
+    let token = entry.get("access")?.as_str()?;
+    let payload = token.split('.').nth(1)?;
+    if token.split('.').count() != 3 || payload.len() > MAX_JWT_PAYLOAD {
+        return None;
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    let text = |v: Option<&serde_json::Value>| v.and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+    let parts: Vec<String> = [
+        text(claims.get("sub")).map(|v| format!("sub={v}")),
+        text(claims.get("account_id")).map(|v| format!("account_id={v}")),
+        text(claims.get("accountId")).map(|v| format!("accountId={v}")),
+        text(claims.get("https://api.openai.com/auth").and_then(|a| a.get("chatgpt_account_id"))).map(|v| format!("chatgpt_account_id={v}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(";"))
+}
+
 /// [`Adoption`] of `home` (a tab's copy) over `stored` (the store's file).
 /// Every CLI but OpenCode takes the copy as it is. OpenCode takes only a
 /// rotation of the tokens of an `oauth` entry the store already holds: the
 /// store's own entries, with `refresh`, `access` and `expires` from the copy.
 /// A new entry, a changed `api` entry, and a changed `type`, `accountId` or
 /// `enterpriseUrl` are not taken; a copy that is not [`admissible`] in the
-/// first place is taken in no part.
+/// first place is taken in no part. Where the stored entry's `access` token
+/// carries an identity ([`access_identity`]), a rotation must carry the same
+/// one, or it is refused as `<entry>.access`; a stored token without a claim
+/// keeps the rule above only.
 fn opencode_adoption(stored: Option<&[u8]>, home: &[u8]) -> Adoption {
     let refuse = |field: String| Adoption { bytes: None, refused: Some(field) };
     let copy = match opencode_entries(home) {
@@ -373,6 +411,10 @@ fn opencode_adoption(stored: Option<&[u8]>, home: &[u8]) -> Adoption {
             if held != entry {
                 refused.get_or_insert_with(|| short(name));
             }
+            continue;
+        }
+        if access_identity(held).is_some_and(|pinned| access_identity(entry) != Some(pinned)) {
+            refused.get_or_insert_with(|| format!("{}.access", short(name)));
             continue;
         }
         if let Some(target) = merged.get_mut(name).and_then(|m| m.as_object_mut()) {

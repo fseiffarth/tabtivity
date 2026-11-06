@@ -13,6 +13,7 @@ import { forgetDrafts, readDraft, writeDraft } from "../../../mobile-web/src/dra
 import { storageKey } from "../../lib/brand";
 import { addMark, EMPTY_LAYER } from "../../../mobile-web/src/markup/layer";
 import { clearLayer, forgetLayers, layerKey, loadLayer, saveLayer, type LayerBackend } from "../../../mobile-web/src/markup/store";
+import { readSlashCommands, rememberSlashCommand } from "../../../mobile-web/src/slashCommands";
 import { forgetHeld, readHeld, writeHeld } from "../../../mobile-web/src/terminal/heldPrompts";
 import { pendingPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { ThumbCache, thumbKey, type ThumbBackend } from "../../../mobile-web/src/thumbs";
@@ -143,16 +144,21 @@ describe("each store forgets on its own", () => {
 });
 
 describe("forgetDeviceData", () => {
-  it("forgets the last place, drafts and held prompts, and survives a store that fails", async () => {
+  it("forgets the last place, drafts, held prompts and slash commands, and survives a store that fails", async () => {
     const actual = await vi.importActual<typeof import("../../../mobile-web/src/forgetDeviceData")>("../../../mobile-web/src/forgetDeviceData");
     localStorage.clear();
     localStorage.setItem(storageKey("mobile.lastTab"), JSON.stringify({ section: "projects" }));
     writeDraft("t1", "unsent");
     writeHeld("t1", [{ ...pendingPrompt(1, "later", []), held: "h1", sentAt: new Date().toISOString() }]);
+    rememberSlashCommand("claude", "/model opus");
+    rememberSlashCommand("codex", "/resume secret-session");
+    expect(readSlashCommands("claude")).toEqual(["/model opus"]);
     // jsdom has no IndexedDB: the covers and layers cannot be reached, which must not matter.
     await expect(actual.forgetDeviceData()).resolves.toBeUndefined();
     expect(readDraft("t1")).toBe("");
     expect(readHeld("t1")).toEqual([]);
+    expect(readSlashCommands("claude")).toEqual([]);
+    expect(readSlashCommands("codex")).toEqual([]);
     expect(localStorage.getItem(storageKey("mobile.lastTab"))).toBeNull();
   });
 });

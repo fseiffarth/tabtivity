@@ -120,6 +120,8 @@ pub fn features(tab: &str) -> Option<Features> {
 const MAX_CONFIG_BYTES: u64 = 8 << 20;
 /// At most this many names per list, each at most [`MAX_NAME_CHARS`].
 const MAX_NAMES: usize = 40;
+/// At most this many entries of a skills folder are looked at.
+const MAX_SKILL_ENTRIES: usize = 300;
 const MAX_NAME_CHARS: usize = 64;
 
 /// The home is the agent's to write: a name is shown as text, cut short and
@@ -136,14 +138,13 @@ fn clean_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
     out
 }
 
-/// A regular file of the home, not a link the agent put there to point the
-/// window at a file of the user's.
-fn read_small(path: &Path) -> Option<String> {
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {
-        return None;
-    }
-    std::fs::read_to_string(path).ok()
+/// A regular file of the home, read by directory handle: a link at any
+/// component (`.codex`, `.claude`) is refused, and a FIFO swapped in never
+/// blocks the read (`HomeFile::open_read` checks the opened inode). At most
+/// [`MAX_CONFIG_BYTES`], valid UTF-8.
+fn read_small(home: &Path, rel: &str) -> Option<String> {
+    let bytes = crate::services::home_io::HomeFile::open_existing(home, rel)?.read_capped(MAX_CONFIG_BYTES)?;
+    String::from_utf8(bytes).ok()
 }
 
 fn json_keys(value: Option<&serde_json::Value>) -> Vec<String> {
@@ -167,7 +168,7 @@ fn json_strings(value: Option<&serde_json::Value>) -> Vec<String> {
 pub fn own_mcp_servers(cli: &str, home: &Path, cwd: &str) -> (Vec<String>, Vec<String>) {
     let (names, off): (Vec<String>, Vec<String>) = match cli {
         "claude" => {
-            let Some(doc) = read_small(&home.join(".claude.json")).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
+            let Some(doc) = read_small(home, ".claude.json").and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
                 return Default::default();
             };
             let folder = doc.get("projects").and_then(|p| p.get(cwd));
@@ -175,7 +176,7 @@ pub fn own_mcp_servers(cli: &str, home: &Path, cwd: &str) -> (Vec<String>, Vec<S
             names.extend(json_keys(folder.and_then(|p| p.get("mcpServers"))));
             (names, json_strings(folder.and_then(|p| p.get("disabledMcpServers"))))
         }
-        "codex" => read_small(&home.join(".codex").join("config.toml"))
+        "codex" => read_small(home, ".codex/config.toml")
             .and_then(|t| t.parse::<toml_edit::DocumentMut>().ok())
             .and_then(|doc| {
                 doc.get("mcp_servers").and_then(|t| t.as_table_like()).map(|t| {
@@ -189,7 +190,7 @@ pub fn own_mcp_servers(cli: &str, home: &Path, cwd: &str) -> (Vec<String>, Vec<S
                 })
             })
             .unwrap_or_default(),
-        "gemini" => read_small(&home.join(".gemini").join("settings.json"))
+        "gemini" => read_small(home, ".gemini/settings.json")
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .map(|doc| (json_keys(doc.get("mcpServers")), json_strings(doc.get("mcp").and_then(|m| m.get("excluded")))))
             .unwrap_or_default(),
@@ -202,17 +203,17 @@ pub fn own_mcp_servers(cli: &str, home: &Path, cwd: &str) -> (Vec<String>, Vec<S
 /// The skills `cli` finds in `home`: a folder with a `SKILL.md` under
 /// Claude's `.claude/skills` or Codex's `.codex/skills`.
 pub fn skills(cli: &str, home: &Path) -> Vec<String> {
-    let dir = match cli {
-        "claude" => home.join(".claude").join("skills"),
-        "codex" => home.join(".codex").join("skills"),
+    let rel = match cli {
+        "claude" => ".claude/skills",
+        "codex" => ".codex/skills",
         _ => return Vec::new(),
     };
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
-    let names = entries
-        .flatten()
-        .filter(|e| e.path().join("SKILL.md").is_file())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| !n.starts_with('.'));
+    let Some(dir) = crate::services::home_io::HomeDir::open_existing(home, rel) else { return Vec::new() };
+    let names = dir
+        .names_capped(MAX_SKILL_ENTRIES)
+        .into_iter()
+        .filter(|n| !n.starts_with('.'))
+        .filter(|n| dir.open_subdir(n).and_then(|d| d.file("SKILL.md")).is_some_and(|f| f.is_file()));
     clean_names(names)
 }
 
@@ -291,6 +292,50 @@ mod tests {
         }
         assert_eq!(skills("claude", h.path()), vec!["review"]);
         assert!(skills("codex", h.path()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_config_folder_and_a_fifo_are_not_read() {
+        let h = home();
+        let outside = home();
+        std::fs::write(outside.path().join("config.toml"), "[mcp_servers.leak]\ncommand = \"x\"\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), h.path().join(".codex")).unwrap();
+        assert_eq!(own_mcp_servers("codex", h.path(), "/p"), (vec![], vec![]), "a linked .codex is not followed");
+
+        let skills_target = home();
+        std::fs::create_dir_all(skills_target.path().join("sneaky")).unwrap();
+        std::fs::write(skills_target.path().join("sneaky").join("SKILL.md"), "x").unwrap();
+        std::fs::create_dir_all(h.path().join(".claude")).unwrap();
+        std::os::unix::fs::symlink(skills_target.path(), h.path().join(".claude").join("skills")).unwrap();
+        assert!(skills("claude", h.path()).is_empty(), "a linked skills folder is not listed");
+
+        let fifo_home = home();
+        crate::services::home_io::mkfifo(&fifo_home.path().join(".claude.json"));
+        let path = fifo_home.path().to_path_buf();
+        let got = crate::services::home_io::within_deadline(move || own_mcp_servers("claude", &path, "/p"));
+        assert_eq!(got, (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_config_over_the_cap_is_not_parsed() {
+        let h = home();
+        let big = format!("{{\"mcpServers\":{{\"a\":{{}}}},\"pad\":\"{}\"}}", "x".repeat(MAX_CONFIG_BYTES as usize));
+        std::fs::write(h.path().join(".claude.json"), big).unwrap();
+        assert_eq!(own_mcp_servers("claude", h.path(), "/p"), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_skills_folder_is_listed_through_a_capped_read() {
+        let h = home();
+        let skills_dir = h.path().join(".claude").join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        for i in 0..(MAX_SKILL_ENTRIES + 50) {
+            std::fs::create_dir_all(skills_dir.join(format!("s{i:04}"))).unwrap();
+        }
+        let dir = crate::services::home_io::HomeDir::open_existing(h.path(), ".claude/skills").unwrap();
+        assert_eq!(dir.names_capped(MAX_SKILL_ENTRIES).len(), MAX_SKILL_ENTRIES);
+        assert_eq!(dir.names().len(), MAX_SKILL_ENTRIES + 50);
     }
 
     #[test]
