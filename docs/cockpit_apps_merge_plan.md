@@ -1,6 +1,9 @@
 # Cockpit: the apps and the system pages as views
 
-Status: **plan only** (2026-11-06). No code written. The user asked to merge
+Status: **implemented on develop, not live-tested** (2026-11-06, 87e736d8..36602de6;
+build log, flagged items and click-through: `docs/cockpit_apps_merge_handoff.md`).
+develop's cockpit declutter landed meanwhile; its machine list
+(`CockpitMachineList`) is the Machines view's list. The user asked to merge
 mail, to-do and calendar into the cockpit, and then models, machines and agents
 too, "but leave the option to add them as separate icons into the main rail".
 Builds on `docs/cockpit_root_merge_plan.md` (the cockpit and the root console
