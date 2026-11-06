@@ -8,6 +8,7 @@ import {
   useCalendarStore,
 } from "../../stores/calendar/calendar";
 import { useSettingsStore } from "../../stores/settings";
+import { isViewShown, useViewShown } from "../../stores/rootOverlay";
 import { formatTime, timePart } from "../../lib/calendar/calendarTime";
 import { useUse24h } from "../../lib/timeFormat";
 import { conferenceLink } from "../../lib/calendar/conference";
@@ -65,7 +66,7 @@ export function CalendarIndicator() {
   const enabled = useSettingsStore((s) => s.settings?.calendar_global_app ?? true);
   const events = useCalendarStore((s) => s.events);
   const calendars = useCalendarStore((s) => s.calendars);
-  const overlayOpen = useCalendarStore((s) => s.overlayOpen);
+  const overlayOpen = useViewShown("calendar");
   // Shared across every header hover-menu (stores/headerHoverMenu) so switching
   // straight from another one closes it instantly instead of racing its own
   // close-grace timer. `setMenuOpen` mirrors the old local-state setter's
@@ -195,7 +196,7 @@ export function CalendarIndicator() {
           setMenuOpen(false);
           window.clearTimeout(closeTimer.current);
           const store = useCalendarStore.getState();
-          if (store.overlayOpen) store.closeOverlay();
+          if (isViewShown("calendar")) store.closeOverlay();
           else store.openOverlay();
         }}
         // Keyboard reach: tabbing to the button is the one way in that no

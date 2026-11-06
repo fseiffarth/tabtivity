@@ -30,6 +30,7 @@ import { ViewBarSlotsContext } from "./viewBarSlots";
 
 // The cockpit's views' graph stays out of the startup chunk and only the shown
 // one mounts.
+const MailView = lazy(() => import("../mail/MailView").then((m) => ({ default: m.MailView })));
 const CockpitViewBody = lazy(() =>
   import("../cockpit/CockpitViews").then((m) => ({ default: m.CockpitViewBody })),
 );
@@ -164,7 +165,11 @@ export function RootOverlayHost() {
     }));
   }, []);
 
-  return open ? <RootOverlay /> : null;
+  // Mail's unsent composers outlive the window: their text lives in the mounted
+  // composer, so with a composer tab open the window stays mounted, hidden.
+  const mailKeepAlive = useMailStore((s) => s.mailTabs.some((tab) => tab.kind === "compose"));
+  if (!open && !mailKeepAlive) return null;
+  return <RootOverlay hidden={!open} />;
 }
 
 /**
@@ -176,17 +181,19 @@ export function RootOverlayHost() {
  * which portals its strip, ⚿ badge and ◫ toggle into the bar's slots. Only the
  * shown view is mounted.
  */
-function RootOverlay() {
+function RootOverlay({ hidden }: { hidden: boolean }) {
   const t = useT();
   const close = useRootOverlayStore((s) => s.close);
   const view: RootOverlayView = useRootOverlayStore((s) => s.view);
   const settings = useSettingsStore((s) => s.settings);
   // A view whose feature gate goes off while it is shown (mail_client,
   // calendar_global_app, todo_board, machines_enabled) is gone: back to Now.
-  const gateOff = !viewEnabled(view, settings);
+  const gateOff = !hidden && !viewEnabled(view, settings);
   useEffect(() => {
     if (gateOff) useRootOverlayStore.getState().openView("now");
   }, [gateOff]);
+  const mailShown = !hidden && view === "mail";
+  const keepMail = useMailStore((s) => s.mailTabs.some((tab) => tab.kind === "compose"));
   const boxFilter = useCockpitStore((s) => s.boxFilter);
   const boxes = useBoxesStore((s) => s.boxes);
   // The window's frame — the one hook the header overlays use: moved by the
@@ -224,11 +231,18 @@ function RootOverlay() {
   }, []);
 
   useEffect(() => {
+    if (hidden) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       // Escape inside a pane is the pane's (an agent TUI's cancel key; the
-      // cockpit's detail pane hosts one too); the toggle chord closes from there.
-      if (e.target instanceof Element && e.target.closest(".root-overlay-region, .cockpit-detail-pane")) return;
+      // cockpit's detail pane and an app view's docked agent column host one
+      // too); the toggle chord closes from there.
+      if (
+        e.target instanceof Element &&
+        e.target.closest(".root-overlay-region, .cockpit-detail-pane, .overlay-agent-column")
+      ) {
+        return;
+      }
       // A menu, dialog or drag of the view goes first, then a gesture of ours,
       // then the proposals panel (the portal's own handler, on the document,
       // marks it handled) — closing the console under an open panel would take
@@ -241,7 +255,7 @@ function RootOverlay() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [close, framing]);
+  }, [close, framing, hidden]);
 
   const { title: moveHint, ...barRest } = barProps;
   const slots: RootBarSlots = {
@@ -256,6 +270,8 @@ function RootOverlay() {
   return (
     <div
       className="modal-backdrop root-overlay-backdrop root-console-backdrop app-overlay-backdrop"
+      // Hidden, not unmounted, while an unsent mail waits (`MailView`).
+      style={hidden ? { display: "none" } : undefined}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) close();
       }}
@@ -350,14 +366,22 @@ function RootOverlay() {
               onBarDoubleClick: barProps.onDoubleClick,
             }}
           >
-            {view === "root" ? (
+            {hidden ? null : view === "root" ? (
               <RootView rights={rights} slots={slots} busyRef={busyRef} />
-            ) : (
+            ) : view === "mail" ? null : (
               <div className="subwindow-body cockpit-overlay-body">
                 <Suspense fallback={null}>
                   <CockpitViewBody view={view} />
                 </Suspense>
               </div>
+            )}
+            {/* Mail is the one view that is not just "mounted while shown": its
+                composers keep their text while the window is on another view or
+                closed (hidden, above). */}
+            {(mailShown || keepMail) && (
+              <Suspense fallback={null}>
+                <MailView shown={mailShown} />
+              </Suspense>
             )}
           </ViewBarSlotsContext.Provider>
         </FrameBandContext.Provider>

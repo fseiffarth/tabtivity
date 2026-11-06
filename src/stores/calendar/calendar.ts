@@ -22,6 +22,7 @@ import { addDays, toStamp, todayStr } from "../../lib/calendar/calendarTime";
 import { parseIcs } from "../../lib/calendar/ics";
 import { markForPush, notifyCalendarWrite } from "../../lib/calendar/calendarWriteHook";
 import { translateNow } from "../../lib/i18n";
+import { isViewShown, useRootOverlayStore } from "../rootOverlay";
 
 /**
  * The native calendar's store: one global set of calendars, events and tasks,
@@ -46,9 +47,11 @@ export interface DeletedCalendar {
 }
 
 interface CalendarStore {
-  /** The header button's calendar overlay is on screen (`calendar_global_app`). */
-  overlayOpen: boolean;
+  /** Show the Calendar view of the console window (`rootOverlay.openView`;
+   *  gated by `calendar_global_app`). Whether it is shown is the window's
+   *  state, `useViewShown("calendar")` — not a flag of this store. */
   openOverlay: () => void;
+  /** Close the window if it is showing Calendar. */
   closeOverlay: () => void;
 
   calendars: Calendar[];
@@ -135,9 +138,10 @@ const withoutId = (event: Omit<CalendarEvent, "id">): CalendarEvent =>
 let reloadSeq = 0;
 
 export const useCalendarStore = create<CalendarStore>((set, get) => ({
-  overlayOpen: false,
-  openOverlay: () => set({ overlayOpen: true }),
-  closeOverlay: () => set({ overlayOpen: false }),
+  openOverlay: () => useRootOverlayStore.getState().openView("calendar"),
+  closeOverlay: () => {
+    if (isViewShown("calendar")) useRootOverlayStore.getState().close();
+  },
 
   calendars: [],
   events: [],

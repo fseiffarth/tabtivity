@@ -1,7 +1,7 @@
 /**
  * The region cursor of keyboard steering mode: one highlighted control inside a
  * surface that has no tab bar to step through — the side panel, the mail /
- * calendar / to-do overlays, a pane's + menu, the settings dialog. ↑/↓ walk
+ * calendar / to-do views, a pane's + menu, the settings dialog. ↑/↓ walk
  * it, Enter presses it.
  *
  * It is deliberately NOT DOM focus. Focusing a control runs its focus handlers
@@ -21,6 +21,7 @@ import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import type { FilesPanelView, Settings } from "../../types";
 import type { SteeringRegion } from "../../stores/keyboardSteering";
 import { steeringInRoot } from "./steeringScope";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 
 const CURSOR_CLASS = "steer-cursor";
 
@@ -35,7 +36,8 @@ const PRESSABLE =
  *  and switcher lead with (`AppShell`'s EDGE_VIEWS). */
 export const SIDE_PANEL_VIEWS: readonly FilesPanelView[] = ["files", "git", "windows", "agents"];
 
-/** The header apps steering can open, and the gate each one's button has. */
+/** The header apps steering can show (views of the console window), and the gate
+ *  each one's button has. */
 export type SteeringApp = "mail" | "calendar" | "todo";
 
 export function steeringAppEnabled(app: SteeringApp, settings: Settings | null | undefined): boolean {
@@ -56,6 +58,10 @@ let cursor: HTMLElement | null = null;
  *  view's terminals or a cockpit view's rows. `regionRoot` sets and clears it
  *  per region, ahead of every use of the root. */
 const chromeFrames = new WeakSet<HTMLElement>();
+/** The same frame while an app region (mail / calendar / to-do) walks it: the
+ *  whole window but its view strip, which is the chrome level's. */
+const appFrames = new WeakSet<HTMLElement>();
+const APP_SKIP = ".root-view-strip";
 /** What the chrome level walks: the title bar's view tabs and buttons, and the
  *  rail's fold toggle. */
 const CHROME_ZONE = ".root-overlay-bar, .cockpit-rail-expand, .cockpit-rail-collapse";
@@ -80,7 +86,10 @@ export function regionRoot(region: SteeringRegion): HTMLElement | null {
     case "chrome": {
       // The root window's frame, walked only over its chrome (`CHROME_ZONE`).
       const frame = document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
-      if (frame) chromeFrames.add(frame);
+      if (frame) {
+        appFrames.delete(frame);
+        chromeFrames.add(frame);
+      }
       return frame;
     }
     case "card":
@@ -88,20 +97,26 @@ export function regionRoot(region: SteeringRegion): HTMLElement | null {
     case "overlay": {
       // The same frame, walked whole (a cockpit view opened with U).
       const layer = topLayer();
-      if (layer) chromeFrames.delete(layer);
+      if (layer) {
+        chromeFrames.delete(layer);
+        appFrames.delete(layer);
+      }
       return layer;
     }
     case "settings":
       // The page, not the whole dialog: ←/→ step the left-hand list
       // (`stepSettingsPage`), so ↑/↓ need not wade through it.
       return settingsDialog()?.querySelector<HTMLElement>(".settings-panel-content") ?? null;
-    default:
-      // The three header overlays share the root console's frame; each adds
-      // its own class. The last one mounted is the one on top.
-      return (
-        document.querySelector<HTMLElement>(`.root-overlay.${region}-overlay`) ??
-        lastMatch(".app-overlay-backdrop .root-overlay")
-      );
+    default: {
+      // The three apps are views of the root console's window: the region
+      // walks its frame, minus the view strip (`APP_SKIP`).
+      const frame = document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
+      if (frame) {
+        chromeFrames.delete(frame);
+        appFrames.add(frame);
+      }
+      return frame;
+    }
   }
 }
 
@@ -158,8 +173,11 @@ export function regionForLayer(layer: HTMLElement): SteeringRegion {
   const holds = (sel: string) => layer.matches(sel) || !!layer.querySelector(sel);
   const settings = settingsDialog();
   if (settings && layer.contains(settings)) return "settings";
-  for (const app of ["mail", "calendar", "todo"] as const) {
-    if (holds(`.root-overlay.${app}-overlay`)) return app;
+  // The apps are views of the console window: that window, while one of them
+  // is the shown view, is the app's region.
+  const { open, view } = useRootOverlayStore.getState();
+  if (open && (view === "mail" || view === "calendar" || view === "todo") && holds(".root-console-backdrop")) {
+    return view;
   }
   if (holds(".tab-add-menu")) return "addTab";
   return "overlay";
@@ -355,6 +373,7 @@ const NOT_A_TARGET = ".app-header .project-pill, .wm-controls";
 export function regionTargets(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];
   const chrome = chromeFrames.has(root);
+  const app = appFrames.has(root);
   // Every element's cursor is read once: a parent comes before its children
   // in document order, so its answer is already here when they ask. (The mail
   // overlay is thousands of elements; each step walks them all.)
@@ -370,6 +389,7 @@ export function regionTargets(root: HTMLElement): HTMLElement[] {
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
     if (el.closest(NOT_A_TARGET)) continue;
     if (chrome && (!el.closest(CHROME_ZONE) || el.closest(CHROME_SKIP))) continue;
+    if (app && el.closest(APP_SKIP)) continue;
     const pressable = el.matches(PRESSABLE);
     if (!pressable) {
       if (!pointerOf(el)) continue;

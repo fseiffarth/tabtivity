@@ -7,9 +7,9 @@
  * tab (worktree question, session ids and all). The two meet over a window
  * event rather than a store because the launch needs that bar's live state.
  *
- * While a mail / calendar / to-do overlay is in front, Ctrl+1–9 go to it
+ * While a mail / calendar / to-do view is shown, Ctrl+1–9 go to it
  * instead (`requestOverlayAgent`): it docks the agent beside the app, where a
- * workspace tab would open hidden under the overlay.
+ * workspace tab would open hidden under the window.
  */
 import { allGroups, useTabsStore } from "../../stores/tabs";
 import { steeringInRoot, steeringTabs } from "./steeringScope";
@@ -85,20 +85,20 @@ export function requestNewTab(
 }
 
 /** Detail: {@link OverlayAgentDetail}. Cancelled (`preventDefault`) by the
- *  addressed overlay when it docked (or re-showed) that slot's agent. */
+ *  addressed app view when it docked (or re-showed) that slot's agent. */
 export const OVERLAY_AGENT_EVENT = "app:overlay-agent";
 
 export interface OverlayAgentDetail {
-  /** The overlay the agent docks in (`frontAppOverlay`). */
+  /** The overlay the agent docks in (`shownApp`). */
   app: SteeringApp;
   /** 0-based, as {@link NewTabRequest}'s: 0 = Ctrl+1. */
   slot: number;
 }
 
 /**
- * Ask the mail / calendar / to-do overlay `app` to dock agent `slot` beside
- * itself — Ctrl+1–9 while that overlay is in front, where a workspace tab
- * would open hidden under it. True when the overlay answered; false leaves the
+ * Ask the mail / calendar / to-do view `app` to dock agent `slot` beside
+ * itself — Ctrl+1–9 while that view is shown, where a workspace tab
+ * would open hidden under the window. True when the view answered; false leaves the
  * key to go on, like an agent number with no agent behind it.
  */
 export function requestOverlayAgent(app: SteeringApp, slot: number): boolean {

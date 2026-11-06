@@ -31,7 +31,7 @@ import {
   type SteeringKeyContext,
   type SteeringKeyMap,
 } from "../lib/shortcuts/steeringBindings";
-import { appOverlayStore, frontAppOverlay } from "../lib/shortcuts/appOverlays";
+import { closeApp, openApp as showApp, shownApp } from "../lib/shortcuts/appViews";
 import { openProjectDialog } from "../lib/projects/projectDialogEvent";
 import { requestProjectJump } from "../lib/projects/projectJumpEvent";
 import { sidePanelViewKey, sidePanelViewPatch } from "../lib/projects/sidePanelView";
@@ -190,9 +190,9 @@ export function isEditableTarget(target: EventTarget | null): boolean {
  *   - Ctrl+Shift+N / M     → new shell / System Monitor tab in the focused pane
  *   - Ctrl+1 … Ctrl+9      → new agent tab there: 1 = the default agent, 2–9
  *                            the + menu's other agents in order; while a mail /
- *                            calendar / to-do overlay is in front, that slot's
- *                            root agent docks in the overlay instead
- *                            (`frontAppOverlay`, `requestOverlayAgent`)
+ *                            calendar / to-do view is shown, that slot's root
+ *                            agent docks beside the app instead
+ *                            (`shownApp`, `requestOverlayAgent`)
  *
  * Steering mode (`steeringMode` chord): a modal layer for the rebindable keys
  * in `steeringBindings.ts` (explained by `STEERING_KEYS`), captured on `document` in the CAPTURE phase so xterm never
@@ -412,8 +412,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     };
     const openApp = (app: SteeringApp) => {
       if (!steeringAppEnabled(app, useSettingsStore.getState().settings)) return;
-      const store = appOverlayStore(app);
-      if (!store.overlayOpen) store.openOverlay();
+      showApp(app);
       enterRegion(app);
     };
 
@@ -927,13 +926,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // terminal too, which is where the hands are when the next one is
       // wanted. It lands in the workspace, so the root console steps aside.
       // An agent number with no agent behind it passes the key on.
-      // While a mail / calendar / to-do overlay is in front, an agent number
-      // goes to it instead: it docks that root agent beside the app, where a
-      // workspace tab would open hidden under the overlay. Unanswered, the key
-      // passes on too — never into that hidden tab. The root console steps
-      // aside either way, so the docked column shows.
+      // While a mail / calendar / to-do view is shown, an agent number goes
+      // to it instead: it docks that root agent beside the app, where a
+      // workspace tab would open hidden under the window. Unanswered, the key
+      // passes on too — never into that hidden tab. The window stays either
+      // way, so the docked column shows.
       const newTab = modalUp ? null : newTabRequestFor(e, overrides);
-      const overlayApp = newTab?.kind === "agent" ? frontAppOverlay() : null;
+      const overlayApp = newTab?.kind === "agent" ? shownApp() : null;
       const toRoot = !overlayApp && steeringInRoot();
       if (
         newTab &&
@@ -945,10 +944,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         e.stopPropagation();
         if (steering.active) exitSteering();
         // The chord went to Root's subwindow while the Root view is up
-        // (`RootNewTabKeys`), so the window stays; otherwise the tab is the
+        // (`RootNewTabKeys`), or docked an agent in the shown app's column
+        // (`overlayApp`), so the window stays; otherwise the tab is the
         // workspace's and the console steps aside.
         const overlay = useRootOverlayStore.getState();
-        if (overlay.open && !toRoot) overlay.close();
+        if (overlay.open && !toRoot && !overlayApp) overlay.close();
         return;
       }
       // Reopen the last agent tab closed in this scope — from a focused
@@ -1490,11 +1490,6 @@ const TYPING_BURST_MS = 400;
 /** Whether a chord would type a character (no Ctrl / Alt / Meta held). */
 function typesText(chord: ChordDescriptor): boolean {
   return !chord.ctrl && !chord.alt && !chord.meta && normalizeKey(chord.key).length === 1;
-}
-
-function closeApp(app: SteeringApp) {
-  const store = appOverlayStore(app);
-  if (store.overlayOpen) store.closeOverlay();
 }
 
 /** Put the side panel on the next / previous of its views — the settings patch

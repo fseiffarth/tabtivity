@@ -8,6 +8,7 @@ import {
   useMailStore,
 } from "../../stores/mail";
 import { useSettingsStore } from "../../stores/settings";
+import { isViewShown, useViewShown } from "../../stores/rootOverlay";
 import { useExperimental } from "../../lib/experimental";
 import { DEFAULT_MAIL_CHECK_MIN, onMailNew } from "../../lib/mail";
 import { useVpnTunnelUp, vpnGateAllows, vpnTunnelUp } from "../../lib/remote/vpn/vpnGate";
@@ -112,7 +113,7 @@ export function MailIndicator() {
   );
   const unread = useMailStore((s) => inboxUnread(s.foldersByAccount));
   const newCount = useMailStore((s) => s.newCount);
-  const overlayOpen = useMailStore((s) => s.overlayOpen);
+  const overlayOpen = useViewShown("mail");
   // The dropdown's rows. Read unconditionally rather than only while the menu is
   // open: these are already in the store (the badge's own `refreshUnread` puts
   // them there), and a hook cannot be conditional anyway.
@@ -284,7 +285,7 @@ export function MailIndicator() {
           setMenuOpen(false);
           window.clearTimeout(closeTimer.current);
           const store = useMailStore.getState();
-          if (store.overlayOpen) store.closeOverlay();
+          if (isViewShown("mail")) store.closeOverlay();
           else store.openOverlay();
         }}
         // Keyboard reach: tabbing to the button is the one way in that no

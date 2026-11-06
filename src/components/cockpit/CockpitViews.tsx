@@ -5,8 +5,10 @@ import { CockpitProjects } from "./CockpitProjects";
 import { CockpitTonight } from "./CockpitTonight";
 
 // The system pages' graphs stay out of the startup chunk and mount only while
-// shown. (Mail, Calendar and To-do are mounted by the window itself: Mail's
-// unsent composers outlive the view, `layout/RootOverlay`.)
+// shown. (Mail is mounted by the window itself: its unsent composers outlive the
+// view, `layout/RootOverlay`.)
+const CalendarView = lazy(() => import("../calendar/CalendarView").then((m) => ({ default: m.CalendarView })));
+const TodoView = lazy(() => import("../todo/TodoView").then((m) => ({ default: m.TodoView })));
 const AgentsView = lazy(() => import("../models/AgentsView").then((m) => ({ default: m.AgentsView })));
 const ModelsView = lazy(() => import("../models/ModelsView").then((m) => ({ default: m.ModelsView })));
 const MachinesView = lazy(() => import("../header/MachinesIndicator").then((m) => ({ default: m.MachinesView })));
@@ -21,6 +23,10 @@ export function CockpitViewBody({ view }: { view: ConsoleView }) {
       return <CockpitProjects />;
     case "tonight":
       return <CockpitTonight />;
+    case "calendar":
+      return <Suspense fallback={null}><CalendarView /></Suspense>;
+    case "todo":
+      return <Suspense fallback={null}><TodoView /></Suspense>;
     case "agents":
       return <Suspense fallback={null}><AgentsView /></Suspense>;
     case "models":

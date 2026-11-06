@@ -51,7 +51,6 @@ import { BoxEditorHost } from "../projects/BoxEditorDialog";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
 import { OpenExternalHost } from "../common/OpenExternalHost";
-import { CalendarOverlayHost } from "../calendar/CalendarOverlay";
 import { CalDavSyncHost } from "../calendar/CalDavSyncHost";
 import { PrinterNetworkDefaultsHost } from "../printing/PrinterNetworkDefaultsHost";
 import { AgentContinueHost } from "./AgentContinueHost";
@@ -110,8 +109,6 @@ import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
 import { listenSettingsChanged, useSettingsStore } from "../../stores/settings";
 import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../stores/tabs";
 import { useTimerStore } from "../../stores/timer";
-import { useMailStore } from "../../stores/mail";
-import { useTodoStore } from "../../stores/todo";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { flushUsage } from "../../stores/usage";
@@ -136,56 +133,13 @@ const DevPerfHost = import.meta.env.DEV
   ? lazy(() => import("../../dev/DevPerfHost").then((m) => ({ default: m.DevPerfHost })))
   : null;
 
-// Code-split (startup size): mail and the todo board are reached from nowhere
-// but these two overlay hosts, and each host renders null until its store's
-// `overlayOpen` is true. Mounting the lazy host only once that flag is set keeps
-// both panes' module graphs out of every window's startup chunk; the fetch is
-// in-process (the frontend is embedded), and the fallback is `null`, the same
-// nothing a closed host renders. The host still applies its own gate
-// (`mail_client` / `todo_board`), so the flag alone never shows anything, and
-// its first-open work (the Escape listener, `openCard`'s `focusTaskId`) runs on
-// mount exactly as it did on the closed-to-open transition: the pane was never
-// mounted while closed. The stores are eager anyway (the header indicators read
-// them). The calendar overlay's chrome stays static (its hooks run while
-// closed too); its pane is the same lazy chunk a calendar tab loads (`TabPane`).
-const MailOverlayHost = lazy(() =>
-  import("../mail/MailOverlay").then((m) => ({ default: m.MailOverlayHost })),
-);
-const TodoOverlayHost = lazy(() =>
-  import("../todo/TodoOverlay").then((m) => ({ default: m.TodoOverlayHost })),
-);
-
-// Mail also stays mounted while a composer tab is open, window closed or not:
-// an unfinished mail's text lives in its mounted composer, and unmounting the
-// host here would throw it away behind the host's own keep-alive.
-function LazyMailOverlayHost() {
-  const open = useMailStore((s) => s.overlayOpen);
-  const composing = useMailStore((s) => s.mailTabs.some((tab) => tab.kind === "compose"));
-  if (!open && !composing) return null;
-  return (
-    <Suspense fallback={null}>
-      <MailOverlayHost />
-    </Suspense>
-  );
-}
-
-function LazyTodoOverlayHost() {
-  const open = useTodoStore((s) => s.overlayOpen);
-  if (!open) return null;
-  return (
-    <Suspense fallback={null}>
-      <TodoOverlayHost />
-    </Suspense>
-  );
-}
-
-// Code-split (perf plan §6), the same bargain as mail and to-do above: each of
-// these hosts renders null until its store says open, so this shell reads that
-// one flag and mounts the lazy host only then; the host keeps its own full
-// gate. Their stores live in their own modules, so reading the flag here pulls
-// in none of the host's graph. Same DOM position as before (the stacking order
-// among `.modal-backdrop`s is DOM order), and the fallback is null, the same
-// nothing a closed host renders.
+// Code-split (perf plan §6): each of these hosts renders null until its store
+// says open, so this shell reads that one flag and mounts the lazy host only
+// then; the host keeps its own full gate. Their stores live in their own
+// modules, so reading the flag here pulls in none of the host's graph. The
+// stacking order among `.modal-backdrop`s is DOM order, and the fallback is
+// null, the same nothing a closed host renders. (Mail, Calendar, To-do, Agents,
+// Models and Machines are views of the console window now, `RootOverlayHost`.)
 const RemoteMachinesDialogHost = lazy(() =>
   import("../projects/RemoteMachinesWindow").then((m) => ({ default: m.RemoteMachinesDialogHost })),
 );
@@ -1526,15 +1480,6 @@ export function AppShell() {
           (services::exec_trust), raised by a gated commit/push/build/format. */}
       <ExecTrustHost />
       <OpenExternalHost />
-      {/* Mail as a global app: the header's ✉ button opens the ordinary MailPane
-          as an overlay over whatever is on screen. At the shell rather than in
-          the header because it covers the window, not the header — and because
-          it must survive a project switch, which mail (unlike a tab) ignores. */}
-      <LazyMailOverlayHost />
-      {/* The calendar's twin of the above: the header's 🗓 button opens the
-          ordinary CalendarPane as an overlay, at the shell for the same reason —
-          it covers the window and must survive a project switch. */}
-      <CalendarOverlayHost />
       {/* CalDAV's scheduled sync (docs/caldav_plan.md Phase 2). Renders nothing,
           and starts no timer at all until an account exists — at the shell for
           the alarm ticker's reason: the surfaces that read a synced calendar
@@ -1558,26 +1503,16 @@ export function AppShell() {
           <AgentContinueHost />
           <AgentCronHost />
           <AgentScheduleHost />
-      {/* The push half's one question (Phase 3): a `412` means the resource
-          changed elsewhere, which is the user's decision and not the app's. Here
-          rather than in the calendar pane because the conflicting edit can come
-          from the board, the overlay or the header's day list — and because the
-          pane is exactly what has been closed by the time an answer is needed. */}
-      <CalDavConflictDialog />
-      {/* The todo board, third of the same family — and mounted LAST of the
-          three deliberately: all three are `.modal-backdrop` at one z-index and
-          nothing makes them mutually exclusive, so DOM order is the tie-break
-          and the surface opened most recently should be the one on top. */}
-      <LazyTodoOverlayHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root
           terminal — a one-click install (`runInstallInTab`) and a parked login
-          both open their tab in it. After the overlay family and the settings
-          surfaces in DOM order, so it lands on top of the dialog that started
-          the install or the login. Its host also persists the root scope and merges the rows a
-          root agent wrote through Tabtivity's MCP tools — both while closed. It
-          is also the cockpit's window (`docs/cockpit_root_merge_plan.md`): the
-          cockpit's four views are views of this one surface. */}
+          both open their tab in it. After the settings surfaces in DOM order, so
+          it lands on top of the dialog that started the install or the login.
+          Its host also persists the root scope and merges the rows a root agent
+          wrote through Tabtivity's MCP tools — both while closed. It is also the
+          cockpit's window (`docs/cockpit_root_merge_plan.md`, `docs/cockpit_apps_merge_plan.md`):
+          Now, Projects, Tonight, Mail, Calendar, To-do, Agents, Models and
+          Machines are views of this one surface. */}
       <RootOverlayHost />
       {/* The dialogs a gesture in the console window's Machines view raises —
           the host-key prompt, the HPC guard, the Remote machines manager, the
@@ -1594,6 +1529,14 @@ export function AppShell() {
       <LazyRemoteMachinesDialogHost />
       <GlobalMachineMonitorDialogHost />
       <LazyHpcPipelineWizardHost />
+      {/* The push half's one question (Phase 3): a `412` means the resource
+          changed elsewhere, which is the user's decision and not the app's. Here
+          rather than in the calendar pane because the conflicting edit can come
+          from the board, the calendar view or the header's day list — and because the
+          pane is exactly what has been closed by the time an answer is needed.
+          After the window in DOM order, so it lands on top of the Calendar and
+          To-do views that raise it. */}
+      <CalDavConflictDialog />
       <AssistantScopeHost />
       {/* The shortcut cheat sheet (F1, `?` in steering mode, or the ⚙ menu) —
           after the overlay family above so the sheet, openable from the

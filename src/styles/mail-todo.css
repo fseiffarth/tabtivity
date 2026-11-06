@@ -476,30 +476,11 @@ svg.alerts-toggle-icon {
   opacity: 0.5;
 }
 
-/* The header overlays — mail, calendar, board, models & agents — all wear the root
-   console's subwindow chrome (`.root-overlay.subwindow`, its `.tab-bar` with a
-   glyph mark, a tab strip and the console's controls); the tabs' shared parts
-   are below. All that is left here is their size — exactly the split
-   `.sysmon-dialog` makes, and for the same reason: a whole pane hosted in a
-   window needs a definite height, because the pane fills it and scrolls its own
+/* Mail, calendar, board, agents, models and machines are views of the console
+   window (`layout/RootOverlay`, one frame, one size — the window's). Their bodies
+   keep the old overlays' body classes below; a pane hosted in the window needs
+   the body's definite height, because the pane fills it and scrolls its own
    regions. */
-/* ONE size for all three, deliberately. They are opened from three buttons a few
-   pixels apart in the same header and are switched between constantly, so a
-   window that jumps and resizes on every switch is the thing you notice instead
-   of the content. The board used to claim its own larger box because its columns
-   tile sideways and every extra pixel is another column — which is true, and is
-   why the shared size is the *board's* rather than a compromise between the two:
-   mail's three panes and the calendar's week grid have nothing to lose from the
-   extra room either. */
-.mail-overlay,
-.calendar-overlay,
-.todo-overlay,
-.models-overlay,
-.machines-overlay {
-  width: min(1680px, calc(100vw - 24px));
-  height: min(93vh, calc(100vh - 24px));
-  max-height: min(93vh, calc(100vh - 24px));
-}
 /* Moved, resized and filled like the root console (common/useFloatingFrame):
    the grips are subwindows.css's `.root-overlay-grip`, hung off this frame; a
    move or resize replaces the size above with an inline `position: fixed` one. */
@@ -569,7 +550,7 @@ svg.alerts-toggle-icon {
    toolbar title would say it twice, one line apart. The calendar needs no
    equivalent: `.cal-toolbar-title` is the visible date range, not the app's
    name, so it says something the band does not. */
-.mail-overlay .mail-toolbar-title,
+.mail-overlay-body .mail-toolbar-title,
 .models-overlay-pane .skills-title,
 .models-overlay-pane > .settings-title-row {
   display: none;
