@@ -2567,7 +2567,7 @@ pub fn run() {
             commands::ollama::ollama_check_updates,
             commands::ollama::ollama_version_status,
             commands::ollama::search_ollama_registry,
-            commands::ollama::hf::search_huggingface_models,
+            commands::ollama::search_huggingface_models,
             // Local code/text autocomplete (opt-in, local-only)
             commands::ollama::complete_text,
             commands::ollama::prepare_text_completion,

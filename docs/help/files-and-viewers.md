@@ -1,7 +1,7 @@
 ---
 id: files-and-viewers
 title: Files, viewers and editing
-keywords: [file, viewer, editor, open, code, markdown, yaml, json, bibtex, csv, table, image, gif, notebook, ipynb, spreadsheet, xlsx, sqlite, html, svg, audio, video, autocomplete, spell check, dictionary, autosave, python, run, debug, text size, copilot, remarks, share, teams, drag out, clipboard, copy file]
+keywords: [file, viewer, editor, open, code, markdown, yaml, json, bibtex, csv, table, image, notebook, spreadsheet, sqlite, html, svg, audio, video, autocomplete, spell check, autosave, python, run, debug, copilot, remarks, share, teams, drag out, clipboard, copy file]
 related: [pdf-and-markup, latex-and-presenter, tabs-and-panels, local-models, git]
 ---
 

@@ -3808,6 +3808,18 @@ mod owned_server_tests {
 
 pub mod hf;
 
+/// Search the Hugging Face Hub's GGUF repos, one page at a time (body in
+/// [`hf::search_huggingface_models_in`]). Declared here, not in `hf.rs`, so the
+/// core dispatcher's generator sees it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn search_huggingface_models(
+    query: String,
+    sort: String,
+    cursor: Option<String>,
+) -> Result<hf::HfSearchPage, String> {
+    hf::search_huggingface_models_in(query, sort, cursor).await
+}
+
 #[cfg(test)]
 mod tests;
 

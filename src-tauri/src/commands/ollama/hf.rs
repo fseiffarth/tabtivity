@@ -66,8 +66,10 @@ pub struct HfSearchPage {
 /// Search the Hub's GGUF repos, one page at a time. `sort` is the browse list's
 /// own (`popular`, `newest`, `name`); `cursor` the previous page's
 /// `next_cursor`, passed back with the same query and sort.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn search_huggingface_models(
+/// The body of the `search_huggingface_models` command, which lives in
+/// `commands/ollama.rs` so the core dispatcher's generator (it reads only
+/// top-level command files) gives the browser and daemon transports a wrapper.
+pub async fn search_huggingface_models_in(
     query: String,
     sort: String,
     cursor: Option<String>,
