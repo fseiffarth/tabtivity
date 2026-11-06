@@ -17,7 +17,7 @@ import { hostStateOf, PRIMARY_HOST, useRemoteStatusStore, type ConnState } from 
 import { useSyncStore } from "../../stores/remote/sync";
 import { useTabsStore } from "../../stores/tabs";
 import { ScopeSetStatusBars } from "../projects/PillStatusBars";
-import { CockpitViewHeading } from "./CockpitViewHeading";
+import { CockpitUntested } from "./CockpitUntested";
 import { useCockpitNow, useCockpitScopes, usePushRequests } from "./useCockpitData";
 import { formatAgo } from "./cockpitFormat";
 
@@ -207,7 +207,7 @@ export function CockpitProjects() {
 
   return (
     <div className="cockpit-view cockpit-view-projects">
-      <CockpitViewHeading view="projects" />
+      <CockpitUntested view="projects" />
       {groups.length === 0 && <p className="cockpit-empty">{t("cockpit.projects.empty")}</p>}
       {groups.map((group) => (
         <section key={group.boxId || "none"} className="cockpit-card-group">

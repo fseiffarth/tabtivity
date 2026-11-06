@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { buildDecisions, type DecisionGroupId } from "../../lib/cockpit/decisions";
-import { buildRoster, type RosterRow } from "../../lib/cockpit/roster";
+import { buildRoster, pickFollow, type RosterRow } from "../../lib/cockpit/roster";
 import { storageKey } from "../../lib/brand";
 import { useT } from "../../lib/i18n";
 import { useFrameBandValue } from "../../lib/window/frameBand";
 import { useActivityStore } from "../../stores/activity";
 import { useCockpitStore } from "../../stores/cockpit";
 import { useAlertsFeed } from "../files/useAlertsFeed";
-import { useDomainReview } from "../layout/RootReviewStrip";
 import { ChevronLeftIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { CockpitDetail } from "./CockpitDetail";
@@ -17,7 +16,6 @@ import { CockpitRailIcons } from "./CockpitRailIcons";
 import { CockpitRoster } from "./CockpitRoster";
 import { NeedsYouChip, NeedsYouPopover, type NeedsYouAnchor } from "./NeedsYouPopover";
 import { ColumnGrip, useColumnWidth } from "./useColumnWidth";
-import { CockpitViewHeading } from "./CockpitViewHeading";
 import {
   useCockpitNow,
   useCockpitScopes,
@@ -69,7 +67,6 @@ export function CockpitNow() {
   const push = usePushRequests(scopes);
   const schedules = useScheduleProposals(scopes);
   const markup = useMarkupAsks(scopes);
-  const { waiting } = useDomainReview();
   const alerts = useAlertsFeed();
   const stateFilter = useCockpitStore((s) => s.stateFilter);
   const sort = useCockpitStore((s) => s.sort);
@@ -92,8 +89,8 @@ export function CockpitNow() {
   );
   const names = useMemo(() => Object.fromEntries(scopes.map((entry) => [entry.scope.id, entry.scope.name])), [scopes]);
   const decisions = useMemo(
-    () => buildDecisions({ rows: allRows, push, schedules, approvals: waiting, markup, alerts: alerts.enabled ? alerts.items : [], names }),
-    [allRows, push, schedules, waiting, markup, alerts.enabled, alerts.items, names],
+    () => buildDecisions({ rows: allRows, push, schedules, markup, alerts: alerts.enabled ? alerts.items : [], names }),
+    [allRows, push, schedules, markup, alerts.enabled, alerts.items, names],
   );
 
   // The wide band has the full rail in its column; no popover outlives it.
@@ -127,8 +124,16 @@ export function CockpitNow() {
     backToList();
   };
 
-  // Nothing selected: the top Asking row is what the pane shows.
-  const shownId = selected ?? decisions.topAsking;
+  // Nothing selected: the top Asking row is what the pane shows, else the latest
+  // working agent. That one is sticky (`pickFollow`): every switch re-attaches a
+  // terminal, so it is kept while it works and re-picked only once it stops.
+  const [followId, setFollowId] = useState<string | null>(null);
+  const followed = pickFollow(allRows, followId);
+  useEffect(() => {
+    if (followed !== followId) setFollowId(followed);
+  }, [followed, followId]);
+  const shownId = selected ?? decisions.topAsking ?? followed;
+  const following = !selected && !decisions.topAsking && followed != null;
   const shownRow = allRows.find((row) => row.ptyId === shownId);
 
   // Selecting an unseen finished turn counts as reading it (the desktop's
@@ -146,21 +151,22 @@ export function CockpitNow() {
       : band === "mid"
         ? { width: detail.width, flexShrink: 1, minWidth: MID_DETAIL_MIN, maxWidth: MID_DETAIL_MAX }
         : undefined;
+  // The narrow band has no rail column: its chip rides the first row of
+  // whichever pane is up (the roster's head, the detail's back bar).
+  const narrowChip =
+    band === "narrow" ? (
+      <>
+        <NeedsYouChip
+          chipRef={chipRef}
+          decisions={decisions}
+          open={needsYou != null}
+          onClick={() => (needsYou ? setNeedsYou(null) : openNeedsYou(null))}
+        />
+        <UntestedTag id="cockpit.narrow" />
+      </>
+    ) : null;
   return (
-    <div className="cockpit-view cockpit-view-now" ref={rootRef}>
-      <CockpitViewHeading view="now">
-        {band === "narrow" && (
-          <>
-            <NeedsYouChip
-              chipRef={chipRef}
-              decisions={decisions}
-              open={needsYou != null}
-              onClick={() => (needsYou ? setNeedsYou(null) : openNeedsYou(null))}
-            />
-            <UntestedTag id="cockpit.narrow" />
-          </>
-        )}
-      </CockpitViewHeading>
+    <div className="cockpit-view cockpit-view-now" ref={rootRef} role="region" aria-label={t("cockpit.now.heading")}>
       <div className={`cockpit-now${band === "narrow" ? " narrow" : ""}`}>
         {band === "wide" && (
           <>
@@ -187,6 +193,7 @@ export function CockpitNow() {
                 openDetail();
               }}
               onOpen={openDetail}
+              headExtra={narrowChip}
             />
           </div>
         )}
@@ -207,9 +214,10 @@ export function CockpitNow() {
                 <button type="button" className="settings-btn sm" onClick={backToList}>
                   <ChevronLeftIcon /> {t("cockpit.narrow.back")}
                 </button>
+                {narrowChip}
               </div>
             )}
-            <CockpitDetail row={shownRow} focused={detailFocused} now={now} />
+            <CockpitDetail row={shownRow} focused={detailFocused} now={now} following={following} />
           </div>
         )}
       </div>

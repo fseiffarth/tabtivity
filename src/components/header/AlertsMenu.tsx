@@ -45,6 +45,10 @@ interface AlertsMenuProps {
   feed: AlertsFeed;
   /** The pointer has handed off to another surface; shut the menu. */
   onNavigate: () => void;
+  /** The host draws the title, the count and the refresh itself (the
+   *  cockpit rail's group heading): this suppresses that row, keeping only
+   *  the muted reveal while something is muted. */
+  bare?: boolean;
 }
 
 /** Icon per source. The row's kind is also its `title`, so this is decoration. */
@@ -77,7 +81,7 @@ const alertDeltaKey = (d: DueDelta): TranslationKey => {
   return d.unit === "h" ? "filesAlerts.inHours" : "filesAlerts.inMinutes";
 };
 
-export function AlertsMenu({ feed, onNavigate }: AlertsMenuProps) {
+export function AlertsMenu({ feed, onNavigate, bare = false }: AlertsMenuProps) {
   const t = useT();
   const { enabled, items, loading, error, refresh, mutedItems, mute, unmute, unmuteAll } = feed;
   // The reveal is local and transient on purpose: it is a way to look at what
@@ -310,9 +314,10 @@ export function AlertsMenu({ feed, onNavigate }: AlertsMenuProps) {
           rail and the wash live on the menu itself, so it must not be what
           scrolls). The count, its overdue emphasis, the muted reveal and the
           refresh ride the title row. */}
-      <div className="tab-new-menu-group-label alerts-menu-head">
-        <span className="alerts-title">{t("filesAlerts.title")}</span>
-        {items.length > 0 && (
+      {(!bare || mutedItems.length > 0) && (
+      <div className={bare ? "alerts-menu-head bare" : "tab-new-menu-group-label alerts-menu-head"}>
+        {!bare && <span className="alerts-title">{t("filesAlerts.title")}</span>}
+        {!bare && items.length > 0 && (
           <span
             className={"alerts-count" + (counts.overdue > 0 ? " overdue" : "")}
             title={t("filesAlerts.countsTitle", {
@@ -339,15 +344,18 @@ export function AlertsMenu({ feed, onNavigate }: AlertsMenuProps) {
             <BellIcon className="alerts-bell" off /> {mutedItems.length}
           </button>
         )}
-        <button
-          type="button"
-          className="toolbar-btn toolbar-btn--sm alerts-menu-refresh"
-          onClick={refresh}
-          title={t("filesAlerts.refresh")}
-        >
-          <RefreshIcon />
-        </button>
+        {!bare && (
+          <button
+            type="button"
+            className="toolbar-btn toolbar-btn--sm alerts-menu-refresh"
+            onClick={refresh}
+            title={t("filesAlerts.refresh")}
+          >
+            <RefreshIcon />
+          </button>
+        )}
       </div>
+      )}
 
       <div className="menu-scroll-region">
         {error && <div className="alerts-error">{t("filesAlerts.failed")}</div>}

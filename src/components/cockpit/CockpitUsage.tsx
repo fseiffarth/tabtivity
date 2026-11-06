@@ -10,7 +10,7 @@ import { hostStateOf, PRIMARY_HOST, useRemoteStatusStore, type ConnState } from 
 import { CliOverviewBody } from "../agents/CliOverviewView";
 import { MachineMeters, RunningModelCard } from "../models/ModelsHubSections";
 import { useMachineMeters, useModelsHub } from "../models/useModelsHub";
-import { CockpitViewHeading } from "./CockpitViewHeading";
+import { CockpitUntested } from "./CockpitUntested";
 
 const LAMP_LABEL: Record<ConnState, TranslationKey> = {
   off: "cockpit.lamp.off",
@@ -127,7 +127,7 @@ function Remote() {
 export function CockpitUsage() {
   return (
     <div className="cockpit-view cockpit-view-usage">
-      <CockpitViewHeading view="usage" />
+      <CockpitUntested view="usage" />
       <div className="cockpit-usage">
         <div className="cockpit-usage-col">
           <CliOverviewBody active />

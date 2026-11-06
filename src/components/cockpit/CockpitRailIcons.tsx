@@ -5,7 +5,6 @@ import { useT } from "../../lib/i18n";
 import { BellIcon } from "../common/BellIcon";
 import {
   CheckIcon,
-  CheckboxIcon,
   ChevronRightIcon,
   ClockIcon,
   PencilIcon,
@@ -22,7 +21,6 @@ const GROUP_ICON: Record<DecisionGroupId, (p: IconProps) => ReactElement> = {
   interrupted: StopIcon,
   push: UploadIcon,
   schedule: ClockIcon,
-  approvals: CheckboxIcon,
   markup: PencilIcon,
   unseen: CheckIcon,
   alerts: (p) => <BellIcon className={p.className} />,

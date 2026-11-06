@@ -25,7 +25,7 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { useSettingsStore } from "../../stores/settings";
 import { useAlertsFeed } from "../files/useAlertsFeed";
-import { CockpitViewHeading } from "./CockpitViewHeading";
+import { CockpitUntested } from "./CockpitUntested";
 import { formatAgo, formatClock, formatTurn } from "./cockpitFormat";
 import { jumpToRow } from "./CockpitRoster";
 import { useCockpitNow, useCockpitScopes, useLoadSchedules, usePushRequests, useRosterInputs, type CockpitScopeTabs } from "./useCockpitData";
@@ -156,7 +156,7 @@ export function CockpitTonight() {
 
   return (
     <div className="cockpit-view cockpit-view-tonight">
-      <CockpitViewHeading view="tonight" />
+      <CockpitUntested view="tonight" />
       {error && <p className="cockpit-empty" role="alert">{error}</p>}
       <div className="cockpit-tonight">
         <section className="cockpit-tonight-col" aria-label={t("cockpit.tonight.heading")}>
