@@ -41,9 +41,35 @@ function pickable(prompt: SelectPrompt): SelectOption[] {
   return prompt.options.filter((option) => option.number !== UNNUMBERED && !freeTextRow(option));
 }
 
+/** A pick-the-row answer that grants a permission or saves a rule: the dialog
+ * words that say so (Claude's "Yes, and don't ask again for …", OpenCode's
+ * "Allow always"). */
+const GRANTING_ROW = /(?:don'?t|do not|never|stop)\s+ask(?:ing)?\s+again|always\s+allow|allow\s+always|allow\s+all\b|auto-?approve|remember\s+(?:this|my)\b/iu;
+
+/**
+ * Whether a voice may answer the dialog `prompt` at all (gap 80: no voice on
+ * permissions). Only a dialog positively read as a *question* the agent asks —
+ * its steps carry navigation (OpenCode's, Gemini's tabs) or one of its rows is
+ * the free-text row Claude Code's question and OpenCode's always add — is
+ * pickable. A permission dialog ("Do you want to proceed?" — Yes / Yes, and
+ * don't ask again / No), a picker, a review page and any shape the parser does
+ * not classify are refused: the parse carries no "kind", so this refuses by
+ * default rather than guessing. A screen-drawn fake question can still look
+ * like a question — the screen is the agent's — which is why a pick also waits
+ * out the send guard's chime-and-cancel window (`PickStage`). A row that names
+ * a grant or a saved rule refuses it too.
+ */
+export function voicePickable(prompt: SelectPrompt): boolean {
+  if (prompt.review) return false;
+  if (prompt.navigation === undefined && !prompt.options.some(freeTextRow)) return false;
+  return !prompt.options.some((option) => GRANTING_ROW.test(option.label));
+}
+
 /** The row `utterance` picks on the question `prompt` — by the number the
- * dialog printed beside it — or `null` when it picks none (`matchOption`). */
+ * dialog printed beside it — or `null` when it picks none (`matchOption`), and on a dialog a voice may not
+ * answer at all (`voicePickable`). */
 export function voicePick(utterance: string, prompt: SelectPrompt): SelectOption | null {
+  if (!voicePickable(prompt)) return null;
   const rows = pickable(prompt);
   if (rows.length === 0) return null;
   const count = Math.max(...rows.map((option) => option.number));
