@@ -3078,7 +3078,7 @@ async function handleRequest(
     case "local_model_mutate": return localModelMutate(request.action);
     // The phone's Diverged list. The sidecar has checked its switches and
     // sealed the preview token; the preview and the resolve repeat
-    // `project_sync`, refuse a delete on a careful or HPC host, and a resolve
+    // `project_sync`, refuse a delete on an HPC host, and a resolve
     // moves nothing unless the preview's fingerprint still holds
     // (`lib/mobileDiverged`).
     case "sync_diverged": return divergedList(request.project_id);

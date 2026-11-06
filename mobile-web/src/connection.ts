@@ -163,10 +163,10 @@ const FAILURE_TEXT: Record<string, TranslationKey> = {
   sync_failed: "mobile.failure.syncFailed",
   sync_off: "mobile.failure.syncOff",
   // A resolve without a fresh preview's receipt, one whose files moved, and a
-  // delete on a careful or HPC host (`diverged.rs`, `lib/mobileDiverged`).
+  // delete on an HPC host (`diverged.rs`, `lib/mobileDiverged`).
   preview_required: "mobile.failure.previewRequired",
   preview_stale: "mobile.failure.previewStale",
-  careful_host: "mobile.failure.carefulHost",
+  hpc_host: "mobile.failure.hpcHost",
   diverged_unavailable: "mobile.failure.divergedUnavailable",
   tab_not_found: "mobile.failure.tabNotFound",
   // An agent tab started before Mobile access the desktop will not restart

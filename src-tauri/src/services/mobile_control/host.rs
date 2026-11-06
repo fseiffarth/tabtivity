@@ -1997,13 +1997,13 @@ fn diverged_scope(state: &HostState, phone: &Phone, project_id: &str) -> Result<
 }
 
 /// What the window said to a Diverged request that is not its answer. The
-/// window repeats the sidecar's checks (`project_sync`, the careful and HPC
-/// hosts, the preview's fingerprint), and each refusal keeps its name; any
+/// window repeats the sidecar's checks (`project_sync`, the HPC hosts, the
+/// preview's fingerprint), and each refusal keeps its name; any
 /// other error is the transfer's, and its words stay on that side.
 fn diverged_desktop_error(response: Result<DesktopResponse, String>) -> (StatusCode, Json<serde_json::Value>) {
     match response {
-        Ok(DesktopResponse::Error { code, .. }) if code == "sync_off" || code == "careful_host" => {
-            api_error(StatusCode::FORBIDDEN, if code == "sync_off" { "sync_off" } else { "careful_host" })
+        Ok(DesktopResponse::Error { code, .. }) if code == "sync_off" || code == "hpc_host" => {
+            api_error(StatusCode::FORBIDDEN, if code == "sync_off" { "sync_off" } else { "hpc_host" })
         }
         Ok(DesktopResponse::Error { code, .. }) if code == "preview_stale" => api_error(StatusCode::CONFLICT, "preview_stale"),
         Ok(DesktopResponse::Error { code, .. }) if code != "desktop_unavailable" => {
@@ -7940,7 +7940,13 @@ async fn project_files_upload(
     // against the day's budget left after the bodies already on their way
     // (`Full`), and only so many bodies at once (`Busy`). Held until the
     // file has landed or the request has failed.
-    let reservation = match uploads::reserve(&state.config.state_dir, &raw_id, declared) {
+    // Off the connection executor: it reads the log under the lock a copy
+    // into a project holds for its whole length.
+    let reserved = {
+        let (state_dir, raw_id) = (state.config.state_dir.clone(), raw_id.clone());
+        tokio::task::spawn_blocking(move || uploads::reserve(&state_dir, &raw_id, declared)).await
+    };
+    let reservation = match reserved.unwrap_or_else(|error| Err(uploads::UploadError::Io(error.to_string()))) {
         Ok(reservation) => reservation,
         Err(error) => return upload_error(error),
     };

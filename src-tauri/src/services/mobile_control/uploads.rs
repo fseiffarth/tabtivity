@@ -183,11 +183,22 @@ impl UploadError {
     }
 }
 
-/// Bytes reserved and bodies in flight, by project raw id.
+/// Bytes reserved and bodies in flight, by sidecar state dir and project raw
+/// id. The state dir is part of the key because the budget it guards is that
+/// state dir's log: one sidecar has one, so nothing changes there, but two
+/// sidecars in a process (the unit tests' fixtures, which share a project id)
+/// must not hold each other's room.
 #[derive(Debug, Default)]
 struct InFlight {
-    by_project: HashMap<String, (u64, usize)>,
-    total: usize,
+    by_project: HashMap<(PathBuf, String), (u64, usize)>,
+    by_state: HashMap<PathBuf, usize>,
+}
+
+#[cfg(test)]
+impl InFlight {
+    fn total(&self) -> usize {
+        self.by_state.values().sum()
+    }
 }
 
 type FlightTable = Mutex<Option<InFlight>>;
@@ -199,6 +210,7 @@ static IN_FLIGHT: FlightTable = Mutex::new(None);
 #[derive(Debug)]
 pub struct Reservation {
     table: &'static FlightTable,
+    state_dir: PathBuf,
     project: String,
     bytes: u64,
 }
@@ -214,12 +226,18 @@ impl Drop for Reservation {
     fn drop(&mut self) {
         let mut flight = self.table.lock_ok();
         let flight = flight.get_or_insert_with(Default::default);
-        flight.total = flight.total.saturating_sub(1);
-        if let Some(entry) = flight.by_project.get_mut(&self.project) {
+        if let Some(count) = flight.by_state.get_mut(&self.state_dir) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                flight.by_state.remove(&self.state_dir);
+            }
+        }
+        let key = (self.state_dir.clone(), self.project.clone());
+        if let Some(entry) = flight.by_project.get_mut(&key) {
             entry.0 = entry.0.saturating_sub(self.bytes);
             entry.1 = entry.1.saturating_sub(1);
             if entry.1 == 0 {
-                flight.by_project.remove(&self.project);
+                flight.by_project.remove(&key);
             }
         }
     }
@@ -232,6 +250,15 @@ fn written_within(records: &[Record], raw_id: &str, now: u64) -> u64 {
         .iter()
         .filter(|record| record.project == raw_id && record.at.saturating_add(CAP_WINDOW) > now)
         .fold(0u64, |total, record| total.saturating_add(record.size))
+}
+
+/// Runs `body` holding the log lock, as a copy into a project does for its
+/// whole length. Tests only: a handler that waits on the lock on the
+/// connection executor stalls every other request while it is held.
+#[cfg(test)]
+pub(crate) fn while_log_locked<R>(body: impl FnOnce() -> R) -> R {
+    let _guard = LOG_LOCK.lock_ok();
+    body()
 }
 
 /// Claims room for one body **before** it is staged: its `declared` length
@@ -258,8 +285,9 @@ fn reserve_at(
     let written = written_within(&read_log(state_dir).0, raw_id, now);
     let mut flight = table.lock_ok();
     let flight = flight.get_or_insert_with(Default::default);
-    let (held, count) = flight.by_project.get(raw_id).copied().unwrap_or_default();
-    if count >= MAX_STAGINGS_PER_PROJECT || flight.total >= MAX_STAGINGS {
+    let key = (state_dir.to_path_buf(), raw_id.to_string());
+    let (held, count) = flight.by_project.get(&key).copied().unwrap_or_default();
+    if count >= MAX_STAGINGS_PER_PROJECT || flight.by_state.get(state_dir).copied().unwrap_or(0) >= MAX_STAGINGS {
         return Err(UploadError::Busy);
     }
     let left = MAX_UPLOADS_PER_DAY.saturating_sub(written).saturating_sub(held);
@@ -270,11 +298,11 @@ fn reserve_at(
         None if left == 0 => return Err(UploadError::Full),
         None => left.min(MAX_UPLOAD_FILE),
     };
-    let entry = flight.by_project.entry(raw_id.to_string()).or_default();
+    let entry = flight.by_project.entry(key).or_default();
     entry.0 = entry.0.saturating_add(bytes);
     entry.1 += 1;
-    flight.total += 1;
-    Ok(Reservation { table, project: raw_id.to_string(), bytes })
+    *flight.by_state.entry(state_dir.to_path_buf()).or_default() += 1;
+    Ok(Reservation { table, state_dir: state_dir.to_path_buf(), project: raw_id.to_string(), bytes })
 }
 
 /// An upload's body, staged in the sidecar's private folder while it
@@ -1194,7 +1222,7 @@ mod tests {
     }
 
     fn in_flight(table: &FlightTable) -> usize {
-        table.lock_ok().as_ref().map_or(0, |flight| flight.total)
+        table.lock_ok().as_ref().map_or(0, InFlight::total)
     }
 
     /// The log holds `size` bytes of `project`, written just now.
@@ -1260,6 +1288,26 @@ mod tests {
         held.pop();
         assert!(reserve_at(table, &f.state, "other", Some(1), NOW).is_ok());
         drop(held);
+        assert_eq!(in_flight(table), 0);
+    }
+
+    #[test]
+    fn two_sidecar_state_dirs_do_not_hold_each_others_room() {
+        let (one, two) = (fixture(), fixture());
+        let table = table();
+        // The same project id in both: one undeclared body takes all the day's room ...
+        let first = reserve_at(table, &one.state, "p1", None, NOW).unwrap();
+        assert_eq!(reserve_at(table, &one.state, "p1", None, NOW).unwrap_err(), UploadError::Full);
+        // ... of its own state dir's log only.
+        let other = reserve_at(table, &two.state, "p1", None, NOW).unwrap();
+        // The stagings in all are counted per state dir as well.
+        let mut held = Vec::new();
+        for project in 0..(MAX_STAGINGS - 1) {
+            held.push(reserve_at(table, &one.state, &format!("q{project}"), Some(1), NOW).unwrap());
+        }
+        assert_eq!(reserve_at(table, &one.state, "other", Some(1), NOW).unwrap_err(), UploadError::Busy);
+        assert!(reserve_at(table, &two.state, "other", Some(1), NOW).is_ok());
+        drop((first, other, held));
         assert_eq!(in_flight(table), 0);
     }
 

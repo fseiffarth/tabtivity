@@ -4687,7 +4687,7 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
 /// bound to the op and exactly those files, good for ten minutes). Without one,
 /// or with one for another op or other files, nothing reaches the window; with
 /// one, the window gets the fingerprint to hold the rows to. The window's own
-/// refusals (a careful host, rows that moved) keep their names.
+/// refusals (an HPC host, rows that moved) keep their names.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_destructive_resolve_needs_the_receipt_of_a_preview_of_exactly_that() {
@@ -4806,8 +4806,8 @@ async fn a_destructive_resolve_needs_the_receipt_of_a_preview_of_exactly_that() 
 
     // The window repeats the checks and says which one stopped it.
     let window_says = |code: &str| Some(DesktopResponse::Error { code: code.into(), message: "words that may name a path".into() });
-    *forced.lock().unwrap() = window_says("careful_host");
-    assert_eq!(code(answer(host.send(post("preview", json!({ "op": "delete_local", "files": [a] }))).await)), (StatusCode::FORBIDDEN, json!("careful_host")));
+    *forced.lock().unwrap() = window_says("hpc_host");
+    assert_eq!(code(answer(host.send(post("preview", json!({ "op": "delete_local", "files": [a] }))).await)), (StatusCode::FORBIDDEN, json!("hpc_host")));
     *forced.lock().unwrap() = window_says("preview_stale");
     assert_eq!(code(answer(host.send(post("resolve", json!({ "op": "delete_host", "files": [a], "token": delete_a_token }))).await)), (StatusCode::CONFLICT, json!("preview_stale")));
     *forced.lock().unwrap() = window_says("sync_off");
@@ -5092,6 +5092,50 @@ async fn upload_here_streams_a_file_past_the_inbox_limit_and_refuses_past_its_ow
     // Nothing is left in the staging folder, landed or refused.
     let staging = host.state.config.state_dir.join("mobile-control").join("upload-staging");
     assert_eq!(std::fs::read_dir(&staging).map(|dir| dir.count()).unwrap_or(0), 0);
+}
+
+/// An upload claims its room (`uploads::reserve`) under the log lock, which a
+/// copy into a project holds for its whole length: the claim is made off the
+/// connection executor, so a copy in progress does not stall every other
+/// request on it (on a current-thread runtime, the clock stops if it does).
+#[tokio::test]
+async fn an_upload_waiting_for_the_log_lock_does_not_stall_the_connection_executor() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(77)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
+    )
+    .unwrap();
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        uploads::while_log_locked(|| {
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+        });
+    });
+    locked_rx.recv().unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/projects/{project_id}/files/upload?name=late.bin"))
+        .header(header::ORIGIN, ORIGIN)
+        .header(header::COOKIE, cookie_pair(&cookie))
+        .body(Body::from(vec![1u8; 16]))
+        .expect("request");
+    let send = host.send(request);
+    tokio::pin!(send);
+    let mut ticks = 0;
+    let (status, _, answer) = loop {
+        tokio::select! {
+            reply = &mut send => break reply,
+            () = tokio::time::sleep(Duration::from_millis(10)) => ticks += 1,
+        }
+    };
+    holder.join().unwrap();
+    assert_eq!(status, StatusCode::CREATED, "answered: {answer}");
+    assert!(ticks >= 5, "the executor was stalled while the upload waited for the log lock: {ticks} ticks");
 }
 
 /// **New folder** makes an empty folder in a folder that takes uploads, never

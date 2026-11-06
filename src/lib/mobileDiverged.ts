@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { MOBILE_HOST_KEY } from "./brand";
-import { isCarefulHost, primaryTargetOf } from "./remote/carefulHost";
+import { primaryTargetOf } from "./remote/carefulHost";
 import { deleteSideOf } from "./remote/divergedRows";
 import { isHpcHost } from "./remote/hpc/hpcHost";
 import { sha256Hex } from "./sha256";
@@ -33,10 +33,10 @@ export type MobileSyncOp = "pull" | "push" | "delete_host" | "delete_local" | "f
 export type MobilePreviewOp = Exclude<MobileSyncOp, "forget">;
 
 /** A refusal the window repeats from the sidecar, by code (the sidecar maps
- *  each to its own answer): `sync_off`, `careful_host`, `preview_stale`. */
+ *  each to its own answer): `sync_off`, `hpc_host`, `preview_stale`. */
 export interface MobileSyncRefusal {
   status: "error";
-  code: "sync_off" | "careful_host" | "preview_stale";
+  code: "sync_off" | "hpc_host" | "preview_stale";
   message: string;
 }
 
@@ -129,17 +129,17 @@ export function syncWritesOpen(): boolean {
 }
 
 /** Whether a delete (of the host account's copy or the mirror's) from the
- *  phone is refused for this project: its primary host is HPC-tagged (which
- *  outranks the careful answer) or careful, which is every remote host until
- *  the user says "normal" for it. A project the window cannot place is
- *  refused too. A phone does not get to remove files on a machine the user
- *  has marked as someone else's. */
+ *  phone is refused for this project: its primary host is HPC-tagged. Only
+ *  `hpc_hosts` counts (user decision 2026-11-06): "careful" is the default of
+ *  every remote host, so refusing on it would refuse everywhere, and
+ *  `hpc_hosts` outranks `careful_hosts` anyway. A project the window cannot
+ *  place is refused too. */
 export function phoneDeleteRefused(projectId: string): boolean {
   const settings = useSettingsStore.getState().settings;
   const project = useProjectsStore.getState().projects.find((entry) => entry.id === projectId);
   const target = primaryTargetOf(project);
   if (!settings || !target) return true;
-  return isHpcHost(settings, target) || isCarefulHost(settings, target);
+  return isHpcHost(settings, target);
 }
 
 /** The refusal that applies to `op` on this project before anything is read or
@@ -147,7 +147,7 @@ export function phoneDeleteRefused(projectId: string): boolean {
 function blocked(projectId: string, op: MobileSyncOp): MobileSyncRefusal | undefined {
   if (!syncWritesOpen()) return refusal("sync_off", "Resolving from the phone is off");
   if ((op === "delete_host" || op === "delete_local") && phoneDeleteRefused(projectId)) {
-    return refusal("careful_host", "Deleting files from the phone is not allowed on this host");
+    return refusal("hpc_host", "Deleting files from the phone is not allowed on an HPC host");
   }
   return undefined;
 }

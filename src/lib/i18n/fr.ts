@@ -6246,7 +6246,7 @@ export const dict: Dict = {
   "mobile.failure.divergedUnavailable": "Ce projet n'a pas de copie locale à comparer.",
   "mobile.failure.previewRequired": "Le bureau doit d'abord le vérifier. Mettez à jour l'app du téléphone, puis réessayez.",
   "mobile.failure.previewStale": "Les fichiers ont changé depuis la question, ou la question est trop ancienne. Actualisez la liste et réessayez.",
-  "mobile.failure.carefulHost": "Le téléphone ne peut pas supprimer de fichiers sur cette machine : elle est marquée \"Ménager cette machine\" (réglage par défaut des machines distantes) ou étiquetée comme nœud de connexion d'un cluster. Supprimez depuis le bureau, ou désactivez cela pour une machine à vous.",
+  "mobile.failure.hpcHost": "Le téléphone ne peut pas supprimer de fichiers sur cette machine : elle est étiquetée comme nœud de connexion d'un cluster (HPC). Supprimez depuis le bureau.",
   "mobile.projectSync": "Le téléphone peut résoudre les divergences",
   "mobile.projectSyncHelp": "Dans la liste des divergences du téléphone : prendre la copie de l'hôte ou la copie locale d'un fichier, téléverser de nouveaux fichiers et terminer une suppression. Chaque action demande d'abord, comme sur le bureau, puis écrase ou supprime cette copie. Nécessite Fichiers du projet, et le bureau doit être ouvert et connecté à l'hôte.",
   "mobile.gitSheet.menu": "Git",

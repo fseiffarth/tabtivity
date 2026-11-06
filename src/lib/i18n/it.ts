@@ -6244,7 +6244,7 @@ export const dict: Dict = {
   "mobile.failure.divergedUnavailable": "Questo progetto non ha una copia locale da confrontare.",
   "mobile.failure.previewRequired": "Il desktop deve prima verificarlo. Aggiorna l'app del telefono e riprova.",
   "mobile.failure.previewStale": "I file sono cambiati dopo la richiesta, oppure la richiesta è troppo vecchia. Aggiorna l'elenco e riprova.",
-  "mobile.failure.carefulHost": "Il telefono non può eliminare file su questa macchina: è contrassegnata \"Vai piano su questa macchina\" (predefinito per le macchine remote) o come nodo di accesso di un cluster. Elimina dal desktop, oppure disattiva l'opzione per una macchina tua.",
+  "mobile.failure.hpcHost": "Il telefono non può eliminare file su questa macchina: è contrassegnata come nodo di accesso di un cluster (HPC). Elimina dal desktop.",
   "mobile.projectSync": "Il telefono può risolvere le divergenze",
   "mobile.projectSyncHelp": "Nell'elenco delle divergenze del telefono: prendere la copia dell'host o quella locale di un file, caricare nuovi file e completare un'eliminazione. Ogni azione chiede prima, come sul desktop, e poi sovrascrive o elimina quella copia. Richiede File del progetto, e il desktop deve essere aperto e connesso all'host.",
   "mobile.gitSheet.menu": "Git",

@@ -287,7 +287,7 @@ describe("the receipt of a preview (gap 97)", () => {
     expect(calls("sync_mark_selected")).toEqual([]);
   });
 
-  describe("careful and HPC hosts refuse a phone-driven delete", () => {
+  describe("an HPC host refuses a phone-driven delete; a careful one does not (user decision 2026-11-06)", () => {
     const attempt = async () => {
       desktopWith(moved);
       const receipt = await fingerprintOf("delete_host", ["a.txt"]);
@@ -300,25 +300,34 @@ describe("the receipt of a preview (gap 97)", () => {
       ];
     };
 
-    it("by default, since every remote host is careful until the user says it is theirs", async () => {
+    it("goes through on a careful host that is not HPC, which is every remote host by default", async () => {
       configure({}, {});
-      for (const answer of await attempt()) expect(answer).toMatchObject({ status: "error", code: "careful_host" });
-      expect(calls("sync_apply_delete")).toEqual([]);
+      const [previewHost, previewLocal, resolvedHost, resolvedLocal] = await attempt();
+      expect(previewHost).toMatchObject({ status: "sync_preview" });
+      expect(previewLocal).toMatchObject({ status: "sync_preview" });
+      expect(resolvedHost).toMatchObject({ status: "sync_resolved", done: 1 });
+      expect(resolvedLocal).toMatchObject({ status: "sync_resolved" });
+      expect(calls("sync_apply_delete")).toContainEqual({ projectId: "p", relPath: "a.txt", side: "host" });
+      // An explicit careful answer changes nothing either.
+      configure({}, { careful_hosts: { "u@h.example:22": true } });
+      expect((await attempt())[2]).toMatchObject({ status: "sync_resolved", done: 1 });
     });
 
-    it("whatever careful_hosts says, when the host is tagged HPC", async () => {
-      configure({}, { careful_hosts: { "u@h.example:22": false }, hpc_hosts: { "u@h.example:22": true } });
-      for (const answer of await attempt()) expect(answer).toMatchObject({ code: "careful_host" });
+    it("is refused on an HPC-tagged host, whatever careful_hosts says", async () => {
+      for (const careful of [false, true, undefined]) {
+        configure({}, { careful_hosts: careful === undefined ? {} : { "u@h.example:22": careful }, hpc_hosts: { "u@h.example:22": true } });
+        for (const answer of await attempt()) expect(answer).toMatchObject({ status: "error", code: "hpc_host" });
+      }
       expect(calls("sync_apply_delete")).toEqual([]);
     });
 
     it("for a project the window cannot place", async () => {
       useProjectsStore.setState({ projects: [] });
-      for (const answer of await attempt()) expect(answer).toMatchObject({ code: "careful_host" });
+      for (const answer of await attempt()) expect(answer).toMatchObject({ code: "hpc_host" });
     });
 
-    it("but not a take-a-side or a forget, and not on a host the user called their own", async () => {
-      configure({}, {});
+    it("but not a take-a-side or a forget, even on an HPC host, and not on a host the user called their own", async () => {
+      configure({}, { hpc_hosts: { "u@h.example:22": true } });
       desktopWith(moved);
       await expect(resolve("pull", ["a.txt"])).resolves.toMatchObject({ status: "sync_resolved", done: 1 });
       configure();
