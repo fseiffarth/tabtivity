@@ -34,7 +34,7 @@ use tokio::sync::Mutex;
 
 use crate::services::sftp::{self, SyncKind};
 
-/// Largest single file the sync moves whole in RAM (64 MiB). `read_file_on` buffers a
+/// Largest single file the sync moves whole in RAM (64 MiB). A read through `read_file_up_to` buffers the
 /// whole file and holds the SFTP channel (G8), so auto-sync and every push refuse a
 /// giant artifact with an error rather than stalling the connection / OOMing. A
 /// manual pull streams a larger file instead ([`pull_file_any_size`]).

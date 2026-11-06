@@ -346,6 +346,22 @@ fn sweep_staging(dir: &Path) {
 /// it declared is cut off) or an empty body (`Empty`). A body cut off
 /// mid-way is an `Io` error; nothing is left behind.
 pub async fn stage_body(state_dir: &Path, body: axum::body::Body, reservation: &Reservation) -> Result<Staged, UploadError> {
+    stage_body_within(state_dir, body, reservation, BODY_IDLE).await
+}
+
+/// How long a body may send nothing before it is given up: the claim
+/// ([`reserve`]) and its staging slot are held while the body streams, so a
+/// phone that lost its connection mid-upload (a half-open socket can sit for
+/// hours) would otherwise keep them, and four such bodies block the project's
+/// uploads, eight everyone's.
+pub const BODY_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
+
+async fn stage_body_within(
+    state_dir: &Path,
+    body: axum::body::Body,
+    reservation: &Reservation,
+    idle: std::time::Duration,
+) -> Result<Staged, UploadError> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
     let dir = state_dir.join(CONTROL_DIR).join(STAGING_DIR);
@@ -375,7 +391,12 @@ pub async fn stage_body(state_dir: &Path, body: axum::body::Body, reservation: &
     let mut file = tokio::fs::File::from_std(file);
     let mut hasher = Sha256::new();
     let mut stream = body.into_data_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = match tokio::time::timeout(idle, stream.next()).await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(_) => return Err(UploadError::Io("the upload stalled".into())),
+        };
         let chunk = chunk.map_err(|error| UploadError::Io(error.to_string()))?;
         staged.size = staged.size.saturating_add(chunk.len() as u64);
         if staged.size > reservation.limit() {
@@ -1323,6 +1344,33 @@ mod tests {
         drop(exact);
         let staging = f.state.join(CONTROL_DIR).join(STAGING_DIR);
         assert_eq!(fs::read_dir(staging).unwrap().count(), 0, "nothing is left staged");
+    }
+
+    /// A body that sends a little and then nothing (a phone that lost its
+    /// connection) gives up its claim and staging file instead of holding them
+    /// until the connection closes.
+    #[tokio::test]
+    async fn a_body_that_stalls_is_given_up_and_frees_its_claim() {
+        let f = fixture();
+        let table = table();
+        use futures_util::StreamExt as _;
+        let claim = reserve_at(table, &f.state, "p1", Some(100), NOW).unwrap();
+        assert_eq!(in_flight(table), 1);
+        let stalled = futures_util::stream::once(async { Ok::<_, std::io::Error>(vec![1u8; 4]) })
+            .chain(futures_util::stream::pending());
+        let body = axum::body::Body::from_stream(stalled);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            stage_body_within(&f.state, body, &claim, std::time::Duration::from_millis(200)),
+        )
+        .await
+        .expect("a stalled body must not hold the request open");
+        assert!(matches!(&result, Err(UploadError::Io(why)) if why.contains("stalled")), "{:?}", result.as_ref().err());
+        drop(claim);
+        assert_eq!(in_flight(table), 0, "the claim is released with the failed request");
+        let staging = f.state.join(CONTROL_DIR).join(STAGING_DIR);
+        assert_eq!(fs::read_dir(staging).unwrap().count(), 0, "nothing is left staged");
+        assert_eq!(BODY_IDLE, std::time::Duration::from_secs(60));
     }
 
     fn folder(f: &Fixture, name: &str, now: u64) -> Result<String, UploadError> {

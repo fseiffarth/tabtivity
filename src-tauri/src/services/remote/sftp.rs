@@ -778,16 +778,6 @@ async fn ensure_parent_dirs_on(sftp: &Sftp, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Read a remote file's whole contents on an already-open session.
-pub async fn read_file_on(sftp: &Sftp, path: &str) -> Result<Vec<u8>, String> {
-    let mut fs = sftp.fs();
-    let bytes = fs
-        .read(path)
-        .await
-        .map_err(|e| format!("sftp read failed: {e}"))?;
-    Ok(bytes.to_vec())
-}
-
 /// Read a remote file's contents, but never more than `limit` bytes into memory.
 /// `Ok(None)` when the file holds more than `limit` bytes (nothing is returned
 /// then: a caller treats it as "too large", not as a prefix). The listing's size
@@ -836,7 +826,7 @@ where
 
 /// Up to `max` bytes of a remote file from byte `offset`, on an already-open
 /// session: the ranged read a growing log or event file needs, where
-/// [`read_file_on`] would move the whole file again on every refresh. Short at
+/// a whole-file read would move the whole file again on every refresh. Short at
 /// the end of the file, empty when `offset` is at or past it.
 ///
 /// The offset is set before every request rather than trusting the handle to
@@ -888,7 +878,7 @@ pub async fn create_file_on(sftp: &Sftp, path: &str) -> Result<(), String> {
 }
 
 /// Chunk size for the streaming transfers below — bounded so an arbitrarily large
-/// file never lives fully in memory (the whole-file `read_file_on`/`write_file_on`
+/// file never lives fully in memory (the whole-file `read_file_up_to`/`write_file_on`
 /// buffer everything, which is why the git-lockstep bundle transport streams; #28n
 /// Phase 3), and a manual sync pull of a file over the RAM cap too.
 pub const STREAM_CHUNK: usize = 256 * 1024;
@@ -929,7 +919,7 @@ pub async fn upload_file_streaming_on(
 
 /// Download a host file to a local path in bounded chunks (never buffering the
 /// whole file), creating missing parent directories first. The remote streaming
-/// analogue of `read_file_on` for large payloads (git bundles at initial pairing).
+/// analogue of `read_file_up_to` for large payloads (git bundles at initial pairing).
 pub async fn download_file_streaming_on(
     sftp: &Sftp,
     remote_path: &str,
