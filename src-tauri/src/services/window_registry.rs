@@ -30,6 +30,14 @@ pub struct TrackedWindow {
     /// frontend has no use for it.
     #[serde(default, skip_serializing)]
     pub launch_id: Option<String>,
+    /// The start time (clock ticks since boot, `proc_table::start_time`) of
+    /// the process `pid` named when the row took it, so Close can tell that
+    /// pid from an unrelated process that reused it
+    /// (`commands::apps::leader_unchanged`). `None` when it could not be read,
+    /// for a pid-0 row, and always off Linux (no start time there). In memory
+    /// only; never serialized.
+    #[serde(default, skip_serializing)]
+    pub pid_start: Option<u64>,
 }
 
 /// One process of a launch family: pid plus start time, so a reused pid is

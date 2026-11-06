@@ -833,7 +833,7 @@ pub fn frontmost_window_under_pointer() -> Option<u64> {
 
 // ── Workspace GSettings ─────────────────────────────────────────────────────
 
-use crate::commands::os_clock::gsettings_get;
+use crate::commands::os_clock::{gsettings_get, gsettings_program};
 
 /// Run one `gsettings` call for [`workspace_settings`].
 fn gsettings_run(op: &Op) -> Result<(), String> {
@@ -843,7 +843,9 @@ fn gsettings_run(op: &Op) -> Result<(), String> {
         }
         Op::Reset { schema, key } => (vec!["reset", schema.as_str(), key.as_str()], schema, key),
     };
-    let output = Command::new("gsettings")
+    let program = gsettings_program()
+        .ok_or_else(|| format!("gsettings {} {schema} {key}: no root-owned gsettings", args[0]))?;
+    let output = Command::new(program)
         .args(&args)
         .stdin(std::process::Stdio::null())
         .output()
