@@ -25,7 +25,6 @@ const STILL_HAND_ROLLED = new Set([
   "browser/BrowserDownloadDialog.tsx",
   "calendar/CalDavAccountDialog.tsx",
   "calendar/CalDavConflictDialog.tsx",
-  "calendar/CalendarOverlay.tsx",
   "calendar/EventDialog.tsx",
   "calendar/IcsImportReviewDialog.tsx",
   "common/FolderPickerDialog.tsx",
@@ -46,7 +45,6 @@ const STILL_HAND_ROLLED = new Set([
   "files/importDrop.tsx",
   "header/AppTimerDisplay.tsx",
   "header/HelpAgentSetup.tsx",
-  "header/MachinesOverlay.tsx",
   "layout/CommandPalette.tsx",
   "layout/DetachedCloseChoice.tsx",
   "layout/HowToStart.tsx",
@@ -64,10 +62,8 @@ const STILL_HAND_ROLLED = new Set([
   "mail/MailFiltersDialog.tsx",
   "mail/MailKeysDialog.tsx",
   "mail/MailMessageView.tsx",
-  "mail/MailOverlay.tsx",
   "mobile/MobileSetupGuide.tsx",
   "mobile/PairedDeviceDialog.tsx",
-  "models/ModelsOverlay.tsx",
   "monitoring/GlobalMachineMonitorDialog.tsx",
   "projects/BigFolderExcludeDialog.tsx",
   "projects/BoxEditorDialog.tsx",
@@ -88,7 +84,6 @@ const STILL_HAND_ROLLED = new Set([
   "tabs/CustomAgentDialog.tsx",
   "terminal/TerminalLimitHandoff.tsx",
   "todo/TodoCardDialog.tsx",
-  "todo/TodoOverlay.tsx",
 ]);
 
 const handRolled = Object.entries(SOURCES)
