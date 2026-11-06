@@ -62,10 +62,19 @@ fn desktop_clock_24h(desktop: &str) -> Option<bool> {
     None
 }
 
+/// The `gsettings` program, from the root-owned system directories only
+/// (`paths::system_executable`) — never the user's `PATH`, where a planted
+/// copy would run with the desktop session's settings bus. `None` when there is
+/// no such copy: the desktop settings are then neither read nor written.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub(crate) fn gsettings_program() -> Option<std::path::PathBuf> {
+    crate::paths::system_executable("gsettings")
+}
+
 /// `gsettings get <schema> <key>`, trimmed; `None` when it cannot run or fails.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(crate) fn gsettings_get(schema: &str, key: &str) -> Option<String> {
-    let output = std::process::Command::new("gsettings")
+    let output = std::process::Command::new(gsettings_program()?)
         .args(["get", schema, key])
         .stdin(std::process::Stdio::null())
         .output()

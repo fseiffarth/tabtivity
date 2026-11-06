@@ -397,6 +397,33 @@ describe("OutboxViewer · Mark up", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("offers Share… in ⋯ while marking, where the head's Share gives way to Submit", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => (String(input).includes("/outbox/")
+      ? new Response(new Uint8Array([1, 2, 3]))
+      : new Response(JSON.stringify({ error: "not_found" }), { status: 404 }))));
+    const share = vi.fn((_data: { files: File[] }) => Promise.resolve());
+    Object.defineProperty(navigator, "canShare", { configurable: true, value: () => true });
+    Object.defineProperty(navigator, "share", { configurable: true, value: share });
+    try {
+      writeMarkupOpen("reading");
+      render(<OutboxViewer scope={{ tab: "t1" }} file={PDF} onClose={() => {}} markup={{ tabId: "t1", projectId: "p1", onSend: (): MarkupSend => "sent" }} />);
+      expect(screen.getByRole("button", { name: "Share…" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Mark up paper.pdf" }));
+      expect(screen.queryByRole("button", { name: "Share…" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "More" }));
+      fireEvent.click(screen.getByRole("button", { name: /Share…/ }));
+      await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+      expect(share.mock.calls[0][0].files[0].name).toBe("paper.pdf");
+      // Titled by the name, for share extensions that skip bare files.
+      expect(share).toHaveBeenCalledWith(expect.objectContaining({ title: "paper.pdf" }));
+      // Still marking: sharing does not leave the marks.
+      expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+    } finally {
+      Reflect.deleteProperty(navigator, "canShare");
+      Reflect.deleteProperty(navigator, "share");
+    }
+  });
+
   it("opens an outbox copy's project file, with its layer, and moves the copy's marks over once", async () => {
     const calls = desktop();
     writeMarkupOpen("reading");

@@ -95,8 +95,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_stalled_call_times_out_and_enough_of_them_turn_new_ones_away() {
         static OWN: Deadline = Deadline { stalled: AtomicUsize::new(0) };
+        // Only calls that must time out get the short limit; a call that
+        // must finish gets a long one, since under a loaded test run the
+        // blocking pool alone can take longer than 50 ms to start a thread.
         let short = Duration::from_millis(50);
-        assert_eq!(OWN.run(short, || Ok(7)).await, Ok(7));
+        let ample = Duration::from_secs(30);
+        assert_eq!(OWN.run(ample, || Ok(7)).await, Ok(7));
 
         let mut releases = Vec::new();
         for _ in 0..MAX_STALLED {
@@ -117,10 +121,10 @@ mod tests {
         // The stalled calls end: the count drains and calls run again.
         drop(releases);
         let drained = std::time::Instant::now();
-        while OWN.stalled() > 0 && drained.elapsed() < Duration::from_secs(5) {
+        while OWN.stalled() > 0 && drained.elapsed() < Duration::from_secs(30) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(OWN.stalled(), 0);
-        assert_eq!(OWN.run(short, || Ok(2)).await, Ok(2));
+        assert_eq!(OWN.run(ample, || Ok(2)).await, Ok(2));
     }
 }

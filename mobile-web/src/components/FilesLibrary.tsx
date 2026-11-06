@@ -520,6 +520,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const [dropping, setDropping] = useState(false);
   /** Why **Download as zip** gave nothing, said under the list's head. */
   const [zipFailure, setZipFailure] = useState<TranslationKey | null>(null);
+  /** How many files the last **Download as zip** left out for their names. */
+  const [zipSkipped, setZipSkipped] = useState(0);
   useEffect(() => {
     setVisit((count) => count + 1);
     setRecentsOpen(false);
@@ -612,8 +614,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
    * than saved as a file. */
   const downloadZip = (dir: string | undefined, name: string) => {
     setZipFailure(null);
+    setZipSkipped(0);
     void checkProjectFolderZip(projectId, dir).then(
-      () => {
+      (answer) => {
+        setZipSkipped(answer.skipped ?? 0);
         const link = document.createElement("a");
         link.href = projectFolderZipUrl(projectId, dir);
         link.download = `${name}.zip`;
@@ -1289,6 +1293,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     <div ref={body} className={`files-library-body${dropping ? " files-dropping" : ""}${selecting ? " files-selecting" : ""}`} onScroll={onBodyScroll} {...dropHandlers}>
       {dropping && <p className="files-drop-note" role="status">{t("mobile.files.upload.drop", { folder: here.name })}</p>}
       {zipFailure && <p className="sheet-note error" role="alert">{t(zipFailure)}</p>}
+      {zipSkipped > 0 && <p className="sheet-note" role="status">{t("mobile.files.zip.skipped", { count: zipSkipped })}</p>}
       {madeFolder && folderRow(madeFolder)}
       {!searching && listing?.uploads && <button className="new-tab-file files-upload" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 20h14" /></svg>

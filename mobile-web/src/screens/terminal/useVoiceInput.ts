@@ -28,8 +28,11 @@ export interface HandsFreeHooks {
   voiceOpen: MutableRefObject<boolean>;
   /** The user stopped the mic: what it still settles is plain dictation. */
   voiceStopping: MutableRefObject<boolean>;
-  /** Answers the question on screen when an utterance picks one of its rows. */
-  pick: MutableRefObject<(utterance: string) => boolean>;
+  /** What an utterance does to the question on screen: "staged" (it picks a
+   * row; answered when the guard's window closes), "refused" (a dialog a voice
+   * may not answer: the words are dropped), "done" (a reading command ran),
+   * false (dictation). */
+  pick: MutableRefObject<(utterance: string) => "done" | "staged" | "refused" | false>;
   /** A send went out: wait for its turn before listening again. */
   awaitTurn: MutableRefObject<() => void>;
   /** The user's stop ends the loop until the mic is tapped again. */
@@ -123,9 +126,18 @@ export function useVoiceInput({
         // the agent waits on, "two" / "option two" picks that row.
         const guard = handsFree.on.current && !voiceStopping.current ? handsFree.guard() : undefined;
         if (step.insert && guard) {
-          if (handsFree.pick.current(step.insert)) {
+          const picked = handsFree.pick.current(step.insert);
+          if (picked === "done") {
             guard.reset();
             voiceOpen.current = false;
+            forgetDictation();
+            return;
+          }
+          if (picked === "staged" || picked === "refused") {
+            // A staged pick rides the guard: its pause, chime and cancel
+            // window run now; a refused one is dropped, never typed.
+            voiceOpen.current = false;
+            guard.settled(picked === "staged" ? step.insert : "");
             forgetDictation();
             return;
           }

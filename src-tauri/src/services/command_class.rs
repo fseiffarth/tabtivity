@@ -374,6 +374,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/clipboard.rs
     ("clipboard_file_paths", Client),
     ("clipboard_has_image", Client),
+    ("copy_files_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
     ("save_clipboard_image", Client),
     // commands/connect.rs — this desktop as a server's client (plan §7.2):
@@ -717,6 +718,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("prepare_local_launch", Core),
     ("prepare_text_completion", Core),
     ("pull_ollama_model", Admin),
+    ("search_huggingface_models", Core),
     ("search_ollama_registry", Core),
     ("stop_ollama_model", Admin),
     ("vibe_install_strategy", Core),

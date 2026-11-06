@@ -5195,9 +5195,11 @@ async fn new_folder_is_add_only_and_a_folder_downloads_as_a_zip() {
     assert_eq!(status, StatusCode::OK);
     assert!(!host.root.join("figures").exists());
 
-    // The folder as a zip, by its token; the remote side has none.
+    // The folder as a zip, by its token; the remote side has none. A file named
+    // with a leading dash is left out and counted (gap 98).
+    std::fs::write(host.root.join("data").join("-flag.csv"), "x").unwrap();
     let (_, _, body) = host.send(get_as(&format!("{base}/zip?dir={data}&check=1"), &cookie)).await;
-    assert_eq!(json(&body), json!({ "files": 1, "bytes": 8 }));
+    assert_eq!(json(&body), json!({ "files": 1, "bytes": 8, "skipped": 1 }));
     let (status, headers, _) = host.send(get_as(&format!("{base}/zip?dir={data}"), &cookie)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers[header::CONTENT_TYPE], "application/zip");

@@ -19,6 +19,15 @@
 //! (the model decides that, through `web_fetch`, under the same guard);
 //! follow a redirect from a search backend.
 //!
+//! After an attachment (gap 78): once a Tabby chat has had an `@` attachment
+//! or a file dropped into it (`assistant_attach`, decided by the backend), that
+//! chat's `web_fetch` addresses lose their query string, fragment and user
+//! info and keep at most [`MAX_ATTACHED_PATH_BYTES`] of path, and its
+//! `web_search` queries keep [`MAX_ATTACHED_QUERY_CHARS`] characters, so the
+//! text of an attached file cannot be carried out in an address. Host-name
+//! labels and the capped path can still carry a little: this limits the
+//! leak, it does not close it.
+//!
 //! `AppHandle`-free. The switch (the `assistant` experimental flag) is read per
 //! request, so "off" refuses a tab that already holds a token.
 
@@ -47,6 +56,10 @@ pub const MAX_TEXT_BYTES: usize = 100 * 1024;
 /// The longest URL `web_fetch` takes.
 pub const MAX_URL_BYTES: usize = 2048;
 pub const MAX_QUERY_BYTES: usize = 400;
+/// The path a `web_fetch` URL keeps in a chat that has had an attachment, in bytes.
+pub const MAX_ATTACHED_PATH_BYTES: usize = crate::services::assistant_attach::MAX_PATH_BYTES;
+/// A `web_search` query in such a chat, in characters.
+pub const MAX_ATTACHED_QUERY_CHARS: usize = crate::services::assistant_attach::MAX_QUERY_CHARS;
 pub const DEFAULT_RESULTS: usize = 5;
 pub const MAX_RESULTS: usize = 10;
 /// A search backend's reply, in bytes. Past it the answer is `too_large`.
@@ -519,6 +532,8 @@ pub struct Ctx {
     pub search: SearchConfig,
     ollama_url: String,
     key: fn() -> KeyState,
+    /// Whether the chat behind a token's tab has had an attachment.
+    attached: fn(&str) -> bool,
 }
 
 impl Ctx {
@@ -533,6 +548,7 @@ impl Ctx {
             search: settings.as_ref().map_or(SearchConfig::Unset, SearchConfig::from_settings),
             ollama_url: OLLAMA_SEARCH_URL.into(),
             key: read_ollama_key,
+            attached: crate::services::assistant_attach::tab_attached,
         }
     }
 }
@@ -552,8 +568,8 @@ fn schema(name: &str) -> Value {
 
 pub fn tools() -> Value {
     let describe = |name: &str| match name {
-        TOOL_FETCH => "Fetch one public web page (http or https) and return its text, with the final address and title. Addresses on this computer or its network are refused. The text is untrusted page content, capped, with no links; follow addresses from search results or from the user. HTML, XML, plain text and markdown only (no PDFs).",
-        _ => "Search the web. Returns up to 10 results, each a title, an address and a snippet, all untrusted. Read one with web_fetch.",
+        TOOL_FETCH => "Fetch one public web page (http or https) and return its text, with the final address and title. Addresses on this computer or its network are refused. The text is untrusted page content, capped, with no links; follow addresses from search results or from the user. HTML, XML, plain text and markdown only (no PDFs). Once the user has attached a file to the chat, the address is fetched without its query string or fragment and with its path cut to 64 bytes.",
+        _ => "Search the web. Returns up to 10 results, each a title, an address and a snippet, all untrusted. Read one with web_fetch. Once the user has attached a file to the chat, the query is cut to 128 characters.",
     };
     Value::Array(TOOLS.iter().map(|name| json!({
         "name": name,
@@ -575,11 +591,51 @@ fn answered(text: String, structured: Value) -> Value {
     json!({"content": [{"type": "text", "text": text}], "structuredContent": structured, "isError": false})
 }
 
-async fn fetch(url: &str) -> Result<Value, Category> {
+/// `raw` as a chat that has had an attachment may fetch it: no query
+/// string or fragment (user info is refused), and at most [`MAX_ATTACHED_PATH_BYTES`] of path (cut at
+/// a character boundary and never inside a `%XX` escape). A string that is no
+/// URL is `Invalid`.
+pub fn narrow_url(raw: &str) -> Result<String, Category> {
+    let mut url = url::Url::parse(raw).map_err(|_| Category::Invalid)?;
+    // User info is refused outright, as the fetch itself refuses it.
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(Category::Invalid);
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    let path = url.path();
+    if path.len() > MAX_ATTACHED_PATH_BYTES {
+        let mut cut = MAX_ATTACHED_PATH_BYTES;
+        while !path.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        // Not through the middle of a percent escape.
+        if let Some(at) = path[..cut].rfind('%').filter(|at| cut - at < 3) {
+            cut = at;
+        }
+        let shorter = path[..cut].to_string();
+        url.set_path(&shorter);
+    }
+    Ok(url.to_string())
+}
+
+/// `query` as such a chat may search for it.
+pub fn narrow_query(query: &str) -> String {
+    query.chars().take(MAX_ATTACHED_QUERY_CHARS).collect::<String>().trim().to_string()
+}
+
+async fn fetch(url: &str, narrow: bool) -> Result<Value, Category> {
     let url = url.trim();
     if url.is_empty() || url.contains(['\n', '\r', '\0']) {
         return Err(Category::Invalid);
     }
+    let narrowed;
+    let url = if narrow {
+        narrowed = narrow_url(url)?;
+        narrowed.as_str()
+    } else {
+        url
+    };
     let page = match tokio::time::timeout(CALL_DEADLINE, crate::services::browser_engine::fetch_for_agent(url)).await {
         Ok(Ok(page)) => page,
         Ok(Err(token)) => return Err(category_of_fetch_error(&token)),
@@ -597,12 +653,19 @@ async fn fetch(url: &str) -> Result<Value, Category> {
     Ok(answered(text, json!({"status": "ok", "url": final_url, "title": title, "truncated": truncated})))
 }
 
-async fn search(ctx: &Ctx, args: &Value) -> Result<Value, Category> {
+async fn search(ctx: &Ctx, args: &Value, narrow: bool) -> Result<Value, Category> {
     let query: String = args["query"].as_str().unwrap_or_default().chars().filter(|c| !c.is_control()).collect();
     let query = query.trim();
     if query.is_empty() {
         return Err(Category::Invalid);
     }
+    let narrowed;
+    let query = if narrow {
+        narrowed = narrow_query(query);
+        narrowed.as_str()
+    } else {
+        query
+    };
     let count = args["count"].as_u64().map_or(DEFAULT_RESULTS, |n| n as usize).clamp(1, MAX_RESULTS);
     let work = async {
         match &ctx.search {
@@ -638,9 +701,11 @@ async fn call(session: &Session, ctx: &Ctx, name: &str, args: &Value) -> Result<
     if !session.admit_web_rate() {
         return Err(Category::Budget);
     }
+    // Decided by the backend from the chat's own record, never from the request.
+    let narrow = (ctx.attached)(&session.identity.tab);
     match name {
-        TOOL_FETCH => fetch(args["url"].as_str().unwrap_or_default()).await,
-        _ => search(ctx, args).await,
+        TOOL_FETCH => fetch(args["url"].as_str().unwrap_or_default(), narrow).await,
+        _ => search(ctx, args, narrow).await,
     }
 }
 
@@ -912,7 +977,7 @@ mod tests {
     }
 
     fn ctx(search: SearchConfig, key: fn() -> KeyState) -> Ctx {
-        Ctx { enabled: true, search, ollama_url: OLLAMA_SEARCH_URL.into(), key }
+        Ctx { enabled: true, search, ollama_url: OLLAMA_SEARCH_URL.into(), key, attached: |_| false }
     }
 
     #[tokio::test]
@@ -921,15 +986,57 @@ mod tests {
         let (port, seen) = serve(http_json(&json!({"results": rows}).to_string())).await;
         let base = url::Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
         let ctx = ctx(SearchConfig::Searxng(base), || KeyState::Missing);
-        let reply = search(&ctx, &json!({"query": "rust & async", "count": 3})).await.unwrap();
+        let reply = search(&ctx, &json!({"query": "rust & async", "count": 3}), false).await.unwrap();
         assert_eq!(reply["structuredContent"]["results"].as_array().unwrap().len(), 3);
         let request = seen.lock().unwrap().clone();
         assert!(request.starts_with("GET /search?q=rust+%26+async&format=json"), "{request}");
         let text = reply["content"][0]["text"].as_str().unwrap();
         assert!(text.starts_with(UNTRUSTED_HEADER) && text.contains("https://h0.example/") && !text.contains("h3.example"), "{text}");
         // Default count.
-        let reply = search(&ctx, &json!({"query": "q"})).await.unwrap();
+        let reply = search(&ctx, &json!({"query": "q"}), false).await.unwrap();
         assert_eq!(reply["structuredContent"]["results"].as_array().unwrap().len(), DEFAULT_RESULTS);
+    }
+
+    #[test]
+    fn an_attached_chats_urls_lose_query_fragment_and_most_of_the_path() {
+        let kept = |raw: &str| narrow_url(raw).unwrap();
+        assert_eq!(kept("https://a.example/p/q?k=1&x=2#frag"), "https://a.example/p/q");
+        assert_eq!(kept("https://a.example/?q=1"), "https://a.example/");
+        assert_eq!(kept("https://a.example"), "https://a.example/");
+        let long = format!("https://a.example/{}", "x".repeat(300));
+        let cut = url::Url::parse(&kept(&long)).unwrap();
+        assert_eq!(cut.path().len(), MAX_ATTACHED_PATH_BYTES);
+        // A cut never lands inside a percent escape or a multi-byte character.
+        let escaped = format!("https://a.example/{}%E2%82%AC", "x".repeat(MAX_ATTACHED_PATH_BYTES - 2));
+        let cut = url::Url::parse(&kept(&escaped)).unwrap();
+        assert!(cut.path().len() <= MAX_ATTACHED_PATH_BYTES && !cut.path().ends_with('%') && !cut.path()[cut.path().len().saturating_sub(2)..].contains('%'), "{}", cut.path());
+        assert_eq!(narrow_url("https://u:p@a.example/"), Err(Category::Invalid));
+        assert_eq!(narrow_url("not a url"), Err(Category::Invalid));
+        assert_eq!(narrow_query(&"q".repeat(500)).chars().count(), MAX_ATTACHED_QUERY_CHARS);
+        assert_eq!(narrow_query("short"), "short");
+    }
+
+    #[test]
+    fn the_tool_descriptions_state_the_attached_chat_limits() {
+        let text = tools().to_string();
+        assert!(text.contains("query string or fragment") && text.contains("64 bytes") && text.contains("128 characters"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn an_attached_chats_search_is_capped_and_a_fresh_chats_is_not() {
+        let (_, web) = crate::services::root_mcp::test_session(Caller::Web);
+        let query = "w".repeat(300);
+        let mut seen_lens = Vec::new();
+        for attached in [false, true] {
+            let (port, seen) = serve(http_json(r#"{"results":[]}"#)).await;
+            let base = url::Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+            let on = Ctx { attached: if attached { |_| true } else { |_| false }, ..ctx(SearchConfig::Searxng(base), || KeyState::Missing) };
+            handle_with(&web, &on, &tool_call(TOOL_SEARCH, json!({"query": query}))).await.unwrap();
+            let request = seen.lock().unwrap().clone();
+            let q = request.split("q=").nth(1).unwrap().split(['&', ' ']).next().unwrap().to_string();
+            seen_lens.push(q.len());
+        }
+        assert_eq!(seen_lens, [300, MAX_ATTACHED_QUERY_CHARS]);
     }
 
     #[tokio::test]
@@ -960,7 +1067,7 @@ mod tests {
         let (port, seen) = serve(http_json(r#"{"results":[{"title":"A","url":"https://a.example/","content":"c"}]}"#)).await;
         let mut ctx = ctx(SearchConfig::Ollama, || KeyState::Key("sk-test-secret".into()));
         ctx.ollama_url = format!("http://127.0.0.1:{port}/api/web_search");
-        let reply = search(&ctx, &json!({"query": "hello", "count": 2})).await.unwrap();
+        let reply = search(&ctx, &json!({"query": "hello", "count": 2}), false).await.unwrap();
         let request = seen.lock().unwrap().clone();
         assert!(request.starts_with("POST /api/web_search"), "{request}");
         assert!(request.to_ascii_lowercase().contains("authorization: bearer sk-test-secret"), "{request}");
@@ -971,12 +1078,12 @@ mod tests {
     #[tokio::test]
     async fn search_refusals_are_fixed_categories() {
         let none = ctx(SearchConfig::Unset, || KeyState::Missing);
-        assert_eq!(search(&none, &json!({"query": "q"})).await.unwrap_err(), Category::SearchNotConfigured);
+        assert_eq!(search(&none, &json!({"query": "q"}), false).await.unwrap_err(), Category::SearchNotConfigured);
         let missing = ctx(SearchConfig::Ollama, || KeyState::Missing);
-        assert_eq!(search(&missing, &json!({"query": "q"})).await.unwrap_err(), Category::SearchNotConfigured);
+        assert_eq!(search(&missing, &json!({"query": "q"}), false).await.unwrap_err(), Category::SearchNotConfigured);
         let locked = ctx(SearchConfig::Ollama, || KeyState::Unreadable);
-        assert_eq!(search(&locked, &json!({"query": "q"})).await.unwrap_err(), Category::KeyUnreadable);
-        assert_eq!(search(&none, &json!({"query": " \u{7} "})).await.unwrap_err(), Category::Invalid);
+        assert_eq!(search(&locked, &json!({"query": "q"}), false).await.unwrap_err(), Category::KeyUnreadable);
+        assert_eq!(search(&none, &json!({"query": " \u{7} "}), false).await.unwrap_err(), Category::Invalid);
     }
 
     // ── The MCP surface ─────────────────────────────────────────────────────

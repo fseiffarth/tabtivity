@@ -255,7 +255,10 @@ questions, ✓ badges or **Approve all**.
   union (the host answers at most `MAX_PEER_TICKS` newest, to fit the 64-KiB
   admin frame). An answer tries the window's store, then the host's, which
   closes the ask and hands back `{ prompt, receipt }`: the window queues it
-  as for its own tabs; a failed queue reopens the ask where it lives. A
+  as for its own tabs; a failed queue reopens the ask where it lives. For a
+  host ask the window mints the receipt and sends it along, so a reply lost
+  on the way back (`markup_failed`) still lets it reopen that answer: at
+  once, else before its next request to the host, until the host answers. A
   dismissal goes to both. The peer is set once by the window
   (`use_host_peer`); with no host running the connect fails at once and the
   window shows only what it holds. A host from before this answers an error,

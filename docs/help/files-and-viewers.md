@@ -1,7 +1,7 @@
 ---
 id: files-and-viewers
 title: Files, viewers and editing
-keywords: [file, viewer, editor, open, code, markdown, yaml, json, bibtex, csv, table, image, gif, notebook, ipynb, spreadsheet, xlsx, sqlite, html, svg, audio, video, autocomplete, spell check, dictionary, autosave, python, run, debug, text size, copilot, remarks]
+keywords: [file, viewer, editor, open, code, markdown, yaml, json, bibtex, csv, table, image, gif, notebook, ipynb, spreadsheet, xlsx, sqlite, html, svg, audio, video, autocomplete, spell check, dictionary, autosave, python, run, debug, text size, copilot, remarks, share, teams, drag out, clipboard, copy file]
 related: [pdf-and-markup, latex-and-presenter, tabs-and-panels, local-models, git]
 ---
 
@@ -17,6 +17,22 @@ current project. Types it has no viewer for open in your system's default app.
   copy path, reveal, rename, delete and properties.
 - A hit in the file panel's **Search** view jumps straight to that line in the
   viewer.
+
+## Share a file with another app
+
+To send a project file to Teams, mail, a browser upload or a file manager:
+
+- **Drag it out of the window.** Drag the file from the file panel and drop it
+  in the other app. Hold **⇧ Shift** while leaving the window to keep it in
+  Tabtivity instead (a new window, or dock it into a popout). The drag's label
+  shows which one a drop will do. Host files of a remote project can't leave
+  this way; use **Download to…** first.
+- **Copy and paste.** The file panel's context menu **Copy** also puts the
+  file on the system clipboard: paste it into the other app's message box or
+  upload field. Pasting into a web page depends on the browser; dragging
+  always works.
+- **On the phone**, every file you open (sent to the phone, project files,
+  the files library) has **Share…**, which offers the phone's other apps.
 - Which external app opens a type you have no viewer for: **Settings →
   Workspace & apps → File Type Apps** (per type), and per project in the
   project's settings. Otherwise your system's default app is used.

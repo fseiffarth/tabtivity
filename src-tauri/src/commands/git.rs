@@ -895,7 +895,7 @@ async fn count_added_lines_remote(
     let Ok(path) = crate::commands::fs::remote_join_confined(&target.spec.remote_path, rel) else {
         return (0, false);
     };
-    match crate::commands::fs::remote_read(pool, target, &path).await {
+    match crate::commands::fs::remote_read(pool, target, &path, crate::services::remote_sync::MAX_SYNC_FILE_BYTES).await {
         Ok(bytes) => count_lines_in_bytes(&bytes),
         Err(_) => (0, false),
     }

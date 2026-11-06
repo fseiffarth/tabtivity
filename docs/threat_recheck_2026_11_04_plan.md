@@ -51,6 +51,11 @@ below are fixed: reviewers may not undo them.
   (`bc79d813`, revocation carried across re-imports); its follow-up (old-mail decision,
   `signature-structure` note) was mid-gates (uncommitted in `tr1104-I2b`), then land.
   I4b running on `60a408cf`. Next: I5, I6, then I6b, I7a, I7b, I8, I9, I10.
+- 2026-11-05: **landed** on develop: I4b `e6db814c`, I1 `ba1e2832` (with follow-up
+  `4d94c0ff`), I2a+I2b `c8a713ad` (follow-up `fe2e654c`). Six of fourteen steps in.
+  Running: I5, I6, I9 (Sonnet). Next: I6 review, I9 review, I5 review, then I6b,
+  I7a, I7b (after I6 lands), I8, I10, final review. Threat-model row conflicts on merge:
+  resolve row by row (keep the "Fixed" side).
 
 ## Decisions (user, 2026-11-05)
 

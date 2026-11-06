@@ -305,6 +305,7 @@ impl AttachTarget {
     fn run(&self, probe: Probe) -> Option<std::process::Output> {
         let mut command = self.probe_command(probe).ok()?;
         match self {
+            Self::Local { .. } if matches!(probe, Probe::KeepDim) => keep_dim(tmux_dim_check_command(), command),
             Self::Local { .. } => command.output().ok(),
             Self::Host { .. } => crate::paths::output_within(command, PROBE_TIMEOUT).ok(),
         }
@@ -407,14 +408,36 @@ fn tmux_window_size_command(tmux_name: &str) -> Command {
     command
 }
 
-/// Teach this tmux server that a `vt100` client can take dim text
-/// (`ssh_exec::TMUX_VT100_DIM`). A one-shot, not a step of the attach: a tmux
-/// that refuses it still attaches.
+/// The read half of teaching this tmux server that a `vt100` client can take
+/// dim text (`ssh_exec::TMUX_VT100_DIM`): prints the server's
+/// `terminal-overrides`, in which [`keep_dim`] looks for an entry already there.
+fn tmux_dim_check_command() -> Command {
+    let mut command = crate::services::tmux_local::tmux_command();
+    command.args(["show-options", "-s", crate::services::ssh_exec::TMUX_VT100_DIM.0]);
+    command
+}
+
+/// The write half: **append** the entry (`set-option -as`), never set an index
+/// of the user's own option.
 fn tmux_keep_dim_command() -> Command {
     let (option, value) = crate::services::ssh_exec::TMUX_VT100_DIM;
     let mut command = crate::services::tmux_local::tmux_command();
-    command.args(["set-option", "-s", option, value]);
+    command.args(["set-option", "-as", option, value]);
     command
+}
+
+/// Teach this tmux server that a `vt100` client can take dim text, once: when
+/// its `terminal-overrides` already holds a `vt100:dim=` entry (ours from an
+/// earlier attach, or the user's own) nothing is written. A one-shot, not a
+/// step of the attach: a tmux that refuses it still attaches.
+fn keep_dim(show: Command, append: Command) -> Option<std::process::Output> {
+    let mut show = show;
+    let shown = show.output().ok()?;
+    if shown.status.success() && String::from_utf8_lossy(&shown.stdout).contains(crate::services::ssh_exec::TMUX_VT100_DIM_MARK) {
+        return Some(shown);
+    }
+    let mut append = append;
+    append.output().ok()
 }
 
 fn parse_window_size(raw: &str) -> Option<(u16, u16)> {
@@ -951,6 +974,10 @@ pub async fn attach(
     on_seen: impl Fn(),
 ) -> Result<(), String> {
     let tmux_name = target.name().to_string();
+    // A Tabby chat's own session: what the phone types into it is the user's
+    // own input, which decides whether the chat has had an `@` attachment
+    // (`assistant_attach`, gap 78). The backend reads it here, off the bytes.
+    let chat = crate::services::assistant_attach::chat_of_tmux(&tmux_name);
     let guard = registry.acquire(&tmux_name, viewer).await?;
     // Do this before the live attach starts redrawing. The browser receives it
     // before every PTY byte below, and tmux's clear/redraw then leaves these
@@ -1190,6 +1217,9 @@ pub async fn attach(
                         tokio::time::sleep_until(at + input_gap(previous_key, &bytes)).await;
                     }
                     last_write = Some((tokio::time::Instant::now(), opens_with_key(&bytes)));
+                    if let Some(uid) = &chat {
+                        crate::services::assistant_attach::note_input_in(&state_dir, uid, &bytes);
+                    }
                     // The AI switch: nothing typed reaches an agent while it is
                     // off. The frame is still acked — it was handled, by
                     // dropping it — and the phone is told why.
@@ -1772,6 +1802,81 @@ mod tests {
         assert!(!queue_hint_shown("   ■⬝⬝⬝⬝⬝⬝⬝ esc interrupt     ↓ 1 shell  ctrl+p commands", &opencode));
         // The key named in prose, with no count after it.
         assert!(!queue_hint_shown("the panel opens with · ctrl+x q here", &opencode));
+    }
+
+    /// The two local halves read and append; neither writes an index.
+    #[test]
+    fn the_local_dim_override_is_appended_never_set_at_an_index() {
+        let args = |command: std::process::Command| command.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let check = args(super::tmux_dim_check_command());
+        assert!(check.ends_with(&["show-options".into(), "-s".into(), "terminal-overrides".into()]), "{check:?}");
+        let append = args(super::tmux_keep_dim_command());
+        assert!(append.ends_with(&["set-option".into(), "-as".into(), "terminal-overrides".into(), r",vt100:dim=\E[2m".into()]), "{append:?}");
+        assert!(!append.iter().any(|a| a.contains('[') && a.contains("terminal-overrides")), "no index: {append:?}");
+    }
+
+    /// The host form: one `sh -c`, the option shown and a `vt100:dim=` entry
+    /// looked for before the append, no index, no `grep`, no single quote.
+    #[test]
+    fn the_host_dim_override_is_appended_once_never_set_at_an_index() {
+        let script = crate::services::ssh_exec::host_tmux_keep_dim_command();
+        assert_eq!(
+            script,
+            r#"exec sh -c 'case "$(tmux show-options -s terminal-overrides 2>/dev/null)" in *vt100:dim=*) ;; *) tmux set-option -as terminal-overrides ",vt100:dim=\E[2m";; esac'"#
+        );
+        assert!(!script.contains("terminal-overrides["), "{script}");
+    }
+
+    /// A tmux on a private `-L` socket (skipped where there is no tmux): the
+    /// real builders' arguments, run against a server that already holds the
+    /// user's own entries at indexes 0, 1 and 77. A first call appends the
+    /// entry once, a second changes nothing, and the user's entries survive;
+    /// a user's own `vt100:dim=` entry is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn keeping_dim_appends_once_and_never_overwrites_the_users_entries() {
+        let Some(tmux) = crate::paths::resolve_executable("tmux") else {
+            eprintln!("no tmux: skipped");
+            return;
+        };
+        let socket = format!("keep-dim-append-{}", std::process::id());
+        let private = |args: Vec<String>| {
+            let mut command = std::process::Command::new(&tmux);
+            command.args(["-L", &socket]).args(args);
+            command
+        };
+        let from = |command: std::process::Command| command.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let shown = || {
+            let out = private(vec!["show-options".into(), "-sv".into(), "terminal-overrides".into()]).output().expect("tmux runs");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let started = private(vec!["-f".into(), "/dev/null".into(), "new-session".into(), "-d".into(), "-s".into(), "k".into(), "sleep 30".into()]).status();
+        if !started.is_ok_and(|status| status.success()) {
+            eprintln!("tmux did not start: skipped");
+            return;
+        }
+        let run = || super::keep_dim(private(from(super::tmux_dim_check_command())), private(from(super::tmux_keep_dim_command()))).expect("tmux answers");
+        for (index, entry) in [(0, "xterm*:Tc"), (1, "foo*:Ms=x"), (77, "mine*:Ss=y")] {
+            assert!(private(vec!["set-option".into(), "-s".into(), format!("terminal-overrides[{index}]"), entry.into()]).status().unwrap().success());
+        }
+        let before = shown();
+        assert!(run().status.success());
+        let once = shown();
+        assert!(run().status.success());
+        let twice = shown();
+        let count = |text: &str| text.lines().filter(|line| line.contains("vt100:dim=")).count();
+        assert_eq!((count(&before), count(&once), count(&twice)), (0, 1, 1), "{once:?}");
+        for entry in ["xterm*:Tc", "foo*:Ms=x", "mine*:Ss=y"] {
+            assert!(twice.lines().any(|line| line == entry), "the user's {entry} is kept: {twice:?}");
+        }
+        assert_eq!(once, twice);
+        // The user's own dim entry: nothing is added.
+        assert!(private(vec!["set-option".into(), "-s".into(), "terminal-overrides".into(), r"vt100:dim=\E[2m".into()]).status().unwrap().success());
+        assert!(private(vec!["set-option".into(), "-as".into(), "terminal-overrides".into(), "x*:Tc".into()]).status().unwrap().success());
+        let theirs = shown();
+        run();
+        assert_eq!(shown(), theirs);
+        let _ = private(vec!["kill-server".into()]).status();
     }
 
     /// The attach client against the real tmux (run with `--ignored`): `vt100`

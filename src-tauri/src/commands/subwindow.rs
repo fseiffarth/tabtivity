@@ -459,6 +459,7 @@ pub async fn detach_subwindow(
         window_id,
         origin: ORIGIN_DETACHED_SUBWINDOW.to_string(),
         launch_id: None,
+        pid_start: None,
     };
     // Register and drop the reservation in ONE critical section, so no other
     // call ever sees this label as neither building nor registered.
@@ -2430,6 +2431,7 @@ mod tests {
             window_id,
             origin: ORIGIN_DETACHED_SUBWINDOW.to_string(),
             launch_id: None,
+            pid_start: None,
         }
     }
 

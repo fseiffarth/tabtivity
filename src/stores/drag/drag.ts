@@ -65,6 +65,9 @@ export interface TabDrag {
   files?: FileDragItem[];
   // Prefetched capability for this file (null while the query is in flight).
   embedCap?: EmbedCap | null;
+  // Leaving the window hands the file(s) to the OS drag, i.e. to the app under
+  // the cursor (a local listing; a host listing's paths aren't this machine's).
+  copyOut?: boolean;
   // ── Link-drag payload (kind === "link") ───────────────────────────────────
   // A file LINK dragged out of a viewer to set its session-only target
   // subwindow (#50). Carries the linking tab's key and the target file path +
@@ -121,6 +124,7 @@ interface DragStore {
       fileExec?: string;
       viewer?: InternalViewer;
       files?: FileDragItem[];
+      copyOut?: boolean;
     },
   ) => void;
   startLinkDrag: (
@@ -189,6 +193,7 @@ export const useDragStore = create<DragStore>((set) => ({
         fileExec: d.fileExec,
         viewer: d.viewer,
         files: d.files,
+        copyOut: d.copyOut,
         embedCap: null,
       },
     }),

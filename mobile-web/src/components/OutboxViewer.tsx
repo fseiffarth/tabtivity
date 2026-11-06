@@ -392,9 +392,16 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   const marked = shared ?? { scope, file, place: markup?.place ?? fresh?.place, folder: markup?.folder ?? fresh?.folder, refresh: markup?.refresh ?? fresh?.refresh, adoptFrom: undefined };
   // Mark up and a PDF's reader are a `MarkupView`, which takes Back itself.
   useBackLayer(onClose, !(marking && (markup || fresh)) && !isPdf);
+  /** Share… inside marking, where the head's actions are not shown. */
+  const shareWhileMarking = shareable ? {
+    run: () => void sharing.share(file),
+    busy: sharing.busy === file.name,
+    ready: sharing.ready === file.name,
+    failed: sharing.failed === file.name,
+  } : undefined;
   if (marking && (markup || fresh)) {
     return <MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place} folder={marked.folder}
-      onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} />;
+      onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} share={shareWhileMarking} />;
   }
   /** Print: a picture, or a text once the whole of it is read in; a PDF's
    * pages are the reader's to print (`MarkupView`). */
@@ -415,7 +422,7 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   if (isPdf) {
     return <MarkupView tabId={markup?.tabId} projectId={target} place={marked.place} folder={marked.folder} onSend={markup?.onSend}
       newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} toChat={markup?.toChat} refresh={marked.refresh} scope={marked.scope} file={marked.file} adoptFrom={marked.adoptFrom} onClose={onClose}
-      startMarking={startMarking} paned={paned} reader={{ actions, alert: sharing.failed === file.name ? t("mobile.outbox.shareError") : undefined }} />;
+      startMarking={startMarking} paned={paned} reader={{ actions, alert: sharing.failed === file.name ? t("mobile.outbox.shareError") : undefined }} share={shareWhileMarking} />;
   }
   return <div className={`outbox-viewer${isText ? " outbox-text-sheet" : ""}${paned ? " paned" : ""}`} role="dialog" aria-modal={!paned} aria-label={sentName(file)}>
     <div className="outbox-viewer-head">

@@ -4489,6 +4489,19 @@ fn drop_box(
     Ok(project.root.clone())
 }
 
+/// A file is about to land in a Tabby chat's drop box: the chat has had an
+/// attachment (`assistant_attach`, gap 78), whatever the phone types next. The
+/// uid is the catalog's own (the tab's `sessionId`), never the request's.
+/// Nothing for any other scope.
+fn note_chat_file(state_dir: &std::path::Path, project: &super::discovery::ResolvedProject, tab: &ResolvedTab) {
+    if project.public.kind != ScopeKind::Assistant {
+        return;
+    }
+    if let Some(uid) = tab.session_id.as_deref() {
+        crate::services::assistant_attach::note_attachment_in(state_dir, uid);
+    }
+}
+
 /// A tab that runs on its remote project's host has nothing on this machine
 /// for a route to act on — its inbox, a sign-in, a desktop switch to it — so
 /// such a route answers `409 tab_on_host` and the phone hides the control
@@ -6119,6 +6132,7 @@ async fn inbox_upload(
         Ok(root) => root,
         Err(error) => return error,
     };
+    note_chat_file(&state.config.state_dir, project, tab);
     drop(catalog);
     store_in_project_inbox(root, query.name, body).await
 }
@@ -6324,6 +6338,10 @@ async fn attach_desktop_image(
         Ok(target) => target,
         Err(error) => return error,
     };
+    // This route puts a picture into a Tabby chat's folder (gap 78).
+    if let Some(uid) = chat.as_deref() {
+        crate::services::assistant_attach::note_attachment_in(&state.config.state_dir, uid);
+    }
     let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
@@ -8052,8 +8070,9 @@ async fn project_files_folder_undo(
 /// **Download as zip**: the folder's files as a stored zip, streamed
 /// (`files_zip`). This computer's side only; past `files_zip::MAX_ZIP_FILES`
 /// files or `MAX_ZIP_BYTES` bytes it is `folder_too_large`, before anything
-/// is sent. `check=1` answers only `{ files, bytes }` (or the refusal), so the
-/// phone can say so before it hands the browser a download.
+/// is sent. `check=1` answers only `{ files, bytes, skipped }` (or the
+/// refusal), so the phone can say so before it hands the browser a download,
+/// and how many files `files_zip::unsafe_entry` leaves out of it by name.
 async fn project_files_zip(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -8087,7 +8106,7 @@ async fn project_files_zip(
         Err(error) => return files_error(error).into_response(),
     };
     if query.get("check").is_some_and(|on| on == "1") {
-        return (StatusCode::OK, Json(json!({ "files": planned.count(), "bytes": planned.bytes }))).into_response();
+        return (StatusCode::OK, Json(json!({ "files": planned.count(), "bytes": planned.bytes, "skipped": planned.skipped }))).into_response();
     }
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<std::io::Result<Bytes>>(4);
     tokio::task::spawn_blocking(move || {

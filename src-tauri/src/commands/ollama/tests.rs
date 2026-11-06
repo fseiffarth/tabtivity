@@ -270,8 +270,13 @@ fn the_manifest_url_defaults_the_namespace_and_the_tag() {
     );
     // An explicit namespace is kept rather than nested under `library/`.
     assert_eq!(
+        registry_manifest_url("someone/model:q4").unwrap(),
+        "https://registry.ollama.ai/v2/someone/model/manifests/q4"
+    );
+    // A Hugging Face model is read where Ollama pulls it from.
+    assert_eq!(
         registry_manifest_url("hf.co/someone/model:q4").unwrap(),
-        "https://registry.ollama.ai/v2/hf.co/someone/model/manifests/q4"
+        "https://huggingface.co/v2/someone/model/manifests/q4"
     );
 }
 

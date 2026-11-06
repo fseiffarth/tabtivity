@@ -175,6 +175,28 @@ a stub model (`docs/third_party_update_checklist.md`).
   forged: probed 2026-10-30 on 2.1.311, Haiku refused 6 of 6 text files and
   Sonnet 0 of 6 (pictures were read by both). With the exception, 8 of 8 text
   reads on Haiku, and it still refuses `~/.ssh/config` and a home listing.
+- **After an attachment the lane narrows (gap 78).** A chat that has had an `@`
+  attachment can hold file text next to `web_fetch`/`web_search`, so
+  `services::assistant_attach` keeps a backend-decided flag per chat: set when
+  the user's own bytes into the chat's PTY carry an `@` mention (`pty_write`;
+  the phone's `pty_bridge::attach`, off the tmux session name) or when a file
+  lands in the chat (`pty_drop_files`, the pasted image, the phone's inbox and
+  desktop-picture routes). It is the marker `<state>/assistant/attached/<uid>`,
+  outside the chat folder (which the fence mounts rw), never cleared; the lane
+  finds the chat by its token's tab id, tied to the uid in `assistant_gate`.
+  Then `web_fetch` drops query string, fragment and refuses user info, keeps
+  64 bytes of path; `web_search` keeps 128 characters. Residual: host-name
+  labels and those bytes still carry a little per call. The renderer is never
+  asked; an `@` typed into a tab this process did not spawn is not seen.
+- **The home denies `Read` of the login files.** `agent_home::deny_login_reads`
+  writes `permissions.deny` (`Read(~/<rel>)`, `Read(~/<dir>/**)`, generated from
+  `agent_registry::auth_registry`) into the assistant home's Claude
+  `settings.json` at every spawn, local-model home included. Does `@` honour
+  it? Tried 2026-11-05 outside the app, Claude 2.1.318, `-p`, Haiku, `--tools
+  WebSearch --strict-mcp-config`, `--settings` with `Read(~/<canary>)`, a canary
+  file under `$HOME` named `@/abs/path` (and `@~/path`): no deny, the model
+  quoted the word; deny, it answered "cannot see it". So yes there; the TUI and
+  other builds are untried, and Codex/OpenCode have no such rule.
 - The home is trusted up front: `.claude.json` gets the folder-trust entry and
   `hasCompletedOnboarding`, Codex's `config.toml` a `[projects."<dir>"]
   trust_level`, so a fresh home shows no dialog (Claude live-checked; Codex's

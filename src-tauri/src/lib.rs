@@ -2230,6 +2230,7 @@ pub fn run() {
             commands::clipboard::save_clipboard_image,
             commands::clipboard::clipboard_file_paths,
             commands::clipboard::copy_text_to_clipboard,
+            commands::clipboard::copy_files_to_clipboard,
             commands::connect::connect_status,
             commands::connect::connect_pair,
             commands::connect::connect_forget,
@@ -2566,6 +2567,7 @@ pub fn run() {
             commands::ollama::ollama_check_updates,
             commands::ollama::ollama_version_status,
             commands::ollama::search_ollama_registry,
+            commands::ollama::hf::search_huggingface_models,
             // Local code/text autocomplete (opt-in, local-only)
             commands::ollama::complete_text,
             commands::ollama::prepare_text_completion,

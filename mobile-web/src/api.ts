@@ -1652,10 +1652,11 @@ export function projectFolderZipUrl(projectId: string, dir: string | undefined):
 
 /** Whether the folder at `dir` can be zipped (`folder_too_large` thrown when
  * not): asked before the download, which could otherwise only save the
- * refusal. */
-export async function checkProjectFolderZip(projectId: string, dir: string | undefined): Promise<{ files: number; bytes: number }> {
+ * refusal. `skipped` counts the files left out for a name that is unsafe to
+ * write into a zip (backslash, control character, leading `-` or `~`). */
+export async function checkProjectFolderZip(projectId: string, dir: string | undefined): Promise<{ files: number; bytes: number; skipped?: number }> {
   const url = projectFolderZipUrl(projectId, dir);
-  return api<{ files: number; bytes: number }>(`${url}${url.includes("?") ? "&" : "?"}check=1`);
+  return api<{ files: number; bytes: number; skipped?: number }>(`${url}${url.includes("?") ? "&" : "?"}check=1`);
 }
 
 /** `DELETE /api/v1/projects/{id}/files/upload?f=<token>` — Undo of an
