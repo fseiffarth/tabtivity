@@ -1996,9 +1996,16 @@ fn diverged_scope(state: &HostState, phone: &Phone, project_id: &str) -> Result<
     Ok(project.raw_id.clone())
 }
 
-/// What the window said to a Diverged request that is not its answer.
+/// What the window said to a Diverged request that is not its answer. The
+/// window repeats the sidecar's checks (`project_sync`, the careful and HPC
+/// hosts, the preview's fingerprint), and each refusal keeps its name; any
+/// other error is the transfer's, and its words stay on that side.
 fn diverged_desktop_error(response: Result<DesktopResponse, String>) -> (StatusCode, Json<serde_json::Value>) {
     match response {
+        Ok(DesktopResponse::Error { code, .. }) if code == "sync_off" || code == "careful_host" => {
+            api_error(StatusCode::FORBIDDEN, if code == "sync_off" { "sync_off" } else { "careful_host" })
+        }
+        Ok(DesktopResponse::Error { code, .. }) if code == "preview_stale" => api_error(StatusCode::CONFLICT, "preview_stale"),
         Ok(DesktopResponse::Error { code, .. }) if code != "desktop_unavailable" => {
             eprintln!("mobile: the window refused a Diverged request: {code}");
             api_error(StatusCode::CONFLICT, "sync_failed")
@@ -2055,14 +2062,37 @@ async fn diverged_list(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DivergedPreviewBody {
-    direction: SyncDirection,
+    /// Any op but `forget`.
+    #[serde(default)]
+    op: Option<SyncOp>,
+    /// What an older phone sent for `op`: a transfer's direction. Its token
+    /// is still handed back, so the refusal comes from the resolve.
+    #[serde(default)]
+    direction: Option<SyncDirection>,
     files: Vec<String>,
 }
 
-/// `POST /api/v1/projects/{project_id}/diverged/preview` with `{ "direction",
-/// "files": [token…] }` — what the transfer would do, for the phone's
-/// confirmation (`sync_transfer_preview`). Reads only, but it prices an act
-/// only `project_sync` allows, so it is closed with the act.
+impl DivergedPreviewBody {
+    /// The op previewed: `op`, or the older `direction`; never both and never
+    /// `forget`, which has nothing to preview.
+    fn previewed_op(&self) -> Option<SyncOp> {
+        let op = match (self.op, self.direction) {
+            (Some(op), None) => op,
+            (None, Some(direction)) => direction.into(),
+            _ => return None,
+        };
+        op.needs_preview().then_some(op)
+    }
+}
+
+/// `POST /api/v1/projects/{project_id}/diverged/preview` with `{ "op",
+/// "files": [token…] }` — what the act would do, for the phone's
+/// confirmation (`sync_transfer_preview` for a transfer; the files a deletion
+/// would remove). Reads only, but it prices an act only `project_sync` allows,
+/// so it is closed with the act. The answer carries `token`: the window's
+/// fingerprint of the rows it read, sealed (`diverged::preview_token`) for
+/// ten minutes against this op over exactly these files. `resolve` takes no
+/// destructive op without it.
 async fn diverged_preview(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -2080,21 +2110,31 @@ async fn diverged_preview(
     if !diverged::sync_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "sync_off");
     }
-    let Ok(DivergedPreviewBody { direction, files }) = serde_json::from_slice(&body) else {
+    let Ok(preview_body) = serde_json::from_slice::<DivergedPreviewBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
-    let paths = match diverged_paths(&state, &raw_id, &files) {
+    let Some(op) = preview_body.previewed_op() else {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    };
+    let paths = match diverged_paths(&state, &raw_id, &preview_body.files) {
         Ok(paths) => paths,
         Err(error) => return error,
     };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
-        &DesktopRequest::SyncPreview { request_id: new_request_id(), project_id: raw_id, direction, paths },
+        &DesktopRequest::SyncPreview { request_id: new_request_id(), project_id: raw_id.clone(), op, paths: paths.clone() },
     )
     .await;
     match response {
-        Ok(DesktopResponse::SyncPreview { preview }) => (StatusCode::OK, Json(json!({ "preview": preview }))),
+        Ok(DesktopResponse::SyncPreview { preview, fingerprint }) => {
+            // A window that sent no usable fingerprint is one this sidecar
+            // cannot bind a resolve to: no token, so no destructive act.
+            let Some(token) = diverged::preview_token(&host_key(&state), &raw_id, op, &paths, &fingerprint, crate::clock::now_secs()) else {
+                return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+            };
+            (StatusCode::OK, Json(json!({ "preview": preview, "token": token })))
+        }
         other => diverged_desktop_error(other),
     }
 }
@@ -2104,14 +2144,22 @@ async fn diverged_preview(
 struct DivergedResolveBody {
     op: SyncOp,
     files: Vec<String>,
+    /// The `token` of the preview the phone confirmed; every op but `forget`.
+    #[serde(default)]
+    token: Option<String>,
 }
 
 /// `POST /api/v1/projects/{project_id}/diverged/resolve` with `{ "op",
-/// "files": [token…] }` — take a side, complete a deletion or forget, file by
-/// file, over the commands the desktop's orange view calls. `403 sync_off`
-/// unless `project_sync` is on. Answers `{ done, failed, skipped }`; a window
-/// that overruns the deadline is `desktop_unavailable`, and it is still
-/// working: the phone says it does not know and reads the list again.
+/// "files": [token…], "token" }` — take a side, complete a deletion or
+/// forget, file by file, over the commands the desktop's orange view calls.
+/// `403 sync_off` unless `project_sync` is on. Every op but `forget` needs the
+/// preview's `token` for this op over exactly these files, or it is refused
+/// `409 preview_required` / `preview_stale` and nothing reaches the window;
+/// the window then checks the token's fingerprint against a fresh status pass
+/// and refuses `preview_stale` too if the rows moved. Answers `{ done,
+/// failed, skipped }`; a window that overruns the deadline is
+/// `desktop_unavailable`, and it is still working: the phone says it does not
+/// know and reads the list again.
 async fn diverged_resolve(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -2129,17 +2177,25 @@ async fn diverged_resolve(
     if !diverged::sync_open(&state.config.state_dir) {
         return api_error(StatusCode::FORBIDDEN, "sync_off");
     }
-    let Ok(DivergedResolveBody { op, files }) = serde_json::from_slice(&body) else {
+    let Ok(DivergedResolveBody { op, files, token }) = serde_json::from_slice(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
     let paths = match diverged_paths(&state, &raw_id, &files) {
         Ok(paths) => paths,
         Err(error) => return error,
     };
+    let expect = if op.needs_preview() {
+        match diverged::open_preview_token(&host_key(&state), &raw_id, op, &paths, token.as_deref(), crate::clock::now_secs()) {
+            Ok(fingerprint) => Some(fingerprint),
+            Err(refusal) => return api_error(StatusCode::CONFLICT, refusal.code()),
+        }
+    } else {
+        None
+    };
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
         &desktop_socket,
-        &DesktopRequest::SyncResolve { request_id: new_request_id(), project_id: raw_id, op, paths },
+        &DesktopRequest::SyncResolve { request_id: new_request_id(), project_id: raw_id, op, paths, expect },
     )
     .await;
     match response {

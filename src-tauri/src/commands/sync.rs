@@ -2332,6 +2332,51 @@ mod tests {
         assert!(commands >= 15, "the scan found only {commands} commands");
     }
 
+    /// The phone's Diverged resolve drives these commands through the window
+    /// (`lib/mobileDiverged`: `sync_pull` for "use the host's copy",
+    /// `sync_apply_delete` with side "local" for "accept the host's deletion"),
+    /// and adds no destructive path of its own. So the loss of local files
+    /// reaches `services::local_loss` here, whoever asks: a pull files the
+    /// mirror edits it is about to overwrite *before* it writes (the evidence is
+    /// gone afterwards), and a mirror copy's deletion files `Deleted` *after* the
+    /// unlink succeeded (a failed delete logs no loss). A change that moves or
+    /// drops either record fails here.
+    #[test]
+    fn the_destructive_commands_a_phone_resolve_drives_file_their_local_loss() {
+        let source = include_str!("sync.rs");
+        let production = &source[..source.find("#[cfg(test)]\nmod tests").expect("tests module")];
+        let body = |start: &str| {
+            let from = production.find(start).unwrap_or_else(|| panic!("{start} is gone"));
+            let rest = &production[from + start.len()..];
+            &production[from..from + start.len() + rest.find("\n}\n").expect("end of the function")]
+        };
+
+        let delete = body("pub async fn sync_apply_delete(");
+        let removed = delete.find("std::fs::remove_file(&mirror_path)").expect("the mirror copy is removed here");
+        let recorded = delete.find("local_loss::record_paths(").expect("a mirror deletion is recorded");
+        assert!(removed < recorded, "the record follows the unlink, so a failed delete logs nothing");
+        let record = &delete[recorded..];
+        let record = &record[..record.find(");").expect("end of the call")];
+        assert!(record.contains("LossKind::Deleted") && record.contains("LossSource::Sync") && record.contains("vec![rel_path.clone()]"), "{record}");
+
+        let pull = body("async fn pull_subtree(");
+        let warned = pull.find("warn_overwritten(project_id, \"Pull from the host\", doomed)").expect("a pull files the edits it overwrites");
+        let doomed = pull.find("unsynced_local_edits(project_id, manifest, &rels)").expect("the edits are collected first");
+        assert!(doomed < warned, "collected before the write");
+        for write in ["try_rsync_pull(", "pull_file("] {
+            if let Some(at) = pull.find(write) {
+                assert!(warned < at, "{write} runs after the record, not before");
+            }
+        }
+        let overwritten = body("fn warn_overwritten(");
+        assert!(overwritten.contains("LossKind::Overwritten") && overwritten.contains("LossSource::Sync"), "{overwritten}");
+
+        // And both entry points the window can reach go through `pull_subtree`.
+        for command in ["pub async fn sync_pull(", "pub async fn sync_whole_project("] {
+            assert!(body(command).contains("pull_subtree("), "{command} no longer pulls through the recorded path");
+        }
+    }
+
     /// A status pass judged `f` against its old base; a push recorded a new base
     /// before the pass took the lock. The heal (and a prune) must leave the push's
     /// base alone, while an entry nobody touched is still healed.
