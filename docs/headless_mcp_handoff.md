@@ -173,10 +173,16 @@ points, none changed:
    dead) host makes each `markup_mcp_list` / `_ticks` / `_dismiss` take that
    long, and every `markup-mcp-changed` re-lists. Absent or dead is instant.
    A short breaker (skip the peer for some seconds after a timeout) would do.
-2. **A lost admin reply loses the answer.** If the host closes an ask over
-   `MarkupAnswer` and the reply is lost or late (5 s), the window reports
-   `gone` and the prompt is never queued; there is no receipt to reopen with.
-   Needs a host stalled mid-request; the card is then closed, not stuck.
+2. ~~**A lost admin reply loses the answer.**~~ **Fixed 2026-11-06.** The
+   window now mints the receipt and sends it with `MarkupAnswer` (optional
+   `receipt`, `markup_mcp::answer_as`, checked by `valid_receipt`). A reply
+   that never comes is answered `markup_failed` and the receipt is kept
+   (`commands::markup_mcp`, per peer socket, at most 64); the window reopens
+   that answer at once and, while the host does not answer, before its next
+   list, answer or reopen against it, until the host gives a definite reply.
+   The same holds for a window reopen whose reply is lost. Tests:
+   `a_lost_reply_to_a_host_answer_reopens_the_ask`,
+   `an_answer_under_the_callers_receipt_is_undone_by_that_receipt`.
 3. **Phone double answer / double dismiss, window down, host-held tab.**
    `markup_held_here` counts open asks only, so a second device answering an
    already answered ask gets `503 desktop_unavailable`, and a repeated dismiss

@@ -84,6 +84,61 @@ async fn ask_peer(peer: Option<&Path>, request: AdminRequest) -> Option<AdminRes
     admin::admin_call(peer?, &request).await.ok()
 }
 
+/// An answer the window sent the peer whose reply never came: the peer may
+/// have closed the ask and handed back a prompt nobody will queue. Its
+/// receipt reopens exactly that answer ([`markup_mcp::reopen`]), so it is
+/// kept until the peer gives a definite reply to the reopen — tried at once,
+/// then before every later list, answer or reopen against it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Undelivered { peer: PathBuf, project_id: String, target: String, ask_id: String, receipt: String }
+
+/// At most this many are kept; the oldest go first (the ask expires anyway).
+const MAX_UNDELIVERED: usize = 64;
+
+static UNDELIVERED: std::sync::Mutex<Vec<Undelivered>> = std::sync::Mutex::new(Vec::new());
+
+fn note_undelivered(entry: Undelivered) {
+    let mut list = UNDELIVERED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    list.retain(|e| e.peer != entry.peer || e.ask_id != entry.ask_id || e.project_id != entry.project_id || e.target != entry.target);
+    list.push(entry);
+    let over = list.len().saturating_sub(MAX_UNDELIVERED);
+    list.drain(..over);
+}
+
+/// Reopen every undelivered answer the peer still might hold closed. A
+/// definite reply (reopened, or refused because something else closed or
+/// replaced the ask since) settles an entry; no reply keeps it and stops the
+/// round, so a peer that is down costs one timeout, not one per entry. The
+/// lock is never held across the call.
+async fn settle_undelivered(peer: Option<&Path>) {
+    let Some(peer) = peer else { return };
+    loop {
+        let next = UNDELIVERED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|e| e.peer == peer).cloned();
+        let Some(entry) = next else { return };
+        let request = AdminRequest::MarkupReopen {
+            project_id: entry.project_id.clone(),
+            target: entry.target.clone(),
+            ask_id: entry.ask_id.clone(),
+            receipt: entry.receipt.clone(),
+        };
+        match ask_peer(Some(peer), request).await {
+            Some(AdminResponse::Ok | AdminResponse::MarkupRefused { .. }) => {
+                UNDELIVERED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|e| e != &entry);
+            }
+            _ => return,
+        }
+    }
+}
+
+fn has_undelivered() -> bool {
+    !UNDELIVERED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
+}
+
+#[cfg(test)]
+fn undelivered_for(peer: &Path) -> usize {
+    UNDELIVERED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().filter(|e| e.peer == peer).count()
+}
+
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
     app_core::rt::spawn_blocking(work).await.map_err(|_| "markup_failed".to_string())
 }
@@ -93,6 +148,7 @@ pub async fn list_with(peer: Option<&Path>, project_id: String, schedule_target_
     valid_target(&project_id, &schedule_target_id)?;
     let (p, t, pa) = (project_id.clone(), schedule_target_id.clone(), path.clone());
     let here = blocking(move || asks_here(&p, &t, pa.as_deref())).await?;
+    if has_undelivered() { settle_undelivered(peer).await; }
     let theirs = match ask_peer(peer, AdminRequest::MarkupList { project_id, target: schedule_target_id, path }).await {
         Some(AdminResponse::MarkupAsks { asks }) => asks,
         _ => Vec::new(),
@@ -149,11 +205,31 @@ pub async fn answer_with(
     let here = blocking(move || markup_mcp::answer(&p, &t, &a, &ans)).await?;
     match here {
         Ok(taken) => Ok(MarkupAnswered { prompt: taken.prompt, receipt: taken.receipt }),
-        Err(AnswerError::Gone) => match ask_peer(peer, AdminRequest::MarkupAnswer { project_id, target: schedule_target_id, ask_id, answers }).await {
-            Some(AdminResponse::MarkupAnswered { prompt, receipt }) => Ok(MarkupAnswered { prompt, receipt }),
-            Some(AdminResponse::MarkupRefused { code }) => Err(code),
-            _ => Err(AnswerError::Gone.code().to_string()),
-        },
+        Err(AnswerError::Gone) => {
+            if peer.is_none() { return Err(AnswerError::Gone.code().to_string()); }
+            if has_undelivered() { settle_undelivered(peer).await; }
+            // Minted here, so a reply lost on the way back still leaves the
+            // window able to undo the answer the peer may have taken.
+            let receipt = markup_mcp::mint_receipt();
+            let request = AdminRequest::MarkupAnswer {
+                project_id: project_id.clone(),
+                target: schedule_target_id.clone(),
+                ask_id: ask_id.clone(),
+                answers,
+                receipt: Some(receipt.clone()),
+            };
+            match ask_peer(peer, request).await {
+                Some(AdminResponse::MarkupAnswered { prompt, receipt }) => Ok(MarkupAnswered { prompt, receipt }),
+                Some(AdminResponse::MarkupRefused { code }) => Err(code),
+                // An older peer that does not know the request: nothing taken.
+                Some(_) => Err(AnswerError::Gone.code().to_string()),
+                None => {
+                    note_undelivered(Undelivered { peer: peer.map(Path::to_path_buf).unwrap_or_default(), project_id, target: schedule_target_id, ask_id, receipt });
+                    settle_undelivered(peer).await;
+                    Err("markup_failed".to_string())
+                }
+            }
+        }
         Err(other) => Err(other.code().to_string()),
     }
 }
@@ -174,11 +250,25 @@ pub async fn reopen_with(peer: Option<&Path>, project_id: String, schedule_targe
     let here = blocking(move || markup_mcp::reopen(&p, &t, &a, &r)).await?;
     match here {
         Ok(()) => Ok(()),
-        Err(AnswerError::Gone) => match ask_peer(peer, AdminRequest::MarkupReopen { project_id, target: schedule_target_id, ask_id, receipt }).await {
-            Some(AdminResponse::Ok) => Ok(()),
-            Some(AdminResponse::MarkupRefused { code }) => Err(code),
-            _ => Err(AnswerError::Gone.code().to_string()),
-        },
+        Err(AnswerError::Gone) if peer.is_some() => {
+            if has_undelivered() { settle_undelivered(peer).await; }
+            let request = AdminRequest::MarkupReopen {
+                project_id: project_id.clone(),
+                target: schedule_target_id.clone(),
+                ask_id: ask_id.clone(),
+                receipt: receipt.clone(),
+            };
+            match ask_peer(peer, request).await {
+                Some(AdminResponse::Ok) => Ok(()),
+                Some(AdminResponse::MarkupRefused { code }) => Err(code),
+                Some(_) => Err(AnswerError::Gone.code().to_string()),
+                // No reply: the ask may still be closed there; keep trying.
+                None => {
+                    note_undelivered(Undelivered { peer: peer.map(Path::to_path_buf).unwrap_or_default(), project_id, target: schedule_target_id, ask_id, receipt });
+                    Err("markup_failed".to_string())
+                }
+            }
+        }
         Err(other) => Err(other.code().to_string()),
     }
 }
@@ -227,8 +317,8 @@ pub fn admin_markup(request: &AdminRequest) -> AdminResponse {
             ticks.drain(..over);
             AdminResponse::MarkupTicks { ticks }
         }
-        AdminRequest::MarkupAnswer { project_id, target, ask_id, answers } if checked(project_id, target) => {
-            match markup_mcp::answer(project_id, target, ask_id, answers) {
+        AdminRequest::MarkupAnswer { project_id, target, ask_id, answers, receipt } if checked(project_id, target) => {
+            match markup_mcp::answer_as(project_id, target, ask_id, answers, receipt.as_deref()) {
                 Ok(taken) => AdminResponse::MarkupAnswered { prompt: taken.prompt, receipt: taken.receipt },
                 Err(error) => refused(error.code()),
             }
@@ -380,6 +470,72 @@ mod tests {
         assert!(matches!(admin_markup(&AdminRequest::Status), AdminResponse::Error { .. }));
         let bad = AdminRequest::MarkupDismiss { project_id: "p".into(), target: "a\nb".into(), ask_id: "x".into() };
         assert!(matches!(admin_markup(&bad), AdminResponse::MarkupRefused { code } if code == "invalid_target"));
+        server.abort();
+    }
+
+    /// The host took the window's answer but its reply never arrived (the
+    /// connection dropped, the 5 s deadline passed): the ask must not stay
+    /// closed with its prompt lost. The window minted the receipt, so it
+    /// reopens that answer — at once, or, while the host does not answer at
+    /// all, on its next contact.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_lost_reply_to_a_host_answer_reopens_the_ask() {
+        use crate::services::markup_mcp::{as_host, test_open_ask};
+        use std::sync::atomic::{AtomicU8, Ordering};
+        use std::sync::Arc;
+        // 0: a working host. 1: answers are taken, their replies dropped;
+        // everything else is dropped unread (a host that stopped answering).
+        let mode = Arc::new(AtomicU8::new(1));
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("lossy.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let served = mode.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let Ok(request) = admin::read_frame::<AdminRequest>(&mut stream).await else { continue };
+                let lossy = served.load(Ordering::SeqCst) == 1;
+                if lossy && !matches!(request, AdminRequest::MarkupAnswer { .. }) { continue; }
+                let response = as_host::run(|| admin_markup(&request));
+                if lossy { continue; }
+                let _ = admin::write_frame(&mut stream, &response).await;
+            }
+        });
+        let peer = Some(socket.as_path());
+        let (project, tab) = ("p-lost-reply", "t-lost-reply");
+        let questions = serde_json::json!([{ "question": "Which?", "options": [{ "label": "Figure" }, { "label": "Paragraph" }] }]);
+        let ask = as_host::run(|| test_open_ask("lost-reply", project, tab, questions));
+        let held = || as_host::run(|| markup_mcp::list(project, tab, Shown::All)).len();
+        let one = || vec![Answer { options: vec![0], other: None }];
+
+        // Taken, reply lost, and the reopen gets no answer either: the window
+        // says it failed and keeps the receipt.
+        assert_eq!(answer_with(peer, project.into(), tab.into(), ask.clone(), one()).await, Err("markup_failed".into()));
+        assert_eq!(held(), 0, "the host closed the ask");
+        assert_eq!(undelivered_for(&socket), 1);
+        // The host answers again: the next list reopens the answer first, so
+        // the card comes back and a retry is not told `answered`.
+        mode.store(0, Ordering::SeqCst);
+        let seen = list_with(peer, project.into(), tab.into(), None).await.unwrap();
+        assert_eq!(seen.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [ask.as_str()]);
+        assert_eq!(undelivered_for(&socket), 0, "settled");
+        let answered = answer_with(peer, project.into(), tab.into(), ask.clone(), one()).await.unwrap();
+        assert!(answered.prompt.contains("Figure"), "{}", answered.prompt);
+
+        // Lost again; this time the next contact is a reopen of another ask:
+        // that settles the pending one too.
+        as_host::run(|| markup_mcp::reopen(project, tab, &ask, &answered.receipt)).unwrap();
+        mode.store(1, Ordering::SeqCst);
+        assert_eq!(answer_with(peer, project.into(), tab.into(), ask.clone(), one()).await, Err("markup_failed".into()));
+        assert_eq!((held(), undelivered_for(&socket)), (0, 1));
+        mode.store(0, Ordering::SeqCst);
+        let other = reopen_with(peer, project.into(), tab.into(), "ask-unrelated".into(), "r".repeat(16)).await;
+        assert_eq!(other, Err("gone".into()));
+        assert_eq!((held(), undelivered_for(&socket)), (1, 0), "open again, settled");
+
+        // A receipt the window did not mint the host's way is refused.
+        let planted = AdminRequest::MarkupAnswer { project_id: project.into(), target: tab.into(), ask_id: ask.clone(), answers: one(), receipt: Some("a/b".into()) };
+        assert!(matches!(admin_markup(&planted), AdminResponse::MarkupRefused { code } if code == "invalid_answer"));
         server.abort();
     }
 

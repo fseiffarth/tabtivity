@@ -476,15 +476,31 @@ pub struct Answered {
     pub receipt: String,
 }
 
-fn mint_receipt() -> String {
+pub fn mint_receipt() -> String {
     crate::services::root_mcp::mint_token().map(|t| t[..16].to_string())
         .unwrap_or_else(|| format!("{:x}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()))
+}
+
+/// A receipt a caller minted itself ([`answer_as`]): what [`mint_receipt`]
+/// makes, bounded so a peer's frame cannot plant anything else.
+pub fn valid_receipt(receipt: &str) -> bool {
+    (8..=64).contains(&receipt.len()) && receipt.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// The user's answer to the open ask `id`: checks every answer against its
 /// question, marks the ask answered and returns the prompt to queue into the
 /// tab. A refused answer changes nothing.
 pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Result<Answered, AnswerError> {
+    answer_as(project, target, id, answers, None)
+}
+
+/// [`answer`] under a receipt the caller chose (`None`: one minted here). The
+/// window answers a Mobile host ask this way: should the host's reply be
+/// lost, the window still holds the receipt and can [`reopen`] the ask it
+/// closed, so the answer is never taken with its prompt lost. A receipt that
+/// is not [`valid_receipt`] is `Invalid`.
+pub fn answer_as(project: &str, target: &str, id: &str, answers: &[Answer], receipt: Option<&str>) -> Result<Answered, AnswerError> {
+    if receipt.is_some_and(|r| !valid_receipt(r)) { return Err(AnswerError::Invalid); }
     let mut asks = store().lock_ok();
     let gone = prune(&mut asks);
     let result = (|| {
@@ -495,7 +511,7 @@ pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Resu
             .map(|(q, a)| answer_text(q, a).map(|text| (q.question.clone(), text)))
             .collect::<Result<Vec<_>, _>>()?;
         let prompt = answer_prompt(ask.file.as_deref(), &lines);
-        let receipt = mint_receipt();
+        let receipt = receipt.map_or_else(mint_receipt, str::to_string);
         asks[at].state = State::Answered;
         asks[at].receipt = Some(receipt.clone());
         Ok(Answered { prompt, receipt })
@@ -1290,6 +1306,27 @@ mod tests {
         let (s2, ..) = tab("dismiss");
         assert!(list(&project, &target, Shown::All).is_empty());
         root_mcp::revoke_tab(&s2.identity.tab);
+    }
+
+    #[test]
+    fn an_answer_under_the_callers_receipt_is_undone_by_that_receipt() {
+        let (s, project, target) = tab("answer-as");
+        let pick = [Answer { options: vec![1], other: None }];
+        let id = call(&s, TOOL_ASK, json!({"questions": [q("a?", &["x", "y"])]}), &ctx_on())["id"].as_str().unwrap().to_string();
+        // Malformed receipts are refused before anything is taken.
+        for bad in ["", "short", "has/slash0123", &"a".repeat(65)] {
+            assert_eq!(answer_as(&project, &target, &id, &pick, Some(bad)), Err(AnswerError::Invalid), "{bad:?}");
+        }
+        assert_eq!(list(&project, &target, Shown::All).len(), 1);
+        let mine = mint_receipt();
+        assert!(valid_receipt(&mine), "{mine}");
+        let taken = answer_as(&project, &target, &id, &pick, Some(&mine)).unwrap();
+        assert_eq!(taken.receipt, mine);
+        assert!(taken.prompt.contains('y'), "{}", taken.prompt);
+        // The caller never saw the reply, but holds the receipt: it undoes it.
+        assert_eq!(reopen(&project, &target, &id, &mine), Ok(()));
+        assert_eq!(list(&project, &target, Shown::All).len(), 1);
+        root_mcp::revoke_tab(&s.identity.tab);
     }
 
     #[test]
