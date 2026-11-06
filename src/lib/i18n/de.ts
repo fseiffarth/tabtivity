@@ -11665,4 +11665,6 @@ export const dict: Dict = {
   "cockpit.usage.noRemote": "Keine entfernten Rechner.",
   "cockpit.usage.sessions": "{count} laufende Sitzungen",
   "cockpit.usage.openMachines": "Globale Rechner öffnen…",
+  "cockpit.usage.machines": "Rechner",
+  "cockpit.usage.manageMachines": "Rechner verwalten…",
 };

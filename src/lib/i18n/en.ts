@@ -11757,4 +11757,6 @@ export const enSource = {
   "cockpit.usage.noRemote": "No remote hosts.",
   "cockpit.usage.sessions": "{count} live sessions",
   "cockpit.usage.openMachines": "Open global machines…",
+  "cockpit.usage.machines": "Machines",
+  "cockpit.usage.manageMachines": "Manage machines…",
 } as const;

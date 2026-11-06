@@ -537,20 +537,32 @@
 }
 
 /* ── Tonight view ─────────────────────────────────────────────────────── */
+/* One centred column, the sections stacked and only as tall as what they
+   hold; the view scrolls as a whole. An empty section is its head and one
+   muted line. */
 .cockpit-tonight {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 8px;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 .cockpit-tonight-col {
-  min-height: 0;
-  overflow: auto;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  padding: 0 8px 8px;
+  min-width: 0;
+}
+.cockpit-tonight-col + .cockpit-tonight-col {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+.cockpit-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.cockpit-section-head > .settings-btn {
+  margin-left: auto;
 }
 .cockpit-tonight-group + .cockpit-tonight-group {
   margin-top: 6px;
@@ -586,25 +598,71 @@
 }
 
 /* ── Usage view ───────────────────────────────────────────────────────── */
+/* Usage: a top strip (CLIs beside this machine), then the machine list at
+   full width. Flat sections, one hairline between them. */
 .cockpit-usage {
-  flex: 1;
-  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cockpit-usage-top {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
+  gap: 16px;
+  align-items: start;
 }
 .cockpit-usage-col {
-  min-height: 0;
-  overflow: auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 .cockpit-usage-section {
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  padding: 0 8px 8px;
+  min-width: 0;
+}
+.cockpit-machines {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+.cockpit-mrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: var(--text-sm);
+}
+.cockpit-mrow:hover {
+  background: var(--control-hover-bg);
+}
+.cockpit-mrow-name {
+  flex: 0 1 220px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.cockpit-mrow-projects {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cockpit-mchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cockpit-mchip .dim {
+  color: var(--text-muted);
+  white-space: pre;
+}
+.cockpit-mrow-connect {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .cockpit-usage-models {
   display: grid;
@@ -741,7 +799,7 @@
   cursor: var(--cur-pointer, pointer);
 }
 
-/* Now, middle band: the rail is the icon rail in its own rounded column, the
+/* Now, middle band: the rail is the flat icon rail, the
    full rail in the popover; roster and detail share the rest. */
 .cockpit-now-icons {
   flex: 0 0 auto;
@@ -812,14 +870,11 @@
   display: flex;
   padding: 4px;
 }
-/* Tonight and Usage stack their two columns; the view scrolls as a whole
-   instead of two short panes scrolling inside it. */
-.root-overlay[data-band="narrow"] .cockpit-tonight,
-.root-overlay[data-band="narrow"] .cockpit-usage {
-  flex: 0 0 auto;
+/* Usage stacks its top strip; the view scrolls as a whole
+   (Tonight is one column at every width). */
+.root-overlay[data-band="narrow"] .cockpit-usage-top {
   grid-template-columns: minmax(0, 1fr);
 }
-.root-overlay[data-band="narrow"] .cockpit-tonight-col,
-.root-overlay[data-band="narrow"] .cockpit-usage-col {
-  overflow: visible;
+.root-overlay[data-band="narrow"] .cockpit-mrow {
+  flex-wrap: wrap;
 }

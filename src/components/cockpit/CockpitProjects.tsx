@@ -27,7 +27,7 @@ import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { hostStateOf, PRIMARY_HOST, useRemoteStatusStore, type ConnState } from "../../stores/remote/remoteStatus";
 import { useSyncStore } from "../../stores/remote/sync";
 import { useTabsStore } from "../../stores/tabs";
-import { ContextMenuPortal } from "../common/ContextMenuPortal";
+import { EntryMenu, type MenuEntry } from "./EntryMenu";
 import { DotIcon, MoreIcon } from "../common/icons/Icon";
 import { CockpitUntested } from "./CockpitUntested";
 import { useCockpitNow, useCockpitScopes, usePushRequests } from "./useCockpitData";
@@ -116,35 +116,6 @@ const showAgentsOf = (id: string) => {
 };
 
 type Band = "wide" | "mid" | "narrow";
-
-/** One menu entry of a row's ⋯ or a fold button's right-click. */
-interface MenuEntry {
-  key: string;
-  label: string;
-  run: () => void;
-}
-
-/** The shared popover (`ContextMenuPortal` + `.tab-new-menu`) with a few actions. */
-function EntryMenu({ x, y, entries, onClose }: { x: number; y: number; entries: MenuEntry[]; onClose: () => void }) {
-  return (
-    <ContextMenuPortal x={x} y={y} keepBelow className="tab-new-menu cockpit-view-menu" onClose={onClose}>
-      {entries.map((entry) => (
-        <button
-          key={entry.key}
-          type="button"
-          role="menuitem"
-          className="tab-new-menu-item"
-          onClick={() => {
-            onClose();
-            entry.run();
-          }}
-        >
-          {entry.label}
-        </button>
-      ))}
-    </ContextMenuPortal>
-  );
-}
 
 /** The grid each band lays its rows (and the column header) on. */
 function gridClass(band: Band): string {

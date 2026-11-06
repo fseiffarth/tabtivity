@@ -11663,4 +11663,6 @@ export const dict: Dict = {
   "cockpit.usage.noRemote": "Aucun hôte distant.",
   "cockpit.usage.sessions": "{count} sessions actives",
   "cockpit.usage.openMachines": "Ouvrir les machines globales…",
+  "cockpit.usage.machines": "Machines",
+  "cockpit.usage.manageMachines": "Gérer les machines…",
 };

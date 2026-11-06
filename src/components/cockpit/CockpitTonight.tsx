@@ -156,10 +156,13 @@ export function CockpitTonight() {
 
   return (
     <div className="cockpit-view cockpit-view-tonight">
-      <CockpitUntested view="tonight" />
       {error && <p className="cockpit-empty" role="alert">{error}</p>}
       <div className="cockpit-tonight">
         <section className="cockpit-tonight-col" aria-label={t("cockpit.tonight.heading")}>
+          <div className="cockpit-section-head">
+            <span className="tab-new-menu-group-label">{t("cockpit.tonight.heading")}</span>
+            <CockpitUntested view="tonight" />
+          </div>
           {comingUp.length === 0 && <p className="cockpit-empty">{t("cockpit.tonight.nothing")}</p>}
           {comingUp.map((group) => (
             <div key={group.bucket} className="cockpit-tonight-group">
