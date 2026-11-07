@@ -1362,15 +1362,17 @@
   width: max-content;
   z-index: 200;
   max-height: 320px;
-  /* Shared popover surface (the `.context-menu` group); it never scrolls
-     itself — `.git-change-rows` is its `.menu-scroll-region` — so the accent
-     wash spans the whole frame. */
+  /* Shared popover surface (the `.context-menu` group), minus its rail and
+     accent wash (apps.css); it never scrolls itself — `.git-change-rows` is
+     its `.menu-scroll-region`. */
   display: flex;
   flex-direction: column;
   overflow: hidden;
   color: var(--text-primary);
   font-size: var(--text-sm);
-  padding: var(--space-1) 0;
+  /* Inset on every side so the rows' scrollbar clears the rounded corners
+     instead of riding the frame's top-right edge. */
+  padding: var(--space-2) var(--space-1);
 }
 /* Once it lists rows, a fixed box: folding a folder changed the max-content
    width and the height, and anchored bottom-right that moved every row —

@@ -65,6 +65,26 @@ describe("the floating recipe", () => {
     expect(css).not.toMatch(new RegExp(`(^|[\\s,}])\\.${member}\\s*\\{[^}]*border-top:`));
   });
 
+  // The Add/Commit/Push change tree is a big list over the panel: rail and wash
+  // made it a lavender slab with a thick top bar (user, 2026-11-06). It opts
+  // out after the group rules, so the later rule wins the cascade.
+  it("the change tree drops the rail and the wash after the recipe", () => {
+    const optOut = css.search(/(^|[\s,}])\.git-change-tree\s*\{\s*--surface-rail: 0px;\s*border-top: 0;/);
+    const noWash = css.search(/(^|[\s,}])\.git-change-tree::before\s*\{\s*content: none;/);
+    expect(optOut).toBeGreaterThan(css.indexOf("--surface-rail: 2px"));
+    expect(noWash).toBeGreaterThan(css.indexOf("inset: calc(-1 * var(--surface-rail)) 0 0"));
+  });
+
+  // The dropdown menus keep the rail but no wash: a wash behind a column of
+  // row cards read as a lavender slab (user, 2026-11-06). Rows rest flat.
+  it("the dropdown menus drop the wash after the recipe and rest their rows flat", () => {
+    const noWash = css.search(/(^|[\s,}])\.box-chip-menu::before\s*\{\s*content: none;/);
+    expect(noWash).toBeGreaterThan(css.indexOf("inset: calc(-1 * var(--surface-rail)) 0 0"));
+    expect(css).toMatch(/\.tab-new-menu-item\s*\{[^}]*background: transparent;/);
+    expect(css).toMatch(/\.context-menu button\s*\{[^}]*background: transparent;/);
+    expect(css).toMatch(/\.project-switcher-add-menu button\s*\{[^}]*background: transparent;/);
+  });
+
   it("never clips with a clip-path, which would take the shadow", () => {
     for (const member of MEMBERS) {
       expect(css).not.toMatch(new RegExp(`\\.${member}\\s*\\{[^}]*clip-path`));

@@ -1182,9 +1182,6 @@ export function LocalModelsSection({
           it is what makes Running / On disk (`is-sub`) read as its parts. */}
       <div className="tab-new-menu-group-label">{t("localModel.localModelsGroup")}</div>
       <button className="tab-new-menu-item" onClick={onManageModels}>
-        <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-          <DotIcon />
-        </span>
         {installed ? t("localModel.manageLocalModels") : t("localModel.installOllamaEllipsis")}
         {/* The dropdown's door now opens the overlay's Ollama tab, not Settings;
             inside the overlay it is a tab switch and carries no pill. */}
@@ -1206,9 +1203,6 @@ export function LocalModelsSection({
             title={t("localModel.checkUpdatesTitle")}
             onClick={checkUpdates}
           >
-            <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-              <DotIcon />
-            </span>
             {checkingUpdates ? t("localModel.checkingUpdates") : t("localModel.checkUpdates")}
             {/* The click must always report back — but only where nothing
                 else does. A *found* update now shows itself: the green

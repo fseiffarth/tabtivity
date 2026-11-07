@@ -766,7 +766,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   padding: 7px 9px;
-  background: var(--control-bg);
+  background: transparent;
   color: var(--text-primary) !important;
   -webkit-text-fill-color: var(--text-primary);
   text-align: left;
@@ -922,6 +922,37 @@
   pointer-events: none;
   z-index: -1;
   border-radius: inherit;
+}
+
+/* The Add/Commit/Push change tree is a list read over the side panel, not a
+   menu: on its 480×320 frame the rail read as a thick bar and the accent wash
+   as a solid lavender slab (user, 2026-11-06). Plain floating fill, no rail,
+   no wash; the shadow alone lifts it. Declared after the groups it opts out of. */
+.git-change-tree {
+  --surface-rail: 0px;
+  border-top: 0;
+}
+.git-change-tree::before {
+  content: none;
+}
+
+/* The dropdown menus (+ tab, + project, context, box pill) are lists, like the
+   change tree above: a 32% accent wash behind a column of white row cards read
+   as a lavender slab full of boxes (user, 2026-11-06). The fill stays plain, the
+   rows sit flat on it (their own rules) and light up on hover; the accent top
+   rail and a hairline ring keep the edge. Declared after the groups it opts
+   out of. Dialogs keep the wash. */
+.context-menu,
+.tab-new-menu,
+.project-switcher-add-menu,
+.box-chip-menu {
+  box-shadow: var(--shadow-2), 0 0 0 1px var(--border-subtle);
+}
+.context-menu::before,
+.tab-new-menu::before,
+.project-switcher-add-menu::before,
+.box-chip-menu::before {
+  content: none;
 }
 
 /* Enter: opacity and a 4px rise; exit: opacity only (`ContextMenuPortal` holds a

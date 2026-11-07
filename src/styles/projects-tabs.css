@@ -3156,7 +3156,7 @@ button.tab-todo-link {
   padding: 7px 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--control-bg);
+  background: transparent;
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
   font-size: var(--text-md);
@@ -3174,7 +3174,7 @@ button.tab-todo-link {
 }
 
 .tab-new-menu-item:disabled:hover {
-  background: var(--control-bg);
+  background: transparent;
   border-color: transparent;
 }
 
@@ -3544,7 +3544,8 @@ select.file-run-args-input {
   min-height: 28px;
   padding: 5px 9px;
   border: 1px solid transparent;
-  background: var(--control-bg);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-primary);
   text-align: left;
   font-size: var(--text-md);
@@ -3567,7 +3568,7 @@ select.file-run-args-input {
   cursor: var(--cur-default, default);
 }
 .context-menu button:disabled:hover {
-  background: var(--control-bg);
+  background: transparent;
 }
 
 .context-menu hr {
