@@ -34,7 +34,10 @@ import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stor
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import { type TabEntry } from "../../stores/tabs";
+import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { AGENT_ITEMS, buildSignInTabSpec } from "../../lib/tabs/newTabItems";
+import { signInLaunch } from "../../lib/agents/signInLaunch";
+import { readSignedOut, signInCommand } from "../../../mobile-web/src/terminal/signIn";
 import { hostTabCwd, hostTabId } from "../../stores/tabs/tabLocation";
 import { useProjectsStore } from "../../stores/projects";
 import { usePaneTab } from "../tabs/paneTabContext";
@@ -467,7 +470,8 @@ const PromptText = memo(function PromptText({ text, unlinked = false }: { text: 
 /** What a subagent's card or list row opens: its handle and what it says. */
 type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">;
 
-function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent }: {
+function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action }: {
+  action?: ReactNode;
   turn: TranscriptTurn;
   cutLabel: string;
   planLabel: string;
@@ -529,6 +533,7 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
     <div className={turn.plan ? "terminal-reader-turn agent plan" : "terminal-reader-turn agent"}>
       {turn.plan && <small className="terminal-reader-plan-head">{planLabel}</small>}
       <AnswerText text={turn.text} />
+      {action}
       {cut}
       {time}
     </div>
@@ -1301,6 +1306,25 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];
   const workingLine = workingModel ? t("terminal.reader.workingModel", { model: workingModel }) : t("terminal.reader.working");
   const typeIntoPane = useCallback((keys: string[]) => typePaneKeys(ptyId, keys), [ptyId]);
+  const signInItem = AGENT_ITEMS.find((item) => item.cmd === tab?.cmd);
+  const loginCommand = signInItem ? signInCommand(agentFamily(signInItem.cmd)) : null;
+  const canLogIn = scope !== ASSISTANT_SCOPE && !!signInItem && (!!loginCommand || (localOnly && !!cwd));
+  const [loggingIn, setLoggingIn] = useState(false);
+  const logIn = () => {
+    if (loggingIn || !canLogIn || !signInItem) return;
+    if (!loginCommand) {
+      if (cwd) useTabsStore.getState().addTabToScope(scope, {
+        ...buildSignInTabSpec(signInItem, signInLaunch(signInItem.cmd), cwd, t),
+        location: "local",
+      });
+      return;
+    }
+    setLoggingIn(true);
+    void typeIntoPane(agentInputWrites(loginCommand))
+      .catch(() => useProjectsStore.setState({ switchToast: t("terminal.reader.answerFailed") }))
+      .finally(() => setLoggingIn(false));
+  };
+
   /** Esc in the composer, once no status panel or subagent is open: the key
    * the terminal would get — it stops the turn, closes the CLI's own menus —
    * typed into the session, the chat staying shown (the prompt strip's switch
@@ -2345,7 +2369,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                     <span>{chatDayLabel(moment, now, dayLabels)}</span>
                   </div>
                 )}
-                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} />
+                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} action={
+                  !browsed && !openStep && canLogIn
+                  && index === turns.length - 1 && turn.kind === "answer"
+                  && readSignedOut(turn.text.split(/\r?\n/u).map((text) => ({ text }))) ? (
+                    <button type="button" className="terminal-reader-stop" disabled={loggingIn || !!live.working || !!live.question || pending.length > 0} onClick={logIn}>
+                      {t("mobile.signIn.open")} <UntestedTag id="terminal.reader.loginExpired" />
+                    </button>
+                  ) : undefined
+                } />
               </Fragment>
             );
           })}
