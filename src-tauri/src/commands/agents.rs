@@ -66,6 +66,8 @@ fn platform_install(spec: &AgentSpec) -> (Option<&'static str>, String, &'static
 /// Public view of one agent + whether it is currently installed.
 #[derive(serde::Serialize)]
 pub struct AgentInfo {
+    /// Discovered launch model IDs; never picker display labels.
+    pub default_models: Vec<String>,
     pub launch_defaults: crate::services::agent_defaults::Capabilities,
     pub id: String,
     pub label: String,
@@ -345,6 +347,11 @@ fn list_agents_blocking() -> Vec<AgentInfo> {
                 .map(|pkg| format!("npm uninstall -g {pkg}"))
                 .unwrap_or_default();
             AgentInfo {
+                default_models: if installed.contains(spec.id) {
+                    crate::services::agent_defaults::discovered_models(spec.bin)
+                } else {
+                    Vec::new()
+                },
                 launch_defaults: crate::services::agent_defaults::capabilities(spec.bin),
                 id: spec.id.to_string(),
                 label: spec.label.to_string(),

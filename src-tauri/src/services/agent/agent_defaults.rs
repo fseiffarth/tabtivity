@@ -84,6 +84,56 @@ pub fn capabilities(cmd: &str) -> Capabilities {
     }
 }
 
+/// Launchable IDs from the newest usable Codex cache, rather than the screen's
+/// display labels. Uses guarded, bounded cache reads; never launches a CLI or
+/// writes a home. Other CLIs retain their configured model names in the UI.
+pub fn discovered_models(cmd: &str) -> Vec<String> {
+    if cmd != "codex" {
+        return Vec::new();
+    }
+    codex_models_in(&crate::services::agent_home::homes_root())
+}
+
+fn codex_models_in(homes: &std::path::Path) -> Vec<String> {
+    crate::services::agent_home::existing_homes_under(homes)
+        .into_iter()
+        .filter(|home| !crate::services::agent_home::is_local_model_home(home))
+        .filter_map(|home| {
+            use std::io::Read;
+            const CAP: u64 = 8 * 1024 * 1024;
+            let file = crate::services::home_io::HomeFile::open_existing(&home, ".codex/models_cache.json")?.open_read()?;
+            let modified = file.metadata().ok()?.modified().ok()?;
+            let mut bytes = Vec::new();
+            file.take(CAP + 1).read_to_end(&mut bytes).ok()?;
+            if bytes.len() as u64 > CAP {
+                return None;
+            }
+            let cache: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+            let mut models = Vec::new();
+            for entry in cache.get("models")?.as_array()? {
+                if entry.get("visibility").and_then(|v| v.as_str()) != Some("list") {
+                    continue;
+                }
+                let Some(slug) = entry.get("slug").and_then(|v| v.as_str()) else { continue; };
+                if slug.is_empty() || slug.len() > 256 || slug.starts_with('-')
+                    || slug.chars().any(char::is_control) || slug.trim() != slug
+                {
+                    continue;
+                }
+                if !models.iter().any(|id| id == slug) {
+                    models.push(slug.to_string());
+                }
+                if models.len() == 256 {
+                    break;
+                }
+            }
+            (!models.is_empty()).then_some((modified, models))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, models)| models)
+        .unwrap_or_default()
+}
+
 fn has_flag(args: &[String], flags: &[&str]) -> bool {
     args.iter().any(|arg| {
         flags.iter().any(|flag| {
@@ -340,6 +390,29 @@ pub fn save_in(path: &std::path::Path, cmd: &str, saved: &Saved) -> Result<(), S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn discovered_models_use_the_newest_usable_nonlocal_catalog() {
+        let codex_model = |slug: &str| serde_json::json!({ "slug": slug, "visibility": "list" });
+        let temp = tempfile::tempdir().unwrap();
+        let homes = temp.path().join("agent-homes");
+        let write = |name: &str, models: serde_json::Value, age: u64| {
+            let dir = homes.join(name).join(".codex");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("models_cache.json");
+            std::fs::write(&path, serde_json::json!({ "models": models }).to_string()).unwrap();
+            std::fs::File::options().write(true).open(path).unwrap()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(age)).unwrap();
+        };
+        write("one", serde_json::json!([codex_model("old")]), 1);
+        let mut hidden = codex_model("hidden");
+        hidden["visibility"] = "hide".into();
+        write("two", serde_json::json!([codex_model("new"), hidden, codex_model("new"), codex_model("--bad"), codex_model("bad\nmodel")]), 2);
+        write("broken", serde_json::json!([{"slug": "not-a-valid-catalog"}]), 3);
+        write("ollama.local", serde_json::json!([codex_model("local")]), 4);
+        assert_eq!(super::codex_models_in(&homes), vec!["new"]);
+        assert!(super::codex_models_in(&temp.path().join("missing")).is_empty());
+    }
+
     use super::*;
     use serde_json::json;
 

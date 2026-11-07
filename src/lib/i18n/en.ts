@@ -2853,6 +2853,8 @@ export const enSource = {
   "agents.options": "Options",
   "agents.defaultsTitle": "Default model and effort",
   "agents.defaultModel": "Default model",
+  "agents.defaultsCustomModel": "Custom model ID or alias",
+  "agents.defaultsNoModels": "No model catalog is available for this CLI yet. You can enter a model ID or alias below.",
   "agents.defaultEffort": "Default effort",
   "agents.defaultsCli": "Use CLI default",
   "agents.defaultsKnownModels": "Saved model names",

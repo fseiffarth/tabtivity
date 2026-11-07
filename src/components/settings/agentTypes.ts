@@ -50,6 +50,8 @@ export interface AgentUpdateReport {
 }
 
 export interface AgentInfo {
+  /** Launch model IDs discovered from the installed CLI catalog. */
+  default_models?: string[];
   /** Native startup choices; absent while running an older backend. */
   launch_defaults?: { model: boolean; efforts: string[]; effort_requires_model?: boolean };
   id: string;
