@@ -2318,3 +2318,1020 @@ fn sync_status_reports_the_last_pass_and_the_unseen_warnings() {
     assert_eq!(row["byte_sync"]["tracked_files"], 0);
     assert!(row["warnings"].as_array().unwrap().is_empty());
 }
+
+
+/// The cockpit capability is bound to a saved identity, not the tool arguments.
+#[test]
+fn cockpit_rename_is_self_only_versioned_and_revocable() {
+    use crate::services::{cockpit_mcp as cockpit, workspace};
+    let state = tempfile::tempdir().unwrap();
+    crate::storage::write_json(&state.path().join("settings.json"), &json!({})).unwrap();
+    let path = crate::services::mobile_control::headless::session_file(state.path(), "p");
+    let tab = |key: &str| serde_json::from_value(json!({"key":key,"label":key,"cmd":"claude",
+        "cwd":state.path().to_string_lossy(),"kind":"agent","unknownFutureField":{"keep":true}})).unwrap();
+    let mine = workspace::create_tab_in(&path, "p", tab("mine"), None).unwrap().tab;
+    let other = workspace::create_tab_in(&path, "p", tab("other"), None).unwrap().tab;
+    let mut spawn = opts("claude", &[], Some("p"));
+    spawn.id = "p:mine".into();
+    spawn.tmux_session = workspace::tmux_of(&mine).map(str::to_string);
+    let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+    let store = TokenStore::default();
+    grant_cockpit(&mut spawn, &runtime, &store, state.path(), &[]);
+    let token = spawn.env[COCKPIT_TOKEN_ENV].clone();
+    let session = store.authenticate(Some(&format!("Bearer {token}"))).unwrap();
+    assert!(spawn.args.join(" ").contains("/mcp/cockpit"));
+    let request = |args: Value| json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+        "params":{"name":"tab_rename","arguments":args}});
+    let call = |args| cockpit::handle_message(&session, &request(args)).unwrap()["result"]["structuredContent"].clone();
+    let before = workspace::snapshot_in(&path).unwrap();
+    assert_eq!(call(json!({"label":"Foreign", "tabId":workspace::tab_id(&other)}))["category"], "invalid_label");
+    assert_eq!(call(json!({"label":"Foreign", "projectId":"other"}))["category"], "invalid_label");
+    assert_eq!(call(json!({"label":"Task", "expectedLabel":"stale"}))["category"], "conflict");
+    for label in ["", " ", "bad\u{001b}[31m", "bad\u{202e}", "bad\u{200b}"] {
+        assert_eq!(call(json!({"label":label}))["category"], "invalid_label");
+    }
+    assert_eq!(call(json!({"label":"  Aufgabe 日本語  ","expectedLabel":"mine"})),
+        json!({"status":"renamed","label":"Aufgabe 日本語"}));
+    let renamed = workspace::snapshot_in(&path).unwrap();
+    assert_eq!(renamed.version, before.version + 1);
+    // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+    assert_eq!(renamed.session.tab_layout[1].label, "other");
+    // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+    assert_eq!(renamed.session.tab_layout[0].extra["unknownFutureField"], json!({"keep":true}));
+    assert_eq!(call(json!({"label":"Aufgabe 日本語"}))["status"], "unchanged");
+    assert_eq!(workspace::snapshot_in(&path).unwrap().version, renamed.version);
+    // A client with the old snapshot must adopt, rather than erase, the rename.
+    let stale = workspace::sync_in(&path, "p", workspace::ClientSync {
+        // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+        base_version: before.version, tabs: before.session.tab_layout, allow_clear: true, ..Default::default()
+    }).unwrap();
+    assert_eq!(stale.tabs[0].label, "Aufgabe 日本語");
+    crate::storage::write_json(&state.path().join("settings.json"), &json!({"cockpit_mcp":false})).unwrap();
+    assert_eq!(call(json!({"label":"Disabled"}))["category"], "unavailable");
+    crate::storage::write_json(&state.path().join("settings.json"), &json!({})).unwrap();
+    // Closing cannot be undone by a late call, including after a reopen.
+    workspace::close_tab_in(&path, "p", workspace::tmux_of(&mine).unwrap(), 1).unwrap();
+    assert_eq!(call(json!({"label":"Late"}))["category"], "tab_not_found");
+    grant_cockpit(&mut spawn, &runtime, &store, state.path(), &[]);
+    // Replace the lane directly to model a new successful spawn generation.
+    store.register("replacement-cockpit-token".into(), session.identity.clone(), false);
+    assert!(session.check().is_err());
+    assert!(cockpit::handle_message(&session, &request(json!({"label":"Old generation"}))).unwrap().get("error").is_some());
+}
+
+#[test]
+fn cockpit_grants_require_a_saved_tab_and_do_not_change_assistant_tools() {
+    let state = tempfile::tempdir().unwrap();
+    let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+    let store = TokenStore::default();
+    let mut spawn = opts("codex", &[], Some("p"));
+    grant_cockpit(&mut spawn, &runtime, &store, state.path(), &[]);
+    assert!(!spawn.env.contains_key(COCKPIT_TOKEN_ENV));
+    for caller in [Caller::Agent, Caller::Reader, Caller::LocalModel, Caller::Helper, Caller::Marker, Caller::Scheduler, Caller::Pusher, Caller::Web] {
+        assert!(!security::tool("tab_rename").unwrap().serves(caller));
+    }
+    assert!(security::tool("tab_rename").unwrap().serves(Caller::Cockpit));
+    for name in ["projects_list", "mail_read", "markup_ask", "web_fetch", crate::brand::HELP_TOOL_READ] {
+        assert!(!security::tool(name).unwrap().serves(Caller::Cockpit));
+    }
+}
+
+#[test]
+fn cockpit_budget_counts_malformed_calls_and_storage_errors_are_opaque() {
+    use crate::services::cockpit_mcp;
+    let state = tempfile::tempdir().unwrap();
+    crate::storage::write_json(&state.path().join("settings.json"), &json!({})).unwrap();
+    let (_, mut session) = test_session(Caller::Cockpit);
+    session.cockpit = Some(cockpit_mcp::Binding { state: state.path().into(), scope: "p".into(), id: "saved-id".into(), spawn: "s".into() });
+    let call = |args| cockpit_mcp::handle_message(&session,
+        &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tab_rename","arguments":args}})).unwrap();
+    let path = crate::services::mobile_control::headless::session_file(state.path(), "p");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "corrupt existing state").unwrap();
+    let reply = call(json!({"label":"Task"}));
+    assert_eq!(reply["result"]["structuredContent"]["category"], "storage_error");
+    assert!(!reply.to_string().contains(&*state.path().to_string_lossy()));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "corrupt existing state");
+    for _ in 1..30 { assert_eq!(call(json!({}))["result"]["structuredContent"]["category"], "invalid_label"); }
+    assert_eq!(call(json!({"label":"Task"}))["result"]["structuredContent"]["category"], "rate_limited");
+}
+
+/// A granted cockpit session over two saved agent tabs in scope `p`, driven
+/// through the JSON-RPC handler like an agent's own client.
+struct CockpitFixture {
+    state: tempfile::TempDir,
+    path: std::path::PathBuf,
+    store: TokenStore,
+    spawn: PtyOptions,
+    runtime: Runtime,
+    session: Session,
+    mine: crate::schema::project::TabEntry,
+}
+impl CockpitFixture {
+    fn new() -> Self {
+        use crate::services::workspace;
+        let state = tempfile::tempdir().unwrap();
+        crate::storage::write_json(&state.path().join("settings.json"), &json!({})).unwrap();
+        let path = crate::services::mobile_control::headless::session_file(state.path(), "p");
+        let tab = |key: &str| serde_json::from_value(json!({"key":key,"label":key,"cmd":"claude",
+            "cwd":state.path().to_string_lossy(),"kind":"agent","unknownFutureField":{"keep":true}})).unwrap();
+        let mine = workspace::create_tab_in(&path, "p", tab("mine"), None).unwrap().tab;
+        workspace::create_tab_in(&path, "p", tab("other"), None).unwrap();
+        let mut spawn = opts("claude", &[], Some("p"));
+        spawn.id = "p:mine".into();
+        spawn.tmux_session = workspace::tmux_of(&mine).map(str::to_string);
+        let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+        let store = TokenStore::default();
+        grant_cockpit(&mut spawn, &runtime, &store, state.path(), &[]);
+        let session = Self::session_of(&store, &spawn);
+        Self { state, path, store, spawn, runtime, session, mine }
+    }
+    fn session_of(store: &TokenStore, spawn: &PtyOptions) -> Session {
+        store.authenticate(Some(&format!("Bearer {}", spawn.env[COCKPIT_TOKEN_ENV]))).unwrap()
+    }
+    /// A new spawn of the same tab: a new token and generation nonce.
+    fn respawn(&mut self) -> Session {
+        grant_cockpit(&mut self.spawn, &self.runtime, &self.store, self.state.path(), &[]);
+        Self::session_of(&self.store, &self.spawn)
+    }
+    fn reply_in(session: &Session, name: &str, args: Value) -> Value {
+        crate::services::cockpit_mcp::handle_message(session,
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}})).unwrap()
+    }
+    fn reply(&self, name: &str, args: Value) -> Value { Self::reply_in(&self.session, name, args) }
+    fn call(&self, name: &str, args: Value) -> Value { self.reply(name, args)["result"]["structuredContent"].clone() }
+    fn stored(&self, index: usize) -> crate::schema::project::TabEntry {
+        // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+        crate::services::workspace::snapshot_in(&self.path).unwrap().session.tab_layout[index].clone()
+    }
+    fn set_switch(&self, on: bool) {
+        crate::storage::write_json(&self.state.path().join("settings.json"), &json!({"cockpit_mcp":on})).unwrap();
+    }
+}
+
+#[test]
+fn cockpit_metadata_tools_are_self_only_strict_and_conflict_checked() {
+    use crate::services::cockpit_mcp as cockpit;
+    let f = CockpitFixture::new();
+    let listed = cockpit::handle_message(&f.session, &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).unwrap();
+    let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["tab_rename", "tab_get_info", "tab_set_activity", "tab_set_handoff", "tab_set_results",
+        "tab_set_progress", "tab_set_blocker", "tab_set_verification", "tab_request_attention", "tab_add_milestone"]);
+    for tool in listed["result"]["tools"].as_array().unwrap() {
+        assert_eq!(tool["inputSchema"]["additionalProperties"], false, "{tool}");
+    }
+    // Own context only: the label, the revision and nothing about the other tab.
+    let info = f.call("tab_get_info", json!({}));
+    assert_eq!(info["status"], "ok");
+    assert_eq!(info["label"], "mine");
+    assert_eq!(info["revision"], 0);
+    assert!(info["activity"].is_null() && info["handoff"].is_null());
+    assert!(info["progress"].is_null() && info["blocker"].is_null() && info["verification"].is_null());
+    assert_eq!(info["blockerExpired"], false);
+    assert!(!info.to_string().contains("other"));
+    assert!(!info.to_string().contains(&*f.state.path().to_string_lossy()));
+    assert_eq!(f.call("tab_get_info", json!({"tabId":"x"}))["category"], "invalid_request");
+    assert_eq!(f.call("tab_get_info", json!("nope"))["category"], "invalid_request");
+
+    // Strict arguments.
+    let long = "a".repeat(161);
+    for bad in [
+        json!({}), json!({"expectedRevision":0}), json!({"text":"x"}),
+        json!({"expectedRevision":0,"text":"x","tabId":"other"}),
+        json!({"expectedRevision":0,"text":"x","projectId":"other"}),
+        json!({"expectedRevision":-1,"text":"x"}), json!({"expectedRevision":1.5,"text":"x"}),
+        json!({"expectedRevision":"0","text":"x"}), json!({"expectedRevision":0,"text":7}),
+        json!({"expectedRevision":0,"text":""}), json!({"expectedRevision":0,"text":"  "}),
+        json!({"expectedRevision":0,"text":"two\nlines"}), json!({"expectedRevision":0,"text":"bidi\u{202e}"}),
+        json!({"expectedRevision":0,"text":"zero\u{200b}width"}), json!({"expectedRevision":0,"text":long}),
+    ] {
+        assert_eq!(f.call("tab_set_activity", bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    for bad in [
+        json!({"expectedRevision":0}), json!({"expectedRevision":0,"handoff":"text"}),
+        json!({"expectedRevision":0,"handoff":{}}), json!({"expectedRevision":0,"handoff":{"checks":"x"}}),
+        json!({"expectedRevision":0,"handoff":{"summary":"s","extra":"x"}}),
+        json!({"expectedRevision":0,"handoff":{"summary":7}}), json!({"expectedRevision":0,"handoff":{"summary":"s","checks":null}}),
+        json!({"expectedRevision":0,"handoff":{"summary":"s\u{200b}"}}),
+        json!({"expectedRevision":0,"handoff":{"summary":"x".repeat(1001)}}),
+        json!({"expectedRevision":0,"handoff":{"summary":"x".repeat(1000),"checks":"y".repeat(1000),"remaining":"z".repeat(1000)},"tabId":"o"}),
+    ] {
+        assert_eq!(f.call("tab_set_handoff", bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    assert_eq!(f.stored(0).extra.get("cockpitMeta"), None, "nothing was written by a refused call");
+}
+
+#[test]
+fn cockpit_activity_and_handoff_update_unchange_conflict_and_clear() {
+    // A fresh session: the strict-argument test above spends most of one minute's budget.
+    let f = CockpitFixture::new();
+
+    // Activity: updated, then unchanged, then a stale revision conflicts.
+    let set = f.call("tab_set_activity", json!({"expectedRevision":0,"text":"  Prüfe 日本語 Layout  "}));
+    assert_eq!((set["status"].as_str(), set["revision"].as_u64()), (Some("updated"), Some(1)));
+    assert_eq!(set["activity"]["text"], "Prüfe 日本語 Layout");
+    assert!(set["activity"]["setAt"].as_u64().unwrap() > 0, "host timestamp");
+    let again = f.call("tab_set_activity", json!({"expectedRevision":1,"text":"Prüfe 日本語 Layout"}));
+    assert_eq!((again["status"].as_str(), again["revision"].as_u64()), (Some("unchanged"), Some(1)));
+    assert_eq!(f.call("tab_set_activity", json!({"expectedRevision":0,"text":"Stale"}))["category"], "conflict");
+    let info = f.call("tab_get_info", json!({}));
+    assert_eq!(info["activity"]["text"], "Prüfe 日本語 Layout");
+    assert_eq!(info["activityExpired"], false);
+
+    // Handoff: optional fields default empty; a clear.
+    let h = f.call("tab_set_handoff", json!({"expectedRevision":1,"handoff":{"summary":"Done a\nand b","remaining":"UI check"}}));
+    assert_eq!((h["status"].as_str(), h["revision"].as_u64()), (Some("updated"), Some(2)));
+    assert_eq!(h["handoff"]["summary"], "Done a\nand b");
+    assert_eq!(h["handoff"]["checks"], "");
+    assert_eq!(f.call("tab_set_handoff", json!({"expectedRevision":2,"handoff":{"summary":"Done a\nand b","remaining":"UI check"}}))["status"], "unchanged");
+    let cleared = f.call("tab_set_handoff", json!({"expectedRevision":2,"handoff":null}));
+    assert_eq!((cleared["status"].as_str(), cleared["revision"].as_u64()), (Some("updated"), Some(3)));
+    assert!(cleared["handoff"].is_null());
+    assert_eq!(f.call("tab_set_activity", json!({"expectedRevision":3,"text":null}))["activity"], Value::Null);
+
+    // The other tab and unrelated fields are untouched; the key is versioned.
+    let (mine, other) = (f.stored(0), f.stored(1));
+    assert_eq!(other.label, "other");
+    assert!(!other.extra.contains_key("cockpitMeta"));
+    assert_eq!(mine.extra["unknownFutureField"], json!({"keep":true}));
+    assert_eq!(mine.extra["cockpitMeta"]["v"], 1);
+    assert_eq!(mine.extra["cockpitMeta"]["revision"], 4);
+    assert_eq!(f.call("tab_rename", json!({"label":"Renamed"}))["status"], "renamed", "tab_rename keeps working");
+    assert_eq!(f.stored(0).extra["cockpitMeta"]["revision"], 4, "a rename does not touch the metadata revision");
+}
+
+#[test]
+fn cockpit_activity_expires_on_read_and_republishing_renews_it() {
+    use crate::services::{cockpit_meta, workspace};
+    let f = CockpitFixture::new();
+    let spawn = f.session.cockpit.as_ref().unwrap().spawn.clone();
+    let id = workspace::tab_id(&f.mine).unwrap().to_string();
+    let plant = |set_at: u64, owner: &str| {
+        workspace::edit_in(&f.path, "p", |session| {
+            // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+            let tab = session.tab_layout.iter_mut().find(|t| workspace::tab_id(t) == Some(id.as_str())).unwrap();
+            tab.extra.insert(cockpit_meta::KEY.into(), json!({"v":1,"revision":7,
+                "activity":{"text":"Old line","setAt":set_at,"spawn":owner}}));
+            Ok(())
+        }).unwrap();
+    };
+    let now = crate::clock::now_ms();
+    plant(now - cockpit_meta::ACTIVITY_TTL_MS - 1_000, &spawn);
+    let info = f.call("tab_get_info", json!({}));
+    assert!(info["activity"].is_null());
+    assert_eq!(info["activityExpired"], true, "the agent is told it expired");
+    // The same text, published again, is a change with a new stamp.
+    let again = f.call("tab_set_activity", json!({"expectedRevision":7,"text":"Old line"}));
+    assert_eq!(again["status"], "updated");
+    assert!(again["activity"]["setAt"].as_u64().unwrap() >= now);
+    // Another spawn's line is never shown to this one.
+    plant(now, "someone-else");
+    let info = f.call("tab_get_info", json!({}));
+    assert!(info["activity"].is_null());
+    assert_eq!(info["activityExpired"], false);
+}
+
+#[test]
+fn cockpit_grant_clears_activity_an_older_spawn_published() {
+    let mut f = CockpitFixture::new();
+    assert_eq!(f.call("tab_set_handoff", json!({"expectedRevision":0,"handoff":{"summary":"kept"}}))["status"], "updated");
+    assert_eq!(f.call("tab_set_activity", json!({"expectedRevision":1,"text":"Old spawn work"}))["status"], "updated");
+    let version = crate::services::workspace::snapshot_in(&f.path).unwrap().version;
+    let old = f.session.clone();
+    let fresh = f.respawn();
+    assert!(old.check().is_err(), "the earlier token is gone");
+    assert_ne!(old.cockpit.as_ref().unwrap().spawn, fresh.cockpit.as_ref().unwrap().spawn, "a new nonce per grant");
+    let meta = f.stored(0).extra["cockpitMeta"].clone();
+    assert!(meta.get("activity").is_none(), "{meta}");
+    assert_eq!(meta["handoff"]["summary"], "kept", "the historical handoff stays");
+    assert_eq!(meta["revision"], 3);
+    assert_eq!(crate::services::workspace::snapshot_in(&f.path).unwrap().version, version + 1, "one write");
+    // Another grant with nothing to clear writes nothing.
+    f.respawn();
+    assert_eq!(crate::services::workspace::snapshot_in(&f.path).unwrap().version, version + 1);
+    // The revoked session is refused; the new one starts from the stored revision.
+    assert!(CockpitFixture::reply_in(&old, "tab_get_info", json!({})).get("error").is_some());
+    let session = CockpitFixture::session_of(&f.store, &f.spawn);
+    let info = CockpitFixture::reply_in(&session, "tab_get_info", json!({}))["result"]["structuredContent"].clone();
+    assert_eq!(info["revision"], 3);
+    assert_eq!(CockpitFixture::reply_in(&session, "tab_set_activity", json!({"expectedRevision":3,"text":"New spawn"}))
+        ["result"]["structuredContent"]["status"], "updated");
+}
+
+impl CockpitFixture {
+    /// Register scope `p` as a project whose folder is `<state>/proj`, with `extra` on its record.
+    fn project(&self, extra: Value) -> std::path::PathBuf {
+        let dir = self.state.path().join("proj");
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        let mut record = json!({"id":"p","name":"p","status":"inactive","position":0,"local_file":"","directory":dir.to_string_lossy()});
+        for (key, value) in extra.as_object().cloned().unwrap_or_default() { record[key] = value; }
+        crate::storage::write_json(&self.state.path().join("projects.json"), &json!([record])).unwrap();
+        dir
+    }
+    fn stored_results(&self) -> Value {
+        self.stored(0).extra.get("cockpitMeta").map_or(Value::Null, |m| m["results"].clone())
+    }
+}
+
+#[test]
+fn cockpit_results_are_strict_bounded_and_refuse_bad_paths_without_writing() {
+    let f = CockpitFixture::new();
+    f.project(json!({}));
+    let one = |label: &str, path: &str| json!({"label":label,"relativePath":path});
+    // The argument shape.
+    for bad in [
+        json!({}), json!({"expectedRevision":0}), json!({"results":[]}),
+        json!({"expectedRevision":0,"results":null}), json!({"expectedRevision":0,"results":"a.png"}),
+        json!({"expectedRevision":0,"results":{}}), json!({"expectedRevision":"0","results":[]}),
+        json!({"expectedRevision":0,"results":[],"tabId":"other"}), json!({"expectedRevision":0,"results":[],"projectDir":"/"}),
+    ] {
+        assert_eq!(f.call("tab_set_results", bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    assert_eq!(f.stored(0).extra.get("cockpitMeta"), None);
+    // The items (a fresh session: the budget is 30 calls a minute): bounds, shape
+    // and every path form the plan rules out.
+    let f = CockpitFixture::new();
+    f.project(json!({}));
+    let call = |results: Value| f.call("tab_set_results", json!({"expectedRevision":0,"results":results}));
+    let nine: Vec<Value> = (0..9).map(|i| one("L", &format!("f{i}.png"))).collect();
+    let absolute = f.state.path().join("proj").join("out").join("plot.png").to_string_lossy().into_owned();
+    for bad in [
+        json!(nine), json!([one(&"x".repeat(121), "a.png")]), json!([one("L", &"a".repeat(513))]), json!([one("", "a.png")]),
+        json!([{"label":"L"}]), json!([{"label":"L","relativePath":"a","extra":1}]), json!(["a.png"]), json!([[]]),
+        json!([one("L", "../a.png")]), json!([one("L", "out/../../a.png")]), json!([one("L", &absolute)]),
+        json!([one("L", "/etc/passwd")]), json!([one("L", "C:\\Windows\\win.ini")]), json!([one("L", "C:/x")]),
+        json!([one("L", "\\\\host\\share\\x")]), json!([one("L", "//host/share/x")]), json!([one("L", "out\\plot.png")]),
+        json!([one("L", "file:///etc/passwd")]), json!([one("L", "https://example.com/a.png")]), json!([one("L", "javascript:alert(1)")]),
+        json!([one("L", "out/")]), json!([one("L", "a\u{202e}b.png")]), json!([one("L", "a\nb.png")]),
+        json!([one("Plot\u{202e}", "a.png")]), json!([one("two\nlines", "a.png")]),
+        json!([one("ok", "a.png"), one("bad", "../x")]),
+    ] {
+        assert_eq!(call(bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    assert_eq!(f.stored_results(), Value::Null, "a refused call writes nothing");
+    assert_eq!(f.stored(0).extra.get("cockpitMeta"), None);
+}
+
+#[test]
+fn cockpit_results_publish_accept_missing_targets_and_report_through_get_info() {
+    let f = CockpitFixture::new();
+    let dir = f.project(json!({}));
+    std::fs::write(dir.join("out").join("plot.png"), "png").unwrap();
+    // 8 items of 120-character labels and 512-character paths are the bound.
+    let wide: Vec<Value> = (0..8).map(|i| json!({"label":"日".repeat(120),"relativePath":format!("{}{i}", "d".repeat(500))})).collect();
+    let set = f.call("tab_set_results", json!({"expectedRevision":0,"results":wide}));
+    assert_eq!((set["status"].as_str(), set["revision"].as_u64()), (Some("updated"), Some(1)), "{set}");
+    assert_eq!(f.call("tab_set_results", json!({"expectedRevision":1,"results":[]}))["results"], Value::Null);
+
+    let list = json!([{"label":"  Plot  ","relativePath":"out/plot.png"},{"label":"Not yet made","relativePath":"out/later.png"},{"label":"Deep","relativePath":"nothing/here/yet.csv"}]);
+    let set = f.call("tab_set_results", json!({"expectedRevision":2,"results":list}));
+    assert_eq!((set["status"].as_str(), set["revision"].as_u64()), (Some("updated"), Some(3)), "{set}");
+    assert_eq!(set["results"]["items"][0], json!({"label":"Plot","relativePath":"out/plot.png"}));
+    assert_eq!(set["results"]["items"].as_array().unwrap().len(), 3, "a missing target is accepted");
+    assert!(set["results"]["setAt"].as_u64().unwrap() > 0, "host timestamp");
+    // The same list again: unchanged, the revision does not move; a stale revision conflicts.
+    let again = f.call("tab_set_results", json!({"expectedRevision":3,"results":[{"label":"Plot","relativePath":"out/plot.png"},{"label":"Not yet made","relativePath":"out/later.png"},{"label":"Deep","relativePath":"nothing/here/yet.csv"}]}));
+    assert_eq!((again["status"].as_str(), again["revision"].as_u64()), (Some("unchanged"), Some(3)));
+    assert_eq!(f.call("tab_set_results", json!({"expectedRevision":2,"results":[]}))["category"], "conflict");
+    // Nothing was created: publishing reads, previews and generates nothing.
+    assert!(!dir.join("out").join("later.png").exists());
+    assert!(!dir.join("nothing").exists());
+    // The agent reads its own list back.
+    let info = f.call("tab_get_info", json!({}));
+    assert_eq!(info["results"]["items"].as_array().unwrap().len(), 3);
+    assert!(info["results"]["ageSeconds"].as_u64().is_some());
+    assert!(!info.to_string().contains(&*f.state.path().to_string_lossy()), "no storage paths");
+    // The other tab and the other notes are untouched; a clear leaves the key.
+    assert!(!f.stored(1).extra.contains_key("cockpitMeta"));
+    let cleared = f.call("tab_set_results", json!({"expectedRevision":3,"results":[]}));
+    assert_eq!((cleared["status"].as_str(), cleared["revision"].as_u64()), (Some("updated"), Some(4)));
+    assert!(f.call("tab_get_info", json!({}))["results"].is_null());
+    assert_eq!(f.call("tab_set_results", json!({"expectedRevision":4,"results":[]}))["status"], "unchanged");
+    // A committed update tells the views, an unchanged call does not.
+    let updated = f.reply("tab_set_results", json!({"expectedRevision":4,"results":[{"label":"A","relativePath":"a.md"}]}));
+    assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &updated).is_some());
+    let same = f.reply("tab_set_results", json!({"expectedRevision":5,"results":[{"label":"A","relativePath":"a.md"}]}));
+    assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &same).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn cockpit_results_refuse_a_link_out_of_the_project_and_the_switch_is_rechecked() {
+    use std::os::unix::fs::symlink;
+    let f = CockpitFixture::new();
+    let dir = f.project(json!({}));
+    let outside = f.state.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("secret.txt"), "s").unwrap();
+    symlink(outside.join("secret.txt"), dir.join("leak.txt")).unwrap();
+    symlink(&outside, dir.join("leakdir")).unwrap();
+    symlink(dir.join("out"), dir.join("finedir")).unwrap();
+    std::fs::write(dir.join("out").join("ok.txt"), "ok").unwrap();
+    let call = |path: &str| f.call("tab_set_results", json!({"expectedRevision":0,"results":[{"label":"L","relativePath":path}]}));
+    for escaping in ["leak.txt", "leakdir/secret.txt", "leakdir/not-yet.txt", "leakdir/new/deeper.txt"] {
+        assert_eq!(call(escaping)["category"], "invalid_request", "{escaping}");
+    }
+    assert_eq!(f.stored_results(), Value::Null);
+    assert_eq!(call("finedir/ok.txt")["status"], "updated", "a link that stays inside is fine");
+    // Off: refused for a running tab.
+    f.set_switch(false);
+    assert_eq!(f.call("tab_set_results", json!({"expectedRevision":1,"results":[]}))["category"], "unavailable");
+}
+
+#[test]
+fn cockpit_results_are_unavailable_outside_a_local_registered_project() {
+    use crate::services::cockpit_mcp;
+    let args = json!({"expectedRevision":0,"results":[{"label":"L","relativePath":"a.png"}]});
+    // No registry at all, then a registry of other shapes.
+    let f = CockpitFixture::new();
+    assert_eq!(f.call("tab_set_results", args.clone())["category"], "unavailable");
+    assert_eq!(f.call("tab_set_results", json!({"expectedRevision":0,"results":[]}))["category"], "unavailable", "even a clear");
+    for (what, extra) in [
+        ("remote", json!({"remote":{"host":"h.example","remote_path":"/srv/p"}})),
+        ("remote-only", json!({"remote":{"host":"h.example","remote_path":"/srv/p","remote_only":true}})),
+        ("worker-hosted", json!({"compute_hosts":[{"id":"w1","host":"gpu.example","remote_path":"/srv/p"}]})),
+        ("vm", json!({"vm":{"name":"v"}})),
+    ] {
+        let g = CockpitFixture::new();
+        g.project(extra);
+        assert_eq!(g.call("tab_set_results", args.clone())["category"], "unavailable", "{what}");
+        assert_eq!(g.stored_results(), Value::Null, "{what}");
+    }
+    // The root scope and a box scope, whatever the registry says.
+    for scope in ["root", "box:b1"] {
+        let f = CockpitFixture::new();
+        f.project(json!({}));
+        let (_, mut session) = test_session(Caller::Cockpit);
+        session.cockpit = Some(cockpit_mcp::Binding { state: f.state.path().into(), scope: scope.into(), id: "saved-id".into(), spawn: "s".into() });
+        let reply = CockpitFixture::reply_in(&session, "tab_set_results", args.clone());
+        assert_eq!(reply["result"]["structuredContent"]["category"], "unavailable", "{scope}");
+        assert_eq!(cockpit_mcp::refusal_reason(&reply), Some("unavailable"));
+    }
+}
+
+#[test]
+fn cockpit_metadata_calls_honour_the_switch_the_budget_closed_tabs_and_corrupt_state() {
+    use crate::services::{cockpit_mcp as cockpit, workspace};
+    let f = CockpitFixture::new();
+    // The switch is read for every call, writes and reads alike.
+    f.set_switch(false);
+    for (name, args) in [("tab_get_info", json!({})), ("tab_set_activity", json!({"expectedRevision":0,"text":"x"})),
+        ("tab_set_handoff", json!({"expectedRevision":0,"handoff":null}))] {
+        assert_eq!(f.call(name, args)["category"], "unavailable", "{name}");
+    }
+    f.set_switch(true);
+    assert_eq!(f.call("tab_get_info", json!({}))["status"], "ok");
+
+    // A refresh hint follows any committed change, and only those.
+    let patch = |reply: &Value| cockpit::refresh_patch(&f.session, reply);
+    let updated = f.reply("tab_set_activity", json!({"expectedRevision":0,"text":"x"}));
+    let (scope, version) = patch(&updated).expect("an update tells the views");
+    assert_eq!(scope, "p");
+    assert_eq!(version, workspace::snapshot_in(&f.path).unwrap().version);
+    assert!(patch(&f.reply("tab_set_activity", json!({"expectedRevision":1,"text":"x"}))).is_none(), "unchanged");
+    assert!(patch(&f.reply("tab_get_info", json!({}))).is_none());
+    assert!(patch(&f.reply("tab_set_activity", json!({"expectedRevision":0,"text":"y"}))).is_none(), "conflict");
+    // Refusals are fixed categories, never text.
+    for category in ["invalid_request", "too_large", "conflict", "unavailable", "storage_error", "rate_limited", "tab_not_found"] {
+        assert_eq!(cockpit::refusal_reason(&json!({"result":{"structuredContent":{"category":category}}})), Some(category));
+    }
+
+    // The policy knows every tool by name (the audit would say "protocol"), serves the cockpit
+    // lane only, and marks the read as a read.
+    for name in ["tab_get_info", "tab_set_activity", "tab_set_handoff", "tab_set_results", "tab_set_progress", "tab_set_blocker", "tab_set_verification",
+        "tab_request_attention", "tab_add_milestone"] {
+        let policy = security::tool(name).unwrap();
+        assert!(policy.serves(Caller::Cockpit), "{name}");
+        assert_eq!(policy.write, name != "tab_get_info", "{name}");
+        for caller in [Caller::Agent, Caller::Reader, Caller::LocalModel, Caller::Helper, Caller::Marker, Caller::Scheduler, Caller::Pusher, Caller::Web] {
+            assert!(!policy.serves(caller), "{name} {caller:?}");
+        }
+    }
+
+    // One budget for every tool, reads and malformed calls included: 30 a minute.
+    // (Four calls were charged above and in the checks before.)
+    let mut used = 0;
+    while f.call("tab_get_info", json!({}))["category"] != "rate_limited" { used += 1; assert!(used <= 30); }
+    assert_eq!(f.call("tab_set_activity", json!({"expectedRevision":1,"text":"z"}))["category"], "rate_limited");
+    assert_eq!(f.call("tab_rename", json!({"label":"L"}))["category"], "rate_limited");
+
+    // A closed tab is never recreated by a late call; corrupt state fails opaquely, unwritten.
+    let g = CockpitFixture::new();
+    workspace::close_tab_in(&g.path, "p", workspace::tmux_of(&g.mine).unwrap(), 1).unwrap();
+    let version = workspace::snapshot_in(&g.path).unwrap().version;
+    for (name, args) in [("tab_get_info", json!({})), ("tab_set_activity", json!({"expectedRevision":0,"text":"late"})),
+        ("tab_set_handoff", json!({"expectedRevision":0,"handoff":{"summary":"late"}}))] {
+        assert_eq!(g.call(name, args)["category"], "tab_not_found", "{name}");
+    }
+    let after = workspace::snapshot_in(&g.path).unwrap();
+    // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+    assert_eq!((after.version, after.session.tab_layout.len()), (version, 1));
+    let h = CockpitFixture::new();
+    std::fs::write(&h.path, "corrupt existing state").unwrap();
+    for (name, args) in [("tab_get_info", json!({})), ("tab_set_activity", json!({"expectedRevision":0,"text":"x"})),
+        ("tab_set_handoff", json!({"expectedRevision":0,"handoff":null}))] {
+        let reply = h.reply(name, args);
+        assert_eq!(reply["result"]["structuredContent"]["category"], "storage_error", "{name}");
+        assert!(!reply.to_string().contains(&*h.state.path().to_string_lossy()));
+    }
+    assert_eq!(std::fs::read_to_string(&h.path).unwrap(), "corrupt existing state");
+}
+
+fn step(id: &str, label: &str, state: &str) -> Value { json!({"id":id,"label":label,"state":state}) }
+
+#[test]
+fn cockpit_progress_blocker_and_verification_are_strict_and_bounded_and_write_nothing_when_refused() {
+    let f = CockpitFixture::new();
+    // The argument shape, for each tool.
+    for (tool, field, empty) in [("tab_set_progress", "steps", json!([])), ("tab_set_verification", "entries", json!([]))] {
+        for bad in [
+            json!({}), json!({"expectedRevision":0}), json!({field:empty}), json!({"expectedRevision":0,field:null}),
+            json!({"expectedRevision":0,field:"x"}), json!({"expectedRevision":0,field:{}}), json!({"expectedRevision":"0",field:empty}),
+            json!({"expectedRevision":-1,field:empty}), json!({"expectedRevision":0,field:empty,"tabId":"other"}),
+            json!({"expectedRevision":0,field:empty,"projectId":"p"}),
+        ] {
+            assert_eq!(f.call(tool, bad.clone())["category"], "invalid_request", "{tool} {bad}");
+        }
+    }
+    // (A fresh session each time: the budget is 30 calls a minute.)
+    let f = CockpitFixture::new();
+    for bad in [
+        json!({}), json!({"expectedRevision":0}), json!({"text":"x"}), json!({"expectedRevision":0,"text":"x","tabId":"o"}),
+        json!({"expectedRevision":0,"text":7}), json!({"expectedRevision":0,"text":""}), json!({"expectedRevision":0,"text":" "}),
+        json!({"expectedRevision":0,"text":"two\nlines"}), json!({"expectedRevision":0,"text":"a\rb"}),
+        json!({"expectedRevision":0,"text":"bidi\u{202e}"}), json!({"expectedRevision":0,"text":"zero\u{200b}w"}),
+        json!({"expectedRevision":0,"text":"a".repeat(301)}),
+    ] {
+        assert_eq!(f.call("tab_set_blocker", bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    let f = CockpitFixture::new();
+    let progress = |steps: Value| f.call("tab_set_progress", json!({"expectedRevision":0,"steps":steps}));
+    let nine: Vec<Value> = (0..9).map(|i| step(&format!("s{i}"), "L", "pending")).collect();
+    for bad in [
+        json!(nine), json!([step("", "L", "done")]), json!([step(&"a".repeat(41), "L", "done")]), json!([step("Upper", "L", "done")]),
+        json!([step("has space", "L", "done")]), json!([step("a.b", "L", "done")]), json!([step("日本", "L", "done")]),
+        json!([step("a", "L", "done"), step("a", "M", "done")]), json!([step("a", "", "done")]), json!([step("a", &"x".repeat(121), "done")]),
+        json!([step("a", "two\nlines", "done")]), json!([step("a", "bidi\u{202e}", "done")]),
+        json!([step("a", "L", "running")]), json!([step("a", "L", "Done")]), json!([step("a", "L", "")]),
+        json!([step("a", "L", "active"), step("b", "L", "active")]),
+        json!([{"id":"a","label":"L"}]), json!([{"id":"a","label":"L","state":"done","extra":1}]), json!(["a"]), json!([null]),
+    ] {
+        assert_eq!(progress(bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    assert_eq!(f.stored(0).extra.get("cockpitMeta"), None, "nothing was written by a refused progress call");
+    let f = CockpitFixture::new();
+    let verify = |entries: Value| f.call("tab_set_verification", json!({"expectedRevision":0,"entries":entries}));
+    let entry = |label: &str, outcome: &str| json!({"label":label,"outcome":outcome});
+    let nine: Vec<Value> = (0..9).map(|i| entry(&format!("L{i}"), "passed")).collect();
+    for bad in [
+        json!(nine), json!([entry("", "passed")]), json!([entry(&"x".repeat(121), "passed")]), json!([entry("two\nlines", "passed")]),
+        json!([entry("L", "verified")]), json!([entry("L", "Passed")]), json!([entry("L", "not run")]), json!([entry("L", "")]),
+        json!([{"label":"L"}]), json!([{"outcome":"passed"}]), json!([{"label":"L","outcome":"passed","at":1}]),
+        json!([{"label":"L","outcome":"passed","note":null}]), json!([{"label":"L","outcome":"passed","note":"x".repeat(301)}]),
+        json!([{"label":"L","outcome":"passed","note":"a\u{1b}b"}]), json!([{"label":"L","outcome":"passed","note":7}]),
+    ] {
+        assert_eq!(verify(bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    assert_eq!(f.stored(0).extra.get("cockpitMeta"), None, "nothing was written by a refused call");
+}
+
+#[test]
+fn cockpit_progress_blocker_and_verification_update_unchange_conflict_clear_and_read_back() {
+    let f = CockpitFixture::new();
+    let steps = json!([step("plan", "  Plan the change  ", "done"), step("code", "Write 日本語 code", "active"), step("ship", "Ship", "pending")]);
+    let set = f.call("tab_set_progress", json!({"expectedRevision":0,"steps":steps}));
+    assert_eq!((set["status"].as_str(), set["revision"].as_u64()), (Some("updated"), Some(1)), "{set}");
+    assert_eq!(set["progress"]["steps"][0], json!({"id":"plan","label":"Plan the change","state":"done"}));
+    assert!(set["progress"]["setAt"].as_u64().unwrap() > 0, "host timestamp");
+    let again = f.call("tab_set_progress", json!({"expectedRevision":1,"steps":[step("plan", "Plan the change", "done"), step("code", "Write 日本語 code", "active"), step("ship", "Ship", "pending")]}));
+    assert_eq!((again["status"].as_str(), again["revision"].as_u64()), (Some("unchanged"), Some(1)));
+    assert_eq!(f.call("tab_set_progress", json!({"expectedRevision":0,"steps":[]}))["category"], "conflict");
+
+    let blocked = f.call("tab_set_blocker", json!({"expectedRevision":1,"text":"  Waiting for the API key  "}));
+    assert_eq!((blocked["status"].as_str(), blocked["revision"].as_u64()), (Some("updated"), Some(2)));
+    assert_eq!(blocked["blocker"]["text"], "Waiting for the API key");
+    assert_eq!(f.call("tab_set_blocker", json!({"expectedRevision":2,"text":"Waiting for the API key"}))["status"], "unchanged");
+
+    let entries = json!([{"label":"Unit tests","outcome":"passed","note":"12 passed\nno failures"},{"label":"Live check","outcome":"not_run"}]);
+    let reported = f.call("tab_set_verification", json!({"expectedRevision":2,"entries":entries}));
+    assert_eq!((reported["status"].as_str(), reported["revision"].as_u64()), (Some("updated"), Some(3)));
+    assert_eq!(reported["verification"]["entries"][0]["note"], "12 passed\nno failures");
+    assert!(reported["verification"]["entries"][1].get("note").is_none());
+    assert_eq!(f.call("tab_set_verification", json!({"expectedRevision":3,"entries":entries}))["status"], "unchanged");
+
+    // The agent reads all three back: the progress with whether it still counts as running.
+    let info = f.call("tab_get_info", json!({}));
+    assert_eq!(info["progress"]["steps"].as_array().unwrap().len(), 3);
+    assert_eq!(info["progress"]["current"], true);
+    assert!(info["progress"]["ageSeconds"].as_u64().is_some());
+    assert_eq!(info["blocker"]["text"], "Waiting for the API key");
+    assert_eq!(info["blockerExpired"], false);
+    assert_eq!(info["verification"]["entries"][0]["outcome"], "passed");
+    assert!(!info.to_string().contains(&*f.state.path().to_string_lossy()), "no storage paths");
+    assert!(!f.stored(1).extra.contains_key("cockpitMeta"), "the other tab is untouched");
+    assert_eq!(f.stored(0).extra["unknownFutureField"], json!({"keep":true}));
+
+    // A committed update tells the views; an unchanged call does not.
+    let updated = f.reply("tab_set_blocker", json!({"expectedRevision":3,"text":null}));
+    assert_eq!(updated["result"]["structuredContent"]["status"], "updated");
+    assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &updated).is_some());
+    let same = f.reply("tab_set_blocker", json!({"expectedRevision":4,"text":null}));
+    assert_eq!(same["result"]["structuredContent"]["status"], "unchanged");
+    assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &same).is_none());
+    // Clears.
+    assert_eq!(f.call("tab_set_progress", json!({"expectedRevision":4,"steps":[]}))["progress"], Value::Null);
+    assert_eq!(f.call("tab_set_verification", json!({"expectedRevision":5,"entries":[]}))["verification"], Value::Null);
+    let info = f.call("tab_get_info", json!({}));
+    assert!(info["progress"].is_null() && info["blocker"].is_null() && info["verification"].is_null());
+    assert_eq!(f.stored(0).extra["cockpitMeta"], json!({"v":1,"revision":6}));
+}
+
+#[test]
+fn cockpit_blocker_expires_on_read_is_never_another_spawns_and_is_cleared_at_the_next_grant() {
+    use crate::services::{cockpit_meta, workspace};
+    let mut f = CockpitFixture::new();
+    let spawn = f.session.cockpit.as_ref().unwrap().spawn.clone();
+    let id = workspace::tab_id(&f.mine).unwrap().to_string();
+    let plant = |meta: Value| {
+        workspace::edit_in(&f.path, "p", |session| {
+            // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+            let tab = session.tab_layout.iter_mut().find(|t| workspace::tab_id(t) == Some(id.as_str())).unwrap();
+            tab.extra.insert(cockpit_meta::KEY.into(), meta.clone());
+            Ok(())
+        }).unwrap();
+    };
+    let now = crate::clock::now_ms();
+    // Past 30 minutes: absent from the read, told as expired, and publishing the same text renews it.
+    plant(json!({"v":1,"revision":7,"blocker":{"text":"Old blocker","setAt":now - cockpit_meta::ACTIVITY_TTL_MS - 1_000,"spawn":spawn},
+        "progress":{"steps":[{"id":"a","label":"L","state":"active"}],"setAt":now - cockpit_meta::ACTIVITY_TTL_MS - 1_000,"spawn":spawn}}));
+    let info = f.call("tab_get_info", json!({}));
+    assert!(info["blocker"].is_null());
+    assert_eq!(info["blockerExpired"], true);
+    assert_eq!(info["progress"]["current"], false, "older than 30 minutes: history, not running");
+    assert_eq!(info["progress"]["steps"][0]["state"], "active", "the steps themselves are kept");
+    let again = f.call("tab_set_blocker", json!({"expectedRevision":7,"text":"Old blocker"}));
+    assert_eq!(again["status"], "updated");
+    let same_steps = f.call("tab_set_progress", json!({"expectedRevision":8,"steps":[step("a", "L", "active")]}));
+    assert_eq!(same_steps["status"], "updated", "a stale report published again is running again");
+    assert_eq!(f.call("tab_get_info", json!({}))["progress"]["current"], true);
+    // Another spawn's blocker is never shown; its progress is history.
+    plant(json!({"v":1,"revision":9,"blocker":{"text":"Theirs","setAt":now,"spawn":"someone-else"},
+        "progress":{"steps":[{"id":"a","label":"L","state":"active"}],"setAt":now,"spawn":"someone-else"}}));
+    let info = f.call("tab_get_info", json!({}));
+    assert!(info["blocker"].is_null());
+    assert_eq!(info["blockerExpired"], false);
+    assert_eq!(info["progress"]["current"], false, "an older spawn's report reads as history");
+
+    // A new grant clears the blocker, ends the progress (kept as history) and leaves the verification.
+    plant(json!({"v":1,"revision":10,"blocker":{"text":"Mine","setAt":now,"spawn":spawn},
+        "progress":{"steps":[{"id":"a","label":"L","state":"active"}],"setAt":now,"spawn":spawn},
+        "verification":{"entries":[{"label":"T","outcome":"passed"}],"setAt":now}}));
+    let version = workspace::snapshot_in(&f.path).unwrap().version;
+    let old = f.session.clone();
+    let fresh = f.respawn();
+    assert!(old.check().is_err());
+    let stored = f.stored(0).extra["cockpitMeta"].clone();
+    assert!(stored.get("blocker").is_none(), "{stored}");
+    assert_eq!(stored["progress"]["ended"], true);
+    assert_eq!(stored["progress"]["steps"][0]["id"], "a");
+    assert_eq!(stored["verification"]["entries"][0]["label"], "T");
+    assert_eq!(stored["revision"], 11);
+    assert_eq!(workspace::snapshot_in(&f.path).unwrap().version, version + 1, "one write");
+    let info = CockpitFixture::reply_in(&fresh, "tab_get_info", json!({}))["result"]["structuredContent"].clone();
+    assert!(info["blocker"].is_null());
+    assert_eq!(info["progress"]["current"], false, "the new spawn did not report it");
+    assert_eq!(info["verification"]["entries"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn cockpit_reports_stay_inside_32_kib_and_honour_the_switch_the_budget_and_closed_tabs() {
+    use crate::services::workspace;
+    // The whole-object bound through the handler: multi-byte text at every bound.
+    let f = CockpitFixture::new();
+    f.project(json!({}));
+    let wide = "日";
+    let big_results: Vec<Value> = (0..8).map(|i| json!({"label":wide.repeat(120),"relativePath":format!("{}{i}", wide.repeat(500))})).collect();
+    let note = |n: usize| wide.repeat(n);
+    let reply = f.call("tab_set_results", json!({"expectedRevision":0,"results":big_results}));
+    assert_eq!(reply["status"], "updated", "{reply}");
+    let reply = f.call("tab_set_handoff", json!({"expectedRevision":1,"handoff":{"summary":note(1000),"checks":note(1000),"remaining":note(1000)}}));
+    assert_eq!(reply["status"], "updated", "{reply}");
+    let entries: Vec<Value> = (0..8).map(|i| json!({"label":format!("{}{i}", note(119)),"outcome":"passed","note":note(300)})).collect();
+    let before = std::fs::read(&f.path).unwrap();
+    let over = f.call("tab_set_verification", json!({"expectedRevision":2,"entries":entries}));
+    assert_eq!(over["category"], "too_large", "{over}");
+    assert_eq!(std::fs::read(&f.path).unwrap(), before, "refused before any mutation");
+    // The same note ends smaller once the bulky older one is cleared.
+    assert_eq!(f.call("tab_set_results", json!({"expectedRevision":2,"results":[]}))["status"], "updated");
+    assert_eq!(f.call("tab_set_verification", json!({"expectedRevision":3,"entries":entries}))["status"], "updated");
+
+    // Off: refused for all three, writes and the read alike.
+    let g = CockpitFixture::new();
+    g.set_switch(false);
+    for (name, args) in [("tab_set_progress", json!({"expectedRevision":0,"steps":[]})), ("tab_set_blocker", json!({"expectedRevision":0,"text":null})),
+        ("tab_set_verification", json!({"expectedRevision":0,"entries":[]}))] {
+        assert_eq!(g.call(name, args)["category"], "unavailable", "{name}");
+    }
+    g.set_switch(true);
+    // One shared budget: 30 a minute, charged for these tools too.
+    let mut used = 0;
+    while g.call("tab_set_blocker", json!({}))["category"] != "rate_limited" { used += 1; assert!(used <= 30); }
+    assert_eq!(g.call("tab_set_progress", json!({"expectedRevision":0,"steps":[]}))["category"], "rate_limited");
+    assert_eq!(g.call("tab_set_verification", json!({"expectedRevision":0,"entries":[]}))["category"], "rate_limited");
+
+    // A closed tab is never recreated by a late call; corrupt state fails opaquely, unwritten.
+    let h = CockpitFixture::new();
+    workspace::close_tab_in(&h.path, "p", workspace::tmux_of(&h.mine).unwrap(), 1).unwrap();
+    let version = workspace::snapshot_in(&h.path).unwrap().version;
+    for (name, args) in [("tab_set_progress", json!({"expectedRevision":0,"steps":[step("a", "L", "active")]})),
+        ("tab_set_blocker", json!({"expectedRevision":0,"text":"late"})),
+        ("tab_set_verification", json!({"expectedRevision":0,"entries":[{"label":"L","outcome":"passed"}]}))] {
+        assert_eq!(h.call(name, args)["category"], "tab_not_found", "{name}");
+    }
+    let after = workspace::snapshot_in(&h.path).unwrap();
+    // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+    assert_eq!((after.version, after.session.tab_layout.len()), (version, 1));
+    let k = CockpitFixture::new();
+    std::fs::write(&k.path, "corrupt existing state").unwrap();
+    for (name, args) in [("tab_set_progress", json!({"expectedRevision":0,"steps":[]})), ("tab_set_blocker", json!({"expectedRevision":0,"text":"x"})),
+        ("tab_set_verification", json!({"expectedRevision":0,"entries":[]}))] {
+        let reply = k.reply(name, args);
+        assert_eq!(reply["result"]["structuredContent"]["category"], "storage_error", "{name}");
+        assert!(!reply.to_string().contains(&*k.state.path().to_string_lossy()));
+    }
+    assert_eq!(std::fs::read_to_string(&k.path).unwrap(), "corrupt existing state");
+}
+
+// ── Step 5: attention and milestones ────────────────────────────────────────
+
+impl CockpitFixture {
+    /// The stored `cockpitMeta` of the agent's tab.
+    fn meta(&self) -> Value { self.stored(0).extra.get("cockpitMeta").cloned().unwrap_or(Value::Null) }
+    /// Overwrite the agent's `cockpitMeta` as a stale or hostile record would be.
+    fn plant(&self, meta: Value) {
+        use crate::services::workspace;
+        let id = workspace::tab_id(&self.mine).unwrap().to_string();
+        workspace::edit_in(&self.path, "p", |session| {
+            // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+            let tab = session.tab_layout.iter_mut().find(|t| workspace::tab_id(t) == Some(id.as_str())).unwrap();
+            tab.extra.insert("cockpitMeta".into(), meta.clone());
+            Ok(())
+        }).unwrap();
+    }
+}
+
+#[test]
+fn cockpit_attention_and_milestone_arguments_are_strict_and_bounded_and_write_nothing_when_refused() {
+    let f = CockpitFixture::new();
+    for bad in [
+        json!({}), json!({"expectedRevision":0}), json!({"question":"Q?"}), json!({"expectedRevision":0,"question":7}),
+        json!({"expectedRevision":"0","question":"Q?"}), json!({"expectedRevision":-1,"question":"Q?"}),
+        json!({"expectedRevision":0,"question":"Q?","options":["a","b"]}), json!({"expectedRevision":0,"question":"Q?","answer":"yes"}),
+        json!({"expectedRevision":0,"question":"Q?","tabId":"other"}), json!({"expectedRevision":0,"question":""}),
+        json!({"expectedRevision":0,"question":"  \n "}), json!({"expectedRevision":0,"question":"a".repeat(501)}),
+        json!({"expectedRevision":0,"question":"bidi\u{202e}x"}), json!({"expectedRevision":0,"question":"zero\u{200b}w"}),
+        json!({"expectedRevision":0,"question":"esc\u{1b}[31m"}), json!({"expectedRevision":0,"question":"tab\there"}),
+    ] {
+        assert_eq!(f.call("tab_request_attention", bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    let f = CockpitFixture::new();
+    for bad in [
+        json!({}), json!({"requestId":"a"}), json!({"text":"x"}), json!({"requestId":"a","text":"x","expectedRevision":0}),
+        json!({"requestId":"a","text":"x","extra":1}), json!({"requestId":"","text":"x"}), json!({"requestId":"has space","text":"x"}),
+        json!({"requestId":"dot.id","text":"x"}), json!({"requestId":"日本","text":"x"}), json!({"requestId":"a".repeat(65),"text":"x"}),
+        json!({"requestId":7,"text":"x"}), json!({"requestId":"a","text":7}), json!({"requestId":"a","text":null}),
+        json!({"requestId":"a","text":""}), json!({"requestId":"a","text":" "}), json!({"requestId":"a","text":"two\nlines"}),
+        json!({"requestId":"a","text":"x".repeat(201)}), json!({"requestId":"a","text":"bidi\u{202e}"}), json!({"requestId":"a","text":"zero\u{200b}w"}),
+    ] {
+        assert_eq!(f.call("tab_add_milestone", bad.clone())["category"], "invalid_request", "{bad}");
+    }
+    assert_eq!(f.stored(0).extra.get("cockpitMeta"), None, "nothing was written by a refused call");
+    // The bounds themselves are fine, counted in characters.
+    let ok_ask = f.call("tab_request_attention", json!({"expectedRevision":0,"question":"日".repeat(500)}));
+    assert_eq!(ok_ask["status"], "updated", "{ok_ask}");
+    let ok_ms = f.call("tab_add_milestone", json!({"requestId":"a".repeat(64),"text":"日".repeat(200)}));
+    assert_eq!(ok_ms["status"], "updated", "{ok_ms}");
+}
+
+#[test]
+fn cockpit_attention_mints_a_fresh_id_per_question_and_a_retry_never_resurfaces_a_dismissed_one() {
+    use crate::services::{cockpit_meta, workspace};
+    let f = CockpitFixture::new();
+    let first = f.call("tab_request_attention", json!({"expectedRevision":0,"question":"  Which branch\nshould I use?  "}));
+    assert_eq!((first["status"].as_str(), first["revision"].as_u64()), (Some("updated"), Some(1)), "{first}");
+    let a1 = first["attention"].clone();
+    assert_eq!(a1["question"], "Which branch\nshould I use?");
+    assert_eq!(a1["dismissed"], false);
+    assert!(a1["setAt"].as_u64().unwrap() > 0, "host timestamp");
+    let id1 = a1["id"].as_str().unwrap().to_string();
+    assert!(id1.len() >= 32 && id1.chars().all(|c| c.is_ascii_hexdigit()));
+    // The same question while open: unchanged, same id, the revision does not move; a changed one is new.
+    let same = f.call("tab_request_attention", json!({"expectedRevision":1,"question":"Which branch\nshould I use?"}));
+    assert_eq!((same["status"].as_str(), same["revision"].as_u64()), (Some("unchanged"), Some(1)));
+    assert_eq!(same["attention"]["id"], id1.as_str());
+    let second = f.call("tab_request_attention", json!({"expectedRevision":1,"question":"Which branch, develop or main?"}));
+    assert_eq!(second["status"], "updated");
+    let id2 = second["attention"]["id"].as_str().unwrap().to_string();
+    assert_ne!(id1, id2, "a changed question is a new item");
+    assert_eq!(f.call("tab_request_attention", json!({"expectedRevision":1,"question":"x"}))["category"], "conflict");
+    // The user dismisses it (the narrow command's body); the agent sees that on read.
+    let tab_id = workspace::tab_id(&f.mine).unwrap().to_string();
+    assert_eq!(cockpit_meta::dismiss_in(&f.path, "p", &tab_id, &id1).unwrap(), cockpit_meta::Dismissal::Stale, "the first id is gone");
+    assert_eq!(cockpit_meta::dismiss_in(&f.path, "p", &tab_id, &id2).unwrap(), cockpit_meta::Dismissal::Dismissed);
+    let info = f.call("tab_get_info", json!({}));
+    assert_eq!(info["revision"], 3);
+    assert_eq!(info["attention"]["dismissed"], true);
+    // A retry of the identical question does nothing and does not tell the views.
+    let retry = f.reply("tab_request_attention", json!({"expectedRevision":3,"question":"Which branch, develop or main?"}));
+    let retried = &retry["result"]["structuredContent"];
+    assert_eq!((retried["status"].as_str(), retried["revision"].as_u64()), (Some("unchanged"), Some(3)));
+    assert_eq!(retried["attention"]["id"], id2.as_str());
+    assert_eq!(retried["attention"]["dismissed"], true);
+    assert_eq!(f.meta()["attention"]["dismissed"], true);
+    assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &retry).is_none());
+    // A different question is a new open item; a clear removes it, and clearing nothing is a no-op.
+    let third = f.call("tab_request_attention", json!({"expectedRevision":3,"question":"Deploy to staging?"}));
+    assert_eq!(third["attention"]["dismissed"], false);
+    assert_ne!(third["attention"]["id"], id2.as_str());
+    let cleared = f.call("tab_request_attention", json!({"expectedRevision":4,"question":null}));
+    assert_eq!((cleared["status"].as_str(), cleared["attention"].is_null()), (Some("updated"), true));
+    assert_eq!(f.call("tab_request_attention", json!({"expectedRevision":5,"question":null}))["status"], "unchanged");
+    assert!(f.call("tab_get_info", json!({}))["attention"].is_null());
+    // The other tab is untouched.
+    assert!(!f.stored(1).extra.contains_key("cockpitMeta"));
+    // A committed ask tells the views.
+    let fresh = f.reply("tab_request_attention", json!({"expectedRevision":5,"question":"One more?"}));
+    assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &fresh).is_some());
+}
+
+#[test]
+fn cockpit_attention_is_read_back_only_while_open_and_its_own_and_goes_with_the_spawn() {
+    use crate::services::cockpit_meta;
+    let mut f = CockpitFixture::new();
+    let spawn = f.session.cockpit.as_ref().unwrap().spawn.clone();
+    let now = crate::clock::now_ms();
+    // Open: returned with its age. Past 24 hours: absent, told as expired, and the same text is asked again with a new id.
+    f.plant(json!({"v":1,"revision":4,"attention":{"id":"old-id","question":"Lapsed?","setAt":now - cockpit_meta::ATTENTION_TTL_MS - 1_000,"spawn":spawn}}));
+    let info = f.call("tab_get_info", json!({}));
+    assert!(info["attention"].is_null());
+    assert_eq!(info["attentionExpired"], true);
+    let again = f.call("tab_request_attention", json!({"expectedRevision":4,"question":"Lapsed?"}));
+    assert_eq!(again["status"], "updated");
+    assert_ne!(again["attention"]["id"], "old-id");
+    let info = f.call("tab_get_info", json!({}));
+    assert_eq!(info["attention"]["question"], "Lapsed?");
+    assert_eq!(info["attentionExpired"], false);
+    assert!(info["attention"]["ageSeconds"].as_u64().is_some());
+    // Another spawn's question is never shown to this one.
+    f.plant(json!({"v":1,"revision":9,"attention":{"id":"theirs","question":"Theirs?","setAt":now,"spawn":"someone-else"}}));
+    let info = f.call("tab_get_info", json!({}));
+    assert!(info["attention"].is_null());
+    assert_eq!(info["attentionExpired"], false);
+    // A new grant removes the old spawn's question (one write) and leaves the history.
+    f.plant(json!({"v":1,"revision":10,"attention":{"id":"mine","question":"Mine?","setAt":now,"spawn":spawn},
+        "milestones":[{"requestId":"m1","text":"Done","at":now}],"handoff":{"summary":"S","checks":"","remaining":"","setAt":now}}));
+    let old = f.session.clone();
+    let fresh = f.respawn();
+    assert!(old.check().is_err());
+    let stored = f.meta();
+    assert!(stored.get("attention").is_none(), "{stored}");
+    assert_eq!(stored["milestones"][0]["requestId"], "m1");
+    assert_eq!(stored["handoff"]["summary"], "S");
+    assert_eq!(stored["revision"], 11);
+    let info = CockpitFixture::reply_in(&fresh, "tab_get_info", json!({}))["result"]["structuredContent"].clone();
+    assert!(info["attention"].is_null());
+    assert_eq!(info["milestones"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn cockpit_milestones_dedup_by_request_id_cap_at_20_use_host_time_and_take_no_revision() {
+    let f = CockpitFixture::new();
+    let before = crate::clock::now_ms();
+    let first = f.call("tab_add_milestone", json!({"requestId":"build-1","text":"  Build is green  "}));
+    assert_eq!((first["status"].as_str(), first["revision"].as_u64()), (Some("updated"), Some(1)), "{first}");
+    assert_eq!(first["milestone"]["text"], "Build is green");
+    assert_eq!(first["milestone"]["requestId"], "build-1");
+    let at = first["milestone"]["at"].as_u64().unwrap();
+    assert!(at >= before, "the host stamped it");
+    // A retry with the same id, whatever its text: unchanged, the existing entry comes back, nothing tells the views.
+    let retry = f.reply("tab_add_milestone", json!({"requestId":"build-1","text":"Something else"}));
+    let r = &retry["result"]["structuredContent"];
+    assert_eq!((r["status"].as_str(), r["revision"].as_u64()), (Some("unchanged"), Some(1)));
+    assert_eq!(r["milestone"], json!({"requestId":"build-1","text":"Build is green","at":at}));
+    assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &retry).is_none());
+    // A new one moves the revision (so the next setter must re-read) and tells the views.
+    let next = f.reply("tab_add_milestone", json!({"requestId":"build-2","text":"Docs updated"}));
+    assert_eq!(next["result"]["structuredContent"]["revision"], 2);
+    assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &next).is_some());
+    assert_eq!(f.call("tab_set_activity", json!({"expectedRevision":1,"text":"x"}))["category"], "conflict");
+    // Up to 20 are kept, oldest dropped; the agent reads them back, oldest first.
+    // (A fresh session: the budget is 30 calls a minute.)
+    let g = CockpitFixture::new();
+    for i in 1..=22 {
+        let reply = g.call("tab_add_milestone", json!({"requestId":format!("m{i}"),"text":format!("Milestone {i}")}));
+        assert_eq!(reply["status"], "updated", "{i}");
+    }
+    let info = g.call("tab_get_info", json!({}));
+    let kept: Vec<&str> = info["milestones"].as_array().unwrap().iter().map(|m| m["requestId"].as_str().unwrap()).collect();
+    assert_eq!(kept.len(), 20);
+    assert_eq!((kept[0], kept[19]), ("m3", "m22"));
+    assert_eq!(info["revision"], 22);
+    assert!(g.meta()["milestones"].as_array().unwrap().iter().all(|m| m["at"].as_u64().unwrap() > 0));
+    assert!(!info.to_string().contains(&*g.state.path().to_string_lossy()), "no storage paths");
+    assert!(!g.stored(1).extra.contains_key("cockpitMeta"), "the other tab is untouched");
+}
+
+#[test]
+fn cockpit_attention_and_milestones_honour_the_switch_the_budget_closed_tabs_and_corrupt_state() {
+    use crate::services::workspace;
+    let ask = || json!({"expectedRevision":0,"question":"Q?"});
+    let ms = || json!({"requestId":"a","text":"T"});
+    let f = CockpitFixture::new();
+    f.set_switch(false);
+    assert_eq!(f.call("tab_request_attention", ask())["category"], "unavailable");
+    assert_eq!(f.call("tab_add_milestone", ms())["category"], "unavailable");
+    f.set_switch(true);
+    // One shared budget: 30 a minute, malformed calls included.
+    let mut used = 0;
+    while f.call("tab_add_milestone", json!({}))["category"] != "rate_limited" { used += 1; assert!(used <= 30); }
+    assert_eq!(f.call("tab_request_attention", ask())["category"], "rate_limited");
+    assert_eq!(f.call("tab_add_milestone", ms())["category"], "rate_limited");
+    // A closed tab is never recreated by a late call.
+    let g = CockpitFixture::new();
+    workspace::close_tab_in(&g.path, "p", workspace::tmux_of(&g.mine).unwrap(), 1).unwrap();
+    let version = workspace::snapshot_in(&g.path).unwrap().version;
+    assert_eq!(g.call("tab_request_attention", ask())["category"], "tab_not_found");
+    assert_eq!(g.call("tab_add_milestone", ms())["category"], "tab_not_found");
+    let after = workspace::snapshot_in(&g.path).unwrap();
+    // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+    assert_eq!((after.version, after.session.tab_layout.len()), (version, 1));
+    // Corrupt state fails opaquely, unwritten.
+    let k = CockpitFixture::new();
+    std::fs::write(&k.path, "corrupt existing state").unwrap();
+    for (name, args) in [("tab_request_attention", ask()), ("tab_add_milestone", ms())] {
+        let reply = k.reply(name, args);
+        assert_eq!(reply["result"]["structuredContent"]["category"], "storage_error", "{name}");
+        assert!(!reply.to_string().contains(&*k.state.path().to_string_lossy()));
+    }
+    assert_eq!(std::fs::read_to_string(&k.path).unwrap(), "corrupt existing state");
+    // An unreadable attention or milestone list is the same: refused, no write.
+    let h = CockpitFixture::new();
+    h.plant(json!({"v":1,"revision":0,"attention":{"id":3},"milestones":"x"}));
+    let bytes = std::fs::read(&h.path).unwrap();
+    assert_eq!(h.call("tab_request_attention", ask())["category"], "storage_error");
+    assert_eq!(h.call("tab_add_milestone", ms())["category"], "storage_error");
+    assert_eq!(h.call("tab_get_info", json!({}))["category"], "storage_error");
+    assert_eq!(std::fs::read(&h.path).unwrap(), bytes);
+}
+
+#[test]
+fn cockpit_attention_and_milestones_are_in_the_tool_list_with_closed_schemas_and_the_policy() {
+    use crate::services::cockpit_mcp as cockpit;
+    let listed = cockpit::tools();
+    let find = |name: &str| listed.as_array().unwrap().iter().find(|t| t["name"] == name).unwrap().clone();
+    let attention = find("tab_request_attention");
+    assert_eq!(attention["inputSchema"]["additionalProperties"], false);
+    assert_eq!(attention["inputSchema"]["required"], json!(["expectedRevision", "question"]));
+    assert!(attention["inputSchema"]["properties"].get("options").is_none(), "no answer payload");
+    assert_eq!(attention["inputSchema"]["properties"]["question"]["maxLength"], 500);
+    let milestone = find("tab_add_milestone");
+    assert_eq!(milestone["inputSchema"]["required"], json!(["requestId", "text"]));
+    assert!(milestone["inputSchema"]["properties"].get("expectedRevision").is_none());
+    assert_eq!(milestone["inputSchema"]["properties"]["text"]["maxLength"], 200);
+    for name in ["tab_request_attention", "tab_add_milestone"] {
+        let policy = security::tool(name).unwrap();
+        assert!(policy.write && policy.serves(Caller::Cockpit), "{name}");
+        for caller in [Caller::Agent, Caller::Reader, Caller::LocalModel, Caller::Helper, Caller::Marker, Caller::Scheduler, Caller::Pusher, Caller::Web] {
+            assert!(!policy.serves(caller), "{name} {caller:?}");
+        }
+    }
+    // The attention notice cannot ask the app to answer or approve anything.
+    let text = attention["description"].as_str().unwrap();
+    assert!(text.contains("cannot carry options"), "{text}");
+}
+
+/// The switch and the revocation are checked again inside the workspace lock,
+/// not only at the top of a call: a switch turned off (or a spawn replaced)
+/// after a tool passed its early check cannot still commit.
+#[test]
+fn cockpit_switch_and_revocation_are_rechecked_inside_the_workspace_lock() {
+    use crate::services::{cockpit_meta as meta, cockpit_mcp as cockpit, workspace};
+    let f = CockpitFixture::new();
+    let binding = f.session.cockpit.as_ref().unwrap().clone();
+    let id = workspace::tab_id(&f.mine).unwrap().to_string();
+    let change = meta::Change::Handoff(Some(meta::HandoffText { summary: "late".into(), checks: String::new(), remaining: String::new() }));
+    // The early check passed; then the user switched the lane off.
+    f.set_switch(false);
+    let before = std::fs::read(&f.path).unwrap();
+    let wrote = meta::update_in(&f.path, "p", &id, 0, 5, &change, cockpit::guard(&f.session, &binding));
+    assert_eq!(wrote.unwrap_err(), "unavailable");
+    assert!(meta::read_in(&f.path, &id, cockpit::guard(&f.session, &binding)).is_err(), "a read is rechecked too");
+    assert_eq!(std::fs::read(&f.path).unwrap(), before, "nothing was written");
+    // Switched back on: the same guard lets the write through ...
+    f.set_switch(true);
+    assert!(meta::update_in(&f.path, "p", &id, 0, 5, &change, cockpit::guard(&f.session, &binding)).is_ok());
+    // ... until the spawn is replaced.
+    f.store.register("replacement-cockpit-token".into(), f.session.identity.clone(), false);
+    let again = meta::Change::Handoff(None);
+    assert_eq!(meta::update_in(&f.path, "p", &id, 1, 6, &again, cockpit::guard(&f.session, &binding)).unwrap_err(), "unavailable");
+}

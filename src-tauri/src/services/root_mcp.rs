@@ -68,8 +68,10 @@ pub const SCHEDULE_URL_ENV: &str = crate::app_env!("SCHEDULE_MCP_URL");
 /// project-agent tab while agent pushes are switched on.
 pub const GIT_TOKEN_ENV: &str = crate::app_env!("GIT_MCP_TOKEN");
 pub const GIT_URL_ENV: &str = crate::app_env!("GIT_MCP_URL");
-/// The help identity's pair (`services::help_mcp`), set for every local agent
-/// tab while the help server is on.
+/// The self-only workspace lane, granted to eligible local agent spawns.
+pub const COCKPIT_TOKEN_ENV: &str = crate::app_env!("COCKPIT_MCP_TOKEN");
+pub const COCKPIT_URL_ENV: &str = crate::app_env!("COCKPIT_MCP_URL");
+/// The read-only help lane, separate from workspace mutations.
 pub const HELP_TOKEN_ENV: &str = crate::app_env!("HELP_MCP_TOKEN");
 pub const HELP_URL_ENV: &str = crate::app_env!("HELP_MCP_URL");
 /// The markup identity's pair (`services::markup_mcp`), set for a local
@@ -166,6 +168,7 @@ fn lane(caller: Caller) -> u8 {
         Caller::Helper => 3,
         Caller::Marker => 4,
         Caller::Web => 5,
+        Caller::Cockpit => 6,
     }
 }
 /// One process's bearer tokens and the sessions they open, in memory only.
@@ -211,6 +214,8 @@ impl TokenStore {
             } else { true }
         });
         let session = Session {
+            cockpit: None,
+            cockpit_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
             id: crate::digest::sha256_hex(token.as_bytes()),
             access: Access::initial(identity.caller), identity,
             revoked: Arc::new(AtomicBool::new(false)),
@@ -258,7 +263,7 @@ pub fn token_generations() -> Vec<(String, Vec<String>)> {
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().map().values() {
-        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web) {
+        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit) {
             *s.projects_grant.lock_ok() = grant.clone();
         }
     }
@@ -294,6 +299,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
         Caller::Agent | Caller::LocalModel | Caller::Reader => SERVER_NAME,
         Caller::Scheduler => super::schedule_mcp::SERVER_NAME,
         Caller::Pusher => super::git_push_mcp::SERVER_NAME,
+        Caller::Cockpit => super::cockpit_mcp::SERVER_NAME,
         Caller::Helper => super::help_mcp::SERVER_NAME,
         Caller::Marker => super::markup_mcp::SERVER_NAME,
         Caller::Web => super::web_lane::SERVER_NAME,
@@ -305,7 +311,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
 /// and web lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
     tokens().map().values()
-        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web))
+        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit))
 }
 
 /// The on-disk half of the mail taint: an empty marker per tab under the root
@@ -437,6 +443,8 @@ pub enum Caller {
     /// Any local agent tab's help identity (`services::help_mcp`): served the
     /// read-only help tools on `/mcp/help` and nothing else.
     Helper,
+    /// Self-only workspace presentation tools, isolated on `/mcp/cockpit`.
+    Cockpit,
     /// A local project-agent tab's markup identity (`services::markup_mcp`),
     /// bound at spawn to its project and schedule target: served
     /// `markup_ask` / `markup_withdraw` / `markup_done` on `/mcp/markup` and
@@ -479,6 +487,8 @@ pub struct Session {
     pub id: String,
     pub identity: Identity,
     pub access: Access,
+    pub(crate) cockpit: Option<super::cockpit_mcp::Binding>,
+    cockpit_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
     revoked: Arc<AtomicBool>,
     /// Latched by the first mail read tool this spawn calls
     /// ([`Self::mark_read_mail`]). A local-model tab is only tainted once it
@@ -519,6 +529,14 @@ pub(crate) fn web_budget_tabs() -> usize { web_budgets().lock_ok().len() }
 pub(crate) const WEB_BUDGET_TABS_MAX: usize = WEB_BUDGET_TABS;
 
 impl Session {
+    pub(crate) fn admit_cockpit_rate(&self) -> bool {
+        let mut calls = self.cockpit_rate.lock_ok();
+        calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(60));
+        if calls.len() >= 30 { return false; }
+        calls.push_back(std::time::Instant::now());
+        true
+    }
+
     pub fn admit_schedule_rate(&self) -> bool {
         let mut calls = self.schedule_rate.lock_ok();
         calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
@@ -599,7 +617,7 @@ pub struct SessionInfo {
 /// Help, markup and web sessions are left out: one per agent tab, nothing to
 /// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web)).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
@@ -608,7 +626,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
-    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web) { return Err("this session's scope is fixed at spawn".into()); }
+    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
     s.access = access;
@@ -825,7 +843,7 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
 }
 
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
-pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, web: Option<String>, armed: bool }
+pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, web: Option<String>, cockpit: Option<String>, armed: bool }
 impl SpawnTokenGuard {
     pub fn new(opts: &PtyOptions) -> Self {
         Self {
@@ -834,6 +852,7 @@ impl SpawnTokenGuard {
             help: opts.env.get(HELP_TOKEN_ENV).cloned(),
             markup: opts.env.get(MARKUP_TOKEN_ENV).cloned(),
             web: opts.env.get(WEB_TOKEN_ENV).cloned(),
+            cockpit: opts.env.get(COCKPIT_TOKEN_ENV).cloned(),
             armed: true,
         }
     }
@@ -845,7 +864,7 @@ impl SpawnTokenGuard {
 impl Drop for SpawnTokenGuard {
     fn drop(&mut self) {
         if self.armed {
-            for token in [&self.token, &self.push, &self.help, &self.markup, &self.web].into_iter().flatten() { revoke_token(token); }
+            for token in [&self.token, &self.push, &self.help, &self.markup, &self.web, &self.cockpit].into_iter().flatten() { revoke_token(token); }
         }
     }
 }
@@ -992,6 +1011,10 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     // process whose views answer them grants it (`Runtime::serves_markup`).
     if project_lanes && runtime.serves_markup && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
         grant_markup(opts, runtime, store, &trusted.tool_models());
+    }
+    if agent_spawn && reader_project.is_none() && help_reaches(opts, &trusted)
+        && trusted.settings.as_ref().is_some_and(|s| s.cockpit_mcp()) {
+        grant_cockpit(opts, runtime, store, &trusted.state, &trusted.tool_models());
     }
     root_agent
 }
@@ -1166,6 +1189,46 @@ pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenSto
     if opts.env.get(GIT_TOKEN_ENV) == Some(&token) {
         store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { git_at_spawn: super::git_push_mcp::git_entry_identity(&dir), dir, fence_scope: None }), endpoint: None, model: None }, false);
     }
+}
+
+/// Wire the self-only cockpit server beside the other independently granted lanes.
+pub fn apply_cockpit_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token: &str, tool_models: &[String]) {
+    let local = is_local_model(opts);
+    if opts.sandbox || (local && !local_model_has_tools(opts, tool_models)) { return; }
+    let url = format!("http://127.0.0.1:{}/mcp/cockpit", runtime.port);
+    let name = super::cockpit_mcp::SERVER_NAME;
+    opts.env.insert(COCKPIT_TOKEN_ENV.into(), token.into());
+    opts.env.insert(COCKPIT_URL_ENV.into(), url.clone());
+    if local {
+        let mut servers: Vec<Value> = opts.env.get("VIBE_MCP_SERVERS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        servers.retain(|s| s["name"] != name);
+        servers.push(json!({"name": name, "transport": "http", "url": url, "api_key_env": COCKPIT_TOKEN_ENV}));
+        opts.env.insert("VIBE_MCP_SERVERS".into(), Value::Array(servers).to_string());
+        let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        let pattern = json!(format!("{name}_*"));
+        if !enabled.contains(&pattern) { enabled.push(pattern); }
+        opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
+    } else {
+        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, COCKPIT_TOKEN_ENV);
+    }
+}
+
+/// Bind a token only to a tab already held by the workspace owner. No tool
+/// argument can choose this scope or identity.
+fn grant_cockpit(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, state: &Path, models: &[String]) {
+    let Some(binding) = super::cockpit_mcp::binding_for_spawn(state, opts) else { return };
+    if !matches!(basename(&opts.cmd), "claude" | "codex") && !is_local_model(opts) { return; }
+    let Some(token) = mint_token() else { return };
+    apply_cockpit_to_spawn_with(opts, runtime, &token, models);
+    if opts.env.get(COCKPIT_TOKEN_ENV) != Some(&token) { return; }
+    store.register(token.clone(), Identity { tab: opts.id.clone(), caller: Caller::Cockpit,
+        project: Some(binding.scope.clone()), schedule_target: None, push: None, endpoint: None, model: None }, false);
+    if let Some(session) = store.map().get_mut(&token) { session.cockpit = Some(binding.clone()); }
+    // The previous spawn's token is gone by now (`register` revokes it): what
+    // it published as current activity is not this spawn's.
+    super::cockpit_mcp::clear_foreign_activity(&binding);
 }
 
 /// Hand an agent tab the help server (`services::help_mcp`). Pure over

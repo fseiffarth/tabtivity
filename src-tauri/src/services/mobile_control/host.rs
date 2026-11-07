@@ -3577,14 +3577,7 @@ async fn tab(
 /// that would smuggle control characters into a terminal title, is refused here
 /// rather than stored and quietly re-rendered as something else.
 fn clean_tab_label(raw: &str) -> Option<String> {
-    let label = raw.trim();
-    if label.is_empty()
-        || label.chars().count() > MAX_TAB_LABEL
-        || label.chars().any(char::is_control)
-    {
-        return None;
-    }
-    Some(label.to_string())
+    crate::services::workspace::clean_tab_label(raw)
 }
 
 /// `PUT /api/v1/tabs/{id}` — rename one agent tab. The desktop owns the write
@@ -8798,6 +8791,7 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
                 // views re-read (their event, `markup-mcp-changed`).
                 Notice::Markup => poke_desktop(&notice_dir, None, &["markup"]),
                 Notice::GitPush => {}
+                Notice::Workspace { scope, .. } => poke_desktop(&notice_dir, Some(&scope), &["workspace"]),
             }
         }),
         on_server.then_some(&core_ctx),

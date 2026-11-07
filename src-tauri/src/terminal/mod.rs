@@ -2136,6 +2136,7 @@ fn launch(
     let help_token = env.and_then(|env| env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned());
     let push_token = env.and_then(|env| env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned());
     let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
+    let cockpit_token = env.and_then(|env| env.get(crate::services::root_mcp::COCKPIT_TOKEN_ENV).cloned());
     let web_token = env.and_then(|env| env.get(crate::services::root_mcp::WEB_TOKEN_ENV).cloned());
     tokio::spawn(async move {
         let emitter = ctx.clone();
@@ -2194,6 +2195,7 @@ fn launch(
                 crate::services::root_mcp::revoke_token(&token);
                 crate::services::markup_mcp::sweep();
             }
+            if let Some(token) = cockpit_token { crate::services::root_mcp::revoke_token(&token); }
             if let Some(token) = web_token {
                 // The assistant's web lane: a chat's token dies with its CLI.
                 crate::services::root_mcp::revoke_token(&token);

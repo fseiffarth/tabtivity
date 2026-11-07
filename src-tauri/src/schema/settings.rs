@@ -291,6 +291,9 @@ pub struct Settings {
     /// it and makes `/mcp/help` refuse the tabs that already hold a token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_mcp: Option<bool>,
+    /// Self-only workspace presentation tools. Absent means on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cockpit_mcp: Option<bool>,
     /// The markup questions server (`services::markup_mcp`) handed to every
     /// local project-agent tab. **Absent means on**; a stored `false` stops
     /// new tabs getting it and makes `markup_ask` answer `off`.
@@ -1317,6 +1320,9 @@ impl Settings {
     pub fn root_mcp(&self) -> bool {
         self.root_mcp.unwrap_or(true)
     }
+
+    /// Whether self-only workspace tools are handed to eligible agent tabs.
+    pub fn cockpit_mcp(&self) -> bool { self.cockpit_mcp.unwrap_or(true) }
 
     /// Whether the help MCP is handed to agent tabs. On unless switched off.
     pub fn help_mcp(&self) -> bool {

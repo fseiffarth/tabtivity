@@ -25,7 +25,7 @@ pub use mail::{
     mail_thunderbird,
 };
 pub mod mcp;
-pub use mcp::{git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
+pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
@@ -153,6 +153,10 @@ pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share
 // (headless owner plan, H1b).
 pub mod launch_prep;
+// Agent-authored tab metadata (`cockpitMeta`), host-owned inside the tab set.
+pub mod cockpit_meta;
+// Result references (`tab_set_results`): project gate, path checks, explicit open.
+pub mod cockpit_results;
 // The shared tab set with a version and per-operation merge (headless owner
 // plan, H1): what `save_tab_layout`'s whole-snapshot write became.
 pub mod workspace;

@@ -377,6 +377,12 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copy_files_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
     ("save_clipboard_image", Client),
+    // commands/cockpit_results.rs — `client` (plan decision 12): the click of the
+    // window the agent's tab is shown in, judged against this machine's registry.
+    ("cockpit_result_target", Client),
+    // — and the dismissal of an agent's reported question (decision 20): the user's
+    // own click, one compare-and-swap on the attention id, nothing else written.
+    ("cockpit_attention_dismiss", Client),
     // commands/connect.rs — this desktop as a server's client (plan §7.2):
     // the machine the user sits at, never exposed.
     ("connect_forget", Client),
@@ -1153,6 +1159,15 @@ mod tests {
             actual, expected,
             "src/lib/transport/commandClasses.ts is stale; regenerate with\n  UPDATE_COMMAND_CLASSES=1 cargo test --manifest-path src-tauri/Cargo.toml -q --lib -- the_generated_command_classes_ts_is_current"
         );
+    }
+
+    #[test]
+    fn the_cockpit_commands_are_client_class() {
+        // The window's own clicks on an agent's notes (plan decisions 12 and 20):
+        // a browser shim may forward them, nothing here is core or admin.
+        assert_eq!(class_of("cockpit_result_target"), Some(Client));
+        assert_eq!(class_of("cockpit_attention_dismiss"), Some(Client));
+        assert!(names_in(Client).any(|name| name == "cockpit_attention_dismiss"));
     }
 
     #[test]

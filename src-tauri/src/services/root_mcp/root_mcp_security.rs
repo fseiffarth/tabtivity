@@ -160,7 +160,7 @@ impl Policy {
             && match caller {
                 Caller::Reader => true,
                 Caller::LocalModel => self.mail_local_read,
-                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web => false,
+                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit => false,
             }
     }
 }
@@ -213,7 +213,7 @@ impl Access {
     pub fn initial(caller: Caller) -> Self {
         // A web-lane session reaches no calendar, board, project, mail or
         // account, and writes nothing: its tools carry no root family.
-        if caller == Caller::Web {
+        if matches!(caller, Caller::Web | Caller::Cockpit) {
             return Self {
                 calendars: Scope::default(),
                 projects: Scope::default(),
@@ -314,6 +314,7 @@ pub struct ToolPolicy {
     /// Served to [`Caller::Web`] (`services::web_lane`) — and then to no
     /// other class: `web_fetch` and `web_search` set it and nothing else.
     web: bool,
+    cockpit: bool,
 }
 impl ToolPolicy {
     pub fn serves(&self, caller: Caller) -> bool {
@@ -322,6 +323,7 @@ impl ToolPolicy {
             Caller::Helper => self.help,
             Caller::Marker => self.marker,
             Caller::Web => self.web,
+            Caller::Cockpit => self.cockpit,
             Caller::Reader => self.reader,
             Caller::LocalModel => self.root || self.local,
             Caller::Agent => self.root,
@@ -331,6 +333,10 @@ impl ToolPolicy {
 
 /// Every name must be deliberately assigned. Unknown names never inherit a role.
 pub fn tool(name: &str) -> Option<ToolPolicy> {
+    if crate::services::cockpit_mcp::is_tool(name) {
+        return Some(ToolPolicy { family: "cockpit", write: !crate::services::cockpit_mcp::is_read_only(name), destructive: false,
+            root: false, reader: false, local: false, help: false, marker: false, web: false, cockpit: true });
+    }
     let (family, write, destructive, root, reader) = match name {
         "proposals_list" => ("session", false, false, true, true),
         "projects_list"
@@ -355,7 +361,7 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         "todo_update" | "todo_delete" => ("board", true, true, true, true),
         "mail_accounts_list" | "mail_drafts_list" => ("mail", false, false, true, true),
         "mail_folders" | "mail_search" | "mail_read" | "mail_thread" => {
-            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false, web: false });
+            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false, web: false, cockpit: false });
         }
         // The help corpus (`services::help_mcp`): read-only, compiled in, and
         // served to the help identity alone — never to a root or reader tab
@@ -364,21 +370,21 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         | crate::brand::HELP_TOOL_READ
         | crate::brand::HELP_TOOL_TOPICS
         | crate::brand::HELP_TOOL_STATUS => {
-            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false, web: false });
+            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false, web: false, cockpit: false });
         }
         // The markup questions and ticks (`services::markup_mcp`): they only
         // put a card or a tick in front of the user, served to the markup
         // identity alone on `/mcp/markup` — never to a root or reader tab
         // through `/mcp`.
         "markup_ask" | "markup_withdraw" | "markup_done" => {
-            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true, web: false });
+            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true, web: false, cockpit: false });
         }
         // The chat assistant's web lane (`services::web_lane`): a guarded page
         // fetch and a search, served to the web identity alone on `/mcp/web`
         // — never to a root or reader tab through `/mcp`. Family `web` is on
         // no `Access` list, so the handler gates on `serves(Caller::Web)`.
         "web_fetch" | "web_search" => {
-            return Some(ToolPolicy { family: "web", write: false, destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: true });
+            return Some(ToolPolicy { family: "web", write: false, destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: true, cockpit: false });
         }
         "mail_draft_create" => ("mail", true, false, true, true),
         "mail_draft_update" | "mail_draft_delete" => ("mail", true, true, true, true),
@@ -394,6 +400,7 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         help: false,
         marker: false,
         web: false,
+        cockpit: false,
     })
 }
 

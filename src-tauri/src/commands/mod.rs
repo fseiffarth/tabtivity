@@ -12,6 +12,7 @@ pub mod calendar;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod clipboard;
+pub mod cockpit_results;
 pub mod copilot;
 pub mod crash;
 pub mod credentials;

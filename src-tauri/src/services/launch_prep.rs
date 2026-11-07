@@ -45,6 +45,8 @@ const CONTROL_ENV: &[&str] = &[
     crate::services::root_mcp::SCHEDULE_URL_ENV,
     crate::services::root_mcp::GIT_TOKEN_ENV,
     crate::services::root_mcp::GIT_URL_ENV,
+    crate::services::root_mcp::COCKPIT_TOKEN_ENV,
+    crate::services::root_mcp::COCKPIT_URL_ENV,
     crate::services::root_mcp::HELP_TOKEN_ENV,
     crate::services::root_mcp::HELP_URL_ENV,
     crate::services::root_mcp::MARKUP_TOKEN_ENV,

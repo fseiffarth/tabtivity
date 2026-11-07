@@ -108,6 +108,7 @@ pub fn origin_of(caller: Caller, read_mail: bool) -> &'static str {
         Caller::Helper => "helper",
         Caller::Marker => "marker",
         Caller::Web => "web",
+        Caller::Cockpit => "cockpit",
     }
 }
 

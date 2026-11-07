@@ -1981,6 +1981,8 @@ pub fn run() {
             commands::projects::workspace_sync,
             commands::projects::adopt_folder_tab_layout,
             commands::projects::root_work_dir,
+            commands::cockpit_results::cockpit_result_target,
+            commands::cockpit_results::cockpit_attention_dismiss,
             commands::root_mcp::root_mcp_status,
             commands::root_mcp::help_search,
             commands::root_mcp::help_read,
