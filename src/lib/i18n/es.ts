@@ -5539,6 +5539,7 @@ export const dict: Dict = {
   "terminal.reader.cancelEditTitle": "Sacar los prompts de la cola del agente al cuadro de texto (↑)",
   "terminal.reader.pullFailed": "No recuperado — el agente no devolvió el mensaje en cola. Mira en el terminal del agente.",
   "terminal.reader.pullLeftover": "Sacado de la cola, pero el cuadro de entrada del agente aún conserva parte — vacíalo en el terminal antes de enviar.",
+  "terminal.reader.takenBack": "Claude devolvió este prompt sin enviarlo porque el turno se detuvo antes de responder. Edítalo y envíalo de nuevo.",
   "terminal.reader.sendFailed": "No enviado — el terminal del agente no acepta entrada. Tu texto sigue aquí.",
   "terminal.reader.sendPickerOpen": "No enviado — hay una lista de modelos o modos abierta en el agente. Elige de ella o ciérrala y vuelve a enviar. Tu texto sigue aquí.",
   "terminal.reader.waitsForQuestion": "Espera tu respuesta a la pregunta de arriba — se envía en cuanto la respondas.",

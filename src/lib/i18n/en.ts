@@ -5772,6 +5772,7 @@ export const enSource = {
   "terminal.reader.cancelEditTitle": "Take the queued prompts back out of the agent's queue into the text box (↑)",
   "terminal.reader.pullFailed": "Not taken back — the agent did not hand the queued prompt back. Look in the agent's terminal.",
   "terminal.reader.pullLeftover": "Taken out of the queue, but the agent's input box still holds some of it — clear it in the terminal before you send.",
+  "terminal.reader.takenBack": "Claude handed this prompt back unsent when the turn stopped before answering. Edit it and send it again.",
   "terminal.reader.sendFailed": "Not sent — the agent's terminal is not taking input. Your text is still here.",
   "terminal.reader.sendPickerOpen": "Not sent — a model or mode list is open in the agent. Choose from it or close it, then send. Your text is still here.",
   "terminal.reader.waitsForQuestion": "Waits for your answer to the question above — it is sent once the question is answered.",

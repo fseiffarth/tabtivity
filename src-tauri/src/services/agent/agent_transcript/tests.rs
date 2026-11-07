@@ -1222,6 +1222,72 @@ fn a_copilot_prompt_is_found_by_the_chat_menu_and_the_prompt_history() {
     assert_eq!(recent.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), vec!["patch it", "and now?"]);
     assert_eq!(agent_session::last_model_in_transcript(&path, TranscriptKind::Copilot).as_deref(), Some("gpt-5.4"));
 }
+
+/// Claude 2.1.318: an Esc before the turn answered puts the prompt back in
+/// its input box, and the prompt sent next hangs from the record the first
+/// one hung from (the shape of the session behind this fix). A rewind past
+/// an answered prompt leaves a branch the same way.
+#[test]
+fn a_claude_prompt_taken_back_or_rewound_leaves_the_chat() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let user = |uuid: &str, parent: &str, text: &str| {
+        format!("{{\"type\":\"user\",\"uuid\":\"{uuid}\",\"parentUuid\":\"{parent}\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}\n")
+    };
+    let attachment = |uuid: &str, parent: &str| {
+        format!("{{\"type\":\"attachment\",\"uuid\":\"{uuid}\",\"parentUuid\":\"{parent}\",\"attachment\":{{\"type\":\"date\"}}}}\n")
+    };
+    let answer = |uuid: &str, parent: &str, text: &str| {
+        format!("{{\"type\":\"assistant\",\"uuid\":\"{uuid}\",\"parentUuid\":\"{parent}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}}}}\n")
+    };
+    let mut text = user("p0", "root", "start");
+    text += &answer("a0", "p0", "started");
+    // Taken back: no answer under it, and the next prompt hangs from `a0`.
+    text += &user("p1", "a0", "fix the menu style");
+    text += &attachment("x1", "p1");
+    text += &user("p2", "a0", "improve the design");
+    text += &attachment("x2", "p2");
+    text += &answer("a2", "x2", "what design?");
+    // Answered, then rewound past: its answer goes with it.
+    text += &user("p3", "a2", "the header menu");
+    text += &answer("a3", "p3", "done");
+    text += &user("p4", "a2", "the side menu");
+    text += &answer("a4", "p4", "on it");
+    std::fs::write(&path, text).unwrap();
+    let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(
+        kinds(&read),
+        vec![
+            ("prompt", "start"),
+            ("answer", "started"),
+            ("prompt", "improve the design"),
+            ("answer", "what design?"),
+            ("prompt", "the side menu"),
+            ("answer", "on it"),
+        ]
+    );
+}
+
+/// Records without links (older transcripts, hand-made ones) and the same
+/// words sent twice down one chain stay as they are.
+#[test]
+fn claude_prompts_on_one_chain_all_stay() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"one\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"two\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"p1\",\"parentUuid\":\"r\",\"message\":{\"role\":\"user\",\"content\":\"three\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"p2\",\"parentUuid\":\"p1\",\"message\":{\"role\":\"user\",\"content\":\"three\"}}\n",
+        ),
+    )
+    .unwrap();
+    let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(kinds(&read), vec![("prompt", "one"), ("prompt", "two"), ("prompt", "three"), ("prompt", "three")]);
+}
+
 #[test]
 fn only_a_tab_that_runs_remotely_has_its_opencode_store_elsewhere() {
     // A local-model OpenCode tab of a remote project runs here (`local_only`):

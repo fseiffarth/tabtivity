@@ -5563,6 +5563,7 @@ export const dict: Dict = {
   "terminal.reader.cancelEditTitle": "Die wartenden Prompts aus der Warteschlange des Agenten zurück ins Textfeld holen (↑)",
   "terminal.reader.pullFailed": "Nicht zurückgeholt — der Agent hat die wartende Nachricht nicht zurückgegeben. Sieh im Terminal des Agenten nach.",
   "terminal.reader.pullLeftover": "Aus der Warteschlange geholt, aber das Eingabefeld des Agenten enthält noch einen Teil davon — leere es im Terminal, bevor du sendest.",
+  "terminal.reader.takenBack": "Claude hat diesen Prompt ungesendet zurückgegeben, weil der Turn vor einer Antwort gestoppt wurde. Bearbeite ihn und sende ihn erneut.",
   "terminal.reader.sendFailed": "Nicht gesendet — das Terminal des Agenten nimmt keine Eingabe an. Dein Text bleibt hier.",
   "terminal.reader.sendPickerOpen": "Nicht gesendet — im Agenten ist eine Modell- oder Modusliste offen. Wähle daraus oder schließe sie, dann sende. Dein Text bleibt hier.",
   "terminal.reader.waitsForQuestion": "Wartet auf deine Antwort auf die Frage oben — wird gesendet, sobald sie beantwortet ist.",

@@ -1123,7 +1123,7 @@ fn read_transcript_in(
     let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
     let context_card = newest_context_card(&lines, kind);
-    let (mut entries, calls, shell_calls) = parse_entries(lines.into_iter(), kind, sidechain);
+    let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain);
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
     let mut spawned_tokens: Vec<String> = Vec::new();
@@ -1561,11 +1561,13 @@ fn codex_context_left(info: &Value) -> Option<u8> {
 /// into one they ran together ("Let me check…" glued to the final answer).
 /// Beside them, each Claude `Agent` call's entry index and call id, for the
 /// caller to match to its subagent, and the shells it has started.
-fn parse_entries<'a>(
-    lines: impl Iterator<Item = &'a str>,
+fn parse_entries(
+    lines: &[&str],
     kind: TranscriptKind,
     sidechain: bool,
 ) -> (Vec<TranscriptEntry>, Vec<(usize, String)>, ShellCalls) {
+    // Branches Claude left: nothing on them is in its conversation any more.
+    let rewound = if kind == TranscriptKind::Claude && !sidechain { claude_rewound(lines) } else { Default::default() };
     let mut entries: Vec<TranscriptEntry> = Vec::new();
     let mut calls: Vec<(usize, String)> = Vec::new();
     // Shell calls since the last prompt, by call id: one an earlier turn
@@ -1601,6 +1603,9 @@ fn parse_entries<'a>(
         let Ok(mut value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if !rewound.is_empty() && value.get("uuid").and_then(Value::as_str).is_some_and(|uuid| rewound.contains(uuid)) {
+            continue;
+        }
         if sidechain {
             if let Some(record) = value.as_object_mut() {
                 record.remove("isSidechain");
@@ -2089,6 +2094,56 @@ fn claude_records(value: &Value) -> Vec<Record> {
         }
         _ => Vec::new(),
     }
+}
+
+/// The records on branches Claude abandoned, by uuid. Claude chains its
+/// records by `parentUuid` and shows the chain that ends in the newest one.
+/// When it takes a prompt back — an Esc before the turn answered puts the
+/// words back in its input box, unsent (2.1.318) — or the user rewinds to an
+/// earlier prompt, the next prompt hangs from the record the earlier prompt
+/// hung from. Everything under that earlier prompt is then off the
+/// conversation, and a chat that showed it would claim the agent had it.
+fn claude_rewound(lines: &[&str]) -> std::collections::HashSet<String> {
+    use std::collections::{HashMap, HashSet};
+    #[derive(Deserialize)]
+    struct Link {
+        uuid: Option<String>,
+        #[serde(rename = "parentUuid")]
+        parent: Option<String>,
+    }
+    let mut dead: HashSet<String> = HashSet::new();
+    // The prompt hanging from each parent: a later one from the same parent
+    // leaves it. Only prompt lines are parsed whole here.
+    let mut prompt_under: HashMap<String, String> = HashMap::new();
+    for line in lines {
+        if !line.contains("\"type\":\"user\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        if claude_interrupt(&value).is_some() || agent_session::claude_prompt_in_record(&value).is_none() {
+            continue;
+        }
+        let (Some(uuid), Some(parent)) = (value.get("uuid").and_then(Value::as_str), value.get("parentUuid").and_then(Value::as_str)) else {
+            continue;
+        };
+        if let Some(earlier) = prompt_under.insert(parent.to_string(), uuid.to_string()) {
+            dead.insert(earlier);
+        }
+    }
+    if dead.is_empty() {
+        return dead;
+    }
+    // A record is written after its parent: one pass in file order carries
+    // the mark down each dead branch.
+    for line in lines {
+        let Ok(link) = serde_json::from_str::<Link>(line.trim()) else { continue };
+        if let (Some(uuid), Some(parent)) = (link.uuid, link.parent) {
+            if dead.contains(&parent) {
+                dead.insert(uuid);
+            }
+        }
+    }
+    dead
 }
 
 /// The notice Claude writes when the user cuts a turn off —

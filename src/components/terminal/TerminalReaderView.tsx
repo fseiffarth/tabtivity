@@ -65,7 +65,7 @@ import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
-import { pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
+import { claudeBoxWords, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
@@ -589,7 +589,21 @@ interface ReaderVoiceLoop {
   chips: ReactNode;
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, inputBlocked, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef }: {
+/** `entries` without the prompt Claude handed back on a stop, while it is
+ * still the newest one and nothing answered it; the same array when that no
+ * longer holds, which is what lets the mark go. */
+function withoutTakenBack(entries: TranscriptEntry[], text: string | null): TranscriptEntry[] {
+  if (text === null) return entries;
+  let at = entries.length - 1;
+  while (at >= 0 && entries[at].kind !== "prompt") {
+    if (entries[at].kind === "answer") return entries;
+    at -= 1;
+  }
+  if (at < 0 || entries[at].text.trim() !== text.trim()) return entries;
+  return [...entries.slice(0, at), ...entries.slice(at + 1)];
+}
+
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, inputBlocked, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -624,6 +638,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   onPulled: (ids: number[]) => void;
   /** Set to what takes `queued` back into the box, whatever it holds. */
   pullRef: MutableRefObject<(() => void) | null>;
+  /** Set to what puts a prompt Claude handed back on a stop into the box,
+   * before what it holds (`takeBackStopped`). */
+  takeBackRef: MutableRefObject<((text: string, cleared: boolean) => void) | null>;
 }) {
   const t = useT();
   const assistantChat = scope === ASSISTANT_SCOPE;
@@ -995,6 +1012,15 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     }).finally(() => { pulling.current = false; });
   };
   pullRef.current = pullQueued;
+  takeBackRef.current = (text, cleared) => {
+    const current = draftRef.current;
+    const next = current ? `${text}\n${current}` : text;
+    historyAt.current = null;
+    editDraft(next);
+    caretAt.current = text.length;
+    setSendError(t(cleared ? "terminal.reader.takenBack" : "terminal.reader.pullLeftover"));
+    composerRef.current?.focus();
+  };
   /** ↑ in the empty box while the CLI says messages wait in its queue. */
   const pullKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
     if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
@@ -1133,7 +1159,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     )}
     {sendError && (actionSlot && !visible
       ? createPortal(<span className="reader-toolbar-error" role="alert">{sendError}</span>, actionSlot)
-      : <div className="terminal-reader-error" role="alert">{sendError}</div>)}
+      : <div className="terminal-reader-error" role="alert">
+        {sendError}
+        {sendError === t("terminal.reader.takenBack") && <UntestedTag id="terminal.reader.takenBack" />}
+      </div>)}
   </>;
 }
 
@@ -1338,6 +1367,20 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     key: (key) => typeIntoPane([key]).then(() => true, () => false),
   }), [ptyId, typeIntoPane]);
   const tabFamily = queueFamily(agentFamily(tab?.cmd ?? ""));
+  const workingRef = useRef(false);
+  workingRef.current = !!live.working;
+  const sendTargetRef = useRef(sendTarget);
+  sendTargetRef.current = sendTarget;
+  /** The prompts a stop may hand back, oldest first: the newest recorded
+   * ones (Claude records a prompt before it answers), then those still
+   * sending, which carry their `sentPrompts` id. Set once the entries are. */
+  const stoppableRef = useRef<() => { text: string; id?: number }[]>(() => []);
+  /** What a stop put back into the composer, see `takeBackStopped`. */
+  const takeBackRef = useRef<((text: string, cleared: boolean) => void) | null>(null);
+  /** A recorded prompt Claude handed back on a stop: its bubble goes while
+   * it is still the newest prompt — the next one Claude records hangs from
+   * where it hung, and the transcript read drops it then (`claude_rewound`). */
+  const [takenBack, setTakenBack] = useState<string | null>(null);
   /** Esc, the working row's Stop. With a queue on screen it is Send now where
    * a lone Esc would not send it: Codex would drop it into a box the chat
    * does not show, OpenCode asks for a second press. */
@@ -1347,7 +1390,20 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       void sendQueuedNow(driver, tabFamily);
       return;
     }
-    void typeIntoPane(["\u001b"]).catch(() => {});
+    // Claude hands a prompt back, unsent, when the stop lands before the
+    // turn answered: it comes back into the composer, not left in a box the
+    // next send empties.
+    const sent = tabFamily === "claude" && workingRef.current ? stoppableRef.current() : [];
+    const before = sent.length > 0 ? claudeBoxWords(driver.rows()) : "";
+    void typeIntoPane(["\u001b"]).then(async () => {
+      if (sent.length === 0) return;
+      const back = await takeBackStopped(driver, sent.map((item) => item.text), before);
+      if (!back) return;
+      const item = sent[back.index];
+      if (item.id !== undefined && sendTargetRef.current) forgetSentPrompts(sendTargetRef.current, [item.id]);
+      else setTakenBack(item.text);
+      takeBackRef.current?.(item.text, back.cleared);
+    }).catch(() => {});
   }, [paneDriver, tabFamily, typeIntoPane]);
   /** The reasoning effort last seen: Claude Code prints it only on its busy
    * row, so the facts row also takes the one its transcript records (every
@@ -1717,7 +1773,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     () => (chatId ? null : afterClear(storedEntries, clearedAt ?? null)),
     [storedEntries, clearedAt, chatId],
   );
-  const entries = sinceClear ?? storedEntries;
+  const entries = useMemo(() => withoutTakenBack(sinceClear ?? storedEntries, takenBack), [sinceClear, storedEntries, takenBack]);
+  useEffect(() => {
+    if (takenBack !== null && entries === (sinceClear ?? storedEntries)) setTakenBack(null);
+  }, [takenBack, entries, sinceClear, storedEntries]);
   /** Codex's own "less than N% of your limit left" heads-up, off the limits
    * its rollout records (no other CLI's transcript carries them). */
   const lowLimits = transcript?.available && !sinceClear && !chatId ? limitWarnings(transcript.usage, new Date()) : [];
@@ -1923,6 +1982,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     if (queueCli === "claude") pressEscape();
     else if (queueCli) void sendQueuedNow(paneDriver(), queueCli);
   };
+  stoppableRef.current = () => [
+    ...entries.filter((entry) => entry.kind === "prompt").slice(-3).map((entry) => ({ text: entry.text })),
+    ...pending.map((item) => ({ text: item.text, id: item.id })),
+  ];
   const dropPending = useCallback((ids: number[]) => {
     if (sendTarget) forgetSentPrompts(sendTarget, ids);
   }, [sendTarget]);
@@ -2550,6 +2613,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         onStatus={requestStatus}
         onPulled={dropPending}
         pullRef={pullQueued}
+        takeBackRef={takeBackRef}
       />}
     </div>
     {/* The conversation's menus only over Chat or Diffs: in Terminal the

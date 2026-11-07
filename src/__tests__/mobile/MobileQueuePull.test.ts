@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codexBoxLines, inputBoxLines, openCodePanelRows, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takenPrompts } from "../../../mobile-web/src/terminal/queuePull";
+import { claudeBoxWords, codexBoxLines, inputBoxLines, openCodePanelRows, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts } from "../../../mobile-web/src/terminal/queuePull";
 
 const FAST = { waitMs: 30, pollMs: 2 };
 const RULE = "────────────────────────────────────────";
@@ -267,5 +267,56 @@ describe("queueFamily", () => {
   it("names only the CLIs whose queue the screen shows", () => {
     expect(["claude", "codex", "opencode"].map(queueFamily)).toEqual(["claude", "codex", "opencode"]);
     for (const family of ["copilot", "gemini", "qwen", "agent"]) expect(queueFamily(family)).toBeNull();
+  });
+
+  describe("a stop Claude answers by handing the prompt back (2.1.318)", () => {
+    /** Esc before the turn answered: the queue goes, the stopped prompt
+     * comes back into the box a moment later, unsent. */
+    function stopped(back: string, queue: string[] = []) {
+      const fake = fakeClaude(queue);
+      const key = fake.driver.key;
+      fake.driver.key = async (pressed: string) => {
+        if (pressed === "\u001b") {
+          fake.state.queue = [];
+          setTimeout(() => { fake.state.box = back; }, 5);
+          return true;
+        }
+        return key(pressed);
+      };
+      return fake;
+    }
+
+    it("takes a prompt the chat sent back out of Claude's box", async () => {
+      const { state, driver } = stopped("fix the menu style", ["improve the design"]);
+      const before = claudeBoxWords(driver.rows());
+      expect(before).toBe(HINT);
+      await driver.key("\u001b");
+      const back = await takeBackStopped(driver, ["fix the menu style", "improve the design"], before, FAST);
+      expect(back).toEqual({ index: 0, cleared: true });
+      expect(state.box).toBe("");
+    });
+
+    it("knows a long prompt by the end the box shows", async () => {
+      const long = `${"word ".repeat(40)}and the end of it`;
+      const { driver } = stopped(long.slice(-60));
+      await driver.key("\u001b");
+      expect(await takeBackStopped(driver, [long], "", FAST)).toMatchObject({ index: 0 });
+    });
+
+    it("leaves the user's own words in the box", async () => {
+      const { state, driver } = stopped("typed in the terminal");
+      await driver.key("\u001b");
+      expect(await takeBackStopped(driver, ["sent from the chat"], "", FAST)).toBeNull();
+      expect(state.box).toBe("typed in the terminal");
+      expect(state.keys).not.toContain("\u0015");
+    });
+
+    it("presses nothing when the box held the words already", async () => {
+      const { state, driver } = fakeClaude([]);
+      state.box = "sent from the chat";
+      const before = claudeBoxWords(driver.rows());
+      expect(await takeBackStopped(driver, ["sent from the chat"], before, FAST)).toBeNull();
+      expect(state.keys).toEqual([]);
+    });
   });
 });

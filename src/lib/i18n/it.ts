@@ -5539,6 +5539,7 @@ export const dict: Dict = {
   "terminal.reader.cancelEditTitle": "Riprendi i prompt dalla coda dell'agente nella casella di testo (↑)",
   "terminal.reader.pullFailed": "Non ripreso — l'agente non ha restituito il messaggio in coda. Guarda nel terminale dell'agente.",
   "terminal.reader.pullLeftover": "Tolto dalla coda, ma la casella di input dell'agente ne contiene ancora una parte — svuotala nel terminale prima di inviare.",
+  "terminal.reader.takenBack": "Claude ha restituito questo prompt senza inviarlo, perché il turno è stato fermato prima di una risposta. Modificalo e invialo di nuovo.",
   "terminal.reader.sendFailed": "Non inviato — il terminale dell'agente non accetta input. Il tuo testo è ancora qui.",
   "terminal.reader.sendPickerOpen": "Non inviato — nell'agente è aperto un elenco di modelli o modalità. Scegli dall'elenco o chiudilo, poi invia. Il tuo testo è ancora qui.",
   "terminal.reader.waitsForQuestion": "Attende la tua risposta alla domanda sopra — viene inviato non appena hai risposto.",

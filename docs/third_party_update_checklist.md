@@ -394,6 +394,14 @@ Claude's `/fast` — different thing.
   the name stays off it (pinned in `AgentReaderLive.test.ts`).
   `Notification` / `permission_prompt` fired after 6 s on both, and not at all
   when the prompt was answered within 2 s, so a probe has to hold it.
+  2.1.318: an Esc that lands before a turn has answered stops it and puts
+  its prompt back in the input box, unsent (with a queue behind it the queue
+  goes first); the transcript keeps a prompt already recorded, and the next
+  prompt hangs from the same parent (`claude/esc_early.py`).
+  `agent_transcript::claude_rewound` drops such branches, and the Reader's
+  `pressEscape` takes the prompt back into its composer (`takeBackStopped`),
+  since a chat send empties the box first. 2.1.318 also shows
+  `ctrl+x ctrl+s to send now` under queued messages; nothing here uses it yet.
   `Press up to edit queued messages` is unchanged; 2.1.312's click to send is
   fullscreen only and acts on the `ctrl+enter to send now` row, which nothing
   here reads. 2.1.312 calls the five-hour window the "5-hour limit" in limit

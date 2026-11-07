@@ -5541,6 +5541,7 @@ export const dict: Dict = {
   "terminal.reader.cancelEditTitle": "Reprendre les prompts de la file de l'agent dans la zone de texte (↑)",
   "terminal.reader.pullFailed": "Pas repris — l'agent n'a pas rendu le message en file. Regarde dans le terminal de l'agent.",
   "terminal.reader.pullLeftover": "Retiré de la file, mais la zone de saisie de l'agent en contient encore une partie — vide-la dans le terminal avant d'envoyer.",
+  "terminal.reader.takenBack": "Claude a rendu ce prompt sans l'envoyer, le tour ayant été arrêté avant une réponse. Modifie-le et renvoie-le.",
   "terminal.reader.sendFailed": "Non envoyé — le terminal de l'agent n'accepte pas de saisie. Votre texte est conservé.",
   "terminal.reader.sendPickerOpen": "Non envoyé — une liste de modèles ou de modes est ouverte dans l'agent. Choisissez-y ou fermez-la, puis envoyez. Votre texte est conservé.",
   "terminal.reader.waitsForQuestion": "Attend votre réponse à la question ci-dessus — envoyé dès qu'elle a une réponse.",
