@@ -1437,6 +1437,11 @@
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
+  /* The window is user-select: none (base.css); installer output is the one
+     thing the user needs to copy into a bug report, so it selects. */
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 /* `.ollama-action-btn` is the settings button in its compact size — look,
