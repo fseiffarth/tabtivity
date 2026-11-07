@@ -212,7 +212,10 @@ must not be able to plant an MCP server, hook or skill that runs in project
 B or in the root console (which holds the root MCP token) — the threat-model
 gap 7 class — so the homes are per scope and other scopes' homes are
 unreachable (the state dir is masked inside the fence; on macOS the whole
-`agent-homes/` tree is denied and only the own home re-allowed). The user's
+`agent-homes/` tree is denied and only the own home re-allowed). Two files
+pierce the Linux mask read-only so an agent can diagnose a crash:
+`crash.log` and the frozen dev build's log (`agent_fence::diagnostic_logs`;
+regular files only, never through a symlink; Seatbelt still hides both). The user's
 own `~/.claude`, `~/.codex`, `~/.gemini` and the rest are never mounted, so
 the whole apparatus that used to protect them — the per-entry deny lists,
 the staged shadow copies of hook-registration files, the credential mirror,

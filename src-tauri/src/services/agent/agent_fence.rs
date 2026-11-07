@@ -1443,6 +1443,23 @@ pub(crate) fn private_state_paths(state_dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// The app's own diagnostic logs, shown read-only through the state mask so an
+/// agent asked "why did it crash" can read them: `crash.log` (crash, panic,
+/// webview and frontend-error entries) and the frozen dev build's
+/// `<dev-bin>.log` (the launcher's stdout/stderr). Only regular files are
+/// listed — never a symlink, which would expose wherever it points. Each is
+/// rewritten in place (`state_gc::cap_crash_log` trims without a rename; the
+/// launcher rotates its log before the app starts), so the bind stays live
+/// for the tab's lifetime.
+#[cfg(any(target_os = "linux", test))]
+fn diagnostic_logs(state_dir: &Path) -> Vec<PathBuf> {
+    ["crash.log".to_string(), format!("{}.log", crate::brand::DEV_BIN_NAME)]
+        .into_iter()
+        .map(|name| state_dir.join(name))
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file()))
+        .collect()
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMount]) {
     let mut mask = Vec::new();
@@ -1450,10 +1467,15 @@ fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMo
         if path.is_dir() { mask.extend(["--tmpfs".into(), path.to_string_lossy().into_owned()]); }
         else if path.exists() { mask.extend(["--ro-bind".into(), "/dev/null".into(), path.to_string_lossy().into_owned()]); }
     }
-    // Only Tabtivity's explicit agent support mounts may pierce the state mask.
-    // Project roots and user allowlists are intentionally never restored here.
+    // Only Tabtivity's explicit agent support mounts and its diagnostic logs
+    // (read-only) may pierce the state mask. Project roots and user allowlists
+    // are intentionally never restored here.
     for m in mounts.iter().filter(|m| Path::new(&m.dst).starts_with(state_dir)) {
         mask.extend([if m.read_only { "--ro-bind" } else { "--bind" }.into(), m.src.clone(), m.dst.clone()]);
+    }
+    for log in diagnostic_logs(state_dir) {
+        let log = log.to_string_lossy().into_owned();
+        mask.extend(["--ro-bind".into(), log.clone(), log]);
     }
     let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
     args.splice(separator..separator, mask);

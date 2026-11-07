@@ -92,11 +92,41 @@ fn install_crash_logger() {
         install_signal_handlers(&path)
     };
 
+    // An `exit()` that does not come through the quit teardown (a library
+    // giving up, a stray `process::exit`) runs no Rust hook and leaves the
+    // children running; atexit handlers still run, so say who called it.
+    #[cfg(unix)]
+    // SAFETY: registers a plain `extern "C" fn()`; called once at startup.
+    unsafe {
+        libc::atexit(exit_outside_quit);
+    }
+
     #[cfg(windows)]
     // SAFETY: called once at startup before any thread can crash.
     unsafe {
         install_seh_filter(&path)
     };
+}
+
+/// Set when `RunEvent::Exit` starts the quit teardown: from then on an
+/// `exit()` is the ordinary end (tao ends its loop in `process::exit`).
+static QUIT_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The atexit hook: an `exit()` before any quit teardown is logged with the
+/// calling thread's stack. (`_exit`, which GDK uses when it loses the display,
+/// runs no hook: the launcher's `=== EXITED` status line covers that.)
+#[cfg(unix)]
+extern "C" fn exit_outside_quit() {
+    if QUIT_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let bt = std::backtrace::Backtrace::force_capture();
+    let thread = std::thread::current().name().unwrap_or("?").to_string();
+    crash_log_append(&format!(
+        "=== EXIT via exit() before any quit teardown {} thread={thread} commit={} ===\nbacktrace:\n{bt}",
+        storage::iso_now(),
+        BUILD_COMMIT
+    ));
 }
 
 /// Append one entry to crash.log in the state dir.
@@ -176,6 +206,92 @@ unsafe fn install_signal_handlers(path: &std::path::Path) {
         sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND | libc::SA_ONSTACK;
         libc::sigaction(sig, &sa, std::ptr::null_mut());
     }
+    for &(sig, _) in QUIET_FATAL {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = signal_quiet_handler as *const () as libc::sighandler_t;
+        sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND | libc::SA_ONSTACK;
+        libc::sigaction(sig, &sa, std::ptr::null_mut());
+    }
+}
+
+/// Signals whose default action ends the process without a word: no core, no
+/// handler of ours, the children left running — the shape of the unexplained
+/// deaths since 2026-11-05. SIGTERM/SIGINT are routed into the quit (`run`),
+/// SIGKILL cannot be caught, and SIGALRM keeps its default because the crash
+/// handler's `alarm(5)` guard relies on it.
+#[cfg(unix)]
+const QUIET_FATAL: &[(libc::c_int, &[u8])] = &[
+    (libc::SIGHUP, b"SIGHUP"),
+    (libc::SIGUSR1, b"SIGUSR1"),
+    (libc::SIGUSR2, b"SIGUSR2"),
+    (libc::SIGXCPU, b"SIGXCPU"),
+    (libc::SIGXFSZ, b"SIGXFSZ"),
+    (libc::SIGSYS, b"SIGSYS"),
+];
+
+/// Log who sent a [`QUIET_FATAL`] signal, then die of it as before. Same
+/// shape and async-signal-safety as `signal_crash_handler`, minus the stack:
+/// the sender is another process, so this thread's stack says nothing.
+#[cfg(unix)]
+extern "C" fn signal_quiet_handler(sig: libc::c_int, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
+    // SAFETY: `sigaction` is async-signal-safe; the struct is fully initialised.
+    unsafe {
+        let mut dfl: libc::sigaction = std::mem::zeroed();
+        dfl.sa_sigaction = libc::SIG_DFL;
+        libc::sigaction(sig, &dfl, std::ptr::null_mut());
+    }
+    let fd = CRASH_LOG_FD.load(std::sync::atomic::Ordering::Relaxed);
+    if fd >= 0 {
+        let name = QUIET_FATAL.iter().find(|(s, _)| *s == sig).map_or(&b"SIGNAL"[..], |(_, n)| *n);
+        // SAFETY: the kernel hands a valid `siginfo_t`; null-checked first.
+        let (code, pid, uid) = unsafe {
+            if info.is_null() {
+                (0, 0, 0)
+            } else {
+                let (pid, uid) = siginfo_sender(&*info);
+                ((*info).si_code, pid, uid)
+            }
+        };
+        let mut buf = [0u8; 512];
+        let len = format_kill_line(name, code, pid, uid, &mut buf);
+        sig_write(fd, &buf[..len]);
+        let len = format_crash_context(0, &mut buf);
+        sig_write(fd, &buf[..len]);
+    }
+    // SAFETY: `raise` is async-signal-safe per POSIX.
+    unsafe {
+        libc::raise(sig);
+    }
+}
+
+/// The sending process and its uid, as a signal's siginfo reports them.
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+fn siginfo_sender(info: &libc::siginfo_t) -> (u32, u32) {
+    // SAFETY: read only for the signals in `QUIET_FATAL`, sent by `kill`-like
+    // calls whose siginfo carries the sender; a kernel-sent one reads as 0.
+    unsafe { (info.si_pid().max(0) as u32, info.si_uid()) }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn siginfo_sender(info: &libc::siginfo_t) -> (u32, u32) {
+    (info.si_pid.max(0) as u32, info.si_uid)
+}
+
+/// Format `=== KILLED: <name> from pid=<n> uid=<n> code=0x… ===\n` without
+/// allocating. `code` is `si_code`: 0 (`SI_USER`) for a `kill`, 0x80
+/// (`SI_KERNEL`) for one the kernel raised (SIGXCPU at a CPU limit).
+#[cfg(any(unix, test))]
+pub fn format_kill_line(name: &[u8], code: i32, pid: u32, uid: u32, buf: &mut [u8]) -> usize {
+    let mut pos = 0;
+    pos = crash_push(buf, pos, b"=== KILLED: ");
+    pos = crash_push(buf, pos, name);
+    pos = crash_push(buf, pos, b" from pid=");
+    pos = crash_push_dec(buf, pos, pid as u64, 1);
+    pos = crash_push(buf, pos, b" uid=");
+    pos = crash_push_dec(buf, pos, uid as u64, 1);
+    pos = crash_push(buf, pos, b" code=0x");
+    pos = crash_push_hex(buf, pos, code as u32 as u64, 1);
+    crash_push(buf, pos, b" ===\n")
 }
 
 /// Async-signal-safe crash handler. Order matters:
@@ -1379,6 +1495,8 @@ pub fn run() {
     // is enforced against what previous runs left rather than a moment later.
     services::state_gc::cap_crash_log();
     install_crash_logger();
+    // Reports runs that died with nothing logged, then keeps this one's beat.
+    services::run_heartbeat::start(storage::state_dir(), BUILD_COMMIT, crash_log_append);
 
     // The webview's data directory is `<data dir>/<identifier>` on Linux, and
     // the identifier is the Tauri config's — asked for rather than hardcoded, so
@@ -1512,10 +1630,11 @@ pub fn run() {
                     ) else {
                         return;
                     };
-                    tokio::select! {
-                        _ = term.recv() => {}
-                        _ = int.recv() => {}
-                    }
+                    let name = tokio::select! {
+                        _ = term.recv() => "SIGTERM",
+                        _ = int.recv() => "SIGINT",
+                    };
+                    crash_log_append(&format!("=== {name} received {}: quitting ===", storage::iso_now()));
                     handle.exit(0);
                 });
             }
@@ -2701,6 +2820,9 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                QUIT_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+                crash_log_append(&format!("=== QUIT {} ===", storage::iso_now()));
+                services::run_heartbeat::quitting();
                 // Saves the window sent on its way out are still queued on the
                 // ordered worker; let them land before anything is torn down.
                 commands::persist_lane::drain_at_exit();
@@ -2821,6 +2943,8 @@ pub fn run() {
                     .inner()
                     .clone();
                 tauri::async_runtime::block_on(services::remote::disconnect_all(&pool));
+                // Last: the teardown finished, so this run ended cleanly.
+                services::run_heartbeat::clear();
             }
         });
 }
@@ -2946,6 +3070,18 @@ mod tests {
         let mut small = [0u8; 6];
         assert_eq!(crash_push_dec(&mut small, 0, u64::MAX, 1), 6);
         assert_eq!(&small, b"184467");
+    }
+
+    #[test]
+    fn format_kill_line_names_the_sender() {
+        let mut buf = [0u8; 96];
+        let len = format_kill_line(b"SIGHUP", 0, 4242, 1000, &mut buf);
+        assert_eq!(
+            std::str::from_utf8(&buf[..len]).unwrap(),
+            "=== KILLED: SIGHUP from pid=4242 uid=1000 code=0x0 ===\n"
+        );
+        let mut small = [0u8; 10];
+        assert_eq!(format_kill_line(b"SIGUSR1", 0, 1, 1, &mut small), 10);
     }
 
     #[test]

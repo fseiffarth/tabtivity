@@ -426,6 +426,31 @@ fn state_is_masked_after_overlapping_project_grants() {
 }
 
 #[test]
+fn diagnostic_logs_pierce_the_state_mask_read_only_and_never_via_a_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let crash = state.join("crash.log");
+    std::fs::write(&crash, "=== STARTED ===").unwrap();
+    std::fs::write(state.join("settings.json"), "{}").unwrap();
+    // The dev log as a symlink to a private store: must stay hidden.
+    let dev_log = state.join(format!("{}.log", crate::brand::DEV_BIN_NAME));
+    std::os::unix::fs::symlink(state.join("settings.json"), &dev_log).unwrap();
+
+    let mut args = vec!["--".into(), "agent".into()];
+    mask_private_state(&mut args, &state, &[]);
+    let state_s = state.to_string_lossy();
+    let crash_s = crash.to_string_lossy();
+    let mask = args.windows(2).rposition(|w| w[0] == "--tmpfs" && w[1] == state_s).unwrap();
+    let shown = args.windows(3).position(|w| w[0] == "--ro-bind" && w[1] == crash_s && w[2] == crash_s).unwrap();
+    assert!(shown > mask, "the log is bound after the mask, so it is visible");
+    assert!(args.iter().position(|a| a == "--").unwrap() > shown);
+    assert!(!args.windows(2).any(|w| w[0] == "--bind" && w[1] == crash_s), "never writable");
+    let dev_s = dev_log.to_string_lossy();
+    assert!(!args.iter().any(|a| *a == dev_s), "a symlinked log is not shown");
+}
+
+#[test]
 fn owned_installs_survive_the_final_state_mask_read_only() {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
