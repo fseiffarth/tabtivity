@@ -236,6 +236,9 @@ export interface Settings {
    * Machines, CPU/RAM/GPU) expanded into the bar? Unset means collapsed to a
    * single summary lamp; anything non-nominal shows itself regardless. */
   header_status_expanded?: boolean;
+  /** Keep the top bar in the layout in the window's fullscreen mode instead of
+   * auto-hiding it at the screen edge. Unset means auto-hide. */
+  header_fullscreen_pinned?: boolean;
   /** Top-bar placement overrides by item id (`lib/headerPins`): `true` keeps the
    * item in the bar while the chevron is collapsed, `false` folds it behind the
    * chevron. An id that is absent follows the built-in default. */

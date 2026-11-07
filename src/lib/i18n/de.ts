@@ -5740,6 +5740,8 @@ export const dict: Dict = {
   "windowControls.maximize": "Maximieren",
   "windowControls.fullscreen": "Vollbild (F11)",
   "windowControls.exitFullscreen": "Vollbild verlassen (F11)",
+  "header.pinFullscreen": "Obere Leiste im Vollbild fixieren",
+  "header.unpinFullscreen": "Obere Leiste im Vollbild automatisch ausblenden",
   "connTypeIcon.offlineSuffix": " (offline)",
   "connTypeIcon.ssidSuffix": " · {ssid}",
   "batteryIndicator.unknown": "Akkustatus unbekannt",

@@ -5716,6 +5716,8 @@ export const dict: Dict = {
   "windowControls.maximize": "Ingrandisci",
   "windowControls.fullscreen": "Schermo intero (F11)",
   "windowControls.exitFullscreen": "Esci da schermo intero (F11)",
+  "header.pinFullscreen": "Fissa la barra superiore a schermo intero",
+  "header.unpinFullscreen": "Nascondi automaticamente la barra superiore a schermo intero",
   "connTypeIcon.offlineSuffix": " (offline)",
   "connTypeIcon.ssidSuffix": " · {ssid}",
   "batteryIndicator.unknown": "Stato della batteria sconosciuto",

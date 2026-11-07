@@ -1044,6 +1044,10 @@ pub struct Settings {
     /// itself either way (see `stores/headerStatus`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_status_expanded: Option<bool>,
+    /// Keep the top bar in the layout in the window's fullscreen mode instead of
+    /// auto-hiding it at the screen edge. Unset means auto-hide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_fullscreen_pinned: Option<bool>,
     /// Top-bar placement overrides by item id: `true` keeps the item in the bar
     /// while the chevron is collapsed, `false` folds it behind the chevron. An
     /// absent id follows the frontend's default (`lib/headerPins`).

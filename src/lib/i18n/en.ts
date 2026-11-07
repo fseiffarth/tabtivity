@@ -5951,6 +5951,8 @@ export const enSource = {
   "windowControls.maximize": "Maximize",
   "windowControls.fullscreen": "Fullscreen (F11)",
   "windowControls.exitFullscreen": "Exit fullscreen (F11)",
+  "header.pinFullscreen": "Pin the top bar in fullscreen",
+  "header.unpinFullscreen": "Auto-hide the top bar in fullscreen",
   "connTypeIcon.offlineSuffix": " (offline)",
   "connTypeIcon.ssidSuffix": " · {ssid}",
   "batteryIndicator.unknown": "Battery status unknown",

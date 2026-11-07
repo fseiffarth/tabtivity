@@ -74,4 +74,20 @@ describe("HeaderBar fullscreen auto-hide", () => {
     act(() => useFullscreenMode.setState({ on: false }));
     expect(container.querySelector(".app-header.is-autohide")).toBeNull();
   });
+
+  it("stays a docked bar in fullscreen once pinned, and the pin button toggles it", () => {
+    const updateSettings = vi.fn(async () => {});
+    useSettingsStore.setState({ settings: { header_fullscreen_pinned: true } as never, updateSettings } as never);
+    useFullscreenMode.setState({ on: true });
+    const { container } = render(<HeaderBar />);
+    expect(container.querySelector(".app-header.is-autohide")).toBeNull();
+    expect(container.querySelector(".header-hotzone")).toBeNull();
+    fireEvent.click(container.querySelector(".wm-pin") as HTMLElement);
+    expect(updateSettings).toHaveBeenCalledWith({ header_fullscreen_pinned: false });
+  });
+
+  it("offers no pin button when windowed", () => {
+    const { container } = render(<HeaderBar />);
+    expect(container.querySelector(".wm-pin")).toBeNull();
+  });
 });

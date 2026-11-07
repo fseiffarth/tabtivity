@@ -10,6 +10,7 @@ import { HeaderSlot } from "../header/HeaderSlot";
 import { headerWidthTier, isHeaderPinned, orderedHeaderIds, useHeaderPinDefaults, type HeaderWidthTier } from "../../lib/headerPins";
 import { APP_ICONS } from "../header/appIcons";
 import { useSettingsStore } from "../../stores/settings";
+import { useT } from "../../lib/i18n";
 import { ProjectSwitcher } from "./ProjectSwitcher";
 
 const NON_DRAG_SELECTOR = [
@@ -52,7 +53,13 @@ export function HeaderBar() {
   // In the window's own fullscreen mode the bar steps out of the layout (the
   // content takes the whole screen) and slides down while the pointer is at the
   // top edge. Windowed, it is the ordinary always-visible bar.
-  const fullscreen = useFullscreenMode((s) => s.on);
+  const inFullscreen = useFullscreenMode((s) => s.on);
+  // Pinned (Settings `header_fullscreen_pinned`, the bar's own pin button): the
+  // bar stays an ordinary docked bar in fullscreen too.
+  const pinned = useSettingsStore((s) => s.settings?.header_fullscreen_pinned ?? false);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  const fullscreen = inFullscreen && !pinned;
+  const t = useT();
   const [revealed, setRevealed] = useState(false);
   const hideTimer = useRef<number | null>(null);
   const clearHide = () => {
@@ -156,6 +163,15 @@ export function HeaderBar() {
             controls: machine-level, like the readouts it follows. */}
         <Clock />
         <span className="project-switcher-separator" aria-hidden="true" />
+        {inFullscreen && (
+          <button
+            className="wm-btn wm-pin"
+            onClick={() => void updateSettings({ header_fullscreen_pinned: !pinned })}
+            title={t(pinned ? "header.unpinFullscreen" : "header.pinFullscreen")}
+            aria-label={t(pinned ? "header.unpinFullscreen" : "header.pinFullscreen")}
+            aria-pressed={pinned}
+          />
+        )}
         <WindowControls />
       </div>
     </header>

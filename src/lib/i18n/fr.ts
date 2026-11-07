@@ -5718,6 +5718,8 @@ export const dict: Dict = {
   "windowControls.maximize": "Agrandir",
   "windowControls.fullscreen": "Plein écran (F11)",
   "windowControls.exitFullscreen": "Quitter le plein écran (F11)",
+  "header.pinFullscreen": "Épingler la barre du haut en plein écran",
+  "header.unpinFullscreen": "Masquer automatiquement la barre du haut en plein écran",
   "connTypeIcon.offlineSuffix": " (hors ligne)",
   "connTypeIcon.ssidSuffix": " · {ssid}",
   "batteryIndicator.unknown": "État de la batterie inconnu",

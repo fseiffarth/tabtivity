@@ -118,6 +118,19 @@ select option {
   visibility: hidden;
   pointer-events: none;
   transition: top 140ms ease-out, visibility 0s linear 140ms;
+  /* Floating over the content, the bar must be fully filled: the glass themes'
+     --top-frame-bg is translucent, so the page behind showed through it. The
+     opaque app background is the base and the theme's own fill is laid over it
+     (::after, under the wash), which keeps the tint a docked bar has. */
+  background: var(--bg-main);
+}
+.app-header.is-autohide::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--top-frame-bg);
+  pointer-events: none;
+  z-index: -2;
 }
 .app-header.is-autohide:is(
     .is-revealed,
@@ -284,6 +297,26 @@ html[data-steer-region="header"] .app-header.is-autohide {
   --wm-ink: var(--wm-close);
   background: color-mix(in srgb, var(--wm-close) 26%, transparent);
   border-color: color-mix(in srgb, var(--wm-close) 55%, transparent);
+}
+
+/* Pin glyph (fullscreen only): a ring at rest, filled while the bar is pinned. */
+.wm-pin::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--wm-ink);
+}
+.wm-pin:hover {
+  --wm-ink: var(--wm-maximize);
+  background: color-mix(in srgb, var(--wm-maximize) 20%, transparent);
+  border-color: color-mix(in srgb, var(--wm-maximize) 45%, transparent);
+}
+.wm-pin[aria-pressed="true"] {
+  --wm-ink: var(--wm-maximize);
+}
+.wm-pin[aria-pressed="true"]::before {
+  background: var(--wm-ink);
 }
 
 /* Minimize glyph: a single bar. */
