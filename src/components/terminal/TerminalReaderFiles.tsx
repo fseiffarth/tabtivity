@@ -26,7 +26,12 @@ export interface ReaderFile {
  * the chat shows a file here instead of opening a tab. ↗ (Ctrl+click: a new
  * subwindow) still opens it as a tab. The Diffs tab's classes, one layout.
  */
-export function TerminalReaderFiles({ files, picked, projectId, disabled, visible, scopeNote, onPick, onOpenTab, onClose }: {
+export function TerminalReaderFiles({ tabKey, files, picked, projectId, disabled, visible, scopeNote, onPick, onOpenTab, onClose }: {
+  /** The agent tab hosting this Reader. Each picked file keeps its scroll/zoom
+   *  under `<tab>#<path>` (the tab's `texPanes`, the TeX workspace's sub-pane
+   *  slot), so leaving to Chat or another tab and coming back reopens the
+   *  PDF where the reader left it instead of at page 1. */
+  tabKey?: string;
   files: readonly ReaderFile[];
   /** The file in the viewer; it stays there when another chat's list lacks it. */
   picked: FileEntry | null;
@@ -78,7 +83,8 @@ export function TerminalReaderFiles({ files, picked, projectId, disabled, visibl
           {!picked ? (
             <div className="terminal-reader-empty">{t(files.length ? "terminal.readerFiles.pick" : "terminal.readerFiles.empty")}</div>
           ) : viewer ? (
-            <FileViewerPane key={picked.path} viewer={viewer} path={picked.path} projectId={projectId} visible={visible} />
+            <FileViewerPane key={picked.path} viewer={viewer} path={picked.path} projectId={projectId} visible={visible}
+              tabKey={tabKey ? `${tabKey}#${picked.path}` : undefined} />
           ) : (
             <ViewlessFile key={picked.path} entry={picked} projectId={projectId} />
           )}

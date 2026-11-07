@@ -2507,6 +2507,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     )}
     {filesOpen && shown && (
       <TerminalReaderFiles
+        tabKey={tabKey}
         files={readerFiles}
         picked={shownFile}
         projectId={projectId}
