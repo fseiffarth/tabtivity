@@ -6986,11 +6986,18 @@ select.file-viewer-run-args-input {
   font: inherit;
   font-size: 12px;
 }
+.sync-handoff-targets {
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 8px;
+}
+.sync-handoff-targets button {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
 .sync-handoff-actions {
-  display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
+  align-items: center;
 }
 .sync-handoff-none {
   align-self: center;

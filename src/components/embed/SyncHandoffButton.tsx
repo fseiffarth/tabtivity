@@ -175,8 +175,8 @@ export function SyncHandoffButton({
           />
           {note && <p className="file-delete-body">{note}</p>}
           {error && <p className="file-delete-body">{error}</p>}
-          <div className="sync-handoff-actions">
-            <button type="button" autoFocus onClick={openNew}>
+          <div className="file-delete-actions sync-handoff-targets">
+            <button type="button" className="btn-primary" autoFocus onClick={openNew}>
               {t("syncHandoff.newTab")}
             </button>
             {localTabs.map((tab) => (
@@ -185,6 +185,8 @@ export function SyncHandoffButton({
               </button>
             ))}
             {localTabs.length === 0 && <span className="sync-handoff-none">{t("syncHandoff.noTabs")}</span>}
+          </div>
+          <div className="file-delete-actions sync-handoff-actions">
             <button type="button" onClick={copy}>
               {t("syncHandoff.copyPrompt")}
             </button>
