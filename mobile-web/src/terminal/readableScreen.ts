@@ -318,39 +318,57 @@ function dividerAt(text: string, column: number): number {
   return -1;
 }
 
+/** A stroke a full-width rule is drawn with at the divider's column: the
+ * input box's top edge (`─`), a dialog's (`▔`). A junction (`┴`) there is a
+ * table's bottom, whose column the bar was. */
+const RULE_STROKE = /^[─━═▔]$/u;
+
+/** Whether `below` is a rule drawn across the divider at `column` — the top
+ * edge of something the screen draws under the pane at full width. */
+function ruleAcross(below: string | undefined, column: number): boolean {
+  return below !== undefined && BORDER_ONLY.test(below) && below.length > column + 1 && RULE_STROKE.test(below[column]);
+}
+
 /**
  * The divider drawn down the screen beside the conversation — its column and
- * the first row it runs from — or null. Claude Code's fullscreen renderer
- * (2.1.292) opens its diff panel (`/diff`) as a pane right of a `│` that runs
- * through every row, the input box and the footer included, with no gutter
- * before it — a dialog's question can run up to the divider itself. A table's
- * columns never cross the input frame, so a bar on the screen's last row and
- * on the rows above it is the pane's.
+ * the rows it runs from and to — or null. Claude Code's fullscreen renderer
+ * opens its diff panel (`/diff`) as a pane right of a `│`, with no gutter
+ * before it — a dialog's question can run up to the divider itself. 2.1.292
+ * ran it through every row, the input box and the footer included; 2.1.318
+ * stops it on the row above the input box's top edge (or a dialog's `▔`),
+ * and draws the box, footer and dialogs under it across the whole screen. A
+ * table's columns end in a junction, never on a rule running past them, and
+ * never cross the input frame, so a bar that reaches the last row or such a
+ * rule is the pane's.
  *
- * Read upwards from that last row, not over every row read: the rows above the
+ * Read upwards from that bottom, not over every row read: the rows above the
  * screen (the phone's replayed tmux history) were printed before the pane
  * opened, and a row caught mid-repaint lacks the bar — either one left the
  * whole pane uncut, its diff glued into an agent's question.
  */
-function dividerColumn(texts: readonly string[]): { column: number; top: number } | null {
+function dividerColumn(texts: readonly string[]): { column: number; top: number; bottom: number } | null {
   let last = texts.length - 1;
   while (last >= 0 && texts[last].trim() === "") last -= 1;
   if (last + 1 < MIN_DIVIDER_ROWS) return null;
-  const bottom = texts[last];
-  let best: { column: number; top: number; hits: number } | null = null;
-  for (let column = bottom.indexOf("│", MIN_SIDE_COLUMN); column >= 0; column = bottom.indexOf("│", column + 1)) {
-    let hits = 0;
-    let top = last;
-    for (let row = last, gap = 0; row >= 0 && gap <= DIVIDER_GAP; row -= 1) {
-      if (dividerAt(texts[row], column) >= 0) {
-        hits += 1;
-        top = row;
-        gap = 0;
-      } else gap += 1;
+  for (let bottom = last; bottom + 1 >= MIN_DIVIDER_ROWS; bottom -= 1) {
+    const row = texts[bottom];
+    let best: { column: number; top: number; hits: number } | null = null;
+    for (let column = row.indexOf("│", MIN_SIDE_COLUMN); column >= 0; column = row.indexOf("│", column + 1)) {
+      if (bottom < last && !ruleAcross(texts[bottom + 1], column)) continue;
+      let hits = 0;
+      let top = bottom;
+      for (let above = bottom, gap = 0; above >= 0 && gap <= DIVIDER_GAP; above -= 1) {
+        if (dividerAt(texts[above], column) >= 0) {
+          hits += 1;
+          top = above;
+          gap = 0;
+        } else gap += 1;
+      }
+      if (hits >= MIN_DIVIDER_ROWS && (!best || hits > best.hits)) best = { column, top, hits };
     }
-    if (hits >= MIN_DIVIDER_ROWS && (!best || hits > best.hits)) best = { column, top, hits };
+    if (best) return { column: best.column, top: best.top, bottom };
   }
-  return best && { column: best.column, top: best.top };
+  return null;
 }
 
 /**
@@ -366,8 +384,8 @@ function dividerColumn(texts: readonly string[]): { column: number; top: number 
  * that row's cut by one.
  *
  * The fullscreen renderer's pane is fenced by a divider instead
- * (`dividerColumn`), and every row from its first down is cut at it — a row
- * missing the bar at its column: read whole, the pane's file header, rules
+ * (`dividerColumn`), and every row it runs through is cut at it — a row
+ * missing the bar at its column too: read whole, the pane's file header, rules
  * and "New file not yet staged" ran into an agent's question, and cut off its
  * options' notes.
  */
@@ -375,7 +393,7 @@ function cutSidePanel(rows: ReadableSpan[][]) {
   const texts = rows.map((spans) => spanText(spans).replace(/\s+$/u, ""));
   const divider = dividerColumn(texts);
   if (divider) {
-    for (let index = divider.top; index < rows.length; index += 1) {
+    for (let index = divider.top; index <= divider.bottom; index += 1) {
       const at = dividerAt(texts[index], divider.column);
       const cut = at >= 0 ? at : Math.min(divider.column, texts[index].length);
       trimSpansRight(rows[index], spanText(rows[index]).length - cut);
