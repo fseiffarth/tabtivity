@@ -47,7 +47,13 @@ gives its usage.
   hook events and keys. `sedcheck.py <label>…` runs the session hook's own
   `sed` extractions, read live from `agent_session.rs`, against each
   payload. `meta.py <label>…` lists the transcript record types and
-  permission modes. These need the login and make small paid haiku turns.
+  permission modes. `esc_early.py <label> <bin> [queued|alone|pull]` holds a
+  turn unanswered with a sleeping hook and presses Esc (or ↑) on it, for
+  where the prompt goes. `chat_send.py <label> <bin> [case…]` types prompts
+  with the Chat's and the phone's exact writes (`agentInputWrites` and its
+  pacing) — fresh, idle, two-line, long, while busy — and reads
+  `UserPromptSubmit` for whether each Enter submitted. These need the login
+  and make small paid haiku turns.
   Binaries come from the agent install's `.local/share/claude/versions/<v>`.
 - **OpenCode** (`opencode/`): `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`
   forces tool calls through the stub in a tab-like home. The session plugin
