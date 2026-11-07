@@ -408,11 +408,24 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
                 spec.docs
             ));
         }
+        let prelude = crate::services::agent_install::installer_prelude(spec.id, installer_uv);
         let mut c = crate::paths::command_no_window("sh");
-        c.arg("-c").arg(format!("{} 2>&1", spec.install_cmd));
+        c.arg("-c").arg(format!("{prelude}{} 2>&1", spec.install_cmd));
         into_install_home(&mut c)?;
         Ok(c)
     }
+}
+
+/// The `uv` an installer would run first on [`agent_install_path`], and the
+/// version it reports (`None` inside when it prints none).
+#[cfg(not(windows))]
+fn installer_uv() -> Option<Option<String>> {
+    let path = agent_install_path();
+    let uv = std::env::split_paths(&path).map(|dir| dir.join("uv")).find(|p| p.is_file())?;
+    let out = crate::paths::command_no_window(&uv).arg("--version").output().ok();
+    Some(out.and_then(|o| {
+        crate::services::agent_versions::parse_version(&String::from_utf8_lossy(&o.stdout))
+    }))
 }
 
 /// What brings the installed `spec` up to date: its installer again, or, for a
