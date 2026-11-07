@@ -116,6 +116,19 @@ const EDGE = /^[↑↓]$/u;
  * under the run, and nothing but the count and one word. */
 const HIDDEN_ROWS = /^\s*(?:…|\.\.\.)\s*\+(\d{1,2})\s+\p{L}+$/u;
 const RADIO_AGENT = /gemini|qwen/iu;
+/** GitHub Copilot CLI (1.0.106, 1.0.107) draws a row whose label wraps with
+ * no hanging indent: the row and its next line both start under the `1.` of
+ * the rows that fit, inside the dialog's box —
+ *
+ *     ❯ 1. Yes
+ *      2. Yes, and don't ask again for file operations when in this repo (/home/…/
+ *      myproject)
+ *       3. No, and tell Copilot what to do differently (Esc to stop)
+ *
+ * Read as ordinary text the wrap ended the run, and row 3 — the one way to
+ * say no and tell Copilot why — never reached the chat. The box is narrower
+ * than the pane, so the width can't tell the wrap (`wrapsLabel`). */
+const HANGLESS_WRAP_AGENT = /copilot/iu;
 /** Claude Code's multi-select question (AskUserQuestion with `multiSelect`,
  * 2.1.286) ends its checkbox rows with one it prints no number for — `Next`,
  * or `Submit` on the last question — at the labels' column, with `❯` in the
@@ -229,6 +242,8 @@ interface ReadRow {
   option: Omit<SelectOption, "index">;
   /** Screen column the label starts at. */
   labelColumn: number;
+  /** Screen column the row's number starts at. */
+  numberColumn: number;
   /** Screen column the row's note starts at: beside the label when the row
    * carries it in a second column, else the label's own column, under which
    * the note is printed on rows of its own. */
@@ -458,6 +473,7 @@ function readRow(text: string, option: RegExp): ReadRow | null {
       description: description ? description.slice(0, MAX_DESCRIPTION) : undefined,
     },
     labelColumn: text.length - rest.length,
+    numberColumn: match[0].indexOf(digits, marker?.length ?? 0),
     descriptionColumn: text.length - rest.length + (split ? split.index + split[0].length : 0),
   };
 }
@@ -478,12 +494,14 @@ export function readSelectPrompt(
     if (question) return question;
   }
   const option = radioMarkerAgent(agentLabel) ? RADIO_OPTION : OPTION;
+  const hanglessWrap = HANGLESS_WRAP_AGENT.test(agentLabel ?? "");
   const first = Math.max(0, lines.length - SEARCH_WINDOW);
   type Run = {
     start: number;
     options: SelectOption[];
     marked: number[];
     labelColumn: number;
+    numberColumn: number;
     column: number;
     edge: boolean;
     /** The `… +N` note right under the run, if any. */
@@ -536,8 +554,11 @@ export function readSelectPrompt(
         last.label = `${last.label} ${panelWrap}`.slice(0, MAX_LABEL);
         continue;
       }
-      const labelWrap = last !== undefined && !last.description && wrapsLabel(lines[index - 1].text, text, columns);
-      const more = run ? readContinuation(text, run.labelColumn, run.column, labelWrap) : null;
+      const indent = text.length - text.trimStart().length;
+      const hangless = hanglessWrap && run !== undefined && last !== undefined && !last.description
+        && indent >= run.numberColumn && indent < run.labelColumn;
+      const labelWrap = hangless || (last !== undefined && !last.description && wrapsLabel(lines[index - 1].text, text, columns));
+      const more = run ? readContinuation(text, hangless ? run.numberColumn : run.labelColumn, run.column, labelWrap) : null;
       if (more && last) {
         if (more.label && !PANEL_COLUMN.test(more.label)) last.label = `${last.label} ${more.label}`.slice(0, MAX_LABEL);
         if (more.description && !PANEL_COLUMN.test(more.description)) {
@@ -558,13 +579,14 @@ export function readSelectPrompt(
     if (!continues || !run) {
       // A run starts at 1 — or wherever a windowed dialog's slice starts,
       // which the final check holds to the window's own marks.
-      run = { start: index, options: [], marked: [], labelColumn: row.labelColumn, column: row.descriptionColumn, edge: false };
+      run = { start: index, options: [], marked: [], labelColumn: row.labelColumn, numberColumn: row.numberColumn, column: row.descriptionColumn, edge: false };
       runs.push(run);
     }
     if (row.marked) run.marked.push(run.options.length);
     if (row.edge) run.edge = true;
     run.options.push({ index: run.options.length, ...row.option });
     run.labelColumn = row.labelColumn;
+    run.numberColumn = row.numberColumn;
     run.column = row.descriptionColumn;
   }
 
