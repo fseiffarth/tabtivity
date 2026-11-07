@@ -1,5 +1,179 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] **Cockpit MCP: rename the calling tab** (implemented 2026-11-06, never live).
+  Plan: `docs/cockpit_mcp_plan.md`. Begin with self-only `tab_rename` on a
+  separate authenticated lane, using versioned workspace edits; later consider
+  own-tab colour/info and scoped aggregate counts. As built:
+  `docs/context/cockpit_mcp.md`; pills `cockpit.mcp.rename` and
+  `agents.tools.group`. Manage CLIs groups all lanes visually under
+  Tabtivity tools; root/web entries link to their existing settings.
+  - [ ] 🖐️ Manual QA: through MCP rename a local agent tab; check strip,
+    cockpit, phone, inactive scope, detached window and restore; repeat for
+    a phone-created tab without a desktop. Check disabled/revoked calls fail,
+    the grouped controls stay independent, and root/web links open their settings.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] Cockpit MCP agent notes (implemented 2026-11-06, never live; plan
+    `docs/cockpit_mcp_extensions_plan.md` steps 1-2, as built
+    `docs/context/cockpit_mcp.md`; pills `cockpit.mcp.activity` and
+    `cockpit.mcp.handoff`). Step 3 (results, 2026-11-06, pill
+    `cockpit.mcp.results`), step 4 (progress/blocker/verification) and step 5
+    (attention, milestones) are implemented below. Phone presentation is open.
+  - [ ] 🖐️ Manual QA, activity: after `npm run backend:stale` is clear (restart
+    when you choose), ask a new local Claude tab to call `tab_get_info`, then
+    `tab_set_activity` with a short line. Check the roster row shows it under
+    the tab name, tagged "Agent says" with a relative time, beside (not in
+    place of) the working/question state; a repeat of the same line changes
+    nothing; a stale `expectedRevision` is refused; after 30 minutes (or a
+    restart of that agent) the line is gone; with the tab's machine down the
+    line is hidden; a hostile line (`<b>`, very long text) renders as text.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, handoff: ask the agent to call `tab_set_handoff` with a
+    summary, checks and remaining. Check the detail pane shows the block
+    marked as written by the agent with its age, newlines kept and markup
+    shown as text; it survives restoring the scope and a restart of the app;
+    a window with an older tab copy (second window or popout) still shows it
+    after a rename elsewhere; the Manage CLIs switch off refuses
+    `tab_get_info` / `tab_set_activity` / `tab_set_handoff` from a running tab.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, results (`tab_set_results`, step 3; `cockpit.mcp.results`):
+    in a local project, ask a new local agent to call `tab_get_info`, then
+    `tab_set_results` with a few project-relative paths (a PNG, a Markdown
+    file, one file that does not exist yet, one with `<b>` in its label). Check
+    the detail pane shows the "Agent results" fold under the handoff with each
+    label and its path as plain text and "Listed by the agent ... ago"; nothing
+    opens or is created by drawing it; clicking an existing file opens its
+    viewer tab in that project (Back returns to the agent tab) and closes the
+    cockpit; clicking the missing one shows "Unavailable" and opens nothing;
+    absolute paths, `..`, `C:\`, `file://` and a symlink out of the project are
+    refused by the tool; replace a listed file by a symlink to a file outside
+    the project and click it: "Not opened: it is outside the project"; the
+    Root console, a box tab, a remote and a worker-hosted project answer
+    `unavailable`; the list survives restoring the scope and a restart, and a
+    second window with an older tab copy still shows it.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, progress (`tab_set_progress`, step 4;
+    `cockpit.mcp.progress`): ask a new local agent to call `tab_get_info`, then
+    `tab_set_progress` with three steps (done, active, pending). Check the
+    detail pane shows "Agent progress" under the results with each label and
+    the words done / in progress / pending, "Reported by the agent ... ago",
+    no spinner; the same steps again change nothing; two active steps, a
+    duplicate id, an id with capitals or spaces and nine steps are refused;
+    after 30 minutes, after restarting that agent (the new run's grant) and
+    while its machine is down the section reads "(past report)" with the
+    active step as "was in progress", never as running; an empty list clears
+    it; it survives restoring the scope and a restart.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, blocker (`tab_set_blocker`, step 4;
+    `cockpit.mcp.blocker`): ask the agent to call `tab_set_blocker` with one
+    line. Check it replaces the activity line under the roster row, tagged
+    "Agent reports blocked" with a relative time, and the detail pane shows
+    "Agent-reported blocker"; the Needs-you count, the row's state mark and
+    the sort do not change (an idle agent that reports a blocker is still
+    idle); text is shown as text (`<b>`), a two-line text is refused;
+    `text: null` restores the activity line; it is gone after 30 minutes and
+    after restarting the agent.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, verification (`tab_set_verification`, step 4;
+    `cockpit.mcp.verification`): ask the agent to call `tab_set_verification`
+    with a passed entry, a failed one with a two-line note and a not_run one.
+    Check the detail pane shows "Agent-reported checks" below the progress
+    with "Reported by the agent at <time> (<ago>). ... did not run or check
+    these." (never "verified"), each outcome as a word, notes keeping their
+    line breaks, markup shown as text; an unknown outcome and nine entries are
+    refused; the list survives a restart and a second window with an older tab
+    copy still shows it; with all the notes full of multi-byte text the write
+    that crosses 32 KiB is refused as too large and nothing changes.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, attention (`tab_request_attention`, step 5;
+    `cockpit.mcp.attention`): ask a local agent that is idle and not asking to
+    call `tab_get_info`, then `tab_request_attention` with a two-line
+    question. Check "Agent asks 1" appears in the Needs-you rail (wide Now,
+    the icon rail's popover in the middle band, the narrow chip and Root's
+    rail), the header badge and its tooltip count it, the question is shown as
+    text (try `<b>x</b>`), clicking the row opens that tab's conversation and
+    answers nothing. Dismiss (rail and detail pane) hides it, the badge falls,
+    and asking the identical question again changes nothing; a changed
+    question is a new item. Make the same tab ask a real question (the CLI's
+    own prompt): it is listed under Asking only, counted once. Options or an
+    answer argument are refused; the question is gone after restarting the
+    agent, after 24 hours (host clock) and when the tab is closed (a reopened
+    tab has none); a second window with an older tab copy cannot bring a
+    dismissed question back.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, milestones (`tab_add_milestone`, step 5;
+    `cockpit.mcp.milestones`): ask the agent to call `tab_add_milestone` with a
+    `requestId` and one line. Check "Agent milestones" in the detail pane
+    (newest first, host time, "Reported by the agent"), the same `requestId`
+    again adds nothing, a 21st milestone drops the oldest, a two-line text is
+    refused, markup shows as text. Close the cockpit, add a milestone from the
+    agent, reopen Tonight: "While you were away" lists it under "Milestones
+    reported by agents" with the "agent-reported" tag and one dated before the
+    window is not listed; after a restart of the app the list survives.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [ ] OpenCode 2 credential sharing (2026-10-22): install/Update/remote and
   the latest-release source already moved to V2 (the user's call, same day),
   so until `agent_auth` can share V2's credential records without sharing its

@@ -10,6 +10,56 @@ agent is its vendor's own command-line tool (CLI), installed once per machine.
 Tabtivity detects installed CLIs, offers them in every `+` menu, and resumes
 their conversations after a restart where the CLI allows it.
 
+## Rename your agent tab and leave notes through MCP
+
+Eligible local Claude, Codex and Vibe tabs with MCP tools receive a separate
+cockpit MCP. Ask the agent to call `tab_rename` with a short `label`; it can
+rename only its own tab. The name is saved and appears in the cockpit and on
+your phone. An optional `expectedLabel` prevents overwriting a changed name.
+The session and focus stay as they are.
+
+The same lane lets an agent describe its own work. `tab_get_info` reads its
+label and notes; `tab_set_activity` publishes one short line (up to 160
+characters) and `tab_set_handoff` leaves a note with a summary, the checks it
+ran and what remains. The cockpit shows the activity line under the agent's
+row, tagged **Agent says**, for 30 minutes while its machine is reachable, and
+the handoff in the detail pane. They are the agent's own words: they are
+plain text, never change what the app detects, and cannot approve, verify or
+start anything. A restarted agent starts without the previous line; the
+handoff stays. `tab_set_results` lists files the agent produced, as a label and
+a path inside the project (up to 8). They appear below the handoff as plain
+text; nothing is read or previewed until you click one, and then it opens in a
+viewer tab only if it still lies inside the project folder. A file that is not
+there shows as **Unavailable**. Results work for projects whose files are on
+this computer, not for the Root console, boxes, remote or worker-hosted
+projects. `tab_set_progress` reports plan steps (up to 8, each pending, active
+or done); they show in the detail pane as words, and a report older than 30
+minutes, from an earlier run of the agent or while its machine is down is
+labelled a past report ("was in progress"), never as running.
+`tab_set_blocker` states in one line what is in the agent's way; it replaces
+the activity line under the agent's row, marked as reported by the agent, for
+30 minutes, and does not change the **Needs you** count or the state the app
+detects. `tab_set_verification` lists the checks the agent says it ran or still
+owes (passed, failed, pending or not run, with an optional note); the detail
+pane words it as reported by the agent at a time, and the app runs or verifies
+nothing. `tab_request_attention` is how an agent says it cannot go on without
+you: one question (up to 500 characters) that shows in **Needs you** as **Agent
+asks**, in the header badge and in the detail pane. It is only a notice, with
+no options or answer: clicking it opens that tab's conversation, where you
+answer as usual, and **Dismiss** hides it for good (the same question sent
+again stays hidden). A tab the app already detects as asking is counted once.
+A question disappears after 24 hours, when the agent is restarted or when the
+tab is closed. `tab_add_milestone` records one finished milestone in a line;
+the detail pane lists the last 20, and **While you were away** shows the ones
+reported while you were gone, marked as agent-reported with the time the app
+received them. Agents are limited to 30 calls a minute.
+
+Manage CLIs → Tools → **Let agents rename their own tab and leave notes
+(Cockpit MCP)** is on by default. Turning it off refuses running tabs' calls
+too. Turn it on before launching a new agent to give that agent the tools.
+Existing MCP tools retain their separate permissions. Tabby keeps its web and
+help tools.
+
 ## Install an agent CLI
 
 1. Click the **Models & agents** button in the header (chip icon) and pick
