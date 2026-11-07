@@ -145,6 +145,35 @@ describe(`${BRAND.display} Mobile — Claude's effort in the model sheet`, () =>
     expect(sent.slice(-2)).toEqual(["/effort max", "\r"]);
   }, 10_000);
 
+  it("keeps the sheet, and its effort row, over a redraw frame that shows no dialog", async () => {
+    // Claude erases its dialog and paints it again on every arrow; a frame
+    // sampled between the two read as "dismissed" and closed the sheet.
+    const dialog = [
+      "   Select model",
+      "   Switch between Claude models.",
+      "",
+      "     1.  Default (recommended)  Sonnet 5.5",
+      "   ❯ 2.  Opus 5.5               For complex work",
+      "",
+      "   ● High effort ←/→ to adjust",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    ].join("\n");
+    render(<Terminal tab={tabOf("Claude")} back={() => {}} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await paint(dialog);
+    await paint("❯ ");
+    await paint(dialog);
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 1500)); });
+    expect(screen.getByRole("dialog").getAttribute("aria-label")).toBe("Select model");
+    expect(levels()).toEqual(["low", "medium", "high", "xhigh", "max", "auto"]);
+
+    // Gone for good (dismissed in the session), the sheet does step aside.
+    await paint("❯ ");
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 1500)); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  }, 15_000);
+
   it("shows a tag's own level once, as the gauge, and swaps it for the one sent", async () => {
     render(<Terminal tab={{ ...tabOf("Claude"), agent_model: "Opus 5 · medium" }} back={() => {}} />);
     await act(async () => {});

@@ -33,6 +33,11 @@ const MODEL_KEEP_SETTLE = 500;
  * done and the sheet steps aside. */
 const SELECT_NEXT_WAIT = 700;
 
+/** How long a dialog that was listed may stay unreadable, with no tap
+ * answering it, before the sheet takes it as dismissed (on the desktop, or by
+ * the session itself). Longer than a redraw, short enough not to linger. */
+const PICKER_GONE_GRACE = 1_200;
+
 /** The model sheet's reading of the picker on screen: OpenCode's walk, the rows
  * put together, and the reveal walk. */
 export function useModelPicker({
@@ -170,8 +175,12 @@ export function useModelPicker({
         // picker gave back, where ↑ recalls old prompts from history.
         clearPending();
         setReveal(null);
-        setModelSheet(false);
-        return;
+        // A frame sampled between the TUI erasing its dialog and painting the
+        // redraw (every walk arrow causes one) reads as "gone"; closing at
+        // once took the sheet, and the effort row in it, from under a thumb
+        // already on its way. The dialog coming back clears this timer.
+        const gone = window.setTimeout(() => setModelSheet(false), PICKER_GONE_GRACE);
+        return () => window.clearTimeout(gone);
       }
       const next = window.setTimeout(() => {
         setModelSheet(false);
