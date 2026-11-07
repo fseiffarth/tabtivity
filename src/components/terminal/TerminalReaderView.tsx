@@ -403,6 +403,40 @@ const NO_PATH_LINKS: ReadonlyMap<string, FileEntry | null> = new Map();
 /** The chat's web links are dressed like its file links (`linkPathsInHtml`). */
 const WEB_LINKS = { webLinks: true } as const;
 
+function CopyCodeButton({ block }: { block: HTMLElement }) {
+  const t = useT();
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+  return <div className="terminal-reader-code-actions">
+    <button type="button" onClick={async (event) => {
+      event.stopPropagation();
+      const code = block.querySelector("pre code") ?? block.querySelector("pre");
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code.textContent ?? "");
+        setStatus("copied");
+      } catch {
+        setStatus("failed");
+      }
+    }}>{t(status === "copied" ? "fileViewer.copied" : "common.copy")}</button>
+    <UntestedTag id="terminal.reader.copyCode" />
+    {status === "failed" && <span role="alert">{t("terminal.copyFailed")}</span>}
+  </div>;
+}
+
+function AnswerMarkdown({ html }: { html: string }) {
+  const root = useRef<HTMLDivElement>(null);
+  const [blocks, setBlocks] = useState<HTMLElement[]>([]);
+  const withControls = useMemo(() => html.replace(/<pre(\s[^>]*)?>/g, '<div class="terminal-reader-code-block"><pre$1>')
+    .replace(/<\/pre>/g, "</pre></div>"), [html]);
+  useLayoutEffect(() => {
+    setBlocks(Array.from(root.current?.querySelectorAll<HTMLElement>(".terminal-reader-code-block") ?? []));
+  }, [withControls]);
+  return <>
+    <div ref={root} className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: withControls }} />
+    {blocks.map((block, index) => createPortal(<CopyCodeButton block={block} />, block, String(index)))}
+  </>;
+}
+
 /** One answer as formatted text (`answerHtml`, the phone's: formatting only,
  * nothing in it opens or loads), its file paths made links and the pictures
  * and PDFs among them drawn under it (`ReaderAnswerFiles`). Memoized on the
@@ -413,7 +447,7 @@ const AnswerText = memo(function AnswerText({ text }: { text: string }) {
   const html = useMemo(() => linkPathsInHtml(answerHtml(text), links, WEB_LINKS), [text, links]);
   return (
     <>
-      <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />
+      <AnswerMarkdown html={html} />
       <ReaderAnswerAlbum text={text} />
     </>
   );
