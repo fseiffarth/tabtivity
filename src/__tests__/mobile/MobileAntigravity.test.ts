@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import captured152 from "../fixtures/antigravity152.json";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import {
   antigravityEffortKeys,
@@ -405,5 +406,25 @@ describe(`${BRAND.display} Mobile — Antigravity 1.4.11, captured`, () => {
     ]);
     expect(readAntigravityPicker(screen)!.options).toHaveLength(5);
     expect(readAntigravityEffort(screen)).toEqual({ current: 0, stops: [{ label: "low" }, { label: "high" }] });
+  });
+});
+
+// Captured from the installed Linux 1.5.2 binary in a private home.
+describe(`${BRAND.display} Mobile — Antigravity 1.5.2, captured`, () => {
+  for (const width of [80, 42] as const) {
+    it(`reads the model picker and both two-stop gauge positions at ${width} columns`, () => {
+      const screen = capturedScreen(captured152[`model@${width}x24`]);
+      expect(readAntigravityPicker(screen)?.options).toHaveLength(5);
+      const before = readAntigravityEffort(screen);
+      expect(before?.stops.map((stop) => stop.label)).toEqual(["low", "high"]);
+      const after = readAntigravityEffort(capturedScreen(captured152[`gauge-right@${width}x24`]));
+      expect(after?.current).toBe(1);
+      expect(sessionStatus(capturedScreen(captured152[`idle@${width}x24`]), LABEL)?.model).toBe("Gemini 3.1 Pro");
+    });
+  }
+  it("reads the three-stop gauge after startup model and effort flags", () => {
+    const screen = capturedScreen(captured152["three-stop@80x24"]);
+    expect(readAntigravityEffort(screen)?.stops.map((stop) => stop.label)).toEqual(["low", "medium", "high"]);
+    expect(readAntigravityEffort(screen)?.current).toBe(1);
   });
 });

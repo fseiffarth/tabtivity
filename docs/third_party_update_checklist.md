@@ -476,6 +476,18 @@ Claude's `/fast` — different thing.
   `credential_expires_at` (an ISO time); nothing reads the envelope's keys
   but `result`, whose three meters parse and place as before. The binary
   grew from 331 to 338 MB.
+  Re-checked against 2.1.319 (2026-11-07, outside the app, beside 2.1.318 from
+  the install's `versions/`): `--help` identical; `hooks.sh` gives the same
+  19 events with the same keys, and `sedcheck.py` the same 23 payloads with
+  no mismatch; transcript record types and keys unchanged; the permission
+  prompt reads the same title, options and lamp at 120, 60 and 42 columns
+  (only the model's one-line summary of the command differs); `esc_early.py`
+  queued/alone/pull behave as on 2.1.318. `claude/chat_send.py` (new) types a
+  prompt as the Chat and the phone do — Ctrl-A Ctrl-K, ≤256-character pieces
+  24 ms apart, Enter 200 ms later — fresh, idle, two-line, long and while
+  busy: every one submitted on both versions. The status footer reads at 44
+  to 200 columns. A report that Enter did nothing in a 2.1.319 Chat turned
+  out to be the desktop not taking Enter at all (a shell tab too), not the CLI.
   An earlier probe unset only
   `TABTIVITY_TAB_UID`; the hook's legacy preamble filled it back in from the
   pre-rename name and the `/proc` walk, matching the current name only,
@@ -636,6 +648,26 @@ tab and resume/fork remain tagged for live verification.
 
 **Assumes**
 
+- **0.167.0 (2026-11-06), CLI checks outside Tabtivity** — installed Linux
+  standalone binary, isolated `CODEX_HOME`, private 100-column tmux, `--no-daemon`
+  and local Ollama provider. Launch/resume/exec flags remain available. Both
+  real-binary probes pass: local model catalogs (thinking/non-thinking/unknown)
+  and the API-key proxy against a fake loopback Responses provider, without a
+  login. Captured both `/model` steps and Shift+Tab's `Plan mode` line; replayed
+  through the production mobile parsers in `Codex167Contract.test.ts` (including
+  the fifth “More reasoning…” row). Existing decision and mobile-picker corpus:
+  86 tests pass. Concurrent resume with the same provider refuses an active
+  writer; SIGKILL of the scratch TUI allows a new writer to resume that id.
+  Config schema top-level keys are unchanged. Decision-lamp verification is
+  source review plus the parser corpus: `approval_overlay.rs` differs from
+  0.166.0 only by a `current_patch_approval` accessor; choice rendering is
+  unchanged. No live approval/title capture, hook payload/hash verification,
+  authenticated warm-up, installer update, or desktop/phone click-through was
+  performed. Local inference is not verified: the scratch resume acquired its
+  writer but Ollama rejected an `additional_tools` input item; the resumed
+  exec also defaulted back to `gpt-6.1-sol` instead of the original local
+  model. This is recorded as a provider-path limitation, not a successful
+  local-model turn.
 - **0.166.0 (2026-10-30), live but outside Tabtivity** — npm's linux-x64 build
   and the canonical `codex-package` (checked against `codex-package_SHA256SUMS`),
   each run in a private tmux with its own `CODEX_HOME` and a local Ollama model,
@@ -1068,7 +1100,7 @@ test, then the real `install.sh` with the same `HOME`: it must not print
 `Downloading Codex CLI`. Verified 2026-10-30 against 0.166.0.
 
 Version probes (`agent_versions::VERSION_ARGV`) exist for Antigravity
-(`agy --version` → `1.5.0`, the same bare shape as 1.2.9) and Muse (`muse --version` →
+(`agy --version` → `1.5.3`, the same bare shape as 1.2.9) and Muse (`muse --version` →
 `Muse Code 1.3.0 (1.3.0-R3057.1)`) as well. Muse's launcher script starts a
 background self-update on any invocation once its interval has passed, so its
 probe sets `MUSE_NO_AUTO_UPDATE=1` (`VERSION_ENV`); a launcher that renames
@@ -1096,6 +1128,38 @@ model changes need a Copilot account, so the model strings they record were
 not seen. `npm i @github/copilot@<v>` fetches all eight platform packages, over
 seven minutes here; the `copilot-linux-x64` binary alone runs, as `COPILOT_BIN`.
 Until npm finishes the file answers `Text file busy`.
+
+Re-checked **1.0.106** (2026-11-06), the latest stable GitHub release and the
+installed Linux x64 native binary. `copilot-events-probe.py` passes all 13 checks
+against its loopback stub with an isolated home: new/resumed pinned session ids,
+message/model fields, workspace cwd, create/edit/apply_patch diff records, and
+`sessionStart` payload/source. Launch/resume/connect and `login --device-code`
+flags remain present. The unpacked 1.0.106 runtime still contains `authTokens`,
+`lastLoggedInUser`, and `storeTokenPlaintext` (layout inspection, no login).
+An isolated 110-column tmux TUI on the same stub draws the folder-trust question,
+idle composer, and create/edit approvals with the expected three choices;
+`Copilot106Contract.test.ts` replays trust, idle and create-approval captures
+through the production Reader and decision parsers. Existing Reader/prompt/context
+suite: 56 tests pass; Rust Copilot tests: 52 pass, one ignored. Release changes
+include terminal program-status reporting and model-picker column handling; no
+incompatibility was found in the checked paths. Authenticated model/Fusion/Auto
+pickers, actual sign-in/keyring, assisted approval, installer update, real-model
+inference and desktop/phone click-through were not exercised. Tabtivity was not
+started or restarted.
+
+Re-checked **1.0.107** (2026-11-07, `npm pack @github/copilot-linux-x64`, beside
+1.0.106): all 13 `copilot-events-probe.py` checks pass on both; `--help` and
+`login --help` identical; the unpacked runtime holds `authTokens`,
+`lastLoggedInUser` and `storeTokenPlaintext` in as many files as 1.0.106's. The
+TUI on the stub (`tui.py`, folder trust, idle, create approval at 110 and 60
+columns) reads the same on both. That pass found an old misreading: with the
+work folder inside a git repo, row 2 says `… in this repo (<path>)` and wraps,
+and Copilot draws a wrapping row with no hanging indent — the row and its
+next line start under the other rows' `1.`. The reader ended the run there
+and lost row 3, the only "No, and tell Copilot…". `selectPrompt.ts` now
+continues a Copilot row's label on a line between its number and label
+columns (`HANGLESS_WRAP_AGENT`); `Copilot107Contract.test.ts` holds it at 110
+and 60 columns, and that other agents still end the run there.
 
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
@@ -1363,6 +1427,15 @@ and their `mini` forms with no picker, `run` exiting 0, the question form at
 lamp over all 45 captures, `session_transcript` (17 entries) and `session_changes`
 off the store. `mini`'s palette reads as stray on both, not a change.
 
+Run again on **2.2.6** (2026-11-07, `npm pack`, beside 2.2.5): `turns.py` full,
+mini and `ask`, `tabby.py` and `resume.py` print the same lines on both; the
+45 captures read the same (three `mini` palette frames differ in raw text
+only). `run` gains `--worktree`/`-w` and `--archived`; nothing here passes
+either, and `--continue` skipping archived sessions touches no session the app
+makes. `opencode run` now waits for background jobs its prompt started before
+it exits: the warm-up's `run` starts none and still exits 0 in under 2 s. The
+TUI's new message spacing changed no reading.
+
 Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
 run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
 install -g @opencode/cli`, as both link `opencode`), and the update check
@@ -1502,6 +1575,37 @@ self-updates the binary it runs from, wherever it sits — check a pinned
 build from a read-only directory (the `/releases` list on the updater host
 gives each version's `execution_id` for its `antigravity-public` download
 URL), and `agy.<ns>.old` beside the installed binary is the build it replaced.
+1.5.2 on 2026-11-06: the official Linux updater manifest reports `1.5.2`,
+matching the installed binary. A pinned scratch copy with auto-update disabled,
+a private home and tmux, dummy Gemini key, and loopback stub completed a streamed
+turn (`stub answer done`); `-p` against the same stub also exits 0 with that
+answer. At 80×24 and 42×24, captured idle footer, `/model`,
+the two-stop Pro gauge moved with →, Enter applying High, and `/effort`.
+A resumed `--model gemini-3.8-flash-medium --effort medium` shows the expected
+Flash footer and three-stop gauge. Captures replay through `readableScreen`
+and the production model/effort/status parsers in `MobileAntigravity.test.ts`.
+`--continue` reopens the stored turn and warns when another instance has the
+conversation open; `--conversation <id>` also reopens it. Supplying conflicting
+model-id effort suffix and `--effort` warns and retains the previous model,
+so matching flags were checked separately. Conversation storage remains
+`~/.gemini/antigravity-cli/conversations/<id>.db`. The sign-in menu still offers
+Google OAuth and Google Cloud; its OAuth page uses the same page-note shape,
+and Shift+↓ reaches `(15–34 of 34 lines)` at 42×24. No account was signed in.
+Unlike the earlier run, `agy changelog` now supplies notes through 1.5.2:
+outside-workspace file approval is now per path, protected commands no longer
+auto-approve under `--dangerously-skip-permissions`, remote-agent plugin skills
+and macOS Option shortcuts changed, and print mode stops requesting an unused
+conversation title. Those permission prompts, authenticated/cloud/remote-agent
+flows, macOS/Windows behavior, self-update, and desktop/phone click-throughs
+were not live verified. No compatibility change was needed for the checked
+model-sheet surface.
+1.5.3 on 2026-11-07 (the installed binary, 1.5.2 from `agy.<ns>.old`, both
+copied into read-only directories): `main.py` at the default width and at 42
+columns and `signin.py` at 42×24 print the same lines on both; `--help`
+identical; the 35 captures read the same (sign-in frames differ only in the
+wrapped PKCE challenge). 1.5.3 adds each subagent's model to the subagent rows
+above the prompt and in `/agents` — not reached here, as the stub starts no
+subagent — plus plugin, hook and gateway fixes nothing here touches.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
