@@ -1222,3 +1222,16 @@ fn a_copilot_prompt_is_found_by_the_chat_menu_and_the_prompt_history() {
     assert_eq!(recent.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), vec!["patch it", "and now?"]);
     assert_eq!(agent_session::last_model_in_transcript(&path, TranscriptKind::Copilot).as_deref(), Some("gpt-5.4"));
 }
+#[test]
+fn only_a_tab_that_runs_remotely_has_its_opencode_store_elsewhere() {
+    // A local-model OpenCode tab of a remote project runs here (`local_only`):
+    // its reader passes `remote: false` and reads the store on this machine,
+    // where the scope reader of a remote project's OpenCode tab answers
+    // `unsupported` (its store is on the host).
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("opencode.db");
+    let tab_dir = dir.path().to_string_lossy().into_owned();
+    let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10);
+    assert_eq!(read(true).reason.as_deref(), Some("unsupported"));
+    assert_eq!(read(false).reason.as_deref(), Some("no_transcript"));
+}

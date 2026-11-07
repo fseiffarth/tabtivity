@@ -1377,6 +1377,10 @@ describe("agentReader helpers", () => {
     expect(readerOffered({ kind: "local_agent", cmd: "ollama", localDriver: "claude" })).toBe(false);
     expect(readerOffered({ kind: "local_agent", cmd: "ollama", localDriver: "opencode" })).toBe(true);
     expect(readerOffered({ kind: "local_agent", cmd: "ollama", localLaunch: { driver: "opencode", model: "m", args: [] } })).toBe(true);
+    // A resumed local OpenCode tab that kept neither field: its `cmd` names
+    // the driver, the only one that runs without `ollama launch`.
+    expect(readerOffered({ kind: "local_agent", cmd: "opencode" })).toBe(true);
+    expect(readerOffered({ kind: "local_agent", cmd: "codex" })).toBe(false);
     expect(readerOffered({ kind: "agent", cmd: "gemini", localDriver: "opencode" })).toBe(false);
     expect(readerOffered({ kind: "shell", cmd: "bash" })).toBe(false);
     expect(readerOffered(undefined)).toBe(false);

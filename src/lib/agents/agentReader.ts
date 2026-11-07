@@ -30,10 +30,14 @@ export function changesOffered(agent: string): boolean {
 }
 
 /** A local-model tab's driver (`list_local_drivers` id): the one it was
- * started with, or the one its saved launch line names. Empty for any other
- * tab, and for a local tab started before the driver was recorded. */
-export function localTabDriver(tab: Pick<TabEntry, "kind" | "localDriver" | "localLaunch">): string {
-  return tab.kind === "local_agent" ? tab.localDriver ?? tab.localLaunch?.driver ?? "" : "";
+ * started with, or the one its saved launch line names — else OpenCode for a
+ * tab whose `cmd` is `opencode`, the one driver that never goes through
+ * `ollama launch` (a resumed tab whose launch line was not kept carries
+ * neither field, and its Chat would read as unsupported). Empty for any
+ * other tab, and for a local tab started before the driver was recorded. */
+export function localTabDriver(tab: Pick<TabEntry, "kind" | "cmd" | "localDriver" | "localLaunch">): string {
+  if (tab.kind !== "local_agent") return "";
+  return tab.localDriver ?? tab.localLaunch?.driver ?? (tab.cmd === "opencode" ? "opencode" : "");
 }
 
 /** The agent whose transcript `tab` keeps, as `agent_tab_transcript` names

@@ -361,7 +361,7 @@ pub fn agent_session_transcript(
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
         let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_transcript(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
     }
     if matches!(cmd, "gemini" | "agy") {
         if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
@@ -430,7 +430,7 @@ pub fn stored_chat_transcript(
             return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_transcript(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
     }
     let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
         return AgentTranscript::unavailable("no_transcript");
@@ -988,6 +988,8 @@ fn fresh_codex_session(project_id: Option<&str>, launch_id: &str) -> Option<Agen
 /// [`agent_session_transcript`] answers for `opencode`, read from the scope's
 /// local-model home, where such a tab's OpenCode keeps its sessions. `launch_id`
 /// names its recorded session; a tab from before it had one is read by folder.
+/// Such a tab runs on this machine even in a remote project (its spawn is
+/// `local_only`), so the project being remote does not put its store away.
 pub fn local_opencode_transcript(
     project_id: Option<&str>,
     tab_dir: Option<&str>,
@@ -1002,13 +1004,13 @@ pub fn local_opencode_transcript(
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
     let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
-    opencode_transcript(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
+    opencode_transcript(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn opencode_transcript(
     db: &Path,
-    project_id: Option<&str>,
+    remote: bool,
     tab_dir: Option<&str>,
     since: Option<i64>,
     own: Option<&str>,
@@ -1019,7 +1021,7 @@ fn opencode_transcript(
     let Some(dir) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
         return AgentTranscript::unavailable("no_session");
     };
-    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+    if remote {
         return AgentTranscript::unavailable("unsupported");
     }
     if !db.is_file() {
@@ -1027,6 +1029,13 @@ fn opencode_transcript(
     }
     crate::services::opencode_store::session_transcript(db, dir, since, own, subagent, version, limit)
         .unwrap_or_else(|| AgentTranscript::unavailable("read_failed"))
+}
+
+/// Whether a tab of `project_id` runs its agent on a remote host — every
+/// agent tab of a remote project but a local-model one — so its CLI's store
+/// is there and not here.
+pub(crate) fn runs_remote(project_id: Option<&str>) -> bool {
+    project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some())
 }
 
 /// The file's fingerprint: its length and modification time. Both move on
