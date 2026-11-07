@@ -143,3 +143,34 @@ backend new `src-tauri/src/services/skills.rs` +
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2429. **Skill creator: write and edit skills in the Skills Library, on desktop
+    and phone.** 📝 Planned (2026-11-06), not built:
+    `docs/skill_creator_plan.md`. "New skill", Edit on installed cards and
+    Customize (copy a catalog skill) open an editor beside the existing
+    preview; saves are compare-and-swap, validated in Rust, to Personal or a
+    project. "Draft with an agent" drafts in the root console's home for
+    review. The phone browses, installs and edits behind three off-by-default
+    switches; its Personal writes wait for Accept on a desktop card.
+    Phase 0 (uninstall addressed the frontmatter name instead of the folder)
+    is fixed: `InstalledSkill.folder`.
+    - [ ] 🤖 Automated test
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+2430. **Development skills adapted from mattpocock/skills.** ✅ Added
+    (2026-11-06): `.claude/skills/{diagnosing-bugs,tdd,to-tickets,handoff,
+    retro,writing-for-agents}` rewritten for this repo's rules (never start
+    the app, `gates.sh`, `todo/` entries, `docs/` hand-offs); MIT notice in
+    `.claude/skills/THIRD_PARTY_NOTICES.md`; reasoning in
+    `docs/mattpocock_skills_adoption_plan.md`. Claude Code only. Upstream
+    updates are pulled by hand (diff against the pinned commit).
+    - [ ] 🖐️ Manual test — `/to-tickets` on a plan writes correctly numbered
+      entries; `/handoff` writes `docs/<feature>_handoff.md`.

@@ -68,6 +68,8 @@ describe("skill install targets", () => {
       "skills_uninstall",
       "skills_list_installed",
     ]);
+    // Uninstall addresses the folder; the wire key keeps its old name.
+    expect(invoked[1].args.name).toBe("pdf");
     for (const call of invoked) {
       expect(call.args.target).toEqual({ kind: "project", dir: "/home/u/proj" });
       // No stray path argument beside the target — `project_dir` was the old

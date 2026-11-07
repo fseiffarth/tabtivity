@@ -433,9 +433,10 @@ pub fn install_skill(target: &SkillTarget, source_id: &str, rel_path: &str) -> R
     copy_skill(&src, &dest).map_err(|e| e.to_string())
 }
 
-/// Delete `<target>/.claude/skills/<name>/`.
-pub fn uninstall_skill(target: &SkillTarget, name: &str) -> Result<(), String> {
-    let dir = installed_skill_dir(target, name)?;
+/// Delete `<target>/.claude/skills/<folder>/` — the folder
+/// [`InstalledSkill::folder`] reported, never the frontmatter name.
+pub fn uninstall_skill(target: &SkillTarget, folder: &str) -> Result<(), String> {
+    let dir = installed_skill_dir(target, folder)?;
     if fs::symlink_metadata(&dir).is_ok() {
         fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
@@ -477,9 +478,13 @@ fn list_installed_at(dir: &Path) -> Vec<InstalledSkill> {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let (name, description, _) = parse_skill_md(&content, &folder_name);
-        out.push(InstalledSkill { name, description });
+        out.push(InstalledSkill {
+            name,
+            description,
+            folder: folder_name,
+        });
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.folder.cmp(&b.folder)));
     out
 }
 
@@ -568,6 +573,7 @@ mod tests {
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].name, "pdf-fill");
         assert_eq!(installed[0].description, "Fill PDF forms");
+        assert_eq!(installed[0].folder, "pdf-fill");
 
         uninstall_skill(&target, "pdf-fill").unwrap();
         assert!(!dest.exists());
@@ -622,6 +628,30 @@ mod tests {
         assert!(cache_dir("../..").is_err(), "a source id never climbs out of the cache");
         assert!(cache_dir("/").is_err());
         assert!(cache_dir("anthropic").is_ok());
+    }
+
+    #[test]
+    fn uninstall_removes_the_listed_folder_not_the_frontmatter_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("p");
+        let skills = project.join(".claude").join("skills");
+        // `foo/` says it is `bar`; `bar/` is a different skill.
+        for (folder, name) in [("foo", "bar"), ("bar", "other")] {
+            fs::create_dir_all(skills.join(folder)).unwrap();
+            fs::write(
+                skills.join(folder).join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+        let target = SkillTarget::Project { dir: project.to_string_lossy().into_owned() };
+        let listed = list_installed(&target);
+        let foo = listed.iter().find(|s| s.name == "bar").unwrap();
+        assert_eq!(foo.folder, "foo");
+
+        uninstall_skill(&target, &foo.folder).unwrap();
+        assert!(!skills.join("foo").exists());
+        assert!(skills.join("bar").join("SKILL.md").is_file(), "the other skill survives");
     }
 
     #[test]

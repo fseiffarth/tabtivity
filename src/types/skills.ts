@@ -40,8 +40,9 @@ export type SkillTarget =
   /** `<dir>/.claude/skills/` — travels with the repo, reaches a container
    *  through the identical-path mount and a remote host through git lockstep. */
   | { kind: "project"; dir: string }
-  /** `~/.claude/skills/` — every project on **this machine**, and no other
-   *  machine at all. */
+  /** The agent-global layer's `.claude/skills/` (laid into every agent home;
+   *  never the user's own `~/.claude`) — every project on **this machine**,
+   *  and no other machine at all. */
   | { kind: "personal" };
 
 /** A skill already present in a target's `.claude/skills/<name>/`, whether it
@@ -49,6 +50,9 @@ export type SkillTarget =
 export interface InstalledSkill {
   name: string;
   description: string;
+  /** The folder under `.claude/skills/` — what uninstall and overwrite
+   *  address. A hand-authored `foo/` may say `name: bar`. */
+  folder: string;
 }
 
 /** The preview panel's full read of one catalog entry. */
