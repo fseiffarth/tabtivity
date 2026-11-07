@@ -8,6 +8,7 @@ import type { AlertItem } from "../alerts";
 import type { MarkupAsk } from "../viewers/markupQuestions";
 import type { GitPushProposal } from "../../types";
 import type { RosterRow } from "./roster";
+import { currentAttention } from "./agentNotes";
 
 /** What the header's cockpit badge counts, each part on its own. */
 export interface CockpitBadgeInput {
@@ -20,6 +21,8 @@ export interface CockpitBadgeInput {
   approvals: number;
   /** Pending push / release requests, where known. */
   pushRequests?: number;
+  /** The clock the agents' 24-hour questions are judged against (default: now). */
+  now?: number;
 }
 
 export interface CockpitBadge {
@@ -27,6 +30,9 @@ export interface CockpitBadge {
   interrupted: number;
   proposals: number;
   approvals: number;
+  /** Agent-reported questions (`tab_request_attention`), a tab the app already
+   *  counts as asking left out. */
+  agentAsks: number;
   total: number;
 }
 
@@ -37,7 +43,8 @@ export interface CockpitBadge {
  *
  * Every agent tab of every hydrated scope but the assistant's counts, with the
  * desktop's own lamps (`deriveAgentRosterState`'s first answers: a decision
- * only while not working). Schedule proposals are counted from the schedules
+ * only while not working). A tab whose agent also reported a question
+ * (`currentAttention`) is counted once: the app-detected asking wins. Schedule proposals are counted from the schedules
  * the window has loaded; push requests only when a caller knows them (the
  * backend read behind them runs git, so nothing reads it while the cockpit
  * is shut).
@@ -45,11 +52,15 @@ export interface CockpitBadge {
 export function cockpitBadge(input: CockpitBadgeInput): CockpitBadge {
   let asking = 0;
   let interrupted = 0;
+  let agentAsks = 0;
+  const now = input.now ?? Date.now();
   for (const [scope, tabs] of Object.entries(input.tabsByScope)) {
     if (scope === ASSISTANT_SCOPE) continue;
     for (const tab of tabs) {
       if (!isRosterAgentKind(tab.kind)) continue;
       const pty = `${scope}:${tab.key}`;
+      const detected = !input.busyByTab[pty] && input.attentionByTab[pty] === "decision";
+      if (!detected && currentAttention(tab.cockpitMeta, now)) agentAsks += 1;
       if (input.busyByTab[pty]) continue;
       const attention = input.attentionByTab[pty];
       if (attention === "decision") asking += 1;
@@ -61,7 +72,7 @@ export function cockpitBadge(input: CockpitBadgeInput): CockpitBadge {
     for (const row of rows) if (isAgentProposal(row)) proposals += 1;
   }
   const approvals = input.approvals;
-  return { asking, interrupted, proposals, approvals, total: asking + interrupted + proposals + approvals };
+  return { asking, interrupted, proposals, approvals, agentAsks, total: asking + interrupted + proposals + approvals + agentAsks };
 }
 
 /** The Decisions inbox's groups, in the rail's urgency order (the phone's
@@ -70,6 +81,7 @@ export function cockpitBadge(input: CockpitBadgeInput): CockpitBadge {
  *  for the header badge (`cockpitBadge`) only. */
 export const DECISION_GROUPS = [
   "asking",
+  "agentAsks",
   "interrupted",
   "push",
   "schedule",
@@ -78,6 +90,16 @@ export const DECISION_GROUPS = [
   "alerts",
 ] as const;
 export type DecisionGroupId = (typeof DECISION_GROUPS)[number];
+
+/** A question an agent reported for its own tab (`tab_request_attention`),
+ *  with the row it belongs to. */
+export interface AgentAskRef {
+  row: RosterRow;
+  /** The host's id for this question: what a dismissal names. */
+  id: string;
+  question: string;
+  setAt: number;
+}
 
 /** A schedule an agent proposed (`isAgentProposal`), where it lives. */
 export interface ScheduleProposalRef {
@@ -110,10 +132,13 @@ export interface DecisionsInput {
   alerts: readonly AlertItem[];
   /** Scope id → the name its rows show. */
   names: Record<string, string>;
+  /** The clock the agents' 24-hour questions are judged against (default: now). */
+  now?: number;
 }
 
 export type DecisionItems = {
   asking: RosterRow[];
+  agentAsks: AgentAskRef[];
   interrupted: RosterRow[];
   push: PushRequestRef[];
   schedule: ScheduleProposalRef[];
@@ -137,7 +162,7 @@ const newest = (at: (row: RosterRow) => number | undefined) => (a: RosterRow, b:
   (at(b) ?? Number.NEGATIVE_INFINITY) - (at(a) ?? Number.NEGATIVE_INFINITY) || 0;
 
 /**
- * The rail model: the seven groups, each in its own order — asking and
+ * The rail model: the eight groups, each in its own order — asking and
  * interrupted newest first (by the last working edge before they stopped),
  * unseen finished turns by when they finished. A push request counts while it
  * waits (pending or running); a finished one is history the card's own
@@ -146,11 +171,22 @@ const newest = (at: (row: RosterRow) => number | undefined) => (a: RosterRow, b:
 export function buildDecisions(input: DecisionsInput): Decisions {
   const asking = input.rows.filter((row) => row.state === "question").sort(newest((row) => row.facts.workingAt));
   const interrupted = input.rows.filter((row) => row.state === "interrupted").sort(newest((row) => row.facts.workingAt));
+  // The agent's own question is a second source for the same need: a tab the
+  // app already detects as asking is listed (and counted) there only.
+  const now = input.now ?? Date.now();
+  const agentAsks = input.rows
+    .filter((row) => row.state !== "question")
+    .flatMap((row): AgentAskRef[] => {
+      const ask = currentAttention(row.tab.cockpitMeta, now);
+      return ask ? [{ row, id: ask.id, question: ask.question, setAt: ask.setAt }] : [];
+    })
+    .sort((a, b) => b.setAt - a.setAt);
   const unseen = input.rows.filter((row) => row.state === "done").sort(newest((row) => row.facts.doneAt));
   const push = input.push.filter(({ proposal }) => !proposal.cleared && proposal.status !== "dismissed" && proposal.status !== "expired");
   const waitingPush = push.filter(({ proposal }) => proposal.status === "pending" || proposal.status === "running").length;
   const items: DecisionItems = {
     asking,
+    agentAsks,
     interrupted,
     push,
     schedule: [...input.schedules],
@@ -160,6 +196,7 @@ export function buildDecisions(input: DecisionsInput): Decisions {
   };
   const counts: Record<DecisionGroupId, number> = {
     asking: asking.length,
+    agentAsks: agentAsks.length,
     interrupted: interrupted.length,
     push: waitingPush,
     schedule: items.schedule.length,

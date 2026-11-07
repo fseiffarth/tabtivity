@@ -3,6 +3,7 @@ import { turnDurationOf, type TurnDuration } from "../../../shared/turnDuration"
 import type { TabEntry } from "../../stores/tabs";
 import type { AgentRosterFacts, AgentRosterState } from "../agents/agentRoster";
 import type { CockpitRosterMode, CockpitStateFilter } from "../../stores/cockpit";
+import { currentActivity, currentBlocker } from "./agentNotes";
 
 /**
  * The cockpit roster (`docs/desktop_cockpit_plan.md`, View 1): every agent tab
@@ -124,6 +125,35 @@ function sortKeys(row: RosterRow) {
     workingAt: row.facts.workingAt,
     doneAt: row.turn && !row.turn.running ? row.turn.end : row.facts.doneAt,
   };
+}
+
+/**
+ * The agent's own one-line activity for a row, only while it counts: the
+ * agent is live (its machine is reachable: the roster's one notion of a row
+ * that cannot be running) and the line is under 30 minutes old by the host's
+ * stamp. It is the agent's statement, shown beside the detected state and
+ * never in place of it.
+ */
+export function rosterActivity(row: Pick<RosterInput, "tab" | "hostDown">, now: number) {
+  return currentActivity(row.tab.cockpitMeta, now, !row.hostDown);
+}
+
+/**
+ * The roster row's second line: the agent's reported blocker, else its
+ * activity, each only while it counts (same live and 30-minute rules). A
+ * blocker replaces the activity line and is marked as the agent's report; it
+ * never touches `row.state`, the counts or the Needs-you list - those stay
+ * what the app detected.
+ */
+export function rosterNote(
+  row: Pick<RosterInput, "tab" | "hostDown">,
+  now: number,
+): { kind: "blocker" | "activity"; text: string; setAt: number } | undefined {
+  const live = !row.hostDown;
+  const blocker = currentBlocker(row.tab.cockpitMeta, now, live);
+  if (blocker) return { kind: "blocker", ...blocker };
+  const activity = currentActivity(row.tab.cockpitMeta, now, live);
+  return activity ? { kind: "activity", ...activity } : undefined;
 }
 
 export function toRosterRow(input: RosterInput): RosterRow {

@@ -8,6 +8,63 @@ import type { AutocompleteMode } from "../../types";
 import type { LoginTarget } from "../../lib/remote/loginTarget";
 import type { AssistantLaunch } from "../../lib/assistant";
 
+/**
+ * Notes an agent published about its own tab through the cockpit MCP — a
+ * read-only mirror of the backend's `services::cockpit_meta`. The host writes
+ * it and a window never sends it back (`toSavedTabEntry` leaves it out; the
+ * workspace merge ignores what a client sends). The `spawn` generation markers
+ * are backend-only; the mirror omits them.
+ * Plain text by the agent, stamped with the host's clock (ms since the epoch).
+ */
+export interface CockpitMeta {
+  v: 1;
+  /** Bumped by every change the host commits; never reused. */
+  revision: number;
+  activity?: { text: string; setAt: number };
+  handoff?: { summary: string; checks: string; remaining: string; setAt: number };
+  /** Project-relative references the agent listed (`tab_set_results`); a
+   *  label and a path to show, never something to read: only the host opens one. */
+  results?: { items: { label: string; relativePath: string }[]; setAt: number };
+  /** The agent's plan steps (`tab_set_progress`), kept as history: it counts as
+   *  running only while the agent is live, `ended` is unset and it is under
+   *  30 minutes old (`lib/cockpit/agentNotes::progressReport`). `ended` is the
+   *  host's mark that a later spawn took the tab over. */
+  progress?: { steps: ProgressStep[]; setAt: number; ended?: true };
+  /** What the agent says is in its way (`tab_set_blocker`); transient like `activity`. */
+  blocker?: { text: string; setAt: number };
+  /** Checks the agent *reports* (`tab_set_verification`); `setAt` is when it
+   *  reported them, never when anything ran. */
+  verification?: { entries: VerificationEntry[]; setAt: number };
+  /** A question the agent says it needs the user for (`tab_request_attention`).
+   *  `id` is the host's, new for every changed question; `dismissed` is the
+   *  user's, written by the narrow dismissal command only. It asks nothing of
+   *  the app: no answer, no approval. The spawn that issued it is not mirrored
+   *  (a new spawn's grant removes it). */
+  attention?: { id: string; question: string; setAt: number; dismissed?: true };
+  /** The agent's finished milestones (`tab_add_milestone`), oldest first, at
+   *  most 20; `at` is the host's clock. */
+  milestones?: AgentMilestone[];
+}
+
+export interface AgentMilestone {
+  requestId: string;
+  text: string;
+  at: number;
+}
+
+export type ProgressState = "pending" | "active" | "done";
+export interface ProgressStep {
+  id: string;
+  label: string;
+  state: ProgressState;
+}
+export type VerificationOutcome = "passed" | "failed" | "pending" | "not_run";
+export interface VerificationEntry {
+  label: string;
+  outcome: VerificationOutcome;
+  note?: string;
+}
+
 export type TabKind =
   | "agent"
   | "local_agent"
@@ -375,6 +432,11 @@ export interface TabEntry {
   autoLabel?: string;
   autoNamed?: boolean;
   taskName?: string;
+  // What the agent said about its own tab (`tab_set_activity` /
+  // `tab_set_handoff` on the cockpit MCP lane). Host-owned: taken from the
+  // saved record on restore and from every workspace sync/patch answer, never
+  // saved from here, and dropped by `duplicateSpec` (a copy is another agent).
+  cockpitMeta?: CockpitMeta;
   // The root console's **Host session** (`docs/context/agent_authority.md`):
   // this agent tab runs unfenced, with the user's full rights, in Tabtivity's
   // `host` agent home. Only ever set by the console's own "Host session" menu
@@ -692,6 +754,8 @@ export interface SavedTabEntry {
   autoLabel?: string;
   autoNamed?: boolean;
   taskName?: string;
+  // Host-written agent notes (see TabEntry.cockpitMeta); read here, never sent.
+  cockpitMeta?: unknown;
   mobileRequestHash?: string;
   // Sign-in tab marker (see TabEntry.signIn); load drops such a tab.
   signIn?: boolean;

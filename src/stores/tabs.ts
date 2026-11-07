@@ -22,6 +22,7 @@ import { getDetachedWindowContext } from "./detachedContext";
 import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { currentTabCommand } from "../lib/brandMigration";
 import { ASSISTANT_SCOPE, readAssistantLaunch } from "../lib/assistant";
+import { readCockpitMeta, sameCockpitMeta } from "../lib/cockpit/agentNotes";
 import type {
   AddTabOpts,
   DetachedEditPayload,
@@ -4417,6 +4418,11 @@ export function adoptSyncOutcome(scope: string, outcome: WorkspaceSyncOutcome, s
       const ownColor = agreed !== undefined && agreed.color !== next.color;
       if (!ownLabel && held.label !== next.label) next = { ...next, label: held.label };
       if (!ownColor && color !== next.color) next = { ...next, color };
+      // The agent's notes are the host's: always the stored copy, never an
+      // edit of this window's. A new `revision` is the only change that
+      // replaces the object (so an unchanged tab keeps its identity).
+      const meta = readCockpitMeta(held.cockpitMeta);
+      if (!sameCockpitMeta(meta, next.cockpitMeta)) next = { ...next, cockpitMeta: meta };
       fields.set(t.key, {
         label: ownLabel ? agreed.label : held.label,
         color: ownColor ? agreed.color : color,

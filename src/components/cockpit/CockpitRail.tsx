@@ -12,10 +12,15 @@ import { jumpToRow } from "./CockpitRoster";
 import { TabContinueButton } from "../tabs/TabLocalityBadges";
 import type { AlertsFeed } from "../files/useAlertsFeed";
 import { RefreshIcon } from "../common/icons/Icon";
+import { UntestedTag } from "../common/UntestedTag";
+import { dismissAttention } from "../../lib/cockpit/attention";
+import type { AgentAskRef } from "../../lib/cockpit/decisions";
+import { formatAgo } from "./cockpitFormat";
 
 /** Each group's heading, also the icon rail's labels. */
 export const GROUP_LABEL: Record<DecisionGroupId, TranslationKey> = {
   asking: "cockpit.rail.asking",
+  agentAsks: "cockpit.rail.agentAsks",
   interrupted: "cockpit.rail.interrupted",
   push: "cockpit.rail.push",
   schedule: "cockpit.rail.schedule",
@@ -68,8 +73,44 @@ function TabRow({
 }
 
 /**
+ * An agent-reported question (`tab_request_attention`): the tab's row, which
+ * opens its conversation exactly as an asking row does, the agent's question as
+ * plain text, and a Dismiss that only hides the notice (the host marks it
+ * dismissed; nothing is answered or approved).
+ */
+function AgentAskRow({ ask, selected, onPick }: { ask: AgentAskRef; selected: boolean; onPick: (row: RosterRow) => void }) {
+  const t = useT();
+  const { row } = ask;
+  return (
+    <div className={`cockpit-rail-row column cockpit-agent-ask${selected ? " selected" : ""}`}>
+      <button
+        type="button"
+        className="cockpit-rail-pick"
+        onClick={() => onPick(row)}
+        title={t("cockpit.rail.agentAsksNote", { ago: formatAgo(ask.setAt, Date.now()) })}
+      >
+        <span className="cockpit-rail-scope">{row.scope.name}</span>
+        <span className="cockpit-rail-tab">{row.tab.label}</span>
+      </button>
+      <span className="cockpit-note-text cockpit-agent-ask-text">{ask.question}</span>
+      <span className="cockpit-agent-ask-actions">
+        <button
+          type="button"
+          className="settings-btn sm"
+          title={t("cockpit.rail.agentAsksDismissTitle")}
+          onClick={() => void dismissAttention(row.scope.id, row.tab.id, ask.id)}
+        >
+          {t("cockpit.rail.agentAsksDismiss")}
+        </button>
+        <UntestedTag id="cockpit.mcp.attention" />
+      </span>
+    </div>
+  );
+}
+
+/**
  * The Decisions inbox (`docs/desktop_cockpit_plan.md`, View 1 · Needs you): the
- * seven groups in the phone's urgency order, each with its own action in place
+ * eight groups in the phone's urgency order, each with its own action in place
  * — the existing cards, never a second answering UI. Empty groups are not
  * drawn; a rail with nothing says so in one line.
  */
@@ -107,6 +148,14 @@ export function CockpitRail({
               return (
                 <Group key={id} id={id} count={count}>
                   {items.asking.map((row) => <TabRow key={row.ptyId} row={row} selected={row.ptyId === selected} onPick={pick} />)}
+                </Group>
+              );
+            case "agentAsks":
+              return (
+                <Group key={id} id={id} count={count}>
+                  {items.agentAsks.map((ask) => (
+                    <AgentAskRow key={`${ask.row.ptyId}:${ask.id}`} ask={ask} selected={ask.row.ptyId === selected} onPick={pick} />
+                  ))}
                 </Group>
               );
             case "interrupted":

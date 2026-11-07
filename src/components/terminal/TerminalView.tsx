@@ -11,7 +11,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { reportFrontendIssue } from "../../crashReporter";
-import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
+import { isDetachedPtyId, useTabsStore, type TabKind } from "../../stores/tabs";
 import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, noteLiveTurn, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
@@ -1814,6 +1814,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // stayed unstamped and never wore the running ▶.
       if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
+        if ((kind === "agent" || kind === "local_agent") && !attachOnly && (tmuxSession || tmuxAttach)) {
+          const owner = splitPtyId(id)?.scope;
+          // A workspace identity is required for self-targeted MCP grants.
+          // An older backend can still launch the agent without that lane.
+          if (owner) await useTabsStore.getState().persistScope(owner, "").catch(() => {});
+          if (cancelled) return;
+        }
         const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean; turn?: "working" | "decision" } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.

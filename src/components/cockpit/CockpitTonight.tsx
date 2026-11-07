@@ -29,6 +29,7 @@ import { CockpitUntested } from "./CockpitUntested";
 import { formatAgo, formatClock, formatTurn } from "./cockpitFormat";
 import { jumpToRow } from "./CockpitRoster";
 import { useCockpitNow, useCockpitScopes, useLoadSchedules, usePushRequests, useRosterInputs, type CockpitScopeTabs } from "./useCockpitData";
+import { UntestedTag } from "../common/UntestedTag";
 
 const BUCKET_LABEL: Record<TonightBucket, TranslationKey> = {
   now: "cockpit.tonight.bucketNow",
@@ -141,7 +142,7 @@ export function CockpitTonight() {
           : [],
       ),
     );
-    return buildAway({ rows, schedules: loaded, push, root, since: awaySince(lastClosedAt, lastInput || undefined, openedAt) });
+    return buildAway({ rows, schedules: loaded, push, root, since: awaySince(lastClosedAt, lastInput || undefined, openedAt), now: openedAt });
   }, [scopes, schedules, rows, push, root, lastClosedAt, lastInput, openedAt]);
 
   const act = (work: () => Promise<unknown>) => {
@@ -266,6 +267,21 @@ export function CockpitTonight() {
                   <span className="cockpit-rail-scope">{scopeName} · {tabLabel}</span>
                   <span className="cockpit-rail-text">{rule.message}</span>
                 </div>
+              ))}
+            </div>
+          )}
+          {away.milestones.length > 0 && (
+            <div className="cockpit-tonight-group">
+              <div className="tab-new-menu-group-label">
+                {t("cockpit.tonight.milestones")} <UntestedTag id="cockpit.mcp.milestones" />
+              </div>
+              {away.milestones.map(({ row, milestone }) => (
+                <button key={`${row.ptyId}:${milestone.requestId}`} type="button" className="cockpit-tonight-row as-button" onClick={() => jumpToRow(row.ptyId)}>
+                  <span className="cockpit-meta cockpit-tonight-time">{formatClock(milestone.at)}</span>
+                  <span className="cockpit-rail-scope">{row.scope.name} · {row.tab.label}</span>
+                  <span className="cockpit-note-tag">{t("cockpit.tonight.milestoneTag")}</span>
+                  <span className="cockpit-rail-text">{milestone.text}</span>
+                </button>
               ))}
             </div>
           )}

@@ -32,7 +32,7 @@ export function CockpitIndicator() {
     [tabsByScope, busyByTab, attentionByTab, schedulesByTarget, waiting],
   );
   const label = badge.total > 0
-    ? t("cockpit.indicatorCount", { asking: badge.asking, interrupted: badge.interrupted, proposals: badge.proposals, approvals: badge.approvals })
+    ? t("cockpit.indicatorCount", { asking: badge.asking, agentAsks: badge.agentAsks, interrupted: badge.interrupted, proposals: badge.proposals, approvals: badge.approvals })
     : t("cockpit.indicator");
   return (
     <div className="global-apps-menu cockpit-indicator no-drag">

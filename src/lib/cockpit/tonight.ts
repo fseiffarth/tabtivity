@@ -3,6 +3,8 @@ import { agentCronTimes, parseTimeOfDay, scheduledAgentCmds, type AgentCron } fr
 import type { RootProposal } from "../../stores/rootReview";
 import type { PushRequestRef } from "./decisions";
 import type { RosterRow } from "./roster";
+import { milestonesSince } from "./agentNotes";
+import type { AgentMilestone } from "../../stores/tabs/types";
 
 /**
  * The cockpit's Tonight view model (`docs/desktop_cockpit_plan.md`, View 3):
@@ -138,6 +140,14 @@ export interface AwayInput {
   push: readonly PushRequestRef[];
   root: readonly RootProposal[];
   since: number;
+  /** The clock a milestone stamped in the future is judged against (default: now). */
+  now?: number;
+}
+
+/** A milestone an agent reported while the user was away, with its row. */
+export interface AwayMilestone {
+  row: RosterRow;
+  milestone: AgentMilestone;
 }
 
 export interface AwayRecap {
@@ -146,6 +156,9 @@ export interface AwayRecap {
   pushes: PushRequestRef[];
   fired: AwayInput["schedules"][number][];
   rootWrites: RootProposal[];
+  /** What agents reported as milestones inside the window (their own
+   *  statements, host-stamped), newest first. */
+  milestones: AwayMilestone[];
   empty: boolean;
 }
 
@@ -154,7 +167,9 @@ const parsed = (iso: string | undefined) => (iso ? Date.parse(iso) : NaN);
 /**
  * What happened while the user was away, built from stamps the stores already
  * keep — a derivation, not a log: turns finished (newest first), turns cut off,
- * pushes that went through, schedules that fired, root writes applied.
+ * pushes that went through, schedules that fired, root writes applied, and the
+ * milestones agents reported inside the window (`cockpitMeta.milestones`, the
+ * host's stamp; the view labels them as agent-reported).
  */
 export function buildAway(input: AwayInput): AwayRecap {
   const { since } = input;
@@ -167,12 +182,17 @@ export function buildAway(input: AwayInput): AwayRecap {
     .filter(({ rule }) => parsed(rule.last?.at) > since)
     .sort((a, b) => parsed(b.rule.last?.at) - parsed(a.rule.last?.at));
   const rootWrites = input.root.filter((p) => p.status === "applied" && parsed(p.created) > since);
+  const now = input.now ?? Date.now();
+  const milestones = input.rows
+    .flatMap((row) => milestonesSince(row.tab.cockpitMeta, since, now).map((milestone) => ({ row, milestone })))
+    .sort((a, b) => b.milestone.at - a.milestone.at);
   return {
     finished,
     cutOff,
     pushes,
     fired,
     rootWrites,
-    empty: !finished.length && !cutOff.length && !pushes.length && !fired.length && !rootWrites.length,
+    milestones,
+    empty: !finished.length && !cutOff.length && !pushes.length && !fired.length && !rootWrites.length && !milestones.length,
   };
 }

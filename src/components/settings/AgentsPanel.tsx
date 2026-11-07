@@ -5,9 +5,7 @@ import { SettingsCard, SettingsHeader, SettingsList } from "../layout/settingsUi
 import { UntestedTag } from "../common/UntestedTag";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
-import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
-import { GitPushMcpSettings } from "../agents/GitPushMcp";
-import { MarkupMcpSettings } from "../agents/MarkupMcpSettings";
+import { AppToolsSettings } from "../agents/AppToolsSettings";
 import { cliInstallsByAdmin } from "../../lib/transport/linkState";
 import { runInstallInTab } from "../../lib/installCommand";
 import type { CustomAgent } from "../../types";
@@ -1003,19 +1001,7 @@ export function AgentsPanel({
         >
           <AgentCronSection agents={agents} />
         </AgentsGroup>
-        <AgentsGroup title={t("agents.groupTools")} summary={t("agents.sumTools")}>
-          <div className="agents-stack">
-            <div className="agents-option">
-              <AgentScheduleMcpSettings />
-            </div>
-            <div className="agents-option">
-              <GitPushMcpSettings />
-            </div>
-            <div className="agents-option">
-              <MarkupMcpSettings />
-            </div>
-          </div>
-        </AgentsGroup>
+        <AppToolsSettings />
         <AgentsGroup
           title={<>{t("agents.composerHeading")} <UntestedTag id="settingsSubPanels.2" /></>}
           summary={t("agents.sumComposer")}

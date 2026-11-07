@@ -18,6 +18,7 @@ import { GROUP_LABEL } from "./CockpitRail";
 
 const GROUP_ICON: Record<DecisionGroupId, (p: IconProps) => ReactElement> = {
   asking: QuestionIcon,
+  agentAsks: QuestionIcon,
   interrupted: StopIcon,
   push: UploadIcon,
   schedule: ClockIcon,

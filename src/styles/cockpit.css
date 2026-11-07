@@ -295,6 +295,145 @@
   overflow: hidden;
   margin-left: 20px;
 }
+/* What the agent says about itself (cockpit MCP notes): the agent's words,
+   tagged and kept apart from the detected state mark and word. */
+.cockpit-roster-note {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-left: 20px;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.cockpit-note-tag {
+  flex: 0 0 auto;
+  font-size: var(--text-xs, 0.75em);
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.cockpit-roster-note .cockpit-note-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cockpit-agent-note {
+  max-height: 40%;
+  overflow: auto;
+}
+.cockpit-agent-results {
+  max-height: 25%;
+}
+.cockpit-agent-results > .cockpit-meta {
+  white-space: normal;
+}
+/* A blocker the agent reports takes the roster note's line; same quiet look,
+   only the tag carries the warning colour. It is not a detected state. */
+.cockpit-roster-note.blocker .cockpit-note-tag {
+  color: var(--text-primary);
+  border-color: var(--border-strong, var(--border-subtle));
+}
+.cockpit-agent-progress,
+.cockpit-agent-blocker,
+.cockpit-agent-verification,
+.cockpit-agent-attention,
+.cockpit-agent-milestones {
+  max-height: 25%;
+}
+.cockpit-agent-attention > .cockpit-meta,
+.cockpit-agent-milestones > .cockpit-meta {
+  white-space: normal;
+}
+/* The agent's own question as plain text; a dismissed one is quieter. */
+.cockpit-agent-ask-text {
+  margin: 2px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cockpit-agent-ask-text.dismissed {
+  opacity: 0.7;
+}
+.cockpit-rail-row.cockpit-agent-ask .cockpit-agent-ask-text {
+  padding: 0 0 0 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cockpit-agent-ask-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cockpit-agent-progress > .cockpit-meta,
+.cockpit-agent-blocker > .cockpit-meta,
+.cockpit-agent-verification > .cockpit-meta {
+  white-space: normal;
+}
+.cockpit-agent-progress.past .cockpit-step-list {
+  opacity: 0.75;
+}
+.cockpit-step-list,
+.cockpit-check-list {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+}
+.cockpit-step,
+.cockpit-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 3px 0;
+  overflow-wrap: anywhere;
+}
+.cockpit-step-state {
+  flex: 0 0 auto;
+  min-width: 6.5em;
+  font-size: var(--text-xs, 0.75em);
+  color: var(--text-muted);
+}
+.cockpit-check-note {
+  flex: 1 0 100%;
+  margin: 0 0 0 calc(6.5em + 6px);
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+}
+.cockpit-agent-blocker .cockpit-note-text {
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+}
+.cockpit-note-field {
+  margin: 4px 0;
+}
+.cockpit-note-field .cockpit-note-text {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cockpit-result-list {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+}
+.cockpit-result-list li {
+  margin: 3px 0;
+  overflow-wrap: anywhere;
+}
+.cockpit-result-path {
+  margin-left: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.cockpit-result-note {
+  margin-left: 8px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
 .cockpit-state-mark {
   width: 14px;
   text-align: center;

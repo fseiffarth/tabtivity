@@ -56,7 +56,7 @@ describe("cockpitBadge", () => {
       schedulesByTarget: {},
       approvals: 2,
     });
-    expect(badge).toEqual({ asking: 1, interrupted: 1, proposals: 0, approvals: 2, total: 4 });
+    expect(badge).toEqual({ asking: 1, interrupted: 1, proposals: 0, approvals: 2, agentAsks: 0, total: 4 });
   });
 
   it("counts agent schedule proposals and known push requests", () => {

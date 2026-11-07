@@ -5,11 +5,14 @@ import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { useT } from "../../lib/i18n";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { useAgentModelsStore } from "../../stores/agents/agentModels";
+import { currentHandoff } from "../../lib/cockpit/agentNotes";
 import { ArrowUpRightIcon } from "../common/icons/Icon";
 import { CockpitDetailPane } from "./CockpitDetailPane";
-import { formatClock } from "./cockpitFormat";
+import { formatAgo, formatClock } from "./cockpitFormat";
 import { jumpToRow, ScopeChip } from "./CockpitRoster";
 import { UntestedTag } from "../common/UntestedTag";
+import { CockpitResults } from "./CockpitResults";
+import { CockpitAttention, CockpitBlocker, CockpitMilestones, CockpitProgress, CockpitVerification } from "./CockpitReports";
 
 const NO_PROMPTS: readonly { text: string }[] = [];
 
@@ -50,6 +53,7 @@ export function CockpitDetail({
       </section>
     );
   }
+  const handoff = currentHandoff(row.tab.cockpitMeta);
   const jumpKey = row.scope.kind === "root" ? "cockpit.detail.openInRoot" : "cockpit.detail.jump";
   return (
     <section className="cockpit-detail" aria-label={t("cockpit.detail.title", { tab: row.tab.label })}>
@@ -73,6 +77,34 @@ export function CockpitDetail({
         </div>
       )}
       <CockpitDetailPane key={row.ptyId} ptyId={row.ptyId} focused={focused} />
+      <CockpitAttention row={row} now={now} />
+      {handoff && (
+        <details className="cockpit-detail-fold cockpit-agent-note" open>
+          <summary>
+            {t("cockpit.notes.handoff")} <UntestedTag id="cockpit.mcp.handoff" />
+          </summary>
+          <p className="cockpit-meta">{t("cockpit.notes.handoffMeta", { ago: formatAgo(handoff.setAt, now) })}</p>
+          {(
+            [
+              ["cockpit.notes.summary", handoff.summary],
+              ["cockpit.notes.checks", handoff.checks],
+              ["cockpit.notes.remaining", handoff.remaining],
+            ] as const
+          ).map(([label, body]) =>
+            body.trim() === "" ? null : (
+              <div key={label} className="cockpit-note-field">
+                <span className="cockpit-note-tag">{t(label)}</span>
+                <p className="cockpit-note-text">{body}</p>
+              </div>
+            ),
+          )}
+        </details>
+      )}
+      <CockpitResults row={row} now={now} />
+      <CockpitProgress row={row} now={now} />
+      <CockpitBlocker row={row} now={now} />
+      <CockpitVerification row={row} now={now} />
+      <CockpitMilestones row={row} now={now} />
       <details className="cockpit-detail-fold">
         <summary>{t("cockpit.detail.schedules", { count: upcoming.length })}</summary>
         {upcoming.length === 0 ? (

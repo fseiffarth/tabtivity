@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { CheckIcon, ChevronDownIcon, CloseIcon, ClockIcon, CloudIcon, DotIcon, RefreshIcon } from "../common/icons/Icon";
 
 import { AGENT_SORTS } from "../../../shared/agentSort";
-import { formatClock, rosterTurnLabel } from "./cockpitFormat";
+import { formatAgo, formatClock, rosterTurnLabel } from "./cockpitFormat";
 import type { Roster, RosterRow } from "../../lib/cockpit/roster";
-import { stepSelection } from "../../lib/cockpit/roster";
+import { rosterNote, stepSelection } from "../../lib/cockpit/roster";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import { steeringKeyIs, type SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
@@ -19,6 +19,7 @@ import { ROOT_SCOPE } from "../../stores/tabs";
 import { StarIcon } from "../layout/StarIcon";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { CockpitUntested } from "./CockpitUntested";
+import { UntestedTag } from "../common/UntestedTag";
 import { CONTINUE_PROMPT } from "../tabs/TabLocalityBadges";
 import { tabColorCss } from "../../lib/theme/tabColors";
 
@@ -139,6 +140,7 @@ function Row({ row, selected, now, onOpen }: { row: RosterRow; selected: boolean
   const t = useT();
   const { facts } = row;
   const turn = rosterTurnLabel(row, now, t);
+  const note = rosterNote(row, now);
   return (
     <div
       role="option"
@@ -177,6 +179,18 @@ function Row({ row, selected, now, onOpen }: { row: RosterRow; selected: boolean
         </span>
       </div>
       {row.lastPrompt && <div className="cockpit-roster-prompt">{row.lastPrompt}</div>}
+      {/* What the agent says it is doing, or what it says blocks it (the blocker takes the line): its own words, marked and timed, apart from the detected state above. */}
+      {note && (
+        <div
+          className={note.kind === "blocker" ? "cockpit-roster-note blocker" : "cockpit-roster-note"}
+          title={t(note.kind === "blocker" ? "cockpit.notes.blockerTitle" : "cockpit.notes.activityTitle", { ago: formatAgo(note.setAt, now) })}
+        >
+          <span className="cockpit-note-tag">{t(note.kind === "blocker" ? "cockpit.notes.blockerTag" : "cockpit.notes.byAgent")}</span>
+          <span className="cockpit-note-text">{note.text}</span>
+          <span className="cockpit-meta">{formatAgo(note.setAt, now)}</span>
+          {note.kind === "blocker" ? <UntestedTag id="cockpit.mcp.blocker" /> : <UntestedTag id="cockpit.mcp.activity" />}
+        </div>
+      )}
     </div>
   );
 }
