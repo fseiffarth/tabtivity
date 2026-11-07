@@ -2669,7 +2669,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
         aria-label={t("machines.ariaLabel")}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        title={t("machines.triggerTitle")}
+        // No native `title` on this button, nor on its lamps (`tooltip={false}`):
+        // the tooltip, a long sentence and every machine's name, is a GTK window
+        // under the resting pointer, and a pointer leaving the button straight
+        // down crossed it unseen, so the list stayed up 2–3 s. The list itself is
+        // the explanation; the sentence stays for screen readers.
+        aria-description={t("machines.triggerTitle")}
         // A click opens the Machines view — the Models button's
         // pattern (`layout/LocalModelMenu`): hover is the glance, click is the
         // room. The dropdown goes with the click rather than staying up over
@@ -2688,7 +2693,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
         <span className="header-conn-lamps">
           {lampGroups.map((g) => (
             <span key={g.lamp} className="conn-lamp-count">
-              <ConnLamp status={g.lamp} busy={g.working.length > 0} label={lampLabel(g)} />
+              <ConnLamp status={g.lamp} busy={g.working.length > 0} label={lampLabel(g)} tooltip={false} />
               {g.machines.length > 1 && (
                 <span className="conn-lamp-count-num">{g.machines.length}</span>
               )}
