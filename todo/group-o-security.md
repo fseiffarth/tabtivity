@@ -1647,3 +1647,27 @@ checkout; `npm ci --ignore-scripts`; Windows/macOS runners pinned to
   checks kept as the fallback on older kernels. `--unshare-net` with a
   forwarder was rejected: it changes every MCP lane and the proxy. Not
   implemented.
+
+- **Local models only projects, phase 1 (DONE ✅ · 🧪 Untested).** Built
+  2026-11-08, `docs/local_models_only_plan.md` and
+  `docs/context/local_models_only.md`: a project's pill menu → Local models
+  only… sets `agent_privacy.local_models_only` on its `projects.json` entry;
+  the spawn gate (`services::agent_privacy`) lets only a verified local-model
+  launch start there, other fences mask the folder, box roots and the root
+  console's read-only list skip it, and the Copilot, drop and root-MCP git
+  paths are closed. Cut network (phase 2) is stored and shown but refused.
+    - [x] 🤖 Automated test
+    - [ ] 🖐️ Manual test — mark a scratch project Local models only; the + menu
+      shows only local rows, a cloud tab restored from before is gone; an
+      OpenCode local tab works; from a Claude tab of another project `ls` of the
+      scratch folder is empty; in a box with another project the box tab cannot
+      see it and the local tab cannot see the other member; dropping one of its
+      files on a cloud tab is refused; turning it off brings the + menu back.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

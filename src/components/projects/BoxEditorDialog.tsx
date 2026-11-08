@@ -15,7 +15,8 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
 import { useT } from "../../lib/i18n";
 import { useDialogs, type ConfirmSpec } from "../common/PromptDialogs";
-import { BoxSwatch, CloseIcon } from "../common/icons/Icon";
+import { BoxSwatch, CloseIcon, LockIcon } from "../common/icons/Icon";
+import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { ToggleRow } from "../layout/settingsUi";
 import { MobileAccessPicker, PhoneReachButton } from "../mobile/MobileAccessPicker";
 import { usePairedPhones } from "../mobile/usePairedPhones";
@@ -281,6 +282,11 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
                       onChange={() => toggle(p.id)}
                     />
                     <span className="box-editor-member-name">{p.name}</span>
+                    {isLocalModelsOnly(p) && (
+                      <span className="box-editor-badge" title={t("agentPrivacy.boxMember")} aria-label={t("agentPrivacy.boxMember")}>
+                        <LockIcon size={10} />
+                      </span>
+                    )}
                     {kinds.map((kind) => (
                       <span key={kind} className={`box-editor-badge is-${kind}`}>{t(KIND_KEY[kind])}</span>
                     ))}

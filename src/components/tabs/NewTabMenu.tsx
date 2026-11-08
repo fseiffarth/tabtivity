@@ -61,6 +61,9 @@ interface Props {
    *  streamed project): no row that starts a tab on this machine — the
    *  local-model and API-key groups, the ☁ Cloud fly-out — is offered. */
   hostPinned?: boolean;
+  /** The scope is a Local models only project (`services::agent_privacy`):
+   *  only the local-model rows start an agent. Unset outside one. */
+  localModelsOnly?: boolean;
   /** A box popout: where a plain pick starts (`detachedNewTabTarget`: the active
    *  tab's member, else the whole box) — named in the menu's first line. `projectCwd`
    *  is then that target's folder; the kinds without a launch directory (monitor,
@@ -88,6 +91,7 @@ export function NewTabMenu({
   onManageAgents,
   machines,
   hostPinned = false,
+  localModelsOnly = false,
   target,
   boxSeed,
 }: Props) {
@@ -218,7 +222,7 @@ export function NewTabMenu({
       <AddTabMenuList
         heading={memberTable && target ? targetHeading(target.member, memberTable, t) : undefined}
         groups={[
-          {
+          ...(localModelsOnly ? [] : [{
             label: t("newTabMenu.groupAgents"),
             moreLabel: t("newTabMenu.moreAgents"),
             entries: agentMenuEntries({
@@ -254,12 +258,13 @@ export function NewTabMenu({
               }),
               compactAgentBins,
             ),
-          },
+          }]),
           // The popout cannot tell a remote project from a local one (its
           // projects store is inert), so its rows carry no remote caution.
           // A host-pinned scope (VM, remote-only) has no local tree: its
-          // API-key and local-model rows, which start here, are not offered.
-          ...(hostPinned
+          // API-key and local-model rows, which start here, are not offered;
+          // nor are a local-models-only project's API-key rows.
+          ...(hostPinned || localModelsOnly
             ? []
             : apiKeyMenuGroups({
                 keyable: keyableAgents,

@@ -1366,7 +1366,16 @@ export interface GitReleasePreview {
   category: string | null;
 }
 
+/** A project's agent privacy (`services::agent_privacy`): Local models only
+ *  keeps every cloud model from reading it; Cut network is stored for the day
+ *  the backend can enforce it. Unknown fields round-trip. */
+export interface AgentPrivacy {
+  local_models_only?: boolean;
+  cut_network?: boolean;
+}
+
 export interface ProjectEntry {
+  agent_privacy?: AgentPrivacy;
   schedule_mcp?: "off" | "propose" | "apply";
   git_push_mcp?: GitPushMcpPolicy;
   id: string;

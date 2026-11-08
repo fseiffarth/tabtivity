@@ -62,6 +62,7 @@ import { DragGhost, SplitPreviewOverlay } from "./CenterPanel";
 import { TabDropPlaceholder } from "../tabs/TabDropPlaceholder";
 import { NewTabMenu } from "../tabs/NewTabMenu";
 import { agentMachines } from "../tabs/agentMenuEntries";
+import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { TabColorPicker } from "../tabs/TabColorPicker";
@@ -2008,6 +2009,7 @@ export function DetachedCenterPanel({
                   : undefined
               }
               hostPinned={hostPinned}
+              localModelsOnly={isLocalModelsOnly(remoteInfo?.project)}
             />
           );
         })()}

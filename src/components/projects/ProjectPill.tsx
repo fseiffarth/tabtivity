@@ -35,6 +35,8 @@ import { ProjectHoverCard, projectDescription, useProjectHoverCard } from "./Pro
 import { useFastMode } from "../../lib/agents/fastMode";
 import { ActivityCalendar } from "./ActivityCalendar";
 import { CategoryEditor } from "./CategoryEditor";
+import { AgentPrivacyDialog } from "./AgentPrivacyDialog";
+import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { ExtendToRemoteDialog } from "./ExtendToRemoteDialog";
 import { ProjectExportDialog } from "./ProjectExportDialog";
 import { autoConnectEligibility } from "./autoConnectEligibility";
@@ -60,7 +62,7 @@ import { BoxMemberChecklist } from "./BoxMemberChecklist";
 import { useQuickCreateBox } from "./useQuickCreateBox";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
-import { BoxSwatch, CheckIcon, CloseIcon, PauseIcon, UnlockIcon } from "../common/icons/Icon";
+import { BoxSwatch, CheckIcon, CloseIcon, LockIcon, PauseIcon, UnlockIcon } from "../common/icons/Icon";
 import {
   agentFenceInstallCommand,
   agentFenceMarkLevel,
@@ -1246,6 +1248,7 @@ export function ProjectPill({
   const [showForget, setShowForget] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [editCategories, setEditCategories] = useState(false);
+  const [showAgentPrivacy, setShowAgentPrivacy] = useState(false);
   const [extendRemote, setExtendRemote] = useState(false);
   // Set instead of `extendRemote` alone when a global machine was handed to this
   // (local-only) project from the header's Machines menu — seeds the "Extend to
@@ -2221,6 +2224,22 @@ export function ProjectPill({
                 </span>
               )}
             </button>
+            {/* Local models only: no cloud model reads this project. Local
+                folders only (the backend refuses a remote, VM or container
+                project and says why). */}
+            {!project.remote && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  setShowAgentPrivacy(true);
+                }}
+                title={t("agentPrivacy.menuTitle")}
+              >
+                {isLocalModelsOnly(project) ? <><CheckIcon />{" "}</> : ""}{t("agentPrivacy.menuItem")}
+                <UntestedTag id="agentPrivacy.menuItem" />
+              </button>
+            )}
             <button
               className="untested"
               onClick={() => {
@@ -2539,6 +2558,10 @@ export function ProjectPill({
         <GitHostingWindow project={project} onClose={() => setShowGitHosting(false)} />
       )}
 
+      {showAgentPrivacy && (
+        <AgentPrivacyDialog project={project} onClose={() => setShowAgentPrivacy(false)} />
+      )}
+
       {/* Category-tag editor */}
       {editCategories && (
         <CategoryEditor project={project} onClose={() => setEditCategories(false)} />
@@ -2850,6 +2873,20 @@ export function ProjectPill({
             }}
           >
             {vmRunning ? "▣" : "▢"}
+          </button>
+        )}
+        {/* Local models only: a lock on the pill, opening the switch. */}
+        {isLocalModelsOnly(project) && (
+          <button
+            className="pill-vm-glyph pill-local-only-glyph"
+            title={t("agentPrivacy.badgeTitle")}
+            aria-label={t("agentPrivacy.badgeLabel")}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAgentPrivacy(true);
+            }}
+          >
+            <LockIcon size={12} />
           </button>
         )}
         {/* Agent-fence marker: red while agents of this project run outside

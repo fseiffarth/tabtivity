@@ -32,6 +32,7 @@ import { tabTaskName } from "../../lib/agents/autoTabName";
 import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { isHostPinned } from "../../lib/projectTabHost";
+import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { AddTabMenuList, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
@@ -544,6 +545,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // A VM or remote-only project's tabs are pinned to its hosts: no Local row
   // in the badge's menu or the agents' machine list.
   const hostPinned = useProjectsStore((s) => isHostPinned(s.projects.find((p) => p.id === scope)));
+  // Local models only (`services::agent_privacy`): this menu offers the local
+  // model rows alone; the backend refuses a cloud agent here regardless.
+  const localModelsOnly = useProjectsStore((s) => isLocalModelsOnly(s.projects.find((p) => p.id === scope)));
   const scopeProject = useProjectsStore((s) => s.projects.find((p) => p.id === scope));
   // Per-tab file source (remote-native vs local mirror), published by the file
   // viewers. Lets the Remote/Local badge ride on the viewer tab itself rather
@@ -1886,7 +1890,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           <AddTabMenuList
             heading={memberTable && boxTarget ? targetHeading(boxTarget.member, memberTable, t) : undefined}
             groups={[
-              {
+              ...(localModelsOnly ? [] : [{
                 label: t("newTabMenu.groupAgents"),
                 moreLabel: t("newTabMenu.moreAgents"),
                 entries: agentMenuEntries({
@@ -1924,11 +1928,12 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   }),
                   compactAgentBins,
                 ),
-              },
+              }]),
               // A host-pinned scope (VM, remote-only) has no local tree: its
               // API-key and local-model rows, which start on this machine,
-              // are not offered.
-              ...(hostPinned
+              // are not offered. Nor are the API-key rows of a local-models-only
+              // project: they start a cloud agent.
+              ...(hostPinned || localModelsOnly
                 ? []
                 : apiKeyMenuGroups({
                     keyable: keyableAgents,

@@ -31,6 +31,7 @@ const DROP_ERRORS: Record<string, TranslationKey> = {
   inbox_full: "terminal.drop.inboxFull",
   not_a_file: "terminal.drop.notAFile",
   not_found: "terminal.drop.notFound",
+  local_models_only: "terminal.drop.localModelsOnly",
 };
 
 export function dropErrorKey(code: string): TranslationKey {

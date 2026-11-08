@@ -148,3 +148,20 @@ calling; the Models & agents menu tags models without it "no tools".
 - **Ollama on another machine**: `ollama_host` in `settings.json` points
   Tabtivity at another address; a non-local host also needs
   `ollama_allow_remote_host`. There is no UI for this yet.
+
+## Local models only projects
+
+A project can be set to **Local models only** (the project pill's menu →
+**Local models only…**; a lock then shows on the pill). Then no cloud model
+reads it: only agent tabs on an installed local Ollama model start in it, the
+**+** menu offers only the local-model rows, other projects' and boxes'
+agents see an empty folder where it is, and a file of the project cannot be
+dropped onto an agent that is not on a local model. Turning it on closes the
+project's running cloud agent tabs.
+
+It does not stop what a local agent does with its own network (a fetch tool, a
+`curl`, a `git push`, switching to an Ollama cloud model mid-session), and
+shell tabs, the root console's Host session and Windows have no sandbox that
+hides the folder. **Cut network** is shown but cannot be switched on yet.
+It is refused for remote, VM and container projects, a folder with another
+project or a box folder inside it, and an Ollama that is not on this machine.
