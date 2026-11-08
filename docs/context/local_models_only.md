@@ -46,7 +46,9 @@ project's own, a parent project's, a box's, the root console's with the read-onl
 project view or an allowlist that covers it. Each fence's view is recorded when it
 is built (`agent_fence::note_fence_view`: visible roots, allowlist and root-console
 grants, and the locked folders it masked), so a tab spawned after the switch, whose
-fence masked the folder, is left alone. `closed_tabs` carries the PTY ids
+fence masked the folder, is left alone. A container agent records the mounted
+project folder as its view (`container_fence_view`), since a container hides nothing.
+`closed_tabs` carries the PTY ids
 (`<scope>:<tab key>`); the store closes the matching tabs in every scope. Unfenced
 agents (the Host session, Windows) have no recorded view and are not touched: D1.
 

@@ -1341,6 +1341,14 @@ pub async fn prepare(
     // fenced.  A missing/blocked fence tool fails closed.
     let mut fenced_scope: Option<String> = None;
     let mut fence_view: Option<crate::services::agent_privacy::FenceView> = None;
+    // An agent in the project's container sees the whole mounted folder, and the
+    // container has no mask (`wrap_pty_options_docker` refuses to start one where a
+    // locked folder is): record that, so turning Local models only on for a folder
+    // inside the mount ends it.
+    if agent_spawn && opts.sandbox && !opts.local_only {
+        let dir = opts.project_id.as_deref().and_then(crate::services::sandbox::project_dir_for).unwrap_or_else(|| opts.cwd.clone());
+        fence_view = Some(crate::services::agent_privacy::container_fence_view(&dir));
+    }
     // Every agent tab that runs on the host, fenced or not, for the pill's
     // live check (`agent_fence::live_unfenced_by_scope`). Taken before the
     // fence and tmux rewrites replace `cmd`.

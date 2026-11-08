@@ -805,6 +805,13 @@ pub fn sees(view: &FenceView, dir: &Path) -> bool {
     view.visible.iter().any(|v| path_inside(dir, v) || path_inside(v, dir)) && !view.masked.iter().any(|m| path_inside(dir, m))
 }
 
+/// The view of an agent running in its project's container: the container mounts
+/// the whole project folder, so a locked project inside it is as visible as to a
+/// fenced tab with that root (a container hides nothing, `container_refusal`).
+pub fn container_fence_view(project_dir: &str) -> FenceView {
+    FenceView { visible: vec![PathBuf::from(project_dir)], masked: Vec::new() }
+}
+
 /// The live PTYs turning Local models only on for `project` (folder `dir`) must
 /// end: every AI PTY (`ais`: `(pty id, the tab it shows)`) that the gate did not
 /// verify for the project and that either belongs to the project's own scope

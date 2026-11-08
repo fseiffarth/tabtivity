@@ -851,3 +851,23 @@ fn the_config_chain_follows_the_directory_the_process_is_in() {
         assert_eq!(masked(&root.join("sub").join("link")), want, "a link inside the folder");
     }
 }
+
+/// An agent tab in a project's container sees the whole project folder through
+/// the mount, and a locked project can lie inside it (`container_refusal` only
+/// stops the *next* agent from starting there). Its spawn records that view too,
+/// or turning the switch on leaves the running container agent reading the folder.
+#[test]
+fn a_running_container_agent_is_ended_when_a_folder_inside_its_mount_is_locked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mount = tmp.path().join("parent");
+    let secret = mount.join("secret");
+    std::fs::create_dir_all(&secret).unwrap();
+    let view = container_fence_view(&s(&mount));
+    let ais = vec![("parent:in-container".to_string(), "parent:in-container".to_string())];
+    let views = vec![("parent:in-container".to_string(), view)];
+    assert_eq!(ptys_to_end("lock", Some(&secret), &ais, &views, &|_| false), ["parent:in-container"]);
+    assert!(ptys_to_end("lock", Some(&tmp.path().join("elsewhere")), &ais, &views, &|_| false).is_empty());
+    // The spawn path records it for a container agent, as it does for a fenced one.
+    let launch = source("services/launch_prep.rs");
+    assert!(body_of(&launch, "pub async fn prepare(").contains("container_fence_view("), "prepare must record a container agent's view");
+}
