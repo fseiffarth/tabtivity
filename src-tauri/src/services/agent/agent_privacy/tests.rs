@@ -817,3 +817,37 @@ fn a_dangling_config_link_refuses_the_spawn() {
     let err = project_config_masks(std::slice::from_ref(&root), &root).unwrap_err();
     assert!(err.starts_with(REFUSAL) && err.contains("opencode.json"), "{err}");
 }
+
+/// The CLIs search upward from the directory the process is *in*, which is the
+/// real path of a cwd given as a link or with `..` in it. A link inside the
+/// folder (attacker-made: `link -> a/b`) must not hide `a/opencode.json` from the
+/// chain, and the masks must not name a path through the link or the `..`.
+#[test]
+fn the_config_chain_follows_the_directory_the_process_is_in() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("secret");
+    let deep = root.join("a").join("b");
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join("a").join("opencode.json"), "{}").unwrap();
+    std::fs::write(deep.join("opencode.jsonc"), "{}").unwrap();
+    let real = |p: &Path| p.canonicalize().unwrap();
+    let mut want = [real(&root.join("a").join("opencode.json")), real(&deep.join("opencode.jsonc"))];
+    want.sort();
+    // What the masks reach (a mask named through the link reaches the same file).
+    let masked = |cwd: &Path| {
+        let mut got: Vec<PathBuf> =
+            project_config_masks(std::slice::from_ref(&root), cwd).unwrap().into_iter().map(|m| real(&m.path)).collect();
+        got.sort();
+        got.dedup();
+        got
+    };
+    // `..` in the cwd: the folder the process is in is `secret/a/b`.
+    let dotted = root.join("sub").join("..").join("a").join("b");
+    assert_eq!(masked(&dotted), want, "a `..` in the cwd");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&deep, root.join("sub").join("link")).unwrap();
+        assert_eq!(masked(&root.join("sub").join("link")), want, "a link inside the folder");
+    }
+}

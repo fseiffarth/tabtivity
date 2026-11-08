@@ -135,13 +135,16 @@ The box editor marks a locked member with a lock.
 The project folder is attacker-controlled and the CLIs read config from it, so a
 verified local tab could be re-aimed at a cloud provider by a file in the folder.
 `agent_privacy::project_config_masks` lists, in the tab's cwd and every folder above
-it up to its root, the names below that **exist**; both fence wrappers cover them for
+it up to its root (walked as the folder the process is really in: a link or `..` in
+the cwd is resolved, so a link inside the folder does not skip a parent), the names
+below that **exist**; both fence wrappers cover them for
 a verified tab (`mask_project_config`: `--ro-bind /dev/null` over a file, `--tmpfs`
 over a folder; macOS adds them to the Seatbelt `hidden` list, not compiled here).
 Existing paths only: a mount over nothing makes bubblewrap create a placeholder file
 in the project. A file created later is covered at the next spawn, which looks again;
-within a running session a CLI that watches its settings could still pick up a file
-its own agent writes (the agent acting, like a prompt-injected `curl`). A name that is
+within a running session a CLI that watches its settings picks up a file its own
+agent writes (measured for Claude Code 2.1.319: `docs/local_models_only_handoff.md`,
+"Review 2 findings") (the agent acting, like a prompt-injected `curl`). A name that is
 a link to nowhere refuses the spawn. An empty file reads as no config in every CLI
 below that was run.
 

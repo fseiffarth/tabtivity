@@ -305,11 +305,22 @@ pub struct ConfigMask {
 /// asked about.
 pub fn project_config_masks(roots: &[PathBuf], cwd: &Path) -> Result<Vec<ConfigMask>, String> {
     let mut bases: Vec<PathBuf> = roots.to_vec();
+    let real_cwd = cwd.canonicalize().ok();
     for root in roots.iter().filter(|r| path_inside(cwd, r)) {
-        let mut dir = Some(cwd);
-        while let Some(d) = dir.filter(|d| d.starts_with(root) && *d != root.as_path()) {
-            bases.push(d.to_path_buf());
-            dir = d.parent();
+        // The CLIs walk up from the folder the process is in, which is the real
+        // path of a cwd given through a link or a `..` (`getcwd`): a link inside
+        // the folder, made by whoever wrote it, would otherwise hide the folders
+        // it skips. Both are walked: the spelling given with its `..` folded, and the
+        // real one below the root, spelled as the root is.
+        let below_root = real_cwd.as_deref().zip(root.canonicalize().ok()).and_then(|(real, real_root)| {
+            real.strip_prefix(&real_root).ok().map(|rel| root.join(rel))
+        });
+        for start in [Some(lexical(cwd)), below_root].into_iter().flatten() {
+            let mut dir = Some(start.as_path());
+            while let Some(d) = dir.filter(|d| d.starts_with(root) && *d != root.as_path()) {
+                bases.push(d.to_path_buf());
+                dir = d.parent();
+            }
         }
     }
     bases.sort();
