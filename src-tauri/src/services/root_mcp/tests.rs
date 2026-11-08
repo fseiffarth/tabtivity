@@ -2250,6 +2250,42 @@ fn the_git_sweep_reads_local_copies_and_says_why_it_skipped_the_rest() {
     assert!(log["commits"][0]["subject"].is_string());
 }
 
+/// A local-models-only project's working copy is read for a local-model tab
+/// whose model is confirmed local, and for nobody else: not a root agent, not
+/// a call with no session, and not a Mistral tab on an Ollama cloud model, which
+/// is a `LocalModel` caller whose answers come from ollama.com.
+#[test]
+fn a_locked_projects_working_copy_is_read_only_for_a_confirmed_local_model() {
+    let f = Fixture::new();
+    std::fs::write(
+        &f.projects,
+        json!([{ "id": "p1", "name": "Alpha", "status": "active", "position": 0, "local_file": "",
+                 "directory": f.dir.path().join("nowhere").to_str().unwrap(),
+                 "agent_privacy": { "local_models_only": true, "cut_network": false } }])
+        .to_string(),
+    )
+    .unwrap();
+    let hidden = |stores: &Stores| {
+        let sweep = projects_git_status(stores, &json!({})).unwrap();
+        let swept = sweep["skipped"].as_array().unwrap().iter().any(|s| s["reason"] == LOCAL_MODELS_ONLY_READ);
+        let activity = project_activity(stores, &json!({ "project": "Alpha" })).err();
+        assert_eq!(swept, activity.as_deref() == Some(LOCAL_MODELS_ONLY_READ), "the two tools agree");
+        swept
+    };
+    let ep = Some("127.0.0.1:11434".to_string());
+    let state = f.dir.path();
+    crate::services::ollama_client::test_tags::set(Some(r#"{"models":[{"name":"llama3:latest"},{"name":"gpt-oss:120b-cloud","remote_host":"https://ollama.com"}]}"#));
+    assert!(hidden(&f.stores()), "a root agent");
+    let (_, local) = test_session_model(Caller::LocalModel, "root:locked-local", state, ep.clone(), Some("llama3:latest".into()));
+    assert!(!hidden(&Stores { caller: Caller::LocalModel, session: Some(&local), ..f.stores() }), "a confirmed local model reads");
+    assert!(hidden(&Stores { caller: Caller::LocalModel, session: None, ..f.stores() }), "nothing recorded to confirm");
+    let (_, cloud) = test_session_model(Caller::LocalModel, "root:locked-cloud", state, ep.clone(), Some("gpt-oss:120b-cloud".into()));
+    assert!(hidden(&Stores { caller: Caller::LocalModel, session: Some(&cloud), ..f.stores() }), "an Ollama cloud model does not");
+    let (_, unrecorded) = test_session_model(Caller::LocalModel, "root:locked-none", state, ep, None);
+    assert!(hidden(&Stores { caller: Caller::LocalModel, session: Some(&unrecorded), ..f.stores() }), "no recorded model");
+    for tab in ["root:locked-local", "root:locked-cloud", "root:locked-none"] { revoke_tab(tab); }
+}
+
 #[test]
 fn sync_status_reports_the_last_pass_and_the_unseen_warnings() {
     let f = Fixture::new();

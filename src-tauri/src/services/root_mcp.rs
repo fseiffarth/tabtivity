@@ -1893,10 +1893,15 @@ pub(crate) fn resolve_project(stores: &Stores, wanted: &str) -> Result<String, S
 const LOCAL_MODELS_ONLY_READ: &str =
     "this project is set to Local models only, so its working copy is not read for a cloud agent";
 
-/// Whether `entry`'s folder must not be read for `caller`: it is
-/// local-models-only and the caller is not a local model.
-fn hidden_from(caller: Caller, entry: &crate::schema::projects::ProjectEntry) -> bool {
-    caller != Caller::LocalModel && crate::services::agent_privacy::is_locked(entry)
+/// Whether `entry`'s folder must not be read for this call: it is
+/// local-models-only and the caller is not a local-model tab whose model is
+/// confirmed to run on this machine ([`local_model_confirmed`]). The tab kind
+/// alone is not enough: a Mistral tab on an Ollama cloud model is a
+/// [`Caller::LocalModel`] whose answers come from ollama.com. A call with no
+/// session (nothing recorded to confirm) is hidden too.
+fn hidden_from(stores: &Stores, entry: &crate::schema::projects::ProjectEntry) -> bool {
+    let confirmed_local = stores.caller == Caller::LocalModel && stores.session.is_some() && local_model_confirmed(stores);
+    !confirmed_local && crate::services::agent_privacy::is_locked(entry)
 }
 
 fn projects_list(stores: &Stores) -> Result<Value, String> {
@@ -3419,7 +3424,7 @@ fn projects_git_status(stores: &Stores, args: &Value) -> Result<Value, String> {
         let skip = |reason: String| json!({ "id": entry.id, "name": entry.name, "reason": reason });
         // A local-models-only project's working copy is not read for a cloud
         // caller (`services::agent_privacy`).
-        if hidden_from(stores.caller, &entry) {
+        if hidden_from(stores, &entry) {
             skipped.push(skip(LOCAL_MODELS_ONLY_READ.to_string()));
             continue;
         }
@@ -3486,7 +3491,7 @@ fn project_activity(stores: &Stores, args: &Value) -> Result<Value, String> {
     let wanted = str_arg(args, "project").ok_or("`project` is required")?;
     let id = resolve_project(stores, wanted)?;
     let entry = read_projects(stores.projects).into_iter().find(|p| p.id == id).ok_or("project not found")?;
-    if hidden_from(stores.caller, &entry) {
+    if hidden_from(stores, &entry) {
         return Err(LOCAL_MODELS_ONLY_READ.to_string());
     }
     let (dir, source) = local_checkout(&entry)?;
