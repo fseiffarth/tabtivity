@@ -764,7 +764,7 @@ fn a_verified_tabs_fence_hides_the_projects_cli_config() {
     std::fs::write(root.join("README.md"), "not config").unwrap();
     // A sibling project's config is not this tab's business.
     std::fs::write(tmp.path().join("opencode.json"), "{}").unwrap();
-    let masks = project_config_masks(&[root.clone()], &deeper).unwrap();
+    let masks = project_config_masks(std::slice::from_ref(&root), &deeper).unwrap();
     let mut got: Vec<(String, bool)> = masks
         .iter()
         .map(|m| (m.path.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"), m.dir))
@@ -788,7 +788,7 @@ fn a_verified_tabs_fence_hides_the_projects_cli_config() {
     // Nothing there, nothing to mount over (a mount over nothing would create a placeholder).
     let empty = tmp.path().join("empty");
     std::fs::create_dir_all(&empty).unwrap();
-    assert!(project_config_masks(&[empty.clone()], &empty).unwrap().is_empty());
+    assert!(project_config_masks(std::slice::from_ref(&empty), &empty).unwrap().is_empty());
     // The argv: a file is bound over with /dev/null, a folder with an empty tmpfs, before `--`.
     let mut args: Vec<String> = ["--bind", "/", "/", "--", "claude"].iter().map(|a| a.to_string()).collect();
     crate::services::agent_fence::mask_project_config(
@@ -814,6 +814,6 @@ fn a_dangling_config_link_refuses_the_spawn() {
     let root = tmp.path().join("secret");
     std::fs::create_dir_all(&root).unwrap();
     std::os::unix::fs::symlink(tmp.path().join("nowhere.json"), root.join("opencode.json")).unwrap();
-    let err = project_config_masks(&[root.clone()], &root).unwrap_err();
+    let err = project_config_masks(std::slice::from_ref(&root), &root).unwrap_err();
     assert!(err.starts_with(REFUSAL) && err.contains("opencode.json"), "{err}");
 }

@@ -180,3 +180,84 @@ root MCP local-model check, the completion guards). What follows is what was fou
 - **Vibe home name** `vibe_local/<alias>.<project key>` can equal another model's shared
   home if a model is named `<alias>.<project key>`; project keys are uuids, so not
   practical.
+
+## Fix round 2
+
+Branch `fix/local-models-holes` (from `develop` 4a77207f). Six holes from the review
+findings above, each with a test that names it (all in
+`services/agent/agent_privacy/tests.rs` unless noted). Commits: `a2177e8a` (the six fixes and their tests), then a
+lint fix and this documentation (`git log 4a77207f..fix/local-models-holes`).
+
+| # | Hole | Fix | Test |
+| --- | --- | --- | --- |
+| 1 | Project config re-aims a verified launch | A verified tab's fence covers the folder's CLI config that exists from its cwd up to its root: `--ro-bind /dev/null` over files, `--tmpfs` over folders (`agent_privacy::project_config_masks`, `agent_fence::mask_project_config`; macOS: Seatbelt `hidden`). A link to nowhere refuses the spawn. Per-CLI result: `docs/context/local_models_only.md`, "The folder's own CLI config" | `a_verified_tabs_fence_hides_the_projects_cli_config`, `a_dangling_config_link_refuses_the_spawn` |
+| 2 | Root MCP "local model" was a label | `grant_root` makes a root agent a `LocalModel` caller only when `agent_privacy::local_vibe_launch` reads a loopback Ollama model out of the exact `vibe_local` home config it runs from; endpoint and model come from that config; a spawn that only claims it gets no root token. The mail local-read path reads the same session identity | `root_mcp/tests.rs` `a_local_tab_is_what_its_home_says_and_starts_with_the_models_taint` (label alone, user's home, label naming another model, env override, extra flags, cloud CLI with label, remote endpoint, edited config) |
+| 3 | Already-open tabs keep the folder | Each fenced spawn records what its fence shows (`FenceView`: roots, allowlist, root-console grants, masked locked folders); turning the switch on ends every unverified agent PTY whose view shows the folder (`agent_privacy::ptys_to_end`, whole subtree and tmux session, same path as before); the store closes the matching tabs in every scope | `turning_the_switch_on_ends_every_live_tab_whose_fence_shows_the_folder`, `the_wrappers_record_their_view_and_the_switch_uses_it`; vitest `LocalModelsOnly.test.tsx` |
+| 4 | `mask_dirs_now` failed open | Returns `Result`; the four fence builders propagate it | `an_unreadable_registry_builds_no_fence_instead_of_one_without_masks` |
+| 5 | Content leaving by send paths | Markup Submit (desktop `pdf_markup_submit`, phone route) refuses a file inside a locked folder when the destination project is not that folder (`foreign_source`, `foreign_source_at`). Send to project (`import_external_file`) treated as the user's own file copy and left; free-text insertions (`pty_write`, schedules) have no source the backend can see: a documented limit | `a_locked_projects_file_is_not_marked_up_into_another_projects_prompt` |
+| 6 | `remote: null` | One reading (`remote_or_vm`: non-null) in the setting and the gate, as `remote_target_for` | `a_null_remote_or_vm_is_local_for_the_setting_and_the_gate_alike` |
+
+### Per-driver config findings (item 1)
+
+Run against the installed CLIs, in a scratch folder with an isolated home:
+
+- **Claude Code 2.1.319**: confirmed hole. A project `.claude/settings.json` with
+  `env.ANTHROPIC_BASE_URL` beat the process environment; the `POST /v1/messages` went to the
+  project's URL. `--setting-sources user` closes it, but `ollama launch claude --model m`
+  takes no flags, so the mask is the closure. Empty and `{}` settings read as none.
+- **OpenCode 2.2.6**: `opencode.json[c]` is loaded from the cwd and every folder above it,
+  plus `.opencode/`; `.env` is not read. `OPENCODE_DISABLE_PROJECT_CONFIG` and
+  `OPENCODE_CONFIG_PROJECT_DISABLE` exist in the binary but changed nothing in
+  `opencode debug config`, so they are not relied on. An empty file loads as nothing.
+- **Codex 0.167.0**: loads `.codex/config.toml` of a trusted project, but ignores provider
+  keys there (`model_provider(s)`, `openai_base_url`, `chatgpt_base_url`, `profile(s)`);
+  `model` and `oss_provider` apply, the launcher's `-c`/`-m` win. Masked anyway.
+- **Pi, Droid, Cline, OpenClaw, Mistral Vibe**: not installed here. Masked by the folder
+  names their docs give (`.pi`, `.factory`, `.cline`, `.openclaw[.json]`, `.vibe`); not
+  verified, and a different name would not be covered.
+
+Could not test the mask itself under bubblewrap (this session's fence forbids a nested
+namespace); the argv shape is a unit test, and the bwrap behaviour (bind over an existing
+file or folder) is the same as the other masks. Existing paths only are masked, because a
+bind over a missing path makes bubblewrap create a placeholder in the project.
+
+### Gates (Linux, this tree)
+
+| Gate | Result |
+| --- | --- |
+| `npm run build` | pass |
+| `npm test` | 11324 of 11327 pass; the same 3 known failures (`shell/i18n`, `theme/CursorPacks`, `theme/TypeScale`) |
+| `npm run lint` | 0 errors, 29 warnings (unchanged) |
+| `cargo test --workspace` | pass: 5408 lib tests (12 new), 143 + 39 + 1 in the other crates |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | pass: 5233 + 1 |
+| clippy (workspace all-targets, no-default-features lib, `app-serverd`) | pass at zero warnings (the workspace run is the one repeated after a `from_ref` lint fix in the new tests) |
+| `scripts/brand-check.sh`, `git diff --check`, `scripts/privacy-check.sh` (each commit's hook) | pass |
+
+### Verification notes
+
+- The fence of an agent tab replaces `projects.json` with an empty file, so a unit test that
+  reads the live registry fails inside Tabtivity (not in CI): the markup guard is kept out
+  of the shared `markup` core for that reason, and the phone route reads the registry of its
+  own state dir.
+
+### Flagged (updated)
+
+Fixed and removed from the list: findings 1, 5 (root MCP label), 8, 9 (markup part), 10.
+
+Still flagged:
+- **Switch race** (a spawn racing `set`), Codex `--oss` / `OLLAMA_HOST`, Copilot language
+  server workspace, `complete_text` path vs project id, macOS tmux keys, Vibe home name
+  collision: unchanged, out of scope here.
+- **Config created mid-session** by the agent itself is masked only from the next spawn; a CLI
+  that hot-reloads settings could apply it in the running session (Claude Code watches
+  settings; whether it re-reads `env` live was not tested). Same class as a prompt-injected
+  `curl` until phase 2.
+- **Unverified driver config names** (Pi, Droid, Cline, OpenClaw, Vibe above).
+- **`.mcp.json`** and other project MCP servers are not masked (tools, not a model location).
+- **Send to project** and free-text sends (`pty_write`, schedules, the prompt library) can
+  still carry a locked project's content to a cloud tab: the user's own act, no backend source.
+- **Unfenced agents** (the Host session, Windows) are not ended when the switch goes on
+  (no recorded view; D1).
+- **Root MCP home read at spawn**: the vibe home is checked when the tab starts; the fenced tab
+  can rewrite its own home afterwards.
+- macOS `hidden` entries for the config masks and the fence view are written, not compiled here.

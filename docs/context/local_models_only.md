@@ -40,8 +40,15 @@ names no folder; another registered project's folder (or mirror) or a box folder
 lies **inside** it; `ollama_host` is not loopback (`mail_ai::resolve_endpoint`,
 which refuses a remote host even with `ollama_allow_remote_host`). It refuses
 Cut network outright (`CUT_NETWORK_UNAVAILABLE`). Turning the switch on ends
-the project's running agent PTYs the gate did not verify (whole subtree, the
-local tmux session too); the store closes their tabs.
+every running agent PTY the gate did not verify **whose fence can see the folder**
+(whole subtree, the local tmux session too; `agent_privacy::ptys_to_end`): the
+project's own, a parent project's, a box's, the root console's with the read-only
+project view or an allowlist that covers it. Each fence's view is recorded when it
+is built (`agent_fence::note_fence_view`: visible roots, allowlist and root-console
+grants, and the locked folders it masked), so a tab spawned after the switch, whose
+fence masked the folder, is left alone. `closed_tabs` carries the PTY ids
+(`<scope>:<tab key>`); the store closes the matching tabs in every scope. Unfenced
+agents (the Host session, Windows) have no recorded view and are not touched: D1.
 
 ## The gate
 
@@ -66,7 +73,9 @@ counts). Only agents are gated; a shell tab is the user's.
 A subject spawn is allowed only when `vet` accepts it:
 
 - not remote, not a worker host, not a container, not the Host session, not the
-  assistant, Cut network not recorded on the project;
+  assistant, Cut network not recorded on the project. A `remote` or `vm` value of
+  `null` on the record is absent, in the setting and in the gate alike
+  (`remote_or_vm`, the reading `remote_target_for` has);
 - **the argv is a launch line Tabtivity builds for a local driver**
   (`local_drivers::identify_local_launch` tries each argument as the model of each
   `LOCAL_DRIVERS` entry against `local_launch_line_ok`: an exact enumeration, no
@@ -116,7 +125,36 @@ Refusals start with `Local models only: "<project>" is set to Local models only,
   `sandbox::wrap_pty_options_docker` refuses an agent whose project is locked or
   whose mount contains a locked folder.
 
+- A fence that cannot read the project list is not built: `mask_dirs_now` is an error,
+  not "no masks", and every fence caller propagates it.
+
 The box editor marks a locked member with a lock.
+
+## The folder's own CLI config (a verified tab's fence)
+
+The project folder is attacker-controlled and the CLIs read config from it, so a
+verified local tab could be re-aimed at a cloud provider by a file in the folder.
+`agent_privacy::project_config_masks` lists, in the tab's cwd and every folder above
+it up to its root, the names below that **exist**; both fence wrappers cover them for
+a verified tab (`mask_project_config`: `--ro-bind /dev/null` over a file, `--tmpfs`
+over a folder; macOS adds them to the Seatbelt `hidden` list, not compiled here).
+Existing paths only: a mount over nothing makes bubblewrap create a placeholder file
+in the project. A file created later is covered at the next spawn, which looks again;
+within a running session a CLI that watches its settings could still pick up a file
+its own agent writes (the agent acting, like a prompt-injected `curl`). A name that is
+a link to nowhere refuses the spawn. An empty file reads as no config in every CLI
+below that was run.
+
+| CLI | Project config it loads | Result |
+| --- | --- | --- |
+| Claude Code 2.1.319 | `.claude/settings.json`, `.claude/settings.local.json` | **Checked.** The `env` block of the project settings beats the process environment: with `ANTHROPIC_BASE_URL` set by the launcher and another URL in the project file, the conversation (`POST /v1/messages`) went to the project's. `--setting-sources user` closes it, but the launch line is `ollama launch claude --model m` and takes no flags, so the mask is the closure. An empty or `{}` file reads as no settings. |
+| OpenCode 2.2.6 | `opencode.json`, `opencode.jsonc` in the cwd and every folder above it, and `.opencode/` | **Checked** (`opencode debug config` lists them; a `.env` in the folder is not read). `OPENCODE_DISABLE_PROJECT_CONFIG` / `OPENCODE_CONFIG_PROJECT_DISABLE` exist in the binary but did not change that listing, so they are not relied on. An empty `opencode.json` loads as nothing. |
+| Codex 0.167.0 | `.codex/config.toml` of a trusted project | **Checked.** It ignores `model_provider`, `model_providers`, `openai_base_url`, `chatgpt_base_url`, `profile`, `profiles` there (it says so at start), but `model` and `oss_provider` apply, and the launcher's `-c`/`-m` outrank them. Masked anyway. |
+| Pi, Droid (`.factory/`), Cline (`.cline/`), OpenClaw (`openclaw.json`, `.openclaw/`), Mistral Vibe (`.vibe/`) | project folders named from the CLIs' documentation | **Not verified**: the binaries are not installed here. Masked by name; if one reads a project file under another name it is not covered. Vibe also reads only the per-project home the gate writes unless the folder is trusted in that home, which nothing trusts. |
+
+Not covered: `.mcp.json` and other project MCP servers (tools, not a model location);
+a CLI's env-var switches for ignoring project config (above: not effective or not
+checked).
 
 ## Audit of the non-agent paths to a cloud model
 
@@ -127,9 +165,10 @@ The box editor marks a locked member with a lock.
 | Tabby (chat assistant) reading project files | Not a path by `@` mention: the assistant's fence has **no roots** (`check_assistant_spawn`), so it cannot open a project file. The way in is a **file drop**, below. |
 | Dropping a project file onto an agent tab (the inbox copy, also the Tabby chat) | **Closed.** `pty_drop_files` refuses (`local_models_only`) any path inside a locked folder unless the tab is a gate-verified local tab of that project (`agent_privacy::drop_refused`). Inbound drops into a locked project are fine. |
 | Clipboard image, phone upload | Not project files. |
-| Send to project (file-tree copy into another project) | A user's file copy between folders, not a model call; but a copy **out** of a locked project puts its files where cloud agents read them. Left to the user; the dialog is unchanged. Flagged. |
-| Markup rounds, prompt library, scheduled prompts | A markup/scheduled prompt goes to a tab of its own project; the tab in a locked project is local by the gate. A scheduled launch in a locked project passes `prepare`, so a cloud CLI is refused. |
-| Root MCP `project_activity` / `projects_git_status` | **Closed.** Commit subjects and branch state are the folder's own text: skipped unless the caller is a `LocalModel` tab whose model passes `local_model_confirmed` (`hidden_from`): a Mistral tab on an Ollama cloud model is hidden from like a cloud agent. |
+| Send to project (file-tree copy into another project, `import_external_file`) | **Treated as the user's own file copy** (a plain copy command, no agent involved), left allowed: a copy out of a locked project puts the file where cloud agents of the destination read it. Flagged; inbound copies into a locked project are fine. |
+| Markup rounds | **Closed for a file reached through another project.** A Submit (`pdf_markup_submit`, the phone's markup route) is refused (`local_models_only`) when the file lies in a locked folder and the project the prompt goes to is not that folder itself (`agent_privacy::foreign_source`): the tabs of the locked project are the gate's local ones, those of a parent project are not. The guard is in the two command layers, not the shared core. |
+| Prompt library, scheduled prompts, anything typed into a tab (`pty_write`), "send selection" style insertions | **A limit.** The backend sees the text and the target tab but not where the text came from: no command takes a source path. A scheduled launch in a locked project passes `prepare`, so a cloud CLI is refused; a prompt the user builds from a locked file and sends to a cloud tab is the user's act. No separate "send selection to tab" command exists in the code. |
+| Root MCP `project_activity` / `projects_git_status` | **Closed.** Commit subjects and branch state are the folder's own text: skipped unless the caller is a `LocalModel` tab whose model passes `local_model_confirmed` (`hidden_from`): a Mistral tab on an Ollama cloud model is hidden from like a cloud agent. The `LocalModel` class itself is no longer the renderer's label: `grant_root` makes a root agent one only when `agent_privacy::local_vibe_launch` reads a loopback Ollama model out of the `vibe_local/<alias>[.<key>]` home it runs from (a plain `vibe` argv, no `VIBE_*` override but the two the frontend sets, a `config.toml` that is byte for byte what `vibe_local_config` writes). The endpoint and the model recorded in the session come from that config. A spawn that only claims to be local (the label, a user's home, a cloud argv) gets no root token at all. The mail local-read path reads the same session identity. Residual: the home is read at spawn; the tab's own fence can rewrite it afterwards (as before). |
 | Root MCP `projects_list`, `todo_*`, `boxes_list`, `time_summary`, `usage_recap` | Not a path: names, ids, folder paths and the to-do cards the user typed in Tabtivity; no file content. Flagged: to-do cards of a locked project stay readable to the cloud root agent. |
 | Mail AI, voice | Do not read project files (mail text and microphone audio). |
 | Warm-up cron (`agent_warmup`) | Runs a CLI in the probe home with a fixed word, not in a project. |
