@@ -773,6 +773,13 @@ pub fn wrap_pty_options_docker(opts: &mut PtyOptions) -> Result<(), String> {
     if let Some(dir) = opts.project_id.as_deref().and_then(project_dir_for) {
         crate::services::server::share::spawn_gate(&[std::path::PathBuf::from(dir)])?;
     }
+    // No container agent where a local-models-only project is, or inside the
+    // mount (`services::agent_privacy`): a container hides nothing from it.
+    if let Some(id) = opts.project_id.as_deref().filter(|_| crate::services::agent_fence::is_agent(opts)) {
+        if let Some(refusal) = crate::services::agent_privacy::container_refusal(id, project_dir_for(id).as_deref()) {
+            return Err(refusal);
+        }
+    }
     // Defence-in-depth: containers are local-only. Never docker-wrap a remote
     // project (resolved explicitly from the tab's owning project id).
     //

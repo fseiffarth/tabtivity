@@ -306,10 +306,13 @@ pub fn compute_fence_roots(
     } else {
         entry_directory(project)?
     };
+    // A local-models-only project's tabs get its own folder and no box root:
+    // a box's other members are read by cloud agents (`agent_privacy`).
+    let locked = crate::services::agent_privacy::is_locked(project);
     let mut roots = vec![own.clone()];
     for b in boxes
         .iter()
-        .filter(|b| b.member_ids.iter().any(|id| id == scope_id))
+        .filter(|b| !locked && b.member_ids.iter().any(|id| id == scope_id))
     {
         if let Some(box_roots) =
             crate::services::box_store::compute_box_allowed_roots(boxes, projects, &b.id)
@@ -513,6 +516,11 @@ pub fn root_project_read_only_paths(
     }
     let mut paths: Vec<PathBuf> = Vec::new();
     for p in projects {
+        // A local-models-only project is not readable by a cloud agent
+        // (`agent_privacy`); the root fence masks it as well.
+        if crate::services::agent_privacy::is_locked(p) {
+            continue;
+        }
         if p.extra.contains_key("remote") {
             paths.extend(crate::services::remote::local_copy_in(p, state_dir));
         } else if let Some(dir) = entry_directory(p) {
@@ -582,9 +590,10 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
         if local_only && project.extra.contains_key("remote") {
             roots[0] = crate::services::remote::local_copy_in(project, &storage::state_dir())?;
         }
+        let locked = crate::services::agent_privacy::is_locked(project);
         for b in boxes
             .iter()
-            .filter(|b| b.member_ids.iter().any(|id| id == scope_id))
+            .filter(|b| !locked && b.member_ids.iter().any(|id| id == scope_id))
         {
             roots.extend(crate::services::box_store::box_allowed_roots(&b.id)?);
         }
@@ -1481,6 +1490,25 @@ fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMo
     args.splice(separator..separator, mask);
 }
 
+/// Hide each local-models-only project's folder (`agent_privacy::mask_dirs`)
+/// under an empty tmpfs, spliced in last like [`mask_private_state`]'s masks:
+/// no allowlist, parent project or box root bound before can re-expose it.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn mask_local_models_only(args: &mut Vec<String>, dirs: &[PathBuf]) {
+    let mask: Vec<String> = dirs.iter().flat_map(|d| ["--tmpfs".to_string(), d.to_string_lossy().into_owned()]).collect();
+    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
+    args.splice(separator..separator, mask);
+}
+
+/// Unset each of `names` inside the fence (bubblewrap's own `--unsetenv`), so a
+/// provider key the app itself inherited never reaches a verified local tab.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn unset_env_in_fence(args: &mut Vec<String>, names: &[String]) {
+    let unset: Vec<String> = names.iter().flat_map(|n| ["--unsetenv".to_string(), n.clone()]).collect();
+    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
+    args.splice(separator..separator, unset);
+}
+
 /// Rewrite a local agent spawn into its outer bubblewrap boundary.
 ///
 /// The agent's argv passes through untouched. Codex in particular gets no
@@ -1506,6 +1534,10 @@ pub fn wrap_pty_options_bwrap(
     // §6.5 gate 2); a no-op everywhere else.
     crate::services::server::share::spawn_gate(roots)?;
     check_assistant_spawn(scope_id, roots, scope_home, &opts.cwd, &storage::state_dir())?;
+    // A local-models-only project: only a spawn `agent_privacy::gate` verified
+    // (it left its stamp) runs in, or from, its folder — and then without any
+    // key. The shell-tab shim never passed the gate and is refused here.
+    let locked_project = crate::services::agent_privacy::fence_gate(opts, scope_id)?;
     // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
@@ -1534,10 +1566,12 @@ pub fn wrap_pty_options_bwrap(
     // (plan §5.4): checked against the keeper's offer here (a withdrawn key
     // fails the spawn), delivered below as a proxy grant like the user's own
     // key (#2389); a no-op everywhere else.
-    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
-    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
-    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+    if locked_project.is_none() {
+        let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
+        let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+        let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+        crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+    }
     let mut args = bwrap_args(
         &paths::home_dir_string(),
         Some(&scope_home.to_string_lossy()),
@@ -1557,6 +1591,15 @@ pub fn wrap_pty_options_bwrap(
     );
     // Last: overlapping roots and allowlists must not reopen private stores.
     mask_private_state(&mut args, &storage::state_dir(), &support_mounts);
+    // Every local-models-only project's folder but this scope's own, hidden
+    // in whatever way it was bound (a parent project, the allowlist).
+    mask_local_models_only(
+        &mut args,
+        &crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id)),
+    );
+    if locked_project.is_some() {
+        unset_env_in_fence(&mut args, &crate::services::agent_privacy::unset_names(opts.env.keys()));
+    }
     // A hosted server's shared hubs: all hidden but this scope's own
     // project's, read-only (plan §6.3); a no-op everywhere else.
     crate::services::server::share::apply_fence(&mut args, roots);
@@ -1885,6 +1928,12 @@ fn sandbox_exec_inputs(
         &mut inputs,
         crate::services::git_guard::guard_paths(roots, Some(Path::new(&opts.cwd))),
     );
+    // Every local-models-only project's folder but this scope's own.
+    inputs.hidden.extend(
+        crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))
+            .into_iter()
+            .map(|p| p.to_string_lossy().into_owned()),
+    );
     Ok((inputs, control_pins))
 }
 
@@ -1905,6 +1954,9 @@ pub fn wrap_pty_options_sandbox_exec(
                 .to_string(),
         );
     }
+    // See the Linux wrapper: only a verified spawn runs in a local-models-only
+    // project, and then without any key.
+    let locked_project = crate::services::agent_privacy::fence_gate(opts, scope_id)?;
     let (inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
@@ -1920,10 +1972,12 @@ pub fn wrap_pty_options_sandbox_exec(
     // inodes set up above (gap 30).
     verify_control_pins(&control_pins)?;
     let agent_cmd = opts.cmd.clone();
-    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
-    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
-    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+    if locked_project.is_none() {
+        let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
+        let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+        let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+        crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+    }
     let mut args = vec![
         "-f".to_string(),
         profile_path.to_string_lossy().into_owned(),
@@ -2200,6 +2254,7 @@ pub fn abandon_spawn(tab_id: &str, seq: u64) -> bool {
     map.remove(tab_id);
     drop(map);
     untrack_host_agent_tab(tab_id);
+    crate::services::agent_privacy::forget(tab_id);
     crate::services::api_proxy::on_tab_gone(tab_id);
     true
 }
@@ -2252,6 +2307,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         settings().agent_fence_cargo_credentials.unwrap_or(false)));
     guard_git_control(&mut argv, crate::services::git_guard::guard_paths(&roots, Some(cwd)));
     mask_private_state(&mut argv, &storage::state_dir(), &[]);
+    mask_local_models_only(&mut argv, &crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id)));
     crate::services::server::share::apply_fence(&mut argv, &roots);
     let filter = write_keyring_filter()?;
     let scope = crate::services::fence_scope::helper_for(&bwrap);
@@ -2279,7 +2335,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
     let roots = roots_for_scope((scope_id != ROOT_SCOPE).then_some(scope_id), false)
         .ok_or_else(|| format!("Agent sandbox: unknown project or box scope '{scope_id}'"))?;
     let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
-    let inputs = one_shot_seatbelt_inputs(
+    let mut inputs = one_shot_seatbelt_inputs(
         &paths::home_dir_string(),
         &storage::state_dir(),
         &roots,
@@ -2288,6 +2344,11 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         cargo_credential_paths(&paths::home_dir(), cargo_home.as_deref(), cwd,
             settings().agent_fence_cargo_credentials.unwrap_or(false)),
         std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
+    );
+    inputs.hidden.extend(
+        crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))
+            .into_iter()
+            .map(|p| p.to_string_lossy().into_owned()),
     );
     let stage = crate::services::sandbox::stage_dir(scope_id);
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
@@ -2331,6 +2392,7 @@ pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
     };
     let was_fenced = removed.is_some_and(|l| l.scope_id.is_some());
     untrack_host_agent_tab(tab_id);
+    crate::services::agent_privacy::forget(tab_id);
     // Its API proxy tokens go with it (those of a tmux-held agent once the
     // session is gone too).
     crate::services::api_proxy::on_tab_gone(tab_id);

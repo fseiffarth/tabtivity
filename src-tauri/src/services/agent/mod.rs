@@ -32,6 +32,7 @@ pub mod agent_history;
 pub mod agent_home;
 pub mod agent_install;
 pub mod agent_latest;
+pub mod agent_privacy;
 pub mod agent_prompts;
 // The built-in agent-CLI registry (`AGENTS`) and its lookups.
 pub mod agent_registry;

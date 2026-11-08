@@ -3730,15 +3730,11 @@ fn dirs_vibe_config() -> Result<std::path::PathBuf, String> {
 /// out, inside the agent, where the message is somebody else's.
 fn ollama_provider_block() -> String {
     let base = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
-    format!(
-        "\n[[providers]]\nname = \"ollama\"\napi_base = \"http://{base}/v1\"\napi_key_env_var = \"\"\napi_style = \"openai\"\nbackend = \"generic\"\nreasoning_field_name = \"reasoning_content\"\nproject_id = \"\"\nregion = \"\"\n\n[providers.extra_headers]\n"
-    )
+    crate::services::local_drivers::vibe_provider_block(&base)
 }
 
 fn ollama_model_block(model: &str, alias: &str) -> String {
-    format!(
-        "\n[[models]]\nname = \"{model}\"\nprovider = \"ollama\"\nalias = \"{alias}\"\ntemperature = 0.2\ninput_price = 0.0\noutput_price = 0.0\nthinking = \"off\"\nauto_compact_threshold = 200000\n"
-    )
+    crate::services::local_drivers::vibe_model_block(model, alias)
 }
 
 #[cfg(all(test, unix))]

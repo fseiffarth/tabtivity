@@ -27,6 +27,7 @@ export const OFF_REASON_ROWS: readonly (readonly [string, string])[] = [
 ];
 
 export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = [
+  ["set_project_agent_privacy", "client"],
   ["agent_prompt_archive", "core"],
   ["agent_prompt_blame", "core"],
   ["agent_prompt_delete", "core"],

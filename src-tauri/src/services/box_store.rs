@@ -205,6 +205,12 @@ pub(crate) fn compute_box_allowed_roots(
         if crate::services::remote::entry_is_remote_only(p) {
             continue;
         }
+        // A local-models-only project's folder is never a box root: a box tab
+        // would be a cloud agent in it, and its own tabs take no box root
+        // (`services::agent_privacy`).
+        if crate::services::agent_privacy::is_locked(p) {
+            continue;
+        }
         if let Some(dir) = project_directory(p) {
             roots.push(dir);
         }
@@ -247,6 +253,7 @@ fn member_local_copies(
     b.member_ids
         .iter()
         .filter_map(|id| projects.iter().find(|p| &p.id == id))
+        .filter(|p| !crate::services::agent_privacy::is_locked(p))
         .filter_map(|p| crate::services::remote::local_copy_in(p, state_dir))
         .collect()
 }

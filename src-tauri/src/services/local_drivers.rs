@@ -282,6 +282,52 @@ pub(crate) fn local_launch_line_ok(driver: &str, model: &str, cmd: &str, args: &
         })
 }
 
+/// The `(driver id, model)` of a launch line [`local_launch_line_ok`] accepts,
+/// found by trying each argument (and an `ollama/`-prefixed one without its
+/// prefix, the form OpenCode and Codex take) as the model of each driver.
+/// It enumerates rather than parses, so the answer is exactly the lines
+/// Tabtivity itself builds and nothing a CLI could read differently; `None`
+/// for any other line. What a local-models-only project (`services::
+/// agent_privacy`) checks a spawn's own argv with, never a renderer's claim.
+pub(crate) fn identify_local_launch(cmd: &str, args: &[String]) -> Option<(&'static str, String)> {
+    let candidates = args.iter().flat_map(|arg| {
+        let bare = arg.strip_prefix("ollama/").unwrap_or(arg);
+        [arg.as_str(), bare]
+    });
+    for model in candidates {
+        for driver in LOCAL_DRIVERS {
+            if local_launch_line_ok(driver.id, model, cmd, args) {
+                return Some((driver.id, model.to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// The `vibe` provider stanza for an Ollama at `addr` (`host:port`): the
+/// OpenAI-compatible endpoint of that server and no API key.
+pub(crate) fn vibe_provider_block(addr: &str) -> String {
+    format!(
+        "\n[[providers]]\nname = \"ollama\"\napi_base = \"http://{addr}/v1\"\napi_key_env_var = \"\"\napi_style = \"openai\"\nbackend = \"generic\"\nreasoning_field_name = \"reasoning_content\"\nproject_id = \"\"\nregion = \"\"\n\n[providers.extra_headers]\n"
+    )
+}
+
+/// The `vibe` model stanza for the Ollama model `model` under `alias`.
+pub(crate) fn vibe_model_block(model: &str, alias: &str) -> String {
+    format!(
+        "\n[[models]]\nname = \"{model}\"\nprovider = \"ollama\"\nalias = \"{alias}\"\ntemperature = 0.2\ninput_price = 0.0\noutput_price = 0.0\nthinking = \"off\"\nauto_compact_threshold = 200000\n"
+    )
+}
+
+/// A whole `config.toml` for a local `vibe` tab on `model` at `addr`: the
+/// model active, tools off, one Ollama provider and nothing else.
+pub(crate) fn vibe_local_config(model: &str, alias: &str, addr: &str) -> String {
+    let mut cfg = format!("active_model = \"{alias}\"\nenabled_tools = [\"__no_tools__\"]\n");
+    cfg.push_str(&vibe_provider_block(addr));
+    cfg.push_str(&vibe_model_block(model, alias));
+    cfg
+}
+
 /// The CLI a local driver runs (`claude` for `"claude"`), for naming the agent
 /// of a persisted local-model tab whose own `cmd` may be `ollama`.
 pub(crate) fn local_driver_bin(driver: &str) -> Option<&'static str> {

@@ -39,6 +39,7 @@ const CONTROL_ENV: &[&str] = &[
     crate::app_env!("HOME"),
     crate::app_env!("PUSH_PREFLIGHT"),
     crate::app_env!("GIT_TOKEN"),
+    crate::services::agent_privacy::STAMP_ENV,
     crate::services::root_mcp::TOKEN_ENV,
     crate::services::root_mcp::URL_ENV,
     crate::services::root_mcp::SCHEDULE_TOKEN_ENV,
@@ -110,6 +111,11 @@ fn settings_agent_remote_control() -> bool {
 /// carrier, and `agent_exec` in front of the CLI maps it (the Host session is
 /// tmux-wrapped like any agent tab); on Windows under the CLI's own name.
 fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> {
+    // A local-models-only project's tab gets no key of any kind
+    // (`services::agent_privacy`).
+    if crate::services::agent_privacy::stamped(opts) {
+        return Ok(());
+    }
     // A hosted server's administrator's key (the Host session), checked
     // against the keeper's offer: a withdrawn key fails the spawn.
     let admin = crate::services::server::agent_keys::admin_for_spawn(&opts.cmd)?;
@@ -922,6 +928,17 @@ pub async fn prepare(
                 }
             }
         }
+    }
+
+    // Local-models-only projects (`services::agent_privacy`): an agent in one —
+    // or one whose working directory is inside one — starts only as a verified
+    // local-model launch, else it is refused here, before anything is built
+    // for it. Runs after the authority and cwd checks above, so the project
+    // and folder it judges are the backend's own; it asks the local Ollama,
+    // hence off the async runtime. A chat assistant has no project folder.
+    if !assistant {
+        let gated = opts.clone();
+        opts = app_core::rt::try_blocking("Local models only", move || crate::services::agent_privacy::gate(gated)).await?;
     }
 
     // The tab's scope, for the agent shims a shell tab may run

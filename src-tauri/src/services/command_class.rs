@@ -197,6 +197,10 @@ use CommandClass::{Admin, Client, Core, Off};
 /// defines it, which is also how `lib.rs` lists them; keep a new command's row
 /// next to its neighbours.
 static TABLE: &[(&str, CommandClass)] = &[
+    // commands/agent_privacy.rs
+    // Desktop only (decision D4): the phone reads the setting from the project
+    // record and has no setter; a browser client hides the control.
+    ("set_project_agent_privacy", Client),
     // commands/agent_prompts.rs
     ("agent_prompt_archive", Core),
     ("agent_prompt_blame", Core),

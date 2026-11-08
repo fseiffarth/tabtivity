@@ -1786,6 +1786,12 @@ impl PtyRegistry {
             .any(|(id, e)| pty_id_in_scope(id, scope) && !e.dead.load(Ordering::SeqCst))
     }
 
+    /// The local tmux session `id` is a client of, when its spawn was wrapped
+    /// in one (`PtyMeta::local_tmux`).
+    pub fn local_tmux_of(&self, id: &str) -> Option<String> {
+        self.entries.get(id).and_then(|e| e.meta.local_tmux.clone())
+    }
+
     /// OS process id of the child for `id`, if it is still tracked.
     pub fn pid(&self, id: &str) -> Option<u32> {
         self.entries.get(id).and_then(|e| e.child.process_id())
@@ -2379,6 +2385,16 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
     }
     for (k, v) in &opts.env {
         cmd.env(k, v);
+    }
+    // A tab `services::agent_privacy` verified for a local-models-only project
+    // inherits no provider key from this process (the Linux fence unsets them
+    // again inside, for what a tmux server would add).
+    if crate::services::agent_privacy::stamped(opts) {
+        for name in crate::services::agent_privacy::unset_names(opts.env.keys()) {
+            if !opts.env.contains_key(&name) {
+                cmd.env_remove(name);
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]

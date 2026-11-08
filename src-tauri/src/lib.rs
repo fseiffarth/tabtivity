@@ -1858,6 +1858,7 @@ pub fn run() {
             commands::agent_tasks::agent_schedules_cleanup_orphans,
             // Project-scoped prompt collection (agent_prompts.json): text with no
             // tab binding until the user aims it at an agent tab.
+            commands::agent_privacy::set_project_agent_privacy,
             commands::agent_prompts::agent_prompts_list,
             commands::agent_prompts::agent_prompt_links_list,
             commands::agent_prompts::agent_prompt_link_upsert,
