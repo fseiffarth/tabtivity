@@ -612,56 +612,94 @@ fn vibe_gets_the_server_only_for_a_model_wearing_the_mcp_chip() {
     assert!(!o.env.contains_key(URL_ENV) && !o.env.contains_key(TOKEN_ENV));
 }
 
-/// Gaps 25 and 33: a local tab's model is fixed at spawn from its env —
-/// raw, else the alias mapped back through the chipped models, nothing
-/// when the pair disagrees or the alias is ambiguous — and a new tab of a
-/// model that read mail in another tab starts tainted.
+/// A `vibe_local/<leaf>` home under `share`, with the config
+/// `prepare_local_agent` (and the privacy gate) writes for `model` at `addr`.
+fn local_vibe_home(share: &Path, leaf: &str, model: &str, addr: &str) -> String {
+    let home = share.join("vibe_local").join(leaf);
+    std::fs::create_dir_all(&home).unwrap();
+    let alias = crate::services::ollama_client::sanitize_alias(model);
+    std::fs::write(home.join("config.toml"), crate::services::local_drivers::vibe_local_config(model, &alias, addr)).unwrap();
+    home.to_string_lossy().into_owned()
+}
+
+/// Gaps 25 and 33, and the local-model caller's provenance: a tab is a
+/// `LocalModel` caller only when the backend reads a loopback Ollama model out of
+/// the home it runs from. Its model and endpoint come from that config, a new tab of
+/// a model that read mail in another tab starts tainted, and the renderer's label
+/// alone (or a cloud argv, a foreign home, a hand-edited config) is no local model
+/// and is handed no token at all.
 #[test]
-fn a_local_tab_records_its_model_and_starts_with_the_models_taint() {
+fn a_local_tab_is_what_its_home_says_and_starts_with_the_models_taint() {
     let raw = crate::app_env!("LOCAL_MODEL");
     let tagged = vec!["gemma4:e4b".to_string(), "qwen3:8b".to_string()];
-    let vibe = |env: &[(&str, &str)]| {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("settings.json"), json!({ "ollama_mcp_models": tagged, "root_mcp_agents": ["claude"] }).to_string()).unwrap();
+    let share = tempfile::tempdir().unwrap();
+    let mut trusted = Trusted::read(dir.path(), None);
+    trusted.share = share.path().to_path_buf();
+    let store = TokenStore::default();
+    let gemma_home = local_vibe_home(share.path(), "gemma4-e4b", "gemma4:e4b", "127.0.0.1:11434");
+    let qwen_home = local_vibe_home(share.path(), "qwen3-8b", "qwen3:8b", "127.0.0.1:11434");
+    let vibe = |tab: &str, env: &[(&str, &str)]| {
         let mut o = opts("vibe", &[], None);
+        o.id = tab.to_string();
         for (k, v) in env {
             o.env.insert(k.to_string(), v.to_string());
         }
         o
     };
-    let of = |env: &[(&str, &str)], models: &[String]| local_model_of(&vibe(env), models);
-    assert_eq!(of(&[(raw, "gemma4:e4b"), ("VIBE_ACTIVE_MODEL", "gemma4-e4b")], &tagged).as_deref(), Some("gemma4:e4b"));
-    assert_eq!(of(&[(raw, "llama3:latest")], &tagged).as_deref(), Some("llama3:latest"));
-    assert_eq!(of(&[("VIBE_ACTIVE_MODEL", "gemma4-e4b")], &tagged).as_deref(), Some("gemma4:e4b"), "a restored tab: alias only");
-    assert_eq!(of(&[(raw, "gemma4:e4b"), ("VIBE_ACTIVE_MODEL", "gpt-oss-120b-cloud")], &tagged), None, "the pair disagrees");
-    assert_eq!(of(&[("VIBE_ACTIVE_MODEL", "llama3-latest")], &tagged), None, "an alias of no chipped model");
-    let twins = vec!["a:b-c".to_string(), "a-b:c".to_string()];
-    assert_eq!(of(&[("VIBE_ACTIVE_MODEL", "a-b-c")], &twins), None, "an alias two models share");
-    assert_eq!(of(&[(raw, "  ")], &tagged), None);
-
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("settings.json"), json!({ "ollama_mcp_models": tagged, "root_mcp_agents": ["claude"] }).to_string()).unwrap();
-    let trusted = Trusted::read(dir.path(), None);
-    let store = TokenStore::default();
     let spawn = |tab: &str, env: &[(&str, &str)]| {
-        let mut o = vibe(env);
-        o.id = tab.to_string();
+        let mut o = vibe(tab, env);
         grant_root(&mut o, &rt(), &store, &trusted);
-        store.authenticate(Some(&format!("Bearer {}", o.env[TOKEN_ENV]))).unwrap()
+        o.env.get(TOKEN_ENV).and_then(|t| store.authenticate(Some(&format!("Bearer {t}"))))
     };
-    let gemma = [(raw, "gemma4:e4b"), ("VIBE_ACTIVE_MODEL", "gemma4-e4b")];
-    let first = spawn("root:model-a", &gemma);
+    let gemma = [(raw, "gemma4:e4b"), ("VIBE_ACTIVE_MODEL", "gemma4-e4b"), ("VIBE_HOME", gemma_home.as_str())];
+    let first = spawn("root:model-a", &gemma).unwrap();
     assert_eq!(first.identity.caller, Caller::LocalModel);
     assert_eq!(first.identity.model.as_deref(), Some("gemma4:e4b"));
     assert_eq!(first.identity.endpoint.as_deref(), Some("127.0.0.1:11434"));
     assert!(!first.has_read_mail());
     // Its first mail read, as `root_mcp_mail::call` records it.
     record_read_mail(dir.path(), "root:model-a", first.identity.model.as_deref()).unwrap();
-    assert!(spawn("root:model-b", &gemma).has_read_mail(), "a new tab of that model");
-    assert!(spawn("root:model-c", &[("VIBE_ACTIVE_MODEL", "gemma4-e4b")]).has_read_mail(), "alias only, same model");
-    assert!(!spawn("root:model-d", &[(raw, "qwen3:8b")]).has_read_mail(), "another model is untouched");
+    assert!(spawn("root:model-b", &gemma).unwrap().has_read_mail(), "a new tab of that model");
+    // A restored tab carries the alias and the home, not the label.
+    let restored = spawn("root:model-c", &[("VIBE_ACTIVE_MODEL", "gemma4-e4b"), ("VIBE_HOME", gemma_home.as_str())]).unwrap();
+    assert_eq!((restored.identity.caller, restored.identity.model.as_deref()), (Caller::LocalModel, Some("gemma4:e4b")));
+    assert!(restored.has_read_mail(), "alias only, same model");
+    let qwen = spawn("root:model-d", &[(raw, "qwen3:8b"), ("VIBE_HOME", qwen_home.as_str())]).unwrap();
+    assert!(!qwen.has_read_mail(), "another model is untouched");
+
+    // The label alone: no home, a home that is not Tabtivity's, or a label that
+    // names another model than the home runs (an Ollama cloud model, say).
+    let foreign = tempfile::tempdir().unwrap();
+    std::fs::write(foreign.path().join("config.toml"), "active_model = \"mistral-vibe-cli-latest\"\n").unwrap();
+    let foreign_home = foreign.path().to_string_lossy().into_owned();
+    assert!(spawn("root:claim-a", &[(raw, "gemma4:e4b")]).is_none(), "a label and no home");
+    assert!(spawn("root:claim-b", &[(raw, "gemma4:e4b"), ("VIBE_HOME", foreign_home.as_str())]).is_none(), "a home of the user's");
+    assert!(spawn("root:claim-c", &[(raw, "gpt-oss:120b-cloud"), ("VIBE_HOME", gemma_home.as_str())]).is_none(), "a label naming another model");
+    assert!(spawn("root:claim-d", &[("VIBE_ACTIVE_MODEL", "gemma4-e4b"), ("VIBE_HOME", qwen_home.as_str())]).is_none(), "an alias that is not the home's");
+    assert!(spawn("root:claim-e", &[(raw, "gemma4:e4b"), ("VIBE_HOME", gemma_home.as_str()), ("VIBE_PROVIDERS", "[]")]).is_none(), "a config override in env");
+    // A cloud argv with the label is no local model either: not for vibe with
+    // other flags, not for another CLI.
+    let mut flagged = vibe("root:claim-f", &gemma);
+    flagged.args = vec!["--agent".into(), "x".into()];
+    grant_root(&mut flagged, &rt(), &store, &trusted);
+    assert!(!flagged.env.contains_key(TOKEN_ENV));
     let mut cloud = opts("claude", &[], None);
-    cloud.id = "root:model-e".into();
+    cloud.id = "root:claim-g".into();
+    cloud.env.insert(raw.into(), "gemma4:e4b".into());
+    cloud.env.insert("VIBE_HOME".into(), gemma_home.clone());
     grant_root(&mut cloud, &rt(), &store, &trusted);
-    assert_eq!(store.authenticate(Some(&format!("Bearer {}", cloud.env[TOKEN_ENV]))).unwrap().identity.model, None, "a cloud agent has no model");
+    let session = store.authenticate(Some(&format!("Bearer {}", cloud.env[TOKEN_ENV]))).unwrap();
+    assert_eq!((session.identity.caller, session.identity.model), (Caller::Agent, None), "a cloud CLI with the label is a cloud agent");
+    // A home whose config was edited to another endpoint or an extra provider.
+    let remote_home = local_vibe_home(share.path(), "gemma4-e4b.remote", "gemma4:e4b", "203.0.113.5:11434");
+    assert!(spawn("root:claim-h", &[(raw, "gemma4:e4b"), ("VIBE_HOME", remote_home.as_str())]).is_none(), "a remote Ollama is not local");
+    let edited = Path::new(&gemma_home).join("config.toml");
+    let mut text = std::fs::read_to_string(&edited).unwrap();
+    text.push_str("\n[[providers]]\nname = \"cloud\"\napi_base = \"https://api.example/v1\"\n");
+    std::fs::write(&edited, text).unwrap();
+    assert!(spawn("root:claim-i", &gemma).is_none(), "an extra provider");
 }
 
 #[test]

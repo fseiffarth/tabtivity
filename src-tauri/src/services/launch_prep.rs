@@ -623,6 +623,9 @@ pub struct PreparedLaunch {
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
     /// The fence scope the spawn runs in, `None` for an unfenced one.
     fenced_scope: Option<String>,
+    /// What that fence shows, for turning Local models only on under a running
+    /// tab (`agent_privacy::tabs_seeing`).
+    fence_view: Option<crate::services::agent_privacy::FenceView>,
     host_agent_tab: Option<crate::services::agent_fence::HostAgentTab>,
     /// A local agent's sandbox, home and CLI, for the hover card
     /// (`services::agent_features`); its API keys are read off the final env.
@@ -747,6 +750,9 @@ impl PreparedLaunch {
                 api_keys: crate::services::agent_features::api_keys_in(&self.opts.env),
             }),
             None => crate::services::agent_features::forget_tab(&self.spawned_tab_id),
+        }
+        if let Some(view) = self.fence_view.take() {
+            crate::services::agent_fence::note_live_fence_view(&self.spawned_tab_id, self.generation.seq, view);
         }
         // A local model's tab: its conversations are not cleared while it runs.
         if let Some(home) = self.opts.env.get("VIBE_HOME") {
@@ -1334,6 +1340,7 @@ pub async fn prepare(
     // tmux server on the host while the command *inside* its session is
     // fenced.  A missing/blocked fence tool fails closed.
     let mut fenced_scope: Option<String> = None;
+    let mut fence_view: Option<crate::services::agent_privacy::FenceView> = None;
     // Every agent tab that runs on the host, fenced or not, for the pill's
     // live check (`agent_fence::live_unfenced_by_scope`). Taken before the
     // fence and tmux rewrites replace `cmd`.
@@ -1396,6 +1403,7 @@ pub async fn prepare(
                     Some(paths) => crate::services::root_mcp::ProjectsGrant::Paths(paths),
                     None => crate::services::root_mcp::ProjectsGrant::Hidden,
                 };
+                fence_view = crate::services::agent_fence::take_fence_view(&opts.id);
                 fenced_scope = Some(scope_id);
             }
             // The root console's Host session: unfenced, in Tabtivity's own
@@ -1496,6 +1504,7 @@ pub async fn prepare(
         mcp_spawn_guard,
         resume_claim,
         fenced_scope,
+        fence_view,
         host_agent_tab,
         features,
         spawned_tab_id,
@@ -1594,7 +1603,7 @@ mod tests {
         };
         PreparedLaunch {
             opts, named: false, interrupted: false, resting: false, live_turn: None, drop_dir: None, ai: true, mcp_spawn_guard: None,
-            resume_claim: None, fenced_scope, host_agent_tab: None, features: None, spawned_tab_id: tab.into(), generation,
+            resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
 

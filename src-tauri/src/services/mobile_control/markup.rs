@@ -398,6 +398,9 @@ pub enum MarkupError {
     InvalidLayer,
     /// Desktop only: a layer could not be written into the inbox.
     Inbox(inbox::InboxError),
+    /// The source lies in a Local models only project's folder and the prompt
+    /// would go to the tabs of another project (`agent_privacy::foreign_source`).
+    LocalModelsOnly,
 }
 
 impl MarkupError {
@@ -412,6 +415,7 @@ impl MarkupError {
             MarkupError::HiddenPath => "hidden_path",
             MarkupError::InvalidLayer => "invalid_layer",
             MarkupError::Inbox(error) => error.code(),
+            MarkupError::LocalModelsOnly => crate::services::agent_privacy::DROP_REFUSED,
         }
     }
 }
@@ -642,6 +646,20 @@ pub fn submit_with_undo(
 fn speakable(source: &ResolvedSource) -> Result<(), MarkupError> {
     if source.rel().chars().any(|c| c.is_control() || c == '`') {
         return Err(MarkupError::Unsupported);
+    }
+    Ok(())
+}
+
+/// A file of a Local models only project is not marked up into the prompt of
+/// another project's tab: the file `source` names under `root` must not lie in a
+/// locked folder other than `root` itself. An outbox file is `root`'s own.
+/// Asked by the two command layers that deliver the prompt (`commands::
+/// pdf_markup`, the phone's route in `host.rs`), not by the shared core, which
+/// the unit tests drive without a project registry.
+pub fn not_foreign(state_dir: &Path, root: &Path, source: &ResolvedSource) -> Result<(), MarkupError> {
+    let ResolvedSource::Files(rel) = source else { return Ok(()) };
+    if crate::services::agent_privacy::foreign_source_at(state_dir, root, &root.join(rel)) {
+        return Err(MarkupError::LocalModelsOnly);
     }
     Ok(())
 }

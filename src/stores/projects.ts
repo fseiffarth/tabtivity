@@ -1997,10 +1997,18 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       return next;
     });
     // The cloud agents are already ended; their tabs go too, not left dead.
+    // The backend also ends tabs of other scopes whose fence showed the folder (a
+    // parent project's, a box's, the root console's): their PTY ids are
+    // `<scope>:<tab key>`.
     if (change.local_models_only) {
       const tabs = useTabsStore.getState();
-      for (const tab of tabs.tabsByScope[id] ?? []) {
-        if (tab.kind === "agent") tabs.removeTabInScope(id, tab.key);
+      const ended = new Set(change.closed_tabs);
+      for (const [scope, list] of Object.entries(tabs.tabsByScope)) {
+        for (const tab of list) {
+          if ((scope === id && tab.kind === "agent") || ended.has(`${scope}:${tab.key}`)) {
+            tabs.removeTabInScope(scope, tab.key);
+          }
+        }
       }
     }
     return change;

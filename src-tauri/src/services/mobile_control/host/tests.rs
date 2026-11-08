@@ -138,6 +138,8 @@ impl Fixture {
                 "id": RAW_PROJECT,
                 "name": "Aurora",
                 "status": "active",
+                "position": 0,
+                "local_file": "",
                 "directory": fixture.root.to_string_lossy(),
                 concat!(crate::app_slug!(), "_mobile_access"): true,
             }]))

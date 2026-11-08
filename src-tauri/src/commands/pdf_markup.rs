@@ -171,6 +171,11 @@ pub async fn pdf_markup_submit(
             remote::remote_target_for(&project_id).is_some(),
             remote::project_directory(&project_id),
         )?;
+        // A file of a Local models only project is not marked up into the prompt
+        // of another project's tab (`agent_privacy::foreign_source`).
+        if crate::services::agent_privacy::foreign_source(&root, Path::new(&path)) {
+            return Err(markup::MarkupError::LocalModelsOnly.code().to_string());
+        }
         let state_dir = crate::storage::state_dir();
         let undo = markup::UndoRequest {
             mode: mode.unwrap_or_default(),

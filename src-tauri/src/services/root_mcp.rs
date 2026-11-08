@@ -123,14 +123,15 @@ pub struct Identity {
     /// spawn from the trusted `projects.json` entry — never from the tab's
     /// cwd or anything inside the tree. `None` for every other class.
     pub push: Option<PushBinding>,
-    /// A [`Caller::LocalModel`] tab's Ollama endpoint, resolved from
-    /// `ollama_host` **at spawn** — the `api_base` its Vibe config was written
-    /// with (`commands::ollama::prepare_local_agent`), which a later change of
-    /// the setting does not move. `root_mcp_mail` reads only while this is
+    /// A [`Caller::LocalModel`] tab's Ollama endpoint, read **at spawn** from
+    /// the `api_base` of its Vibe home's config
+    /// (`agent_privacy::local_vibe_launch`), which a later change of
+    /// `ollama_host` does not move. `root_mcp_mail` reads only while this is
     /// loopback; `None` for every other class.
     pub endpoint: Option<String>,
-    /// A [`Caller::LocalModel`] tab's Ollama model, read from its spawn env
-    /// ([`local_model_of`]) — never from its Vibe home, which the tab writes.
+    /// A [`Caller::LocalModel`] tab's Ollama model, read at spawn from the same
+    /// config (`agent_privacy::local_vibe_launch`), never from the renderer's
+    /// label alone.
     /// Its mail reads go ahead only while that endpoint lists this model as
     /// local, not an Ollama cloud model (gap 25), and its mail taint is also
     /// kept per model ([`model_read_mail`], gap 33). `None` for every other
@@ -807,29 +808,6 @@ fn is_local_model(opts: &PtyOptions) -> bool {
         && (opts.env.contains_key(crate::app_env!("LOCAL_MODEL")) || opts.env.contains_key("VIBE_ACTIVE_MODEL"))
 }
 
-/// The Ollama model a local-model spawn runs, from the same env pair
-/// [`local_model_has_tools`] reads: `TABTIVITY_LOCAL_MODEL` raw, else the
-/// `VIBE_ACTIVE_MODEL` alias mapped back through the "MCP"-chipped models (a
-/// tab with the tools is one of them). Fails closed — `None`, so the tab reads
-/// no mail — when the two disagree or the alias names no single model. The
-/// env comes from the renderer at spawn; the tab's own Vibe home, which it
-/// writes, is never consulted (gap 25).
-fn local_model_of(opts: &PtyOptions, tool_models: &[String]) -> Option<String> {
-    let raw = opts.env.get(crate::app_env!("LOCAL_MODEL")).map(|m| m.trim()).filter(|m| !m.is_empty());
-    let alias = opts.env.get("VIBE_ACTIVE_MODEL").map(|a| a.trim()).filter(|a| !a.is_empty());
-    let alias_of = crate::services::ollama_client::sanitize_alias;
-    match (raw, alias) {
-        (Some(raw), Some(alias)) => (alias_of(raw) == alias).then(|| raw.to_string()),
-        (Some(raw), None) => Some(raw.to_string()),
-        (None, Some(alias)) => {
-            let mut named = tool_models.iter().map(|m| m.trim()).filter(|m| alias_of(m) == alias);
-            let first = named.next()?;
-            named.all(|m| m == first).then(|| first.to_string())
-        }
-        (None, None) => None,
-    }
-}
-
 /// Whether a Vibe tab's local model wears the "MCP" chip. The tab names its
 /// model twice (`NewTabMenu`): `TABTIVITY_LOCAL_MODEL` raw, `VIBE_ACTIVE_MODEL`
 /// as the alias `prepare_local_agent` wrote — and a restored tab may carry
@@ -903,6 +881,9 @@ pub(crate) struct Trusted {
     state: std::path::PathBuf,
     settings: Option<crate::schema::Settings>,
     entry: Option<crate::schema::projects::ProjectEntry>,
+    /// `storage::home_share_dir()`: where the local `vibe` homes live, which
+    /// [`grant_root`] reads to tell a local model from a label.
+    share: std::path::PathBuf,
 }
 impl Trusted {
     pub(crate) fn read(state: &Path, project: Option<&str>) -> Self {
@@ -911,7 +892,7 @@ impl Trusted {
             crate::storage::read_json::<crate::schema::projects::ProjectsList>(&state.join("projects.json")).ok()?
                 .into_iter().find(|e| e.id == id)
         });
-        Trusted { state: state.to_path_buf(), settings, entry }
+        Trusted { state: state.to_path_buf(), settings, entry, share: crate::storage::home_share_dir() }
     }
     fn tool_models(&self) -> Vec<String> {
         self.settings.as_ref().and_then(|s| s.ollama_mcp_models.clone()).unwrap_or_default()
@@ -1064,19 +1045,24 @@ pub fn web_endpoint_url(port: u16) -> String {
 fn grant_root(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, trusted: &Trusted) {
     let Some(settings) = trusted.settings.as_ref() else { return };
     if !settings.root_mcp() { return; }
-    let host = crate::services::ollama_client::host_setting(settings).0.map(str::to_string);
     let Some(token) = mint_token() else { return };
-    let caller = if is_local_model(opts) { Caller::LocalModel } else { Caller::Agent };
-    // The endpoint this tab's model answers from, fixed here like its Vibe
-    // config is: `resolve_ollama_addr` with the remote allowance, so a remote
-    // host is *recorded* and refused at read time, not hidden behind an error.
-    let endpoint = (caller == Caller::LocalModel)
-        .then(|| crate::services::ollama_client::resolve_ollama_addr(host.as_deref(), true).ok())
-        .flatten();
+    // A local-model caller is what the backend verified, not the renderer's
+    // label: the launch's own files name a loopback Ollama model
+    // (`agent_privacy::local_vibe_launch`). A spawn that only *says* it is local
+    // (the label, a `vibe` on a cloud home) gets no token at all rather than the
+    // cloud class, so nothing is served on the strength of a claim.
+    let launch = crate::services::agent_privacy::local_vibe_launch(opts, &trusted.share);
+    if launch.is_none() && is_local_model(opts) {
+        return;
+    }
+    let caller = if launch.is_some() { Caller::LocalModel } else { Caller::Agent };
+    // The endpoint this tab's model answers from: the one its config was
+    // written with, which a later change of `ollama_host` does not move.
+    let endpoint = launch.as_ref().map(|l| l.endpoint.clone());
     let tool_models = trusted.tool_models();
     // The model, fixed here with the endpoint: what the read gate judges
     // local or cloud, and what keys the per-model taint (gaps 25, 33).
-    let model = (caller == Caller::LocalModel).then(|| local_model_of(opts, &tool_models)).flatten();
+    let model = launch.map(|l| l.model);
     apply_to_spawn_with(opts, runtime, &token, &settings.root_mcp_agent_list(), &tool_models, settings.root_mcp_local_only());
     if opts.env.get(TOKEN_ENV) == Some(&token) {
         let read_mail = spawn_read_mail(&trusted.state, &opts.id, model.as_deref());

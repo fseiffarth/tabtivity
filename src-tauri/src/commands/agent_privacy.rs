@@ -43,18 +43,28 @@ pub async fn set_project_agent_privacy(
     Ok(AgentPrivacyChange { local_models_only: stored.local_models_only, cut_network: stored.cut_network, closed_tabs })
 }
 
-/// End every live agent PTY of `project` the spawn gate did not verify, with
-/// its whole subtree (as `pty_kill` does) and the local tmux session it was
-/// a client of, so a cloud agent does not outlive the switch.
+/// End every live agent PTY that is not a verified local tab of `project` and
+/// can see its folder (`agent_privacy::ptys_to_end`): the project's own, and any
+/// whose fence was built before the switch and still shows the folder — a parent
+/// project's, a box's, the root console's with the read-only project view. Each
+/// goes with its whole subtree (as `pty_kill` does) and the local tmux session it
+/// was a client of, so a cloud agent does not outlive the switch.
 async fn close_unverified_agents(ctx: &Ctx, project: &str) -> Result<Vec<String>, String> {
+    let id = project.to_string();
+    let dir = app_core::rt::try_blocking("agent privacy", move || {
+        Ok(crate::services::remote::projects()?.iter().find(|p| p.id == id).and_then(|p| p.directory().map(std::path::PathBuf::from)))
+    })
+    .await?;
     let registry = ctx.get::<RegistryState>();
     let (ids, taken, sessions) = {
         let mut registry = registry.lock_ok();
-        let ids: Vec<String> = registry
-            .ids_for_scope(project)
-            .into_iter()
-            .filter(|id| registry.is_ai(id) && !agent_privacy::is_verified(id, project))
-            .collect();
+        let ids = agent_privacy::ptys_to_end(
+            project,
+            dir.as_deref(),
+            &registry.ai_ids(),
+            &crate::services::agent_fence::live_fence_views(),
+            &|tab| agent_privacy::is_verified(tab, project),
+        );
         let sessions: Vec<String> = ids.iter().filter_map(|id| registry.local_tmux_of(id)).collect();
         let taken: Vec<_> = ids.iter().filter_map(|id| registry.take(id)).collect();
         (ids, taken, sessions)

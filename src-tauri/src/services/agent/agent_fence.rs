@@ -1500,6 +1500,23 @@ pub(crate) fn mask_local_models_only(args: &mut Vec<String>, dirs: &[PathBuf]) {
     args.splice(separator..separator, mask);
 }
 
+/// Hide the project config a local-model CLI would load from a verified tab's own
+/// folder (`agent_privacy::project_config_masks`): a file is bound over with
+/// `/dev/null`, a folder covered with an empty tmpfs, spliced in last like the
+/// other masks so nothing bound before can re-expose it.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn mask_project_config(args: &mut Vec<String>, masks: &[crate::services::agent_privacy::ConfigMask]) {
+    let mask: Vec<String> = masks
+        .iter()
+        .flat_map(|m| {
+            let path = m.path.to_string_lossy().into_owned();
+            if m.dir { vec!["--tmpfs".to_string(), path] } else { vec!["--ro-bind".to_string(), "/dev/null".to_string(), path] }
+        })
+        .collect();
+    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
+    args.splice(separator..separator, mask);
+}
+
 /// Unset each of `names` inside the fence (bubblewrap's own `--unsetenv`), so a
 /// provider key the app itself inherited never reaches a verified local tab.
 #[cfg(any(target_os = "linux", test))]
@@ -1593,11 +1610,21 @@ pub fn wrap_pty_options_bwrap(
     mask_private_state(&mut args, &storage::state_dir(), &support_mounts);
     // Every local-models-only project's folder but this scope's own, hidden
     // in whatever way it was bound (a parent project, the allowlist).
-    mask_local_models_only(
-        &mut args,
-        &crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id)),
+    let locked_masks = crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?;
+    mask_local_models_only(&mut args, &locked_masks);
+    note_fence_view(
+        &opts.id,
+        crate::services::agent_privacy::FenceView {
+            visible: roots.iter().cloned().chain(extra_ro.iter().map(PathBuf::from)).collect(),
+            masked: locked_masks,
+        },
     );
     if locked_project.is_some() {
+        // The CLI reads config from the folder it works in, and the folder is
+        // attacker-controlled: a project `.claude/settings.json` `env` beats the
+        // environment `ollama launch` set, and would re-aim the tab at a cloud
+        // provider.
+        mask_project_config(&mut args, &crate::services::agent_privacy::project_config_masks(roots, Path::new(&opts.cwd))?);
         unset_env_in_fence(&mut args, &crate::services::agent_privacy::unset_names(opts.env.keys()));
     }
     // A hosted server's shared hubs: all hidden but this scope's own
@@ -1929,10 +1956,14 @@ fn sandbox_exec_inputs(
         crate::services::git_guard::guard_paths(roots, Some(Path::new(&opts.cwd))),
     );
     // Every local-models-only project's folder but this scope's own.
-    inputs.hidden.extend(
-        crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))
-            .into_iter()
-            .map(|p| p.to_string_lossy().into_owned()),
+    let locked_masks = crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?;
+    inputs.hidden.extend(locked_masks.iter().map(|p| p.to_string_lossy().into_owned()));
+    note_fence_view(
+        &opts.id,
+        crate::services::agent_privacy::FenceView {
+            visible: inputs.roots.iter().chain(&inputs.readable).chain(&inputs.writable).map(PathBuf::from).collect(),
+            masked: locked_masks,
+        },
     );
     Ok((inputs, control_pins))
 }
@@ -1957,7 +1988,16 @@ pub fn wrap_pty_options_sandbox_exec(
     // See the Linux wrapper: only a verified spawn runs in a local-models-only
     // project, and then without any key.
     let locked_project = crate::services::agent_privacy::fence_gate(opts, scope_id)?;
-    let (inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
+    let (mut inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
+    if locked_project.is_some() {
+        // As on Linux: the folder's own CLI config is denied (Seatbelt has no
+        // empty mount, so the CLI meets a denied read where Linux shows an empty file).
+        inputs.hidden.extend(
+            crate::services::agent_privacy::project_config_masks(roots, Path::new(&opts.cwd))?
+                .into_iter()
+                .map(|m| m.path.to_string_lossy().into_owned()),
+        );
+    }
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
@@ -2157,6 +2197,9 @@ struct LiveSpawn {
     /// The `VIBE_HOME` it was spawned with ([`note_vibe_home`]): a local
     /// model's conversations are not cleared while a tab of it runs.
     vibe_home: Option<PathBuf>,
+    /// What its fence showed ([`note_live_fence_view`]): which live tabs a newly
+    /// locked project's folder must be taken from.
+    view: Option<crate::services::agent_privacy::FenceView>,
 }
 
 fn tab_spawns() -> &'static Mutex<HashMap<String, TabSpawns>> {
@@ -2194,7 +2237,7 @@ pub fn begin_spawn(tab_id: &str) -> u64 {
 pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
     match tab_spawns().lock_ok().get_mut(tab_id) {
         Some(spawns) if spawns.latest == seq => {
-            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string), vibe_home: None });
+            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string), vibe_home: None, view: None });
             true
         }
         _ => false,
@@ -2209,6 +2252,40 @@ pub fn note_vibe_home(tab_id: &str, seq: u64, home: &Path) {
     if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
         live.vibe_home = Some(home.to_path_buf());
     }
+}
+
+fn pending_fence_views() -> &'static Mutex<HashMap<String, crate::services::agent_privacy::FenceView>> {
+    static VIEWS: OnceLock<Mutex<HashMap<String, crate::services::agent_privacy::FenceView>>> = OnceLock::new();
+    VIEWS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The fence just built for `tab` shows `view` (called by the wrappers; the
+/// spawn path takes it with [`take_fence_view`] and attaches it to the live
+/// spawn once the process exists).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn note_fence_view(tab: &str, view: crate::services::agent_privacy::FenceView) {
+    pending_fence_views().lock_ok().insert(tab.to_string(), view);
+}
+
+/// The view [`note_fence_view`] recorded for `tab`'s spawn, consumed once.
+pub fn take_fence_view(tab: &str) -> Option<crate::services::agent_privacy::FenceView> {
+    pending_fence_views().lock_ok().remove(tab)
+}
+
+/// Attach `view` to the live spawn `seq` of `tab_id`. Nothing when `seq` is not
+/// the live spawn.
+pub fn note_live_fence_view(tab_id: &str, seq: u64, view: crate::services::agent_privacy::FenceView) {
+    let mut map = tab_spawns().lock_ok();
+    if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
+        live.view = Some(view);
+    }
+}
+
+/// Every live fenced tab and what its fence shows, for
+/// `agent_privacy::tabs_seeing`.
+pub fn live_fence_views() -> Vec<(String, crate::services::agent_privacy::FenceView)> {
+    let map = tab_spawns().lock_ok();
+    map.iter().filter_map(|(id, s)| Some((id.clone(), s.live.as_ref()?.view.clone()?))).collect()
 }
 
 /// The tabs whose live process was spawned with `VIBE_HOME` = `home`: a
@@ -2307,7 +2384,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         settings().agent_fence_cargo_credentials.unwrap_or(false)));
     guard_git_control(&mut argv, crate::services::git_guard::guard_paths(&roots, Some(cwd)));
     mask_private_state(&mut argv, &storage::state_dir(), &[]);
-    mask_local_models_only(&mut argv, &crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id)));
+    mask_local_models_only(&mut argv, &crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?);
     crate::services::server::share::apply_fence(&mut argv, &roots);
     let filter = write_keyring_filter()?;
     let scope = crate::services::fence_scope::helper_for(&bwrap);
@@ -2346,7 +2423,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
     );
     inputs.hidden.extend(
-        crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))
+        crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?
             .into_iter()
             .map(|p| p.to_string_lossy().into_owned()),
     );

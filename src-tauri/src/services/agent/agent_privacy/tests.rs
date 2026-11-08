@@ -604,3 +604,216 @@ fn the_completion_paths_call_their_guards() {
     let complete = body_of(&copilot, "pub async fn copilot_complete(");
     assert!(complete.contains("agent_privacy::inside_locked("), "a file of a locked project opened through its parent");
 }
+
+/// `remote: null` is "not remote" everywhere else (`remote_target_for`), so the
+/// setting and the gate must agree: a project that may be locked may start its
+/// local tab, and a real remote record is refused by both.
+#[test]
+fn a_null_remote_or_vm_is_local_for_the_setting_and_the_gate_alike() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("secret")).unwrap();
+    let boxes: BoxesList = Vec::new();
+    let with = |extra: Value| {
+        let mut entry = json!({ "id": "lock", "name": "Secret", "status": "active", "position": 0, "local_file": "",
+            "directory": s(&tmp.path().join("secret")), "agent_privacy": { "local_models_only": true } });
+        entry.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        list(json!([entry]))
+    };
+    let ok = || Ok("127.0.0.1:11434".to_string());
+    let tab = || opts("ollama", LINE, Some("lock"), &tmp.path().join("secret"));
+    for extra in [json!({ "remote": null }), json!({ "vm": null }), json!({ "remote": null, "vm": null })] {
+        let projects = with(extra.clone());
+        assert!(check_enable(&projects, &boxes, "lock", ok()).is_ok(), "{extra}: may be locked");
+        assert!(World::healthy().gate(tab(), &projects, tmp.path()).is_ok(), "{extra}: its local tab starts");
+    }
+    for extra in [json!({ "remote": { "host": "h", "remote_path": "/r" } }), json!({ "vm": { "enabled": true } })] {
+        let projects = with(extra.clone());
+        assert!(check_enable(&projects, &boxes, "lock", ok()).is_err(), "{extra}: not lockable");
+        assert!(World::healthy().gate(tab(), &projects, tmp.path()).is_err(), "{extra}: refused at the gate");
+    }
+}
+
+/// An unreadable project list must not build a fence without masks: the roots
+/// lookup and this read are two reads of the file, and a torn one between them
+/// is the gap.
+#[test]
+fn an_unreadable_registry_builds_no_fence_instead_of_one_without_masks() {
+    let err = mask_dirs_from(Err("torn read".into()), Some("open")).unwrap_err();
+    assert!(err.starts_with(REFUSAL) && err.contains("torn read"), "{err}");
+    let tmp = tempfile::tempdir().unwrap();
+    let masks = mask_dirs_from(Ok(locked_registry(tmp.path())), Some("open")).unwrap();
+    assert!(masks.contains(&tmp.path().join("secret")));
+    // Every caller propagates the error instead of defaulting it away.
+    let fence = source("services/agent/agent_fence.rs");
+    assert_eq!(fence.matches("mask_dirs_now(").count(), fence.matches("then_some(scope_id))?").count(), "every call site ends in `?`");
+}
+
+fn view(visible: &[&Path], masked: &[&Path]) -> FenceView {
+    FenceView { visible: visible.iter().map(|p| p.to_path_buf()).collect(), masked: masked.iter().map(|p| p.to_path_buf()).collect() }
+}
+
+/// Turning the switch on for a folder must end every live agent whose fence was
+/// built before it and still shows the folder — not only the project's own tabs:
+/// a parent project's, a box's, the root console's (read-only project view or an
+/// allowlist), and leave alone what cannot see it.
+#[test]
+fn turning_the_switch_on_ends_every_live_tab_whose_fence_shows_the_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let parent = tmp.path().join("parent");
+    let secret = parent.join("secret");
+    let (open, other, boxed) = (tmp.path().join("open"), tmp.path().join("other"), tmp.path().join("box"));
+    for d in [&secret, &open, &other, &boxed] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let ais: Vec<(String, String)> = [
+        "lock:own-cloud", "lock:own-local", "parent:cloud", "box:cloud", "root:console", "root:allow", "open:cloud", "late:cloud", "other:cloud",
+    ]
+    .iter()
+    .map(|t| (t.to_string(), t.to_string()))
+    .chain([("parent:cloud:attach".to_string(), "parent:cloud".to_string())])
+    .collect();
+    let views = vec![
+        ("lock:own-local".to_string(), view(&[&secret], &[])),
+        ("parent:cloud".to_string(), view(&[&parent], &[])),
+        ("box:cloud".to_string(), view(&[&boxed, &secret], &[])),
+        ("root:console".to_string(), view(&[&tmp.path().join("work"), &secret], &[])),
+        ("root:allow".to_string(), view(&[tmp.path()], &[])),
+        ("open:cloud".to_string(), view(&[&open], &[])),
+        // Spawned after the switch: the folder was masked in its fence.
+        ("late:cloud".to_string(), view(&[&parent], &[&secret])),
+        // A file of the folder on the allowlist.
+        ("other:cloud".to_string(), view(&[&other, &secret.join("notes.md")], &[])),
+    ];
+    let mut ended = ptys_to_end("lock", Some(&secret), &ais, &views, &|tab| tab == "lock:own-local");
+    ended.sort();
+    assert_eq!(
+        ended,
+        ["box:cloud", "lock:own-cloud", "other:cloud", "parent:cloud", "parent:cloud:attach", "root:allow", "root:console"],
+        "a verified local tab, an unrelated tab and a tab whose fence masked the folder stay"
+    );
+    // Without a recorded folder only the project's own unverified tabs go.
+    assert_eq!(ptys_to_end("lock", None, &ais, &views, &|tab| tab == "lock:own-local"), ["lock:own-cloud"]);
+    // The decision, alone: a sibling that shares the prefix is not the folder.
+    assert!(!sees(&view(&[&tmp.path().join("parent2")], &[]), &parent));
+    assert!(sees(&view(&[&secret], &[]), &secret));
+}
+
+/// The wrappers record what each fence shows and the switch's command asks for
+/// it: a source scan, since the live pieces need a registry and a fence.
+#[test]
+fn the_wrappers_record_their_view_and_the_switch_uses_it() {
+    let fence = source("services/agent/agent_fence.rs");
+    for wrapper in ["pub fn wrap_pty_options_bwrap(", "fn sandbox_exec_inputs("] {
+        assert!(body_of(&fence, wrapper).contains("note_fence_view("), "{wrapper} must record its fence view");
+    }
+    assert!(body_of(&source("services/launch_prep.rs"), "pub async fn prepare(").contains("take_fence_view("));
+    assert!(source("commands/agent_privacy.rs").contains("agent_privacy::ptys_to_end("));
+}
+
+/// Content of a locked project goes only to the tabs of that same project: a
+/// markup Submit of its file, rooted in the project itself, may; the same file
+/// reached through a parent project or any other root may not. A file anywhere
+/// else is unaffected.
+#[test]
+fn a_locked_projects_file_is_not_marked_up_into_another_projects_prompt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let locked = locked_projects(&locked_registry(tmp.path()));
+    let secret = tmp.path().join("secret");
+    let file = secret.join("docs").join("paper.pdf");
+    // Its own root: the tabs there are the gate's verified local ones.
+    assert!(!foreign_source_in(&locked, &secret, &file));
+    // Through a parent project, a sibling, or any other root: refused.
+    assert!(foreign_source_in(&locked, tmp.path(), &file), "a parent project's root");
+    assert!(foreign_source_in(&locked, &tmp.path().join("open"), &file), "another project's root");
+    assert!(foreign_source_in(&locked, &secret.join("docs"), &file), "a root inside the folder is not the folder");
+    // A file outside every locked folder, and a sibling that shares the prefix.
+    assert!(!foreign_source_in(&locked, tmp.path(), &tmp.path().join("open").join("a.pdf")));
+    assert!(!foreign_source_in(&locked, tmp.path(), &tmp.path().join("secret-twin").join("a.pdf")));
+    assert!(!foreign_source_in(&[], tmp.path(), &file));
+    // Read from a registry file, as the phone's host does with its own state dir.
+    let state = tempfile::tempdir().unwrap();
+    assert!(!foreign_source_at(state.path(), tmp.path(), &file), "no registry file lists no project");
+    std::fs::write(state.path().join("projects.json"), serde_json::to_string(&locked_registry(tmp.path())).unwrap()).unwrap();
+    assert!(foreign_source_at(state.path(), tmp.path(), &file));
+    assert!(!foreign_source_at(state.path(), &secret, &file));
+    std::fs::write(state.path().join("projects.json"), "{ torn").unwrap();
+    assert!(foreign_source_at(state.path(), tmp.path(), &tmp.path().join("open").join("a.pdf")), "an unreadable registry refuses");
+    // Both command layers that deliver a Submit's prompt, desktop and phone, ask first.
+    assert!(body_of(&source("commands/pdf_markup.rs"), "pub async fn pdf_markup_submit(").contains("agent_privacy::foreign_source("));
+    assert!(source("services/mobile_control/host.rs").contains("markup::not_foreign(&state_dir, &root, &source)?;"));
+}
+
+/// A project folder is attacker-controlled and the CLIs read config from it
+/// (verified: Claude Code's `.claude/settings.json` `env` beats the environment
+/// `ollama launch` sets, OpenCode's `opencode.json` and `.opencode` are loaded
+/// from the cwd and every folder above it). The verified tab's fence covers
+/// what exists on the way from its cwd to its root.
+#[test]
+fn a_verified_tabs_fence_hides_the_projects_cli_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("secret");
+    let deeper = root.join("sub").join("deeper");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    std::fs::create_dir_all(root.join(".codex")).unwrap();
+    std::fs::create_dir_all(root.join(".opencode")).unwrap();
+    std::fs::create_dir_all(root.join(".vibe")).unwrap();
+    std::fs::create_dir_all(deeper.join(".pi")).unwrap();
+    for file in ["opencode.json", ".claude/settings.json", ".claude/settings.local.json", ".codex/config.toml", "sub/opencode.jsonc"] {
+        std::fs::write(root.join(file), "{}").unwrap();
+    }
+    std::fs::write(root.join("README.md"), "not config").unwrap();
+    // A sibling project's config is not this tab's business.
+    std::fs::write(tmp.path().join("opencode.json"), "{}").unwrap();
+    let masks = project_config_masks(&[root.clone()], &deeper).unwrap();
+    let mut got: Vec<(String, bool)> = masks
+        .iter()
+        .map(|m| (m.path.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"), m.dir))
+        .collect();
+    got.sort();
+    let mut want: Vec<(String, bool)> = [
+        (".claude/settings.json", false),
+        (".claude/settings.local.json", false),
+        (".codex/config.toml", false),
+        (".opencode", true),
+        (".vibe", true),
+        ("opencode.json", false),
+        ("sub/deeper/.pi", true),
+        ("sub/opencode.jsonc", false),
+    ]
+    .iter()
+    .map(|(p, d)| (p.to_string(), *d))
+    .collect();
+    want.sort();
+    assert_eq!(got, want, "what exists, from the cwd up to the root, and nothing else");
+    // Nothing there, nothing to mount over (a mount over nothing would create a placeholder).
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    assert!(project_config_masks(&[empty.clone()], &empty).unwrap().is_empty());
+    // The argv: a file is bound over with /dev/null, a folder with an empty tmpfs, before `--`.
+    let mut args: Vec<String> = ["--bind", "/", "/", "--", "claude"].iter().map(|a| a.to_string()).collect();
+    crate::services::agent_fence::mask_project_config(
+        &mut args,
+        &[ConfigMask { path: PathBuf::from("/w/p/opencode.json"), dir: false }, ConfigMask { path: PathBuf::from("/w/p/.opencode"), dir: true }],
+    );
+    assert_eq!(
+        args[3..],
+        ["--ro-bind", "/dev/null", "/w/p/opencode.json", "--tmpfs", "/w/p/.opencode", "--", "claude"]
+    );
+    // Both wrappers cover it for a verified tab.
+    let fence = source("services/agent/agent_fence.rs");
+    assert!(body_of(&fence, "pub fn wrap_pty_options_bwrap(").contains("mask_project_config("));
+    assert!(body_of(&fence, "pub fn wrap_pty_options_sandbox_exec(").contains("project_config_masks("));
+}
+
+/// A name that is a link to nowhere cannot be covered, so the spawn is refused
+/// instead of building a fence that leaves it to the CLI.
+#[cfg(unix)]
+#[test]
+fn a_dangling_config_link_refuses_the_spawn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("secret");
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("nowhere.json"), root.join("opencode.json")).unwrap();
+    let err = project_config_masks(&[root.clone()], &root).unwrap_err();
+    assert!(err.starts_with(REFUSAL) && err.contains("opencode.json"), "{err}");
+}

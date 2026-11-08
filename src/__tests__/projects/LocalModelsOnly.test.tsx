@@ -102,6 +102,26 @@ describe("the Agent privacy dialog", () => {
     expect(closed).toEqual(["p1:cloud"]);
   });
 
+  it("closes the tabs of other scopes the backend ended because their fence showed the folder", async () => {
+    const closed: string[] = [];
+    useTabsStore.setState({
+      tabsByScope: {
+        p1: [{ key: "cloud", kind: "agent", label: "Claude", cmd: "claude", cwd: "/w/p1" }],
+        parent: [
+          { key: "a", kind: "agent", label: "Claude", cmd: "claude", cwd: "/w" },
+          { key: "b", kind: "agent", label: "Codex", cmd: "codex", cwd: "/w" },
+        ],
+        root: [{ key: "r", kind: "agent", label: "Root", cmd: "claude", cwd: "/" }],
+      } as never,
+      removeTabInScope: ((scope: string, key: string) => void closed.push(`${scope}:${key}`)) as never,
+    });
+    mockInvoke.mockResolvedValue({ local_models_only: true, cut_network: false, closed_tabs: ["p1:cloud", "parent:a", "root:r"] });
+    await act(async () => {
+      await useProjectsStore.getState().setProjectAgentPrivacy("p1", true, false);
+    });
+    expect(closed.sort()).toEqual(["p1:cloud", "parent:a", "root:r"]);
+  });
+
   it("shows the backend's refusal, naming the project, and stays open", async () => {
     mockInvoke.mockRejectedValue('"Secret" cannot be set to Local models only: it is a remote or VM project.');
     const onClose = vi.fn();

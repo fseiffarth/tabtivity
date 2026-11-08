@@ -1588,6 +1588,16 @@ impl PtyRegistry {
         })
     }
 
+    /// Every live PTY that runs an AI, with the tab it shows: itself, or for an
+    /// attach PTY the tab it attaches to.
+    pub fn ai_ids(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .filter(|(id, _)| self.is_ai(id))
+            .map(|(id, e)| (id.clone(), e.meta.attach_of.clone().unwrap_or_else(|| id.clone())))
+            .collect()
+    }
+
     /// `None` when no such tab is live; `Some(None)` for a remote one.
     pub fn drop_dir(&self, id: &str) -> Option<Option<String>> {
         self.entries.get(id).map(|e| e.drop_dir.clone())

@@ -183,14 +183,17 @@ pub fn mask_dirs(locked: &[Locked], own: Option<&str>) -> Vec<PathBuf> {
     out
 }
 
-/// [`mask_dirs`] against the live registry. A registry that cannot be read
-/// masks nothing — the spawn that needs it was refused at the gate already, and
-/// a fence with no project list builds no roots either.
-pub fn mask_dirs_now(own: Option<&str>) -> Vec<PathBuf> {
-    match crate::services::remote::projects() {
-        Ok(projects) => mask_dirs(&locked_projects(&projects), own),
-        Err(_) => Vec::new(),
-    }
+/// [`mask_dirs`] against the live registry. A registry that cannot be read is an
+/// error and the fence is not built: a fence with no masks would hand a locked
+/// project's folder to whatever else is bound over it.
+pub fn mask_dirs_now(own: Option<&str>) -> Result<Vec<PathBuf>, String> {
+    mask_dirs_from(crate::services::remote::projects().map(|p| p.to_vec()), own)
+}
+
+/// [`mask_dirs_now`] over a given read of the registry.
+pub fn mask_dirs_from(projects: Result<ProjectsList, String>, own: Option<&str>) -> Result<Vec<PathBuf>, String> {
+    let projects = projects.map_err(|e| format!("{REFUSAL}: the project list could not be read ({e}), so no sandbox was built."))?;
+    Ok(mask_dirs(&locked_projects(&projects), own))
 }
 
 // ── The environment of a verified tab ───────────────────────────────────────
@@ -265,6 +268,76 @@ pub fn unset_names<'a>(env: impl IntoIterator<Item = &'a String>) -> Vec<String>
 /// listed or not).
 fn scrub_env(env: &mut HashMap<String, String>) {
     env.retain(|k, _| renderer_env_kept(k));
+}
+
+// ── Project config a CLI would load from the folder ─────────────────────────
+
+/// Files of a project folder that a local-model CLI loads and that can point it at
+/// another provider, relative to a folder on the way from the tab's cwd up to its
+/// root (the CLIs search upward). Hidden in a verified tab's fence by
+/// [`project_config_masks`]. Per CLI (`docs/context/local_models_only.md`):
+/// OpenCode `opencode.json[c]` (checked), Claude Code `.claude/settings[.local].json`
+/// whose `env` block beats the process environment (checked), Codex
+/// `.codex/config.toml` (checked: it ignores provider keys there, masked anyway).
+pub const PROJECT_CONFIG_FILES: &[&str] =
+    &["opencode.json", "opencode.jsonc", ".claude/settings.json", ".claude/settings.local.json", ".codex/config.toml", "openclaw.json"];
+
+/// Project folders the CLIs read config, plugins or provider definitions from: OpenCode's
+/// `.opencode` (checked; its plugins are code), Pi's `.pi`, Droid's `.factory`,
+/// Mistral Vibe's `.vibe`, Cline's `.cline` and OpenClaw's `.openclaw` (named from the
+/// CLIs' documentation; those binaries were not installed to check).
+pub const PROJECT_CONFIG_DIRS: &[&str] = &[".opencode", ".pi", ".factory", ".vibe", ".cline", ".openclaw"];
+
+/// One path the fence covers: a file is bound over with `/dev/null` (empty, which
+/// every CLI above reads as no config), a folder with an empty tmpfs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigMask {
+    pub path: PathBuf,
+    pub dir: bool,
+}
+
+/// The [`PROJECT_CONFIG_FILES`] and [`PROJECT_CONFIG_DIRS`] that exist, in `cwd`
+/// and every folder above it up to the root of `roots` that holds it (and in each
+/// root). Only what exists: a mount over nothing would create a placeholder in the
+/// project. A file the agent creates later is covered at the next spawn, which
+/// looks again. A name that is a link leading nowhere is an error — the fence
+/// cannot cover what it cannot resolve — and so is a name the folder cannot be
+/// asked about.
+pub fn project_config_masks(roots: &[PathBuf], cwd: &Path) -> Result<Vec<ConfigMask>, String> {
+    let mut bases: Vec<PathBuf> = roots.to_vec();
+    for root in roots.iter().filter(|r| path_inside(cwd, r)) {
+        let mut dir = Some(cwd);
+        while let Some(d) = dir.filter(|d| d.starts_with(root) && *d != root.as_path()) {
+            bases.push(d.to_path_buf());
+            dir = d.parent();
+        }
+    }
+    bases.sort();
+    bases.dedup();
+    let mut out = Vec::new();
+    for base in &bases {
+        for names in [PROJECT_CONFIG_FILES, PROJECT_CONFIG_DIRS] {
+            for name in names {
+                let path = base.join(name);
+                match std::fs::symlink_metadata(&path) {
+                    Ok(_) => match std::fs::metadata(&path) {
+                        Ok(meta) => out.push(ConfigMask { dir: meta.is_dir(), path }),
+                        Err(e) => {
+                            return Err(format!(
+                                "{REFUSAL}: `{}` leads nowhere ({e}), so the sandbox cannot hide it from the agent. Remove it, or switch Local models only off.",
+                                path.display()
+                            ))
+                        }
+                    },
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    // A parent that is a file or cannot be searched: nothing is there to load.
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::NotADirectory | std::io::ErrorKind::PermissionDenied) => {}
+                    Err(e) => return Err(format!("{REFUSAL}: `{}` could not be looked at ({e}), so the sandbox was not built.", path.display())),
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ── The refusals ────────────────────────────────────────────────────────────
@@ -428,6 +501,80 @@ fn write_vibe_home(home: &Path, model: &str, alias: &str, endpoint: &str) -> Res
     std::fs::write(&config, crate::services::local_drivers::vibe_local_config(model, alias, endpoint)).map_err(fail)
 }
 
+/// Whether the record marks the project remote or VM. A `null` value is absent,
+/// as `services::remote::remote_target_for` and the root MCP read it; the setting
+/// ([`check_enable`]) and the gate share this one reading, so a project that may
+/// be locked is a project that may start an agent.
+fn remote_or_vm(entry: &ProjectEntry) -> bool {
+    ["remote", "vm"].iter().any(|k| entry.extra.get(*k).is_some_and(|v| !v.is_null()))
+}
+
+// ── What the backend can vouch for about a local `vibe` ─────────────────────
+
+/// A local `vibe` launch the backend checked against the files it runs from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VibeLaunch {
+    /// The Ollama model the home's config runs.
+    pub model: String,
+    /// The loopback `host:port` that config sends it to.
+    pub endpoint: String,
+}
+
+/// The only `VIBE_*` variables a verified local `vibe` may carry: every other one
+/// is a config field of its own (`VIBE_PROVIDERS`, `VIBE_MODELS`, …) and can
+/// re-aim the model the home names.
+const VIBE_ENV_KEPT: &[&str] = &["VIBE_HOME", "VIBE_ACTIVE_MODEL", "VIBE_MCP_SERVERS", "VIBE_ENABLED_TOOLS"];
+
+/// Whether `opts` is a local `vibe` the backend can stand behind, and what it
+/// runs, read from the **files** and not from the renderer's label
+/// (`<APP>_LOCAL_MODEL`, which anything can set): a plain `vibe` argv, no
+/// `VIBE_*` override but the two the frontend sets, a `VIBE_HOME` that is one of
+/// Tabtivity's `vibe_local/<alias>[.<key>]` homes, and a `config.toml` there that
+/// is exactly what `local_drivers::vibe_local_config` writes for one model on a
+/// loopback Ollama. A bare `vibe` (Mistral's cloud CLI), a home of the user's, a
+/// hand-edited config or a label with none of it is not local. The label, when
+/// present, must name the same model. `share_dir` is `storage::home_share_dir()`.
+pub fn local_vibe_launch(opts: &PtyOptions, share_dir: &Path) -> Option<VibeLaunch> {
+    if program(&opts.cmd) != "vibe" || !vibe_args_ok(&opts.args) {
+        return None;
+    }
+    let up = |k: &str| k.to_ascii_uppercase();
+    if opts.env.keys().any(|k| up(k).starts_with("VIBE_") && !VIBE_ENV_KEPT.contains(&up(k).as_str())) {
+        return None;
+    }
+    let home = PathBuf::from(opts.env.get("VIBE_HOME")?);
+    let leaf = home.strip_prefix(share_dir.join("vibe_local")).ok()?;
+    let mut parts = leaf.components();
+    let (Some(Component::Normal(leaf)), None) = (parts.next(), parts.next()) else { return None };
+    let leaf = leaf.to_str()?;
+    // A real folder and a real file: a link planted in the shared store leads elsewhere.
+    if !std::fs::symlink_metadata(&home).ok()?.is_dir() {
+        return None;
+    }
+    let config_path = home.join("config.toml");
+    if !std::fs::symlink_metadata(&config_path).ok()?.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&config_path).ok()?;
+    let quoted = |line: &str, key: &str| -> Option<String> {
+        let rest = line.strip_prefix(key)?.trim_start().strip_prefix('=')?.trim();
+        Some(rest.strip_prefix('"')?.strip_suffix('"')?.to_string())
+    };
+    let alias = text.lines().find_map(|l| quoted(l, "active_model"))?;
+    let endpoint = text.lines().find_map(|l| quoted(l, "api_base"))?.strip_prefix("http://")?.strip_suffix("/v1")?.to_string();
+    let model = text.lines().skip_while(|l| l.trim() != "[[models]]").find_map(|l| quoted(l, "name"))?;
+    let (host, _) = crate::services::ollama_client::split_host_port(&endpoint)?;
+    let consistent = crate::services::local_drivers::model_name_ok(&model)
+        && crate::services::ollama_client::host_is_loopback(host)
+        && crate::services::ollama_client::sanitize_alias(&model) == alias
+        && (leaf == alias || leaf.strip_prefix(alias.as_str()).is_some_and(|rest| rest.starts_with('.')))
+        && opts.env.get("VIBE_ACTIVE_MODEL").is_none_or(|a| a.trim() == alias)
+        && opts.env.get(crate::app_env!("LOCAL_MODEL")).is_none_or(|l| l.trim() == model);
+    // The whole file, not a few lines of it: a second provider, a tool list or an
+    // `api_base` further down would all pass a line scan.
+    (consistent && text == crate::services::local_drivers::vibe_local_config(&model, &alias, &endpoint)).then_some(VibeLaunch { model, endpoint })
+}
+
 /// The gate over given lists; [`gate`] is this against the live state.
 pub fn gate_with(
     mut opts: PtyOptions,
@@ -445,7 +592,7 @@ pub fn gate_with(
     if hit.len() > 1 {
         return Err(refuse(subject, "this agent would work in more than one local-models-only project."));
     }
-    let remote = projects.iter().find(|p| p.id == subject.id).is_some_and(|p| p.extra.contains_key("remote") || p.extra.contains_key("vm"));
+    let remote = projects.iter().find(|p| p.id == subject.id).is_some_and(remote_or_vm);
     let verified = vet(&opts, subject, probe, remote)?;
     apply(&mut opts, &verified, share_dir)?;
     note_verified(&opts.id, &verified.project);
@@ -551,6 +698,35 @@ pub fn drop_refused(tab: &str, paths: &[String]) -> bool {
     locked_now().map_or(true, |locked| drop_refused_in(&locked, tab, paths))
 }
 
+/// Whether content read from `file` must not go to the agent tabs of the
+/// project whose folder is `root` (a markup Submit's prompt, the marked copy and
+/// the layers it writes into `root`'s inbox, all delivered to a tab of that
+/// project): `file` lies in a locked project's folder that is not `root` itself.
+/// A locked project's own tabs are the gate's verified local ones, so a source
+/// inside its own folder may go to them; the same file reached through a parent
+/// project (or any other root) may not, since that project's tabs are not.
+pub fn foreign_source_in(locked: &[Locked], root: &Path, file: &Path) -> bool {
+    locked.iter().any(|l| {
+        l.dir.as_deref().is_some_and(|dir| path_inside(file, dir) && !(path_inside(root, dir) && path_inside(dir, root)))
+    })
+}
+
+/// [`foreign_source_in`] against the live registry; an unreadable one refuses.
+pub fn foreign_source(root: &Path, file: &Path) -> bool {
+    locked_now().map_or(true, |locked| foreign_source_in(&locked, root, file))
+}
+
+/// [`foreign_source`] against the registry file in `state_dir` (the phone's host
+/// carries its own state dir): a missing file lists no project, an unreadable or
+/// unparsable one refuses.
+pub fn foreign_source_at(state_dir: &Path, root: &Path, file: &Path) -> bool {
+    let path = state_dir.join("projects.json");
+    if !path.exists() {
+        return false;
+    }
+    crate::storage::read_json::<ProjectsList>(&path).map_or(true, |projects| foreign_source_in(&locked_projects(&projects), root, file))
+}
+
 /// Whether `path` lies in some locked project's folder (`locked`): a file of one
 /// opened through another project that contains it, whose editor may send its
 /// text to a cloud service.
@@ -596,6 +772,52 @@ pub fn completion_refusal(project_locked: bool, addr: &str, model: &str) -> Opti
     completion_refusal_in(project_locked, addr, model, &|addr, model| crate::services::ollama_client::model_is_local_at(addr, model))
 }
 
+// ── Which live tabs can see a folder ────────────────────────────────────────
+
+/// What one live agent's fence bound at its spawn, recorded by the wrappers
+/// (`agent_fence::note_fence_view`): the paths it can read, and the locked
+/// folders it hid then. A tab that started before a project was locked still
+/// has the folder in `visible` and none in `masked`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FenceView {
+    /// Project and box roots, the read-only allowlist and the root console's
+    /// read-only project view.
+    pub visible: Vec<PathBuf>,
+    /// The locked folders ([`mask_dirs`]) the fence covered with an empty mount.
+    pub masked: Vec<PathBuf>,
+}
+
+/// Whether a fence with `view` shows `dir`: some visible path is `dir`, holds it
+/// or lies inside it (an allowlisted file below a project), and no mask covers
+/// it. Any doubt about a path counts as seeing ([`path_inside`]).
+pub fn sees(view: &FenceView, dir: &Path) -> bool {
+    view.visible.iter().any(|v| path_inside(dir, v) || path_inside(v, dir)) && !view.masked.iter().any(|m| path_inside(dir, m))
+}
+
+/// The live PTYs turning Local models only on for `project` (folder `dir`) must
+/// end: every AI PTY (`ais`: `(pty id, the tab it shows)`) that the gate did not
+/// verify for the project and that either belongs to the project's own scope
+/// (whatever its fence) or whose fence shows the folder (`views`: a parent
+/// project's tab, a box tab, a root-console agent with the read-only project
+/// view, any allowlist that covers it). The verified local tabs stay.
+pub fn ptys_to_end(
+    project: &str,
+    dir: Option<&Path>,
+    ais: &[(String, String)],
+    views: &[(String, FenceView)],
+    verified: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    let own = format!("{project}:");
+    ais.iter()
+        .filter(|(_, tab)| !verified(tab))
+        .filter(|(_, tab)| {
+            tab.starts_with(&own)
+                || dir.is_some_and(|dir| views.iter().any(|(id, view)| id == tab && sees(view, dir)))
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 // ── Which tabs the gate verified ────────────────────────────────────────────
 
 fn verified_tabs() -> &'static Mutex<HashMap<String, String>> {
@@ -638,7 +860,7 @@ pub fn check_enable(
 ) -> Result<(), String> {
     let entry = projects.iter().find(|p| p.id == id).ok_or_else(|| format!("project '{id}' not found"))?;
     let no = |why: &str| Err(format!("\"{}\" cannot be set to Local models only: {why}", entry.name));
-    if entry.extra.get("remote").is_some_and(|v| !v.is_null()) || entry.extra.get("vm").is_some_and(|v| !v.is_null()) {
+    if remote_or_vm(entry) {
         return no("it is a remote or VM project. This mode covers local folders only for now.");
     }
     if entry.extra.get("sandbox").and_then(|s| s.get("enabled")).and_then(Value::as_bool) == Some(true) {

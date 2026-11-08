@@ -6904,6 +6904,7 @@ async fn markup_submit(
         } else {
             Ok(markup::UndoTarget { state_dir: &state_dir, owner })
         };
+        markup::not_foreign(&state_dir, &root, &source)?;
         markup::submit_with_undo(&root, &source, &request, send_back, undo)
     })
     .await;
