@@ -351,6 +351,12 @@ pub async fn pty_drop_files(
         .ok_or("no_terminal")?
         .ok_or("remote_tab")?;
     let sizes = sizes.unwrap_or_default();
+    // A file of a local-models-only project is never copied into the inbox of
+    // a tab that is not a verified local-model tab of it (a cloud agent, a
+    // Tabby chat): `services::agent_privacy`.
+    if agent && crate::services::agent_privacy::drop_refused(&id, &paths) {
+        return Ok(PtyDropped { error: Some(crate::services::agent_privacy::DROP_REFUSED.to_string()), ..PtyDropped::default() });
+    }
     let dropped = app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await?;
     // A file in a Tabby chat's inbox is an attachment, whatever is typed next.
     if agent && !dropped.items.is_empty() {

@@ -42,7 +42,17 @@ fn load_settings() -> Result<Settings, String> {
     }
 }
 
+/// A local-models-only project's text never reaches GitHub's Copilot, whatever
+/// consent is on file (`services::agent_privacy`): the same refusal as a
+/// project's own `local_only`, so the editor falls back to the local model.
+fn locked_project(project_id: &str) -> bool {
+    remote::project_entry(project_id).is_ok_and(|entry| crate::services::agent_privacy::is_locked(&entry))
+}
+
 fn authorize_in(settings: &Settings, project_id: &str) -> Result<PathBuf, String> {
+    if locked_project(project_id) {
+        return Err("copilot_local_only".into());
+    }
     let directory = remote::project_directory(project_id).ok_or("copilot_no_consent")?;
     let is_remote = remote::remote_target_for(project_id).is_some();
     policy::authorize_project(settings, project_id, Path::new(&directory), is_remote).map_err(policy_code)
@@ -109,6 +119,9 @@ pub fn copilot_setup() -> Value {
 pub async fn copilot_set_project_policy(project_id: String, copilot: bool, local_only: bool, text: Option<bool>)
     -> Result<Settings, String> {
     let directory = remote::project_directory(&project_id).ok_or("copilot_invalid_path")?;
+    if copilot && locked_project(&project_id) {
+        return Err("copilot_local_only".into());
+    }
     if copilot && remote::remote_target_for(&project_id).is_some() {
         return Err("copilot_remote_project".into());
     }

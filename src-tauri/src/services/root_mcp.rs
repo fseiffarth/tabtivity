@@ -1888,6 +1888,17 @@ pub(crate) fn resolve_project(stores: &Stores, wanted: &str) -> Result<String, S
     }
 }
 
+/// What a cloud caller is told about a local-models-only project's working
+/// copy: the git tools (branch, commit subjects) read the folder's own text.
+const LOCAL_MODELS_ONLY_READ: &str =
+    "this project is set to Local models only, so its working copy is not read for a cloud agent";
+
+/// Whether `entry`'s folder must not be read for `caller`: it is
+/// local-models-only and the caller is not a local model.
+fn hidden_from(caller: Caller, entry: &crate::schema::projects::ProjectEntry) -> bool {
+    caller != Caller::LocalModel && crate::services::agent_privacy::is_locked(entry)
+}
+
 fn projects_list(stores: &Stores) -> Result<Value, String> {
     let rows: Vec<Value> = read_projects(stores.projects)
         .iter()
@@ -3406,6 +3417,12 @@ fn projects_git_status(stores: &Stores, args: &Value) -> Result<Value, String> {
             continue;
         }
         let skip = |reason: String| json!({ "id": entry.id, "name": entry.name, "reason": reason });
+        // A local-models-only project's working copy is not read for a cloud
+        // caller (`services::agent_privacy`).
+        if hidden_from(stores.caller, &entry) {
+            skipped.push(skip(LOCAL_MODELS_ONLY_READ.to_string()));
+            continue;
+        }
         // One slow repo must not cost the rows already read: a snapshot is
         // started only while it can still finish inside the request.
         if out_of_time || stores.closing(GIT_TIMEOUT + std::time::Duration::from_millis(500)) {
@@ -3469,6 +3486,9 @@ fn project_activity(stores: &Stores, args: &Value) -> Result<Value, String> {
     let wanted = str_arg(args, "project").ok_or("`project` is required")?;
     let id = resolve_project(stores, wanted)?;
     let entry = read_projects(stores.projects).into_iter().find(|p| p.id == id).ok_or("project not found")?;
+    if hidden_from(stores.caller, &entry) {
+        return Err(LOCAL_MODELS_ONLY_READ.to_string());
+    }
     let (dir, source) = local_checkout(&entry)?;
     let snap = git_snapshot(stores, Path::new(&dir))?.ok_or("not a git repository")?;
     let count = args.get("commits").and_then(Value::as_u64).unwrap_or(10).clamp(1, 30);
