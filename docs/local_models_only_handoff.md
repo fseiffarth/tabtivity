@@ -261,3 +261,42 @@ Still flagged:
 - **Root MCP home read at spawn**: the vibe home is checked when the tab starts; the fenced tab
   can rewrite its own home afterwards.
 - macOS `hidden` entries for the config masks and the fence view are written, not compiled here.
+
+## Review 2 findings — flagged for user
+
+Review of `4a77207f..c5506b55` on `review2/local-models-only`. Fixed (with a regression test
+each): the cwd chain of the config masks (`the_config_chain_follows_the_directory_the_process_is_in`)
+and running container agents (`a_running_container_agent_is_ended_when_a_folder_inside_its_mount_is_locked`).
+The rest is flagged, not changed.
+
+- **Claude Code re-reads project settings during a session (measured).** Claude Code 2.1.319, an
+  interactive session on a loopback listener A with `ANTHROPIC_BASE_URL=A`, no project settings. After
+  the first reply the test wrote `.claude/settings.json` with `{"env":{"ANTHROPIC_BASE_URL":B}}` into the
+  cwd; the next prompt's `POST /v1/messages` went to B. So "masks only what exists at spawn" does not hold
+  against anything that writes the file later: the agent itself (a prompt-injected local model) or a
+  command it runs. The same should hold for the agent home's own `~/.claude/settings.json`, which by
+  the fence code is bound writable (only the vibe home's control paths are read-only pins; not run). Claude reads project settings
+  from the cwd only, not from parent folders (measured: settings in the parent were not applied).
+  Closures, each a design call: (a) bind a read-only empty mount over the absent `<cwd>/.claude` (bubblewrap
+  then creates an empty `.claude` folder in the project, which the implementer avoided); (b) a managed
+  settings file bound into the fence at `/etc/claude-code/managed-settings.json` (managed outranks
+  project and user settings); (c) accept it as the same class as a prompt-injected `curl` until phase 2.
+  OpenCode and the others: not tested whether they watch their config.
+- **Agents that survive without a registry PTY are not ended by the switch.** `close_unverified_agents`
+  walks `PtyRegistry::ai_ids`. (1) A tab the phone started headless (`HeadlessSpawner`: `prepare` +
+  `spawn_detached_with`, then `commit`) has a live spawn record and a fence view but no PTY until a window
+  attaches; a cloud agent started that way before the switch keeps running. (2) After a crash or restart the
+  local tmux session of an agent outlives the app; a respawn of the tab attaches to it
+  (`new-session -A`) while the fence argv built for that respawn (and the view recorded from it) describes
+  a *new* fence, not the old process. `live_unfenced_by_scope` has the same caveat in its own doc. Closing
+  this needs the tmux session names of agent tabs (workspace records) at switch time.
+- **macOS / unfenced agents** (Host session, Windows) unchanged from round 2: no view, not ended.
+- **Handoff round 2 says the vibe home "can be rewritten by the fenced tab afterwards"** (root MCP flag).
+  `local_model_mounts` pins `config.toml`, `hooks.toml`, `.env`, tools etc. read-only for the tab's own
+  home, so the config `local_vibe_launch` read stays what the process runs. The residual is only the
+  window between that read and the fence being built.
+- **Store closes every own-scope agent tab** in the UI when the switch goes on (`projects.ts`), including a
+  verified local tab that the backend keeps alive (by reading: turn the switch off, then on again with a
+  verified tab open; not run): the tab would disappear, its PTY keep running. Backend `closed_tabs` is the better source.
+- **Config names:** `.mcp.json` and project MCP servers (code that runs in the fence with network), Pi,
+  Droid, Cline, OpenClaw, Vibe folder names stay unverified; unchanged from round 2.
