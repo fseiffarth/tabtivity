@@ -10,11 +10,18 @@ fn s(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// A tab id of its own per call: the registry of verified tabs is process-wide
+/// and the tests run in parallel.
+fn fresh_tab_id() -> String {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    format!("tab-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
 fn opts(cmd: &str, args: &[&str], project: Option<&str>, cwd: &Path) -> PtyOptions {
     PtyOptions {
         login: None,
         assistant: None,
-        id: "tab-1".to_string(),
+        id: fresh_tab_id(),
         cmd: cmd.to_string(),
         args: args.iter().map(|a| a.to_string()).collect(),
         env: HashMap::new(),
@@ -226,9 +233,8 @@ fn a_genuine_local_launch_line_on_a_local_model_is_verified_and_scrubbed() {
     assert!(!out.env.contains_key("ANTHROPIC_API_KEY") && !out.env.contains_key("OPENAI_BASE_URL"));
     assert!(out.local_model, "the home without logins");
     assert_eq!(out.args, LINE, "the argv is the one that was verified");
-    assert!(is_verified("tab-1", "lock"));
+    assert!(is_verified(&out.id, "lock"));
     assert!(stamped(&out));
-    forget("tab-1");
 }
 
 #[test]
@@ -255,7 +261,6 @@ fn every_driver_line_is_recognised_and_a_tampered_one_is_not() {
         let err = World::healthy().gate(opts(cmd, &args, Some("lock"), &cwd), &projects, tmp.path()).unwrap_err();
         assert!(err.starts_with(REFUSAL), "{cmd} {args:?}: {err}");
     }
-    forget("tab-1");
 }
 
 #[test]
@@ -280,7 +285,6 @@ fn a_cloud_model_an_absent_ollama_a_foreign_listener_or_a_remote_host_refuses() 
     // A loopback OLLAMA_HOST is fine.
     let ok = World { ambient: Some("127.0.0.1:11500".into()), ..World::healthy() };
     assert!(ok.gate(tab(), &projects, tmp.path()).is_ok());
-    forget("tab-1");
 }
 
 #[test]
@@ -357,7 +361,6 @@ fn a_vibe_tab_gets_a_home_and_config_of_its_own_per_project() {
     let mut flagged = opts("vibe", &["--agent", "x"], Some("lock"), &tmp.path().join("secret"));
     flagged.env.insert(crate::app_env!("LOCAL_MODEL").into(), "qwen3:8b".into());
     assert!(World::healthy().gate(flagged, &projects, &share).is_err());
-    forget("tab-1");
 }
 
 #[test]
