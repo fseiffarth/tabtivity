@@ -191,11 +191,13 @@ fn provider_variables_are_named_and_scrubbed() {
         ("ANTHROPIC_API_KEY".into(), "k".into()),
         ("ANTHROPIC_BASE_URL".into(), "https://example.invalid".into()),
         ("OPENCODE_CONFIG_CONTENT".into(), "{}".into()),
-        ("KEEP_ME".into(), "1".into()),
+        ("DROP_ME".into(), "1".into()),
+        (crate::app_env!("TAB_UID").into(), "uid".into()),
+        (crate::app_env!("LOCAL_MODEL").into(), "qwen3:8b".into()),
     ]);
     scrub_env(&mut env);
-    assert_eq!(env.len(), 1);
-    assert!(env.contains_key("KEEP_ME"));
+    assert_eq!(env.len(), 2, "{env:?}");
+    assert!(env.contains_key(crate::app_env!("TAB_UID")) && env.contains_key(crate::app_env!("LOCAL_MODEL")));
     let names = unset_names(["MY_API_KEY".to_string()].iter());
     assert!(names.contains(&"MISTRAL_API_KEY".to_string()) && names.contains(&"MY_API_KEY".to_string()));
 }
@@ -225,16 +227,51 @@ fn a_genuine_local_launch_line_on_a_local_model_is_verified_and_scrubbed() {
     let mut tab = opts("ollama", LINE, Some("lock"), &tmp.path().join("secret").join("sub"));
     tab.env.insert("ANTHROPIC_API_KEY".into(), "sk-secret".into());
     tab.env.insert("OPENAI_BASE_URL".into(), "https://example.invalid".into());
-    tab.env.insert("KEEP".into(), "1".into());
+    tab.env.insert(crate::app_env!("TAB_UID").into(), "uid".into());
     let out = World::healthy().gate(tab, &projects, tmp.path()).unwrap();
     assert_eq!(out.env.get(STAMP_ENV).map(String::as_str), Some("lock"));
     assert_eq!(out.env.get("OLLAMA_HOST").map(String::as_str), Some("127.0.0.1:11434"));
-    assert_eq!(out.env.get("KEEP").map(String::as_str), Some("1"));
+    assert_eq!(out.env.get(crate::app_env!("TAB_UID")).map(String::as_str), Some("uid"));
     assert!(!out.env.contains_key("ANTHROPIC_API_KEY") && !out.env.contains_key("OPENAI_BASE_URL"));
     assert!(out.local_model, "the home without logins");
     assert_eq!(out.args, LINE, "the argv is the one that was verified");
     assert!(is_verified(&out.id, "lock"));
     assert!(stamped(&out));
+}
+
+/// A CLI reads more of its environment than any list of keys and base URLs
+/// covers: `vibe` takes every `VIBE_*` variable as a config field, Codex's
+/// `--oss` reads `CODEX_OSS_BASE_URL`. A tab verified for a local model keeps
+/// only the two variables the frontend itself sets.
+#[test]
+fn a_verified_tab_keeps_none_of_the_renderers_other_variables() {
+    let tmp = tempfile::tempdir().unwrap();
+    let share = tmp.path().join("share");
+    let projects = locked_registry(tmp.path());
+    let secret = tmp.path().join("secret");
+    let hostile = [
+        ("VIBE_PROVIDERS", "[{\"name\":\"ollama\",\"api_base\":\"https://api.example.invalid/v1\"}]"),
+        ("VIBE_MODELS", "[]"),
+        ("CODEX_OSS_BASE_URL", "https://api.example.invalid/v1"),
+        ("CODEX_OSS_PORT", "1"),
+        ("CLAUDE_CODE_USE_BEDROCK", "1"),
+        ("HTTPS_PROXY", "http://proxy.example.invalid"),
+        ("NODE_OPTIONS", "--require /tmp/x.js"),
+    ];
+    let mut codex = opts("codex", &["--oss", "-c", "oss_provider=\"ollama\"", "-m", "qwen3:8b"], Some("lock"), &secret);
+    let mut vibe = opts("vibe", &[], Some("lock"), &secret);
+    vibe.env.insert(crate::app_env!("LOCAL_MODEL").into(), "qwen3:8b".into());
+    for tab in [&mut codex, &mut vibe] {
+        tab.env.extend(hostile.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        tab.env.insert(crate::app_env!("TAB_UID").into(), "uid".into());
+    }
+    for tab in [codex, vibe] {
+        let out = World::healthy().gate(tab, &projects, &share).unwrap();
+        for (name, _) in hostile {
+            assert!(!out.env.contains_key(name), "{name} survived: {:?}", out.env.keys());
+        }
+        assert_eq!(out.env.get(crate::app_env!("TAB_UID")).map(String::as_str), Some("uid"));
+    }
 }
 
 #[test]
@@ -523,4 +560,47 @@ fn every_agent_spawn_site_passes_the_gate() {
         ["agent_fence.rs", "agent_shim.rs", "assistant_model_probe.rs", "launch_prep.rs"],
         "a new site that wraps an agent in the fence must pass the gate (the wrapper does) and be listed here"
     );
+}
+
+/// The editor's Ollama completion sends the text around the caret to whatever
+/// answers on the endpoint: a locked project's goes only to a confirmed local
+/// model, never to an Ollama cloud model on the loopback endpoint.
+#[test]
+fn a_locked_projects_completion_refuses_a_model_that_is_not_confirmed_local() {
+    let cloud = |_: &str, _: &str| Err("model_not_local");
+    let local = |_: &str, _: &str| Ok(());
+    let down = |_: &str, _: &str| Err(crate::services::ollama_client::MODEL_NOT_RUNNING);
+    let refusal = completion_refusal_in(true, "127.0.0.1:11434", "gpt-oss:120b-cloud", &cloud).unwrap();
+    assert!(refusal.starts_with(REFUSAL) && refusal.contains("gpt-oss:120b-cloud"), "{refusal}");
+    assert!(completion_refusal_in(true, "127.0.0.1:11434", "qwen3:8b", &down).is_some(), "an unanswered list fails closed");
+    assert_eq!(completion_refusal_in(true, "127.0.0.1:11434", "qwen3:8b", &local), None);
+    assert_eq!(completion_refusal_in(false, "127.0.0.1:11434", "gpt-oss:120b-cloud", &cloud), None, "an open project is not asked");
+    assert!(!completion_locked(None));
+}
+
+/// A project that contains a locked one can open its files in its own editor:
+/// the path, not the editing project, decides whether Copilot may see the text.
+#[test]
+fn a_file_of_a_locked_project_is_inside_whatever_project_opened_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let locked = locked_projects(&locked_registry(tmp.path()));
+    let secret = tmp.path().join("secret");
+    assert!(inside_locked_in(&locked, &secret.join("src").join("main.rs")));
+    assert!(inside_locked_in(&locked, &secret.join("a").join("..").join("b.txt")));
+    assert!(!inside_locked_in(&locked, &tmp.path().join("open").join("main.rs")));
+    assert!(!inside_locked_in(&locked, &tmp.path().join("secret-twin").join("main.rs")));
+    assert!(!inside_locked_in(&[], &secret.join("main.rs")));
+}
+
+/// The editor-side calls that would hand a locked project's text to a cloud
+/// service name their guard: the Ollama completion asks the model's locality,
+/// Copilot's asks whether the file lies in a locked folder.
+#[test]
+fn the_completion_paths_call_their_guards() {
+    let ollama = source("commands/ollama.rs");
+    let complete = body_of(&ollama, "pub async fn complete_text(");
+    assert!(complete.contains("agent_privacy::completion_locked(") && complete.contains("agent_privacy::completion_refusal("));
+    let copilot = source("commands/copilot.rs");
+    let complete = body_of(&copilot, "pub async fn copilot_complete(");
+    assert!(complete.contains("agent_privacy::inside_locked("), "a file of a locked project opened through its parent");
 }

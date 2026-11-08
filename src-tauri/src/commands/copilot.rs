@@ -179,6 +179,12 @@ pub async fn copilot_complete(
         return Err("copilot_no_consent".into());
     }
     let file = policy::authorize_document(&root, Path::new(&path)).map_err(policy_code)?;
+    // A file of a local-models-only project opened through a project that
+    // contains it is never sent to GitHub, whatever this project's consent is
+    // (`services::agent_privacy`).
+    if crate::services::agent_privacy::inside_locked(&file) {
+        return Err("copilot_local_only".into());
+    }
     let uri = url::Url::from_file_path(&file).map_err(|_| "copilot_invalid_path")?;
     session.complete_cancellable(CompletionRequest {
         uri: uri.as_str(), editor: &editor, client_version: version, text: &text, language: &language,

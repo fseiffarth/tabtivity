@@ -226,11 +226,19 @@ pub const PROVIDER_ENV: &[&str] = &[
     "COPILOT_GITHUB_TOKEN",
 ];
 
-/// Variables a tab brings itself that would re-aim a local line at a provider
-/// the gate did not look at (the inline OpenCode config is Tabtivity's own,
-/// added after the gate); dropped from the renderer's env, not from the
-/// inherited one.
-const RETARGET_ENV: &[&str] = &["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "VIBE_MCP_SERVERS"];
+/// The only variables a verified tab keeps of the ones it arrived with: the
+/// frontend's own two (`<APP>_TAB_UID`, `<APP>_LOCAL_MODEL`, the label the usage
+/// recap and the vibe gate read). Everything else a local launch needs is set by
+/// the backend ([`apply`], `launch_prep`). The rest is dropped rather than listed
+/// because a CLI reads more of its environment than any list of base URLs and
+/// keys covers: Mistral's `vibe` takes every `VIBE_*` variable as a config field
+/// (`VIBE_PROVIDERS`, `VIBE_MODELS` re-aim the verified model at a cloud
+/// endpoint), Codex's `--oss` reads `CODEX_OSS_BASE_URL`, and the next CLI will
+/// read another.
+fn renderer_env_kept(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    [crate::app_env!("TAB_UID"), crate::app_env!("LOCAL_MODEL")].contains(&up.as_str())
+}
 
 /// Whether `name` is a provider key or endpoint variable ([`PROVIDER_ENV`], or
 /// any `*_API_KEY` / `*_API_TOKEN` / `*_AUTH_TOKEN` in any letter case: Windows
@@ -252,13 +260,11 @@ pub fn unset_names<'a>(env: impl IntoIterator<Item = &'a String>) -> Vec<String>
     names
 }
 
-/// Drop what the renderer put in a verified tab's `env`: provider keys,
-/// endpoints, and config overrides ([`PROVIDER_ENV`], [`RETARGET_ENV`]).
+/// Drop what the renderer put in a verified tab's `env`: everything but
+/// [`renderer_env_kept`] (so provider keys, endpoints and config overrides go,
+/// listed or not).
 fn scrub_env(env: &mut HashMap<String, String>) {
-    env.retain(|k, _| {
-        let up = k.to_ascii_uppercase();
-        !is_provider_env(k) && !RETARGET_ENV.contains(&up.as_str())
-    });
+    env.retain(|k, _| renderer_env_kept(k));
 }
 
 // ── The refusals ────────────────────────────────────────────────────────────
@@ -543,6 +549,51 @@ pub fn drop_refused_in(locked: &[Locked], tab: &str, paths: &[String]) -> bool {
 /// [`drop_refused_in`] against the live registry; an unreadable one refuses.
 pub fn drop_refused(tab: &str, paths: &[String]) -> bool {
     locked_now().map_or(true, |locked| drop_refused_in(&locked, tab, paths))
+}
+
+/// Whether `path` lies in some locked project's folder (`locked`): a file of one
+/// opened through another project that contains it, whose editor may send its
+/// text to a cloud service.
+pub fn inside_locked_in(locked: &[Locked], path: &Path) -> bool {
+    locked.iter().any(|l| l.dir.as_deref().is_some_and(|dir| path_inside(path, dir)))
+}
+
+/// [`inside_locked_in`] against the live registry; an unreadable one says yes.
+pub fn inside_locked(path: &Path) -> bool {
+    locked_now().map_or(true, |locked| inside_locked_in(&locked, path))
+}
+
+/// Whether a text completion for project `project_id` is subject to the mode:
+/// the project is local-models-only. An unreadable registry says yes (fail
+/// closed); no project says no.
+pub fn completion_locked(project_id: Option<&str>) -> bool {
+    let Some(id) = project_id else { return false };
+    locked_now().map_or(true, |locked| locked.iter().any(|l| l.id == id))
+}
+
+/// Why the editor's Ollama completion (`complete_text`) of a locked project may
+/// not use `model`, or `None`: the prefix, suffix and attached files go to
+/// whatever answers on the endpoint, and an Ollama cloud model is answered on
+/// ollama.com. The model must be one `local` confirms ([`Probe::local`]'s rule).
+pub fn completion_refusal_in(
+    project_locked: bool,
+    addr: &str,
+    model: &str,
+    local: &dyn Fn(&str, &str) -> Result<(), &'static str>,
+) -> Option<String> {
+    if !project_locked {
+        return None;
+    }
+    local(addr, model).err().map(|verdict| {
+        format!(
+            "{REFUSAL}: this project is set to Local models only, so its text is completed only by a model that runs on this machine, and `{model}` is not confirmed to ({verdict}). Pick an installed local model."
+        )
+    })
+}
+
+/// [`completion_refusal_in`] against the live Ollama. Blocking: it asks `addr`.
+pub fn completion_refusal(project_locked: bool, addr: &str, model: &str) -> Option<String> {
+    completion_refusal_in(project_locked, addr, model, &|addr, model| crate::services::ollama_client::model_is_local_at(addr, model))
 }
 
 // ── Which tabs the gate verified ────────────────────────────────────────────

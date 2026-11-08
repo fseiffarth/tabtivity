@@ -3257,10 +3257,24 @@ pub async fn complete_text(
     let event = format!("text-completion-{request_id}");
     text_completion::run(request_id, async move {
         let settings = crate::storage::load_settings().unwrap_or_default();
-        let local_only = project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
+        // A local-models-only project (`services::agent_privacy`) is completed
+        // by this machine's models only: loopback host, a model the endpoint
+        // lists without a remote (an Ollama cloud model answers on ollama.com).
+        let locked = crate::services::agent_privacy::completion_locked(project_id.as_deref());
+        let local_only = locked || project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
             .is_some_and(|policy| policy.local_only);
         let (host, allow_remote) = host_setting(&settings);
         let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
+        if locked {
+            let (checked_addr, checked_model) = (addr.clone(), model.clone());
+            let refusal = app_core::rt::blocking("Local models only", move || {
+                crate::services::agent_privacy::completion_refusal(true, &checked_addr, &checked_model)
+            })
+            .await?;
+            if let Some(refusal) = refusal {
+                return Err(refusal);
+            }
+        }
         let client = text_completion::client()?;
         let mode = CompletionMode::parse(mode.as_deref().unwrap_or("sentence"));
         let context = context

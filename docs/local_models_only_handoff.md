@@ -117,3 +117,66 @@ stops at vitest; the Rust gates above were run directly. The new
   (documented in the dialog).
 - Cut network (phase 2) is intentionally unreachable: the switch is disabled in the
   UI and `set` refuses it.
+
+## Review findings — flagged for user
+
+A review of `efb20935..5395708d` (2026-11-08) fixed three holes (commits
+`fix(local-models): …` on `review/local-models-only`: the renderer-env allowlist, the
+root MCP local-model check, the completion guards). What follows is what was found and
+**not** changed: design objections and anything not confirmed.
+
+- **Tabs started before the switch keep their fence.** Turning it on ends only the
+  project's own unverified agent PTYs. A cloud agent of a parent project that contains
+  the folder, of a box the project belongs to, or the root console's (read-only view
+  switch on) was fenced at its spawn and still sees the folder until it is restarted.
+  Fix idea: also end (or ask to end) every live agent PTY whose scope's roots include
+  the folder, and say so in the dialog (`agentPrivacy.closeNote` counts only this
+  project's tabs).
+- **A spawn racing the switch survives.** `close_unverified_agents` sees registered
+  PTYs only; a cloud spawn that passed `prepare` just before `set` landed registers
+  after it. The next spawn is refused, this one is not. Needs a generation check in
+  `register` or a second sweep after a short delay.
+- **Project content can re-aim a verified local line.** What sits in the project folder
+  is attacker-controlled (AGENTS.md), and the CLIs read it: OpenCode's `opencode.json`
+  (a project `ollama` provider with another `baseURL`; the inline config wins only when
+  `/api/ps` answered), Claude Code's `.claude/settings.json` `env` block
+  (`ANTHROPIC_BASE_URL`), Codex's `.codex/config.toml`. The gate checks the model on the
+  loopback Ollama, not where the CLI ends up sending it. Pinning each driver's endpoint
+  by flag or managed config per CLI is a design decision (and phase 2's relay closes it
+  for good).
+- **Codex `--oss` does not read `OLLAMA_HOST`.** It dials `CODEX_OSS_BASE_URL` or
+  `localhost:11434`; with `ollama_host` on another loopback port the model was verified
+  on one listener and Codex talks to the default one (a different process, same
+  machine). Pre-existing for every Codex local tab; setting `CODEX_OSS_BASE_URL` from
+  the verified endpoint in `apply` would close it (not done: the variable name is from
+  memory of the Codex source, not verified against the installed binary).
+- **A root MCP caller's "local model" is a label.** `Caller::LocalModel` comes from
+  `<APP>_LOCAL_MODEL` / `VIBE_ACTIVE_MODEL` in the spawn env (`agent_api_keys::
+  is_local_model`), not from the vetted argv. After the fix a cloud root agent has to
+  name an installed non-cloud model to read a locked project's git state; it still can.
+  The CSP is what keeps the renderer honest here (same caveat as `is_host_bound_local_agent`).
+- **Copilot's language server** is started with the editing project's folder as its
+  workspace. For a parent project that contains a locked one, the server process could
+  read the locked files itself (neighbour-file context); only the text the editor sends
+  is guarded. Not verified whether the server reads the workspace.
+- **Ollama completion carries a project id, not a path.** A locked file opened through a
+  parent project is completed under the parent's id, so `complete_text` cannot tell; the
+  frontend only offers loaded (running) models, which excludes Ollama cloud models in
+  practice. Passing the document path to `complete_text` would let the backend decide.
+- **`mask_dirs_now` fails open** on an unreadable registry (no mask, fence built). The
+  roots lookup reads the same file a moment earlier and would have failed first, so this
+  needs a torn read between the two; making the wrapper refuse is a one-liner.
+- **Plan 1c "nothing from this project goes to a tab outside it" is not built** beyond
+  file drops: Send to project (already flagged above), "send selection to agent tab" and
+  markup prompts can still carry a locked project's text to a tab of another project.
+- **`remote: null` on a record**: `check_enable` reads it as local, the gate
+  (`contains_key`) as remote and refuses every spawn. Fails closed, but the project can be
+  locked and never start an agent.
+- **macOS**: provider variables the app itself inherits are removed from the PTY
+  (`env_remove`), but a tmux server that already runs keeps them in its global
+  environment and Seatbelt has no `--unsetenv`; a local agent there can read them. No
+  cloud call by Tabtivity, but a prompt-injected `curl` could send them (the network is
+  on in phase 1).
+- **Vibe home name** `vibe_local/<alias>.<project key>` can equal another model's shared
+  home if a model is named `<alias>.<project key>`; project keys are uuids, so not
+  practical.

@@ -81,8 +81,10 @@ A subject spawn is allowed only when `vet` accepts it:
   (`LISTENER_REFUSED`). Ollama down, an unreadable list or a foreign listener
   refuse.
 
-On success `apply` scrubs the renderer's env (`PROVIDER_ENV` keys and base URLs,
-any `*_API_KEY`/`*_API_TOKEN`/`*_AUTH_TOKEN`, config overrides), forces
+On success `apply` scrubs the renderer's env down to the two variables the frontend
+sets itself (`<APP>_TAB_UID`, `<APP>_LOCAL_MODEL`; a list of keys and base URLs cannot
+keep up with what a CLI reads: `vibe` takes every `VIBE_*` as config, Codex `--oss`
+reads `CODEX_OSS_BASE_URL`), forces
 `local_model` (the scope's `.local` home, which holds no logins), stamps the
 env, and pins `OLLAMA_HOST` to the verified endpoint. API-key injection
 (`agent_api_keys::inject_launch`, the hosted admin key, `inject_api_keys` of the
@@ -120,13 +122,14 @@ The box editor marks a locked member with a lock.
 
 | Path | Result |
 | --- | --- |
-| Copilot inline completion | **Closed.** `commands/copilot.rs` `authorize_in` answers `copilot_local_only` for a locked project (the editor falls back to the local model) and `copilot_set_project_policy` refuses to switch Copilot on for one. |
+| Copilot inline completion | **Closed.** `commands/copilot.rs` `authorize_in` answers `copilot_local_only` for a locked project (the editor falls back to the local model) and `copilot_set_project_policy` refuses to switch Copilot on for one. A file of a locked project opened through a project that contains it is refused by path (`inside_locked`, in `copilot_complete`). |
+| Ollama text completion (`complete_text`) | **Closed for a locked `project_id`.** Loopback host only, and the model must pass `model_is_local_at` (an Ollama cloud model on the loopback endpoint is answered on ollama.com). A locked file opened through a parent project carries the parent's id and is not covered (flagged in the handoff). |
 | Tabby (chat assistant) reading project files | Not a path by `@` mention: the assistant's fence has **no roots** (`check_assistant_spawn`), so it cannot open a project file. The way in is a **file drop**, below. |
 | Dropping a project file onto an agent tab (the inbox copy, also the Tabby chat) | **Closed.** `pty_drop_files` refuses (`local_models_only`) any path inside a locked folder unless the tab is a gate-verified local tab of that project (`agent_privacy::drop_refused`). Inbound drops into a locked project are fine. |
 | Clipboard image, phone upload | Not project files. |
 | Send to project (file-tree copy into another project) | A user's file copy between folders, not a model call; but a copy **out** of a locked project puts its files where cloud agents read them. Left to the user; the dialog is unchanged. Flagged. |
 | Markup rounds, prompt library, scheduled prompts | A markup/scheduled prompt goes to a tab of its own project; the tab in a locked project is local by the gate. A scheduled launch in a locked project passes `prepare`, so a cloud CLI is refused. |
-| Root MCP `project_activity` / `projects_git_status` | **Closed.** Commit subjects and branch state are the folder's own text: skipped for a cloud caller (`hidden_from`), read as before for a `LocalModel` caller. |
+| Root MCP `project_activity` / `projects_git_status` | **Closed.** Commit subjects and branch state are the folder's own text: skipped unless the caller is a `LocalModel` tab whose model passes `local_model_confirmed` (`hidden_from`): a Mistral tab on an Ollama cloud model is hidden from like a cloud agent. |
 | Root MCP `projects_list`, `todo_*`, `boxes_list`, `time_summary`, `usage_recap` | Not a path: names, ids, folder paths and the to-do cards the user typed in Tabtivity; no file content. Flagged: to-do cards of a locked project stay readable to the cloud root agent. |
 | Mail AI, voice | Do not read project files (mail text and microphone audio). |
 | Warm-up cron (`agent_warmup`) | Runs a CLI in the probe home with a fixed word, not in a project. |
