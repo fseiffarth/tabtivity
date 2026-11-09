@@ -141,6 +141,7 @@ import { useVoiceInput, type StartVoiceOptions } from "./terminal/useVoiceInput"
 import { useTabbyGate } from "./terminal/useTabbyGate";
 import { useHandsFree } from "./terminal/useHandsFree";
 import { useVoiceNav } from "./terminal/useVoiceNav";
+import { useVoiceLanding } from "./terminal/useVoiceLanding";
 import { type SendGuard } from "../../../shared/handsFree";
 import { queueFamily, queuedHintShown } from "../terminal/queuePull";
 import {
@@ -2200,7 +2201,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     tab, project: projectOfTab, openTab, openProject, setOpen: setNavOpen, utterances: utteranceHooks, tabbyGate,
     handsFreeOn: handsFreeRef, guard: handsFreeGuard, voiceOpen, recognition, endDictation, startVoiceRef,
   });
-  const navLine = voiceFailure ? null : nav.line;
+  /** A jump to this tab: its last prompt and the answer are read, then the mic opens. */
+  const landingLine = useVoiceLanding({
+    tab, connected, handsFree, micOpen: () => recognition.current !== undefined || preparingVoice, transcript,
+    sessionFocus, startVoiceRef,
+  });
+  const navLine = voiceFailure ? null : nav.line ?? landingLine;
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language ? { language: note.language } : undefined);
   /** A browser without Web Speech says so from the start: no action clears

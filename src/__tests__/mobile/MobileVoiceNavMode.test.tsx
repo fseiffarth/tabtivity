@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup as cleanupScreen, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MobileSpeechRecognitionResultEvent } from "../../../mobile-web/src/voiceInput";
 
@@ -553,5 +553,148 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     await hear("stop");
     await advance(3_000);
     expect(said()).toEqual(["Fixed it."]);
+  });
+
+  describe("the landing on the screen a jump opened", () => {
+    const entries = (...list: [string, string][]) => list.map(([kind, text], index) => ({ kind, text, at: `2026-11-09T10:00:0${index}.000Z` }));
+    const session = (...list: [string, string][]) => ({ available: true, version: "1:1", truncated: false, entries: entries(...list) });
+    const land = (where = "Claude Code in Alpha", id = HERE.id) => leaveLanding({ tabId: id, where });
+    const mount = async (tab: TabRow = HERE) => {
+      render(<Terminal tab={tab} project="p1" back={() => {}} openTab={openTab} openProject={openProject} />);
+      await settle();
+      await advance(100);
+    };
+
+    it("reads the last prompt and the answer to it, then opens the mic with the start-word gate on", async () => {
+      host.transcript = session(
+        ["prompt", "old question"], ["answer", "Old answer."],
+        ["prompt", "Add a clear button. Then test it. And ship it."], ["answer", "Done: the clear button exists."],
+      );
+      land();
+      await mount();
+      expect(said()).toEqual(["You asked: Add a clear button. Then test it."]);
+      expect(screen.getByText("You asked: Add a clear button. Then test it.")).toBeTruthy();
+      // The mic stays closed while the phone talks.
+      expect(FakeRecognition.instances).toHaveLength(0);
+      await finishSpeech();
+      expect(said()).toEqual(["You asked: Add a clear button. Then test it.", "Done: the clear button exists."]);
+      expect(FakeRecognition.instances).toHaveLength(0);
+      await advance(400);
+      expect(FakeRecognition.instances).toHaveLength(1);
+      // Dictation, the gate on: talk without the start word is dropped.
+      await hear("so about something else");
+      expect(box().value).toBe("");
+      await hear(`${T} and add a changelog line`);
+      expect(box().value).toBe("and add a changelog line");
+    });
+
+    it("says there is no answer yet when the tab is still working on the prompt", async () => {
+      host.transcript = session(["prompt", "old"], ["answer", "Old answer."], ["prompt", "new one"]);
+      land();
+      await mount();
+      await finishSpeech();
+      expect(said()).toEqual(["You asked: new one", "No answer yet"]);
+    });
+
+    it("reads every answer after the prompt, up to the last three", async () => {
+      host.transcript = session(["prompt", "q"], ["answer", "One."], ["answer", "Two."], ["answer", "Three."], ["answer", "Four."]);
+      land();
+      await mount();
+      await finishSpeech();
+      expect(said()).toEqual(["You asked: q", "Two.", "Three.", "Four."]);
+    });
+
+    it("lets a spoken \"repeat\" move the reading, as it does on any reading", async () => {
+      host.transcript = session(["prompt", "q"], ["answer", "The answer."]);
+      land();
+      await mount();
+      await finishSpeech();
+      await advance(400);
+      await hear("repeat");
+      expect(said().slice(-1)).toEqual(["The answer."]);
+    });
+
+    it("says only where it landed with no prompt or without a stored session", async () => {
+      host.transcript = session(["answer", "orphan"]);
+      land();
+      await mount();
+      await finishSpeech();
+      expect(said()).toEqual(["Claude Code in Alpha"]);
+      expect(FakeRecognition.instances).toHaveLength(0);
+      await advance(400);
+      expect(FakeRecognition.instances).toHaveLength(1);
+    });
+
+    it("says only where it landed in the Terminal view", async () => {
+      localStorage.setItem(storageKey("mobile.view.claude-code"), "terminal");
+      land();
+      await mount();
+      await finishSpeech();
+      expect(said()).toEqual(["Claude Code in Alpha"]);
+    });
+
+    it("waits for the transcript, then falls back to the tab's last prompt with no answer to read", async () => {
+      let release = () => {};
+      host.transcriptHeld = new Promise<void>((resolve) => { release = resolve; });
+      land();
+      await mount(agent("tab-1", { label: "Fix login", prompts: [{ text: "older" }, { text: "the fallback prompt" }] }));
+      await advance(5_000);
+      expect(said()).toEqual([]);
+      await advance(1_500);
+      expect(said()).toEqual(["You asked: the fallback prompt"]);
+      await finishSpeech();
+      expect(said()).toEqual(["You asked: the fallback prompt", "No answer to read"]);
+      await act(async () => { release(); });
+    });
+
+    it("drops a landing that is stale, or for another tab", async () => {
+      host.transcript = session(["prompt", "q"], ["answer", "a"]);
+      leaveLanding({ tabId: HERE.id, where: "x" }, Date.now() - 31_000);
+      await mount();
+      expect(said()).toEqual([]);
+      expect(FakeRecognition.instances).toHaveLength(0);
+      land("x", "somewhere-else");
+      expect(takeLanding(HERE.id)).toBeNull();
+    });
+
+    it("takes the note and does nothing with hands-free off", async () => {
+      localStorage.setItem(storageKey("mobile.focusHandsFree"), "0");
+      host.transcript = session(["prompt", "q"], ["answer", "a"]);
+      land();
+      await mount();
+      expect(said()).toEqual([]);
+      expect(FakeRecognition.instances).toHaveLength(0);
+      expect(takeLanding(HERE.id)).toBeNull();
+    });
+
+    it("opens the mic as the voice line is tapped, stopping the voice", async () => {
+      host.transcript = session(["prompt", "q"], ["answer", "a"]);
+      land();
+      await mount();
+      fireEvent.click(screen.getByRole("button", { name: /^You asked: q/ }));
+      await advance(400);
+      expect(FakeRecognition.instances).toHaveLength(1);
+    });
+
+    it("only shows the lines, and opens the mic, where the browser cannot speak", async () => {
+      Reflect.deleteProperty(window, "speechSynthesis");
+      Reflect.deleteProperty(window, "SpeechSynthesisUtterance");
+      host.transcript = session(["prompt", "q"], ["answer", "a"]);
+      land();
+      await mount();
+      await advance(400);
+      expect(FakeRecognition.instances).toHaveLength(1);
+    });
+
+    it("keeps a half-dictated draft with the tab it was dictated in", async () => {
+      await start();
+      await hear("the first half of a prompt");
+      expect(box().value).toBe("the first half of a prompt");
+      await hear(`${T} navigate go to docs`);
+      expect(openTab.mock.calls[0][0].id).toBe("tab-2");
+      // The screen is replaced: its draft is flushed to the store under its own tab id.
+      cleanupScreen();
+      expect(JSON.stringify(Object.values(localStorage))).toContain("the first half of a prompt");
+    });
   });
 });
