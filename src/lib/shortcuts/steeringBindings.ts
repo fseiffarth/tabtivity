@@ -16,7 +16,7 @@
  * resolves against (`steeringActionFor`) and what the conflict check compares.
  */
 import type { TranslationKey } from "../i18n";
-import { isLoneModifier, normalizeKey } from "./shortcuts";
+import { isLoneModifier, normalizeKey } from "./keyNames";
 
 /** How many keys one steering action can hold. */
 export const STEERING_KEYS_PER_ACTION = 2;
@@ -189,7 +189,7 @@ function scopeFits(scopes: readonly SteeringScope[], context: SteeringKeyContext
 /** Whether a keydown is `key`: by character, and a digit also by physical key
  *  — AZERTY types `&` on the key US calls 1, the same fallback `chordMatches`
  *  gives the digit chords. */
-function keyMatches(key: string, e: Pick<KeyboardEvent, "key" | "code">): boolean {
+export function keyMatches(key: string, e: Pick<KeyboardEvent, "key" | "code">): boolean {
   if (normalizeKey(e.key) === normalizeKey(key)) return true;
   return /^[0-9]$/.test(key) && (e.code === `Digit${key}` || e.code === `Numpad${key}`);
 }
