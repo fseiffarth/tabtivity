@@ -405,3 +405,75 @@ Still flagged:
   workspace, `complete_text` path vs id, macOS tmux keys, `.mcp.json`, unverified Pi/Droid/Cline/
   OpenClaw/Vibe config names, free-text sends, macOS `hidden` entries not compiled here (the new
   Seatbelt refusal is not compiled here either).
+
+## Review 3 findings — flagged for user
+
+Review of `0229355d..6624eae9` (fix round 3), branch `review3/local-models`.
+
+Fixed (one commit): `claude_managed_for` took the pin from the per-tab-id gate record alone, so a
+second verified spawn of the same tab id under another driver (a respawn racing the first, or a
+renderer that sends two spawns) replaced the record and the first, Claude, launch was fenced with no
+pin at all. It now also judges its own argv: a Claude launch whose record is not Claude's refuses.
+Test `a_claude_launch_is_not_left_unpinned_when_a_second_spawn_of_its_tab_id_replaced_the_record`
+(failed before: `Ok(None)`).
+
+Checked and found sound (by reading; not run, because nested namespaces are forbidden here):
+- The Claude pin argv. `--ro-bind / /` is the first mount and the pin follows it directly, before
+  `--dev`, home and every allowlist bind, so the bind sources under the state dir are resolved
+  before the home tmpfs and the final masks (`mask_private_state` shadows the state tree afterwards;
+  the bound inode survives that). `--tmpfs` + `--ro-bind` + `--remount-ro` is valid for bubblewrap 0.11.1
+  (installed here); `--overlay-src A --overlay-src B --ro-overlay DEST` is valid (man page: first source
+  at the bottom, `--ro-overlay` needs two, no source may be an ancestor of another; the state dir is
+  not under `/etc`). Apparmor's `bwrap` profile on this host allows `mount`. A failure of either form
+  is a bubblewrap error, so the tab does not start (closed).
+- Nothing the renderer or the project writes reaches the pinned values: model and endpoint come from the
+  gate's record; the file and its digest folder sit in the state tree, which every fence shadows.
+  `CLAUDE_CODE_USE_*` in the 2.1.319 binary: BEDROCK, VERTEX, FOUNDRY, MANTLE, ANTHROPIC_AWS,
+  ANTHROPIC_GOOGLE_CLOUD, GATEWAY are all in the emptied list (the others, `_CCR_V*`, `_COWORK_PLUGINS`,
+  `_NATIVE_FILE_SEARCH`, `_POWERSHELL_TOOL`, are not providers). The `*_BASE_URL` variables of those
+  providers only act with their switch.
+- `opencode_session.rs:262` inserts `mini` in `launch_prep` (line ~1130), after the gate (line ~951), so the
+  gate judges `opencode --model ollama/<m>`, the form the app builds; nothing is refused or accepted
+  because of the rewrite. `apply`'s inline config is not unset by `unset_names` (no `OPENCODE_*` in
+  `PROVIDER_ENV`) and `launch_prep` does not overwrite an inline config that is already set.
+- Sweep (item 2): session names are `<prefix><key>--agent-<uuid>`; a project key cannot contain `--agent-`
+  unless the id does. Shell sessions are never ended. `parse_tmux_pane_pids` keeps the first pane; the
+  rest of the session goes with `kill-session`. A session that starts after the listing is gated by the
+  stored setting (the switch race stays as flagged earlier).
+
+Flagged, not changed:
+1. **OpenCode cannot be pinned against a project `opencode.json` by the inline config.** Measured on
+   2.2.6 with `opencode models --standalone`: a project file with a provider `evil` plus
+   `enabled_providers: ["evil"]` still lists `evil/x` when the inline config sets
+   `enabled_providers: ["ollama"]` (arrays are unioned, not replaced), and a project provider with no
+   `enabled_providers` is listed as before. `model`, `small_model` and a per-agent `model` in a file the agent
+   writes mid-session therefore stay unpinned (OpenCode reloads project config). Only the `ollama`
+   provider's endpoint is pinned. With network open the agent can reach any endpoint by `curl` anyway; the
+   gap is in "no cloud model reads the folder through OpenCode", not in the Phase 2 cut. A fix would
+   mean creating the files in the project to mask them, which the app must not do.
+2. **The overlay needs bubblewrap 0.8 and overlayfs in a user namespace (kernel 5.11+).** On a host with no
+   `/etc/claude-code` (every default install) the overlay is the path taken, so a host with bubblewrap
+   0.6 (Ubuntu 22.04) fails to start a verified Claude tab, with bubblewrap's "unknown option" as the
+   error, not a message. There is no version check. Overlayfs does not follow bind mounts under the lower
+   `/etc` (a container's `resolv.conf`): they show as the underlying file. On this host `/etc` has no
+   submounts. An alternative that needs neither is a tmpfs over `/etc` with each entry re-bound and
+   links re-made, which is a larger change.
+3. **`forget()` can drop a record between the gate and `begin_spawn`.** The gate stores the verified record
+   (`launch_prep` ~951) and the spawn generation begins later (~1048). A kill of the same tab id that
+   lands in between runs `on_tab_gone` -> `forget(tab)` for the old generation and erases the new record;
+   since round 3 that makes the Claude pin refuse the launch ("not verified for this tab, open it
+   again"). Closed, but a restart of a Claude tab in a locked project can fail once. A fix is to begin the
+   generation before the gate, which moves a lot of `prepare`.
+4. **Settings that run code or send data other than the model request are outside the pin.** Claude Code
+   2.1.319 still honours `apiKeyHelper`, `awsAuthRefresh`, `otelHeadersHelper`, `statusLine`, `hooks` and MCP
+   servers from the user's and the project's settings, and `WebFetch`/`WebSearch`; none carries the model
+   request (the base URL, proxies, providers and every model name are pinned), and they run inside the
+   fence. Phase 1 does not cover them.
+5. **Sessions without the `--agent-` token are not swept.** A tmux session minted before the kind token
+   existed reads as "other" (`sessionKindFromName`). It is left running even if it is an agent.
+6. **Sweep over-reach by key collision.** `project_key` maps every character outside `[A-Za-z0-9_-]` to `_`,
+   so locking project `a.b` also matches the sessions of an unlocked `a_b`. Project ids are uuids in
+   practice.
+7. **`kill-session -t <name>` is not an exact match** (`local_tmux_kill_args`, shared with the quit path): if
+   a session ended between the listing and the kill, tmux prefix-matches a sibling. Names end in a
+   uuid, so a prefix of another is not possible for the names Tabtivity mints.

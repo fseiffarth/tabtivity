@@ -924,6 +924,24 @@ fn the_gate_remembers_a_claude_tabs_endpoint_and_model_for_the_fence() {
 }
 
 #[test]
+fn a_claude_launch_is_not_left_unpinned_when_a_second_spawn_of_its_tab_id_replaced_the_record() {
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = locked_registry(tmp.path());
+    let cwd = tmp.path().join("secret");
+    let claude = World::healthy().gate(opts("ollama", &claude_line(), Some("lock"), &cwd), &projects, tmp.path()).unwrap();
+    assert!(claude_managed_for(&claude).unwrap().is_some());
+    // The record is kept per tab id: a second verified spawn of the id under another
+    // driver replaces it, while the first spawn is still being fenced.
+    let mut second = opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd);
+    second.id = claude.id.clone();
+    World::healthy().gate(second, &projects, tmp.path()).unwrap();
+    assert!(
+        claude_managed_for(&claude).unwrap_err().starts_with(REFUSAL),
+        "a Claude launch without its record's pin must not start"
+    );
+}
+
+#[test]
 fn claude_is_refused_where_the_sandbox_cannot_pin_its_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let projects = locked_registry(tmp.path());

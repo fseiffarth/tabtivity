@@ -208,6 +208,10 @@ container's `resolv.conf`) is the case to watch for the overlay. The pinned prec
 by pointing the real binary at an equivalent file through a ptrace path rewrite (a test tool, not
 part of the product); the real bind mount was not exercised.
 
+The pin is built from the gate's record of the tab, which is kept per tab id; a Claude launch whose
+record is missing or not Claude's (a second spawn of the id replaced it) refuses instead of starting
+unpinned (`agent_privacy::claude_managed_for` also reads the launch's own argv).
+
 **macOS and Windows.** Seatbelt cannot bind a file to `/Library/Application
 Support/ClaudeCode/managed-settings.json`, and Windows has no sandbox: `vet` refuses a
 verified Claude tab there (`Probe::pins_claude`, `CLAUDE_NOT_PINNABLE`), and the Seatbelt wrapper

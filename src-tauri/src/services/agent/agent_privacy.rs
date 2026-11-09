@@ -671,19 +671,20 @@ pub fn gate(opts: PtyOptions) -> Result<PtyOptions, String> {
 /// A tab that is a Claude launch but has no record is an error — the fence is not
 /// built without the pin, whatever the stamp says.
 pub fn claude_managed_for(opts: &PtyOptions) -> Result<Option<String>, String> {
+    // The record is per tab id, so a second spawn of the same id (another driver, a
+    // respawn mid-prepare) replaces it. What this spawn runs is judged from its own
+    // argv as well: a Claude launch whose record says otherwise gets no pin and so
+    // is not started.
+    let claude_launch = program(&opts.cmd) == "claude"
+        || crate::services::local_drivers::identify_local_launch(&opts.cmd, &opts.args).is_some_and(|(d, _)| d == "claude");
     match verified_launch(&opts.id) {
         Some(v) if v.driver == "claude" => {
             Ok(Some(crate::services::local_drivers::claude_managed_settings(&v.model, &v.endpoint)))
         }
-        Some(_) => Ok(None),
-        None if program(&opts.cmd) == "claude"
-            || crate::services::local_drivers::identify_local_launch(&opts.cmd, &opts.args).is_some_and(|(d, _)| d == "claude") =>
-        {
-            Err(format!(
-                "{REFUSAL}: Claude Code was not verified for this tab, so the sandbox has no settings to pin it to. Open it again from the \u{ff0b} menu."
-            ))
-        }
-        None => Ok(None),
+        _ if claude_launch => Err(format!(
+            "{REFUSAL}: Claude Code was not verified for this tab, so the sandbox has no settings to pin it to. Open it again from the \u{ff0b} menu."
+        )),
+        _ => Ok(None),
     }
 }
 
