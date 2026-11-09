@@ -52,6 +52,7 @@ fn the_relay_binary_pumps_to_the_lane_and_execs_the_command_in_its_own_process()
     let script = format!(
         "exec 3<>/dev/tcp/127.0.0.1/{port}; printf 'GET /api/tags HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n' >&3; cat <&3; echo; echo PID=$$; exit 7"
     );
+    // brand-check: allow — cargo names this variable after the binary
     let child = Command::new(env!("CARGO_BIN_EXE_tabtivity"))
         .args(["--local-relay", &format!("{port}={}", sock.display()), "--", bash, "-c", &script])
         .stdin(Stdio::null())
@@ -82,6 +83,7 @@ fn a_relay_that_cannot_listen_or_start_its_command_fails_closed() {
     let held = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = held.local_addr().unwrap().port();
     let run = |args: &[&str]| {
+        // brand-check: allow — cargo names this variable after the binary
         Command::new(env!("CARGO_BIN_EXE_tabtivity")).args(args).stdin(Stdio::null()).output().unwrap()
     };
     // The port is taken: the command never starts.

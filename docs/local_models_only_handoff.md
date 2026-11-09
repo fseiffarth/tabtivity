@@ -539,3 +539,84 @@ the inline `OPENCODE_CONFIG_CONTENT` of an unlocked project still comes from `la
    that lies about `cmd` can send it (the CSP's case); typed into a shell tab it is the user's own shell, or the shim.
 7. The one `＋ menu` test mock that answered `null` now answers `[]` for `list_local_drivers`: the backend always answers
    an array, and a locked project's menu filters it. No regression hidden.
+
+## Phase 2 — Cut network (Linux)
+
+Branch `phase2/local-models` from `develop` 4c9bfa93. Commits (`git log 4c9bfa93..phase2/local-models`):
+`a9f156fd` (the lane, the relay mode, the fence, the gate, the dialog), `3dc82e7d` (two routes the drivers needed,
+quiet env, long paths, accept loop), `51dc4bbb` (part 7, the phone's ＋ sheet), `b898d3e9` (`/api/show` with an empty
+`name`), `590a1d83` (part 8, the shell-tab refusal text), then this documentation. Design and the per-driver table:
+`docs/context/local_models_only.md` ("Cut network (phase 2, Linux)").
+
+### Per part
+
+| Part | State |
+| --- | --- |
+| 1 Enable the switch | Done. `check_set`/`cut_platform`: accepted on Linux beneath Local models only, refused on macOS/Windows with the old text; the gate closes a project with it recorded where the platform cannot cut. Changing it returns `restart_tabs` (verified tabs whose fence has the other setting) and the dialog asks; `restartLocalTabs` stops and relaunches only on the user's say-so. Dialog text, `UntestedTag` row `agentPrivacy.cut`, 5 dictionaries, help topic |
+| 2a Fence | Done as argv: `--unshare-net` after `--unshare-pid`, from `Verified::cut` checked against the registry (`fence_cut_in`). bubblewrap brings `lo` up (`loopback_setup` strings in the installed 0.11.1). **Not run in a real namespace** |
+| 2b Local lane | Done and tested over real sockets. Relay binary: the app's own (below). Pins and `OLLAMA_HOST` name `127.0.0.1:<port>` (`fence_endpoint`); the relay listens on the same ports the CLI is configured with, so MCP configs need no change |
+| 2c Tools | Done: cockpit, help, markup on the second socket; web, git, schedule, root refused. `tabtivity-send` is a script writing into the project's outbox: needs no relay |
+| 5 OpenCode | Done: allowed under the cut, refused with the network on (menus, allowed-agents list and the phone follow) |
+| 2d Verification | Done for Claude Code, OpenCode, Codex as plain processes under a seccomp network emulation; the rest refused by name. Edit proof: Claude and OpenCode yes, Codex no (its own sandbox cannot start here) |
+| 7 Phone ＋ sheet | Done: `local_models_only`/`cut_network` booleans on `PublicProject`; one TS rule (`cloudRowsOffered`, `offeredLocalAgents`) for desktop and phone; Rust/TS driver lists tied by a test. **The baked PWA needs `npm run mobile:bundle`** (not run) and the sidecar a rebuild to send the flags |
+| 8 Shell-tab refusal text | Done: `unstamped_reason`; the refusal itself is unchanged |
+
+### Relay-binary choice (the spike)
+
+The app's own binary in `--local-relay` mode, not a static helper. Reachable: bound read-only at a fixed path under the
+fence's private `/run` from `fence_scope::running_binary()`, wherever it lives (even under `$HOME`). Runnable: libraries
+are the host's, visible through `--ro-bind / /`. Cost (debug build): 125 libraries, 40 to 80 ms start, 57 MB resident; the mode
+is dispatched in `main` before Tauri starts. It forks a pump process and **execs the CLI in the same process** (a deviation from
+"the CLI is its child": signals, terminal and process tree stay what they were). The one gap: an **AppImage** runs from a FUSE mount
+under `/tmp` whose libraries the fence hides, so `relay_exe_check` refuses a cut spawn there with a message. The static helper is
+not built.
+
+### What was and was not verified
+
+- **In a real namespace: nothing.** This session's fence forbids nested namespaces. The bubblewrap argv (relay and socket binds
+  after `--tmpfs /run`, `--unshare-net`, relay before the CLI) is unit-tested only; whether bubblewrap accepts a socket as a bind
+  source, whether the relay starts under the keyring seccomp filter, and whether `::1` exists in the fence were not exercised.
+- Over real sockets and no namespace: the whole lane (`local_lane/tests.rs`, `tests/local_lane_relay.rs` with the real binary).
+- Per driver: `netcut` (seccomp user-notification, a test tool kept in the session scratchpad, not in the repo) refusing every
+  connect but the relay port, the host's own listeners and the stub resolver, plus the real lane against the real Ollama
+  (`examples/local_lane_harness.rs`, kept). Model `nemotron-3.5-bolt:e4b`.
+- Not verified: OpenCode's interactive `mini` TUI answering a prompt typed through a pty (the harness's keystrokes never produced a
+  request; `opencode run` works); Codex editing a file;
+  (re-run after the fix: works, and the quiet switches reach the CLI through `ollama launch`); Pi, Droid, Cline, OpenClaw and Mistral (not installed: refused).
+
+### Deviations from the plan
+
+- Routes added to the plan's list after running the drivers: `GET|HEAD /` (`ollama launch` stops without it) and `POST /v1/responses`
+  (Codex). `/api/status`, `/api/experimental/*`, `/api/hello` and `/v1/messages/count_tokens` were observed and stay refused (the CLIs
+  continue without them).
+- A request body that spells the model key twice or in another case is refused (Go's decoder takes the last match, case-folded), and an
+  empty `name` is ignored (`ollama launch` sends one).
+- Two sockets per tab (Ollama and MCP) so the host knows the target by socket, not by what the fence says.
+
+### Flagged for user
+
+1. Nothing ran in a real `--unshare-net` bubblewrap (above). First live check: turn Cut network on for a scratch project, restart a Claude Code tab, `curl https://example.com` and `curl 127.0.0.1:11434` must fail while the model answers.
+2. AppImage cannot be the relay; the static helper fallback is unbuilt.
+3. A cut tab loses its model when the app quits or restarts (the lane lives in the app, sockets are swept at the next first open): a tmux-held cut agent that survives a crash is dead until reopened.
+4. Codex's update check has no environment switch; it fails at once offline, so nothing hangs, but it was not silenced.
+5. `/api/show` is asked once per installed model by OpenCode: a cloud-flagged model listed locally makes the lane answer 403 for that one (harmless to OpenCode in the run; not seen with a cloud model installed).
+6. The lane's Ollama target is the endpoint the gate verified for the tab; a later `ollama_host` change does not move a running tab.
+7. The MCP target is the app's own loopback port, connected without an owner check (the port is this process's).
+8. Per-lane limits (32 MiB body, 32 exchanges) are guesses; chunked request bodies are refused (no driver sent one).
+9. `netcut`'s emulation allows every loopback port the host does not listen on: a port opened on the host after it started is not seen.
+10. The phone: the `cloud` rows are hidden by the flag only where the sidecar sends it (an older host sends none, so the cloud rows stay).
+
+### Gates (Linux, this tree)
+
+| Gate | Result |
+| --- | --- |
+| `npm run build` | pass |
+| `npm test` | 11341 tests, 3 known failures (`shell/i18n` (keys other than mine), `theme/CursorPacks`, `theme/TypeScale`). A first run had 28 failures: `offeredLocalAgents` copied a driver list some menus do not have yet; fixed (`1 commit`), full run repeated |
+| `npm run lint` | 0 errors, 29 warnings (unchanged) |
+| `cargo test --workspace` | pass: 5457 lib tests (34 more), 145 in `tests/it.rs` (2 are the relay binary), 136 + 39 + 1 + 101 in the other targets |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | pass |
+| clippy: workspace all-targets, no-default-features lib, `app-serverd` | pass at zero warnings |
+| `scripts/brand-check.sh`, `scripts/privacy-check.sh 4c9bfa93..HEAD`, `git diff --check` | pass |
+
+Not run: `npm run backend:stale`, `npm run mobile:bundle` (the baked PWA carries the phone-sheet change only after it), anything live.
+No process of mine is left running (`netcut`, the harness and the stub proxies exited; their sockets and `/tmp/ll-*` links are removed).

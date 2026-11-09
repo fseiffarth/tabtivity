@@ -77,7 +77,8 @@ export function offeredLocalAgents<T extends { id: string }>(
   locked: boolean,
   cut: boolean,
 ): { drivers: T[]; vibe: boolean } {
-  if (!locked) return { drivers: [...drivers], vibe: true };
+  // Outside a locked project the list is handed back as it came (a menu may not have it yet).
+  if (!locked) return { drivers: drivers as T[], vibe: true };
   return { drivers: driversForLockedProject(drivers, cut), vibe: vibeOfferedInLockedProject(cut) };
 }
 
