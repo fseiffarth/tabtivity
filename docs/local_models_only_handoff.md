@@ -504,9 +504,8 @@ Branch `fix4/local-models` (from `develop` 854e436f). The two items the user cho
 
 Fixed and removed from the list: review 3 items 1 (OpenCode, by refusing it) and 2 (the bubblewrap version
 message). Still flagged:
-- **OpenCode is unavailable in a locked project** until Phase 2 (`--unshare-net`), by decision. The phone's ＋
-  sheet still lists its local row (it lists the cloud rows of a locked project too); the spawn is refused with the
-  new text. Every OpenCode-specific path in the fence (its config masks) is now unreachable for a verified tab and kept.
+- **OpenCode is unavailable in a locked project** until Phase 2 (`--unshare-net`), by decision; the spawn is refused
+  with the new text. (Closed in Phase 2: it starts with Cut network on, and the phone's ＋ sheet follows the desktop's rule.)
 - **The overlay still needs overlayfs in a user namespace (kernel 5.11+)** and does not follow bind mounts under the
   lower `/etc` (a container's `resolv.conf`); only the version is checked. The bubblewrap mounts were not run.
 - A bubblewrap with the right version number whose build lacks overlay support still fails with bubblewrap's own error.
@@ -523,9 +522,7 @@ for those, the OpenCode text for the exact line); nothing after the gate rewrite
 stamp and is refused at the fence; the Tabby chat runs with its cwd in its own chat folder, locked folders masked, and
 the inline `OPENCODE_CONFIG_CONTENT` of an unlocked project still comes from `launch_prep`. Flagged, not changed:
 
-1. **The phone's ＋ sheet still lists the OpenCode row** in a locked project (known, round 4 flag). `localChoices` in
-   `MobileBridgeHost.tsx` knows the scope and could apply `driversForLockedProject`; the row is also the first one the
-   sheet offers (light harness), so the likeliest phone tap in a locked project ends in the refusal.
+1. ~~The phone's ＋ sheet still lists the OpenCode row~~ (closed in Phase 2, part 7: the sheet reads the desktop's rule).
 2. **A typed `opencode` in a shell tab is refused with the fence's generic text** ("was not started as a local-model tab.
    Open a local model from the ＋ menu"), not the one naming the agents that can run. The manual-test line in
    `todo/group-o-security.md` and the context doc say it names them. The ＋ menu it points to has no OpenCode row.
@@ -535,7 +532,7 @@ the inline `OPENCODE_CONFIG_CONTENT` of an unlocked project still comes from `la
    replacement would keep a stale answer (not realistic for a package upgrade).
 4. **The allowed-agents list is advisory**: it names Claude Code on every Linux, although the overlay form can still
    refuse it for an old bubblewrap, and it names agents that are not installed.
-5. **Two lists to keep equal**: `REFUSED_DRIVERS` (Rust) and `LOCKED_REFUSED_DRIVERS` (TS) have no test tying them.
+5. ~~Two lists to keep equal~~ (closed in Phase 2, part 7: `the_frontends_driver_lists_are_the_backends` reads both).
 6. **A locked agent can start OpenCode itself**: inside a verified Pi or Codex fence the shim steps aside and runs the real
    `opencode` (or `opencode2`), with that fence's home and no network cut. Same class as a `curl` from the agent (Phase 2).
    A spawn with `cmd` `opencode2`, `npx` or `bunx` and `agent: false` is not an agent to `is_agent`; only a renderer

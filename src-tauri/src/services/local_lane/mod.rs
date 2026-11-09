@@ -59,6 +59,41 @@ pub fn relay_ports(ollama_endpoint: &str, mcp_port: Option<u16>) -> Result<(u16,
     Ok((port, mcp_port.filter(|p| *p != port)))
 }
 
+/// Run `f` with a path to `path` that fits a socket address (`sun_path` holds about a
+/// hundred bytes; a state dir under a long home does not): on Linux, a long path is
+/// reached as `/proc/self/fd/<its folder, held open>/<name>`. Other paths are passed
+/// as they are.
+pub fn with_socket_path<T>(path: &Path, f: impl FnOnce(&Path) -> std::io::Result<T>) -> std::io::Result<T> {
+    #[cfg(target_os = "linux")]
+    if path.as_os_str().len() >= 100 {
+        use std::os::fd::AsRawFd;
+        if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+            let held = std::fs::File::open(dir)?;
+            return f(&Path::new("/proc/self/fd").join(held.as_raw_fd().to_string()).join(name));
+        }
+    }
+    f(path)
+}
+
+/// Whether the running binary can be the relay inside a fence: it is bound in
+/// read-only and linked against the host's libraries, which the fence shows as the
+/// host has them. An AppImage keeps its libraries in a temporary FUSE mount under
+/// `/tmp` and finds them through the environment its launcher sets, and the fence's
+/// `/tmp` is empty, so the relay would not start; that is refused with the reason,
+/// not left to fail inside the sandbox. (`appimage` is the `APPIMAGE` variable of this
+/// process.) A static helper written to `<state_dir>/bin` is the fallback if this
+/// ever has to run from an AppImage.
+pub fn relay_exe_check(exe: &Path, appimage: Option<&str>) -> Result<(), String> {
+    let temp_mount = exe.starts_with("/tmp") || exe.to_string_lossy().contains("/.mount_");
+    if appimage.is_some_and(|a| !a.is_empty()) || temp_mount {
+        return Err(format!(
+            "Agent sandbox: Cut network runs the relay from {} itself, and this copy runs from a temporary mount (an AppImage) whose libraries the sandbox does not show, so this agent was not started. Install the package, or build {} from source.",
+            crate::brand::DISPLAY, crate::brand::DISPLAY
+        ));
+    }
+    Ok(())
+}
+
 /// What a fence needs of a tab's open lane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FenceLane {

@@ -1733,6 +1733,7 @@ fn add_local_lane(args: &mut Vec<String>, tab: &str) -> Result<(), String> {
     let mcp_port = crate::services::root_mcp::runtime().map(|r| r.port);
     let lane = crate::services::local_lane::open(tab, &storage::state_dir(), &verified.endpoint, mcp_port)?;
     let exe = crate::services::fence_scope::running_binary();
+    crate::services::local_lane::relay_exe_check(Path::new(&exe), std::env::var("APPIMAGE").ok().as_deref())?;
     insert_local_lane(args, lane.binds(Path::new(&exe)), lane.command_prefix())
 }
 

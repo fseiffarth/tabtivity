@@ -110,7 +110,7 @@ impl LaneServer {
             Ok(_) => std::fs::remove_file(path)?,
             Err(_) => {}
         }
-        let listener = UnixListener::bind(path)?;
+        let listener = super::with_socket_path(path, |p| UnixListener::bind(p))?;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         let closed = Arc::new(AtomicBool::new(false));
         let thread = {
@@ -359,7 +359,7 @@ fn plan(target: &Target, head: &Head) -> Result<Plan, Refusal> {
     match target {
         Target::Ollama { .. } => {
             let route = policy::ollama_route(&head.method, &head.target)?;
-            Ok(Plan { path: route.path, needs_body: route.post, route: Some(route) })
+            Ok(Plan { path: route.path, needs_body: route.has_body(), route: Some(route) })
         }
         Target::Mcp { .. } => {
             let path = policy::mcp_route(&head.method, &head.target)?;

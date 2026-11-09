@@ -101,7 +101,7 @@ pub fn listen_addrs(port: u16) -> [SocketAddr; 2] {
 }
 
 fn pump(client: TcpStream, socket: &std::path::Path) {
-    let Ok(up) = UnixStream::connect(socket) else { return };
+    let Ok(up) = super::with_socket_path(socket, |p| UnixStream::connect(p)) else { return };
     let _ = client.set_nodelay(true);
     let (Ok(mut client_r), Ok(mut up_w)) = (client.try_clone(), up.try_clone()) else { return };
     let (client_close, up_close) = (client.try_clone(), up.try_clone());

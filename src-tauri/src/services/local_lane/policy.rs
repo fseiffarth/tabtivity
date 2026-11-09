@@ -34,34 +34,43 @@ pub enum Filter {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Route {
     pub path: &'static str,
-    pub post: bool,
+    /// The methods the route takes; a route that takes POST carries a body.
+    pub methods: &'static [&'static str],
     /// The body names a model, and every name must pass the local check.
     pub needs_model: bool,
     pub filter: Filter,
     pub api: Api,
 }
 
-const fn route(path: &'static str, post: bool, needs_model: bool, filter: Filter, api: Api) -> Route {
-    Route { path, post, needs_model, filter, api }
+const fn route(path: &'static str, methods: &'static [&'static str], needs_model: bool, filter: Filter, api: Api) -> Route {
+    Route { path, methods, needs_model, filter, api }
 }
 
 /// The only requests the lane carries to Ollama (`docs/local_models_only_plan.md`,
 /// 2b). Everything else is refused: notably `pull`, `push`, `create`, `copy`,
 /// `delete` and `blobs`, which change what is installed or upload a model.
+const GET: &[&str] = &["GET"];
+const POST: &[&str] = &["POST"];
+const GET_HEAD: &[&str] = &["GET", "HEAD"];
+
 pub const OLLAMA_ROUTES: &[Route] = &[
-    route("/api/chat", true, true, Filter::None, Api::Native),
-    route("/api/generate", true, true, Filter::None, Api::Native),
-    route("/api/embed", true, true, Filter::None, Api::Native),
-    route("/api/embeddings", true, true, Filter::None, Api::Native),
-    route("/api/show", true, true, Filter::None, Api::Native),
-    route("/api/tags", false, false, Filter::Tags, Api::Native),
-    route("/api/ps", false, false, Filter::None, Api::Native),
-    route("/api/version", false, false, Filter::None, Api::Native),
-    route("/v1/chat/completions", true, true, Filter::None, Api::OpenAi),
-    route("/v1/completions", true, true, Filter::None, Api::OpenAi),
-    route("/v1/embeddings", true, true, Filter::None, Api::OpenAi),
-    route("/v1/models", false, false, Filter::V1Models, Api::OpenAi),
-    route("/v1/messages", true, true, Filter::None, Api::Anthropic),
+    // Added to the plan's list after the drivers were run (docs/context/local_models_only.md): `ollama
+    // launch` probes `HEAD /` before it starts a CLI, and Codex talks to `/v1/responses`.
+    route("/", GET_HEAD, false, Filter::None, Api::Native),
+    route("/v1/responses", POST, true, Filter::None, Api::OpenAi),
+    route("/api/chat", POST, true, Filter::None, Api::Native),
+    route("/api/generate", POST, true, Filter::None, Api::Native),
+    route("/api/embed", POST, true, Filter::None, Api::Native),
+    route("/api/embeddings", POST, true, Filter::None, Api::Native),
+    route("/api/show", POST, true, Filter::None, Api::Native),
+    route("/api/tags", GET, false, Filter::Tags, Api::Native),
+    route("/api/ps", GET, false, Filter::None, Api::Native),
+    route("/api/version", GET, false, Filter::None, Api::Native),
+    route("/v1/chat/completions", POST, true, Filter::None, Api::OpenAi),
+    route("/v1/completions", POST, true, Filter::None, Api::OpenAi),
+    route("/v1/embeddings", POST, true, Filter::None, Api::OpenAi),
+    route("/v1/models", GET, false, Filter::V1Models, Api::OpenAi),
+    route("/v1/messages", POST, true, Filter::None, Api::Anthropic),
 ];
 
 /// Why a request does not pass: an HTTP status and the words for the client.
@@ -69,6 +78,13 @@ pub const OLLAMA_ROUTES: &[Route] = &[
 pub struct Refusal {
     pub status: u16,
     pub message: String,
+}
+
+impl Route {
+    /// Whether a request to this route carries a body.
+    pub fn has_body(&self) -> bool {
+        self.methods.contains(&"POST")
+    }
 }
 
 impl Refusal {
@@ -121,9 +137,8 @@ pub fn ollama_route(method: &str, target: &str) -> Result<Route, Refusal> {
             ),
         ));
     };
-    let want = if found.post { "POST" } else { "GET" };
-    if method != want {
-        return Err(Refusal::new(405, format!("`{path}` takes {want} here.")));
+    if !found.methods.contains(&method) {
+        return Err(Refusal::new(405, format!("`{path}` takes {} here.", found.methods.join(" or "))));
     }
     Ok(*found)
 }

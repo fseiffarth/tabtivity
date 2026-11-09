@@ -69,6 +69,21 @@ pub const fn cut_platform() -> bool {
 /// refused in a project with Cut network on, naming it, rather than left to hang.
 pub const CUT_VERIFIED_DRIVERS: &[&str] = &["opencode", "claude", "codex"];
 
+/// The quiet-mode environment a cut tab's driver runs with: the switches that stop
+/// an update check, a model-catalog fetch or telemetry from trying a network the
+/// fence does not have (`docs/context/local_models_only.md`, per-driver table). Measured
+/// on Claude Code 2.1.319, OpenCode 2.2.6 and Codex 0.167.0: without them the CLI still
+/// starts (its connection fails at once, with nothing to wait for), but Claude Code
+/// sends a probe the lane refuses and OpenCode asks its resolver; with them neither
+/// does. Codex has no environment switch for its update check.
+pub fn cut_quiet_env(driver: &str) -> &'static [(&'static str, &'static str)] {
+    match driver {
+        "claude" => &[("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"), ("DISABLE_AUTOUPDATER", "1")],
+        "opencode" => &[("OPENCODE_DISABLE_AUTOUPDATE", "1"), ("OPENCODE_DISABLE_MODELS_FETCH", "1"), ("OPENCODE_DISABLE_FREE_MODELS", "1")],
+        _ => &[],
+    }
+}
+
 /// The address a verified tab's pins and `OLLAMA_HOST` carry in a cut fence: the
 /// Ollama port on `127.0.0.1`, where the in-fence relay listens
 /// (`services::local_lane`). The configured host may be spelled `localhost` or
@@ -94,8 +109,15 @@ pub struct Privacy {
 /// shape than the one [`set`] writes reads as on, so a hand-edited or damaged
 /// record narrows rather than opens.
 pub fn privacy_of(entry: &ProjectEntry) -> Privacy {
+    privacy_of_value(entry.extra.get(KEY))
+}
+
+/// [`privacy_of`] over the record's `agent_privacy` value (`None` when the key is
+/// absent): the one reading, shared with the phone's project list
+/// (`mobile_control::discovery`), which parses the registry with a lighter type.
+pub fn privacy_of_value(value: Option<&Value>) -> Privacy {
     let on = |v: Option<&Value>| !matches!(v, None | Some(Value::Null) | Some(Value::Bool(false)));
-    match entry.extra.get(KEY) {
+    match value {
         None | Some(Value::Null) => Privacy::default(),
         Some(Value::Object(map)) => {
             Privacy { local_models_only: on(map.get("local_models_only")), cut_network: on(map.get("cut_network")) }
@@ -603,6 +625,11 @@ fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), St
     opts.local_model = true;
     opts.env.insert(STAMP_ENV.to_string(), v.project.clone());
     opts.env.insert("OLLAMA_HOST".to_string(), v.pinned_endpoint());
+    if v.cut {
+        for (name, value) in cut_quiet_env(&v.driver) {
+            opts.env.insert((*name).to_string(), (*value).to_string());
+        }
+    }
     if v.driver == "vibe" {
         let alias = crate::services::ollama_client::sanitize_alias(&v.model);
         let home = vibe_home_in(share_dir, &alias, &v.project);

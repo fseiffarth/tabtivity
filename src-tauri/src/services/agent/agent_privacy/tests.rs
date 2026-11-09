@@ -1071,6 +1071,28 @@ fn with_cut_network_on_the_verified_drivers_start_and_the_rest_are_refused_by_na
 }
 
 #[test]
+fn a_cut_tab_runs_its_driver_in_quiet_mode_and_an_open_one_does_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().join("secret");
+    let cut = cut_registry(tmp.path());
+    let plain = locked_registry(tmp.path());
+    for (cmd, line, quiet) in [
+        ("ollama", claude_line(), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"),
+        ("opencode", vec!["--model", "ollama/qwen3:8b"], "OPENCODE_DISABLE_AUTOUPDATE"),
+    ] {
+        let on = World::healthy().gate(opts(cmd, &line, Some("lock"), &cwd), &cut, tmp.path()).unwrap();
+        assert_eq!(on.env.get(quiet).map(String::as_str), Some("1"), "{cmd}");
+        if cmd == "ollama" {
+            let off = World::healthy().gate(opts(cmd, &line, Some("lock"), &cwd), &plain, tmp.path()).unwrap();
+            assert!(!off.env.contains_key(quiet), "a project with its network keeps the CLI's own behaviour");
+        }
+    }
+    // Only drivers the table measured get a switch, and each driver's switches are its own.
+    assert!(cut_quiet_env("codex").is_empty() && cut_quiet_env("pi").is_empty());
+    assert!(cut_quiet_env("claude").iter().all(|(k, _)| !k.starts_with("OPENCODE")));
+}
+
+#[test]
 fn a_cut_tabs_pins_name_the_relay_address_not_the_configured_host() {
     assert_eq!(fence_endpoint("localhost:9"), "127.0.0.1:9");
     assert_eq!(fence_endpoint("127.0.0.2:11434"), "127.0.0.1:11434");
@@ -1289,6 +1311,26 @@ fn the_wrappers_the_lane_and_the_exit_are_wired() {
     // The relay mode keeps the CLI in its own process: it execs, it does not spawn.
     let relay = source("services/local_lane/relay.rs");
     assert!(relay.contains(".exec()") && !relay.contains(".spawn()"));
+}
+
+/// The names in `export const <name>: readonly string[] = ["a", "b"];` of the frontend's
+/// `localModelsOnly.ts`.
+fn ts_list(name: &str) -> Vec<String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/projects/localModelsOnly.ts");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let head = format!("export const {name}: readonly string[] = [");
+    let at = text.find(&head).unwrap_or_else(|| panic!("{name} not found in localModelsOnly.ts"));
+    let rest = &text[at + head.len()..];
+    rest[..rest.find(']').unwrap()].split(',').map(|s| s.trim().trim_matches('"').to_string()).filter(|s| !s.is_empty()).collect()
+}
+
+#[test]
+fn the_frontends_driver_lists_are_the_backends() {
+    // The menus (desktop and phone) hide what the gate refuses; two lists with nothing
+    // tying them would drift. The frontend's list of what a locked project with its network
+    // on refuses, and of what a cut project starts, are the backend's.
+    assert_eq!(ts_list("LOCKED_REFUSED_DRIVERS"), REFUSED_DRIVERS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    assert_eq!(ts_list("CUT_VERIFIED_DRIVERS"), CUT_VERIFIED_DRIVERS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
 }
 
 // ── Agents no registry PTY holds: headless tabs and sessions that outlived a crash ──

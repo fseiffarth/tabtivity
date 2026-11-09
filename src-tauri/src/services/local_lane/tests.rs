@@ -257,7 +257,7 @@ fn only_the_listed_routes_are_carried_and_nothing_else_reaches_ollama() {
     let rig = rig(stub.ollama_target(), Limits::default());
     for path in [
         "/api/pull", "/api/push", "/api/create", "/api/copy", "/api/delete", "/api/blobs/sha256:abc", "/api/blobs/sha256:abc", "/api/me",
-        "/", "/api/tags/", "/api/../api/pull", "//api/tags", "/api/%63hat", "/api/chat/", "/v1/messages/count_tokens", "/api/web_search", "/mcp/web",
+        "/api/tags/", "/api/../api/pull", "//api/tags", "/api/%63hat", "/api/chat/", "/v1/messages/count_tokens", "/api/web_search", "/mcp/web",
     ] {
         let a = post(rig.addr, path, r#"{"model":"llama3"}"#);
         assert!(a.status == 403 || a.status == 400, "{path}: {}", a.status);
@@ -278,18 +278,18 @@ fn every_route_on_the_list_is_carried() {
     let stub = Stub::start();
     let rig = rig(stub.ollama_target(), Limits::default());
     for route in policy::OLLAMA_ROUTES {
-        let a = if route.post { post(rig.addr, route.path, r#"{"model":"llama3:latest"}"#) } else { get(rig.addr, route.path) };
+        let a = if route.has_body() { post(rig.addr, route.path, r#"{"model":"llama3:latest"}"#) } else { get(rig.addr, route.path) };
         assert_eq!(a.status, 200, "{}: {}", route.path, a.text());
     }
     assert_eq!(stub.requests().len(), policy::OLLAMA_ROUTES.len());
-    // The list is the plan's.
+    // The list is the plan's, plus `/` (the probe `ollama launch` makes) and `/v1/responses` (Codex).
     let mut paths: Vec<&str> = policy::OLLAMA_ROUTES.iter().map(|r| r.path).collect();
     paths.sort();
     assert_eq!(
         paths,
         [
-            "/api/chat", "/api/embed", "/api/embeddings", "/api/generate", "/api/ps", "/api/show", "/api/tags", "/api/version",
-            "/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/messages", "/v1/models"
+            "/", "/api/chat", "/api/embed", "/api/embeddings", "/api/generate", "/api/ps", "/api/show", "/api/tags", "/api/version",
+            "/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/messages", "/v1/models", "/v1/responses"
         ]
     );
 }
@@ -612,6 +612,18 @@ fn the_fence_binds_and_command_prefix_have_one_fixed_shape() {
 }
 
 #[test]
+fn an_appimage_cannot_be_the_relay_and_says_so() {
+    use std::path::Path;
+    assert!(super::relay_exe_check(Path::new("/opt/app/bin/x"), None).is_ok());
+    assert!(super::relay_exe_check(Path::new("/usr/bin/x"), Some("")).is_ok());
+    assert!(super::relay_exe_check(Path::new("/home/u/build/target/debug/x"), None).is_ok());
+    for (exe, appimage) in [("/tmp/.mount_abc123/usr/bin/x", None), ("/opt/x", Some("/home/u/App.AppImage")), ("/tmp/x", None)] {
+        let err = super::relay_exe_check(Path::new(exe), appimage).unwrap_err();
+        assert!(err.starts_with("Agent sandbox:") && err.contains("AppImage"), "{err}");
+    }
+}
+
+#[test]
 fn the_relay_refuses_what_it_cannot_parse() {
     let os = |v: &[&str]| v.iter().map(|s| std::ffi::OsString::from(*s)).collect::<Vec<_>>();
     assert!(relay::parse(&os(&["11434=/s", "claude"])).is_err(), "no --");
@@ -622,6 +634,24 @@ fn the_relay_refuses_what_it_cannot_parse() {
     assert!(relay::parse(&os(&["11434=rel", "--", "x"])).is_err());
     assert!(relay::parse(&os(&["11434", "--", "x"])).is_err());
     assert!(relay::parse(&os(&["11434=/s", "--", "x", "--", "y"])).is_ok());
+}
+
+#[test]
+fn a_socket_under_a_long_path_still_binds_and_connects() {
+    // A state dir under a long home overflows `sun_path` (about 100 bytes).
+    let base = tempfile::tempdir().unwrap();
+    let deep = base.path().join("a".repeat(60)).join("b".repeat(60)).join("local-lane");
+    let sock = deep.join("0123456789abcdef.sock");
+    assert!(sock.as_os_str().len() > 110);
+    let stub = Stub::start();
+    let server = LaneServer::start(&sock, stub.ollama_target(), Limits::default()).unwrap();
+    assert!(sock.exists());
+    let relay = relay::Relay::bind(&[("127.0.0.1:0".parse().unwrap(), sock.clone())]).unwrap();
+    let addr = relay.addrs()[0];
+    relay.serve();
+    assert_eq!(get(addr, "/api/version").status, 200);
+    server.stop();
+    assert!(!sock.exists());
 }
 
 #[test]
@@ -647,6 +677,11 @@ fn route_decisions() {
     assert_eq!(ollama_route("GET", "/v1/models").unwrap().filter, Filter::V1Models);
     assert_eq!(ollama_route("GET", "/api/pull").unwrap_err().status, 403);
     assert_eq!(ollama_route("GET", "/api/chat").unwrap_err().status, 405);
+    assert_eq!(ollama_route("HEAD", "/").unwrap().path, "/");
+    assert_eq!(ollama_route("GET", "/?x=1").unwrap().path, "/");
+    assert_eq!(ollama_route("POST", "/").unwrap_err().status, 405);
+    assert_eq!(ollama_route("HEAD", "/api/tags").unwrap_err().status, 405);
+    assert!(ollama_route("POST", "/v1/responses").unwrap().needs_model);
     assert_eq!(policy::mcp_route("POST", "/mcp/cockpit").unwrap(), "/mcp/cockpit");
     assert_eq!(policy::mcp_route("POST", "/mcp/web").unwrap_err().status, 403);
     assert_eq!(policy::mcp_route("GET", "/mcp/help").unwrap_err().status, 405);

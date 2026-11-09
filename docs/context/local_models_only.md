@@ -270,9 +270,102 @@ scans that name every spawn site (`prepare` calls the gate before the scope env;
 both wrappers call `fence_gate` and skip key injection; the docker wrap refuses;
 only four files wrap an agent in the fence).
 
-## Not done in phase 1
+## Cut network (phase 2, Linux)
 
-Phase 2 (`--unshare-net`, the local lane relay, Cut network, and with it OpenCode in a
-locked project), macOS Seatbelt network denial, container and VM projects, the phone's ＋
-sheet hiding cloud rows and the OpenCode row in a locked project (the spawn is refused
-with the backend's text).
+`cut_network` on a Local models only project (`agent_privacy::cut_platform`: Linux; macOS is phase 3 and
+Windows has no sandbox, both refuse with `CUT_NETWORK_UNAVAILABLE` and the gate closes a project that
+has it recorded) gives its verified local tabs a bubblewrap fence with `--unshare-net`. bubblewrap
+brings `lo` up in the new namespace itself (`loopback_setup`, RTM_NEWADDR/RTM_NEWLINK; the strings
+are in the installed 0.11.1), so the agent's loopback is its own and the host's Ollama and Tabtivity MCP
+ports are not there. The abstract-socket Landlock scope is unchanged. The fence decision is the gate's
+record (`Verified::cut`) checked against the registry (`fence_cut_in`): the switch moved on while a tab
+started refuses (open it again), moved off keeps the cut.
+
+**The local lane** (`services::local_lane`, Unix only, `AppHandle`-free, builds in the daemon):
+
+- *Host side* (`server.rs`, `policy.rs`, `http.rs`): per tab two Unix sockets in `<state_dir>/local-lane/`
+  (`<hash of the pty id>.sock` for Ollama, `….mcp.sock` for the tools; mode 0600 in a 0700 folder; a long
+  state dir is reached through `/proc/self/fd/<dir>/` because `sun_path` holds about 100 bytes). Opened by the
+  Linux wrapper after every mask, closed by `on_tab_gone` / `abandon_spawn`, at the app's `RunEvent::Exit`
+  and the Mobile host's stop (`stop_for_exit`); files an earlier run left are swept at the first open. Every
+  connection is one request: a strict parser (no chunked body, no upgrade, no compressed body, one
+  `Content-Length`, no bare line feeds, `Expect: 100-continue` answered), a path allowlist, then the request
+  is **rebuilt** and sent on to the verified loopback endpoint (only `Content-Type`, `Accept`, `User-Agent`
+  and a `Host` of the lane's choosing; `Connection: close`; identity encoding), after
+  `ollama_client::owner_gate` on every connect. Streaming passes through byte for byte; a client that hangs
+  up drops the upstream connection (the generation stops). Limits: 32 MiB body, 15 s head, 120 s body, 15 min
+  idle, 4 h per exchange, 32 exchanges per lane. Refusals are JSON in the shape of the API asked
+  (native, OpenAI, Anthropic).
+- *Routes*: the plan's list (`/api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`, `/api/tags`,
+  `/api/show`, `/api/ps`, `/api/version`, `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`,
+  `/v1/models`, `/v1/messages`) **plus two the drivers needed**, found by running them: `GET|HEAD /`
+  (`ollama launch` probes it first and stops with "something went wrong" without it) and
+  `POST /v1/responses` (Codex's wire API). Everything else is refused (`pull`, `push`, `create`, `copy`,
+  `delete`, `blobs`, `/api/status`, `/api/experimental/*`, `/api/hello`, `/v1/messages/count_tokens` ...).
+- *Models*: every model a body names (`model`; `name` too on `/api/show`) passes
+  `ollama_client::model_is_local_at` (60 s cache). Go's JSON decoder folds key case and takes the last
+  match, so a body that spells `model` twice or in another case is refused, as is a non-string, a padded or
+  empty name. `/api/tags` drops entries naming a remote; `/v1/models` keeps ids the same check accepts.
+- *Tools*: the second socket forwards `POST` to `/mcp/cockpit`, `/mcp/help` and `/mcp/markup` of this
+  process's MCP server only (`MCP_ALLOWED`); `/mcp/web`, `/mcp/git`, `/mcp/schedule` and `/mcp` are refused.
+  Bearer tokens are unchanged and forwarded. The phone send (`tabtivity-send`) needs no relay at all: it is a
+  shell script that writes into the project's outbox folder, which the fence binds read-write.
+- *Fence side* (`relay.rs`, `main.rs`): the fence's command becomes the app's own binary,
+  `<binary> --local-relay PORT=SOCKET… -- <cli> …`, bound read-only at `/run/<slug>-lane/relay`, with the
+  sockets bound beside it (right after the `--tmpfs /run`, before the home is replaced, so the sources under the
+  state dir resolve). It listens on `127.0.0.1` (and `::1`) at **the same ports** the CLI is configured with
+  (the verified Ollama port, the MCP port), so the Claude pin, `OLLAMA_HOST`, the OpenCode inline config and
+  every MCP URL keep working; the pins name `127.0.0.1:<port>` whatever spelling `ollama_host` has
+  (`fence_endpoint`). It forks a pump process (own process group, no terminal, `PR_SET_PDEATHSIG`) and
+  **execs the CLI in the same process**, so the tab keeps its process, terminal and signals. A client hang-up
+  closes the exchange.
+
+**Why the app's own binary, not a helper (the spike).** The plan asked to check the binary is reachable and
+what it costs. Measured on the debug build here: 125 shared libraries (the host's `/usr/lib`, visible through
+`--ro-bind / /`), 40 to 80 ms to start (the mode is dispatched in `main` before anything of Tauri starts, as
+`--fence-scope` and `--agent-exec` already are), 57 MB resident. It can be bound whatever its path is, including
+under `$HOME`, which the fence otherwise hides. The cost is that an **AppImage** keeps its libraries in a FUSE mount
+under `/tmp` that the fence hides, so `relay_exe_check` refuses a cut spawn there with the reason; the static
+helper in `<state_dir>/bin` the plan names as the fallback is **not built** (it needs a second build target and
+packaging, which this change could not exercise). *Not run:* the bind mount and the relay inside a real
+`--unshare-net` bubblewrap, because this session's fence forbids a nested namespace.
+
+**Tests.** Real sockets and no namespace: an in-process in-fence listener (`Relay`), the Unix socket, the host
+side and a stub Ollama (`local_lane/tests.rs`): routes, refusals, models (cloud name, cloud model listed under a
+local name, duplicate-case keys), list filtering, body cap and framing, slow head, `100-continue`, streaming
+as produced, hang-up cancels, MCP lanes, socket mode and teardown, long paths; the real binary's mode in
+`tests/local_lane_relay.rs` (the command is the relay's own process and its exit code, the pump goes with it,
+a taken port fails closed); the bubblewrap argv shape in `agent_privacy/tests.rs`.
+
+**Per-driver run with the network cut.** Done as plain processes, no namespace: `netcut`, a seccomp
+user-notification supervisor (a test tool, not in the product) that fails `connect`/`sendto`/`sendmsg` like a
+fresh namespace would: loopback ports that something on the *host* listens on refuse, ports the CLI's own
+tree opens are allowed, everything else is `ENETUNREACH`, and the stub resolver `127.0.0.53:53` refuses.
+In it, `<binary> --local-relay` and the harness `examples/local_lane_harness.rs` (the lane's host half
+against the real Ollama on 127.0.0.1:11434) with `nemotron-3.5-bolt:e4b`; a permissive logging proxy was
+used first to learn which paths each CLI asks for. Each CLI ran in an isolated `HOME`, a scratch project,
+under a pty. "Edit" is a non-interactive run in a scratch project.
+
+| Driver | Starts | Answers a prompt through the relay | Edits a file | Update check, telemetry, login probe | Lane paths used | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude Code 2.1.319 | 0.6 s | yes (`ollama launch claude` too, once `HEAD /` is carried) | yes (`claude -p`, `acceptEdits`) | Without the quiet switches it sends `HEAD /api/hello` (refused, harmless) and tries the resolver; with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1` it sends nothing but the model call. No hang either way | `POST /v1/messages?beta=true`; `HEAD /`, `POST /api/show`, `GET /api/tags` (+ refused `/api/status`, `/api/experimental/model-recommendations`) through `ollama launch` | **verified** |
+| OpenCode 2.2.6 | 1.0 s (`mini --standalone`, its own server on a random loopback port, which a namespace's loopback allows) | yes (`opencode run`) | yes (`Wrote file successfully`) | The resolver is tried and refused at once; `OPENCODE_DISABLE_AUTOUPDATE`, `_MODELS_FETCH`, `_FREE_MODELS` silence it. No hang | `GET /api/tags`, `POST /api/show` for **each installed model** (a cloud-flagged one is refused by the lane, which the CLI shrugs off), `POST /v1/chat/completions` | **verified** for `run`; the interactive `mini` TUI started but a prompt typed through the harness's pty never produced a request (not diagnosed, so the typed-prompt path is **not** verified) |
+| Codex 0.167.0 | 0.7 s | yes (interactive) | **not verified**: its own sandbox needs a user namespace and exits at "Codex's Linux sandbox uses bubblewrap" here; the unsandboxed form was not run | The resolver is tried and refused at once; no env switch exists. No hang | `GET /v1/models`, `GET /api/version`, `GET /api/tags`, `POST /v1/responses` | **verified** to start and answer; edit not exercised |
+| Pi, Droid, Cline, OpenClaw | not installed | | | | | **refused** in a cut project, naming it |
+| Mistral (vibe) | not installed | | | | | **refused** in a cut project, naming it |
+
+`CUT_VERIFIED_DRIVERS` is `opencode`, `claude`, `codex`; `cut_quiet_env` sets the switches above on a cut tab.
+The ＋ menus, the allowed-agents list and the phone's sheet follow it (`offeredLocalAgents`).
+
+**The phone's ＋ sheet** (`NewTabSheet`, `localChoiceRows`) reads the same rule as the desktop menus:
+`PublicProject` (`mobile_control::discovery`) carries `local_models_only` and `cut_network` as plain booleans,
+absent when off (read with `agent_privacy::privacy_of_value`, so a malformed record counts as locked, as in
+the gate). In a locked project the sheet lists the local model's agents (OpenCode only with the cut on, and then
+only the verified drivers) and shells, not the cloud agents, their cloud sessions, the API and sign-in rows;
+`cloudRowsOffered`, `offeredLocalAgents` are the one shared TS rule. `the_frontends_driver_lists_are_the_backends`
+ties the Rust and TS driver lists. The baked PWA needs `npm run mobile:bundle` to carry the sheet change.
+
+## Not done
+
+macOS Seatbelt network denial (phase 3: Cut network is refused there), container and VM projects
+(phase 4), and what "Cut network (phase 2, Linux)" below lists as not run in a real namespace.
