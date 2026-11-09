@@ -868,11 +868,24 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
                 if reason == WebProcessTerminationReason::TerminatedByApi {
                     return;
                 }
-                if renderer_reload_allowed(
+                if !renderer_reload_allowed(
                     crashes.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 ) {
-                    view.reload();
+                    return;
                 }
+                // A reload spawns a new web process; out of descriptors, GLib
+                // asserts inside that spawn and aborts the whole app
+                // (2026-11-09). A dead page is the lesser loss.
+                if let Err(why) = services::fd_limit::spawn_headroom() {
+                    let msg = format!(
+                        "=== WEBVIEW '{label}' NOT RELOADED {}: {why} ===",
+                        storage::iso_now()
+                    );
+                    crash_log_append(&msg);
+                    eprintln!("{msg}");
+                    return;
+                }
+                view.reload();
             });
     });
 }
@@ -1480,6 +1493,13 @@ pub fn run() {
     // JS at load 121). Best effort; see `services::ui_priority`.
     #[cfg(target_os = "linux")]
     services::ui_priority::install();
+
+    // The session's 1024 open files ran out under many agent tabs, and a
+    // renderer reload then aborted inside GLib (2026-11-09). See
+    // `services::fd_limit`.
+    if let Some((old, new)) = services::fd_limit::raise_soft_limit() {
+        eprintln!("fd_limit: open-file soft limit {old} -> {new}");
+    }
 
     services::brand_migration::hits::install();
     // Before anything creates or opens the state dir, and before the webview

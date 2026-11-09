@@ -140,6 +140,11 @@ fn sample() -> String {
     if let Some(n) = field(&status, "Threads:") {
         parts.push(format!("threads {n}"));
     }
+    match super::fd_limit::usage() {
+        Ok((open, limit)) => parts.push(format!("fds {open}/{limit}")),
+        Err(e) if e.raw_os_error() == Some(libc::EMFILE) => parts.push("fds exhausted".into()),
+        Err(_) => {}
+    }
     parts.join(", ")
 }
 

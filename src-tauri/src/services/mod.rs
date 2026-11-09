@@ -150,6 +150,9 @@ pub mod spell;
 pub mod state_gc;
 // When a run died, when no handler could say (`crash.log`'s PREVIOUS RUN DIED).
 pub mod run_heartbeat;
+// The open-file soft limit raised at launch; descriptor headroom before a
+// renderer reload.
+pub mod fd_limit;
 // TensorBoard event files read natively (the training-curves viewer).
 pub mod tfevents;
 pub mod terminal_service;
