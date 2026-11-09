@@ -253,10 +253,10 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
     input.current.openTab(target.project_id, target);
   }
 
-  /** Moves the cursor one step on a list level, a section or a sheet. */
-  function step(dir: 1 | -1, level: PhoneLevel): void {
+  /** Moves the cursor one step on a list level, a section or a sheet; inside a tab it scrolls (`page`: Shift, a page). */
+  function step(dir: 1 | -1, level: PhoneLevel, page = false): void {
     if (level === "inside") {
-      scrollStep(dir);
+      scrollStep(dir, page);
       return;
     }
     if (LIST_LEVELS.has(level)) {
@@ -319,10 +319,10 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
         toggleLegendFolded();
         return;
       case "up":
-        step(-1, level);
+        step(-1, level, e.shiftKey);
         return;
       case "down":
-        step(1, level);
+        step(1, level, e.shiftKey);
         return;
       case "back":
         goBack();

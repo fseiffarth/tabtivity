@@ -309,6 +309,19 @@ describe("Mobile steering inside a tab", () => {
     expect(chat.scrollTop).toBe(5000);
   });
 
+  it("Shift with the arrows (or E/D) scrolls a page instead of a third", async () => {
+    await mount();
+    const chat = document.querySelector<HTMLElement>(".readable-output")!;
+    Object.defineProperty(chat, "clientHeight", { configurable: true, value: 600 });
+    press(document.body, " ", { shift: true });
+    press(document.body, "ArrowDown");
+    expect(chat.scrollTop).toBe(200);
+    press(document.body, "ArrowDown", { shift: true });
+    expect(chat.scrollTop).toBe(200 + 540);
+    press(document.body, "E", { shift: true });
+    expect(chat.scrollTop).toBe(200);
+  });
+
   it("unregisters when the terminal goes away", async () => {
     await mount();
     expect(getSteering().hasInside).toBe(true);
