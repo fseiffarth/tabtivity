@@ -147,6 +147,7 @@ function reading(...items: [string, boolean][]): MobileSpeechRecognitionResultEv
 describe(`${BRAND.display} Mobile spoken navigation`, () => {
   let spoken: FakeUtterance[];
   let ended: number;
+  let cancels: number;
   let openTab: Mock<(tab: TabRow, opts?: { project?: string }) => void>;
   let openProject: Mock<(id: string) => void>;
 
@@ -160,6 +161,7 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     FakeWebSocket.instances = [];
     spoken = [];
     ended = 0;
+    cancels = 0;
     openTab = vi.fn<(tab: TabRow, opts?: { project?: string }) => void>();
     openProject = vi.fn<(id: string) => void>();
     forgetReadings();
@@ -169,7 +171,7 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     vi.stubGlobal("SpeechSynthesisUtterance", FakeUtterance);
     vi.stubGlobal("speechSynthesis", {
       speak: (utterance: FakeUtterance) => { spoken.push(utterance); },
-      cancel: () => { ended = spoken.length; },
+      cancel: () => { ended = spoken.length; cancels += 1; },
     });
     vi.stubGlobal("fetch", sidecarFetch());
     localStorage.setItem(storageKey("mobile.view.claude-code"), "focus");
@@ -613,6 +615,17 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(openTab).toHaveBeenCalledTimes(1);
     });
 
+    it("stops a line being said when the screen is left", async () => {
+      await start();
+      await hear(`${T} navigate`);
+      await hear("go to project Beta");
+      expect(said()).toEqual(["Project Beta?"]);
+      const before = cancels;
+      cleanupScreen();
+      expect(cancels).toBeGreaterThan(before);
+      expect(ended).toBe(spoken.length);
+    });
+
     it("shows the lines only, with the mic left open, where the browser cannot speak", async () => {
       vi.stubGlobal("speechSynthesis", undefined);
       Reflect.deleteProperty(window, "speechSynthesis");
@@ -802,6 +815,17 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(FakeRecognition.instances).toHaveLength(0);
       await advance(10_000);
       expect(FakeRecognition.instances).toHaveLength(1);
+    });
+
+    it("stops the landing being said when the screen is left", async () => {
+      host.transcript = session(["prompt", "q"], ["answer", "a"]);
+      land();
+      await mount();
+      expect(said()).toEqual(["You asked: q"]);
+      const before = cancels;
+      cleanupScreen();
+      expect(cancels).toBeGreaterThan(before);
+      expect(ended).toBe(spoken.length);
     });
 
     it("opens the mic as the voice line is tapped, stopping the voice", async () => {
