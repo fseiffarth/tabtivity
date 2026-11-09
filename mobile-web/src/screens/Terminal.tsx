@@ -2208,7 +2208,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** A jump to this tab: its last prompt and the answer are read, then the mic opens. */
   const landingLine = useVoiceLanding({
     tab, connected, handsFree, micOpen: () => recognition.current !== undefined || preparingVoice, transcript,
-    sessionFocus, startVoiceRef,
+    sessionFocus, startVoiceRef, hasDraft: () => draftRef.current.trim() !== "",
   });
   const navLine = voiceFailure ? null : nav.line ?? landingLine;
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");

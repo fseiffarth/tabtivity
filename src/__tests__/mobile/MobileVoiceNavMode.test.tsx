@@ -72,6 +72,7 @@ import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import type { ActivityTab, TabRow } from "../../../mobile-web/src/api";
 import { forgetReadings } from "../../../mobile-web/src/speechOutput";
 import { readSeenDone } from "../../../mobile-web/src/seenDone";
+import { writeDraft } from "../../../mobile-web/src/drafts";
 import { leaveLanding, resetNavCursors, takeLanding } from "../../../mobile-web/src/voiceNav";
 import { BRAND, storageKey } from "../../lib/brand";
 
@@ -729,6 +730,18 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(box().value).toBe("");
       await hear(`${T} and add a changelog line`);
       expect(box().value).toBe("and add a changelog line");
+    });
+
+    it("opens the mic with the gate off when a draft is kept for the tab, as for typed text", async () => {
+      writeDraft(HERE.id, "half a thought");
+      host.transcript = session(["prompt", "q"], ["answer", "a"]);
+      land();
+      await mount();
+      expect(box().value).toBe("half a thought");
+      await finishSpeech();
+      await advance(400);
+      expect(FakeRecognition.instances).toHaveLength(1);
+      expect(screen.queryByText(new RegExp(`say ${T} for your next prompt`))).toBeNull();
     });
 
     it("is read all the same when the screen is mounted twice (a development remount)", async () => {

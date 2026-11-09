@@ -21,7 +21,7 @@ export const LANDING_TRANSCRIPT_WAIT_MS = 6_000;
 type Phase = "waiting" | "speaking" | "done";
 
 export function useVoiceLanding({
-  tab, connected, handsFree, micOpen, transcript, sessionFocus, startVoiceRef,
+  tab, connected, handsFree, micOpen, transcript, sessionFocus, startVoiceRef, hasDraft,
 }: {
   tab: TabRow;
   connected: boolean;
@@ -33,6 +33,9 @@ export function useVoiceLanding({
   /** Focus is reading the stored session. */
   sessionFocus: boolean;
   startVoiceRef: { current: (options?: StartVoiceOptions) => Promise<void> };
+  /** The composer holds a draft (kept with the tab across the jump): the mic
+   * opens with the Tabby gate off, as it does for text typed into the box. */
+  hasDraft: () => boolean;
 }): NavLine | null {
   const [landing, setLanding] = useState<Landing | null>(null);
   const taken = useRef(false);
@@ -106,7 +109,7 @@ export function useVoiceLanding({
       window.clearTimeout(timer);
       setLine(null);
       setPhase("done");
-      void startVoiceRef.current({ gate: true });
+      void startVoiceRef.current({ gate: !hasDraft() });
     };
     const check = () => {
       window.clearTimeout(timer);
