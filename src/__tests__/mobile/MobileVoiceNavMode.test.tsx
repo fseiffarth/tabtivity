@@ -477,6 +477,17 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(micOpen()).toBe(true);
     });
 
+    it("does not close on a command begun inside the ten seconds, however long it takes to settle", async () => {
+      await start();
+      await hear(`${T} navigate`);
+      await advance(9_500);
+      // Said at 9.5 s; the utterance settles 0.8 s later, past the ten.
+      await hear("go to project Beta");
+      await advance(0);
+      expect(screen.queryByText("Navigation closed")).toBeNull();
+      expect(said()).toEqual(["Project Beta?"]);
+    });
+
     it("does not count the ten seconds while the phone is speaking", async () => {
       await start();
       await hear(`${T} navigate`);

@@ -2175,6 +2175,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const utteranceHooks = {
     capture: useRef(false),
     take: useRef<(utterance: string) => boolean>(() => false),
+    activity: useRef<() => void>(() => {}),
   };
   /** Spoken navigation is open (`useVoiceNav`): hands-free leaves the mic to it. */
   const [navOpen, setNavOpen] = useState(false);

@@ -99,6 +99,8 @@ export function useVoiceNav({
   /** Bumped by each spoken line: only the newest line's continuation runs. */
   const turn = useRef(0);
   const idle = useRef(0);
+  /** The quiet timer is running (the mic is open and the phone is not speaking). */
+  const idleArmed = useRef(false);
   const flashTimer = useRef(0);
   const data = useRef<Promise<NavData> | null>(null);
   /** Commands run one at a time, in the order they were heard. */
@@ -114,13 +116,23 @@ export function useVoiceNav({
 
   /** A function, so that no narrowing of `mode.current` outlives an `await`. */
   const isOff = () => mode.current.kind === "off";
-  const clearIdle = () => window.clearTimeout(idle.current);
+  const clearIdle = () => {
+    window.clearTimeout(idle.current);
+    idleArmed.current = false;
+  };
   const armIdle = () => {
     clearIdle();
     if (mode.current.kind === "off") return;
     const mine = epoch.current;
-    idle.current = window.setTimeout(() => { if (epoch.current === mine) leave(); }, NAV_IDLE_MS);
+    idleArmed.current = true;
+    idle.current = window.setTimeout(() => {
+      idleArmed.current = false;
+      if (epoch.current === mine) leave();
+    }, NAV_IDLE_MS);
   };
+  // Words being said are not quiet: a command begun just inside the ten seconds
+  // must not be cut off by them before it has settled and been handled.
+  utterances.activity.current = () => { if (idleArmed.current) armIdle(); };
   /** The mode is over (no mic change): what is in flight stops, the screen goes back to dictating. */
   const exit = () => {
     epoch.current += 1;

@@ -50,6 +50,9 @@ export interface UtteranceHooks {
   capture: MutableRefObject<boolean>;
   /** A held utterance settled, as one whole text. True when a command took it. */
   take: MutableRefObject<(utterance: string) => boolean>;
+  /** The recognizer produced words while navigation mode was open (a command
+   * begun, still being said): the mode's quiet timer starts over. */
+  activity: MutableRefObject<() => void>;
 }
 
 /** What a mic start may say about the Tabby gate: `true` sets it (navigation,
@@ -209,6 +212,7 @@ export function useVoiceInput({
       // Navigation mode owns the mic: every word is a command (never typed),
       // and none of it may start the send guard's pause.
       if (utterances.capture.current) {
+        utterances.activity.current();
         voiceOpen.current = false;
         handsFree.sendGuard.current?.reset();
         setVoicePreview("");
