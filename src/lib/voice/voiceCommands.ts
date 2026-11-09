@@ -871,22 +871,23 @@ export const BUILTIN_AGENT_ALIASES: Readonly<Record<string, readonly string[]>> 
 /** How many leading tokens the start word takes (`voice.startWord`, the
  * assistant's name), 0 when it is not first. A recognizer spells a name it
  * does not know freely, so the heard word is compared as a spoken name is
- * (`phonetic`: "Tabbi" and "Tabby" are one), as one word or as two run
- * together ("Tab bi"), and only at the start: "ask Tabby" or a "tabby cat"
+ * (`phonetic`: "Tabbi" and "Tabby" are one), as one word or, for the name's own
+ * spelling, as two run together ("Tab bi"), and only at the start: "ask Tabby" or a "tabby cat"
  * mid-sentence is dictation. The bar is exact on that spelling plus the
  * dictionary's aliases (`voice.assistantAliases`: "Tavi", the spellings a
  * recognizer is known to write) — a fuzzy score let "taxi", "Toby" and
  * "tabs" through, each one letter from a four-letter name, and a word spoken
  * at the start of every sentence cannot afford a false hit. */
 function startWordLength(tokens: readonly Token[], lang: Language): number {
-  const forms = new Set(
-    [translate(lang, "voice.startWord"), ...splitTemplates(translate(lang, "voice.assistantAliases"))]
-      .map((form) => phonetic(norms(form, lang).join("")))
-      .filter(Boolean),
-  );
+  const phoneticForm = (form: string) => phonetic(norms(form, lang).join(""));
+  const name = phoneticForm(translate(lang, "voice.startWord"));
+  const forms = new Set([name, ...splitTemplates(translate(lang, "voice.assistantAliases")).map(phoneticForm)].filter(Boolean));
   if (!forms.size || !tokens.length) return 0;
   if (forms.has(phonetic(tokens[0].norm))) return 1;
-  if (tokens.length > 1 && forms.has(phonetic(tokens[0].norm + tokens[1].norm))) return 2;
+  // Two words run together ("Tab bi") are the name itself, never an alias: the
+  // aliases are one-word spellings, and "tab" + "be" ("tab be careful") is
+  // ordinary speech that joins into one of them.
+  if (tokens.length > 1 && name && phonetic(tokens[0].norm + tokens[1].norm) === name) return 2;
   return 0;
 }
 

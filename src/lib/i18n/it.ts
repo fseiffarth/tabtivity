@@ -11382,7 +11382,7 @@ export const dict: Dict = {
   "voice.cmd.whatsWaiting": "cosa aspetta|cosa sta aspettando|cosa mi aspetta",
   "voice.cmd.whatsWorking": "cosa sta lavorando|cosa è in corso|cosa lavora",
   "voice.cmd.nextWaiting": "prossimo in attesa|successivo in attesa|prossima domanda|vai alla scheda in attesa|la scheda in attesa",
-  "voice.cmd.nextWorking": "prossimo in corso|successivo in corso|vai alla scheda in corso|la scheda in corso",
+  "voice.cmd.nextWorking": "prossimo in corso|successivo in corso|vai alla scheda in corso|vai alla scheda che lavora|la scheda che lavora",
   "voice.cmd.nextDone": "prossimo finito|prossimo completato|successivo finito|vai alla scheda finita|vai alla scheda completata|la scheda finita|la scheda completata",
   "voice.cmd.status": "stato|dove sono|dove siamo",
   "voice.cmd.tabNumber": "scheda {n}|apri la scheda {n}|vai alla scheda {n}",

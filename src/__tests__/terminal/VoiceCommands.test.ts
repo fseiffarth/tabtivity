@@ -525,6 +525,8 @@ describe("the start word and navigation", () => {
   ];
   /** Words one letter from the name that are not it. */
   const nearWords = ["taxi", "Toby", "tabs", "tab", "tobi", "tape", "tabu"];
+  /** Ordinary words that run together into a one-word alias ("tab" + "be" → "tabe"). */
+  const nearPairs = ["tab be", "tab bee", "Tab be"];
   const aloneIn: Record<Language, string> = {
     en: "ask @@ to navigate the tabs",
     de: "frag @@ ob er navigiere",
@@ -574,6 +576,16 @@ describe("the start word and navigation", () => {
     }
   });
 
+  it.each(LANGS)("%s: two ordinary words that join into an alias are not the start word", (lang) => {
+    for (const pair of nearPairs) {
+      expect(matchStartWord(`${pair} careful with that`, lang), pair).toBeNull();
+      expect(matchStartWord(pair, lang), pair).toBeNull();
+      expect(matchNavigate(`${pair} ${navigatePhrases(lang)[0].split(" ").slice(1).join(" ")}`, lang), pair).toBeNull();
+    }
+    // The name split in two is still the name.
+    expect(matchStartWord(`${A.slice(0, 3)} ${A.slice(3).replace(/y$/i, "i")} and add a test`, lang)).toEqual({ rest: "and add a test" });
+  });
+
   it("holds an utterance back while it may still be a navigate command", () => {
     expect(mayNavigate(A, "en")).toBe(true);
     expect(mayNavigate(`${A} nav`, "en")).toBe(true);
@@ -606,6 +618,14 @@ describe("the start word and navigation", () => {
     expect(matchNavLeave("cancel", "en")).toBe(true);
     expect(matchNavLeave("please cancel", "en")).toBe(true);
     expect(matchNavLeave("vergiss es", "de")).toBe(true);
+  });
+
+  it("a bare \"the current tab\" is not the working-tab command in French or Italian", () => {
+    for (const [lang, text] of [["fr", "l'onglet en cours"], ["it", "la scheda in corso"]] as const) {
+      expect(said(match(text, lang, lists, free)), text).not.toBe("nextWorking");
+    }
+    expect(said(match("l'onglet qui travaille", "fr", lists, free))).toBe("nextWorking");
+    expect(said(match("la scheda che lavora", "it", lists, free))).toBe("nextWorking");
   });
 
   const queues: Record<Language, [string, string][]> = {

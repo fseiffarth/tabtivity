@@ -11384,7 +11384,7 @@ export const dict: Dict = {
   "voice.cmd.whatsWaiting": "qu'est-ce qui attend|qui attend|qu'est-ce qui m'attend",
   "voice.cmd.whatsWorking": "qu'est-ce qui tourne|qui travaille|qu'est-ce qui travaille",
   "voice.cmd.nextWaiting": "prochain en attente|suivant en attente|prochaine question|va à l'onglet en attente|aller à l'onglet en attente|l'onglet en attente",
-  "voice.cmd.nextWorking": "prochain en cours|suivant en cours|va à l'onglet en cours|aller à l'onglet en cours|l'onglet en cours",
+  "voice.cmd.nextWorking": "prochain en cours|suivant en cours|va à l'onglet en cours|aller à l'onglet en cours|va à l'onglet qui travaille|l'onglet qui travaille",
   "voice.cmd.nextDone": "prochain terminé|suivant terminé|va à l'onglet terminé|aller à l'onglet terminé|l'onglet terminé",
   "voice.cmd.status": "état|statut|où suis-je|où en suis-je",
   "voice.cmd.tabNumber": "onglet {n}|ouvre l'onglet {n}|va à l'onglet {n}",
