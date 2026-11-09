@@ -459,6 +459,8 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     leave();
+    // Unpaired or unmounted: a close confirm must not wait for the next session.
+    setConfirm(null);
   };
 }
 

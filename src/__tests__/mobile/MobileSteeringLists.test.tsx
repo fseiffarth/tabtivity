@@ -199,6 +199,22 @@ describe("Mobile steering — closing a tab asks first", () => {
     expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "DELETE")).toBe(false);
   });
 
+  it("a tap on the confirm's own button still closes the tab (the tap leaves the mode, not the sheet)", async () => {
+    await mountProject();
+    press(null, " ", { shift: true });
+    press(null, "d");
+    press(null, "w");
+    const sheet = await screen.findByRole("dialog", { name: "Close b?" });
+    const button = [...sheet.querySelectorAll<HTMLButtonElement>("[data-steer-confirm]")][0];
+    expect(button).toBeTruthy();
+    // A finger on the glass: pointerdown first (it leaves the mode), then the click.
+    act(() => { fireEvent.pointerDown(button); });
+    expect(active()).toBe(false);
+    act(() => { fireEvent.click(button); });
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url) === "/api/v1/tabs/b" && (init as RequestInit | undefined)?.method === "DELETE")).toBe(true));
+    await waitFor(() => expect(getSteering().confirm).toBeNull());
+  });
+
   it("a confirm for a card that is gone does nothing", async () => {
     await mountProject();
     act(() => setConfirm({ tabId: "gone", label: "gone" }));

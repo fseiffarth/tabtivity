@@ -136,11 +136,15 @@ export function useSteering(): SteeringSnapshot {
   return useSyncExternalStore(subscribe, getSteering, getSteering);
 }
 
-/** Turns the mode on or off. Leaving drops the flash and a pending close confirm; the folded flag stays. */
+/**
+ * Turns the mode on or off. Leaving drops the flash; the folded flag stays, and
+ * so does a close confirm already on screen: it is an ordinary sheet by then,
+ * and the tap that leaves the mode may be the one on its own button.
+ */
 export function setActive(active: boolean): void {
   if (state.active === active) return;
   if (!active) clearFlashTimer();
-  set(active ? { active } : { active, flash: null, confirm: null, view: null });
+  set(active ? { active } : { active, flash: null, view: null });
 }
 
 export function setLegendFolded(legendFolded: boolean): void {
