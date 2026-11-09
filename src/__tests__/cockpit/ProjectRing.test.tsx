@@ -113,10 +113,10 @@ describe("the project ring's root station", () => {
 
   it("the cycle-project chord opens Root too, and cycles on from it", () => {
     render(<Harness />);
-    // Ctrl+Shift+Tab walks forward: a -> b -> Root.
-    press({ key: "Tab", ctrlKey: true, shiftKey: true });
+    // Alt+Shift+→ walks forward: a -> b -> Root.
+    press({ key: "ArrowRight", altKey: true, shiftKey: true });
     expect(setActive).toHaveBeenLastCalledWith("b");
-    press({ key: "Tab", ctrlKey: true, shiftKey: true });
+    press({ key: "ArrowRight", altKey: true, shiftKey: true });
     expect(rootUp()).toBe(true);
     expect(setActive).not.toHaveBeenCalledWith(null);
     expect(useProjectsStore.getState().activeId).toBe("b");

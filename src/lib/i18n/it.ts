@@ -2465,7 +2465,7 @@ export const dict: Dict = {
 
   "steering.project.label": "Cambia progetto",
 
-  "steering.project.desc": "Progetto precedente / successivo, terminale root incluso — l'anello che percorre {modifier}+Maiusc+Tab. La navigazione arriva sulle sue schede; ↑ torna qui per cambiare di nuovo.",
+  "steering.project.desc": "Progetto precedente / successivo, terminale root incluso — l'anello che percorre {cycle}. La navigazione arriva sulle sue schede; ↑ torna qui per cambiare di nuovo.",
 
   "steering.into.label": "Nelle finestre",
 
@@ -10188,7 +10188,7 @@ export const dict: Dict = {
   "lessons.keyboardSteering.cheatSheetTitle": "Il riepilogo con F1",
   "lessons.keyboardSteering.cheatSheetBody": "F1 apre il riepilogo delle scorciatoie in qualsiasi momento — senza bisogno della navigazione {app} (è anche nel menu Impostazioni). Elenca ogni combinazione effettiva raggruppata in navigazione, schede e sottofinestre, e navigazione {app}; contrassegna quelle che hai personalizzato e nomina i tasti fissi. Lo stesso F1 è riassegnabile.",
   "lessons.keyboardSteering.projectCycleTitle": "Scorri i progetti — e personalizza tutto",
-  "lessons.keyboardSteering.projectCycleBody": "Fuori dalla navigazione {app}, {modifier}+Maiusc+Tab passa al progetto successivo e Alt+Maiusc+← al precedente — lo stesso anello su cui saltano le cifre. Ogni combinazione nominata in questa lezione è un valore predefinito: Impostazioni → Scorciatoie da tastiera le mostra raggruppate, avvisa quando due combinazioni collidono, e il suo \"Reimposta tutto\" riporta tutto allo stato di fabbrica.",
+  "lessons.keyboardSteering.projectCycleBody": "Fuori dalla navigazione {app}, {cycle} passa al progetto successivo e {cycleBack} al precedente ({modifier}+Tab e {modifier}+Maiusc+Tab scorrono le schede del progetto) — lo stesso anello su cui saltano le cifre. Ogni combinazione nominata in questa lezione è un valore predefinito: Impostazioni → Scorciatoie da tastiera le mostra raggruppate, avvisa quando due combinazioni collidono, e il suo \"Reimposta tutto\" riporta tutto allo stato di fabbrica.",
   "lessons.yamlViewer.title": "Modifica YAML e JSON visivamente",
   "lessons.yamlViewer.blurb": "Apri un file di configurazione come schede modificabili o albero: i commenti e la formattazione sopravvivono a ogni modifica.",
   "lessons.yamlViewer.openYamlTitle": "Apri un file .yaml, .yml o .json",
@@ -10848,6 +10848,8 @@ export const dict: Dict = {
   "shortcut.subwindowUp": "Cicla la sottofinestra attiva verso l’alto",
   "shortcut.subwindowDown": "Cicla la sottofinestra attiva verso il basso",
   "shortcut.cycleTabs": "Cicla le schede nella sottofinestra",
+  "shortcut.nextProjectTab": "Scheda successiva del progetto",
+  "shortcut.prevProjectTab": "Scheda precedente del progetto",
   "shortcut.hideSubwindow": "Nascondi la sottofinestra attiva",
   "shortcut.toggleSubwindowFiles": "Attiva/disattiva il visualizzatore file della sottofinestra",
   "shortcut.closeSubwindow": "Chiudi la sottofinestra attiva",

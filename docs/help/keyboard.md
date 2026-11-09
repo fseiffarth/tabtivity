@@ -25,8 +25,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 
 | Default | Action |
 |---|---|
-| Ctrl+Shift+Tab | Next project |
-| Alt+Shift+← | Previous project |
+| AltGr+Tab / AltGr+Shift+Tab | Next / previous project (AltGr = the right Alt key) — from a focused terminal too; Alt+Shift+→ / ← work as well, and are the default on macOS |
 | Ctrl+Shift+PageDown / PageUp | Next / previous box |
 | Ctrl+Shift+R | Open / close the root console |
 | Shift+Space | Enter Tabtivity navigation |
@@ -37,6 +36,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 | Default | Action |
 |---|---|
 | Ctrl+Shift+← / Ctrl+Shift+→ | Previous / next tab in the pane — from a focused terminal too (a program in it then never gets these keys; plain Shift+←/→ is left to it, e.g. an agent CLI's own use of it) |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab of the project, through all its panes in order (focus moves to the pane that holds it, wrapping) — from a focused terminal too |
 | Shift+Tab | Cycle tabs in the pane |
 | Ctrl+Shift+↑ / Ctrl+Shift+↓ | Cycle pane focus up / down |
 | Ctrl+Enter | Toggle the focused pane's fullscreen |

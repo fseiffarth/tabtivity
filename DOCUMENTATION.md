@@ -1087,8 +1087,10 @@ keeps global `~/.vibe/config.toml` untouched.
 
 Beyond these, a **rebindable** set lives in `src/lib/shortcuts/shortcuts.ts` and is edited
 in Settings → Shortcuts, persisted as `settings.keyboard_shortcuts` overrides:
-toggle subwindow fullscreen, cycle to the next project, previous/next tab in a
-subwindow, cycle the focused subwindow up/down, cycle tabs, hide the focused
+toggle subwindow fullscreen, cycle to the next / previous project (AltGr+Tab / AltGr+Shift+Tab, plus
+Alt+Shift+→ / ←; on macOS the arrows),
+next/previous tab of the whole project (Ctrl+Tab / Ctrl+Shift+Tab, across
+subwindows), previous/next tab in a subwindow, cycle the focused subwindow up/down, cycle tabs, hide the focused
 subwindow, toggle its file viewer, close the focused subwindow, close the active
 tab, and close all tabs in a project. On macOS the Meta key is reserved for Cmd
 shortcuts, so the chord labels differ there.

@@ -75,6 +75,7 @@ import { useDialogs } from "../common/PromptDialogs";
 import { tabColorCss, type TabColor } from "../../lib/theme/tabColors";
 import { pickEdge } from "../tabs/dragGeometry";
 import {
+  actionMatches,
   chordMatches,
   resolveChord,
   type ShortcutAction,
@@ -104,7 +105,7 @@ import {
   type TabEntry,
   type TabLocation,
 } from "../../stores/tabs";
-import { dividerFraction } from "../../stores/tabs/layoutTree";
+import { dividerFraction, stepOrderedTab } from "../../stores/tabs/layoutTree";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
 import { detachedNewTabCwd, detachedNewTabTarget, type DetachedRemoteInfo } from "../../stores/detached";
@@ -429,7 +430,7 @@ export function DetachedCenterPanel({
       if (editable && !isMacCommandChord(e) && !isPaneTerminalTarget(e.target)) return;
       const is = (action: ShortcutAction) =>
         (!editable || editorMayTakeChord(action, e) || terminalMayTakeChord(action, e)) &&
-        chordMatches(resolveChord(action, overrides), e);
+        actionMatches(action, overrides, e);
       const {
         tree: t,
         focusedGroupId: fid,
@@ -468,6 +469,19 @@ export function DetachedCenterPanel({
           const cur = focused.activeKey ? focused.tabKeys.indexOf(focused.activeKey) : 0;
           const next = focused.tabKeys[(cur + (prev ? -1 : 1) + len) % len];
           activate(next);
+        }
+        return;
+      }
+
+      // Next / previous tab across all of this popout's subwindows; focus
+      // moves to the subwindow that holds it.
+      const prevAll = is("prevProjectTab");
+      if (prevAll || is("nextProjectTab")) {
+        const step = stepOrderedTab(t, focused?.id ?? null, prevAll ? -1 : 1);
+        if (step) {
+          e.preventDefault();
+          if (step.groupId !== focused?.id) setFocusedGroupId(step.groupId);
+          activate(step.key);
         }
         return;
       }

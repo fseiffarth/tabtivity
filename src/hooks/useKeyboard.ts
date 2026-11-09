@@ -4,7 +4,7 @@ import { PLATFORM } from "../lib/window/dragPlatform";
 import { IS_MAC } from "../lib/platform";
 import { toggleWindowFullscreen } from "../lib/window/fullscreenMode";
 import { probeSuperKeyOwnership } from "../lib/shortcuts/superKey";
-import { ROOT_SCOPE, allGroups, findGroup, useTabsStore } from "../stores/tabs";
+import { ROOT_SCOPE, allGroups, findGroup, stepOrderedTab, useTabsStore } from "../stores/tabs";
 import { steeringInRoot, steeringTabs, steeringTabsActive } from "../lib/shortcuts/steeringScope";
 import { closeTabInScope, closeTabWithConfirm } from "../lib/remote/closeRemoteTab";
 import { reopenClosedAgentTab } from "../stores/agents/closedAgentTabs";
@@ -171,7 +171,12 @@ export function isEditableTarget(target: EventTarget | null): boolean {
  *   - Ctrl + / - / 0       → UI zoom
  *   - Ctrl+Enter           → toggle fullscreen for the focused subwindow
  *   - Escape               → exit fullscreen (when active)
- *   - Shift+Ctrl+Tab       → cycle to the next active project
+ *   - Ctrl+Tab / Ctrl+Shift+Tab → next / previous tab of the project, across
+ *                            all its subwindows (document order, wrapping),
+ *                            from a focused pane terminal too (terminalTabChord)
+ *   - AltGr+Tab / AltGr+Shift+Tab → next / previous active project, from a
+ *                            focused pane terminal too (Alt+Shift+→ / ← as well;
+ *                            the arrows are the macOS default — no AltGr)
  *   - Ctrl+Shift+Left/Right → previous / next tab within the focused subwindow,
  *                            from a focused pane terminal too (terminalTabChord)
  *                            — plain Shift+Arrow is left alone because an agent
@@ -182,7 +187,6 @@ export function isEditableTarget(target: EventTarget | null): boolean {
  *   - Shift+Ctrl+W         → close the focused subwindow
  *   - Ctrl+W               → close the active tab
  *   - Ctrl+Shift+T         → reopen the last closed agent tab
- *   - Alt+Shift+←          → cycle to the previous active project
  *   - F1                   → open the shortcut cheat sheet (window event)
  *   - Shift+Space          → toggle keyboard steering mode (see below)
  *   - Ctrl+Shift+R         → open / close the root console
@@ -1171,11 +1175,12 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       const editable = isEditableTarget(e.target);
       if (editable && !isMacCommandChord(e) && !isPaneTerminalTarget(e.target)) return;
 
-      // Resolve the configured chord for an action (user override or default).
-      // From an editable target only those exceptions may match.
+      // Match the configured chords of an action (user override or default,
+      // with a default's aliases — `actionChords`). From an editable target only
+      // those exceptions may match.
       const is = (action: ShortcutAction) =>
         (!editable || editorMayTakeChord(action, e) || terminalMayTakeChord(action, e)) &&
-        chordMatches(resolveChord(action, overrides), e);
+        actionMatches(action, overrides, e);
 
       // The tab and subwindow chords below act on what the user is looking at.
       // While the root window's Root view is in front that is **Root's** tabs
@@ -1332,6 +1337,24 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           const delta = prev ? -1 : 1;
           const next = group.tabKeys[(cur + delta + len) % len];
           tabs.setGroupActiveInScope(walked.scope, group.id, next);
+        }
+        return;
+      }
+
+      // Next / previous tab of the whole project: every subwindow's tabs in
+      // document order, so past the focused subwindow's last tab comes the next
+      // subwindow's first (focus moves along). A fullscreen subwindow moves with
+      // it, or the step would land in one nobody can see.
+      const prevAll = is("prevProjectTab");
+      if (prevAll || is("nextProjectTab")) {
+        const walked = windowUp ? (inRootView ? steeringTabs() : null) : { scope: tabs.scope, layout: tabs.layout, focusedGroupId: tabs.focusedGroupId };
+        const step = walked ? stepOrderedTab(walked.layout, walked.focusedGroupId, prevAll ? -1 : 1) : null;
+        if (walked && step) {
+          e.preventDefault();
+          tabs.setGroupActiveInScope(walked.scope, step.groupId, step.key);
+          if (!windowUp && tabs.fullscreenGroupId && tabs.fullscreenGroupId !== step.groupId) {
+            tabs.toggleFullscreen(step.groupId);
+          }
         }
         return;
       }

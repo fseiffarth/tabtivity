@@ -2466,7 +2466,7 @@ export const dict: Dict = {
 
   "steering.project.label": "Changer de projet",
 
-  "steering.project.desc": "Projet précédent / suivant, terminal racine compris — l'anneau que parcourt {modifier}+Maj+Tab. La navigation arrive sur ses onglets ; ↑ revient ici pour changer encore.",
+  "steering.project.desc": "Projet précédent / suivant, terminal racine compris — l'anneau que parcourt {cycle}. La navigation arrive sur ses onglets ; ↑ revient ici pour changer encore.",
 
   "steering.into.label": "Dans les fenêtres",
 
@@ -10190,7 +10190,7 @@ export const dict: Dict = {
   "lessons.keyboardSteering.cheatSheetTitle": "L'aide-mémoire F1",
   "lessons.keyboardSteering.cheatSheetBody": "F1 ouvre l'aide-mémoire des raccourcis à tout moment — sans passer par la navigation {app} (il est aussi dans le menu Paramètres). Il liste chaque raccourci effectif, groupé en navigation, onglets et sous-fenêtres, et navigation {app} ; il marque ceux que vous avez personnalisés et nomme les touches fixes. F1 lui-même est réassignable.",
   "lessons.keyboardSteering.projectCycleTitle": "Faire défiler les projets — et tout personnaliser",
-  "lessons.keyboardSteering.projectCycleBody": "Hors de la navigation {app}, {modifier}+Maj+Tab passe au projet suivant et Alt+Maj+← au précédent — le même anneau que parcourent les chiffres. Chaque raccourci nommé dans cette leçon est une valeur par défaut : Paramètres → Raccourcis clavier les affiche groupés, avertit quand deux raccourcis entrent en collision, et « Tout réinitialiser » remet tout d'origine.",
+  "lessons.keyboardSteering.projectCycleBody": "Hors de la navigation {app}, {cycle} passe au projet suivant et {cycleBack} au précédent ({modifier}+Tab et {modifier}+Maj+Tab parcourent les onglets du projet) — le même anneau que parcourent les chiffres. Chaque raccourci nommé dans cette leçon est une valeur par défaut : Paramètres → Raccourcis clavier les affiche groupés, avertit quand deux raccourcis entrent en collision, et « Tout réinitialiser » remet tout d'origine.",
   "lessons.yamlViewer.title": "Modifier YAML et JSON visuellement",
   "lessons.yamlViewer.blurb": "Ouvrez un fichier de configuration sous forme de cartes modifiables ou d'arborescence — commentaires et mise en forme survivent à chaque modification.",
   "lessons.yamlViewer.openYamlTitle": "Ouvrez un fichier .yaml, .yml ou .json",
@@ -10850,6 +10850,8 @@ export const dict: Dict = {
   "shortcut.subwindowUp": "Faire défiler la sous-fenêtre active vers le haut",
   "shortcut.subwindowDown": "Faire défiler la sous-fenêtre active vers le bas",
   "shortcut.cycleTabs": "Faire défiler les onglets de la sous-fenêtre",
+  "shortcut.nextProjectTab": "Onglet suivant du projet",
+  "shortcut.prevProjectTab": "Onglet précédent du projet",
   "shortcut.hideSubwindow": "Masquer la sous-fenêtre active",
   "shortcut.toggleSubwindowFiles": "Basculer la visionneuse de fichiers de la sous-fenêtre",
   "shortcut.closeSubwindow": "Fermer la sous-fenêtre active",

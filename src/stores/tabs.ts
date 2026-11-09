@@ -127,6 +127,7 @@ export {
   findGroup,
   findGroupOfTab,
   orderedTabKeys,
+  stepOrderedTab,
 } from "./tabs/layoutTree";
 export {
   BLOB_TAB_CMD,

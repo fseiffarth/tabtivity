@@ -467,6 +467,8 @@ export const UNTESTED = {
   "shortcut.rootConsole": { area: "lib", what: "shortcuts · Open / close the root console" },
   "shortcut.projectShell": { area: "lib", what: "shortcuts · Ctrl+Shift+S: root console shell at the project root" },
   "shortcut.newTabChords": { area: "lib", what: "shortcuts · Ctrl+Shift+N shell, Ctrl+Shift+M System Monitor, Ctrl+1 default agent, Ctrl+2–9 the + menu's other agents: a new tab in the main window's focused pane, keyboard focus in it, from a focused terminal too; the chords show in the + menu" },
+  "shortcut.projectCycleAltGr": { area: "lib", what: "shortcuts · AltGr+Tab / AltGr+Shift+Tab (right Alt): next / previous project, from a focused terminal too; Alt+Shift+→ / ← still work; a rebind can record an AltGr chord" },
+  "shortcut.projectTabCycle": { area: "lib", what: "shortcuts · Ctrl+Tab / Ctrl+Shift+Tab: next / previous tab of the project across all its subwindows (focus moves along, wraps), from a focused terminal too and in popouts; next project moved to Alt+Shift+→" },
   "shortcut.prevTab": { area: "lib", what: "shortcuts · Ctrl+Shift+← previous tab, from a focused terminal too (not the root console's)" },
   "shortcut.privacyCurtain": { area: "lib", what: "shortcuts · Ctrl+Shift+Alt+H covers every app window; pressed in a covered window, shows that one" },
   "shortcut.nextTab": { area: "lib", what: "shortcuts · Ctrl+Shift+→ next tab, from a focused terminal too (not the root console's)" },

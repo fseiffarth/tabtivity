@@ -2465,7 +2465,7 @@ export const dict: Dict = {
 
   "steering.project.label": "Cambiar de proyecto",
 
-  "steering.project.desc": "Proyecto anterior / siguiente, terminal raíz incluida — el anillo que recorre {modifier}+Mayús+Tab. La navegación llega a sus pestañas; ↑ vuelve aquí para cambiar de nuevo.",
+  "steering.project.desc": "Proyecto anterior / siguiente, terminal raíz incluida — el anillo que recorre {cycle}. La navegación llega a sus pestañas; ↑ vuelve aquí para cambiar de nuevo.",
 
   "steering.into.label": "A las ventanas",
 
@@ -10188,7 +10188,7 @@ export const dict: Dict = {
   "lessons.keyboardSteering.cheatSheetTitle": "La guía con F1",
   "lessons.keyboardSteering.cheatSheetBody": "F1 abre la guía de atajos en cualquier momento — sin necesidad de la navegación de {app} (también está en el menú Ajustes). Lista cada combinación efectiva agrupada en navegación, pestañas y subventanas, y navegación de {app}; marca las que has personalizado y nombra las teclas fijas. El propio F1 también es reasignable.",
   "lessons.keyboardSteering.projectCycleTitle": "Recorre proyectos — y hazlo tuyo",
-  "lessons.keyboardSteering.projectCycleBody": "Fuera de la navegación de {app}, {modifier}+Mayús+Tab pasa al proyecto siguiente y Alt+Mayús+← al anterior — el mismo anillo por el que saltan los dígitos. Cada combinación nombrada en esta lección es la predeterminada: Ajustes → Atajos de teclado las muestra agrupadas, avisa cuando dos combinaciones chocan y su \"Restablecer todo\" devuelve todo al estado de fábrica.",
+  "lessons.keyboardSteering.projectCycleBody": "Fuera de la navegación de {app}, {cycle} pasa al proyecto siguiente y {cycleBack} al anterior ({modifier}+Tab y {modifier}+Mayús+Tab recorren las pestañas del proyecto) — el mismo anillo por el que saltan los dígitos. Cada combinación nombrada en esta lección es la predeterminada: Ajustes → Atajos de teclado las muestra agrupadas, avisa cuando dos combinaciones chocan y su \"Restablecer todo\" devuelve todo al estado de fábrica.",
   "lessons.yamlViewer.title": "Edita YAML y JSON visualmente",
   "lessons.yamlViewer.blurb": "Abre un archivo de configuración como tarjetas editables o un árbol; los comentarios y el formato sobreviven a cada edición.",
   "lessons.yamlViewer.openYamlTitle": "Abre un archivo .yaml, .yml o .json",
@@ -10848,6 +10848,8 @@ export const dict: Dict = {
   "shortcut.subwindowUp": "Cambiar la subventana enfocada hacia arriba",
   "shortcut.subwindowDown": "Cambiar la subventana enfocada hacia abajo",
   "shortcut.cycleTabs": "Recorrer las pestañas de la subventana",
+  "shortcut.nextProjectTab": "Pestaña siguiente del proyecto",
+  "shortcut.prevProjectTab": "Pestaña anterior del proyecto",
   "shortcut.hideSubwindow": "Ocultar la subventana enfocada",
   "shortcut.toggleSubwindowFiles": "Alternar el visor de archivos de la subventana",
   "shortcut.closeSubwindow": "Cerrar la subventana enfocada",

@@ -127,8 +127,8 @@ describe("chordsEqual / findConflicts", () => {
   });
 
   it("reports both sides of a crafted override collision", () => {
-    // Rebind closeTab onto cycleProject's default chord (Ctrl+Shift+Tab).
-    const conflicts = findConflicts({ closeTab: { key: "Tab", ctrl: true, shift: true } });
+    // Rebind closeTab onto cycleProject's default chord (Alt+Shift+→).
+    const conflicts = findConflicts({ closeTab: { key: "ArrowRight", alt: true, shift: true } });
     expect(conflicts.get("closeTab")).toEqual(["cycleProject"]);
     expect(conflicts.get("cycleProject")).toEqual(["closeTab"]);
     // Nothing else is dragged in.

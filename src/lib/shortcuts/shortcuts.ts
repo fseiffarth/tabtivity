@@ -38,7 +38,18 @@ export interface ChordDescriptor {
   shift?: boolean;
   alt?: boolean;
   meta?: boolean;
+  /** AltGr (the right Alt key), matched by `getModifierState("AltGraph")`.
+   *  Its own flag because the OS reports it differently: Linux as neither
+   *  Ctrl nor Alt, Windows as Ctrl+Alt — so an AltGr chord ignores both. */
+  altGr?: boolean;
 }
+
+/** The project cycle's arrow chords: the default on macOS (no AltGr), an
+ *  alias beside AltGr+Tab elsewhere. */
+const PROJECT_CYCLE_ARROWS = {
+  next: { key: "ArrowRight", alt: true, shift: true },
+  back: { key: "ArrowLeft", alt: true, shift: true },
+} satisfies Record<string, ChordDescriptor>;
 
 /** Stable ids for each rebindable navigation action. */
 export type ShortcutAction =
@@ -46,6 +57,8 @@ export type ShortcutAction =
   | "cycleProject"
   | "prevTab"
   | "nextTab"
+  | "prevProjectTab"
+  | "nextProjectTab"
   | "subwindowUp"
   | "subwindowDown"
   | "cycleTabs"
@@ -156,11 +169,32 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     group: "tabs",
     default: { key: "Enter", ctrl: true },
   },
+  // AltGr+Tab (right Alt): the left Alt+Tab is the desktop's window switcher,
+  // and Ctrl+Tab / Ctrl+Shift+Tab are the project's own tab cycle (the
+  // browser's chords). Alt+Shift+→ stays beside it (`actionChords`) for
+  // keyboards without AltGr; macOS has none, so it is the default there.
   {
     action: "cycleProject",
     labelKey: "shortcut.cycleProject",
     group: "navigation",
+    default: IS_MAC ? PROJECT_CYCLE_ARROWS.next : { key: "Tab", altGr: true },
+    untested: "shortcut.projectCycleAltGr",
+  },
+  // Every tab of the project, across its subwindows (`stepOrderedTab`). Handed
+  // over by a focused pane terminal like prevTab/nextTab (`terminalTabChord`).
+  {
+    action: "nextProjectTab",
+    labelKey: "shortcut.nextProjectTab",
+    group: "tabs",
+    default: { key: "Tab", ctrl: true },
+    untested: "shortcut.projectTabCycle",
+  },
+  {
+    action: "prevProjectTab",
+    labelKey: "shortcut.prevProjectTab",
+    group: "tabs",
     default: { key: "Tab", ctrl: true, shift: true },
+    untested: "shortcut.projectTabCycle",
   },
   // Ctrl+Shift, not plain Shift: a plain Shift+Arrow is an agent CLI's own
   // chord (Codex uses it for in-terminal selection/navigation), and a pane
@@ -249,13 +283,13 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     default: { key: " ", shift: true },
     untested: "shortcut.steeringMode",
   },
-  // Backward twin of cycleProject. Alt (not Ctrl) distinguishes it from
-  // prevTab's Ctrl+Shift+← default.
+  // Backward twin of cycleProject; its arrow alias is Alt (not Ctrl) to stay
+  // clear of prevTab's Ctrl+Shift+← default.
   {
     action: "cycleProjectBack",
     labelKey: "shortcut.cycleProjectBack",
     group: "navigation",
-    default: { key: "ArrowLeft", alt: true, shift: true },
+    default: IS_MAC ? PROJECT_CYCLE_ARROWS.back : { key: "Tab", altGr: true, shift: true },
     untested: "shortcut.cycleProjectBack",
   },
   // The boxes' twin of the project cycle: walk the box pills in the leading
@@ -530,6 +564,13 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
 export function chordFromEvent(e: KeyboardEvent): ChordDescriptor | null {
   if (isLoneModifier(e.key)) return null;
   const chord: ChordDescriptor = { key: normalizeKey(e.key) };
+  // AltGr: Windows adds Ctrl+Alt to it, which `chordMatches` ignores for an
+  // AltGr chord — so they are not stored either.
+  if (e.getModifierState?.("AltGraph")) {
+    chord.altGr = true;
+    if (e.shiftKey) chord.shift = true;
+    return chord;
+  }
   if (e.ctrlKey) chord.ctrl = true;
   if (e.shiftKey) chord.shift = true;
   if (e.altKey) chord.alt = true;
@@ -555,6 +596,8 @@ export function chordMatches(chord: ChordDescriptor, e: ChordKeyEvent): boolean 
   if (!chord.key || chord.key === LONE_SUPER.key) return false;
   if (normalizeKey(e.key) !== normalizeKey(chord.key) && !isDigitKeyOf(chord.key, e)) return false;
   if (e.shiftKey !== !!chord.shift) return false;
+  // AltGr chords: only Shift besides AltGr counts (see `ChordDescriptor.altGr`).
+  if (chord.altGr) return !!e.getModifierState?.("AltGraph");
   if (e.altKey !== !!chord.alt) return false;
   if (IS_MAC) {
     const wantsPrimary = !!chord.ctrl || !!chord.meta;
@@ -572,7 +615,8 @@ function isDigitKeyOf(key: string, e: ChordKeyEvent): boolean {
 }
 
 /** The fields a chord match reads — a DOM event or a React one both fit. */
-export type ChordKeyEvent = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">;
+export type ChordKeyEvent = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> &
+  Partial<Pick<KeyboardEvent, "getModifierState">>;
 
 /** A chord the user switched off: its empty key matches nothing. Stored as a
  *  chord (not `null`) so the backend's typed map still reads it. */
@@ -598,6 +642,7 @@ export function chordLabel(chord: ChordDescriptor): string {
   if (isUnbound(chord)) return "—";
   if (IS_MAC) {
     const parts: string[] = [];
+    if (chord.altGr) parts.push("AltGr+");
     if (chord.alt) parts.push("⌥"); // Option
     if (chord.shift) parts.push("⇧"); // Shift
     if (chord.ctrl || chord.meta) parts.push("⌘"); // primary modifier / Super
@@ -606,6 +651,7 @@ export function chordLabel(chord: ChordDescriptor): string {
   }
   const parts: string[] = [];
   if (chord.ctrl) parts.push("Ctrl");
+  if (chord.altGr) parts.push("AltGr");
   if (chord.shift) parts.push("Shift");
   if (chord.alt) parts.push("Alt");
   if (chord.meta) parts.push("Super");
@@ -631,6 +677,15 @@ function prettyKey(key: string): string {
  *  go through `useChordHint` instead, so a rebinding shows up there. */
 export function modifierLabel(): string {
   return IS_MAC ? "⌘" : "Ctrl";
+}
+
+/** The default project-cycle chords as prose names them ({cycle} /
+ *  {cycleBack}): AltGr+Tab off macOS, the Alt+Shift arrows on it. */
+export function projectCycleLabels(): { cycle: string; cycleBack: string } {
+  return {
+    cycle: chordLabel(resolveChord("cycleProject", undefined)),
+    cycleBack: chordLabel(resolveChord("cycleProjectBack", undefined)),
+  };
 }
 
 /** The stored shortcut map (action id → chord). Partial: any unset action
@@ -665,6 +720,8 @@ export function actionChords(
   if (action === "togglePanels" && isLoneSuper(chord)) return [chord, { key: "F9" }];
   if (action === "toggleSidePanel" && !IS_MAC) return [chord, { key: "1", alt: true }];
   if (action === "editorRedo") return [chord, { key: "z", ctrl: true, shift: true }];
+  if (action === "cycleProject" && chord.altGr) return [chord, PROJECT_CYCLE_ARROWS.next];
+  if (action === "cycleProjectBack" && chord.altGr) return [chord, PROJECT_CYCLE_ARROWS.back];
   return [chord];
 }
 
@@ -686,7 +743,8 @@ export function chordsEqual(a: ChordDescriptor, b: ChordDescriptor): boolean {
     !!a.ctrl === !!b.ctrl &&
     !!a.shift === !!b.shift &&
     !!a.alt === !!b.alt &&
-    !!a.meta === !!b.meta
+    !!a.meta === !!b.meta &&
+    !!a.altGr === !!b.altGr
   );
 }
 

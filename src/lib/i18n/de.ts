@@ -2467,7 +2467,7 @@ export const dict: Dict = {
 
   "steering.project.label": "Projekt wechseln",
 
-  "steering.project.desc": "Vorheriges / nächstes Projekt, Root-Terminal eingeschlossen — der Ring, den {modifier}+Umschalt+Tab durchläuft. Die Navigation landet auf seinen Tabs; ↑ führt zum erneuten Wechseln hierher zurück.",
+  "steering.project.desc": "Vorheriges / nächstes Projekt, Root-Terminal eingeschlossen — der Ring, den {cycle} durchläuft. Die Navigation landet auf seinen Tabs; ↑ führt zum erneuten Wechseln hierher zurück.",
 
   "steering.into.label": "In die Fenster",
 
@@ -10194,7 +10194,7 @@ export const dict: Dict = {
   "lessons.keyboardSteering.cheatSheetTitle": "Die F1-Übersicht",
   "lessons.keyboardSteering.cheatSheetBody": "F1 öffnet die Tastenkürzel-Übersicht jederzeit – ganz ohne {app}-Navigation (sie steht auch im Einstellungen-Menü). Sie listet jede wirksame Belegung gruppiert nach Navigation, Tabs & Unterfenster und {app}-Navigation, markiert die von dir angepassten und nennt die festen Tasten. Auch F1 selbst lässt sich umbelegen.",
   "lessons.keyboardSteering.projectCycleTitle": "Projekte durchschalten – und alles anpassen",
-  "lessons.keyboardSteering.projectCycleBody": "Außerhalb der {app}-Navigation wechselt {modifier}+Umschalt+Tab zum nächsten Projekt und Alt+Umschalt+← zum vorherigen – derselbe Ring, in dem auch die Ziffern springen. Jede in dieser Lektion genannte Kombination ist ein Standard: Einstellungen → Tastenkürzel zeigt sie gruppiert, warnt, wenn zwei Kombinationen kollidieren, und „Alle zurücksetzen“ stellt den Auslieferungszustand wieder her.",
+  "lessons.keyboardSteering.projectCycleBody": "Außerhalb der {app}-Navigation wechselt {cycle} zum nächsten Projekt und {cycleBack} zum vorherigen ({modifier}+Tab und {modifier}+Umschalt+Tab gehen durch die Tabs des Projekts) – derselbe Ring, in dem auch die Ziffern springen. Jede in dieser Lektion genannte Kombination ist ein Standard: Einstellungen → Tastenkürzel zeigt sie gruppiert, warnt, wenn zwei Kombinationen kollidieren, und „Alle zurücksetzen“ stellt den Auslieferungszustand wieder her.",
   "lessons.yamlViewer.title": "YAML & JSON visuell bearbeiten",
   "lessons.yamlViewer.blurb": "Öffne eine Konfigurationsdatei als bearbeitbare Karten oder Baum – Kommentare und Formatierung überleben jede Bearbeitung.",
   "lessons.yamlViewer.openYamlTitle": "Öffne eine .yaml-, .yml- oder .json-Datei",
@@ -10854,6 +10854,8 @@ export const dict: Dict = {
   "shortcut.subwindowUp": "Fokussiertes Unterfenster nach oben wechseln",
   "shortcut.subwindowDown": "Fokussiertes Unterfenster nach unten wechseln",
   "shortcut.cycleTabs": "Tabs im Unterfenster durchwechseln",
+  "shortcut.nextProjectTab": "Nächster Tab im Projekt",
+  "shortcut.prevProjectTab": "Vorheriger Tab im Projekt",
   "shortcut.hideSubwindow": "Fokussiertes Unterfenster ausblenden",
   "shortcut.toggleSubwindowFiles": "Dateibetrachter des Unterfensters umschalten",
   "shortcut.closeSubwindow": "Fokussiertes Unterfenster schließen",

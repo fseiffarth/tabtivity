@@ -82,6 +82,7 @@ export interface KeyboardChord {
   shift?: boolean;
   alt?: boolean;
   meta?: boolean;
+  altGr?: boolean;
 }
 
 /**
