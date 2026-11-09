@@ -261,6 +261,13 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
   });
 
   it("opens navigation mode, not the draft, when the held words settle as the navigate phrase", async () => {
+    // The mode reads the project list when it opens.
+    const sideChannels = globalThis.fetch;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => (
+      typeof input === "string" && input.startsWith("/api/v1/projects")
+        ? Promise.resolve(new Response(JSON.stringify({ projects: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+        : sideChannels(input, init)
+    ));
     const speech = await dictate();
     await say(speech, [`${T} navigate`, true]);
     expect(box().value).toBe("");
