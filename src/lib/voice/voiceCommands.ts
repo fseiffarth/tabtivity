@@ -346,12 +346,18 @@ interface Words {
  * → "l onglet", "to-do" → "to do"), number words as digits. */
 function words(utterance: string, lang: Language): Words {
   const text = sanitizeVoiceTranscript(utterance);
+  return { text, tokens: tokenize(text, lang) };
+}
+
+/** `text`'s words, their places in `text` itself (not sanitized: a draft's
+ * line breaks stay where they are). */
+function tokenize(text: string, lang: Language): Token[] {
   const tokens: Token[] = [];
   for (const found of text.matchAll(/[\p{L}\p{N}]+/gu)) {
     const start = found.index ?? 0;
     tokens.push({ norm: numberWord(fold(found[0]), lang), start, end: start + found[0].length });
   }
-  return { text, tokens };
+  return tokens;
 }
 
 function norms(text: string, lang: Language): string[] {
@@ -859,3 +865,96 @@ export const BUILTIN_AGENT_ALIASES: Readonly<Record<string, readonly string[]>> 
   gemini: ["jemini", "gemeni"],
   copilot: ["co pilot"],
 };
+
+// ---------------------------------------------------------------- the start word, navigating
+
+/** How many leading tokens the start word takes (`voice.startWord`, the
+ * assistant's name), 0 when it is not first. A recognizer spells a name it
+ * does not know freely, so the heard word is compared as a spoken name is
+ * (`phonetic`: "Tabbi" and "Tabby" are one), as one word or as two run
+ * together ("Tab bi"), and only at the start: "ask Tabby" or a "tabby cat"
+ * mid-sentence is dictation. The bar is exact on that spelling plus the
+ * dictionary's aliases (`voice.assistantAliases`: "Tavi", the spellings a
+ * recognizer is known to write) — a fuzzy score let "taxi", "Toby" and
+ * "tabs" through, each one letter from a four-letter name, and a word spoken
+ * at the start of every sentence cannot afford a false hit. */
+function startWordLength(tokens: readonly Token[], lang: Language): number {
+  const forms = new Set(
+    [translate(lang, "voice.startWord"), ...splitTemplates(translate(lang, "voice.assistantAliases"))]
+      .map((form) => phonetic(norms(form, lang).join("")))
+      .filter(Boolean),
+  );
+  if (!forms.size || !tokens.length) return 0;
+  if (forms.has(phonetic(tokens[0].norm))) return 1;
+  if (tokens.length > 1 && forms.has(phonetic(tokens[0].norm + tokens[1].norm))) return 2;
+  return 0;
+}
+
+/** The utterance after the start word ("Tabby, scratch that" → "scratch
+ * that"), as heard; `null` when it does not start with it. `rest` may be
+ * empty ("Tabby" alone). */
+export function matchStartWord(utterance: string, lang: Language): { rest: string } | null {
+  const source = words(utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return null;
+  const after = source.tokens[skip];
+  return { rest: after ? source.text.slice(after.start).trim() : "" };
+}
+
+/** The runs of words that follow the start word in a `voice.navigate` phrase
+ * ("{assistant} navigate" → ["navigate"]). */
+function navigateRuns(lang: Language): string[][] {
+  const target = norms(translate(lang, "voice.startWord"), lang).join("");
+  return splitTemplates(translate(lang, "voice.navigate")).map((phrase) => {
+    const tokens = norms(phrase, lang);
+    let joined = "";
+    for (let index = 0; index < tokens.length; index++) {
+      joined += tokens[index];
+      if (joined === target) return tokens.slice(index + 1);
+    }
+    return tokens;
+  }).filter((run) => run.length > 0);
+}
+
+/** "Tabby navigate …": opens navigation mode. The start word, then the
+ * navigate word (`voice.navigate`, exact); `rest` is what follows, as heard —
+ * a command said in the same breath, or empty. `null` for anything else,
+ * including "navigate" with no start word and "tabby" in a sentence. Call it
+ * on a whole, settled utterance, never on one still growing. */
+export function matchNavigate(utterance: string, lang: Language): { rest: string } | null {
+  const source = words(utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return null;
+  for (const run of navigateRuns(lang)) {
+    if (!startsWith(source.tokens, run, skip)) continue;
+    const after = source.tokens[skip + run.length];
+    return { rest: after ? source.text.slice(after.start).trim() : "" };
+  }
+  return null;
+}
+
+/** Whether `utterance` is, so far, the beginning of a "Tabby navigate" — only
+ * the start word, or it and the start of the navigate word ("Tabby", "Tabby
+ * nav"), or the whole navigate phrase and anything after it. While it is, the
+ * words are held back from the draft until the utterance settles and shows
+ * whether it was a command. */
+export function mayNavigate(utterance: string, lang: Language): boolean {
+  const source = words(utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return false;
+  const heard = source.tokens.slice(skip).map((token) => token.norm);
+  if (!heard.length) return true;
+  return navigateRuns(lang).some((run) => {
+    if (heard.length > run.length) return run.every((word, index) => heard[index] === word);
+    return heard.every((word, index) => (index < heard.length - 1 ? word === run[index] : run[index].startsWith(word)));
+  });
+}
+
+/** A leave phrase (`voice.nav.leave`: "stop", "cancel", "never mind"): the
+ * whole utterance, the start word allowed in front. Ends navigation mode. */
+export function matchNavLeave(utterance: string, lang: Language): boolean {
+  const source = words(utterance, lang);
+  const tokens = withoutPolite(source.tokens.slice(startWordLength(source.tokens, lang)), lang);
+  if (!tokens.length) return false;
+  return alternatives("voice.nav.leave", lang).includes(tokens.map((token) => token.norm).join(" "));
+}
