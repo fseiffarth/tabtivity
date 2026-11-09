@@ -754,6 +754,10 @@ impl PreparedLaunch {
         if let Some(view) = self.fence_view.take() {
             crate::services::agent_fence::note_live_fence_view(&self.spawned_tab_id, self.generation.seq, view);
         }
+        // The session a PTY-less spawn (a phone-started headless tab) lives in.
+        if let Some(session) = self.opts.tmux_session.as_deref() {
+            crate::services::agent_fence::note_live_tmux(&self.spawned_tab_id, self.generation.seq, session);
+        }
         // A local model's tab: its conversations are not cleared while it runs.
         if let Some(home) = self.opts.env.get("VIBE_HOME") {
             crate::services::agent_fence::note_vibe_home(

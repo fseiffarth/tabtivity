@@ -896,6 +896,77 @@ pub fn ptys_to_end(
         .collect()
 }
 
+/// An app tmux session `tmux ls` listed: its name and the active pane's folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TmuxAgent {
+    pub session: String,
+    pub cwd: String,
+}
+
+/// A live spawn the process knows runs in a tmux session (`agent_fence::live_tmux_tabs`):
+/// the tab, the session and what its fence showed, when that was recorded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownSession {
+    pub tab: String,
+    pub tmux: String,
+    pub view: Option<FenceView>,
+}
+
+/// Whether `session` is the tmux session of an agent tab of `project`:
+/// `<prefix><project key>--agent-…`, the naming `discovery::expected_tmux` and the
+/// quit reap already rely on.
+fn agent_session_of(session: &str, project: &str) -> bool {
+    crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, session)
+        .is_some_and(|rest| rest.starts_with(&format!("{}--agent-", crate::storage::project_key(project))))
+}
+
+/// Whether `session` is some agent tab's session at all (`<prefix><key>--agent-…`).
+fn is_agent_session(session: &str) -> bool {
+    crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, session)
+        .is_some_and(|rest| rest.split_once("--").is_some_and(|(_, tab)| tab.starts_with("agent-")))
+}
+
+/// The agent tmux sessions turning Local models only on for `project` (folder `dir`)
+/// must end although no PTY of the registry holds them: a tab the phone started
+/// headless (`prepare` + a detached session), or a session that outlived a crash and
+/// that a respawn would attach to (`new-session -A`, whose fence is not the new one).
+///
+/// `sessions` are the app's tmux sessions; `held` those a live registry PTY is a
+/// client of (handled by [`ptys_to_end`]); `known` the live spawns that recorded their
+/// session. A known, unverified session ends when it belongs to the project's own scope
+/// or its recorded fence shows the folder. Anything else ends when its view is
+/// **unknown** and it overlaps the folder: it is the project's own session, its
+/// folder is the locked one, lies in it or above it, or it names none (fail closed).
+/// A known session whose fence hid the folder, and a verified one, stay.
+pub fn tmux_sessions_to_end(
+    project: &str,
+    dir: Option<&Path>,
+    sessions: &[TmuxAgent],
+    held: &[String],
+    known: &[KnownSession],
+    verified: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    let own = format!("{project}:");
+    sessions
+        .iter()
+        .filter(|s| is_agent_session(&s.session) && !held.contains(&s.session))
+        .filter(|s| {
+            let overlaps = || {
+                agent_session_of(&s.session, project)
+                    || s.cwd.trim().is_empty()
+                    || dir.is_some_and(|d| path_inside(d, Path::new(&s.cwd)) || path_inside(Path::new(&s.cwd), d))
+            };
+            match known.iter().find(|k| k.tmux == s.session) {
+                Some(k) if verified(&k.tab) => false,
+                Some(k) if k.tab.starts_with(&own) => true,
+                Some(KnownSession { view: Some(view), .. }) => dir.is_some_and(|d| sees(view, d)),
+                _ => overlaps(),
+            }
+        })
+        .map(|s| s.session.clone())
+        .collect()
+}
+
 // ── Which tabs the gate verified ────────────────────────────────────────────
 
 fn verified_tabs() -> &'static Mutex<HashMap<String, Verified>> {

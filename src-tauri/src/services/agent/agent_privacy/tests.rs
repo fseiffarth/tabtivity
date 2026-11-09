@@ -1028,3 +1028,107 @@ fn both_wrappers_pin_or_refuse_a_verified_claude_tab() {
     let mac = body_of(&fence, "pub fn wrap_pty_options_sandbox_exec(");
     assert!(mac.contains("claude_managed_for(opts)") && mac.contains("CLAUDE_NOT_PINNABLE"), "Seatbelt refuses a verified Claude tab");
 }
+
+// ── Agents no registry PTY holds: headless tabs and sessions that outlived a crash ──
+
+fn agent_session(project: &str, n: u32) -> String {
+    format!("{}{}--agent-{n:010}", crate::brand::TMUX_PREFIX, crate::storage::project_key(project))
+}
+
+fn tmux_agent(session: &str, cwd: &str) -> TmuxAgent {
+    TmuxAgent { session: session.to_string(), cwd: cwd.to_string() }
+}
+
+fn known(tab: &str, session: &str, visible: &[&str], masked: &[&str]) -> KnownSession {
+    KnownSession {
+        tab: tab.to_string(),
+        tmux: session.to_string(),
+        view: Some(FenceView {
+            visible: visible.iter().map(PathBuf::from).collect(),
+            masked: masked.iter().map(PathBuf::from).collect(),
+        }),
+    }
+}
+
+#[test]
+fn the_switch_ends_a_phone_started_headless_agent_and_a_session_that_outlived_a_crash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("secret");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let dir_s = s(&dir);
+    let (own, parent, other, hidden, verified, held, shell) = (
+        agent_session("lock", 1),
+        agent_session("parent", 2),
+        agent_session("elsewhere", 3),
+        agent_session("boxed", 4),
+        agent_session("lock", 5),
+        agent_session("lock", 6),
+        format!("{}{}--shell-0000000007", crate::brand::TMUX_PREFIX, crate::storage::project_key("lock")),
+    );
+    let sessions = vec![
+        tmux_agent(&own, &dir_s),
+        tmux_agent(&parent, &s(tmp.path())),
+        tmux_agent(&other, "/somewhere/else"),
+        tmux_agent(&hidden, &s(tmp.path())),
+        tmux_agent(&verified, &dir_s),
+        tmux_agent(&held, &dir_s),
+        tmux_agent(&shell, &dir_s),
+    ];
+    // A headless phone tab of the parent project: its recorded fence shows the folder.
+    // A box tab's fence hid it. The verified tab is the gate's.
+    let known = vec![
+        known("parent:agent-2", &parent, &[&s(tmp.path())], &[]),
+        known("boxed:agent-4", &hidden, &[&s(tmp.path())], &[&dir_s]),
+        known("lock:agent-5", &verified, &[&dir_s], &[]),
+    ];
+    let is_verified = |tab: &str| tab == "lock:agent-5";
+    let ended = tmux_sessions_to_end("lock", Some(&dir), &sessions, &[held.clone()], &known, &is_verified);
+    // `own` is unknown (a crash survivor) and the project's own; `parent` is known and sees the folder.
+    // `other` is unknown and unrelated: stays. `hidden` saw nothing: stays. `verified` stays;
+    // `held` is a registry PTY's (ended by the PTY path); a shell session is not an agent.
+    assert_eq!(ended, vec![own.clone(), parent.clone()]);
+}
+
+#[test]
+fn an_unknown_view_that_overlaps_the_folder_is_ended_and_one_that_does_not_is_left() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("work").join("secret");
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |cwd: &str| {
+        let session = agent_session("someone", 9);
+        tmux_sessions_to_end("lock", Some(&dir), &[tmux_agent(&session, cwd)], &[], &[], &|_| false).len()
+    };
+    assert_eq!(run(&s(&dir)), 1, "in the folder");
+    assert_eq!(run(&s(&dir.join("deeper"))), 1, "below it");
+    assert_eq!(run(&s(&dir.parent().unwrap())), 1, "above it");
+    assert_eq!(run(&s(tmp.path())), 1, "further above");
+    assert_eq!(run(""), 1, "no folder known: fail closed");
+    assert_eq!(run(&s(&tmp.path().join("work").join("secret-neighbour"))), 0, "a sibling sharing a prefix");
+    assert_eq!(run("/somewhere/else"), 0);
+    // A known spawn that recorded no view falls back to the same rule.
+    let session = agent_session("someone", 9);
+    let blind = KnownSession { tab: "someone:agent-9".into(), tmux: session.clone(), view: None };
+    let sessions = [tmux_agent(&session, &s(&dir))];
+    assert_eq!(tmux_sessions_to_end("lock", Some(&dir), &sessions, &[], &[blind], &|_| false), vec![session]);
+}
+
+#[test]
+fn the_headless_spawn_records_its_view_and_session_and_the_switch_sweeps_them() {
+    // `prepare` leaves the fence view and `commit` attaches it to the live spawn together
+    // with the tmux session; the headless owner commits after the detached spawn.
+    let prep = source("services/launch_prep.rs");
+    let commit = body_of(&prep, "pub fn commit(mut self)");
+    assert!(commit.contains("note_live_fence_view("), "commit records the view");
+    assert!(commit.contains("note_live_tmux("), "commit records the session");
+    let host = source("services/mobile_control/host.rs");
+    let launch = body_of(&host, "impl Default for HeadlessSpawner");
+    assert!(
+        launch.find("spawn_detached_with(").unwrap() < launch.find("prepared.commit()").unwrap(),
+        "the headless launch commits the prepared spawn"
+    );
+    let command = source("commands/agent_privacy.rs");
+    let close = body_of(&command, "async fn close_unverified_agents(");
+    assert!(close.contains("end_detached_agents("), "the switch sweeps the sessions no PTY holds");
+    let sweep = body_of(&command, "fn end_detached_agents(");
+    assert!(sweep.contains("tmux_sessions_to_end(") && sweep.contains("reap_child_subtree(") && sweep.contains("local_tmux_kill_args("));
+}

@@ -2322,6 +2322,9 @@ struct LiveSpawn {
     /// What its fence showed ([`note_live_fence_view`]): which live tabs a newly
     /// locked project's folder must be taken from.
     view: Option<crate::services::agent_privacy::FenceView>,
+    /// The local tmux session the spawn runs in ([`note_live_tmux`]): a tab the phone
+    /// started headless has no PTY in the registry, only this session.
+    tmux: Option<String>,
 }
 
 fn tab_spawns() -> &'static Mutex<HashMap<String, TabSpawns>> {
@@ -2359,7 +2362,7 @@ pub fn begin_spawn(tab_id: &str) -> u64 {
 pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
     match tab_spawns().lock_ok().get_mut(tab_id) {
         Some(spawns) if spawns.latest == seq => {
-            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string), vibe_home: None, view: None });
+            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string), vibe_home: None, view: None, tmux: None });
             true
         }
         _ => false,
@@ -2401,6 +2404,34 @@ pub fn note_live_fence_view(tab_id: &str, seq: u64, view: crate::services::agent
     if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
         live.view = Some(view);
     }
+}
+
+/// Record the tmux session the live spawn `seq` of `tab_id` runs in. Nothing when
+/// `seq` is not the live spawn.
+pub fn note_live_tmux(tab_id: &str, seq: u64, session: &str) {
+    let mut map = tab_spawns().lock_ok();
+    if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
+        live.tmux = Some(session.to_string());
+    }
+}
+
+/// Every live spawn that runs in a tmux session: the tab, the session and what its
+/// fence showed (`None` for an unfenced one or a spawn whose view was not recorded).
+/// The switch reads this to find agents no PTY of the registry holds (a headless
+/// phone-started tab).
+pub fn live_tmux_tabs() -> Vec<crate::services::agent_privacy::KnownSession> {
+    tab_spawns()
+        .lock_ok()
+        .iter()
+        .filter_map(|(tab, s)| {
+            let live = s.live.as_ref()?;
+            Some(crate::services::agent_privacy::KnownSession {
+                tab: tab.clone(),
+                tmux: live.tmux.clone()?,
+                view: live.view.clone(),
+            })
+        })
+        .collect()
 }
 
 /// Every live fenced tab and what its fence shows, for
