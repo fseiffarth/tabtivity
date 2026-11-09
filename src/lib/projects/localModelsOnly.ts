@@ -28,6 +28,20 @@ export function isCutNetwork(project: Pick<ProjectEntry, "agent_privacy"> | null
   return !(v === undefined || v === null || v === false);
 }
 
+/**
+ * The local drivers (`list_local_drivers` ids) the backend gate refuses in a Local
+ * models only project (`agent_privacy::vet`): OpenCode re-reads a project config the
+ * agent writes mid-session and merges its provider and model lists over the launch
+ * settings, so it cannot be kept on the local model until Phase 2. Hiding is a
+ * courtesy; the spawn is refused either way.
+ */
+export const LOCKED_REFUSED_DRIVERS: readonly string[] = ["opencode"];
+
+/** `drivers` without the ones a Local models only project refuses. */
+export function driversForLockedProject<T extends { id: string }>(drivers: readonly T[]): T[] {
+  return drivers.filter((d) => !LOCKED_REFUSED_DRIVERS.includes(d.id));
+}
+
 /** What `set_project_agent_privacy` answers. */
 export interface AgentPrivacyChange {
   local_models_only: boolean;

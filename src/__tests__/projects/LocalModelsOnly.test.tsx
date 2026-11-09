@@ -16,6 +16,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { AgentPrivacyDialog } from "../../components/projects/AgentPrivacyDialog";
 import { NewTabMenu } from "../../components/tabs/NewTabMenu";
+import { localModelMenuGroup } from "../../components/tabs/localModelGroup";
+import type { LocalDriverInfo } from "../../lib/agents/localDrivers";
 import { isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { dropErrorKey } from "../../lib/terminal/terminalDrop";
 import { useProjectsStore } from "../../stores/projects";
@@ -158,7 +160,8 @@ describe("the Agent privacy dialog", () => {
 describe("the + menu", () => {
   beforeEach(() => {
     mockInvoke.mockReset();
-    mockInvoke.mockResolvedValue(null);
+    // The driver list is an array from the backend; anything else answers null.
+    mockInvoke.mockImplementation((cmd: string) => Promise.resolve(cmd === "list_local_drivers" ? [] : null));
     useProjectsStore.setState({ projects: [proj()] });
   });
   afterEach(cleanup);
@@ -185,6 +188,30 @@ describe("the + menu", () => {
     expect(screen.queryByText(translate("en", "newTabMenu.groupAgents"))).toBeNull();
     // The shell group stays: a shell is the user's.
     expect(screen.queryAllByText(translate("en", "newTabMenu.groupShell")).length).toBeGreaterThan(0);
+  });
+});
+
+describe("the + menu's local-model rows", () => {
+  const driver = (id: string, label: string, heavy = false): LocalDriverInfo => ({
+    id, label, available: true, needs_tools_unsupported: false, heavy_harness: heavy,
+  });
+  const drivers = [driver("opencode", "OpenCode"), driver("pi", "Pi"), driver("claude", "Claude Code", true)];
+  const keys = (lockedProject: boolean) =>
+    localModelMenuGroup({
+      localModel: "qwen3:8b",
+      localModelOffInRoot: undefined,
+      localDrivers: drivers,
+      lockedProject,
+      vibeForLocalModel: true,
+      gpu: { placement: "ready", loading: false, failed: false, load: vi.fn() },
+      onVibe: vi.fn(),
+      onLaunch: vi.fn(),
+      t: ((k: string) => k) as never,
+    }).entries.map((e) => e.key);
+
+  it("hides OpenCode, which the backend refuses in such a project, and keeps the other local agents", () => {
+    expect(keys(false)).toEqual(["opencode", "pi", "vibe", "claude"]);
+    expect(keys(true)).toEqual(["pi", "vibe", "claude"]);
   });
 });
 

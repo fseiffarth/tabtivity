@@ -406,6 +406,42 @@ pub const fn claude_pinned_platform() -> bool {
     cfg!(target_os = "linux")
 }
 
+/// The local drivers no Local models only project starts yet. OpenCode re-reads
+/// its project config while it runs and merges the arrays of a file the agent
+/// writes (providers, `enabled_providers`, models) over the launch settings;
+/// measured on 2.2.6 (`docs/context/local_models_only.md`), the inline config cannot
+/// pin that, so a locked project cannot keep it on the local model until Phase 2.
+/// The frontend's `LOCKED_REFUSED_DRIVERS` (`localModelsOnly.ts`) hides the same
+/// rows; this is what refuses them.
+const REFUSED_DRIVERS: &[&str] = &["opencode"];
+
+/// Why a verified-looking launch of a refused driver (see [`REFUSED_DRIVERS`])
+/// stops, naming the local agents that can still run in such a project: derived
+/// from the driver registry, Claude Code only where its settings can be pinned.
+fn driver_not_pinnable(driver: &str, pins_claude: bool) -> String {
+    let label = crate::services::local_drivers::LOCAL_DRIVERS
+        .iter()
+        .find(|d| d.id == driver)
+        .map_or(driver, |d| d.label);
+    format!(
+        "{label} cannot be kept on the local model in a Local models only project yet: it reads a project config file again while it runs, so a file the agent writes could add a cloud provider and model. Local agents that can run here: {}.",
+        agents_that_can_run_locked(pins_claude).join(", ")
+    )
+}
+
+/// The labels of the local agents a Local models only project can start: every
+/// driver of the registry that is not refused ([`REFUSED_DRIVERS`]), Claude Code
+/// only where its settings can be pinned, and Mistral (`vibe`), which keeps its
+/// own launch path.
+pub fn agents_that_can_run_locked(pins_claude: bool) -> Vec<&'static str> {
+    crate::services::local_drivers::LOCAL_DRIVERS
+        .iter()
+        .filter(|d| !REFUSED_DRIVERS.contains(&d.id) && (d.id != "claude" || pins_claude))
+        .map(|d| d.label)
+        .chain(["Mistral (vibe)"])
+        .collect()
+}
+
 /// The args of a local `vibe` tab Tabtivity starts: none, `--continue`, or
 /// `--resume <session id>`.
 fn vibe_args_ok(args: &[String]) -> bool {
@@ -462,6 +498,9 @@ fn vet(opts: &PtyOptions, subject: &Locked, probe: &Probe<'_>, remote_project: b
             program(&opts.cmd)
         ));
     };
+    if REFUSED_DRIVERS.contains(&driver.as_str()) {
+        return no(&driver_not_pinnable(&driver, probe.pins_claude));
+    }
     if driver == "claude" && !probe.pins_claude {
         return no(CLAUDE_NOT_PINNABLE);
     }
@@ -497,9 +536,6 @@ pub fn vibe_home_in(share_dir: &Path, alias: &str, project: &str) -> PathBuf {
     share_dir.join("vibe_local").join(format!("{alias}.{}", crate::storage::project_key(project)))
 }
 
-/// OpenCode's inline config variable (`agent_api_keys::OPENCODE_INLINE_ENV`).
-const OPENCODE_INLINE: &str = "OPENCODE_CONFIG_CONTENT";
-
 /// Change a verified spawn's options to what the gate stands behind.
 fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), String> {
     scrub_env(&mut opts.env);
@@ -507,17 +543,6 @@ fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), St
     opts.local_model = true;
     opts.env.insert(STAMP_ENV.to_string(), v.project.clone());
     opts.env.insert("OLLAMA_HOST".to_string(), v.endpoint.clone());
-    if v.driver == "opencode" {
-        // OpenCode reads its project config again while it runs (measured on 2.2.6:
-        // a `opencode.json` written mid-session moves the next request). The inline
-        // config outranks it for the provider's endpoint (same measurement), so it
-        // is written from what was verified and never left to the loaded-models
-        // list `launch_prep` builds when none is set.
-        opts.env.insert(
-            OPENCODE_INLINE.to_string(),
-            crate::services::local_drivers::opencode_ollama_config(&v.endpoint, &[], Some(&v.model)),
-        );
-    }
     if v.driver == "vibe" {
         let alias = crate::services::ollama_client::sanitize_alias(&v.model);
         let home = vibe_home_in(share_dir, &alias, &v.project);

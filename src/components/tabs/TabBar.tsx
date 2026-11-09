@@ -1951,6 +1951,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     localModel,
                     localModelOffInRoot,
                     localDrivers,
+                    lockedProject: localModelsOnly,
                     vibeForLocalModel,
                     gpu: localModelGpu,
                     onVibe: (model) => void handleOllamaModel(model),

@@ -281,7 +281,6 @@ fn every_driver_line_is_recognised_and_a_tampered_one_is_not() {
     let projects = locked_registry(tmp.path());
     let cwd = tmp.path().join("secret");
     for (cmd, args) in [
-        ("opencode", vec!["--model", "ollama/qwen3:8b"]),
         ("ollama", vec!["launch", "pi", "--model", "qwen3:8b"]),
         ("ollama", vec!["launch", "claude", "--model", "qwen3:8b"]),
         ("codex", vec!["--oss", "-c", "oss_provider=\"ollama\"", "-m", "qwen3:8b"]),
@@ -914,7 +913,7 @@ fn the_gate_remembers_a_claude_tabs_endpoint_and_model_for_the_fence() {
     assert_eq!(claude_managed_for(&resumed).unwrap().as_deref(), Some(settings.as_str()));
     // Another driver pins nothing here; a Claude launch the gate never saw is an error.
     let other = World::healthy()
-        .gate(opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path())
+        .gate(opts("ollama", &["launch", "pi", "--model", "qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path())
         .unwrap();
     assert_eq!(claude_managed_for(&other).unwrap(), None);
     let unseen = opts("ollama", &claude_line(), Some("lock"), &cwd);
@@ -932,7 +931,7 @@ fn a_claude_launch_is_not_left_unpinned_when_a_second_spawn_of_its_tab_id_replac
     assert!(claude_managed_for(&claude).unwrap().is_some());
     // The record is kept per tab id: a second verified spawn of the id under another
     // driver replaces it, while the first spawn is still being fenced.
-    let mut second = opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd);
+    let mut second = opts("ollama", &["launch", "pi", "--model", "qwen3:8b"], Some("lock"), &cwd);
     second.id = claude.id.clone();
     World::healthy().gate(second, &projects, tmp.path()).unwrap();
     assert!(
@@ -949,23 +948,62 @@ fn claude_is_refused_where_the_sandbox_cannot_pin_its_settings() {
     let world = World { pins_claude: false, ..World::healthy() };
     let err = world.gate(opts("ollama", &claude_line(), Some("lock"), &cwd), &projects, tmp.path()).unwrap_err();
     assert!(err.starts_with(REFUSAL) && err.contains(CLAUDE_NOT_PINNABLE), "{err}");
-    assert!(world.gate(opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path()).is_ok());
+    assert!(world.gate(opts("codex", &["--oss", "-c", "oss_provider=\"ollama\"", "-m", "qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path()).is_ok());
     assert!(world.gate(opts("ollama", &["launch", "pi", "--model", "qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path()).is_ok());
     assert_eq!(claude_pinned_platform(), cfg!(target_os = "linux"));
 }
 
 #[test]
-fn a_verified_opencode_tab_runs_on_an_inline_config_written_from_what_was_verified() {
+fn opencode_is_refused_in_a_locked_project_whichever_way_it_gets_to_the_gate() {
     let tmp = tempfile::tempdir().unwrap();
     let projects = locked_registry(tmp.path());
     let cwd = tmp.path().join("secret");
-    let mut tab = opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd);
-    // What a renderer or the project could hand it is scrubbed first.
-    tab.env.insert("OPENCODE_CONFIG_CONTENT".into(), r#"{"provider":{"ollama":{"options":{"baseURL":"https://evil.invalid/v1"}}}}"#.into());
-    let out = World::healthy().gate(tab, &projects, tmp.path()).unwrap();
-    let doc: Value = serde_json::from_str(&out.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
-    assert_eq!(doc["provider"]["ollama"]["options"]["baseURL"], "http://127.0.0.1:11434/v1");
-    assert_eq!(doc["provider"]["ollama"]["whitelist"], json!(["qwen3:8b"]));
+    let line = ["--model", "ollama/qwen3:8b"];
+    // Its own project (window, phone, restore and schedule all arrive here), the root
+    // console with a cwd inside, and another project (a box tab) with a cwd inside.
+    for project in [Some("lock"), None, Some("open")] {
+        let err = World::healthy().gate(opts("opencode", &line, project, &cwd), &projects, tmp.path()).unwrap_err();
+        assert!(err.starts_with(REFUSAL) && err.contains("\"Secret\""), "{project:?}: {err}");
+        assert!(err.contains("OpenCode") && err.contains("cannot be kept on the local model"), "{project:?}: {err}");
+        // It names what can still run there, derived from the drivers.
+        for label in ["Pi", "Claude Code", "Codex", "Mistral"] {
+            assert!(err.contains(label), "{label} missing: {err}");
+        }
+    }
+    // The refusal does not depend on Ollama or the model: a verified-looking line is
+    // refused with the same words when Ollama is down.
+    let down = World { local: Err(crate::services::ollama_client::MODEL_NOT_RUNNING), ..World::healthy() };
+    let err = down.gate(opts("opencode", &line, Some("lock"), &cwd), &projects, tmp.path()).unwrap_err();
+    assert!(err.contains("cannot be kept on the local model"), "{err}");
+    // Where Claude cannot be pinned it is not offered as an alternative.
+    let no_claude = World { pins_claude: false, ..World::healthy() };
+    let err = no_claude.gate(opts("opencode", &line, Some("lock"), &cwd), &projects, tmp.path()).unwrap_err();
+    assert!(!err.contains("Claude Code"), "{err}");
+    // A project that is not locked still runs it; the shell-tab shim, which never
+    // passed the gate and so has no stamp, is refused at the fence.
+    let open = tmp.path().join("open");
+    assert!(World::healthy().gate(opts("opencode", &line, Some("open"), &open), &projects, tmp.path()).is_ok());
+    let locked = locked_projects(&projects);
+    let shim = opts("opencode", &line, Some("lock"), &cwd);
+    assert!(fence_gate_in(&locked, &shim, "lock").unwrap_err().starts_with(REFUSAL));
+}
+
+#[test]
+fn the_agents_a_locked_project_can_run_are_derived_from_the_driver_registry() {
+    let with_claude = agents_that_can_run_locked(true);
+    let without = agents_that_can_run_locked(false);
+    assert!(!with_claude.contains(&"OpenCode") && !without.contains(&"OpenCode"));
+    assert!(with_claude.contains(&"Claude Code") && !without.contains(&"Claude Code"));
+    // Every other registry driver is on the list, whatever the registry holds today.
+    for d in crate::services::local_drivers::LOCAL_DRIVERS.iter().filter(|d| d.id != "opencode" && d.id != "claude") {
+        assert!(without.contains(&d.label), "{} missing from {without:?}", d.label);
+    }
+    assert!(without.contains(&"Mistral (vibe)"));
+    // The refused drivers are exactly the ones the gate turns away: nothing on the list is refused.
+    for id in REFUSED_DRIVERS {
+        let label = crate::services::local_drivers::LOCAL_DRIVERS.iter().find(|d| d.id == *id).unwrap().label;
+        assert!(!with_claude.contains(&label), "{label}");
+    }
 }
 
 #[test]

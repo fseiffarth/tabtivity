@@ -159,6 +159,13 @@ agents see an empty folder where it is, and a file of the project cannot be
 dropped onto an agent that is not on a local model. Turning it on closes the
 project's running cloud agent tabs.
 
+OpenCode cannot be kept on the local model in such a project yet (it re-reads
+a config file the agent writes while it runs, so the agent could add a cloud
+provider): its local row is not offered there and an OpenCode tab is refused
+with a message naming the local agents that can run (Pi, Claude Code on
+Linux, Codex, Droid, OpenClaw, Cline, Mistral). It runs again in a project
+with the switch off.
+
 It does not stop what a local agent does with its own network (a fetch tool, a
 `curl`, a `git push`, switching to an Ollama cloud model mid-session), and
 shell tabs, the root console's Host session and Windows have no sandbox that

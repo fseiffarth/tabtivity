@@ -304,6 +304,7 @@ export function NewTabMenu({
                 localModel,
                 localModelOffInRoot,
                 localDrivers,
+                lockedProject: localModelsOnly,
                 vibeForLocalModel,
                 gpu: localModelGpu,
                 onVibe: (model) => void pickOllamaModel(model),

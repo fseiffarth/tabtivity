@@ -101,6 +101,16 @@ A subject spawn is allowed only when `vet` accepts it:
   `<APP>_LOCAL_MODEL` env names the model. The renderer's `PtyOptions.local_model`
   is never read for the decision; the plan's "`prepare_local_agent` record" is
   not needed because the argv itself is what runs;
+- the driver is not **OpenCode** (`agent_privacy::REFUSED_DRIVERS`): a launch line that
+  would be OpenCode's is refused, before Ollama is asked, with "OpenCode cannot be kept
+  on the local model in a Local models only project yet" and the local agents that can
+  run (`agents_that_can_run_locked`: the `LOCAL_DRIVERS` labels but OpenCode, Claude
+  Code only where it can be pinned, and Mistral (vibe)). Every route into a locked
+  project passes `vet` or the fence's stamp check (window, phone, restore, schedule, a
+  box tab or the root console with a cwd inside, the shell-tab shim), so there is one
+  place to lift this in Phase 2. The ＋ menus hide the row (`driversForLockedProject`,
+  `LOCKED_REFUSED_DRIVERS` in `localModelsOnly.ts`; the phone's sheet lists all rows, as
+  it does the cloud ones, and gets the backend's text);
 - `OLLAMA_HOST` of the Tabtivity process, if set, is loopback;
 - the endpoint is the loopback `ollama_host`, and
   `ollama_client::tab_model_is_local_at` passes: a listed model without a remote,
@@ -187,7 +197,7 @@ prompts):
 | CLI | Re-reads mid-session? | What pins it |
 | --- | --- | --- |
 | Claude Code 2.1.319 | **Yes**, project `.claude/settings.json`, `.claude/settings.local.json` and the user's `~/.claude/settings.json` (the agent home's, writable in the fence). An `env.ANTHROPIC_BASE_URL` moved the next `POST /v1/messages`; so did `env.HTTP_PROXY`/`HTTPS_PROXY` (the whole request goes through the proxy even to a loopback base URL) and `env.CLAUDE_CODE_USE_BEDROCK` + `ANTHROPIC_BEDROCK_BASE_URL` (the request went to the attacker as `/model/<m>/invoke-with-response-stream`). | A **managed-settings file** (`local_drivers::claude_managed_settings`), written by the backend into `<state>/claude_managed/<digest>/claude-code/managed-settings.json` (content-addressed, `home_io` handles, pinned by inode and re-checked last by `verify_control_pins`) and bound read-only into the fence at Claude's machine-wide path `/etc/claude-code/managed-settings.json`. It outranks project and user settings. It pins `env` (`ANTHROPIC_BASE_URL` to the verified endpoint, the model variables `ollama launch claude` sets, the proxy and `CLAUDE_CODE_USE_*` variables emptied, `NO_PROXY` to loopback), `model`, `availableModels: [model]` and `allowedProviders: ["customEndpoint"]` (Claude Code refuses a session on any other provider; the custom endpoint is admitted only at the value this file pins). Built from what the gate recorded for the tab (driver, model, endpoint), not from the argv. |
-| OpenCode 2.2.6 | **Yes**: a project `opencode.json` / `.opencode/opencode.json` written mid-session moved the next request when the provider came from a project file (`opencode mini --standalone`). | The gate puts an **inline `OPENCODE_CONFIG_CONTENT`** on a verified tab, written from the verified endpoint and model (`opencode_ollama_config`). Measured: with the inline config set, the same mid-session project files moved nothing (all later requests went to the inline endpoint). Not pinned: a project config that adds a new provider or sets `model`/`enabled_providers` (the project's `enabled_providers` replaced the inline list in `opencode models`); it takes a user action (a new session, a model switch) to use. Flagged. |
+| OpenCode 2.2.6 | **Yes**: a project `opencode.json` / `.opencode/opencode.json` written mid-session moved the next request when the provider came from a project file (`opencode mini --standalone`). | **Nothing holds it, so OpenCode is refused in a locked project until Phase 2.** An inline `OPENCODE_CONFIG_CONTENT` (which fix round 3 gave a verified tab) pinned the `ollama` provider's endpoint, but config arrays merge as a union: a project file that adds a provider and sets `enabled_providers`, `model`, `small_model` or a per-agent `model` still lists and uses its own (`opencode models --standalone`, review 3). The only closure would be to create the files in the project to mask them, which the app must not do. The inline-config code in `apply` is removed (it is in git history, `17f447d3`); `local_drivers::opencode_ollama_config` stays, since `launch_prep` builds the loaded-models config with it for every other OpenCode tab. |
 | Codex 0.167.0 | **No** (measured): `.codex/config.toml` written mid-session with another `model`/`model_provider`/`openai_base_url` changed nothing; later requests kept the launch model on the launch endpoint. The provider keys in a project file are ignored at start anyway. | Nothing needed. |
 | Pi, Droid, Cline, OpenClaw, Vibe | Not installed, not measured. | The spawn-time masks only. Vibe's home is pinned read-only. |
 
@@ -250,6 +260,7 @@ only four files wrap an agent in the fence).
 
 ## Not done in phase 1
 
-Phase 2 (`--unshare-net`, the local lane relay, Cut network), macOS Seatbelt network
-denial, container and VM projects, the phone's ＋ sheet hiding cloud rows in a locked
-project (the spawn is refused with the backend's text).
+Phase 2 (`--unshare-net`, the local lane relay, Cut network, and with it OpenCode in a
+locked project), macOS Seatbelt network denial, container and VM projects, the phone's ＋
+sheet hiding cloud rows and the OpenCode row in a locked project (the spawn is refused
+with the backend's text).

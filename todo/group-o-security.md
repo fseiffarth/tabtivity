@@ -1658,8 +1658,9 @@ checkout; `npm ci --ignore-scripts`; Windows/macOS runners pinned to
   paths are closed. Cut network (phase 2) is stored and shown but refused.
     - [x] 🤖 Automated test
     - [ ] 🖐️ Manual test — mark a scratch project Local models only; the + menu
-      shows only local rows, a cloud tab restored from before is gone; an
-      OpenCode local tab works; from a Claude tab of another project `ls` of the
+      shows only local rows (no OpenCode row, and an OpenCode tab typed into a
+      shell tab is refused with a message naming the local agents that can run),
+      a cloud tab restored from before is gone; a Pi local tab works; from a Claude tab of another project `ls` of the
       scratch folder is empty; in a box with another project the box tab cannot
       see it and the local tab cannot see the other member; dropping one of its
       files on a cloud tab is refused; turning it off brings the + menu back.
