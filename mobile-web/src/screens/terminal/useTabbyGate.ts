@@ -22,7 +22,7 @@ export interface TabbyGate {
   /** A spoken send went out: the gate is on, the chime plays, the cue shows. */
   arm(): void;
   /** The mic was started for a reason other than a tap (navigation, a landing):
-   * the gate is on or off, with no cue. */
+   * the gate is on or off, with no chime. On, the voice line says so (the cue). */
   set(on: boolean): void;
   /** The start word was said alone: the chime plays and the next utterance
    * (for `GATE_WINDOW_MS`) starts the draft. */
@@ -65,7 +65,7 @@ export function useTabbyGate(tabId: string): TabbyGate {
     set(next) {
       closeWindow();
       on.current = next;
-      setLine(null);
+      setLine(next ? "cue" : null);
     },
     listen() {
       if (!on.current) return;

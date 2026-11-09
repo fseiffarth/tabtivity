@@ -539,6 +539,20 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(box().value).toBe("add a test");
     });
 
+    it("says to start with the start word once it has left, the gate being on", async () => {
+      await start();
+      expect(screen.queryByText(new RegExp(`say ${T} for your next prompt`))).toBeNull();
+      await hear(`${T} navigate`);
+      await hear("never mind");
+      // "Navigation closed" first, shown for a moment; then the gate's hint.
+      expect(screen.getByText("Navigation closed")).toBeTruthy();
+      await advance(3_100);
+      expect(screen.getByText(new RegExp(`say ${T} for your next prompt`))).toBeTruthy();
+      // The gate is on: the first utterance of the prompt starts the draft.
+      await hear(`${T} add a test`);
+      expect(box().value).toBe("add a test");
+    });
+
     it("closes after ten quiet seconds", async () => {
       await start();
       await hear(`${T} navigate`);
@@ -708,6 +722,8 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(FakeRecognition.instances).toHaveLength(0);
       await advance(400);
       expect(FakeRecognition.instances).toHaveLength(1);
+      // The voice line says how to start.
+      expect(screen.getByText(new RegExp(`say ${T} for your next prompt`))).toBeTruthy();
       // Dictation, the gate on: talk without the start word is dropped.
       await hear("so about something else");
       expect(box().value).toBe("");
