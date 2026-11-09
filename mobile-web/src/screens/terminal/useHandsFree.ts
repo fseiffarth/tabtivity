@@ -293,6 +293,11 @@ export function useHandsFree({
       return;
     }
     if (!handsFree || !readAloud || !liveQuestion || questionHeld || spokenQuestion.current === questionSignature || !voicePickable(liveQuestion)) return;
+    // Navigation owns the mic and the voice: its lines cut a question off, and
+    // its own end would reopen the mic over one still being read. A mic still
+    // being prepared (the mode's end opens one) would open under the reading too.
+    // The effect runs again when either is over.
+    if (navOpen || preparingVoice) return;
     spokenQuestion.current = questionSignature;
     const text = questionSpeech(questionAsk.map((line) => line.text), liveQuestion);
     if (!text) return;
@@ -305,7 +310,7 @@ export function useHandsFree({
     }
     speak(`question:${questionSignature}`, text, speechTag());
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questionSignature, handsFree, readAloud, liveQuestion, questionHeld, questionAsk]);
+  }, [questionSignature, handsFree, readAloud, liveQuestion, questionHeld, questionAsk, navOpen, preparingVoice]);
 
   /** Hands-free's line where a tap does something: the cancel window (a tap
    * keeps the draft unsent), the answer being read (a tap stops the voice;
