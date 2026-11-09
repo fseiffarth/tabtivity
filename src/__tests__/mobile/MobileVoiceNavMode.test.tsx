@@ -1,5 +1,5 @@
 import { act, cleanup as cleanupScreen, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { MobileSpeechRecognitionResultEvent } from "../../../mobile-web/src/voiceInput";
 
 const terminalModes = vi.hoisted(() => ({ bracketedPasteMode: false }));
@@ -144,8 +144,8 @@ function reading(...items: [string, boolean][]): MobileSpeechRecognitionResultEv
 describe(`${BRAND.display} Mobile spoken navigation`, () => {
   let spoken: FakeUtterance[];
   let ended: number;
-  let openTab: ReturnType<typeof vi.fn>;
-  let openProject: ReturnType<typeof vi.fn>;
+  let openTab: Mock<(tab: TabRow, opts?: { project?: string }) => void>;
+  let openProject: Mock<(id: string) => void>;
 
   beforeEach(() => {
     localStorage.clear();
@@ -157,8 +157,8 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     FakeWebSocket.instances = [];
     spoken = [];
     ended = 0;
-    openTab = vi.fn();
-    openProject = vi.fn();
+    openTab = vi.fn<(tab: TabRow, opts?: { project?: string }) => void>();
+    openProject = vi.fn<(id: string) => void>();
     forgetReadings();
     Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: FakeRecognition });
     Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
