@@ -202,3 +202,60 @@ The 3 failures, none from this work (checked in a detached worktree at be8e75ab,
    file (they need a transcript/answer cycle); they are exercised only through the code path
    (`onSend`, `startVoiceRef.current({ gate: false })`). N2's landing tests are the place to
    cover `{ gate: true }`.
+
+## N2 (plan steps 4–7) — done
+
+Worktree `voice-nav`, on top of N1. Commits:
+
+| sha | step |
+|---|---|
+| `2c08837f` | 4 — `voiceNav.ts` (lists, queues, cursor, landing note), `needsYouGroups.ts` lifted out of `NeedsYou.tsx`, **and the 15 i18n keys** (committed here by `git add -A`; they are used from step 5), plus the plan file itself (it was untracked in the worktree) |
+| `6e569684` | 5 — navigation mode (`useVoiceNav.ts`), `useHandsFree` defers, `useVoiceInput` dispatch, `Terminal.tsx`/`App.tsx`, `unlockSpeech()` in the mic tap, `mobile.voice.navigate` row; also `landingRead` + its tests (pure, belongs to step 6) |
+| `fe74f921` | 6 — `useVoiceLanding.ts` + landing tests |
+| `79a38c22` | 7 — help page, `docs/context/voice.md`, file map, `phone_voice_plan.md` pointer, plan status + "Decided in the build" |
+| `4219eb65`, `a602a31c` | test type fix; the N1 gate test's navigate case now answers the project fetch |
+
+### What landed
+
+- **`mobile-web/src/voiceNav.ts`** — `projectItems`, `detailLists`, `latestAgentTab`, `tabAtNumber`, `agentTabChoice`, `navQueue` (waiting = Needs you asking group, done = its finished group, working = `sortAgentTabs` lastWorking; unavailable tabs left out), `nextInQueue` + `noteJump` (module cursor, wraps, never the current tab), `leaveLanding`/`takeLanding` (one-shot, 30 s, other tab dropped), `landingRead`, `promptForVoice`.
+- **`mobile-web/src/needsYouGroups.ts`** — the two Needs-you filters, used by `NeedsYou.tsx` and `voiceNav.ts`.
+- **`useVoiceNav.ts`** — the mode (`off | open | confirm | pick`). Sets `utterances.capture` and `utterances.take`; `guard().reset()` + `voiceOpen=false` on entry. Commands run one at a time (promise chain). Lines are always spoken via `speak(..., replace)` with the mic closed (`endDictation()` in a microtask, so the utterance layer's step is not disturbed), mic reopened `NAV_TAIL_MS` (300 ms) after the voice is quiet; no speech output → line shown only, mic stays open. Idle close after `NAV_IDLE_MS` (10 s), armed only when not speaking. A mic tap calls `nav.end()`.
+- **`useVoiceLanding.ts`** — takes the note in a mount effect; waits for `connected` and the transcript (6 s, then the tab row's `lastPrompt`); speaks "You asked: …", reads answers after it with `readTurn(tab, sinceKey)`; then `startVoice({ gate: true })`. Hands-free off or a mic tap first: the note is taken and dropped. Tapping the line stops the voice and opens the mic.
+- **`useVoiceInput.ts`** — `dispatch(text)` is the single ordered route of a held utterance, and `consume` returns early while `utterances.capture` is set (so the send guard never runs in the mode).
+- **`App.tsx`/`Terminal.tsx`** — `openTab(..., { project })`; a new optional `openProject(id)` prop (project with no agent tab → its screen).
+
+### Where the merge of the draft edits slots in
+
+`useVoiceInput.ts`, function `dispatch`, marked `// (3) the draft edits slot in here.` Order: `utterances.take` (navigation mode, then "Tabby navigate") → **draft edits** → (not claimed) gate → `consume` (guard, `pick`) → dictation. Two things the merge must do: (a) widen `StartLexicon.mayNavigate` (`startLexicon.ts`) to "any utterance that starts with the start word" so edit utterances are *held* until they settle (today only start word, + a prefix of the navigate word, or the navigate phrase are held); (b) call `matchDraftEdit` in `dispatch` after `take`, return true when it ran. Also drop main's own `startWordLength`/`matchStartWord` in favour of N1's exact one.
+
+### i18n keys (all five dictionaries)
+
+`voice.nav.project|noAgentTab|nothingWorking|nothingDone|nothingWaiting|notYet|closed|desktopDown|unavailable|noSuchTab|landed|youAsked|noAnswerYet|noAnswer` (spoken, in the spoken language via `translate`) and `mobile.voice.navOpen` (shown).
+
+### Untested rows
+
+`mobile.voice.navigate` in `src/lib/untested.ts`; call site: the nav/landing voice line in `Terminal.tsx`.
+
+### Tests
+
+`MobileVoiceNav.test.ts` (23), `MobileVoiceNavMode.test.tsx` (37: mode, project ask-back, three queues, tab by name/number/agent, leave/idle/tap, no-TTS, hands-free deferral with a mutation check, landing, draft kept). Changed existing tests: the five hands-free tests in `MobileTerminalReadAloud.test.tsx` now read `voiced()` (the spoken list without the empty unlock utterance) — same assertions; `MobileTerminalTabbyGate.test.tsx`: "Tabby navigate" is no longer typed after the settle (it opens the mode), so that test was split into a "Tabby nav" (prefix, typed) case and a mode-opens case.
+
+### Gates
+
+`scripts/gates.sh --base be8e75ab`: brand pass, `git diff --check` pass, `npm run lint` pass (0 errors, no new warnings), `npm run build` pass. Vitest (`--changed be8e75ab`, 823 files): **8204 passed, 2 failed of 8206** — the known base failures `shell/i18n.test` (`agents.*` keys only) and `theme/CursorPacks.test`. (A first run also failed the mobile gate test, fixed in `a602a31c`, and the desktop `TerminalAiSwitch` test, which passes alone and in the rerun: load flake.) `MobileTerminalTranscript` "/clear mid-turn" passed. No Rust change.
+
+### Gotchas
+
+- `scanDictation` reads two near-identical utterances in one result list as one revised utterance (`sameSpeech`: ≥60% of the earlier words in order). Real life separates navigation commands by a mic restart (the phone speaks between them, or a jump replaces the screen); tests use a fresh mic (`reopen()`).
+- The socket's `visibilitychange` handler pings and abandons the link (mic aborted) after 4 s without a pong: tests that dispatch it must stay under that.
+- `endDictation()` aborts the recognizer without `onEnd`, so the gate is not cleared by it.
+- A landing starts the mic without a tap; a browser that refuses shows the existing failure line and the mic button works.
+
+### Flagged for user
+
+1. **Navigation closes with a shown line only** ("Navigation closed" for 3 s, plus the opening chime), not a spoken one, so the mic is not bounced; say if you want it spoken.
+2. **Project list is `GET /projects?view=active`** (what Home shows); a project only reachable through Home's search is not nameable.
+3. **"Cancel"/"stop" in the project ask-back leave the mode** (leave phrases win over "no"); "no" keeps it open.
+4. **Landing on a shell tab** reads nothing, starts no mic, ends the mode (as planned); the line is not spoken because the screen is replaced.
+5. **Not run live**: nothing here was started; the speech/recognizer interplay (mic reopen after a spoken line, the start word's real spellings, Chrome re-finalization) is only covered by fakes.
+6. `todo/*.md` has no phone-voice 🖐️ entry to extend; the Untested register rows (`mobile.voice.navigate`, `mobile.voice.tabbyStart`) are the manual list.
