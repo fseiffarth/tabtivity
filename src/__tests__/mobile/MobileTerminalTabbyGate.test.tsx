@@ -252,12 +252,21 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
     const speech = await dictate();
     await say(speech, [T, true]);
     expect(box().value).toBe("");
+    await say(speech, [`${T} nav`, true]);
+    expect(box().value).toBe("");
+    expect(screen.getByText(`Heard: ${T} nav`)).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+    // Not the navigate word after all: it is dictation.
+    expect(box().value).toBe(`${T} nav`);
+  });
+
+  it("opens navigation mode, not the draft, when the held words settle as the navigate phrase", async () => {
+    const speech = await dictate();
     await say(speech, [`${T} navigate`, true]);
     expect(box().value).toBe("");
-    expect(screen.getByText(`Heard: ${T} navigate`)).toBeTruthy();
     await act(async () => { await vi.advanceTimersByTimeAsync(900); });
-    // No navigation mode yet to claim it: it is dictation after all.
-    expect(box().value).toBe(`${T} navigate`);
+    expect(box().value).toBe("");
+    expect(screen.getByText(/^Navigation: say a project/)).toBeTruthy();
   });
 
   it("types the held start word with the next word when it is dictation", async () => {

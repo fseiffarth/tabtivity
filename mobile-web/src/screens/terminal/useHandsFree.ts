@@ -32,7 +32,7 @@ import { type StartVoiceOptions } from "./useVoiceInput";
  * for the turn a send started, and the question read out to be answered. */
 export function useHandsFree({
   tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation, tabbyGate,
-  connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
+  navOpen, connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
   questionSignature, questionAsk, answerQuestion, transcript,
 }: {
   tab: TabRow;
@@ -47,6 +47,9 @@ export function useHandsFree({
   endDictation: () => void;
   /** The Tabby gate: hands-free's own send and reopen turn it off. */
   tabbyGate: TabbyGate;
+  /** Spoken navigation is open (`useVoiceNav`): it owns the mic until it ends,
+   * so the wait for a turn neither closes it nor opens it again meanwhile. */
+  navOpen: boolean;
   connected: boolean;
   listening: boolean;
   preparingVoice: boolean;
@@ -62,6 +65,8 @@ export function useHandsFree({
   const [handsFree, setHandsFree] = useState(() => readFlag("focusHandsFree"));
   const handsFreeRef = useRef(handsFree);
   handsFreeRef.current = handsFree;
+  const navOpenRef = useRef(navOpen);
+  navOpenRef.current = navOpen;
   const [guardPhase, setGuardPhase] = useState<GuardPhase>("idle");
   /** A spoken pick of a row waits here for the guard's chime and cancel
    * window (gap 80); `pickHeard` is what the line shows meanwhile. */
@@ -246,6 +251,8 @@ export function useHandsFree({
       setHandsFreeWait(null);
       return;
     }
+    // Navigation owns the mic; the effect runs again when it ends.
+    if (navOpen) return;
     const over = handsFreeTurnOver({
       reading: handsFreeTurn.current.reading,
       busy: liveBusy,
@@ -262,6 +269,7 @@ export function useHandsFree({
     const dictating = () => voiceOpen.current || guardPhase !== "idle" || draftRef.current.trim() !== "";
     if (listening && dictating()) return;
     const timer = window.setTimeout(() => {
+      if (navOpenRef.current) return;
       if (listening) {
         if (dictating()) return;
         endDictation();
@@ -275,7 +283,7 @@ export function useHandsFree({
     }, TURN_SETTLE_MS);
     return () => window.clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handsFreeWait, handsFree, connected, liveBusy, liveQuestion, questionHeld, lastAnswerKey, speaking, listening, preparingVoice, pageShown, readAloud, guardPhase]);
+  }, [handsFreeWait, handsFree, connected, liveBusy, liveQuestion, questionHeld, lastAnswerKey, speaking, listening, preparingVoice, pageShown, readAloud, guardPhase, navOpen]);
   /** Hands-free with read-aloud: a question the agent waits on is read out,
    * its rows by number, once per question, so it can be answered by voice. */
   const spokenQuestion = useRef("");

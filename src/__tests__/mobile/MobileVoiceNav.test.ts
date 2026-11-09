@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ActivityTab, ProjectRow, TabRow } from "../../../mobile-web/src/api";
+import type { ActivityTab, ProjectRow, SessionTranscript, TabRow } from "../../../mobile-web/src/api";
 import {
-  LANDING_MAX_AGE_MS, agentTabChoice, detailLists, latestAgentTab, leaveLanding, navQueue, nextInQueue, noteJump,
+  LANDING_MAX_AGE_MS, agentTabChoice, detailLists, landingRead, latestAgentTab, leaveLanding, navQueue, nextInQueue, noteJump,
   projectItems, promptForVoice, resetNavCursors, tabAtNumber, takeLanding, tabsOfAgent,
 } from "../../../mobile-web/src/voiceNav";
 import { needsYouGroups } from "../../../mobile-web/src/needsYouGroups";
@@ -169,5 +169,40 @@ describe(`${BRAND.display} prompt read at a landing`, () => {
     const cut = promptForVoice(long);
     expect(cut.length).toBeLessThanOrEqual(281);
     expect(cut.endsWith("…")).toBe(true);
+  });
+});
+
+describe(`${BRAND.display} what a landing reads`, () => {
+  const entries = (...list: [string, string][]) => list.map(([kind, text], index) => ({ kind, text, at: `2026-11-09T10:00:0${index}.000Z` }));
+  const session = (...list: [string, string][]): SessionTranscript => ({ available: true, truncated: false, entries: entries(...list) } as SessionTranscript);
+  const row = tab("t1");
+
+  it("reads the last prompt and the answers after it, from the answer before it", () => {
+    const read = landingRead(row, session(["prompt", "one"], ["answer", "first"], ["prompt", "two"], ["answer", "second"]), true);
+    expect(read).toEqual({ kind: "prompt", text: "two", answered: true, sinceKey: "answer:2026-11-09T10:00:01.000Z" });
+  });
+
+  it("starts from nothing when no answer comes before the prompt, and says a prompt has no answer yet", () => {
+    expect(landingRead(row, session(["prompt", "one"]), true)).toEqual({ kind: "prompt", text: "one", answered: false, sinceKey: null });
+    expect(landingRead(row, session(["prompt", "one"], ["answer", "a"], ["prompt", "two"]), true))
+      .toMatchObject({ answered: false, sinceKey: "answer:2026-11-09T10:00:01.000Z" });
+  });
+
+  it("skips a slash command for the prompt before it", () => {
+    const read = landingRead(row, session(["prompt", "real prompt"], ["answer", "a"], ["prompt", "/clear"]), true);
+    expect(read).toMatchObject({ kind: "prompt", text: "real prompt" });
+  });
+
+  it("says only where it landed with no prompt, no session or no Focus", () => {
+    expect(landingRead(row, session(["answer", "a"]), true)).toEqual({ kind: "where" });
+    expect(landingRead(row, { available: false, reason: "no_session", entries: [], truncated: false } as SessionTranscript, true)).toEqual({ kind: "where" });
+    expect(landingRead(row, session(["prompt", "x"]), false)).toEqual({ kind: "where" });
+  });
+
+  it("falls back to the tab row's last prompt when the session cannot be read", () => {
+    const asked = tab("t2", { prompts: [{ text: "older" }, { text: "fix it. then more. and more." }] } as Partial<ActivityTab>);
+    expect(landingRead(asked, null, true)).toEqual({ kind: "fallback", text: "fix it. then more." });
+    expect(landingRead(asked, { available: false, reason: "read_failed", entries: [], truncated: false } as SessionTranscript, true).kind).toBe("fallback");
+    expect(landingRead(row, null, true)).toEqual({ kind: "where" });
   });
 });

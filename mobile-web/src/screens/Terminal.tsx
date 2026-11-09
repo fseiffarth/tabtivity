@@ -140,6 +140,7 @@ import { useLiveQuestion } from "./terminal/useLiveQuestion";
 import { useVoiceInput, type StartVoiceOptions } from "./terminal/useVoiceInput";
 import { useTabbyGate } from "./terminal/useTabbyGate";
 import { useHandsFree } from "./terminal/useHandsFree";
+import { useVoiceNav } from "./terminal/useVoiceNav";
 import { type SendGuard } from "../../../shared/handsFree";
 import { queueFamily, queuedHintShown } from "../terminal/queuePull";
 import {
@@ -615,7 +616,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
  * model picker already up — once, as soon as the session has drawn.
  * `subagent`: one was picked off the tab card's subagent list, so the session
  * opens in Focus on that subagent's own conversation. */
-export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab, markupBack }: {
+export function Terminal({ tab, project: projectOfTab, back, pickModel = false, subagent, signInTab: openedToSignIn = false, openTab, openProject, markupBack }: {
   tab: TabRow;
   /** The project the tab belongs to, for the files drawer a swipe from the
    * left of the output opens (`ProjectFiles`). */
@@ -628,7 +629,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * (`TabRow.sign_in`), for a sign-in tab reached any other way. */
   signInTab?: boolean;
   /** Shows another tab of the same project in place of this one. */
-  openTab?: (tab: TabRow, opts?: { signIn?: boolean; markupBack?: MarkupBack }) => void;
+  openTab?: (tab: TabRow, opts?: { signIn?: boolean; markupBack?: MarkupBack; project?: string }) => void;
+  /** Shows a project's screen (spoken navigation to a project with no agent tab). */
+  openProject?: (id: string) => void;
   /** Opened from a markup view's Open tab: that view, marking, is kept here
    * tucked away under the bar over the composer, which brings it back. */
   markupBack?: MarkupBack;
@@ -2172,12 +2175,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     capture: useRef(false),
     take: useRef<(utterance: string) => boolean>(() => false),
   };
+  /** Spoken navigation is open (`useVoiceNav`): hands-free leaves the mic to it. */
+  const [navOpen, setNavOpen] = useState(false);
   const {
     handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, stopLoop,
     toggleHandsFree, handsFreeLine: handsFreeLineFor,
   } = useHandsFree({
     tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation, tabbyGate,
-    connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
+    navOpen, connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
     questionSignature, questionAsk, answerQuestion, transcript,
   });
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
@@ -2190,6 +2195,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     },
   });
   startVoiceRef.current = startVoice;
+  /** "{assistant} navigate": spoken navigation, in hands-free's open mic. */
+  const nav = useVoiceNav({
+    tab, project: projectOfTab, openTab, openProject, setOpen: setNavOpen, utterances: utteranceHooks, tabbyGate,
+    handsFreeOn: handsFreeRef, guard: handsFreeGuard, voiceOpen, recognition, endDictation, startVoiceRef,
+  });
+  const navLine = voiceFailure ? null : nav.line;
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
   const sayVoice = (note: VoiceNote) => t(note.key, note.language ? { language: note.language } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
@@ -2656,10 +2667,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </>}
     </div>
     <div className="terminal-controls">
-      {tab.kind === "agent" && handsFreeLine && (handsFreeLine.run
+      {tab.kind === "agent" && navLine && (navLine.run
+        ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={navLine.run}>{navLine.text}{isUntested("mobile.voice.navigate") && <em>{t("mobile.focus.untested")}</em>}</button>
+        : <div className="voice-feedback hands-free" role="status" aria-live="polite">{navLine.text}{isUntested("mobile.voice.navigate") && <em>{t("mobile.focus.untested")}</em>}</div>)}
+      {tab.kind === "agent" && !navLine && handsFreeLine && (handsFreeLine.run
         ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={handsFreeLine.run}>{handsFreeLine.text}{isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</button>
         : <div className="voice-feedback hands-free" role="status" aria-live="polite">{handsFreeLine.text}</div>)}
-      {tab.kind === "agent" && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}
+      {tab.kind === "agent" && !navLine && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
       {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}
@@ -2801,10 +2815,17 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {suggested && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
           {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={() => {
+            // A tap ends spoken navigation, whatever else it does.
+            nav.end();
             if (listening) stopVoice();
             else if (preparingVoice) cancelVoicePrep();
             else if (handsFree && speaking) stopSpeaking();
-            else void startVoice({ gate: false });
+            else {
+              // The tap is the gesture a browser wants before the page may speak
+              // (navigation and the landing speak without one).
+              unlockSpeech();
+              void startVoice({ gate: false });
+            }
           }}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
         </div>
         <div className="composer-bar">

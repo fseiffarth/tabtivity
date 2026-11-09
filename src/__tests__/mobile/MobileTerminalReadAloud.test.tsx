@@ -111,6 +111,9 @@ class FakeUtterance {
 
 describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
   let spoken: FakeUtterance[];
+  /** What was said, without the silent utterance a mic tap sends to let the
+   * page speak (`unlockSpeech`). */
+  const voiced = () => spoken.filter((utterance) => utterance.text !== "");
   let cancel: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -202,18 +205,18 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
       entries = [FIRST, SECOND];
       act(() => { document.dispatchEvent(new Event("visibilitychange")); });
       await settle();
-      expect(spoken.map((utterance) => utterance.text)).toEqual([]);
+      expect(voiced().map((utterance) => utterance.text)).toEqual([]);
       await act(async () => { vi.advanceTimersByTime(1_600); });
-      expect(spoken.map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft."]);
-      act(() => { spoken[0].onend?.(); });
-      act(() => { spoken[1].onend?.(); });
-      expect(spoken.map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft.", "code block, one line"]);
+      expect(voiced().map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft."]);
+      act(() => { voiced()[0].onend?.(); });
+      act(() => { voiced()[1].onend?.(); });
+      expect(voiced().map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft.", "code block, one line"]);
 
       // Read: the mic opens again, and a whole "repeat" is a reading command.
       await act(async () => { vi.advanceTimersByTime(1_600); });
       expect(FakeRecognition.instances).toHaveLength(2);
       act(() => FakeRecognition.instances[1].onresult?.(heard("repeat")));
-      expect(spoken.map((utterance) => utterance.text).slice(-1)).toEqual(["code block, one line"]);
+      expect(voiced().map((utterance) => utterance.text).slice(-1)).toEqual(["code block, one line"]);
       expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("");
     } finally {
       vi.useRealTimers();
@@ -246,13 +249,13 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
       entries = [FIRST, SECOND];
       act(() => { document.dispatchEvent(new Event("visibilitychange")); });
       await settle();
-      expect(spoken.map((utterance) => utterance.text)).toEqual([]);
+      expect(voiced().map((utterance) => utterance.text)).toEqual([]);
       // Nothing is being dictated: the mic closes, the answer is read …
       await act(async () => { vi.advanceTimersByTime(1_600); });
       expect(abort).toHaveBeenCalledTimes(1);
-      expect(spoken.map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft."]);
-      act(() => { spoken[0].onend?.(); });
-      act(() => { spoken[1].onend?.(); });
+      expect(voiced().map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft."]);
+      act(() => { voiced()[0].onend?.(); });
+      act(() => { voiced()[1].onend?.(); });
       // … and the mic opens again after it.
       await act(async () => { vi.advanceTimersByTime(1_600); });
       expect(FakeRecognition.instances).toHaveLength(2);
@@ -284,7 +287,7 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
       entries = [FIRST, SECOND];
       act(() => { document.dispatchEvent(new Event("visibilitychange")); });
       await settle();
-      expect(spoken.map((utterance) => utterance.text)).toEqual([]);
+      expect(voiced().map((utterance) => utterance.text)).toEqual([]);
 
       if (how === "the link lost") {
         act(() => { FakeWebSocket.instances.forEach((socket) => socket.close()); });
@@ -293,7 +296,7 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
         fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Hands-free/ }));
       }
       await settle();
-      expect(spoken.map((utterance) => utterance.text).filter((text) => text !== "")).toEqual(["Done: the ✕ empties the draft."]);
+      expect(voiced().map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft."]);
     } finally {
       vi.useRealTimers();
       delete (window as Window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
@@ -325,15 +328,15 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
       await act(async () => {});
       act(() => FakeRecognition.instances[FakeRecognition.instances.length - 1].onresult?.(heard("and the logout")));
       await act(async () => { vi.advanceTimersByTime(3_000); });
-      expect(spoken.map((utterance) => utterance.text)).toEqual([]);
+      expect(voiced().map((utterance) => utterance.text)).toEqual([]);
 
       entries = [FIRST, SECOND, third];
       act(() => { document.dispatchEvent(new Event("visibilitychange")); });
       await settle();
       await act(async () => { vi.advanceTimersByTime(1_600); });
-      act(() => { spoken[0].onend?.(); });
-      act(() => { spoken[1].onend?.(); });
-      expect(spoken.map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft.", "code block, one line", "And the logout too."]);
+      act(() => { voiced()[0].onend?.(); });
+      act(() => { voiced()[1].onend?.(); });
+      expect(voiced().map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft.", "code block, one line", "And the logout too."]);
     } finally {
       vi.useRealTimers();
       delete (window as Window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;

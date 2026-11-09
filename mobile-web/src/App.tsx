@@ -663,7 +663,9 @@ export function App() {
     subagent={terminal.subagent}
     signInTab={terminal.signIn}
     markupBack={terminal.markupBack}
-    openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
+    openTab={(next, opts) => openTerminal(opts?.project ?? terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
+    // Spoken navigation to a project with no agent tab: its screen, from here.
+    openProject={(id) => { setTerminal(null); setProjectView({ kind: "project", id }); }}
     back={() => setTerminal(null)}
   /></BackNest>;
   if (tabby) return <BackNest><TabbyOpen

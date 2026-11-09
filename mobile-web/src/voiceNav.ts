@@ -10,10 +10,13 @@
 // `/projects/{id}` and `/activity`.
 import { sortAgentTabs } from "../../shared/agentSort";
 import { BUILTIN_AGENT_ALIASES, type VoiceListItem } from "../../src/lib/voice/voiceCommands";
-import { type ActivityTab, type ProjectDetail, type ProjectRow, type TabRow } from "./api";
+import { lastPrompt } from "./agentPrompts";
+import { type ActivityTab, type ProjectDetail, type ProjectRow, type SessionTranscript, type TabRow } from "./api";
 import { lastWorkedAt } from "./components/AgentModeMarks";
 import { needsYouGroups } from "./needsYouGroups";
 import { type SeenDone } from "./seenDone";
+import { withoutInboxReferences } from "./terminal/inboxRefs";
+import { transcriptTurns } from "./terminal/transcriptTurns";
 
 // ---------------------------------------------------------------- lists
 
@@ -170,4 +173,40 @@ export function promptForVoice(text: string, maxSentences = 2, maxChars = 280): 
   let out = sentences.slice(0, maxSentences).map((sentence) => sentence.trim()).join(" ");
   if (out.length > maxChars) out = `${out.slice(0, maxChars).replace(/\s+\S*$/u, "")}…`;
   return out;
+}
+
+/** What a landing reads, decided from what the new screen holds:
+ * - `prompt`: the reader's last prompt there; `answered` says whether the
+ *   session has an answer after it, and `sinceKey` is the key of the newest
+ *   answer *before* it (the reading cursor reads the ones after that);
+ * - `fallback`: the session could not be read: the tab row's last prompt, and
+ *   no answer;
+ * - `where`: only where it landed ("Claude in Alpha") — a tab whose Focus is
+ *   not a stored session, or one with no prompt yet. */
+export type LandingRead =
+  | { kind: "where" }
+  | { kind: "prompt"; text: string; answered: boolean; sinceKey: string | null }
+  | { kind: "fallback"; text: string };
+
+export function landingRead(tab: TabRow, transcript: SessionTranscript | null, sessionFocus: boolean): LandingRead {
+  if (!sessionFocus) return { kind: "where" };
+  // A session that does not exist (a terminal view, no stored session) has
+  // nothing to read; one that failed to read, or has not answered, falls back.
+  if (transcript && !transcript.available && transcript.reason !== "read_failed") return { kind: "where" };
+  if (transcript?.available) {
+    const turns = transcriptTurns(transcript.entries);
+    let at = -1;
+    for (let index = turns.length - 1; index >= 0 && at < 0; index -= 1) {
+      if (turns[index].kind === "prompt" && !turns[index].command) at = index;
+    }
+    if (at < 0) return { kind: "where" };
+    let sinceKey: string | null = null;
+    for (let index = at - 1; index >= 0 && sinceKey === null; index -= 1) {
+      if (turns[index].kind === "answer") sinceKey = turns[index].key;
+    }
+    const text = promptForVoice(withoutInboxReferences(turns[at].text) || turns[at].text);
+    return { kind: "prompt", text, answered: turns.slice(at + 1).some((turn) => turn.kind === "answer"), sinceKey };
+  }
+  const asked = lastPrompt(tab);
+  return asked ? { kind: "fallback", text: promptForVoice(asked.text) } : { kind: "where" };
 }

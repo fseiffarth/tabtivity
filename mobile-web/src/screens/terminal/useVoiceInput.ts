@@ -43,7 +43,8 @@ export interface HandsFreeHooks {
   stopLoop: () => void;
 }
 
-/** What the utterance layer hands on (navigation mode fills these). */
+/** What the utterance layer hands on (navigation mode fills these; `dispatch`
+ * below is the one ordered route a held utterance takes). */
 export interface UtteranceHooks {
   /** Navigation mode is open: every utterance is a command, none is typed. */
   capture: MutableRefObject<boolean>;
@@ -164,8 +165,25 @@ export function useVoiceInput({
       // utterance needs no start word.
       open: tabbyGate.windowOpen() || draftRef.current.trim() !== "",
       flush,
-      onWithheld: (text) => utterances.take.current(text),
+      onWithheld: (text) => dispatch(text),
     });
+    /** A held utterance has settled: the one ordered route it takes before it
+     * can be dictation, first match wins.
+     *   1. navigation mode, if open: a leave word ("stop", "cancel") ends it,
+     *      any other utterance is a navigation command (`useVoiceNav`);
+     *   2. "{assistant} navigate …" opens the mode (the same `take`);
+     *   3. SLOT for the spoken draft edits ("Tabby scratch that" …,
+     *      `matchDraftEdit`): they are utterances that start with the start
+     *      word, so they must also be *held* until they settle — widen
+     *      `StartLexicon.mayNavigate` (`startLexicon.ts`) to "any start-word
+     *      utterance" and call the matcher here, after 1 and 2;
+     *   4. not claimed: the Tabby gate, then hands-free's guard and `pick`,
+     *      then dictation — all in `consume`, below. */
+    const dispatch = (text: string): boolean => {
+      if (utterances.take.current(text)) return true;
+      // (3) the draft edits slot in here.
+      return false;
+    };
     /** What a step did to the layer's state and the gate. */
     const took = (step: UtteranceStep) => {
       voiceProgress.current = step.progress;
@@ -188,6 +206,14 @@ export function useVoiceInput({
     /** What the words of one reading do: the hands-free guard, a spoken send,
      * the draft, the "Heard:" line. */
     const consume = (insert: string, interim: string, preview: string, held: boolean) => {
+      // Navigation mode owns the mic: every word is a command (never typed),
+      // and none of it may start the send guard's pause.
+      if (utterances.capture.current) {
+        voiceOpen.current = false;
+        handsFree.sendGuard.current?.reset();
+        setVoicePreview("");
+        return;
+      }
       // Hands-free: settled words go through the send guard first. A stop
       // word cancels its window and never reaches the draft; on a question
       // the agent waits on, "two" / "option two" picks that row.
