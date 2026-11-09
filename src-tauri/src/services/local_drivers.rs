@@ -328,6 +328,71 @@ pub(crate) fn vibe_local_config(model: &str, alias: &str, addr: &str) -> String 
     cfg
 }
 
+/// The environment names whose value, set in a project's or the user's Claude settings,
+/// would send the conversation somewhere else than the pinned endpoint. Measured on
+/// Claude Code 2.1.319 (`docs/context/local_models_only.md`, "Claude Code re-reads its
+/// settings"): the proxy variables carry the whole request through a proxy even to a
+/// loopback base URL, and the `CLAUDE_CODE_USE_*` switches move it to a cloud provider.
+const CLAUDE_UNPINNED_ENV: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "CLAUDE_CODE_HTTP_PROXY",
+    "CLAUDE_CODE_HTTPS_PROXY",
+    "ANTHROPIC_UNIX_SOCKET",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_GATEWAY",
+];
+
+/// The managed-settings file of a local Claude Code tab on `model` at the loopback
+/// Ollama `addr` (`host:port`), the one the gate verified. Claude Code reads it from
+/// `/etc/claude-code/managed-settings.json`, above the project's and the user's
+/// settings, and it re-reads those two while a session runs — so a settings file the
+/// agent (or a command it runs) writes mid-session cannot move the next request.
+/// Pinned: the base URL and the models `ollama launch claude` sets, the proxy and
+/// provider switches ([`CLAUDE_UNPINNED_ENV`], emptied), `model`, `availableModels`
+/// and `allowedProviders: ["customEndpoint"]` (which Claude Code enforces by refusing
+/// a session on any other provider, and which admits a custom endpoint only at the
+/// value pinned in this file's `env`). Pure; the caller writes it.
+pub(crate) fn claude_managed_settings(model: &str, addr: &str) -> String {
+    let mut env = serde_json::Map::new();
+    let mut put = |k: &str, v: &str| {
+        env.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+    };
+    put("ANTHROPIC_BASE_URL", &format!("http://{addr}"));
+    put("ANTHROPIC_AUTH_TOKEN", "ollama");
+    put("ANTHROPIC_API_KEY", "");
+    for name in [
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+    ] {
+        put(name, model);
+    }
+    for name in CLAUDE_UNPINNED_ENV {
+        put(name, "");
+    }
+    put("NO_PROXY", "127.0.0.1,localhost,::1");
+    put("no_proxy", "127.0.0.1,localhost,::1");
+    serde_json::to_string_pretty(&serde_json::json!({
+        "env": env,
+        "model": model,
+        "availableModels": [model],
+        "allowedProviders": ["customEndpoint"],
+    }))
+    .unwrap_or_default()
+}
+
 /// The CLI a local driver runs (`claude` for `"claude"`), for naming the agent
 /// of a persisted local-model tab whose own `cmd` may be `ollama`.
 pub(crate) fn local_driver_bin(driver: &str) -> Option<&'static str> {

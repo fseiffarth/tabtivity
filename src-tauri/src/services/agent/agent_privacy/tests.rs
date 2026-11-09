@@ -63,17 +63,18 @@ struct World {
     local: Result<(), &'static str>,
     endpoint: Result<String, String>,
     ambient: Option<String>,
+    pins_claude: bool,
 }
 
 impl World {
     fn healthy() -> Self {
-        World { local: Ok(()), endpoint: Ok("127.0.0.1:11434".into()), ambient: None }
+        World { local: Ok(()), endpoint: Ok("127.0.0.1:11434".into()), ambient: None, pins_claude: true }
     }
 
     fn gate(&self, opts: PtyOptions, projects: &ProjectsList, share: &Path) -> Result<PtyOptions, String> {
         let endpoint = || self.endpoint.clone();
         let local = |_: &str, _: &str| self.local;
-        let probe = Probe { endpoint: &endpoint, local: &local, ambient_host: self.ambient.clone() };
+        let probe = Probe { endpoint: &endpoint, local: &local, ambient_host: self.ambient.clone(), pins_claude: self.pins_claude };
         gate_with(opts, projects, &probe, share)
     }
 }
@@ -364,7 +365,7 @@ fn spawns_outside_every_locked_project_and_shells_pass_untouched() {
     shell.agent = false;
     assert!(World::healthy().gate(shell, &projects, tmp.path()).is_ok());
     // No Ollama needed for an unrelated project.
-    let down = World { local: Err(crate::services::ollama_client::MODEL_NOT_RUNNING), endpoint: Err("x".into()), ambient: None };
+    let down = World { local: Err(crate::services::ollama_client::MODEL_NOT_RUNNING), endpoint: Err("x".into()), ambient: None, pins_claude: true };
     assert!(down.gate(opts("claude", &[], Some("open"), &open), &projects, tmp.path()).is_ok());
 }
 
@@ -870,4 +871,160 @@ fn a_running_container_agent_is_ended_when_a_folder_inside_its_mount_is_locked()
     // The spawn path records it for a container agent, as it does for a fenced one.
     let launch = source("services/launch_prep.rs");
     assert!(body_of(&launch, "pub async fn prepare(").contains("container_fence_view("), "prepare must record a container agent's view");
+}
+
+// ── Claude Code re-reads its settings: the pinned managed-settings file ─────
+
+fn claude_line() -> Vec<&'static str> {
+    vec!["launch", "claude", "--model", "qwen3:8b"]
+}
+
+#[test]
+fn the_managed_claude_settings_pin_the_endpoint_the_model_and_every_way_around_them() {
+    let text = crate::services::local_drivers::claude_managed_settings("qwen3:8b", "127.0.0.1:11434");
+    let doc: Value = serde_json::from_str(&text).unwrap();
+    let env = doc["env"].as_object().unwrap();
+    assert_eq!(env["ANTHROPIC_BASE_URL"], "http://127.0.0.1:11434");
+    for name in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"] {
+        assert_eq!(env[name], "qwen3:8b", "{name}");
+    }
+    // Emptied: a proxy variable in a settings file the agent writes carries the whole
+    // request through its proxy, and the USE switches move it to a cloud provider.
+    for name in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "CLAUDE_CODE_HTTP_PROXY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_UNIX_SOCKET"] {
+        assert_eq!(env[name], "", "{name}");
+    }
+    assert_eq!(doc["model"], "qwen3:8b");
+    assert_eq!(doc["availableModels"], json!(["qwen3:8b"]));
+    assert_eq!(doc["allowedProviders"], json!(["customEndpoint"]));
+}
+
+#[test]
+fn the_gate_remembers_a_claude_tabs_endpoint_and_model_for_the_fence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = locked_registry(tmp.path());
+    let cwd = tmp.path().join("secret");
+    let out = World::healthy().gate(opts("ollama", &claude_line(), Some("lock"), &cwd), &projects, tmp.path()).unwrap();
+    let settings = claude_managed_for(&out).unwrap().expect("a verified Claude tab has settings to pin");
+    let doc: Value = serde_json::from_str(&settings).unwrap();
+    assert_eq!(doc["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:11434");
+    assert_eq!(doc["model"], "qwen3:8b");
+    // The record, not the argv, is what is pinned: a rewritten argv (a resume) changes nothing.
+    let mut resumed = out.clone();
+    resumed.args.extend(["--resume".into(), "x".into()]);
+    assert_eq!(claude_managed_for(&resumed).unwrap().as_deref(), Some(settings.as_str()));
+    // Another driver pins nothing here; a Claude launch the gate never saw is an error.
+    let other = World::healthy()
+        .gate(opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path())
+        .unwrap();
+    assert_eq!(claude_managed_for(&other).unwrap(), None);
+    let unseen = opts("ollama", &claude_line(), Some("lock"), &cwd);
+    assert!(claude_managed_for(&unseen).unwrap_err().starts_with(REFUSAL));
+    let plain = opts("claude", &[], Some("lock"), &cwd);
+    assert!(claude_managed_for(&plain).is_err());
+}
+
+#[test]
+fn claude_is_refused_where_the_sandbox_cannot_pin_its_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = locked_registry(tmp.path());
+    let cwd = tmp.path().join("secret");
+    let world = World { pins_claude: false, ..World::healthy() };
+    let err = world.gate(opts("ollama", &claude_line(), Some("lock"), &cwd), &projects, tmp.path()).unwrap_err();
+    assert!(err.starts_with(REFUSAL) && err.contains(CLAUDE_NOT_PINNABLE), "{err}");
+    assert!(world.gate(opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path()).is_ok());
+    assert!(world.gate(opts("ollama", &["launch", "pi", "--model", "qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path()).is_ok());
+    assert_eq!(claude_pinned_platform(), cfg!(target_os = "linux"));
+}
+
+#[test]
+fn a_verified_opencode_tab_runs_on_an_inline_config_written_from_what_was_verified() {
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = locked_registry(tmp.path());
+    let cwd = tmp.path().join("secret");
+    let mut tab = opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd);
+    // What a renderer or the project could hand it is scrubbed first.
+    tab.env.insert("OPENCODE_CONFIG_CONTENT".into(), r#"{"provider":{"ollama":{"options":{"baseURL":"https://evil.invalid/v1"}}}}"#.into());
+    let out = World::healthy().gate(tab, &projects, tmp.path()).unwrap();
+    let doc: Value = serde_json::from_str(&out.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
+    assert_eq!(doc["provider"]["ollama"]["options"]["baseURL"], "http://127.0.0.1:11434/v1");
+    assert_eq!(doc["provider"]["ollama"]["whitelist"], json!(["qwen3:8b"]));
+}
+
+#[test]
+fn the_bubblewrap_pin_covers_an_existing_policy_folder_with_a_tmpfs_and_a_missing_one_with_an_overlay() {
+    use crate::services::agent_fence::{host_claude_dir, insert_managed_claude, managed_claude_args, HostClaudeDir};
+    let file = Path::new("/state/claude_managed/ab/claude-code/managed-settings.json");
+    let layer = Path::new("/state/claude_managed/ab");
+    assert_eq!(
+        managed_claude_args(HostClaudeDir::Folder, file, layer),
+        [
+            "--tmpfs",
+            "/etc/claude-code",
+            "--ro-bind",
+            "/state/claude_managed/ab/claude-code/managed-settings.json",
+            "/etc/claude-code/managed-settings.json",
+            "--remount-ro",
+            "/etc/claude-code"
+        ]
+    );
+    assert_eq!(
+        managed_claude_args(HostClaudeDir::Missing, file, layer),
+        ["--overlay-src", "/etc", "--overlay-src", "/state/claude_managed/ab", "--ro-overlay", "/etc"]
+    );
+    // Before every other mount, so none of them under `/etc` is hidden by the overlay.
+    let mut args: Vec<String> = ["--ro-bind", "/", "/", "--dev", "/dev", "--", "claude"].iter().map(|a| a.to_string()).collect();
+    insert_managed_claude(&mut args, managed_claude_args(HostClaudeDir::Missing, file, layer));
+    assert_eq!(args[..3], ["--ro-bind", "/", "/"]);
+    assert_eq!(args[3], "--overlay-src");
+    assert_eq!(args[args.len() - 4..], ["--dev", "/dev", "--", "claude"][..]);
+    // The host's folder: a folder is covered, nothing there is overlaid, anything else refuses.
+    let tmp = tempfile::tempdir().unwrap();
+    assert_eq!(host_claude_dir(tmp.path()).unwrap(), HostClaudeDir::Folder);
+    assert_eq!(host_claude_dir(&tmp.path().join("none")).unwrap(), HostClaudeDir::Missing);
+    std::fs::write(tmp.path().join("file"), "x").unwrap();
+    assert!(host_claude_dir(&tmp.path().join("file")).is_err());
+}
+
+#[test]
+fn the_pinned_settings_file_is_written_once_per_content_and_pinned_by_inode() {
+    use crate::services::agent_fence::{verify_control_pins, write_managed_claude};
+    let tmp = tempfile::tempdir().unwrap();
+    let (file, layer, pin) = write_managed_claude(tmp.path(), "{\"a\":1}").unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"a\":1}");
+    assert!(file.starts_with(&layer) && file.ends_with("claude-code/managed-settings.json"));
+    assert!(verify_control_pins(std::slice::from_ref(&pin)).is_ok());
+    // The same content keeps the file (and so every running tab's bind); other content
+    // gets a folder of its own.
+    let (again, _, same) = write_managed_claude(tmp.path(), "{\"a\":1}").unwrap();
+    assert_eq!(again, file);
+    assert_eq!(same, pin);
+    let (other, _, _) = write_managed_claude(tmp.path(), "{\"a\":2}").unwrap();
+    assert_ne!(other, file);
+    // A file swapped in behind the pin refuses the spawn.
+    std::fs::remove_file(&file).unwrap();
+    std::fs::write(&file, "{\"a\":1}").unwrap();
+    assert!(verify_control_pins(&[pin]).is_err());
+    // A link at the file's name is replaced, never written through.
+    let (file2, _, _) = write_managed_claude(tmp.path(), "{\"b\":1}").unwrap();
+    let outside = tmp.path().join("outside");
+    std::fs::write(&outside, "keep").unwrap();
+    std::fs::remove_file(&file2).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&outside, &file2).unwrap();
+        write_managed_claude(tmp.path(), "{\"b\":1}").unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&file2).unwrap().file_type().is_symlink());
+    }
+}
+
+#[test]
+fn both_wrappers_pin_or_refuse_a_verified_claude_tab() {
+    let fence = source("services/agent/agent_fence.rs");
+    let linux = body_of(&fence, "pub fn wrap_pty_options_bwrap(");
+    assert!(linux.contains("claude_managed_for(opts)"), "the bubblewrap wrapper must build the pin");
+    assert!(linux.contains("managed_claude_args("), "the bubblewrap wrapper must place the pin");
+    assert!(linux.contains("verify_control_pins(&managed_pins)"), "the pinned file is checked last, like the other control paths");
+    let mac = body_of(&fence, "pub fn wrap_pty_options_sandbox_exec(");
+    assert!(mac.contains("claude_managed_for(opts)") && mac.contains("CLAUDE_NOT_PINNABLE"), "Seatbelt refuses a verified Claude tab");
 }

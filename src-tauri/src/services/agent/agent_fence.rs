@@ -1500,6 +1500,109 @@ pub(crate) fn mask_local_models_only(args: &mut Vec<String>, dirs: &[PathBuf]) {
     args.splice(separator..separator, mask);
 }
 
+/// What a host's `/etc/claude-code` is, as far as the fence's mounts are concerned.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostClaudeDir {
+    /// A folder: it can be covered with an empty tmpfs in place.
+    Folder,
+    /// Nothing there: the fence root is read-only, so the folder is added by an
+    /// overlay of `/etc`.
+    Missing,
+}
+
+/// Where Claude Code reads its machine-wide managed settings on Linux. It reads
+/// `managed-settings.json` and the drop-in folder `managed-settings.d/` here
+/// (strace of 2.1.319), and nowhere else on this platform; the environment override
+/// of the path is compiled out of the release build.
+#[cfg(any(target_os = "linux", test))]
+const CLAUDE_MANAGED_DIR: &str = "/etc/claude-code";
+
+/// The bubblewrap arguments that put `file` at `/etc/claude-code/managed-settings.json`
+/// read-only, with no `managed-settings.d/` beside it and nothing writable in the
+/// folder, so a drop-in the agent adds cannot be merged over it. `layer` is the
+/// folder that holds `claude-code/managed-settings.json` (the overlay source used
+/// when the host has no `/etc/claude-code`).
+///
+/// A folder on the host is covered with a tmpfs (hiding an administrator's own
+/// policy and drop-ins inside this fence), the file bound into it and the tmpfs
+/// remounted read-only. Without one bubblewrap cannot create a mount point in the
+/// read-only `/etc` of the root bind, so `/etc` is overlaid read-only with `layer`
+/// as a second source. Built, not run, here (the sandbox of this session forbids a
+/// nested namespace): the argv shape is a unit test.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn managed_claude_args(host: HostClaudeDir, file: &Path, layer: &Path) -> Vec<String> {
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let dest = format!("{CLAUDE_MANAGED_DIR}/managed-settings.json");
+    match host {
+        HostClaudeDir::Folder => vec![
+            "--tmpfs".into(),
+            CLAUDE_MANAGED_DIR.into(),
+            "--ro-bind".into(),
+            s(file),
+            dest,
+            "--remount-ro".into(),
+            CLAUDE_MANAGED_DIR.into(),
+        ],
+        HostClaudeDir::Missing => vec![
+            "--overlay-src".into(),
+            "/etc".into(),
+            "--overlay-src".into(),
+            s(layer),
+            "--ro-overlay".into(),
+            "/etc".into(),
+        ],
+    }
+}
+
+/// Write `settings` where only Tabtivity can (`<state>/claude_managed/<digest>/claude-code/
+/// managed-settings.json`, content-addressed so tabs of different models never share
+/// a name) through the guarded file helpers, and say what [`managed_claude_args`] and
+/// [`verify_control_pins`] need: the file, its layer folder and its pin. The file is
+/// outside the project and the agent homes; the fence binds it read-only.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn write_managed_claude(state_dir: &Path, settings: &str) -> Result<(PathBuf, PathBuf, ControlPin), String> {
+    let refuse = |why: &dyn std::fmt::Display| {
+        format!("Agent sandbox: could not prepare the Claude Code settings the fence pins ({why}), so this agent was not started.")
+    };
+    let digest = crate::digest::sha256_hex(settings.as_bytes());
+    let root = state_dir.join("claude_managed");
+    let rel = format!("{digest}/claude-code/managed-settings.json");
+    let file = crate::services::home_io::HomeFile::open(&root, &rel).ok_or_else(|| refuse(&"a link or file is in the way"))?;
+    if file.read().as_deref() != Some(settings.as_bytes()) {
+        file.write(settings.as_bytes()).map_err(|e| refuse(&e))?;
+    }
+    let meta = file.ensure(false).map_err(|e| refuse(&e))?;
+    let path = file.path();
+    Ok((path, root.join(&digest), ControlPin { path: file.path(), ino: meta.ino }))
+}
+
+/// [`HostClaudeDir`] of this machine; an `/etc/claude-code` that is not a folder (a
+/// file, a link) refuses, since no mount can be placed over it safely.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn host_claude_dir(path: &Path) -> Result<HostClaudeDir, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => Ok(HostClaudeDir::Folder),
+        Ok(_) => Err(format!(
+            "Agent sandbox: {} is not a folder, so the sandbox cannot pin Claude Code's settings there and this agent was not started.",
+            path.display()
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HostClaudeDir::Missing),
+        Err(e) => Err(format!("Agent sandbox: {} could not be looked at ({e}), so this agent was not started.", path.display())),
+    }
+}
+
+/// Put the pinned Claude settings into a fence argv: right after the root bind, before
+/// any mount under `/etc`.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn insert_managed_claude(args: &mut Vec<String>, managed: Vec<String>) {
+    let at = args
+        .windows(3)
+        .position(|w| w[0] == "--ro-bind" && w[1] == "/" && w[2] == "/")
+        .map_or(0, |i| i + 3);
+    args.splice(at..at, managed);
+}
+
 /// Hide the project config a local-model CLI would load from a verified tab's own
 /// folder (`agent_privacy::project_config_masks`): a file is bound over with
 /// `/dev/null`, a folder covered with an empty tmpfs, spliced in last like the
@@ -1599,6 +1702,19 @@ pub fn wrap_pty_options_bwrap(
         &extra_ro,
         &mounts,
     );
+    // A verified local Claude Code tab: Claude Code re-reads the project's and the
+    // user's settings while it runs, so a file the agent writes mid-session would move
+    // the next request. The managed-settings file outranks both; it holds the endpoint
+    // and the model the gate checked and is bound read-only where Claude reads it.
+    let mut managed_pins = Vec::new();
+    if locked_project.is_some() {
+        if let Some(settings) = crate::services::agent_privacy::claude_managed_for(opts)? {
+            let (file, layer, pin) = write_managed_claude(&storage::state_dir(), &settings)?;
+            let host = host_claude_dir(Path::new(CLAUDE_MANAGED_DIR))?;
+            insert_managed_claude(&mut args, managed_claude_args(host, &file, &layer));
+            managed_pins.push(pin);
+        }
+    }
     // Final masks follow every allowlist/project bind, so none re-exposes a
     // token. Missing files need no mask (their parent is read-only/hidden).
     mask_cargo_credentials(&mut args, hidden_cargo_credentials(opts));
@@ -1655,6 +1771,7 @@ pub fn wrap_pty_options_bwrap(
     // Last before the argv: the local model's control paths still hold the
     // inodes set up above (gap 30).
     verify_control_pins(&control_pins)?;
+    verify_control_pins(&managed_pins)?;
     (opts.cmd, opts.args) = seccomp_launcher(
         &bwrap.to_string_lossy(),
         step.as_ref().map(|(helper, mode)| (helper.as_str(), *mode)),
@@ -1988,6 +2105,11 @@ pub fn wrap_pty_options_sandbox_exec(
     // See the Linux wrapper: only a verified spawn runs in a local-models-only
     // project, and then without any key.
     let locked_project = crate::services::agent_privacy::fence_gate(opts, scope_id)?;
+    // Seatbelt cannot bind a file to Claude Code's managed-settings path, so a verified
+    // Claude tab (which re-reads its settings mid-session) is not started here.
+    if locked_project.is_some() && crate::services::agent_privacy::claude_managed_for(opts)?.is_some() {
+        return Err(crate::services::agent_privacy::CLAUDE_NOT_PINNABLE.to_string());
+    }
     let (mut inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
     if locked_project.is_some() {
         // As on Linux: the folder's own CLI config is denied (Seatbelt has no

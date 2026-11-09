@@ -388,6 +388,22 @@ pub struct Probe<'a> {
     pub local: &'a dyn Fn(&str, &str) -> Result<(), &'static str>,
     /// `OLLAMA_HOST` of this process, which a CLI started without one inherits.
     pub ambient_host: Option<String>,
+    /// Whether this platform's sandbox can pin Claude Code's managed-settings file
+    /// (Linux: bound read-only at `/etc/claude-code/managed-settings.json`). Without
+    /// the pin a settings file written mid-session re-aims Claude Code, so a Claude
+    /// tab is refused where it cannot be had ([`claude_pinned_platform`]).
+    pub pins_claude: bool,
+}
+
+/// Why a verified Claude Code tab is refused where its settings cannot be pinned.
+pub const CLAUDE_NOT_PINNABLE: &str = "Claude Code cannot be held to the local model on this operating system: it re-reads its settings while it runs, and only the Linux sandbox can pin the managed-settings file that outranks them. Use another local agent, or Claude Code on Linux.";
+
+/// Whether the sandbox of this build can pin Claude Code's managed settings: Linux
+/// only. Seatbelt (macOS) cannot bind a file to
+/// `/Library/Application Support/ClaudeCode/managed-settings.json`, and Windows has
+/// no sandbox at all.
+pub const fn claude_pinned_platform() -> bool {
+    cfg!(target_os = "linux")
 }
 
 /// The args of a local `vibe` tab Tabtivity starts: none, `--continue`, or
@@ -446,6 +462,9 @@ fn vet(opts: &PtyOptions, subject: &Locked, probe: &Probe<'_>, remote_project: b
             program(&opts.cmd)
         ));
     };
+    if driver == "claude" && !probe.pins_claude {
+        return no(CLAUDE_NOT_PINNABLE);
+    }
     if let Some(host) = &probe.ambient_host {
         if crate::services::ollama_client::resolve_ollama_addr(Some(host), true)
             .ok()
@@ -478,6 +497,9 @@ pub fn vibe_home_in(share_dir: &Path, alias: &str, project: &str) -> PathBuf {
     share_dir.join("vibe_local").join(format!("{alias}.{}", crate::storage::project_key(project)))
 }
 
+/// OpenCode's inline config variable (`agent_api_keys::OPENCODE_INLINE_ENV`).
+const OPENCODE_INLINE: &str = "OPENCODE_CONFIG_CONTENT";
+
 /// Change a verified spawn's options to what the gate stands behind.
 fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), String> {
     scrub_env(&mut opts.env);
@@ -485,6 +507,17 @@ fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), St
     opts.local_model = true;
     opts.env.insert(STAMP_ENV.to_string(), v.project.clone());
     opts.env.insert("OLLAMA_HOST".to_string(), v.endpoint.clone());
+    if v.driver == "opencode" {
+        // OpenCode reads its project config again while it runs (measured on 2.2.6:
+        // a `opencode.json` written mid-session moves the next request). The inline
+        // config outranks it for the provider's endpoint (same measurement), so it
+        // is written from what was verified and never left to the loaded-models
+        // list `launch_prep` builds when none is set.
+        opts.env.insert(
+            OPENCODE_INLINE.to_string(),
+            crate::services::local_drivers::opencode_ollama_config(&v.endpoint, &[], Some(&v.model)),
+        );
+    }
     if v.driver == "vibe" {
         let alias = crate::services::ollama_client::sanitize_alias(&v.model);
         let home = vibe_home_in(share_dir, &alias, &v.project);
@@ -606,7 +639,7 @@ pub fn gate_with(
     let remote = projects.iter().find(|p| p.id == subject.id).is_some_and(remote_or_vm);
     let verified = vet(&opts, subject, probe, remote)?;
     apply(&mut opts, &verified, share_dir)?;
-    note_verified(&opts.id, &verified.project);
+    note_verified(&opts.id, &verified);
     Ok(opts)
 }
 
@@ -623,8 +656,35 @@ pub fn gate(opts: PtyOptions) -> Result<PtyOptions, String> {
     let host = crate::services::ollama_client::host_setting(&settings).0.map(str::to_string);
     let endpoint = move || crate::services::mail_ai::resolve_endpoint(host.as_deref());
     let local = |addr: &str, model: &str| crate::services::ollama_client::tab_model_is_local_at(addr, model);
-    let probe = Probe { endpoint: &endpoint, local: &local, ambient_host: std::env::var("OLLAMA_HOST").ok().filter(|h| !h.trim().is_empty()) };
+    let probe = Probe {
+        endpoint: &endpoint,
+        local: &local,
+        ambient_host: std::env::var("OLLAMA_HOST").ok().filter(|h| !h.trim().is_empty()),
+        pins_claude: claude_pinned_platform(),
+    };
     gate_with(opts, &projects, &probe, &crate::storage::home_share_dir())
+}
+
+/// The managed-settings file a verified local Claude Code tab's fence pins
+/// ([`crate::services::local_drivers::claude_managed_settings`]), built from what the
+/// gate recorded for the tab (driver, model, endpoint): `Ok(None)` for any other tab.
+/// A tab that is a Claude launch but has no record is an error — the fence is not
+/// built without the pin, whatever the stamp says.
+pub fn claude_managed_for(opts: &PtyOptions) -> Result<Option<String>, String> {
+    match verified_launch(&opts.id) {
+        Some(v) if v.driver == "claude" => {
+            Ok(Some(crate::services::local_drivers::claude_managed_settings(&v.model, &v.endpoint)))
+        }
+        Some(_) => Ok(None),
+        None if program(&opts.cmd) == "claude"
+            || crate::services::local_drivers::identify_local_launch(&opts.cmd, &opts.args).is_some_and(|(d, _)| d == "claude") =>
+        {
+            Err(format!(
+                "{REFUSAL}: Claude Code was not verified for this tab, so the sandbox has no settings to pin it to. Open it again from the \u{ff0b} menu."
+            ))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Whether `opts` carries the gate's stamp: a spawn that went through [`gate`].
@@ -838,13 +898,13 @@ pub fn ptys_to_end(
 
 // ── Which tabs the gate verified ────────────────────────────────────────────
 
-fn verified_tabs() -> &'static Mutex<HashMap<String, String>> {
-    static TABS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+fn verified_tabs() -> &'static Mutex<HashMap<String, Verified>> {
+    static TABS: OnceLock<Mutex<HashMap<String, Verified>>> = OnceLock::new();
     TABS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn note_verified(tab: &str, project: &str) {
-    verified_tabs().lock_ok().insert(tab.to_string(), project.to_string());
+fn note_verified(tab: &str, verified: &Verified) {
+    verified_tabs().lock_ok().insert(tab.to_string(), verified.clone());
 }
 
 /// Forget `tab` (it spawns again, or is gone).
@@ -854,12 +914,19 @@ pub fn forget(tab: &str) {
 
 /// Whether the gate verified the live spawn of `tab` for `project`.
 pub fn is_verified(tab: &str, project: &str) -> bool {
-    verified_tabs().lock_ok().get(tab).is_some_and(|p| p == project)
+    verified_tabs().lock_ok().get(tab).is_some_and(|v| v.project == project)
+}
+
+/// What the gate verified for the live spawn of `tab`: the driver, the model and the
+/// loopback endpoint it judged. The fence builds what it pins from this, not from the
+/// argv, which session resume rewrites after the gate.
+pub fn verified_launch(tab: &str) -> Option<Verified> {
+    verified_tabs().lock_ok().get(tab).cloned()
 }
 
 /// The tabs of `project` the gate verified.
 pub fn verified_of(project: &str) -> Vec<String> {
-    verified_tabs().lock_ok().iter().filter(|(_, p)| *p == project).map(|(t, _)| t.clone()).collect()
+    verified_tabs().lock_ok().iter().filter(|(_, v)| v.project == project).map(|(t, _)| t.clone()).collect()
 }
 
 // ── The setting ─────────────────────────────────────────────────────────────
