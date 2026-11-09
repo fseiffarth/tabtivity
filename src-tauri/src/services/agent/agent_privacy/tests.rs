@@ -1328,6 +1328,22 @@ fn the_cut_fence_binds_the_lane_after_the_private_run_and_starts_the_cli_behind_
     assert!(insert_local_lane(&mut vec!["--".to_string()], vec![], vec![]).is_err());
 }
 
+/// systemd-resolved's varlink socket (`/run/systemd/resolve/io.systemd.Resolve`, mode 0666)
+/// answers `ResolveHostname` for any local user, from any network namespace: a cut fence
+/// that still showed it could send data out as DNS names. The ordinary fence binds that
+/// folder for `resolv.conf`; a cut one has no use for it.
+#[test]
+fn the_cut_fence_does_not_show_the_host_resolver_socket() {
+    use crate::services::agent_fence::{bwrap_args, insert_local_lane};
+    let plain = bwrap_args("/home/u", Some("/state/agent-homes/x"), "/w/p", "claude", &[], &[PathBuf::from("/w/p")], &[], &[]);
+    assert!(plain.iter().any(|a| a == "/run/systemd/resolve"), "a fence with its network keeps the resolver's folder");
+    let mut cut = plain.clone();
+    insert_local_lane(&mut cut, vec![], vec![]).unwrap();
+    assert!(!cut.iter().any(|a| a.starts_with("/run/systemd")), "a cut fence shows no resolver socket: {cut:?}");
+    // Nothing else of the argv moved with it.
+    assert_eq!(cut.iter().filter(|a| *a == "--ro-bind-try").count() + 1, plain.iter().filter(|a| *a == "--ro-bind-try").count());
+}
+
 #[test]
 fn the_wrappers_the_lane_and_the_exit_are_wired() {
     let fence = source("services/agent/agent_fence.rs");

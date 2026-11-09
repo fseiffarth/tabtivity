@@ -620,3 +620,35 @@ not built.
 
 Not run: `npm run backend:stale`, `npm run mobile:bundle` (the baked PWA carries the phone-sheet change only after it), anything live.
 No process of mine is left running (`netcut`, the harness and the stub proxies exited; their sockets and `/tmp/ll-*` links are removed).
+
+## Phase 2 review findings — flagged for user
+
+Review of `4c9bfa93..f5d4fc93` on `review-p2/local-models`. One hole fixed (the resolver socket, below); nothing else in the lane,
+the relay, the gate or the phone flags needed a code change. Nothing here ran in a real `--unshare-net` bubblewrap (this session's
+fence forbids a nested namespace), so the fence findings are argv and filesystem reasoning, checked against the host's own sockets.
+
+Fixed: the cut fence kept `--ro-bind-try /run/systemd/resolve`. `/run/systemd/resolve/io.systemd.Resolve` is a mode 0666 unix socket;
+`ResolveHostname` over it works for any user (tried from this session: `localhost` answered), and a path socket is not scoped to a
+network namespace. So a cut agent could send data out as DNS names to a server it controls. `insert_local_lane` now removes that bind.
+
+1. **Host unix sockets outside `/run`, `/tmp` and the home are still reachable.** The fence is `--ro-bind / /`; `connect()` on a socket
+   on a read-only mount works. Sockets under those three are hidden (private `/run`, `/tmp`, the scope home). On this machine nothing
+   else exists, but a host with postfix (`/var/spool/postfix/public/cleanup`, 0666), sssd pipes, or a user allowlist entry that holds
+   a socket would show one. A generic answer is Landlock `LANDLOCK_ACCESS_FS_RESOLVE_UNIX` (new kernels) in the `--fence-scope` step, or
+   refusing allowlist entries that are or contain sockets under Cut network. Design change, not done.
+2. **Sockets visible in a cut fence**: the lane's `ollama.sock` and `mcp.sock` (judged on the host), the read-only `relay` file; the
+   resolver varlink pair (now removed); abstract sockets of the host (unreachable: new netns). Hidden: `/run/user/*` (D-Bus, ssh-agent,
+   Wayland, pipewire), `/run/docker.sock`, `/var/run` (symlink to `/run`), the tmux socket in `/tmp/tmux-*`, X11 in `/tmp/.X11-unix`,
+   Tabtivity's own sockets (state dir is masked).
+3. **A tmux session that survived a crash and is reattached** runs the process it had, with the fence it was started with. The gate and
+   the wrapper run again and record `Verified::cut` for the new setting, so after a Cut switch change `restart_tabs` does not list
+   it, and the record says cut for a process that may not be. (`live_unfenced_by_scope` asks the process for the Phase 1 case.) It can
+   only end in more network than the record says, and only after a crash plus a switch change. Not fixed.
+4. **The locality verdict is cached 60 s** per (endpoint, model), the verdict `Ok` included. A model the user re-pulls or `ollama cp`s as a
+   cloud model under a name that was local a moment ago is judged local for up to a minute. Needs the user's own action; the agent
+   cannot pull or copy through the lane.
+5. **Memory per lane**: up to 32 exchanges times a 32 MiB buffered body is 1 GiB worst case for one tab. The caps are guesses already flagged.
+6. **A new spawn of a tab id closes the lane of the older spawn of that id** (`open` calls `close`), and if the new spawn then fails the
+   older fence stays without a lane. Fails closed, loses the model; only on a relaunch race.
+7. **The first `open` in a process sweeps every `*.sock` in `local-lane/`**: two Tabtivity processes on one state dir (a dev build beside
+   the packaged one) would remove each other's live sockets.
