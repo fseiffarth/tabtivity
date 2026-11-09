@@ -259,3 +259,38 @@ Worktree `voice-nav`, on top of N1. Commits:
 4. **Landing on a shell tab** reads nothing, starts no mic, ends the mode (as planned); the line is not spoken because the screen is replaced.
 5. **Not run live**: nothing here was started; the speech/recognizer interplay (mic reopen after a spoken line, the start word's real spellings, Chrome re-finalization) is only covered by fakes.
 6. `todo/*.md` has no phone-voice 🖐️ entry to extend; the Untested register rows (`mobile.voice.navigate`, `mobile.voice.tabbyStart`) are the manual list.
+
+## N3 review (bugs only) — done
+
+Worktree `voice-nav`, on top of N2. Read against the plan's fixed decisions 1–10 (none changed).
+
+### Fixed (each with a regression test that fails without it)
+
+| sha | bug |
+|---|---|
+| `1626ce27` | `useVoiceLanding`'s `gone` flag was set by the cleanup of a first setup and never reset: under a development remount (StrictMode) the landing never spoke and the mic never opened. |
+| `2d95baa2` | Navigation's 10 s quiet timer kept running while a command was being said: a command begun at 9.5 s settles 0.8 s later, after the timer had left the mode, and was dropped. The recognizer's words now start the 10 s over (`UtteranceHooks.activity`, only while the timer is armed, so a spoken line or a command in flight is untouched). |
+| `0d73314f` | `lastScan` (the last reading's live guess) survived a mic start: stopping a fresh mic before it heard anything settled the old mic's guess back onto the Heard line. Hands-free off never had this (the settle path is hands-free only); it was new with the utterance layer. |
+
+### Gates
+
+`scripts/gates.sh --base be8e75ab` (31 files, frontend only): brand pass, `git diff --check` pass, `npm run lint` pass (0 errors, no new warnings), `npm run build` pass. Vitest (823 related files): **8207 passed, 2 failed of 8209** — the known base failures `shell/i18n.test` (`agents.*` keys) and `theme/CursorPacks.test`; no flake this run. +3 tests over N2 (8204 passed). No Rust change. (The run reported "tree changed" only because this section was written while it ran.)
+
+### Checked, no bug found
+
+Hands-free off is the be8e75ab path (`advanceDictation`, `consume` without guard, `onRestart`/`stopVoice` settle return early; the gate is only cleared; the one visible addition is the silent `unlockSpeech()` in the mic tap, which the plan asks for). `loadDict` never rejects, so `load()` cannot cache a rejected promise. `onEnd` never follows `abort()`, so a half-duplex `endDictation` cannot clear the next session's gate. Every `handle` path ends in `say(... "listen")`, a jump or `armIdle`, so the mode has no open path without a timer, except a hanging `fetch` (`api` has a timeout). `takeLanding` takes once, drops another tab's and a stale note; the Terminal unmount releases `holdReadingForTurn`. No hardcoded display text, no assistant name in code, no ids crossing `mobile_control`, both untested rows have call sites.
+
+### Flagged for user
+
+1. **A settled utterance that keeps growing is dropped.** The 800 ms settle hands "Tabby navigate" (or "go to project") to the mode, marks the record handled, and any later growth of the same recognizer utterance (a pause under Chrome's own end-of-speech, so "Tabby navigate … [1 s] … go to the done tab" is one utterance) is skipped. With the gate off, "Tabby" + a pause + "navigate" types "Tabby" into the draft after the settle and then "navigate" as well. Fix needs the layer to re-offer a handled utterance's new tail; not done blind. Worth a live check of how often Chrome splits there.
+2. **A question read aloud while navigation is open.** `useHandsFree`'s question effect (hands-free + read-aloud) does not defer to `navOpen`: it closes the mic and speaks the question, the mode's 10 s timer can then `leave()` and reopen the mic while the phone is still reading (echo), and the nav lines' `speak(..., replace)` cut the question off. Rare (a question has to arrive while the mode is open); no hands-free question test exists to anchor a fix.
+3. **No line says "say Tabby" after a landing or a leave**, though the gate is on (`tabbyGate.set(true)` shows no cue); the user's first words without it vanish with no sign. A shown cue there is a one-liner if wanted.
+4. **A dead session's settle timer** is not cancelled by `endDictation()` (only `onEnd`/unmount clear it); it fires once on the old closure. With `lastScan` now cleared at a start the effect is limited to `voiceOpen`/guard state for a closed mic, but a `recognition.current === session` guard in `settle` would be tidier.
+5. **Two utterances finalized in one event** are judged with the `capture` flag as it was at the start of the step, so a command finalized in the same event as "Tabby navigate" is typed or dropped by the gate. Needs interim-first recognizers to hit; `capture` could become a function.
+6. **Words in flight when the mic is tapped off** (nav open, or gate on) finalize after the stop through the plain `advanceDictation` path and are typed raw.
+7. **No safety net for a voice that never ends**: if `speechSynthesis` fires neither `onend` nor `onerror`, the mode's mic (and the landing's) never reopens; the voice line's tap is the way out.
+8. **A tap on the mic while the phone speaks a nav line** ends the mode and stops the voice but needs a second tap to open the mic.
+9. **`openProject` in `App.tsx`** does not `setTab("projects")`; if a Terminal was ever opened from another section, "no agent tab" would show that section, not the project.
+10. **Landing with a kept draft** starts the mic with `{ gate: true }`; the plan lists "a draft already present at a landing" among the gate-off cases. The effect is the same (an existing draft already lets the next utterance through), only the gate flag differs.
+11. **Words**: French `voice.cmd.nextWorking` "l'onglet en cours" also reads as "the current tab"; the alias "tabe" plus the two-word join lets an utterance starting "tab be …" match the start word (rare).
+12. **Leaving Focus by Back** while a nav or landing line is being spoken does not stop the voice.
