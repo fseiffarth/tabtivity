@@ -1,6 +1,7 @@
 # Phone voice: "Tabby navigate" and "Tabby" prompts in the Focus mic
 
-Status: plan (2026-11-09). Nothing built. A slim slice of
+Status: built (2026-11-09), unreviewed and not run live — handoff:
+`docs/voice_nav_mode_handoff.md`. A slim slice of
 `docs/phone_voice_plan.md` that needs none of its probe results: it lives
 inside the Focus screen's existing mic (`screens/terminal/useVoiceInput.ts`,
 `useHandsFree.ts`), not in that plan's App-level session (S3/S4), which stays
@@ -11,7 +12,7 @@ as planned for later. It reuses what that plan already landed: the matcher
 
 Base: the "go on keeps listening" change (a spoken "go on" sends and leaves the
 mic open; hands-free holds the turn's answers until nothing is dictated, then
-closes the mic to read them). Handoff: none yet (`docs/phone_voice_handoff.md` is the sibling plan's).
+closes the mic to read them). Handoff: `docs/voice_nav_mode_handoff.md` (`docs/phone_voice_handoff.md` is the sibling plan's).
 
 ## Why
 
@@ -222,6 +223,39 @@ projects still needs a finger.
 - No backend change: `getActivity`, `getTranscript`, `GET /api/v1/projects`
   and `GET /api/v1/projects/{id}` are enough. No new route, so no
   `command_class` row.
+
+### Decided in the build (main loop and N1/N2, 2026-11-09)
+
+- **A draft under way, or 10 s after a lone start word, needs no start word.** A
+  prompt split by pauses is not cut at the second half; the gate still applies to
+  the first utterance of a prompt (N1).
+- **The start word is matched exactly** (phonetic spelling plus
+  `voice.assistantAliases`), not fuzzily (N1).
+- **`unlockSpeech()` is in the mic tap** (start branch only); the five hands-free
+  read-aloud tests filter the empty unlock utterance and assert the same things.
+- **One ordered dispatch** in `useVoiceInput.ts` (`dispatch`): navigation mode →
+  "Tabby navigate" → [slot: spoken draft edits] → gate → hands-free guard / `pick`
+  → dictation. While the mode is open `consume` ignores everything (the send guard
+  never runs), so a half-dictated draft is never sent from the mode.
+- **Navigation lines**: spoken and shown for every answer of the mode; "Navigation
+  closed" (leave phrase, 10 s) and the opening line are shown only, with a chime on
+  opening, so the mic is not bounced for them. The entry line is
+  `mobile.voice.navOpen`.
+- **"No" to "Project X?" and any other answer**: a no keeps the mode open with the
+  opening line; an answer that is neither yes nor no is read as a fresh command.
+  A leave phrase wins over yes/no ("cancel" leaves, it is not "no").
+- **A project with no agent tab** says its line first, then opens the Project
+  screen through a new optional `Terminal` prop `openProject` (App closes the
+  terminal and shows the project); `openTab`'s `project` option carries the jump
+  itself, as planned.
+- **Landing on the tab already open** ("tab 1" on tab 1) says where it is and ends
+  the mode; a tab that is not up says "‹name› is not available" and stays in the
+  mode; unavailable tabs are left out of the three queues.
+- **The landing note** is taken in a mount effect (a development remount runs it
+  twice) and the reading waits for `connected` and the transcript (6 s).
+- **Tests** run two utterances sharing the words "Tabby navigate" as separate
+  recognizer lists (a fresh mic), as a jump does in life: one list of two near
+  utterances is read by `scanDictation` as one revised utterance.
 
 ## Steps
 

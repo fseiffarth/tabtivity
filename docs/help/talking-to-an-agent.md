@@ -80,3 +80,18 @@ the answer still waits until you stop talking, then the mic pauses while it
 is read. Keep the screen on and the page open — a web page cannot hold the
 microphone from a pocket. A tap on the line stops the voice or cancels a
 send.
+
+With Hands-free on, a spoken **"go on"** also plays a chime and shows "Sent —
+say Tabby for your next prompt": from then until the next send the open mic
+dictates only what you start with **"Tabby"**; talk before it is dropped, and
+a prompt you have already begun carries on without it.
+
+Say **"Tabby navigate"** to move without touching the screen: say a project
+("go to project Alpha" — the phone asks "Project Alpha?", answer yes or no),
+**"the working tab"**, **"the done tab"** (only ones you have not opened yet) or
+**"the waiting tab"** (they go across all projects; say it again for the next
+one), or a tab of this project by name, number or agent. The phone says where
+it is going, opens the tab, reads your last prompt there and the agent's
+answer, then listens again: begin the next prompt with "Tabby". **"Stop"** or
+**"cancel"**, ten quiet seconds, or a tap on the mic ends navigation; a
+half-written prompt stays with its tab.
