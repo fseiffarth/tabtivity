@@ -3125,3 +3125,29 @@ unchanged; the new agents are additive.
 - [ ] Talk over a natural voice through speakers: `webrtc-audio-processing`
   echo cancellation against the samples `piper.rs` plays (plan step 7);
   probe the crate on the three CI OSes first.
+
+### Send skill — `docs/context/agent_sessions.md`
+
+- [x] Built 2026-11-08 (uncommitted): `agent_hint::write_skill_in_home`
+  writes a `tabtivity-send` skill into `.claude`/`.codex`/`.copilot`
+  `skills/` of every agent home except the assistant's and the probe's.
+  Folders found by searching Claude 2.1.319, OpenCode 2.2.6, Codex 0.167.0 and
+  Copilot 1.0.107; not live.
+- [ ] 🖐️ Manual test — in a new Claude tab type `/tabtivity-send README.md`:
+  the file goes to the screen you typed from (the desktop chat names it, or
+  the phone gets it). In a new Codex, Copilot and OpenCode tab, `/skills` (or
+  the CLI's skill list) shows `tabtivity-send` **once**. Ask any of them to
+  "send me the output of `ls` on my phone": it pipes through `-n` rather than
+  writing a file first. Tabby's (assistant) chat lists no such skill.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] Send skill for the CLIs not installed here (Gemini, Qwen, Auggie,
+  CodeBuddy, Droid, Cursor, Vibe, Pi, Kimi, Crush, Amp, Goose, Kiro): check
+  with `verify-cli` whether each reads user skills from its home, and from
+  which folder; add the ones that do to `agent_hint::SKILL_DIRS`.

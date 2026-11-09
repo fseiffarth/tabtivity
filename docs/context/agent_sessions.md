@@ -187,6 +187,16 @@ user-level `AGENTS.md`, OpenCode a hint file in its `opencode.json`
 it is written into the agent home at each spawn, after the global layer. CLIs with neither (Aider, Goose, Crush, …) get no
 hint. See the third-party update checklist.
 
+The CLIs that load user skills from their home also get a `tabtivity-send`
+skill (`agent_hint::write_skill_in_home`, 2026-11-08): `SKILL.md` in
+`.claude/skills` (Claude, OpenCode), `.codex/skills` and `.copilot/skills`,
+rewritten at each spawn after the global layer, never in the assistant's or
+the probe's home. It carries the whole contract (piped `-n`, `--clear`,
+limits, exit codes) and is a slash command (`/tabtivity-send <file>`). The
+shared `.agents/skills` is left out: OpenCode, Codex and Copilot all read it
+beside their own and would list the skill twice. The one-line hint stays,
+since a skill loads only when the model matches its description.
+
 ### Where Codex keeps a session, and why resume died
 
 Codex 0.154 also exclusively locks a conversation while its writer is alive.

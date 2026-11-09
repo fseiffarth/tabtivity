@@ -24,6 +24,13 @@
 //!   would *replace* the `~/.claude/CLAUDE.md` it otherwise falls back to,
 //!   which is where the user's global instructions reach it.
 //!
+//! Where a CLI loads user skills from its home, a **skill** of the same name
+//! as the command carries what one line cannot: piped output, `--clear`, the
+//! limits and exit codes — and it is a slash command the user can type
+//! (`/<slug>-send report.pdf` in Claude). The hint stays: a skill only loads
+//! when the model matches its description, and the line is always there.
+//! Not in the assistant's or the probe's home (`agent_home` decides).
+//!
 //! Everything is written into Tabtivity's per-scope agent homes at each spawn,
 //! after the global layer (`agent_global`) — never the user's own home — and
 //! through directory handles (`home_io`), as `agent_session` registers its
@@ -41,6 +48,80 @@ use crate::storage;
 /// What every CLI is told.
 pub const HINT: &str =
     concat!("When the user asks you to send or show them a file, run `", crate::app_slug!(), "-send <file>` (local and container tabs): it goes to the screen they last typed from, the phone or the desktop. Do what its output says: for the desktop, name the path it prints in your reply, and the chat shows the pictures and PDFs a reply names. Add `--phone` or `--desktop` when the user names a screen.");
+
+/// The send skill's folder and `name`, which is also Claude's slash command.
+pub const SKILL_NAME: &str = concat!(crate::app_slug!(), "-send");
+
+/// The user-skill folders of the CLIs that load one from their home, checked
+/// against the installed binaries on 2026-11-08: Claude 2.1.319 reads
+/// `.claude/skills`, and so does OpenCode 2.2.6; Codex 0.167.0 reads
+/// `$CODEX_HOME/skills` (`.codex` in a tab's home); Copilot 1.0.107 reads
+/// `.copilot/skills`. OpenCode, Codex and Copilot also read the shared
+/// `.agents/skills`, which is left out: each of them would list the skill
+/// twice. A CLI not listed here gets only the hint.
+pub(crate) const SKILL_DIRS: &[&str] = &[".claude/skills", ".codex/skills", ".copilot/skills"];
+
+/// The skill's `SKILL.md`: the Agent Skills frontmatter (`name`,
+/// `description` only — the two keys every reader takes, Codex's own skill
+/// validator rejects any other, and an `allowed-tools` grant would be
+/// Tabtivity choosing a permission) and the
+/// command's whole contract, as `scripts/<slug>-send.sh` implements it.
+pub fn skill_md() -> String {
+    let cmd = SKILL_NAME;
+    format!(
+        "---
+name: {cmd}
+description: Send or show the user a file on their phone or in the desktop chat with `{cmd}`. Use when the user asks you to send, show or share a file, put one on their phone or screen, or wants to look at something you produced (a plot, a PDF, an image, a log). Local and container tabs only.
+---
+
+# Send a file to the user
+
+`{cmd}` puts a file in front of the user on the screen they last typed from: their phone or this desktop chat.
+
+```
+{cmd} FILE...               # where they last typed; both screens when that is unknown
+{cmd} --phone FILE...       # when the user names the phone
+{cmd} --desktop FILE...     # when the user names the desktop
+command | {cmd} -n NAME     # piped output, as a file called NAME; always the phone
+{cmd} --clear               # empty the phone outbox
+```
+
+Invoked with arguments (`/{cmd} report.pdf`), send those files.
+
+## Then do what each line it prints says
+
+- `→ phone: <file> (<n> KB) — shown as an image / opens as a PDF / …`: it is on the phone. Tell the user it was sent.
+- `→ desktop: name <path> in your reply …`: write that project-relative path in your reply. The desktop chat shows the pictures and PDFs a reply names.
+
+## Limits
+
+- Regular, non-empty files of at most 24 MiB each. Send a folder as an archive; a big file as an excerpt or a compressed copy.
+- The desktop shows files inside the project only: copy a file from elsewhere into the project first, then send the copy.
+- Never send secrets (`.env` files, keys, tokens, credentials) unless the user names that file.
+- `--clear` only when the user asks, or after the outbox is full and the user agrees.
+- Exit 2 is a usage error, 3 no project directory, 4 a file it cannot send, 5 busy (`another send … in progress`: retry once) or full (`The outbox is full`: ask before `--clear`).
+- Not in a remote (SSH) tab: the command is missing there. Say so; do not copy the file somewhere by hand.
+"
+    )
+}
+
+/// Write the send skill into each of [`SKILL_DIRS`] in one agent home. Best
+/// effort per file, logged; a linked config dir is skipped, as for the hooks.
+/// A copy the agent edited in its scope's home is put back here.
+pub fn write_skill_in_home(home: &std::path::Path) {
+    let body = skill_md();
+    for dir in SKILL_DIRS {
+        let rel = format!("{dir}/{SKILL_NAME}/SKILL.md");
+        match HomeFile::open(home, &rel) {
+            Some(file) => {
+                if let Err(e) = write_if_changed(&file, body.as_bytes()) {
+                    eprintln!("agent_hint: {rel} in {}: {e}", home.display());
+                }
+            }
+            None => eprintln!("agent_hint: {rel} in {} is not a plain path; skipped", home.display()),
+        }
+    }
+}
 
 #[cfg(not(windows))]
 const SCRIPT_NAME: &str = crate::brand::AGENT_HINT_SH;
@@ -591,6 +672,51 @@ mod tests {
         assert_eq!(with_block(&stale), format!("top\n{BLOCK_START}\n{HINT}\n{BLOCK_END}\nbottom\n"));
         assert_eq!(with_block(&with_block("")), with_block(""));
         assert_eq!(with_block(""), format!("{BLOCK_START}\n{HINT}\n{BLOCK_END}\n"));
+    }
+
+    #[test]
+    fn the_skill_has_only_name_and_description_and_names_every_option() {
+        let md = skill_md();
+        let front = md.strip_prefix("---\n").unwrap().split("\n---\n").next().unwrap();
+        let keys: Vec<&str> = front.lines().map(|l| l.split(':').next().unwrap()).collect();
+        assert_eq!(keys, ["name", "description"]);
+        assert!(front.contains(&format!("name: {SKILL_NAME}\n")));
+        // The Agent Skills limits: a lowercase-hyphen name ≤ 64, a description ≤ 1024.
+        assert!(SKILL_NAME.len() <= 64 && SKILL_NAME.chars().all(|c| c.is_ascii_lowercase() || c == '-'));
+        let description = front.lines().nth(1).unwrap().strip_prefix("description: ").unwrap();
+        assert!(description.len() <= 1024);
+        for option in ["--phone", "--desktop", "-n NAME", "--clear"] {
+            assert!(md.contains(&format!("{SKILL_NAME} {option}")), "{option}");
+        }
+    }
+
+    #[test]
+    fn the_skill_lands_in_every_skill_dir_and_an_edited_copy_is_put_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill_in_home(tmp.path());
+        let at = |dir: &str| tmp.path().join(dir).join(SKILL_NAME).join("SKILL.md");
+        for dir in SKILL_DIRS {
+            assert_eq!(std::fs::read_to_string(at(dir)).unwrap(), skill_md(), "{dir}");
+        }
+        std::fs::write(at(SKILL_DIRS[0]), "an agent's edit").unwrap();
+        write_skill_in_home(tmp.path());
+        assert_eq!(std::fs::read_to_string(at(SKILL_DIRS[0])).unwrap(), skill_md());
+        // Not the shared folder three of the CLIs also read: they would list it twice.
+        assert!(!tmp.path().join(".agents").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_skill_skips_a_linked_config_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join(".claude")).unwrap();
+        write_skill_in_home(&home);
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+        assert!(home.join(".codex/skills").join(SKILL_NAME).join("SKILL.md").is_file());
     }
 
     #[test]

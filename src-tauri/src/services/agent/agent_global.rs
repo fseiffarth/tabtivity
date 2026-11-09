@@ -25,7 +25,8 @@
 //!
 //! [`import_from_user_home`] fills the layer from the user's own `~/.claude`,
 //! `~/.codex` and `~/.gemini`, plus the hook and plugin files the other CLIs
-//! read (Cursor, Droid, Copilot, OpenCode, Pi, Mistral Vibe) — so a tool the
+//! read (Cursor, Droid, Copilot, OpenCode, Pi, Mistral Vibe) and the shared
+//! `~/.agents/skills` (Codex, Copilot, OpenCode) — so a tool the
 //! user wired into their agents themselves (rtk's `rtk init -g`, say) reaches
 //! every Tabtivity agent too. One click, the one direction that is safe.
 //! Tabtivity's own session hooks are filtered out of what it imports; they are
@@ -537,6 +538,9 @@ const IMPORT_DIRS: &[&str] = &[
     ".codex/prompts",
     ".codex/rules",
     ".codex/skills",
+    // The shared user-skill folder Codex, Copilot and OpenCode read beside
+    // their own (Claude only offers to import from it).
+    ".agents/skills",
     ".gemini/commands",
     ".gemini/hooks",
     ".copilot/hooks",
@@ -1244,6 +1248,7 @@ mod tests {
         write(&user.join(".claude/history.jsonl"), "{}");
         write(&user.join(".claude/skills/s/SKILL.md"), "skill");
         write(&user.join(".codex/skills/.system/x.md"), "bundled");
+        write(&user.join(".agents/skills/shared/SKILL.md"), "shared skill");
         write(&user.join(".codex/AGENTS.md"), "codex\n@/home/u/.codex/RTK.md");
         write(&user.join(".codex/RTK.md"), "rtk");
         write(&user.join(".codex/auth.json"), "{}");
@@ -1281,12 +1286,13 @@ mod tests {
             ),
         );
         let report = import_from_user_home_in(&state, &user).unwrap();
-        assert_eq!(report, ImportReport { files: 7, configs: 5 });
+        assert_eq!(report, ImportReport { files: 8, configs: 5 });
         let layer = global_dir_in(&state);
         assert!(layer.join(".claude/CLAUDE.md").is_file());
         assert!(layer.join(".claude/RTK.md").is_file());
         assert!(layer.join(".claude/statusline.sh").is_file());
         assert!(layer.join(".claude/skills/s/SKILL.md").is_file());
+        assert!(layer.join(".agents/skills/shared/SKILL.md").is_file());
         assert!(!layer.join(".claude/.credentials.json").exists());
         assert!(!layer.join(".claude/history.jsonl").exists());
         assert!(!layer.join(".codex/skills/.system").exists());
