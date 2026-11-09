@@ -62,6 +62,8 @@ export interface PhoneBindingDef {
   desktop?: SteeringAction | readonly SteeringAction[];
   /** Keys of the phone's own, added to the desktop's. */
   keys?: readonly string[];
+  /** Desktop keys this row never takes (the phone gives them another meaning on its levels). */
+  except?: readonly string[];
   labelKey: TranslationKey;
   group: "move" | "act" | "status" | "open" | "mode";
 }
@@ -79,17 +81,18 @@ const SLOTS: readonly SteeringAction[] = STEERING_SLOT_ACTIONS;
  * Escape.
  */
 export const PHONE_STEERING_BINDINGS: readonly PhoneBindingDef[] = [
-  { action: "exit", levels: ALL, desktop: "exit", labelKey: "steering.exit.label", group: "mode" },
+  // Over a sheet Escape (and the desktop's Back key) closes it; this row comes
+  // first so a desktop table whose exit key is Escape cannot take it over.
+  { action: "back", levels: ["region"], desktop: "back", keys: ["Escape"], labelKey: "mobile.steering.key.back", group: "move" },
   // Escape leaves too, except over a sheet, where it is Back.
-  { action: "exit", levels: WALKING, keys: ["Escape"], labelKey: "steering.exit.label", group: "mode" },
+  { action: "exit", levels: WALKING, desktop: "exit", keys: ["Escape"], labelKey: "steering.exit.label", group: "mode" },
+  { action: "exit", levels: ["region"], desktop: "exit", except: ["Escape"], labelKey: "steering.exit.label", group: "mode" },
   { action: "legend", levels: WALKING, desktop: "legend", labelKey: "mobile.steering.key.legend", group: "mode" },
   { action: "up", levels: ["projects", "tabs", "section", "region"], desktop: "up", labelKey: "mobile.steering.key.move", group: "move" },
   { action: "up", levels: ["inside"], desktop: "up", labelKey: "mobile.steering.key.scroll", group: "move" },
   { action: "down", levels: ["projects", "tabs", "section", "region"], desktop: "down", labelKey: "mobile.steering.key.move", group: "move" },
   { action: "down", levels: ["inside"], desktop: "down", labelKey: "mobile.steering.key.scroll", group: "move" },
   { action: "back", levels: ALL, desktop: "left", labelKey: "mobile.steering.key.back", group: "move" },
-  // Over a sheet the desktop's Back key (Escape) closes it as well.
-  { action: "back", levels: ["region"], desktop: "back", labelKey: "mobile.steering.key.back", group: "move" },
   { action: "open", levels: [...LISTS, "region"], desktop: "right", keys: ["Enter"], labelKey: "mobile.steering.key.open", group: "move" },
   { action: "latest", levels: ["inside"], desktop: "right", labelKey: "mobile.steering.key.latest", group: "act" },
   { action: "confirm", levels: ["region"], desktop: "confirm", labelKey: "mobile.steering.key.confirm", group: "act" },
@@ -107,7 +110,8 @@ export const PHONE_STEERING_BINDINGS: readonly PhoneBindingDef[] = [
   { action: "closeTab", levels: ["tabs"], desktop: "closeTab", labelKey: "mobile.steering.key.close", group: "act" },
   { action: "menu", levels: ["tabs"], desktop: "menu", labelKey: "steering.menu.label", group: "act" },
   { action: "answer", levels: ["inside"], desktop: SLOTS, labelKey: "mobile.steering.key.answer", group: "act" },
-  { action: "type", levels: ["inside"], desktop: "agentPrompt", labelKey: "mobile.steering.key.type", group: "act" },
+  // I stays the phone's type key whichever key the desktop gives its prompt box.
+  { action: "type", levels: ["inside"], desktop: "agentPrompt", keys: ["i"], labelKey: "mobile.steering.key.type", group: "act" },
 ];
 
 /** The actions a held key may repeat: moving and scrolling. Everything else fires once per press. */
@@ -119,7 +123,9 @@ export function acceptsRepeat(action: PhoneSteeringAction): boolean {
 export function phoneKeys(def: PhoneBindingDef, overrides: SteeringKeyMap | null | undefined): readonly string[] {
   const actions = def.desktop === undefined ? [] : typeof def.desktop === "string" ? [def.desktop] : def.desktop;
   const out: string[] = [];
+  const except = (def.except ?? []).map(normalizeKey);
   for (const key of [...actions.flatMap((a) => steeringKeys(a, overrides)), ...(def.keys ?? [])]) {
+    if (except.includes(normalizeKey(key))) continue;
     if (!out.some((k) => normalizeKey(k) === normalizeKey(key))) out.push(key);
   }
   return out;

@@ -55,6 +55,8 @@ describe("shared key names", () => {
 
 describe("phone steering table", () => {
   it("resolves the walking keys on every level", () => {
+    // The desktop's exit key, whatever it is (Space at HEAD); Escape is covered below.
+    const exitKey = steeringKeys("exit", null).find((k) => k !== "Escape");
     for (const level of PHONE_LEVELS) {
       expect(act("e", level)).toBe("up");
       expect(act("ArrowUp", level)).toBe("up");
@@ -62,7 +64,7 @@ describe("phone steering table", () => {
       expect(act("ArrowDown", level)).toBe("down");
       expect(act("s", level)).toBe("back");
       expect(act("ArrowLeft", level)).toBe("back");
-      expect(act(" ", level)).toBe("exit");
+      if (exitKey) expect(act(exitKey, level)).toBe("exit");
     }
   });
 
@@ -157,7 +159,9 @@ describe("tie to the desktop table", () => {
     for (const row of PHONE_STEERING_BINDINGS) {
       if (typeof row.desktop !== "string") continue;
       const own = row.keys ?? [];
-      const wanted = [...steeringKeys(row.desktop, null), ...own.filter((k) => !steeringKeys(row.desktop as never, null).includes(k))];
+      const except = row.except ?? [];
+      const wanted = [...steeringKeys(row.desktop, null), ...own.filter((k) => !steeringKeys(row.desktop as never, null).includes(k))]
+        .filter((k) => !except.includes(k));
       expect(phoneKeys(row, null), row.action).toEqual(wanted);
     }
   });
@@ -179,6 +183,16 @@ describe("tie to the desktop table", () => {
 
   it("has no conflicting keys on any level", () => {
     expect(findPhoneSteeringConflicts(null).size).toBe(0);
+  });
+
+  it("keeps Escape as Back over a sheet and I as the type key whatever the desktop's exit and prompt keys are", () => {
+    // The desktop rework's defaults: Escape exits, Space opens the prompt box.
+    const rework = { exit: ["Escape"], agentPrompt: [" "] };
+    expect(findPhoneSteeringConflicts(rework).size).toBe(0);
+    expect(phoneSteeringActionFor(new KeyboardEvent("keydown", keyInit("Escape")), "region", rework)).toBe("back");
+    expect(phoneSteeringActionFor(new KeyboardEvent("keydown", keyInit("Escape")), "tabs", rework)).toBe("exit");
+    expect(phoneSteeringActionFor(new KeyboardEvent("keydown", keyInit("i")), "inside", rework)).toBe("type");
+    expect(phoneSteeringActionFor(new KeyboardEvent("keydown", keyInit(" ")), "inside", rework)).toBe("type");
   });
 
   it("reports a conflict when two live actions share a key", () => {

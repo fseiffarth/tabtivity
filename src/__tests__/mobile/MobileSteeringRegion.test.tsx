@@ -108,13 +108,13 @@ describe("Mobile steering — a sheet on top is the region", () => {
     expect(getSteering().active).toBe(true);
   });
 
-  it("Space leaves the mode over a sheet; Y with no confirm in it does nothing", async () => {
+  it("the chord leaves the mode over a sheet; Y with no confirm in it does nothing", async () => {
     const onPick = vi.fn();
     render(<><BackNest>{sheet({ onPick })}</BackNest><Engine /></>);
     press(null, " ", { shift: true });
     expect(press(null, "y")).toBe(true);
     expect(onPick).not.toHaveBeenCalled();
-    press(null, " ");
+    press(null, " ", { shift: true });
     expect(getSteering().active).toBe(false);
   });
 });
