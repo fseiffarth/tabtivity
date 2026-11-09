@@ -164,9 +164,11 @@ export function useVoiceInput({
     /** Hands-free listens to utterances: the gate and the hold-back apply. */
     const layered = () => handsFree.on.current && !voiceStopping.current;
     const utteranceOptions = (flush: boolean): UtteranceOptions => ({
-      gate: tabbyGate.on.current,
+      // Asked as each utterance begins: a command taken from one utterance can
+      // open navigation mode or set the gate for the next, in the same event.
+      gate: () => tabbyGate.on.current,
       holdBack: true,
-      capture: utterances.capture.current,
+      capture: () => utterances.capture.current,
       // The prompt has begun, or the start word was just said alone: the next
       // utterance needs no start word.
       open: tabbyGate.windowOpen() || draftRef.current.trim() !== "",

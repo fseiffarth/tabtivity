@@ -383,13 +383,17 @@ export const UTTERANCES_START: UtteranceLedger = { records: {}, starts: [] };
 
 export interface UtteranceOptions {
   now?: number;
-  /** The Tabby gate is on (hands-free only). */
-  gate: boolean;
+  /** The Tabby gate is on (hands-free only). A function is asked as each new
+   * utterance begins: a command taken from an earlier utterance of the same
+   * event may have set or cleared it. */
+  gate: boolean | (() => boolean);
   /** Hold back utterances that may be a command ("Tabby navigate"). */
   holdBack: boolean;
   /** Navigation mode is open: every new utterance is a command, held until it
-   * settles, offered to `onWithheld` and never typed. */
-  capture?: boolean;
+   * settles, offered to `onWithheld` and never typed. A function is asked as
+   * each new utterance begins (see `gate`): two utterances finalized in one
+   * event are each judged by the mode as the one before it left it. */
+  capture?: boolean | (() => boolean);
   /** The gate lets a new utterance through without the start word: a bare start
    * word was just said, or the draft already holds the prompt's start. */
   open?: boolean;
@@ -420,6 +424,11 @@ export interface UtteranceStep {
  * together. */
 export function currentUtterance(scan: DictationScan): string[] {
   return scan.live;
+}
+
+/** A flag that may be asked late. */
+function flag(value: boolean | (() => boolean) | undefined): boolean {
+  return typeof value === "function" ? value() : value === true;
 }
 
 interface Run {
@@ -454,9 +463,9 @@ function runUtterances(
     let rec = records[s];
     if (!rec) {
       if (e <= run.cursor) return;
-      const captured = opts.capture === true;
+      const captured = flag(opts.capture);
       rec = {
-        gated: opts.gate && !captured, captured, open: opts.open === true, keep: null, skip: 0,
+        gated: flag(opts.gate) && !captured, captured, open: opts.open === true, keep: null, skip: 0,
         withheld: captured, handled: false, reported: false, announced: false,
       };
     } else rec = { ...rec };
@@ -560,7 +569,7 @@ export function stepUtterances(
   }
   const run = runUtterances(prev, progress, scan, lex, opts);
   const tailQuote = scan.tail === "new"
-    ? scan.live.slice(!opts.gate || opts.open || opts.capture ? 0 : lex.start(scan.live) || scan.live.length)
+    ? scan.live.slice(!flag(opts.gate) || opts.open || flag(opts.capture) ? 0 : lex.start(scan.live) || scan.live.length)
     : scan.tail === "extends" && !run.hideLive ? scan.interim.split(" ").filter(Boolean) : [];
   return {
     ledger: { records: run.records, starts: scan.starts },

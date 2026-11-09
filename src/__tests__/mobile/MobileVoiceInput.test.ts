@@ -556,6 +556,43 @@ describe(`${BRAND.display} Mobile utterance layer`, () => {
     });
   });
 
+  describe("two utterances finalized in one event", () => {
+    it("judges the second by the mode the first left, not the one the event began in", () => {
+      const mode = { open: false };
+      const session = new Session({
+        capture: () => mode.open,
+        take: (text) => {
+          if (text === `${T} navigate`) mode.open = true;
+          return true;
+        },
+      });
+      // Navigation mode was closed when the event began; its first utterance opens it.
+      session.hear([`${T} navigate`, true], ["go to the done tab", true]);
+      expect(session.draft).toBe("");
+      session.settle();
+      expect(session.offered).toEqual([`${T} navigate`, "go to the done tab"]);
+      expect(session.draft).toBe("");
+    });
+
+    it("judges the second by the gate the first left", () => {
+      const mode = { open: true, gate: false };
+      const session = new Session({
+        capture: () => mode.open,
+        gate: () => mode.gate,
+        take: (text) => {
+          // A leave word: the mode ends and the gate turns on.
+          if (text === "stop") { mode.open = false; mode.gate = true; }
+          return true;
+        },
+      });
+      session.hear(["stop", true], ["chatter that is not for the agent", true]);
+      session.settle();
+      // Dropped by the gate, not taken for a navigation command that is over.
+      expect(session.offered).toEqual(["stop"]);
+      expect(session.draft).toBe("");
+    });
+  });
+
   it("takes the start word in German too", () => {
     const session = new Session({ gate: true }, "de");
     session.hear(["ich überlege noch", true], [`${T} und füge einen Test hinzu`, true]);
