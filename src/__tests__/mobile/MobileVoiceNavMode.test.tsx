@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, cleanup as cleanupScreen, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { MobileSpeechRecognitionResultEvent } from "../../../mobile-web/src/voiceInput";
@@ -586,6 +587,18 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(box().value).toBe("");
       await hear(`${T} and add a changelog line`);
       expect(box().value).toBe("and add a changelog line");
+    });
+
+    it("is read all the same when the screen is mounted twice (a development remount)", async () => {
+      host.transcript = session(["prompt", "q"], ["answer", "a"]);
+      land();
+      render(<StrictMode><Terminal tab={HERE} project="p1" back={() => {}} openTab={openTab} openProject={openProject} /></StrictMode>);
+      await settle();
+      await advance(100);
+      expect(said()).toEqual(["You asked: q"]);
+      await finishSpeech();
+      await advance(400);
+      expect(FakeRecognition.instances).toHaveLength(1);
     });
 
     it("says there is no answer yet when the tab is still working on the prompt", async () => {

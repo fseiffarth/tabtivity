@@ -54,7 +54,12 @@ export function useVoiceLanding({
   const begun = useRef(false);
   const gone = useRef(false);
   const skip = useRef<() => void>(() => {});
-  useEffect(() => () => { gone.current = true; }, []);
+  // Set again on every setup: a development remount runs the cleanup once
+  // between two setups, and the screen is still here.
+  useEffect(() => {
+    gone.current = false;
+    return () => { gone.current = true; };
+  }, []);
 
   // Once connected and the stored session is in: what is said on arrival.
   useEffect(() => {
