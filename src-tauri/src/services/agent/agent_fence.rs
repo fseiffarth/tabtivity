@@ -1592,6 +1592,76 @@ pub(crate) fn host_claude_dir(path: &Path) -> Result<HostClaudeDir, String> {
     }
 }
 
+/// A bubblewrap version as `--version` prints it: `(major, minor, patch)`.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) type BwrapVersion = (u32, u32, u32);
+
+/// The first bubblewrap with `--overlay-src` / `--ro-overlay`, which the pinned Claude
+/// settings need on a host with no `/etc/claude-code` ([`managed_claude_args`]).
+#[cfg(any(target_os = "linux", test))]
+const OVERLAY_MIN_BWRAP: (u32, u32) = (0, 8);
+
+/// The version in bubblewrap's `--version` output (`bubblewrap 0.11.1`): the first line
+/// must start with `bubblewrap`; major and minor are required, a missing patch is 0
+/// and a suffix after the digits (`0.9.0-rc1`) is dropped. Anything else is `None`.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn parse_bwrap_version(out: &str) -> Option<BwrapVersion> {
+    let rest = out.lines().next()?.trim().strip_prefix("bubblewrap")?;
+    // A separator, not a longer program name.
+    let rest = rest.strip_prefix(char::is_whitespace)?.trim();
+    let num = |s: &str| s.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<u32>().ok();
+    let mut parts = rest.split('.');
+    let major = num(parts.next()?)?;
+    let minor = num(parts.next()?)?;
+    let patch = parts.next().and_then(num).unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+/// Whether the bubblewrap found can build the mounts [`managed_claude_args`] chose for
+/// `host`: the overlay form (no `/etc/claude-code` on the host) needs
+/// [`OVERLAY_MIN_BWRAP`]. An older one, or one whose version could not be read, is
+/// refused here by name, because bubblewrap's own answer is a bare "unknown option".
+/// The tmpfs form uses options bubblewrap has had for years and is not checked.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn overlay_bwrap_check(host: HostClaudeDir, version: Option<BwrapVersion>) -> Result<(), String> {
+    if host != HostClaudeDir::Missing {
+        return Ok(());
+    }
+    let (major, minor) = OVERLAY_MIN_BWRAP;
+    let need = format!("Agent sandbox: pinning Claude Code to the local model needs bubblewrap {major}.{minor} or newer on this machine");
+    match version {
+        Some(v) if (v.0, v.1) >= OVERLAY_MIN_BWRAP => Ok(()),
+        Some((a, b, c)) => Err(format!(
+            "{need}, and the installed bubblewrap is {a}.{b}.{c}, so this agent was not started. Update the bubblewrap package, or use another local agent."
+        )),
+        None => Err(format!(
+            "{need}, and the installed version could not be read, so this agent was not started. Update the bubblewrap package, or use another local agent."
+        )),
+    }
+}
+
+/// The version of the bubblewrap at `bwrap` (`--version`), asked once per binary file:
+/// the answer is kept until the file's modification time or size changes (an upgrade).
+/// `None` when it cannot be run or its output is not a version, which
+/// [`overlay_bwrap_check`] treats as too old.
+#[cfg(target_os = "linux")]
+fn bwrap_version(bwrap: &Path) -> Option<BwrapVersion> {
+    type Key = (Option<std::time::SystemTime>, u64);
+    static CACHE: Mutex<Option<(Key, BwrapVersion)>> = Mutex::new(None);
+    let meta = std::fs::metadata(bwrap).ok()?;
+    let key: Key = (meta.modified().ok(), meta.len());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached, version)) = cache.as_ref() {
+        if *cached == key {
+            return Some(*version);
+        }
+    }
+    let out = paths::command_no_window(bwrap).arg("--version").output().ok().filter(|o| o.status.success())?;
+    let version = parse_bwrap_version(&String::from_utf8_lossy(&out.stdout))?;
+    *cache = Some((key, version));
+    Some(version)
+}
+
 /// Put the pinned Claude settings into a fence argv: right after the root bind, before
 /// any mount under `/etc`.
 #[cfg(any(target_os = "linux", test))]
@@ -1709,8 +1779,10 @@ pub fn wrap_pty_options_bwrap(
     let mut managed_pins = Vec::new();
     if locked_project.is_some() {
         if let Some(settings) = crate::services::agent_privacy::claude_managed_for(opts)? {
-            let (file, layer, pin) = write_managed_claude(&storage::state_dir(), &settings)?;
             let host = host_claude_dir(Path::new(CLAUDE_MANAGED_DIR))?;
+            // The overlay form needs bubblewrap 0.8: say so, not "unknown option".
+            overlay_bwrap_check(host, bwrap_version(&bwrap))?;
+            let (file, layer, pin) = write_managed_claude(&storage::state_dir(), &settings)?;
             insert_managed_claude(&mut args, managed_claude_args(host, &file, &layer));
             managed_pins.push(pin);
         }

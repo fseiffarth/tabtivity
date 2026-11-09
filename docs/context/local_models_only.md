@@ -213,7 +213,11 @@ file's layer as a second source (`--overlay-src /etc --overlay-src <layer> --ro-
 mounts come right after the root bind. **The bubblewrap argv is a unit test; it was not run**:
 this session's fence forbids a nested namespace, so neither the overlay nor the tmpfs case was
 mounted, and the overlay needs bubblewrap 0.8 and an overlayfs that unprivileged user namespaces may
-mount (a failure refuses the spawn, closed). A host whose `/etc` holds bind mounts of its own (a
+mount (a failure refuses the spawn, closed). Bubblewrap's version is read once from the binary the fence
+runs (`agent_fence::bwrap_version`, `bwrap --version`, cached per binary file) and, when the overlay form is
+the one to use, a version below 0.8 or one that cannot be read refuses the spawn with a message naming the
+version found and 0.8 (`overlay_bwrap_check`), instead of bubblewrap's bare "unknown option". The tmpfs form
+uses nothing newer than bubblewrap has had for years and is not checked. A host whose `/etc` holds bind mounts of its own (a
 container's `resolv.conf`) is the case to watch for the overlay. The pinned precedence was measured
 by pointing the real binary at an equivalent file through a ptrace path rewrite (a test tool, not
 part of the product); the real bind mount was not exercised.

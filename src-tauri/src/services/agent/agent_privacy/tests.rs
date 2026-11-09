@@ -1007,6 +1007,37 @@ fn the_agents_a_locked_project_can_run_are_derived_from_the_driver_registry() {
 }
 
 #[test]
+fn an_old_or_unreadable_bubblewrap_is_refused_by_name_where_the_pin_needs_the_overlay() {
+    use crate::services::agent_fence::{overlay_bwrap_check, parse_bwrap_version, HostClaudeDir};
+    assert_eq!(parse_bwrap_version("bubblewrap 0.6.1\n"), Some((0, 6, 1)));
+    assert_eq!(parse_bwrap_version("bubblewrap 0.11.1"), Some((0, 11, 1)));
+    assert_eq!(parse_bwrap_version("bubblewrap 0.8"), Some((0, 8, 0)));
+    assert_eq!(parse_bwrap_version("bubblewrap 0.9.0-rc1\nmore"), Some((0, 9, 0)));
+    for junk in ["", "bubblewrap", "bubblewrap x.y", "bwrap: command not found", "0.8.0", "bubblewrap 1", "bubblewrapped 0.9.0"] {
+        assert_eq!(parse_bwrap_version(junk), None, "{junk:?}");
+    }
+    // The overlay form (no `/etc/claude-code` on the host) needs 0.8.
+    let err = overlay_bwrap_check(HostClaudeDir::Missing, Some((0, 6, 1))).unwrap_err();
+    assert!(err.starts_with("Agent sandbox:") && err.contains("0.6.1") && err.contains("0.8"), "{err}");
+    let err = overlay_bwrap_check(HostClaudeDir::Missing, Some((0, 7, 9))).unwrap_err();
+    assert!(err.contains("0.7.9") && err.contains("0.8"), "{err}");
+    for ok in [(0, 8, 0), (0, 11, 1), (1, 0, 0)] {
+        assert!(overlay_bwrap_check(HostClaudeDir::Missing, Some(ok)).is_ok(), "{ok:?}");
+    }
+    // An unreadable version is refused the same way (closed), and says so.
+    let err = overlay_bwrap_check(HostClaudeDir::Missing, None).unwrap_err();
+    assert!(err.contains("0.8") && err.contains("could not be read"), "{err}");
+    // The tmpfs form uses nothing newer than bubblewrap has had for years.
+    assert!(overlay_bwrap_check(HostClaudeDir::Folder, Some((0, 6, 1))).is_ok());
+    assert!(overlay_bwrap_check(HostClaudeDir::Folder, None).is_ok());
+    // The wrapper asks before it builds the mounts, from the binary it will run.
+    let fence = source("services/agent/agent_fence.rs");
+    let body = body_of(&fence, "pub fn wrap_pty_options_bwrap(");
+    let check = body.find("overlay_bwrap_check(").expect("the Linux wrapper checks the bubblewrap version");
+    assert!(check < body.find("insert_managed_claude(").unwrap(), "the check comes before the mounts are inserted");
+}
+
+#[test]
 fn the_bubblewrap_pin_covers_an_existing_policy_folder_with_a_tmpfs_and_a_missing_one_with_an_overlay() {
     use crate::services::agent_fence::{host_claude_dir, insert_managed_claude, managed_claude_args, HostClaudeDir};
     let file = Path::new("/state/claude_managed/ab/claude-code/managed-settings.json");
