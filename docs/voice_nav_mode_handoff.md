@@ -319,3 +319,30 @@ tail) needs a live check.
 Gates (`scripts/gates.sh --base be8e75ab`): brand, whitespace, lint, build
 pass; no Rust change. Vitest 8231 passed, 2 failed of 8233 — both in
 `CursorPacks.test`, a known failure at the base.
+
+## N4 fixes (the N3 "Flagged for user" items 2-12) — done
+
+Item 1 (an utterance growing past the 800 ms settle) is deliberately left flagged: it needs a live check.
+Each fix has a regression test that fails without it, except item 12.
+
+| Item | sha | Fix |
+|---|---|---|
+| 4 | `793e3584` | `endDictation` clears the utterance layer's settle timer (now one ref shared by `useComposer` and `useVoiceInput`); unmount already cleared it. |
+| 5 | `4b7b8fe5` | `UtteranceOptions.gate` / `.capture` may be functions, asked as each new utterance begins, so a second utterance in one event is judged by the mode the first left. |
+| 6 | `8042bee4` | After a stop, in-flight words go through the layer as the mic stood at the stop (gate, capture). Navigation-mode words are dropped, a navigate phrase opens nothing, held words settle at `onEnd`. `stopVoice` now runs before `nav.end()` in the mic tap. |
+| 8 | `77810e58` | A tap with navigation open stops the voice and goes on to start the mic. |
+| 7 | `c6323d5c` | `speechOutput.guardSpeech`: a piece that has not moved for 15 s + 100 ms per character is stopped (each chunk restarts the watch). Used by the nav line wait and the landing wait. |
+| 12 | `aa3eafbc` | Already true: `useReadAloud`'s unmount cleanup calls `stopSpeaking()`. Two tests added to lock it in; no source change. |
+| 9 | `55e7f209` | `openProject` in `App.tsx` also calls `setTab("projects")`. |
+| 3 | `2c288d03` | `tabbyGate.set(true)` shows the existing cue line (no chime). Its wording is "Sent — say Tabby …", slightly off after a landing or leave; a dedicated key would be a five-dictionary addition if wanted. |
+| 10 | `0a8a1eac` | The plan is explicit ("also a draft already present at a landing" is a gate-off case), so a landing with a draft opens the mic with the gate off. Leaving navigation keeps the gate on, as the plan says. |
+| 2 | `de3d9d83` | The question read-out in `useHandsFree` waits while `navOpen` or `preparingVoice` and runs again after. A landing needed nothing: its question queues behind the landing lines. |
+| 11 | `87706aee` | Two words run together match only the name's own spelling, not an alias ("tab be" no longer); French `l'onglet en cours` and Italian `la scheda in corso` (a sibling collision) are no longer bare working-tab phrases ("qui travaille" / "che lavora" stand in). Near-miss tests in all five languages. |
+
+### Gates
+
+`scripts/gates.sh --base be8e75ab` (35 files, frontend only): brand, whitespace, `npm run lint`, `npm run build` pass. Vitest (825 related files): 8231 passed, 2 failed of 8233 — the known base failures `shell/i18n.test` (`agents.*` keys) and `theme/CursorPacks.test`. No flake this run. No Rust change.
+
+### Could not fix
+
+Item 1 only (see top). Note the tap-off routing (item 6) is covered with a fake recognizer that finalizes words inside `stop()`; the real Chrome order of final results, `onend` and restart is unchecked live.
