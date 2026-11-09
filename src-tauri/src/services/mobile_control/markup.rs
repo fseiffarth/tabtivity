@@ -190,6 +190,10 @@ pub enum Color {
     Blue,
     Black,
     Yellow,
+    Green,
+    Orange,
+    Purple,
+    Pink,
 }
 
 impl Color {
@@ -200,6 +204,10 @@ impl Color {
             Color::Blue => "blue",
             Color::Black => "black",
             Color::Yellow => "yellow",
+            Color::Green => "green",
+            Color::Orange => "orange",
+            Color::Purple => "purple",
+            Color::Pink => "pink",
         }
     }
 }
@@ -1448,7 +1456,7 @@ mod tests {
         // Unknown kinds, colours and fields are refused by the parser itself.
         for bad in [
             r#"{"source":{"files":"t"},"pages":[{"n":1,"size":[1,1],"layer":"x","marks":[{"kind":"laser","color":"red"}]}]}"#,
-            r#"{"source":{"files":"t"},"pages":[{"n":1,"size":[1,1],"layer":"x","marks":[{"kind":"box","color":"pink","rect":[0,0,1,1]}]}]}"#,
+            r#"{"source":{"files":"t"},"pages":[{"n":1,"size":[1,1],"layer":"x","marks":[{"kind":"box","color":"teal","rect":[0,0,1,1]}]}]}"#,
             r#"{"source":{"path":"/etc/passwd"},"pages":[]}"#,
             r#"{"source":{"files":"t"},"pages":[],"extra":1}"#,
         ] {
@@ -1644,6 +1652,16 @@ mod tests {
             )),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_notes_style_colours_are_read_and_named() {
+        // The pen bar's added colours parse and the prompt names them as is.
+        for (word, color) in [("green", Color::Green), ("orange", Color::Orange), ("purple", Color::Purple), ("pink", Color::Pink)] {
+            let boxed: Mark = serde_json::from_str(&format!(r#"{{"kind":"box","color":"{word}","rect":[1,2,30,4]}}"#)).unwrap();
+            assert_eq!(mark_color(&boxed), color);
+            assert_eq!(color.word(), word);
+        }
     }
 
     #[test]

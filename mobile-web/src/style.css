@@ -2050,7 +2050,6 @@ span.files-close { background:transparent; }
 .markup-toolbar > button.selected { background:#2f6fec; color:#fff; }
 .markup-toolbar > button:disabled { opacity:.35; }
 .markup-toolbar > button[aria-expanded="true"] { background:#2b3043; }
-.markup-color-well span { display:block; width:24px; height:24px; border-radius:50%; box-shadow:0 0 0 2px #e6e9f2; }
 .markup-toolbar-rule { flex:0 0 auto; width:1px; height:24px; margin:0 3px; background:#34384a; }
 /* Previous / Next mark: the toolbar's look stood on end, at the palette's
    right edge (reading too, where it is the palette's only part). */
@@ -2072,13 +2071,6 @@ span.files-close { background:transparent; }
 .markup-pen-ring { display:block; border-radius:50%; border:1.5px solid currentColor; }
 .markup-pen-area { display:block; width:16px; height:11px; border:1.5px dashed currentColor; }
 .markup-pen-meaning { margin:0; color:#c9cddb; font-size:.74rem; text-align:center; }
-.markup-color-well.is-eraser { color:#e6e9f2; }
-/* On a wide screen the colours ride in the toolbar too. */
-.markup-toolbar-colors { display:none; }
-@media (min-width: 560px) {
-  .markup-toolbar-colors { display:inline-flex; align-items:center; gap:6px; padding:0 4px; }
-  .markup-toolbar-colors .markup-color { width:26px; height:26px; }
-}
 /* What the area eraser will take while it is dragged. */
 .markup-area { position:absolute; border:1.5px dashed #333; outline:1.5px solid rgba(255,255,255,.85); pointer-events:none; z-index:3; }
 .markup-more { display:grid; min-width:230px; }
@@ -2119,6 +2111,36 @@ span.files-close { background:transparent; }
 .markup-comment textarea { min-height:56px; resize:vertical; border:1px solid #34384a; border-radius:8px; background:#0f131c; color:#e6e9f2; font:400 .85rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; padding:6px 8px; }
 .markup-comment .markup-pen-actions { display:flex; justify-content:flex-end; }
 .markup-more-value { margin-left:auto; color:#8fb8ff; font-size:.8rem; }
+/* The notes-style dock (docs/markup_notes_style_plan.md): the Draw/Scroll
+   switch, the six slots; a slot's sheet holds favourites, a segmented choice,
+   the size slider, switches and the Proof grid; the Agent badge's sheet. */
+.markup-toolbar > button.markup-finger { width:44px; border-radius:14px; display:flex; flex-direction:column; gap:0; font-size:.95rem; line-height:1; }
+.markup-toolbar > button.markup-finger small { font-size:.6rem; font-weight:600; }
+.markup-toolbar > button.markup-finger.selected { background:#e6e9f2; color:#141a26; }
+.markup-seg { display:flex; gap:2px; padding:3px; border-radius:12px; background:#141a26; }
+.markup-seg button { flex:1; min-height:36px; border:0; border-radius:9px; background:transparent; color:#c9cddb; font:500 .82rem/1.1 Inter,ui-sans-serif,system-ui,sans-serif; }
+.markup-seg button.selected { background:#2b3043; color:#fff; }
+.markup-pen-switch { display:flex; align-items:center; gap:10px; min-height:40px; padding:0 6px; border:0; background:transparent; color:#e6e9f2; font:500 .86rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; }
+.markup-pen-switch[aria-checked="true"] .markup-switch { background:#2f6fec; }
+.markup-pen-switch[aria-checked="true"] .markup-switch::after { left:19px; }
+.markup-size { display:flex; align-items:center; gap:10px; padding:0 6px; color:#c9cddb; font-size:.82rem; }
+.markup-size input { flex:1; accent-color:#2f6fec; }
+.markup-size .markup-more-value { margin-left:0; min-width:1.5em; text-align:right; }
+.markup-proof { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:5px; }
+.markup-proof button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; min-height:52px; border:1px solid #34384a; border-radius:10px; background:#141a26; color:#e6e9f2; font-size:.66rem; }
+.markup-proof button > span:first-child { font-size:1.05rem; }
+.markup-proof button.selected { border-color:#2f6fec; box-shadow:0 0 0 1px #2f6fec; }
+.markup-preset .markup-fav-dot { display:block; border-radius:50%; box-shadow:0 0 0 1.5px rgba(255,255,255,.55); }
+.markup-preset { justify-content:center; min-width:44px; height:44px; padding:0; }
+.markup-preset.markup-preset-add { border-style:dashed; color:#8fb8ff; font-size:1.2rem; }
+.markup-lasso { position:absolute; left:0; top:0; z-index:3; pointer-events:none; overflow:visible; }
+.markup-lasso polyline { fill:rgba(47,111,236,.08); stroke:#2f6fec; stroke-width:1.5; stroke-dasharray:4 3; }
+.markup-popover.markup-agent { display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow:auto; padding:10px; }
+.markup-popover.markup-agent p { margin:0; color:#c9cddb; font-size:.82rem; }
+.outbox-action.markup-agent { display:inline-flex; align-items:center; gap:6px; }
+.outbox-action.markup-agent.selected { background:#2b3043; }
+.markup-agent-count { display:inline-grid; place-items:center; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#2f6fec; color:#fff; font-size:.7rem; font-weight:700; }
+.markup-agent-dot { width:7px; height:7px; border-radius:50%; background:#2f6fec; }
 .markup-tick-diff { position:absolute; z-index:1; overflow:hidden; padding:4px 8px; border-radius:10px; background:rgba(15,42,24,.92); color:#c9f2d5; font:500 .7rem/1.25 Inter,ui-sans-serif,system-ui,sans-serif; text-overflow:ellipsis; white-space:nowrap; max-width:240px; pointer-events:none; }
 /* The agent's markup questions (`MarkupQuestionsCard`, `markup_ask`): a card
    docked at the top of the palette, folded to its head by a tap, its rows the
