@@ -512,3 +512,33 @@ message). Still flagged:
 - A bubblewrap with the right version number whose build lacks overlay support still fails with bubblewrap's own error.
 - Review 3 items 3 to 7 and the earlier rounds' list are unchanged (the `forget()` window, settings that run code,
   sessions without `--agent-`, key collision, `kill-session` prefix match).
+
+## Review 4 findings — flagged for user
+
+Review of `854e436f..577ff673` (fix round 4). No bug confirmed, so no code changed; `cargo test -p tabtivity --lib
+agent_privacy` passes (47). The OpenCode refusal holds on every route read: the gate runs before anything is built
+(`launch_prep::prepare`), `identify_local_launch` compares `cmd` and args exactly, so a full path, `.exe`, `opencode2`,
+resume args, `ollama launch opencode` or the `mini` form never identify as a verified line and are refused (generic text
+for those, the OpenCode text for the exact line); nothing after the gate rewrites `cmd`; the shell-tab shim has no
+stamp and is refused at the fence; the Tabby chat runs with its cwd in its own chat folder, locked folders masked, and
+the inline `OPENCODE_CONFIG_CONTENT` of an unlocked project still comes from `launch_prep`. Flagged, not changed:
+
+1. **The phone's ＋ sheet still lists the OpenCode row** in a locked project (known, round 4 flag). `localChoices` in
+   `MobileBridgeHost.tsx` knows the scope and could apply `driversForLockedProject`; the row is also the first one the
+   sheet offers (light harness), so the likeliest phone tap in a locked project ends in the refusal.
+2. **A typed `opencode` in a shell tab is refused with the fence's generic text** ("was not started as a local-model tab.
+   Open a local model from the ＋ menu"), not the one naming the agents that can run. The manual-test line in
+   `todo/group-o-security.md` and the context doc say it names them. The ＋ menu it points to has no OpenCode row.
+3. **`bwrap --version` runs `.output()` inside the async `prepare`** (the wrapper is called from it directly), and also
+   when the host has `/etc/claude-code` (the tmpfs form, where the result is not used). Once per binary file, a few ms,
+   the same pattern as `bwrap_available`; the cache key is mtime and size, not the inode, so a same-size, same-mtime
+   replacement would keep a stale answer (not realistic for a package upgrade).
+4. **The allowed-agents list is advisory**: it names Claude Code on every Linux, although the overlay form can still
+   refuse it for an old bubblewrap, and it names agents that are not installed.
+5. **Two lists to keep equal**: `REFUSED_DRIVERS` (Rust) and `LOCKED_REFUSED_DRIVERS` (TS) have no test tying them.
+6. **A locked agent can start OpenCode itself**: inside a verified Pi or Codex fence the shim steps aside and runs the real
+   `opencode` (or `opencode2`), with that fence's home and no network cut. Same class as a `curl` from the agent (Phase 2).
+   A spawn with `cmd` `opencode2`, `npx` or `bunx` and `agent: false` is not an agent to `is_agent`; only a renderer
+   that lies about `cmd` can send it (the CSP's case); typed into a shell tab it is the user's own shell, or the shim.
+7. The one `＋ menu` test mock that answered `null` now answers `[]` for `list_local_drivers`: the backend always answers
+   an array, and a locked project's menu filters it. No regression hidden.
