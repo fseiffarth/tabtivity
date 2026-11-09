@@ -206,3 +206,50 @@ Commit: see `git log` (subject `feat(phone-steering): engine, list levels, sheet
   Alt+Space), cursor repair after a real remount, and the on-screen look (no CSS until I3: the cursor
   has no outline yet, so a phone build of this commit steers invisibly).
 - No new i18n keys were needed; no plan deviation beyond the choices above.
+
+## I3: inside a tab, the legend, docs
+
+Commit: 0cd811139 (`feat(phone-steering): inside a tab, the legend, the tip, docs`); the handoff text itself is a second commit.
+
+### What landed
+
+- `terminal/selectPrompt.ts`: `optionForDigit(prompt, n)` (printed number n; the nth row when nothing is numbered; an unnumbered action row is never reached by position when others are numbered).
+- `screens/terminal/useTerminalSteering.ts`: registers the `inside` target while the Terminal is mounted (cleared on unmount) and calls `refreshInside()` when the question appears or goes. `answer(n)`: not in Focus / no question -> `none`; no option -> `missing`; a free-text row -> clicks its `.question-list > li > button` (opens the field, which hands off) -> `freeText`; else `answerQuestion(option)` -> `answered` (a held question swallows it quietly). `focusComposer()`: `blocked` when the textarea is missing or `disabled`, else focus with the caret at the end.
+- `screens/Terminal.tsx`: three small hunks (import, one `useTerminalSteering({...})` call after `useLiveQuestion`, `data-steer-scroll` on `.readable-output`).
+- `steering/SteeringBar.tsx`, mounted in the three branches of `App()` (fragment for terminal/tabby, inside `.tabbed` after the tab bar): badge, ladder, keys, flash line, folded form, and the one-time tip.
+- `steering/steering.css` (imported in `main.tsx` after `themes.css`; added to `MobileAnimatedShadowBlur` SHEETS).
+- `prefs.ts` `hintSteering` flag (+ doc comment), `HintMessage.tsx` `resetTips` writes it false.
+- `src/lib/untested.ts`: the six `mobile.steering.*` rows; every pill has a literal `isUntested("...")` call site (`node scripts/untested.mjs check` agrees).
+- Tests: `MobileSteeringInside` (10) and `MobileSteeringBar` (14).
+- Docs: `docs/help/mobile.md` "Steering with a keyboard", `docs/help/keyboard.md` paragraph, one line in `DOCUMENTATION.md`'s tree, `docs/context/phone_steering.md`, todo item `31cr` in `todo/group-h-crossplatform.md` (Android and iOS pairs), filemap rows (`steering/` row extended, `screens/terminal/` row mentions the hook).
+
+### Choices where the plan was open
+
+- **Legend layout.** A head line (badge, untested pill, ladder, `H Keys`) plus up to two lines of keys: `--steer-bar-h` is `58px` + the safe-area inset, so a three-line budget rather than the plan's "two lines". Up and down read as one chip ("E/↑ D/↓ Move"); Mail, Calendar and To-do as one chip ("M C T  Mail / Calendar / To-do"); `legend` is the head's `H Keys`, not a chip. Q R X appear only at a count above zero (with the count); Answer only while a question is up; Jump back only after a jump; Type always (a blocked composer flashes). A flash replaces the key lines; paused and the typing handoffs replace them too.
+- **Bar is non-interactive** (`pointer-events: none`): a tap leaves the mode anyway and should reach the control under it.
+- **Folded form** is a one-line static strip (`mobile.steering.folded`) that reserves no room (`data-steer-bar` is off while folded).
+- **Tip**: a window capture `keydown` listener in `SteeringBar` (passive, never prevents). It sets `hintSteering` at the first `isHardwareKeydown` (also when that key is the chord, in which case nothing shows), shows for 8 s or until the next keydown. `hintsOff` silences it without using it up. It lives and dies with the bar instance, so it restarts when the App switches among its three branches (harmless).
+- **Section label** `assistant.title` is passed through `t()` without vars in the bar, as `TabbyOpen` does.
+- **New register description wording** is mine; the plan only named the ids.
+- The todo item took id `31cr` (the last `31c?` was `31cq`) and sits next to the Back-stack item `31ch`.
+
+### Gotchas
+
+- Untested pills render in tests (the register rows are untested), so a test reading a ladder entry's text sees "Sheet Untested"; `MobileSteeringBar` reads `firstChild`.
+- The bar's tip listener and the engine are both window-capture keydown listeners; the tip checks `getSteering().active` and `isEntryChord` itself, so their order does not matter.
+- A test mounting the engine plus the bar must stub `fetch` (the engine polls `getActivity()` while the mode is on) and flush it (`await act(async () => {})`) to avoid act warnings.
+- Enter in the composer is prevented by the composer's own handler (it sends), not by steering: do not assert `defaultPrevented === false` for it.
+- `Terminal.tsx` hunks for the landing merge: the `import` line after `useLiveQuestion`'s, the one call after the `useLiveQuestion({...})` block, and `data-steer-scroll` on the `section.readable-output` opening tag.
+
+### Gates
+
+- `scripts/gates.sh` (diff vs HEAD): brand, whitespace, `npm run lint` (0 errors; no warning in a file this step added; the one `Terminal.tsx` warning is an old effect), `npm run build` pass. Its `vitest --changed` pass: 730 files, 6806 tests, 2 failures under load (`PdfZoomRaster`, `MobileTerminalTranscript`), both green when rerun alone.
+- `node scripts/untested.mjs check`: register and sources agree. `cargo test -p tabtivity --lib help_mcp -q`: 16 passed (the help corpus parses). `npm run mobile:bundle` builds; `mobile-dist/` is untracked/ignored, nothing to commit.
+- New tests: `MobileSteeringInside` 10, `MobileSteeringBar` 14; `MobileAnimatedShadowBlur` (now with `steering.css`), `MobileKeydownGuards`, `MobileFocusQuestion`, `UntestedRegistry`, `MobileBackStack` green.
+- Plain `npm test`: 1111 files, 11484 tests, 3 failures, the known base ones: `i18n.test.ts` (agents.tools / agents.defaults translations), `CursorPacks.test.ts`, `TypeScale.test.ts`. None mention the steering files; develop's e90b94b6 and 295558b74 fix them and arrive with the merge.
+
+### Flagged for user
+
+- Never live-verified: everything visual (the outline, the bar over the tab bar, FAB and sheet spacing, safe-area on a notched phone), the tip, and real Bluetooth keyboards on Android and iOS. Walk and platform checks are todo item `31cr`.
+- The bar is three lines high (head + two key lines, 58px + inset), not the plan's two; on a narrow phone the longest levels may clip the last chips (H folds the bar).
+- The `Terminal.tsx` hunks are three small ones (see Gotchas) for the manual landing merge; `untested.ts`, the i18n dictionaries (none touched here), `filemap_frontend.md`, `DOCUMENTATION.md` and `keyboard.md` are also dirty in the main checkout.
