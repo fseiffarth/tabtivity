@@ -253,3 +253,53 @@ Commit: 0cd811139 (`feat(phone-steering): inside a tab, the legend, the tip, doc
 - Never live-verified: everything visual (the outline, the bar over the tab bar, FAB and sheet spacing, safe-area on a notched phone), the tip, and real Bluetooth keyboards on Android and iOS. Walk and platform checks are todo item `31cr`.
 - The bar is three lines high (head + two key lines, 58px + inset), not the plan's two; on a narrow phone the longest levels may clip the last chips (H folds the bar).
 - The `Terminal.tsx` hunks are three small ones (see Gotchas) for the manual landing merge; `untested.ts`, the i18n dictionaries (none touched here), `filemap_frontend.md`, `DOCUMENTATION.md` and `keyboard.md` are also dirty in the main checkout.
+
+## Review
+
+Final review of `develop..mobile-steering` (the five commits above). Checked: typing safety
+(mode off touches only the two chords and their keyup; no `stopPropagation`; IME 229 /
+composing / Dead / Unidentified ignored; Alt+Space by `code` or the no-break space), every phone
+`keydown` listener reads `defaultPrevented`, the import graph, the `keyNames.ts` move (desktop
+hunks are the move and one `export`), App wiring (hook before the early returns, bar in all three
+branches, `SteeringConfirm` inside `BackNest`), CSS (no blur, no animation, hex themed by
+`themeColors`), the five dictionaries, untested rows and pills, filemap, help and todo format.
+
+### Fixes
+
+- 34d710b8d `fix(phone-steering): Shift with the arrows scrolls a page inside a tab`: the engine never passed
+  Shift to `scrollStep`, so Shift+↓ moved a third like ↓ (Fixed decision 8). Test in
+  `MobileSteeringInside`.
+- 5c509d5e8 `fix(phone-steering): a tap on the close confirm closes the tab`: any `pointerdown` leaves the
+  mode, and `setActive(false)` dropped the pending confirm, so a finger on the sheet's "Close tab"
+  unmounted the sheet before its click and nothing closed. The confirm now outlives the mode and
+  is cleared when the engine is torn down. Test in `MobileSteeringLists`.
+
+### Flagged for user
+
+- **N on a project presses the + FAB as a tap does**, and a tap with a default agent starred starts
+  that agent at once (`useTapHold`'s `onTap` → `create`), not the + sheet. The todo walk (31cr,
+  step 4) expects "N opens the + sheet", and the plan's reason for W's confirm ("a single letter is
+  easy to hit") applies here too. Decide: open the sheet (`setNewTabOpen`, needs a marker or a
+  second act) or keep the tap.
+- **The folded strip reserves no room** (I3's choice): it sits over the lower ~20 px of the tab bar,
+  and in a tab over the composer bar (`data-steer-bar` is off while folded, so `.terminal-screen`
+  gets no padding). Pointer-transparent, but it hides labels. Option: keep `data-steer-bar` while
+  folded with a one-line `--steer-bar-h`.
+- **The bar covers the bottom 58 px of the files library and the viewers** while steering is
+  paused over them (bar z-index 14 over `.files-library` 12 and `.outbox-viewer` 13; neither gets
+  padding). Their bottom toolbars (Mark up's pen bar) are under it until a tap leaves the mode.
+- **The moved tab bar keeps its own safe-area padding** on top of the bar's, so on a notched phone
+  there is an inset-sized gap above the bar (cosmetic; device check).
+- **I in a tab flashes "The agent is waiting on a choice"** whenever the composer is disabled, which
+  is also the case while the tab reconnects (`!connected`), where that text is wrong.
+- **Help page** (`docs/help/mobile.md` table): "Every level … Enter opens the row; H folds the bar"
+  is not true inside a tab (Enter is unbound there) or over a sheet (H is unbound).
+- **A status jump reads `place` after its fetch** (up to the poll age, 2 s fresh window), so a key
+  that moved the reader during the fetch is what Backspace returns to. Harmless in practice.
+- **Q R X / Backspace from Tabby** record a list place, so Backspace returns to the section under
+  Tabby, not to Tabby.
+- **Device-only**: whether Android takes a hardware Esc as system Back (then Esc would also pop a
+  back layer through `popstate` beside the engine's own action), whether `click()` on the inert card
+  behind the confirm fires in WebKit (jsdom does; the spec says it should), and whether Home's
+  remembered row wins over a Needs-you row that renders first after a Back (cursor repair focuses
+  the first row when the remembered one is not there yet).
