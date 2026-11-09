@@ -294,3 +294,28 @@ Hands-free off is the be8e75ab path (`advanceDictation`, `consume` without guard
 10. **Landing with a kept draft** starts the mic with `{ gate: true }`; the plan lists "a draft already present at a landing" among the gate-off cases. The effect is the same (an existing draft already lets the next utterance through), only the gate flag differs.
 11. **Words**: French `voice.cmd.nextWorking` "l'onglet en cours" also reads as "the current tab"; the alias "tabe" plus the two-word join lets an utterance starting "tab be …" match the start word (rare).
 12. **Leaving Focus by Back** while a nav or landing line is being spoken does not stop the voice.
+
+## N4 fixes (the N3 review's flagged items; section written by the main loop)
+
+Each fix has a regression test, checked to fail without it (except 12):
+
+| Item | Commit | Fix |
+|---|---|---|
+| 4 | 793e3584 | `endDictation` clears the shared settle timer |
+| 5 | 4b7b8fe5 | `capture` and the gate are asked per utterance |
+| 6 | 8042bee4 | words in flight after a stop go through the layer as the mic stood at the stop |
+| 8 | 77810e58 | one tap while a nav line is spoken stops the voice and opens the mic |
+| 7 | c6323d5c | `guardSpeech` stall watchdog (15 s + 100 ms per character) for nav and landing lines |
+| 12 | aa3eafbc | tests only: Back already stops the voice (`useReadAloud`'s unmount `stopSpeaking`) |
+| 9 | 55e7f209 | `openProject` also switches to the Projects tab |
+| 3 | 2c288d03 | the gate's cue line shows after a landing or leave too (its wording, "Sent — say Tabby …", is slightly off there) |
+| 10 | 0a8a1eac | a landing with a kept draft opens the mic with the gate off (the plan's case) |
+| 2 | de3d9d83 | the question read-out waits while navigation is open or the mic is being prepared |
+| 11 | 87706aee | a two-word join matches only the name, not aliases ("tab be"); FR/IT working-tab phrases that also mean "the current tab" replaced; near-miss tests in all five languages |
+
+Left flagged: item 1 (an utterance growing past the 800 ms settle loses its
+tail) needs a live check.
+
+Gates (`scripts/gates.sh --base be8e75ab`): brand, whitespace, lint, build
+pass; no Rust change. Vitest 8231 passed, 2 failed of 8233 — both in
+`CursorPacks.test`, a known failure at the base.
