@@ -854,6 +854,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         for that file row alone, and is named after it. */}
     {fabOffered && <button
       className="primary fab fab-round"
+      data-steer-act="new"
       disabled={!detail}
       {...fabPress}
       aria-haspopup="dialog"

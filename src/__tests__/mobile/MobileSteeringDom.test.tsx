@@ -11,6 +11,7 @@ import {
   focusRow,
   ownKeysUp,
   press,
+  cursorRow,
   rowAct,
   rowById,
   rows,
@@ -108,6 +109,19 @@ describe("walk", () => {
 
   it("returns null for an empty list", () => {
     expect(walk([], 1, null)).toBeNull();
+  });
+});
+
+describe("cursorRow", () => {
+  it("is the focused row, the row of a card whose other button has focus, or null", () => {
+    const host = mount(`<div class="tab-card"><button data-steer-row="t1" id="o1">open</button><button id="m1">more</button></div>
+      <div class="tab-card"><button data-steer-row="t2" id="o2">open</button></div><button id="fab">+</button>`);
+    const list = rows(host);
+    expect(cursorRow(list, document.getElementById("o2"))?.id).toBe("o2");
+    expect(cursorRow(list, document.getElementById("m1"))?.id).toBe("o1");
+    expect(cursorRow(list, document.getElementById("fab"))).toBeNull();
+    expect(cursorRow(list, null)).toBeNull();
+    expect(cursorRow(list, document.body)).toBeNull();
   });
 });
 
@@ -231,6 +245,18 @@ describe("row and screen acts", () => {
     document.getElementById("p")!.addEventListener("click", onClick);
     expect(rowAct("p1", "menu")).toBe(true);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("reaches a card behind a sheet (inert) only when asked to, and never a disabled button", () => {
+    mount(`<main inert><div class="tab-card"><button data-steer-row="t1">open</button><button data-steer-act="close" id="x1">x</button></div>
+      <div class="tab-card"><button data-steer-row="t2">open</button><button data-steer-act="close" id="x2" disabled>x</button></div></main>`);
+    const x1 = vi.fn();
+    document.getElementById("x1")!.addEventListener("click", x1);
+    expect(rowAct("t1", "close")).toBe(false);
+    expect(x1).not.toHaveBeenCalled();
+    expect(rowAct("t1", "close", true)).toBe(true);
+    expect(x1).toHaveBeenCalledTimes(1);
+    expect(rowAct("t2", "close", true)).toBe(false);
   });
 
   it("clicks the screen's own marked button", () => {

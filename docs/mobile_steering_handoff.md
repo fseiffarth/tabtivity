@@ -97,3 +97,112 @@ All under `mobile-web/src/steering/` unless noted; none of it imports Tauri or `
 - The baseline i18n parity failure above makes `npm test` red on this branch until the
   local-models translations land.
 - No plan deviation except the array-typed `desktop` and the multi-row actions above.
+
+## I2: the engine, the list levels, sheets, App wiring
+
+Commit: see `git log` (subject `feat(phone-steering): engine, list levels, sheets, App wiring`).
+
+### What exists now
+
+- `mobile-web/src/steering/usePhoneSteering.ts`: `usePhoneSteering(input)` and the types
+  `PhoneSteeringInput`, `SteeringBase`. Window capture `keydown`/`keyup`, `pointerdown`,
+  `focusin`/`focusout`, window `blur`, `visibilitychange`; a `MutationObserver` (cursor repair,
+  engine rule 7) that runs only while the mode is on; a `useVisiblePoll` of `getActivity()` every
+  5 s while on. Listeners are added once per `enabled`; every other input is read through a ref.
+  Nothing calls `stopPropagation`. With the mode off only the two chords (and the keyup of a key it
+  prevented) are touched.
+- `mobile-web/src/steering/SteeringConfirm.tsx`: the W confirm; it subscribes to `confirm` only.
+- `steeringState.ts` gained `SteeringView { level, paused, typing, sectionLabel }`, the snapshot
+  field `view` (null while the mode is off) and `setView`. The engine publishes it after every
+  handled key, on focus changes and from the observer, so a sheet that opens later is seen.
+- `steeringDom.ts` gained `cursorRow(list, from)` and `rowAct(id, act, behindSheet = false)`; the
+  confirm needs `behindSheet` because the screen behind a sheet is `inert`.
+- `App.tsx`: `usePhoneSteering` is called right after `openSection` is defined, before the first
+  early return, `enabled: auth === "paired"`. `base`: `terminal` is `inside`; `tabby` or a tab
+  other than Projects is `section`; a project is `tabs`; else `projects`. `sectionLabel` is the tab's
+  `mobile.tabs.*` key, or `assistant.title` for Tabby. `<SteeringConfirm />` sits after the screen
+  inside the tabbed branch's `<BackNest>`.
+- Markers (attributes only): `data-steer-row` on Home's project cards (box heads and members too),
+  `.home-needs-row`, `.activity-card`, both `.tab-card-open` buttons (a file card uses its swipe
+  key); `data-steer-act` `menu`/`close` on the cards, `new` on the + FAB and Home's new-project
+  button; `data-steer-confirm` on an `OptionSheet` option whose key is `"confirm"` (also
+  `DivergedSheet`'s, so Y works there). Home answers the find request.
+- Guards: `ProjectFiles.tsx` Esc listener and `rowDrag.ts` grip `onKeyDown` return on
+  `defaultPrevented`.
+
+### What I3 must use or fill
+
+- **Inside registry.** `registerInside(target)` from `steeringState`; the engine calls
+  `getInside()` lazily at the key, so a target registered after entering the mode works.
+  `answer(n)` results: `none` flashes `noQuestion`, `missing` flashes `noOption {n}`, `answered` and
+  `freeText` flash nothing. `focusComposer()` `"blocked"` flashes `blocked`. After `registerInside`
+  or a question change call `refreshInside()` so the bar's `question` flag moves.
+- **Handoff.** The engine blurs the composer itself after an Enter that left it empty (checks at
+  0 ms and 250 ms), so `Terminal.tsx` is not wrapped. Esc in any field blurs it. Typing detection
+  asks `typingField(...)`; the composer is a field inside `.composer-field` (the bar's
+  "Enter sends" text keys off `view.typing === "composer"`).
+- **The bar.** Mount `<SteeringBar />` in the three early-returning branches of `App()` (terminal,
+  tabby, tabbed) as a fragment around each. Read it with `useSteering()`: `active`, `view`
+  (`level`, `paused`, `typing`, `sectionLabel`), `flash`, `legendFolded`, `activity.tabs` for the Q R
+  X counts (`statusCounts`), `question`/`hasInside`. Keys for a level come from
+  `phoneBindingsFor(level)` / `phoneActionKeys` (merge rows of one action; skip `legend` in the
+  list if you show it as the badge). Hide the status keys at count 0.
+- **`data-steer-scroll`** on `.readable-output` is yours (Terminal.tsx); `scrollStep` falls back to
+  the visible `.xterm-viewport`.
+- **CSS** (yours): the cursor is real `:focus`, under `html[data-steering]`; `html[data-steer-bar]`
+  is set only while active and not folded. A row may need `scroll-margin-bottom`.
+
+### Choices where the plan was open
+
+- **Digits on Home** count the project rows (`.home-project-card`), not Needs-you rows; with none
+  (the Agents list) they count the rows there.
+- **Q R X record `jumpBack` on every jump** (the place before the most recent jump); Backspace
+  restores it and clears it (depth 1).
+- **`openSection` wrapper does nothing for the section you are already on** (the tab bar reseeds it;
+  a key must not lose Mail's folder), and nothing for a hidden section.
+- **`restore`** leaves `tab`/`projectView` alone for a terminal place (only `terminal` and `tabby`
+  are set); for a list place it sets `tab`, and `projectView` when the section is Projects.
+- **Enter on a card's other button** (✕, ⋯, the model chip) opens the card, as the cursor is the
+  card; ← / S still go back. The cursor is moved to the card's row first.
+- **Cursor memory is per list level** (`projects`, `tabs`), set on every focus that lands on a row,
+  so Back lands on the row you left. `/` forgets the Projects one so Esc lands on the first result.
+- **Esc in a sheet's field** blurs it and moves the cursor to the next control; elsewhere the
+  repair puts it on a row.
+- **A held key** is still prevented but does nothing unless it is up/down.
+- **`isIgnoredKey` runs first**, so Alt+Space is the only Alt key the engine sees.
+
+### Gotchas
+
+- `useSteering()` re-renders its caller on every change (flash, activity every 5 s, view). The
+  App and `SteeringConfirm`/Home read single fields through `useSyncExternalStore`; keep the bar the
+  only heavy subscriber.
+- jsdom delivers `focus()` without `focusin` ordering guarantees you may expect; `view` is published
+  in a microtask after focus changes, so tests `waitFor` it.
+- Window-level keys do not reach `document` listeners in tests: fire on `document.body` to see the
+  event bubble to document (the engine uses capture on `window`).
+- The cursor-repair test uses a plain `blur()` plus an appended node; jsdom does not blur a moved node.
+
+### Gates
+
+- `scripts/gates.sh` (diff vs HEAD): brand, whitespace, `npm run lint` (0 errors, no new warnings),
+  `npm run build` and `vitest --changed` all pass; no Rust gate selected.
+- New tests, all green: `MobileSteeringLists` 23, `MobileSteeringRegion` 9, `MobileKeydownGuards` 5,
+  plus 2 added cases in `MobileSteeringDom` (`cursorRow`, `rowAct` behind a sheet). The existing
+  `MobileBackStack`, `MobileFilesLibraryViewer`, `MobileTerminalOutbox`, `MobileAppSession`,
+  `MobileHome`, `MobileNeedsYou` and the desktop `SteeringBindings` suites pass unchanged.
+- Plain `npm test`: 1109 files, 11460 tests, 3 failures, all independent of this change:
+  `i18n.test.ts` "every language covers every English key" (the `agents.tools.*` /
+  `agents.defaults*` baseline), `CursorPacks.test.ts` (bare `cursor:` in the stylesheet) and
+  `TypeScale.test.ts` (an `11px` font size in the desktop stylesheet). The last one is not in the
+  list I1 recorded; no CSS is touched on this branch, so it is also at the base. The flaky
+  `MobileTerminalTranscript` passed this run.
+
+### Flagged for user
+
+- No App-level test mounts `<App />` with the engine: the wiring in `App.tsx` (`base`, `place`,
+  `openSection` wrapper, `restore`, `findProject`) is covered by type-check and the harness tests
+  of the engine and Home, not end to end. It needs the manual walk (plan, Verification 3-7).
+- Not live-verified: real Bluetooth keyboards on Android and iOS (Shift+Space, hardware Esc,
+  Alt+Space), cursor repair after a real remount, and the on-screen look (no CSS until I3: the cursor
+  has no outline yet, so a phone build of this commit steers invisibly).
+- No new i18n keys were needed; no plan deviation beyond the choices above.

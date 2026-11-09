@@ -12,6 +12,7 @@ import { useSyncExternalStore } from "react";
 import type { ActivityTab, TabRow } from "../api";
 import type { MobileSection } from "../lastPlace";
 import type { TranslationKey } from "../../../src/lib/i18n";
+import type { PhoneLevel } from "./phoneSteeringKeys";
 
 /** Where the reader stood: in a terminal, or on a list (a section, or a project's tabs). */
 export type Place =
@@ -43,6 +44,21 @@ export interface InsideTarget {
   hasQuestion(): boolean;
 }
 
+/**
+ * What the engine last saw: the level keys resolve on, whether an own-keys
+ * surface has taken the keyboard, whether a text field has the caret (and
+ * whether it is the chat composer) and the section's name. The legend reads it.
+ */
+export interface SteeringView {
+  level: PhoneLevel;
+  /** A files library or viewer is up: every key passes through. */
+  paused: boolean;
+  /** Who has the caret: nothing, the composer (Enter sends) or another field. */
+  typing: "none" | "composer" | "field";
+  /** The section screen's name (`section` level), else null. */
+  sectionLabel: TranslationKey | null;
+}
+
 export interface SteeringSnapshot {
   active: boolean;
   legendFolded: boolean;
@@ -51,6 +67,8 @@ export interface SteeringSnapshot {
   /** The last `getActivity()` list and the `Date.now()` it was fetched at; null before the first. */
   activity: { tabs: ActivityTab[]; fetchedAt: number } | null;
   confirm: SteeringConfirm | null;
+  /** The engine's last reading while the mode is on; null while it is off. */
+  view: SteeringView | null;
   /** Counts find requests; Home answers when it changes (see `takeFindRequest`). */
   findSeq: number;
   /** Whether an `inside` target is registered. */
@@ -68,6 +86,7 @@ const initial = (): SteeringSnapshot => ({
   jumpBack: null,
   activity: null,
   confirm: null,
+  view: null,
   findSeq: 0,
   hasInside: false,
   question: false,
@@ -121,7 +140,7 @@ export function useSteering(): SteeringSnapshot {
 export function setActive(active: boolean): void {
   if (state.active === active) return;
   if (!active) clearFlashTimer();
-  set(active ? { active } : { active, flash: null, confirm: null });
+  set(active ? { active } : { active, flash: null, confirm: null, view: null });
 }
 
 export function setLegendFolded(legendFolded: boolean): void {
@@ -154,6 +173,14 @@ export function setJumpBack(jumpBack: Place | null): void {
 
 export function setActivity(tabs: ActivityTab[], fetchedAt: number = Date.now()): void {
   set({ activity: { tabs, fetchedAt } });
+}
+
+/** Publishes the engine's reading; a reading equal to the last one changes nothing. */
+export function setView(view: SteeringView | null): void {
+  const old = state.view;
+  if (old === view) return;
+  if (old && view && old.level === view.level && old.paused === view.paused && old.typing === view.typing && old.sectionLabel === view.sectionLabel) return;
+  set({ view });
 }
 
 export function setConfirm(confirm: SteeringConfirm | null): void {

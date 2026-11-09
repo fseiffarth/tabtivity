@@ -78,6 +78,12 @@ function indexOfCursor(list: readonly HTMLElement[], from: Element | null): numb
   return -1;
 }
 
+/** The row the cursor stands on (see above), or null when focus is on none of `list`. */
+export function cursorRow(list: readonly HTMLElement[], from: Element | null): HTMLElement | null {
+  const at = indexOfCursor(list, from);
+  return at < 0 ? null : list[at];
+}
+
 /** The row `dir` steps from `from`, wrapping at both ends. With no cursor, 1 gives the first row and -1 the last; null for an empty list. */
 export function walk(list: readonly HTMLElement[], dir: 1 | -1, from: Element | null): HTMLElement | null {
   if (list.length === 0) return null;
@@ -111,10 +117,22 @@ function actButton(scope: ParentNode, act: SteerAct): HTMLElement | null {
   return [...scope.querySelectorAll<HTMLElement>(`[data-steer-act='${act}']`)].find(isReachable) ?? null;
 }
 
-/** Clicks the `act` button of the card holding row `id` (`.tab-card`, `.home-project-card`); false when the card or marker is missing. */
-export function rowAct(id: string, act: SteerAct): boolean {
-  const card = rowById(id)?.closest(".tab-card, .home-project-card");
-  const button = card ? actButton(card, act) : null;
+/**
+ * Clicks the `act` button of the card holding row `id` (`.tab-card`,
+ * `.home-project-card`); false when the card or marker is missing. With
+ * `behindSheet` the card may be inert (the screen behind the sheet that asked),
+ * which only the confirm sheet needs; the button must still be enabled.
+ */
+export function rowAct(id: string, act: SteerAct, behindSheet = false): boolean {
+  const row = behindSheet
+    ? [...document.querySelectorAll<HTMLElement>("[data-steer-row]")].find((el) => rowId(el) === id) ?? null
+    : rowById(id);
+  const card = row?.closest(".tab-card, .home-project-card");
+  const button = card
+    ? behindSheet
+      ? [...card.querySelectorAll<HTMLButtonElement>(`[data-steer-act='${act}']`)].find((el) => !el.disabled) ?? null
+      : actButton(card, act)
+    : null;
   button?.click();
   return button !== null;
 }

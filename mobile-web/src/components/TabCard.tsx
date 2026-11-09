@@ -184,10 +184,10 @@ export function TabCard({ tab, draft, statusShown, drag, canReorder, schedulesOf
           </span>
         </span>
       </div>
-      <button className="tab-card-icon tab-card-more" onClick={onMore} aria-haspopup="dialog" aria-expanded={moreOpen} aria-label={t("mobile.files.item.menu", { name: tab.label })} title={t("mobile.files.item.menu", { name: tab.label })}><MoreIcon size="1em" /></button>
+      <button className="tab-card-icon tab-card-more" data-steer-act="menu" onClick={onMore} aria-haspopup="dialog" aria-expanded={moreOpen} aria-label={t("mobile.files.item.menu", { name: tab.label })} title={t("mobile.files.item.menu", { name: tab.label })}><MoreIcon size="1em" /></button>
       {/* Close is one tap, where a phone looks for it; every tab the phone
           lists offers it, shell included. A swipe left does the same. */}
-      <button className="tab-card-icon tab-card-close" disabled={closing} onClick={onClose} aria-label={t("mobile.project.closeTab", { label: tab.label })} title={t("common.close")}><CloseIcon size="1em" /></button>
+      <button className="tab-card-icon tab-card-close" data-steer-act="close" disabled={closing} onClick={onClose} aria-label={t("mobile.project.closeTab", { label: tab.label })} title={t("common.close")}><CloseIcon size="1em" /></button>
       {/* The grip, under the manual order only. It is also the keyboard's way
           in: the arrows move the tab one place. */}
       {canReorder && <button
@@ -209,7 +209,7 @@ export function TabCard({ tab, draft, statusShown, drag, canReorder, schedulesOf
     {restart?.starting && !tab.available && <div className="tab-card-foot"><small className="tab-card-when">{t("mobile.project.restarting")}</small>{isUntested("mobile.project.restartForPhone") && <span className="untested">{t("mobile.newTab.untested")}</span>}</div>}
     {/* Last, so it lies over the whole card: a tap anywhere the controls
         above have not claimed opens the session. */}
-    <button className="tab-card-open" disabled={restart && !tab.available ? restart.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
+    <button className="tab-card-open" data-steer-row={tab.id} disabled={restart && !tab.available ? restart.busy : !tab.available} onClick={onOpen} aria-label={t("mobile.project.openTab", { label: tab.label })} />
   </div>;
 }
 
@@ -276,9 +276,9 @@ export function FileTabCard({ file, swipeKey, swiped, unsent, linked, onOpen, on
           </small>}
         </span>
       </div>
-      <button className="tab-card-icon tab-card-close" onClick={onForget} aria-label={t("mobile.project.fileTab.close", { name })} title={t("mobile.project.fileTab.close", { name })}><CloseIcon size="1em" /></button>
+      <button className="tab-card-icon tab-card-close" data-steer-act="close" onClick={onForget} aria-label={t("mobile.project.fileTab.close", { name })} title={t("mobile.project.fileTab.close", { name })}><CloseIcon size="1em" /></button>
     </div>
-    <button className="tab-card-open" onClick={onOpen} aria-label={t("mobile.project.fileTab.open", { name })} />
+    <button className="tab-card-open" data-steer-row={swipeKey} onClick={onOpen} aria-label={t("mobile.project.fileTab.open", { name })} />
     {/* The linked agent's state, on the tile's corner as an agent tab's
         card shows its own. */}
     {linked?.agent_status && <AgentStatusMark status={linked.agent_status} />}
