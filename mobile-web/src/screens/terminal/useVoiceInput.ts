@@ -14,6 +14,7 @@ import {
   type DictationProgress, type DictationScan, type UtteranceLedger, type UtteranceOptions, type UtteranceStep,
 } from "../../voiceInput";
 import { startLexicon } from "../../startLexicon";
+import { matchNavigate } from "../../../../src/lib/voice/voiceCommands";
 import { type TabbyGate } from "./useTabbyGate";
 import { startDictation, type DictationSession } from "../../voiceSession";
 import { paintMicLevel, spokenSend } from "../../../../shared/voice";
@@ -102,10 +103,15 @@ export function useVoiceInput({
    * to a command. Set by the session; a stop calls it before the recognizer
    * finalizes what it holds. */
   const settleNow = useRef<() => void>(() => {});
+  /** What the layer stood in when the user stopped the mic: words still in
+   * flight (the recognizer finalizes them after the stop) are routed by it, not
+   * by the gate the stop has just cleared. Null while the mic is not stopping. */
+  const stopped = useRef<{ gate: boolean; capture: boolean; open: boolean } | null>(null);
   /** The user's stop also ends the hands-free loop until the mic is tapped
-   * again. */
+   * again. Call it before `nav.end()`: the mode the words were said in is read here. */
   const stopVoice = () => {
     settleNow.current();
+    stopped.current = { gate: tabbyGate.on.current, capture: utterances.capture.current, open: tabbyGate.windowOpen() };
     tabbyGate.clear();
     handsFree.stopLoop();
     voiceStopping.current = true;
@@ -156,25 +162,32 @@ export function useVoiceInput({
     // What a past mic was still guessing at is not this one's.
     lastScan.current = undefined;
     voiceStopping.current = false;
+    stopped.current = null;
     if (options.gate !== undefined) tabbyGate.set(options.gate);
     setVoicePreview("");
     setVoiceFailure(null);
     // The session restarts the browser's recognizer through pauses, so
     // "listening" holds from the tap until the stop (`voiceSession.ts`).
     /** Hands-free listens to utterances: the gate and the hold-back apply. */
-    const layered = () => handsFree.on.current && !voiceStopping.current;
-    const utteranceOptions = (flush: boolean): UtteranceOptions => ({
-      // Asked as each utterance begins: a command taken from one utterance can
-      // open navigation mode or set the gate for the next, in the same event.
-      gate: () => tabbyGate.on.current,
-      holdBack: true,
-      capture: () => utterances.capture.current,
-      // The prompt has begun, or the start word was just said alone: the next
-      // utterance needs no start word.
-      open: tabbyGate.windowOpen() || draftRef.current.trim() !== "",
-      flush,
-      onWithheld: (text) => dispatch(text),
-    });
+    const layered = () => handsFree.on.current;
+    const utteranceOptions = (flush: boolean): UtteranceOptions => {
+      // After the user's stop the words still in flight are judged as the mic
+      // was when it was stopped (the gate, the mode), never typed raw; and no
+      // command opens anything on a mic that is closing.
+      const after = voiceStopping.current ? stopped.current : null;
+      return {
+        // Asked as each utterance begins: a command taken from one utterance can
+        // open navigation mode or set the gate for the next, in the same event.
+        gate: () => (after ? after.gate : tabbyGate.on.current),
+        holdBack: true,
+        capture: () => (after ? after.capture : utterances.capture.current),
+        // The prompt has begun, or the start word was just said alone: the next
+        // utterance needs no start word.
+        open: (after ? after.open : tabbyGate.windowOpen()) || draftRef.current.trim() !== "",
+        flush,
+        onWithheld: (text) => (after ? after.capture || matchNavigate(text, spokenIn) !== null : dispatch(text)),
+      };
+    };
     /** A held utterance has settled: the one ordered route it takes before it
      * can be dictation, first match wins.
      *   1. navigation mode, if open: a leave word ("stop", "cancel") ends it,
@@ -334,6 +347,8 @@ export function useVoiceInput({
       onError: (message) => setVoiceFailure({ key: message }),
       onLevel: (level) => paintMicLevel(dictateButton.current, level),
       onEnd: () => {
+        // The last words the recognizer finalized for a stop are still held.
+        settle(true);
         window.clearTimeout(settleTimer.current);
         settleNow.current = () => {};
         tabbyGate.clear();

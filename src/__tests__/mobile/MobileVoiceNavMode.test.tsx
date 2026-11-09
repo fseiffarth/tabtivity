@@ -37,7 +37,9 @@ class FakeRecognition {
   aborted = false;
   constructor() { FakeRecognition.instances.push(this); }
   start() { this.onstart?.(); }
-  stop() { this.onend?.(); }
+  /** Words the recognizer still finalizes between a stop and its end. */
+  inFlight: (() => void) | null = null;
+  stop() { this.inFlight?.(); this.onend?.(); }
   abort() { this.aborted = true; this.onend?.(); }
 }
 
@@ -262,6 +264,48 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     expect(screen.queryByText(/half a wor/)).toBeNull();
     await advance(2_000);
     expect(screen.queryByText(/half a wor/)).toBeNull();
+  });
+
+  describe("words still in flight when the mic is tapped off", () => {
+    const tapOff = async (inFlight: [string, boolean][]) => {
+      const recognizer = mic();
+      recognizer.inFlight = () => act(() => recognizer.onresult?.(reading(...[...(heard.get(recognizer) ?? []), ...inFlight])));
+      fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+      await settle();
+      await advance(2_000);
+    };
+
+    it("are not typed when navigation mode was open", async () => {
+      await start();
+      await hear(`${T} navigate`);
+      await tapOff([["go to project Beta", true]]);
+      expect(box().value).toBe("");
+      expect(screen.queryByText("Project Beta?")).toBeNull();
+      expect(said()).toEqual([]);
+    });
+
+    it("are held to the Tabby gate when it was on", async () => {
+      await start();
+      await hear(`${T} navigate`);
+      await hear("never mind");
+      expect(micOpen()).toBe(true);
+      await tapOff([["talk that is not for the agent", true]]);
+      expect(box().value).toBe("");
+    });
+
+    it("never open navigation on a mic that is closing", async () => {
+      await start();
+      await tapOff([[`${T} navigate go to project Beta`, true]]);
+      expect(box().value).toBe("");
+      expect(screen.queryByText(/^Navigation:/)).toBeNull();
+      expect(chime.calls).toBe(0);
+    });
+
+    it("are typed as heard when nothing was in force", async () => {
+      await start();
+      await tapOff([["plain words", true]]);
+      expect(box().value).toBe("plain words");
+    });
   });
 
   it("ignores the navigate phrase with hands-free off", async () => {

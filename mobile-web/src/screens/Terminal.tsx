@@ -2825,10 +2825,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {suggested && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
           {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={() => {
-            // A tap ends spoken navigation, whatever else it does.
+            // A tap ends spoken navigation, whatever else it does. A stop reads the
+            // mode its in-flight words were said in, so it comes first.
+            if (listening) {
+              stopVoice();
+              nav.end();
+              return;
+            }
             nav.end();
-            if (listening) stopVoice();
-            else if (preparingVoice) cancelVoicePrep();
+            if (preparingVoice) cancelVoicePrep();
             else if (handsFree && speaking) stopSpeaking();
             else {
               // The tap is the gesture a browser wants before the page may speak
