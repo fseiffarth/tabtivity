@@ -410,7 +410,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   projectId: string;
   /** The project's name: the root's title. */
   label: string;
-  /** ‹ Back at the root, Escape, or a right swipe at the root. */
+  /** ‹ Back at the root, × in a folder, Escape, or a right swipe at the root. */
   onClose: () => void;
   /** An agent tab's library offers **Mark up** on its PDFs and pictures; the
    * project screen's passes none (it has no chat). The library finds a
@@ -1265,9 +1265,16 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
           aria-label={t("mobile.files.library.path", { name: here.name })}>{here.name}</button>
         {untested && <small>{t("mobile.outbox.untested")}</small>}
       </h2>
-      <button className="files-library-more" aria-haspopup="dialog" onClick={() => setSheet({ kind: "view" })} aria-label={t("mobile.files.library.view")}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 12h.01M12 12h.01M18.5 12h.01" /></svg>
-      </button>
+      <span className="files-library-actions">
+        <button className="files-library-more" aria-haspopup="dialog" onClick={() => setSheet({ kind: "view" })} aria-label={t("mobile.files.library.view")}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 12h.01M12 12h.01M18.5 12h.01" /></svg>
+        </button>
+        {/* Inside a folder ‹ only goes up: × puts the library away from here,
+            and it opens again in this folder (the trail is remembered). */}
+        {!atRoot && <button className="files-library-more files-library-close" onClick={onClose} aria-label={t("mobile.files.close")}>
+          <CloseIcon size="1em" />
+        </button>}
+      </span>
     </header>
     <div className="files-library-bar">
       {trail.length > 1 && <PathBar trail={trail} label={t("mobile.files.trail")} onPick={(index) => setTrail((current) => current.slice(0, index + 1))} />}
