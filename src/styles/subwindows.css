@@ -4383,6 +4383,6 @@ button.terminal-reader-option:hover:not(:disabled) {
 .terminal-reader-code-block { position: relative; padding-top: 30px; }
 .terminal-reader-code-actions {
   position: absolute; top: 0; right: 0;
-  display: flex; align-items: center; gap: 6px; font-size: 11px;
+  display: flex; align-items: center; gap: 6px; font-size: var(--text-sm);
 }
-.terminal-reader-code-actions button { color: inherit; cursor: pointer; }
+.terminal-reader-code-actions button { color: inherit; cursor: var(--cur-pointer, pointer); }
