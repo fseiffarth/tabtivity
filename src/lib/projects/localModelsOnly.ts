@@ -34,4 +34,6 @@ export interface AgentPrivacyChange {
   cut_network: boolean;
   /** The running agent tabs the backend ended because they were not a verified local launch. */
   closed_tabs: string[];
+  /** Agent tmux sessions ended although no window held a PTY on them (a phone-started headless tab, a session that outlived a crash). */
+  closed_sessions?: string[];
 }
