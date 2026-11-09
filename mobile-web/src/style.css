@@ -1913,7 +1913,6 @@ span.files-close { background:transparent; }
 .files-select-bar > [role="status"] { margin-right:auto; font-weight:600; }
 .files-select-bar > button { min-height:var(--hit); padding:0 var(--sp-3); border-radius:var(--r-sm); }
 .files-select-bar .error { color:#f28b82; }
-.files-select-note { color:var(--ink-muted); font-size:var(--fs-foot); }
 /* A keyboard or a pointer (an iPad's): where the focus is, and what is under
    the pointer, show on the items. */
 .files-library-body :is(.files-tile-open, .files-list > li > button, .files-section > button):focus-visible { outline:2px solid #8fb8ff; outline-offset:-2px; }
