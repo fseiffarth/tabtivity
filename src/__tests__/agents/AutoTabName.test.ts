@@ -16,6 +16,7 @@ import { useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { duplicateSpec, restoreSavedTab } from "../../stores/tabs/tabEntries";
+import { AGENT_CLI_ROWS } from "../../lib/agents/agentCliTable";
 import type { Settings } from "../../types";
 
 describe("promptTabName", () => {
@@ -133,6 +134,33 @@ describe("autoTabNames", () => {
     expect(tab().taskName).toBe("Fix the settings scrollbar");
   });
 
+  it.each(AGENT_CLI_ROWS)("names $label on the phone from its first prompt", (cli) => {
+    seed({ cmd: cli.bin, label: cli.label, autoLabel: cli.label });
+    useAgentModelsStore.setState({ promptByTab: { [PTY]: "Fix settings" } });
+    expect(tab()).toMatchObject({ label: cli.label, autoLabel: cli.label, taskName: "Fix settings", autoNamed: true });
+  });
+
+  it("names an older Codex tab without an automatic-label marker", () => {
+    seed({ cmd: "codex", label: "Codex", autoLabel: undefined });
+    read(["Fix phone naming"]);
+    expect(tab()).toMatchObject({ label: "Codex", autoLabel: "Codex", taskName: "Fix phone naming", autoNamed: true });
+  });
+
+  it("catches up when a Codex tab loads after its prompt", () => {
+    useTabsStore.setState({ tabsByScope: {} });
+    read(["Fix phone naming"]);
+    seed({ cmd: "codex", label: "Codex", autoLabel: undefined });
+    expect(tab().taskName).toBe("Fix phone naming");
+  });
+
+  it("catches up with prompts read before the naming subscriber starts", () => {
+    stop();
+    seed({ cmd: "codex", label: "Codex", autoLabel: undefined });
+    read(["Fix phone naming"]);
+    stop = startAutoTabNames();
+    expect(tab().taskName).toBe("Fix phone naming");
+  });
+
   it("never touches a tab the user renamed", () => {
     seed({ label: "My name" });
     read(["Fix the settings scrollbar"]);
@@ -140,12 +168,12 @@ describe("autoTabNames", () => {
     expect(tab().taskName).toBeUndefined();
   });
 
-  it("does nothing for an unarmed tab or with the setting off", () => {
-    seed({ autoLabel: undefined });
+  it("leaves custom unarmed tabs and disabled naming alone", () => {
+    seed({ autoLabel: undefined, label: "My task" });
     read(["Fix it"]);
     expect(tab().taskName).toBeUndefined();
-    seed();
     useSettingsStore.setState({ settings: { agent_tab_auto_name: false } as Settings });
+    seed();
     read(["Fix it again"]);
     expect(tab().taskName).toBeUndefined();
   });

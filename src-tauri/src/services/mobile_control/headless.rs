@@ -769,6 +769,7 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
             } else {
                 Vec::new()
             };
+            extra.insert("autoLabel".into(), json!(agent.public.label));
             extra.insert("kind".into(), json!("agent"));
             extra.insert("args".into(), json!(args));
             extra.insert("env".into(), json!({ crate::app_env!("TAB_UID"): uuid }));
@@ -2121,6 +2122,7 @@ mod tests {
         };
         let before = crate::clock::now_ms() as i64;
         let record = tab_record(&CreateTabKind::Agent, Some(&agent), Path::new("/p"), "h");
+        assert_eq!(record.extra.get("autoLabel"), Some(&json!(agent.public.label)));
         let stamped = record.extra.get("launchedAt").and_then(serde_json::Value::as_i64).expect("stamped");
         assert!(stamped >= before && stamped <= crate::clock::now_ms() as i64);
         let shell = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");

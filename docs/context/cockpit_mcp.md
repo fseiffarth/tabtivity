@@ -397,3 +397,5 @@ the pills until the user confirms the click-throughs in
 under the localized app-tools heading. Root-console and assistant web entries
 link to their existing settings pages; their permissions and review controls
 remain independent. The help switch shares `help_mcp` with the intro.
+
+New conversations are instructed to shorten their first task title once with `tab_get_info` and `tab_rename` (2–5 words, ideally under 32 characters), passing `expectedLabel`. Custom and resumed titles stay. Other CLIs use the shared first-prompt fallback on the phone; desktop labels stay as their CLI names.
