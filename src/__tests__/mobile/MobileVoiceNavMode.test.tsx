@@ -238,6 +238,18 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     expect(FakeWebSocket.instances[0].sent.filter((value) => ArrayBuffer.isView(value as ArrayBufferView))).toHaveLength(0);
   });
 
+  it("shows nothing of a past mic's guess when a fresh mic is stopped before it hears anything", async () => {
+    await start();
+    act(() => mic().onresult?.(reading(["half a wor", false])));
+    fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+    await settle();
+    expect(screen.queryByText(/half a wor/)).toBeNull();
+  });
+
   it("ignores the navigate phrase with hands-free off", async () => {
     localStorage.setItem(storageKey("mobile.focusHandsFree"), "0");
     await start();

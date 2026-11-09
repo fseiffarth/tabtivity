@@ -152,6 +152,8 @@ export function useVoiceInput({
     }
     voiceProgress.current = DICTATION_START;
     ledger.current = UTTERANCES_START;
+    // What a past mic was still guessing at is not this one's.
+    lastScan.current = undefined;
     voiceStopping.current = false;
     if (options.gate !== undefined) tabbyGate.set(options.gate);
     setVoicePreview("");
