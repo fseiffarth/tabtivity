@@ -562,7 +562,7 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       await start();
       await hear(`${T} navigate`);
       await hear("go to project Beta");
-      await advance(30_000);
+      await advance(12_000);
       // Still saying it: the voice has not fallen quiet.
       expect(screen.getByText("Project Beta?")).toBeTruthy();
       await lineSaid();
@@ -597,6 +597,20 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       await hear("go to the done tab");
       expect(box().value).toBe("go to the done tab");
       expect(said()).toEqual(["Project Beta?"]);
+    });
+
+    it("opens the mic again when the voice never reports its end", async () => {
+      await start();
+      await hear(`${T} navigate`);
+      await hear("go to project Beta");
+      expect(said()).toEqual(["Project Beta?"]);
+      // The fake voice never fires onend nor onerror.
+      await advance(10_000);
+      expect(micOpen()).toBe(false);
+      await advance(10_000);
+      expect(micOpen()).toBe(true);
+      await hear("yes");
+      expect(openTab).toHaveBeenCalledTimes(1);
     });
 
     it("shows the lines only, with the mic left open, where the browser cannot speak", async () => {
@@ -777,6 +791,17 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(said()).toEqual([]);
       expect(FakeRecognition.instances).toHaveLength(0);
       expect(takeLanding(HERE.id)).toBeNull();
+    });
+
+    it("opens the mic when the voice never reports its end", async () => {
+      host.transcript = session(["prompt", "q"], ["answer", "a"]);
+      land();
+      await mount();
+      expect(said()).toEqual(["You asked: q"]);
+      await advance(10_000);
+      expect(FakeRecognition.instances).toHaveLength(0);
+      await advance(10_000);
+      expect(FakeRecognition.instances).toHaveLength(1);
     });
 
     it("opens the mic as the voice line is tapped, stopping the voice", async () => {

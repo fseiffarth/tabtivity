@@ -21,7 +21,7 @@ import {
 } from "../../../../src/lib/voice/voiceCommands";
 import { api, getActivity, type ProjectDetail, type ProjectRow, type TabRow } from "../../api";
 import { speechLanguage, speechTag } from "../../speechLang";
-import { currentSpeechId, speak, speechOutputSupported, stopSpeaking, subscribeSpeech } from "../../speechOutput";
+import { currentSpeechId, guardSpeech, speak, speechOutputSupported, stopSpeaking, subscribeSpeech } from "../../speechOutput";
 import { markDoneSeen, readSeenDone } from "../../seenDone";
 import {
   agentTabChoice, detailLists, latestAgentTab, leaveLanding, navQueue, nextInQueue, noteJump, projectItems, tabAtNumber,
@@ -192,10 +192,13 @@ export function useVoiceNav({
       speak(`nav:${mine}`, text, speechTag(), true);
       let timer = 0;
       let done = false;
+      // A voice that never ends must not keep the mic closed for good.
+      const unguard = guardSpeech();
       const finish = () => {
         if (done) return;
         done = true;
         off();
+        unguard();
         window.clearTimeout(timer);
         proceed();
       };
@@ -206,7 +209,7 @@ export function useVoiceNav({
       const off = subscribeSpeech(check);
       wait.current = {
         finish,
-        cancel: () => { done = true; off(); window.clearTimeout(timer); },
+        cancel: () => { done = true; off(); unguard(); window.clearTimeout(timer); },
       };
       check();
     });

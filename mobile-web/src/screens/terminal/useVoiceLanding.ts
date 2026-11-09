@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadDict, translate, type TranslationKey } from "../../../../src/lib/i18n";
 import { type SessionTranscript, type TabRow } from "../../api";
 import { speechLanguage, speechTag } from "../../speechLang";
-import { currentSpeechId, readTurn, speak, stopSpeaking, subscribeSpeech } from "../../speechOutput";
+import { currentSpeechId, guardSpeech, readTurn, speak, stopSpeaking, subscribeSpeech } from "../../speechOutput";
 import { landingRead, takeLanding, type Landing } from "../../voiceNav";
 import { type StartVoiceOptions } from "./useVoiceInput";
 import { NAV_TAIL_MS, type NavLine } from "./useVoiceNav";
@@ -114,9 +114,12 @@ export function useVoiceLanding({
     };
     skip.current = () => { stopSpeaking(); open(); };
     const off = subscribeSpeech(check);
+    // A voice that never ends must not keep the mic closed for good.
+    const unguard = guardSpeech();
     check();
     return () => {
       off();
+      unguard();
       window.clearTimeout(timer);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -339,6 +339,34 @@ export function subscribeSpeech(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/** A voice that fires neither `onend` nor `onerror` (some engines go quiet on
+ * a lost audio focus) leaves `currentSpeechId` set for good. This watches the
+ * piece being said and, if nothing changes for far longer than it takes to
+ * say, stops the voice, so whoever waits on the quiet goes on. Cheap and
+ * conservative: it stops only the stall, never a long answer, since every
+ * chunk that follows starts it over. Returns the stop of the watch. */
+export function guardSpeech(): () => void {
+  let timer = 0;
+  const arm = () => {
+    window.clearTimeout(timer);
+    const head = queue[0];
+    if (speakingId === null || !head) return;
+    const length = (itemText(head) ?? "").length;
+    timer = window.setTimeout(() => {
+      if (speakingId !== null) stopSpeaking();
+    }, SPEECH_STALL_MS + Math.ceil((length * 100) / readingRate()));
+  };
+  const off = subscribeSpeech(arm);
+  arm();
+  return () => {
+    off();
+    window.clearTimeout(timer);
+  };
+}
+
+/** The floor of `guardSpeech`'s wait; the piece's length at 100 ms a character is added. */
+export const SPEECH_STALL_MS = 15_000;
+
 // ---------------------------------------------------------------------------
 // Feeding a tab's answers
 
