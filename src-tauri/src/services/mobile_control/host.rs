@@ -8879,6 +8879,10 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
     if let Some(registry) = core_ctx.state.try_get::<crate::terminal::RegistryState>() {
         registry.lock_ok().kill_all();
     }
+    // The local lanes of the cut tabs this process spawned (a phone-started tab
+    // fences here): no socket outlives the stop.
+    #[cfg(unix)]
+    crate::services::local_lane::stop_for_exit();
     if let Some(error) = serve_failure.lock_ok().take() {
         return Err(format!("Tailscale Serve verification failed: {error}"));
     }

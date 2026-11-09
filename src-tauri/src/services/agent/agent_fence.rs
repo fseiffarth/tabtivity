@@ -1673,6 +1673,30 @@ pub(crate) fn insert_managed_claude(args: &mut Vec<String>, managed: Vec<String>
     args.splice(at..at, managed);
 }
 
+/// Put a cut fence's local lane into the argv (`services::local_lane`): the relay
+/// binary and the sockets bound under the fence's private `/run` (right after the
+/// `--tmpfs /run`, so they are not covered by it, and before the home is replaced,
+/// since their sources live under the user's real state dir), `--unshare-net`, and
+/// the relay in front of the CLI's own command. Unix only; built, not run, here
+/// (the sandbox of this session forbids a nested namespace): the argv shape is a
+/// unit test.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn insert_local_lane(args: &mut Vec<String>, binds: Vec<String>, prefix: Vec<String>) -> Result<(), String> {
+    let run = args
+        .windows(2)
+        .position(|w| w[0] == "--tmpfs" && w[1] == "/run")
+        .ok_or("Agent sandbox: the fence has no private /run to bind the local model lane into, so this agent was not started.")?;
+    args.splice(run + 2..run + 2, binds);
+    let pid = args
+        .iter()
+        .position(|a| a == "--unshare-pid")
+        .ok_or("Agent sandbox: the fence argv has no pid namespace to put the network namespace beside, so this agent was not started.")?;
+    args.insert(pid + 1, "--unshare-net".into());
+    let separator = args.iter().position(|s| s == "--").ok_or("Agent sandbox: the fence argv has no command.")?;
+    args.splice(separator + 1..separator + 1, prefix);
+    Ok(())
+}
+
 /// Hide the project config a local-model CLI would load from a verified tab's own
 /// folder (`agent_privacy::project_config_masks`): a file is bound over with
 /// `/dev/null`, a folder covered with an empty tmpfs, spliced in last like the
@@ -1697,6 +1721,19 @@ pub(crate) fn unset_env_in_fence(args: &mut Vec<String>, names: &[String]) {
     let unset: Vec<String> = names.iter().flat_map(|n| ["--unsetenv".to_string(), n.clone()]).collect();
     let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
     args.splice(separator..separator, unset);
+}
+
+/// Open `tab`'s local lane and splice it into `args` ([`insert_local_lane`]).
+/// The endpoint is the one the gate verified for the tab; the tools socket is
+/// there when this process serves an MCP listener.
+#[cfg(target_os = "linux")]
+fn add_local_lane(args: &mut Vec<String>, tab: &str) -> Result<(), String> {
+    let verified = crate::services::agent_privacy::verified_launch(tab)
+        .ok_or("Agent sandbox: the local model lane has no verified endpoint for this tab, so it was not started. Open it again.")?;
+    let mcp_port = crate::services::root_mcp::runtime().map(|r| r.port);
+    let lane = crate::services::local_lane::open(tab, &storage::state_dir(), &verified.endpoint, mcp_port)?;
+    let exe = crate::services::fence_scope::running_binary();
+    insert_local_lane(args, lane.binds(Path::new(&exe)), lane.command_prefix())
 }
 
 /// Rewrite a local agent spawn into its outer bubblewrap boundary.
@@ -1818,7 +1855,27 @@ pub fn wrap_pty_options_bwrap(
     // A hosted server's shared hubs: all hidden but this scope's own
     // project's, read-only (plan §6.3); a no-op everywhere else.
     crate::services::server::share::apply_fence(&mut args, roots);
-    let filter = write_keyring_filter()?;
+    // Cut network (phase 2): the verified tab's fence has no network. Its only way
+    // out is the local lane: sockets served by this process, bound in beside the
+    // relay binary that is the fence's command and listens on the ports the CLI was
+    // configured with. The lane is opened last, so a refusal above leaves none.
+    let lane_tab = match &locked_project {
+        Some(project) if crate::services::agent_privacy::fence_cut(project, &opts.id)? => Some(opts.id.clone()),
+        _ => None,
+    };
+    if let Some(tab) = &lane_tab {
+        if let Err(e) = add_local_lane(&mut args, tab) {
+            crate::services::local_lane::close(tab);
+            return Err(e);
+        }
+    }
+    let close_lane = |e: String| {
+        if let Some(tab) = &lane_tab {
+            crate::services::local_lane::close(tab);
+        }
+        e
+    };
+    let filter = write_keyring_filter().map_err(close_lane)?;
     opts.env
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
     // Keep the CLI's login in its file: the keyring is not reachable here.
@@ -1842,8 +1899,8 @@ pub fn wrap_pty_options_bwrap(
     );
     // Last before the argv: the local model's control paths still hold the
     // inodes set up above (gap 30).
-    verify_control_pins(&control_pins)?;
-    verify_control_pins(&managed_pins)?;
+    verify_control_pins(&control_pins).map_err(close_lane)?;
+    verify_control_pins(&managed_pins).map_err(close_lane)?;
     (opts.cmd, opts.args) = seccomp_launcher(
         &bwrap.to_string_lossy(),
         step.as_ref().map(|(helper, mode)| (helper.as_str(), *mode)),
@@ -2181,6 +2238,13 @@ pub fn wrap_pty_options_sandbox_exec(
     // Claude tab (which re-reads its settings mid-session) is not started here.
     if locked_project.is_some() && crate::services::agent_privacy::claude_managed_for(opts)?.is_some() {
         return Err(crate::services::agent_privacy::CLAUDE_NOT_PINNABLE.to_string());
+    }
+    // Seatbelt's network denial and the local lane are phase 3: a project with Cut
+    // network on starts nothing here (the gate refused already; this repeats it).
+    if let Some(project) = &locked_project {
+        if crate::services::agent_privacy::fence_cut(project, &opts.id)? {
+            return Err(format!("{}: {}", crate::services::agent_privacy::REFUSAL, crate::services::agent_privacy::CUT_NETWORK_UNAVAILABLE));
+        }
     }
     let (mut inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
     if locked_project.is_some() {
@@ -2557,6 +2621,9 @@ pub fn abandon_spawn(tab_id: &str, seq: u64) -> bool {
     drop(map);
     untrack_host_agent_tab(tab_id);
     crate::services::agent_privacy::forget(tab_id);
+    // A cut tab's lane sockets go with it (a respawn of the id opens its own).
+    #[cfg(unix)]
+    crate::services::local_lane::close(tab_id);
     crate::services::api_proxy::on_tab_gone(tab_id);
     true
 }
@@ -2695,6 +2762,9 @@ pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
     let was_fenced = removed.is_some_and(|l| l.scope_id.is_some());
     untrack_host_agent_tab(tab_id);
     crate::services::agent_privacy::forget(tab_id);
+    // A cut tab's lane sockets go with it (a respawn of the id opens its own).
+    #[cfg(unix)]
+    crate::services::local_lane::close(tab_id);
     // Its API proxy tokens go with it (those of a tmux-held agent once the
     // session is gone too).
     crate::services::api_proxy::on_tab_gone(tab_id);

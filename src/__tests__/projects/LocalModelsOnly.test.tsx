@@ -7,8 +7,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, cleanup, fireEvent, screen } from "@testing-library/react";
 
-const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }));
+const { mockInvoke, host, restartMock } = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+  host: { linux: true },
+  restartMock: vi.fn(() => Promise.resolve(1)),
+}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
+// Cut network is Linux's: the dialog reads the host OS, which a test turns off here.
+vi.mock("../../lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/platform")>()),
+  get IS_HOST_LINUX() {
+    return host.linux;
+  },
+}));
+vi.mock("../../stores/agents/restartLocalTabs", () => ({ restartLocalTabs: restartMock }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
   emit: vi.fn(() => Promise.resolve()),
@@ -55,14 +67,89 @@ describe("the Agent privacy dialog", () => {
   });
   afterEach(cleanup);
 
-  it("shows both switches with their guarantee text, and Cut network cannot be turned on", () => {
+  it("shows both switches with their guarantee text; Cut network is on offer only beneath Local models only", () => {
     render(<AgentPrivacyDialog project={proj()} onClose={() => {}} />);
     const switches = screen.getAllByRole("checkbox") as HTMLInputElement[];
     expect(switches).toHaveLength(2);
     expect(switches[0].disabled).toBe(false);
     expect(switches[1].disabled).toBe(true);
-    expect(screen.getByText(translate("en", "agentPrivacy.cutNotYet"))).toBeTruthy();
+    expect(screen.getByText(translate("en", "agentPrivacy.cutScope"))).toBeTruthy();
+    expect(screen.queryByText(translate("en", "agentPrivacy.cutNotYet"))).toBeNull();
     expect(screen.getByText(/Not covered: what the local agent does with its own network/)).toBeTruthy();
+    fireEvent.click(switches[0]);
+    expect(switches[1].disabled).toBe(false);
+  });
+
+  it("cannot turn Cut network on where the OS cannot cut the network", () => {
+    host.linux = false;
+    try {
+      render(<AgentPrivacyDialog project={proj({ agent_privacy: { local_models_only: true } })} onClose={() => {}} />);
+      const switches = screen.getAllByRole("checkbox") as HTMLInputElement[];
+      expect(switches[1].disabled).toBe(true);
+      expect(screen.getByText(translate("en", "agentPrivacy.cutNotYet"))).toBeTruthy();
+    } finally {
+      host.linux = true;
+    }
+  });
+
+  it("saves both switches through the backend command", async () => {
+    mockInvoke.mockResolvedValue({ local_models_only: true, cut_network: true, closed_tabs: [], restart_tabs: [] });
+    const onClose = vi.fn();
+    render(<AgentPrivacyDialog project={proj()} onClose={onClose} />);
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    fireEvent.click(screen.getAllByRole("checkbox")[1]);
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.save")));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("set_project_agent_privacy", { projectId: "p1", localModelsOnly: true, cutNetwork: true });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("turning Local models only off sends Cut network off with it", async () => {
+    mockInvoke.mockResolvedValue({ local_models_only: false, cut_network: false, closed_tabs: [] });
+    render(<AgentPrivacyDialog project={proj({ agent_privacy: { local_models_only: true, cut_network: true } })} onClose={() => {}} />);
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.save")));
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("set_project_agent_privacy", { projectId: "p1", localModelsOnly: false, cutNetwork: false });
+  });
+
+  it("asks before restarting the local tabs a change left on the other setting, and never does it by itself", async () => {
+    restartMock.mockClear();
+    mockInvoke.mockResolvedValue({ local_models_only: true, cut_network: true, closed_tabs: [], restart_tabs: ["p1:t1", "p1:t2"] });
+    const onClose = vi.fn();
+    render(<AgentPrivacyDialog project={proj({ agent_privacy: { local_models_only: true } })} onClose={onClose} />);
+    fireEvent.click(screen.getAllByRole("checkbox")[1]);
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.save")));
+    });
+    // Saved, not closed: the question is on screen and nothing restarted.
+    expect(screen.getByText(translate("en", "agentPrivacy.restartCutOn", { count: 2 }))).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(restartMock).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.restartLater")));
+    });
+    expect(onClose).toHaveBeenCalled();
+    expect(restartMock).not.toHaveBeenCalled();
+  });
+
+  it("restarts exactly the named tabs when asked to", async () => {
+    restartMock.mockClear();
+    mockInvoke.mockResolvedValue({ local_models_only: true, cut_network: false, closed_tabs: [], restart_tabs: ["p1:t1"] });
+    const onClose = vi.fn();
+    render(<AgentPrivacyDialog project={proj({ agent_privacy: { local_models_only: true, cut_network: true } })} onClose={onClose} />);
+    fireEvent.click(screen.getAllByRole("checkbox")[1]);
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.save")));
+    });
+    expect(screen.getByText(translate("en", "agentPrivacy.restartCutOff", { count: 1 }))).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.restartNow")));
+    });
+    expect(restartMock).toHaveBeenCalledWith(["p1:t1"]);
+    expect(onClose).toHaveBeenCalled();
   });
 
   it("saves through the backend command and records the answer", async () => {
@@ -196,12 +283,13 @@ describe("the + menu's local-model rows", () => {
     id, label, available: true, needs_tools_unsupported: false, heavy_harness: heavy,
   });
   const drivers = [driver("opencode", "OpenCode"), driver("pi", "Pi"), driver("claude", "Claude Code", true)];
-  const keys = (lockedProject: boolean) =>
+  const keys = (lockedProject: boolean, cutNetwork = false) =>
     localModelMenuGroup({
       localModel: "qwen3:8b",
       localModelOffInRoot: undefined,
       localDrivers: drivers,
       lockedProject,
+      cutNetwork,
       vibeForLocalModel: true,
       gpu: { placement: "ready", loading: false, failed: false, load: vi.fn() },
       onVibe: vi.fn(),
@@ -212,6 +300,13 @@ describe("the + menu's local-model rows", () => {
   it("hides OpenCode, which the backend refuses in such a project, and keeps the other local agents", () => {
     expect(keys(false)).toEqual(["opencode", "pi", "vibe", "claude"]);
     expect(keys(true)).toEqual(["pi", "vibe", "claude"]);
+  });
+
+  it("offers OpenCode again with Cut network on, and only the drivers that were run with the network cut", () => {
+    // Pi and Mistral were not verified with the network cut; the backend refuses them there.
+    expect(keys(true, true)).toEqual(["opencode", "claude"]);
+    // The cut flag means nothing outside a locked project.
+    expect(keys(false, true)).toEqual(["opencode", "pi", "vibe", "claude"]);
   });
 });
 

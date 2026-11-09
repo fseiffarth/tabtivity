@@ -50,11 +50,35 @@ pub const REFUSAL: &str = "Local models only";
 /// a tab never brings one, `prepare` drops it before the gate runs.
 pub const STAMP_ENV: &str = crate::app_env!("LOCAL_MODELS_ONLY");
 
-/// Why Cut network cannot be switched on yet (phase 2 of the plan): stored in
-/// the setting's shape, shown in the UI, refused here rather than accepted
-/// without a guarantee.
+/// Why Cut network cannot be switched on where the sandbox cannot cut the network
+/// (macOS is phase 3 of the plan, Windows has no sandbox): refused here rather
+/// than accepted without a guarantee. On Linux it is enforced ([`cut_platform`]).
 pub const CUT_NETWORK_UNAVAILABLE: &str =
     "Cut network is not available yet: the network cut and the relay to the local model are not built, so switching it on would promise something nothing enforces.";
+
+/// Whether this build's sandbox can cut a fence's network and carry the local lane:
+/// Linux (bubblewrap `--unshare-net` and `services::local_lane`). Seatbelt's
+/// network denial is phase 3; Windows has no sandbox.
+pub const fn cut_platform() -> bool {
+    cfg!(target_os = "linux")
+}
+
+/// The drivers that were run with the network cut and verified (start, answer a
+/// prompt through the relay, edit a file, no hang on an update check or telemetry;
+/// the table is in `docs/context/local_models_only.md`). Any other local driver is
+/// refused in a project with Cut network on, naming it, rather than left to hang.
+pub const CUT_VERIFIED_DRIVERS: &[&str] = &["opencode", "claude", "codex"];
+
+/// The address a verified tab's pins and `OLLAMA_HOST` carry in a cut fence: the
+/// Ollama port on `127.0.0.1`, where the in-fence relay listens
+/// (`services::local_lane`). The configured host may be spelled `localhost` or
+/// another loopback address; the relay answers on `127.0.0.1` (and `::1`).
+pub fn fence_endpoint(endpoint: &str) -> String {
+    match crate::services::ollama_client::split_host_port(endpoint) {
+        Some((_, port)) => format!("127.0.0.1:{port}"),
+        None => endpoint.to_string(),
+    }
+}
 
 /// The limits of the mode, in the words the UI help and the context doc use.
 pub const LIMITS: &str = "A local agent keeps its own network unless Cut network is on, so a fetch tool, a prompt-injected curl or a git push can still send what it read. Shell tabs, the root console's Host session and Windows have no fence that hides the folder.";
@@ -376,6 +400,17 @@ pub struct Verified {
     pub model: String,
     /// The loopback `host:port` the model was judged on.
     pub endpoint: String,
+    /// The project had Cut network on: the fence has no network and reaches the
+    /// endpoint through the local lane.
+    pub cut: bool,
+}
+
+impl Verified {
+    /// The endpoint the tab's own configuration names: the judged one, or in a
+    /// cut fence the relay's address ([`fence_endpoint`]).
+    pub fn pinned_endpoint(&self) -> String {
+        if self.cut { fence_endpoint(&self.endpoint) } else { self.endpoint.clone() }
+    }
 }
 
 /// What the gate asks of the machine, so the rule is a test and not a claim.
@@ -393,6 +428,8 @@ pub struct Probe<'a> {
     /// the pin a settings file written mid-session re-aims Claude Code, so a Claude
     /// tab is refused where it cannot be had ([`claude_pinned_platform`]).
     pub pins_claude: bool,
+    /// Whether this platform's sandbox can cut the network ([`cut_platform`]).
+    pub can_cut: bool,
 }
 
 /// Why a verified Claude Code tab is refused where its settings cannot be pinned.
@@ -406,11 +443,12 @@ pub const fn claude_pinned_platform() -> bool {
     cfg!(target_os = "linux")
 }
 
-/// The local drivers no Local models only project starts yet. OpenCode re-reads
-/// its project config while it runs and merges the arrays of a file the agent
-/// writes (providers, `enabled_providers`, models) over the launch settings;
-/// measured on 2.2.6 (`docs/context/local_models_only.md`), the inline config cannot
-/// pin that, so a locked project cannot keep it on the local model until Phase 2.
+/// The local drivers a Local models only project that keeps its network does not
+/// start. OpenCode re-reads its project config while it runs and merges the arrays
+/// of a file the agent writes (providers, `enabled_providers`, models) over the
+/// launch settings; measured on 2.2.6 (`docs/context/local_models_only.md`), the
+/// inline config cannot pin that. With Cut network on its only way out is the local
+/// lane, which judges every model, so it starts there (phase 2).
 /// The frontend's `LOCKED_REFUSED_DRIVERS` (`localModelsOnly.ts`) hides the same
 /// rows; this is what refuses them.
 const REFUSED_DRIVERS: &[&str] = &["opencode"];
@@ -419,27 +457,45 @@ const REFUSED_DRIVERS: &[&str] = &["opencode"];
 /// stops, naming the local agents that can still run in such a project: derived
 /// from the driver registry, Claude Code only where its settings can be pinned.
 fn driver_not_pinnable(driver: &str, pins_claude: bool) -> String {
-    let label = crate::services::local_drivers::LOCAL_DRIVERS
-        .iter()
-        .find(|d| d.id == driver)
-        .map_or(driver, |d| d.label);
+    let label = driver_label(driver);
     format!(
-        "{label} cannot be kept on the local model in a Local models only project yet: it reads a project config file again while it runs, so a file the agent writes could add a cloud provider and model. Local agents that can run here: {}.",
-        agents_that_can_run_locked(pins_claude).join(", ")
+        "{label} cannot be kept on the local model in a Local models only project that keeps its network: it reads a project config file again while it runs, so a file the agent writes could add a cloud provider and model. It does start when the project's Cut network is on, because its only way out is then the relay, which checks every model. Local agents that can run here: {}.",
+        agents_that_can_run_locked(pins_claude, false).join(", ")
     )
 }
 
-/// The labels of the local agents a Local models only project can start: every
-/// driver of the registry that is not refused ([`REFUSED_DRIVERS`]), Claude Code
-/// only where its settings can be pinned, and Mistral (`vibe`), which keeps its
-/// own launch path.
-pub fn agents_that_can_run_locked(pins_claude: bool) -> Vec<&'static str> {
-    crate::services::local_drivers::LOCAL_DRIVERS
+/// Why a driver that was not run with the network cut stops in a project with
+/// Cut network on ([`CUT_VERIFIED_DRIVERS`]), naming it and the ones that can run.
+fn driver_not_verified_cut(driver: &str, pins_claude: bool) -> String {
+    format!(
+        "{} has not been verified with the network cut (some agents hang on an update check or a login probe there, or are not installed to test), so it does not start in a project with Cut network on. Local agents that can run here: {}.",
+        driver_label(driver),
+        agents_that_can_run_locked(pins_claude, true).join(", ")
+    )
+}
+
+fn driver_label(driver: &str) -> &str {
+    if driver == "vibe" {
+        return "Mistral (vibe)";
+    }
+    crate::services::local_drivers::LOCAL_DRIVERS.iter().find(|d| d.id == driver).map_or(driver, |d| d.label)
+}
+
+/// The labels of the local agents a Local models only project can start: with the
+/// network on, every driver of the registry that is not refused
+/// ([`REFUSED_DRIVERS`]) and Mistral (`vibe`), which keeps its own launch path;
+/// with Cut network on (`cut`), the drivers verified with the network cut
+/// ([`CUT_VERIFIED_DRIVERS`]). Claude Code only where its settings can be pinned.
+pub fn agents_that_can_run_locked(pins_claude: bool, cut: bool) -> Vec<&'static str> {
+    let drivers = crate::services::local_drivers::LOCAL_DRIVERS
         .iter()
-        .filter(|d| !REFUSED_DRIVERS.contains(&d.id) && (d.id != "claude" || pins_claude))
-        .map(|d| d.label)
-        .chain(["Mistral (vibe)"])
-        .collect()
+        .filter(|d| {
+            let allowed = if cut { CUT_VERIFIED_DRIVERS.contains(&d.id) } else { !REFUSED_DRIVERS.contains(&d.id) };
+            allowed && (d.id != "claude" || pins_claude)
+        })
+        .map(|d| d.label);
+    let vibe = (!cut || CUT_VERIFIED_DRIVERS.contains(&"vibe")).then_some("Mistral (vibe)");
+    drivers.chain(vibe).collect()
 }
 
 /// The args of a local `vibe` tab Tabtivity starts: none, `--continue`, or
@@ -473,8 +529,8 @@ fn vibe_model(opts: &PtyOptions) -> Result<String, &'static str> {
 /// locked project `subject`. Pure over `probe`; nothing is changed.
 fn vet(opts: &PtyOptions, subject: &Locked, probe: &Probe<'_>, remote_project: bool) -> Result<Verified, String> {
     let no = |why: &str| Err(refuse(subject, why));
-    if subject.cut_network {
-        return no("it is set to Cut network, which is not available yet (nothing enforces it), so the project is closed to agents until that switch is off.");
+    if subject.cut_network && !probe.can_cut {
+        return no("it is set to Cut network, which is not available on this operating system yet (nothing enforces it), so the project is closed to agents until that switch is off.");
     }
     if opts.sandbox || opts.remote_host_id.as_deref().is_some_and(|h| h != crate::services::remote::PRIMARY_HOST) || remote_project {
         return no("it is not a plain local folder: remote, VM and container projects are not supported by this mode yet.");
@@ -498,7 +554,11 @@ fn vet(opts: &PtyOptions, subject: &Locked, probe: &Probe<'_>, remote_project: b
             program(&opts.cmd)
         ));
     };
-    if REFUSED_DRIVERS.contains(&driver.as_str()) {
+    if subject.cut_network {
+        if !CUT_VERIFIED_DRIVERS.contains(&driver.as_str()) {
+            return no(&driver_not_verified_cut(&driver, probe.pins_claude));
+        }
+    } else if REFUSED_DRIVERS.contains(&driver.as_str()) {
         return no(&driver_not_pinnable(&driver, probe.pins_claude));
     }
     if driver == "claude" && !probe.pins_claude {
@@ -526,7 +586,7 @@ fn vet(opts: &PtyOptions, subject: &Locked, probe: &Probe<'_>, remote_project: b
             },
         )
     })?;
-    Ok(Verified { project: subject.id.clone(), driver, model, endpoint })
+    Ok(Verified { project: subject.id.clone(), driver, model, endpoint, cut: subject.cut_network })
 }
 
 /// The Mistral (`vibe`) home of `project` for `alias`: apart from the shared
@@ -542,11 +602,11 @@ fn apply(opts: &mut PtyOptions, v: &Verified, share_dir: &Path) -> Result<(), St
     // Only picks the home without logins; the gate alone grants.
     opts.local_model = true;
     opts.env.insert(STAMP_ENV.to_string(), v.project.clone());
-    opts.env.insert("OLLAMA_HOST".to_string(), v.endpoint.clone());
+    opts.env.insert("OLLAMA_HOST".to_string(), v.pinned_endpoint());
     if v.driver == "vibe" {
         let alias = crate::services::ollama_client::sanitize_alias(&v.model);
         let home = vibe_home_in(share_dir, &alias, &v.project);
-        write_vibe_home(&home, &v.model, &alias, &v.endpoint)?;
+        write_vibe_home(&home, &v.model, &alias, &v.pinned_endpoint())?;
         opts.env.insert("VIBE_HOME".to_string(), home.to_string_lossy().into_owned());
         opts.env.insert("VIBE_ACTIVE_MODEL".to_string(), alias);
     }
@@ -686,6 +746,7 @@ pub fn gate(opts: PtyOptions) -> Result<PtyOptions, String> {
         local: &local,
         ambient_host: std::env::var("OLLAMA_HOST").ok().filter(|h| !h.trim().is_empty()),
         pins_claude: claude_pinned_platform(),
+        can_cut: cut_platform(),
     };
     gate_with(opts, &projects, &probe, &crate::storage::home_share_dir())
 }
@@ -704,13 +765,56 @@ pub fn claude_managed_for(opts: &PtyOptions) -> Result<Option<String>, String> {
         || crate::services::local_drivers::identify_local_launch(&opts.cmd, &opts.args).is_some_and(|(d, _)| d == "claude");
     match verified_launch(&opts.id) {
         Some(v) if v.driver == "claude" => {
-            Ok(Some(crate::services::local_drivers::claude_managed_settings(&v.model, &v.endpoint)))
+            Ok(Some(crate::services::local_drivers::claude_managed_settings(&v.model, &v.pinned_endpoint())))
         }
         _ if claude_launch => Err(format!(
             "{REFUSAL}: Claude Code was not verified for this tab, so the sandbox has no settings to pin it to. Open it again from the \u{ff0b} menu."
         )),
         _ => Ok(None),
     }
+}
+
+/// Whether the fence for tab `tab`, the verified spawn of locked project `project`,
+/// is built without network. The gate recorded the setting it verified under
+/// ([`Verified::cut`]) and the registry says what it is now; they can differ only
+/// when the switch moved while the tab was starting. Cut network switched **on** in
+/// between refuses (the pins and environment were made for a fence with a network,
+/// so the tab must be opened again); switched off keeps the cut (a fence with no
+/// network is the narrower one). A cut project whose tab has no record refuses.
+pub fn fence_cut_in(locked: &[Locked], project: &str, recorded: Option<&Verified>) -> Result<bool, String> {
+    let now = locked.iter().find(|l| l.id == project);
+    let now_cut = now.is_some_and(|l| l.cut_network);
+    match (now_cut, recorded.map(|v| v.cut)) {
+        (false, Some(true)) | (true, Some(true)) => Ok(true),
+        (false, Some(false)) | (false, None) => Ok(false),
+        (true, Some(false)) => Err(match now {
+            Some(l) => refuse(l, "Cut network was switched on while this agent was starting, and its sandbox was prepared with a network. Open it again."),
+            None => format!("{REFUSAL}: Cut network was switched on while this agent was starting. Open it again."),
+        }),
+        (true, None) => Err(match now {
+            Some(l) => refuse(l, "this agent was not verified for the cut network (its record is gone). Open it again."),
+            None => format!("{REFUSAL}: this agent was not verified. Open it again."),
+        }),
+    }
+}
+
+/// [`fence_cut_in`] against the live registry and the gate's record of `tab`.
+pub fn fence_cut(project: &str, tab: &str) -> Result<bool, String> {
+    fence_cut_in(&locked_now()?, project, verified_launch(tab).as_ref())
+}
+
+/// The tabs of `project` the gate verified under a Cut network setting other than
+/// `cut`: their fence keeps the old one until they are opened again. The dialog
+/// offers to restart these; nothing restarts them silently.
+pub fn restart_for_cut_in(tabs: &HashMap<String, Verified>, project: &str, cut: bool) -> Vec<String> {
+    let mut out: Vec<String> = tabs.iter().filter(|(_, v)| v.project == project && v.cut != cut).map(|(t, _)| t.clone()).collect();
+    out.sort();
+    out
+}
+
+/// [`restart_for_cut_in`] over the live record.
+pub fn restart_for_cut(project: &str, cut: bool) -> Vec<String> {
+    restart_for_cut_in(&verified_tabs().lock_ok(), project, cut)
 }
 
 /// Whether `opts` carries the gate's stamp: a spawn that went through [`gate`].
@@ -1071,15 +1175,25 @@ pub fn check_enable(
     Ok(())
 }
 
-/// Write `want` to project `id`'s trusted record. Turning Local models only on
-/// is checked ([`check_enable`]); Cut network is stored in the setting's shape
-/// but refused until it is enforced ([`CUT_NETWORK_UNAVAILABLE`]) and cannot be
-/// on without Local models only. Unknown fields of the record round-trip, and
-/// two off switches leave no record at all.
-pub fn set(id: &str, want: Privacy) -> Result<Privacy, String> {
-    if want.cut_network {
+/// What [`set`] decides before it reads the registry: Cut network needs a platform
+/// that can cut ([`cut_platform`]) and Local models only beneath it. Pure.
+pub fn check_set(want: Privacy, can_cut: bool) -> Result<(), String> {
+    if want.cut_network && !can_cut {
         return Err(CUT_NETWORK_UNAVAILABLE.to_string());
     }
+    if want.cut_network && !want.local_models_only {
+        return Err("Cut network is a switch of Local models only: switch Local models only on first.".to_string());
+    }
+    Ok(())
+}
+
+/// Write `want` to project `id`'s trusted record. Turning Local models only on
+/// is checked ([`check_enable`]); Cut network is accepted where the sandbox can
+/// cut the network ([`cut_platform`]: Linux), refused elsewhere
+/// ([`CUT_NETWORK_UNAVAILABLE`]), and cannot be on without Local models only. Unknown fields of the record round-trip, and
+/// two off switches leave no record at all.
+pub fn set(id: &str, want: Privacy) -> Result<Privacy, String> {
+    check_set(want, cut_platform())?;
     if want.local_models_only {
         let projects = crate::services::remote::projects()?;
         let boxes = crate::services::box_store::read_boxes()?;

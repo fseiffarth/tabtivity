@@ -75,6 +75,10 @@ pub mod port_forward;
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// The way a fenced agent with no network reaches the local Ollama and a few of
+// Tabtivity's tools (Local models only + Cut network, docs/context/local_models_only.md).
+#[cfg(unix)]
+pub mod local_lane;
 // Who owns a loopback listener (`/proc/net/tcp{,6}`, Linux): Ollama, the API
 // proxy's remembered port and the phone's sign-in relay judge the owner, not
 // the address.

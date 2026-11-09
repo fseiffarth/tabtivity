@@ -2861,6 +2861,10 @@ pub fn run() {
                 // streams in flight briefly. Before the PTY teardown below, so
                 // its tab-gone hooks find nothing left to sweep.
                 services::api_proxy::stop_for_exit();
+                // The local lane of every tab with Cut network on: close and
+                // remove its sockets, so none outlives the quit.
+                #[cfg(unix)]
+                services::local_lane::stop_for_exit();
                 // The microphone, whisper and any speech: nothing of the
                 // voice outlives the quit (bounded at half a second).
                 services::voice::stop_for_exit();

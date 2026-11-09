@@ -5,7 +5,7 @@ import type { TranslationKey } from "../../lib/i18n";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import type { AddMenuEntry, AddMenuGroup } from "./AddTabMenuList";
 import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
-import { driversForLockedProject } from "../../lib/projects/localModelsOnly";
+import { driversForLockedProject, vibeOfferedInLockedProject } from "../../lib/projects/localModelsOnly";
 
 /**
  * Where the "tabs" local model sits right now, as far as the "+" menu cares:
@@ -143,6 +143,9 @@ export function localModelMenuGroup(opts: {
   /** The scope is a Local models only project: the drivers the backend gate
    *  refuses there (OpenCode, `driversForLockedProject`) are not offered. */
   lockedProject?: boolean;
+  /** The locked project has Cut network on: only the drivers verified with the
+   *  network cut are offered, and Mistral is not. */
+  cutNetwork?: boolean;
   vibeForLocalModel: boolean;
   gpu: LocalModelPlacementState;
   onVibe: (model: string) => void;
@@ -150,7 +153,9 @@ export function localModelMenuGroup(opts: {
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
 }): AddMenuGroup {
   const { localModel, localModelOffInRoot, vibeForLocalModel, gpu, t } = opts;
-  const localDrivers = opts.lockedProject ? driversForLockedProject(opts.localDrivers) : opts.localDrivers;
+  const cut = Boolean(opts.lockedProject && opts.cutNetwork);
+  const localDrivers = opts.lockedProject ? driversForLockedProject(opts.localDrivers, cut) : opts.localDrivers;
+  const offerVibe = vibeForLocalModel && (!opts.lockedProject || vibeOfferedInLockedProject(cut));
   // `heavy_harness` cautions, it never withholds — see
   // lib/agents/localDrivers.ts. The row stays pickable because which local
   // models cope is not something the backend can probe.
@@ -171,7 +176,7 @@ export function localModelMenuGroup(opts: {
         // Light-harness drivers (OpenCode, Pi) lead, ahead of Mistral.
         ...drivers(false, localModel),
         // Mistral/vibe keeps its bespoke per-model VIBE_HOME path.
-        ...(vibeForLocalModel
+        ...(offerVibe
           ? [{
               key: "vibe",
               label: "Mistral",

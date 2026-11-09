@@ -159,16 +159,32 @@ agents see an empty folder where it is, and a file of the project cannot be
 dropped onto an agent that is not on a local model. Turning it on closes the
 project's running cloud agent tabs.
 
-OpenCode cannot be kept on the local model in such a project yet (it re-reads
-a config file the agent writes while it runs, so the agent could add a cloud
-provider): its local row is not offered there and an OpenCode tab is refused
-with a message naming the local agents that can run (Pi, Claude Code on
-Linux, Codex, Droid, OpenClaw, Cline, Mistral). It runs again in a project
-with the switch off.
+OpenCode cannot be kept on the local model while the project keeps its network
+(it re-reads a config file the agent writes while it runs, so the agent could add
+a cloud provider): its local row is not offered there and an OpenCode tab is
+refused with a message naming the local agents that can run. It starts again when
+**Cut network** is on (below). With the network on, the other local agents run
+(Pi, Claude Code on Linux, Codex, Droid, OpenClaw, Cline, Mistral).
 
 It does not stop what a local agent does with its own network (a fetch tool, a
 `curl`, a `git push`, switching to an Ollama cloud model mid-session), and
 shell tabs, the root console's Host session and Windows have no sandbox that
-hides the folder. **Cut network** is shown but cannot be switched on yet.
+hides the folder.
+
+**Cut network** (Linux; the switch under Local models only in the same dialog)
+takes the network away from the project's local tabs. Their sandbox has no
+network at all; the only way out is a relay inside Tabtivity to the local Ollama.
+It carries chat, generate, embeddings, the model list and show; it refuses
+installing, copying, creating, pushing or deleting a model, and it checks that
+every request names a model that runs on this machine, so a `/model` switch to
+an Ollama cloud model fails. The model lists the agent sees show local models
+only. The cockpit, help and markup tools and sending a file to your phone keep
+working; the web tool, git push and release, the schedule and the mail tools do
+not. Only **OpenCode, Claude Code and Codex** have been run with the network
+cut: Pi, Droid, Cline, OpenClaw and Mistral are refused in such a project,
+naming themselves. The sandbox is built when a tab starts, so changing the
+switch asks whether to restart the project's running local tabs and never does
+it by itself. On macOS and Windows the switch cannot be turned on.
+
 It is refused for remote, VM and container projects, a folder with another
 project or a box folder inside it, and an Ollama that is not on this machine.

@@ -64,17 +64,18 @@ struct World {
     endpoint: Result<String, String>,
     ambient: Option<String>,
     pins_claude: bool,
+    can_cut: bool,
 }
 
 impl World {
     fn healthy() -> Self {
-        World { local: Ok(()), endpoint: Ok("127.0.0.1:11434".into()), ambient: None, pins_claude: true }
+        World { local: Ok(()), endpoint: Ok("127.0.0.1:11434".into()), ambient: None, pins_claude: true, can_cut: true }
     }
 
     fn gate(&self, opts: PtyOptions, projects: &ProjectsList, share: &Path) -> Result<PtyOptions, String> {
         let endpoint = || self.endpoint.clone();
         let local = |_: &str, _: &str| self.local;
-        let probe = Probe { endpoint: &endpoint, local: &local, ambient_host: self.ambient.clone(), pins_claude: self.pins_claude };
+        let probe = Probe { endpoint: &endpoint, local: &local, ambient_host: self.ambient.clone(), pins_claude: self.pins_claude, can_cut: self.can_cut };
         gate_with(opts, projects, &probe, share)
     }
 }
@@ -122,8 +123,16 @@ fn the_record_round_trips_and_unknown_fields_stay() {
 }
 
 #[test]
-fn only_a_set_cut_network_is_refused_until_it_is_enforced() {
-    assert!(set("p", Privacy { local_models_only: true, cut_network: true }).unwrap_err().contains("not available yet"));
+fn cut_network_is_accepted_where_the_sandbox_can_cut_and_only_beneath_local_models_only() {
+    let on = Privacy { local_models_only: true, cut_network: true };
+    assert!(check_set(on, true).is_ok());
+    assert!(check_set(Privacy { local_models_only: true, cut_network: false }, false).is_ok());
+    // macOS (phase 3) and Windows: the existing fail-closed text.
+    assert_eq!(check_set(on, false).unwrap_err(), CUT_NETWORK_UNAVAILABLE);
+    // Not without Local models only.
+    assert!(check_set(Privacy { local_models_only: false, cut_network: true }, true).unwrap_err().contains("Local models only"));
+    assert_eq!(cut_platform(), cfg!(target_os = "linux"));
+    // `set` takes the same decisions before it reads the registry.
     assert!(set("p", Privacy { local_models_only: false, cut_network: true }).is_err());
 }
 
@@ -346,9 +355,11 @@ fn the_host_session_the_root_console_and_other_kinds_of_project_refuse() {
         "directory": s(&secret), "remote": { "host": "h", "remote_path": "/r" },
         "agent_privacy": { "local_models_only": true } }]));
     assert!(World::healthy().gate(opts("ollama", LINE, Some("lock"), &secret), &remote, tmp.path()).is_err());
+    // Cut network on a platform whose sandbox cannot cut the network closes the project.
     let cut = registry(tmp.path(), json!({ "local_models_only": true, "cut_network": true }));
-    let err = World::healthy().gate(opts("ollama", LINE, Some("lock"), &secret), &cut, tmp.path()).unwrap_err();
-    assert!(err.contains("Cut network") && err.contains("not available yet"), "{err}");
+    let no_cut = World { can_cut: false, ..World::healthy() };
+    let err = no_cut.gate(opts("ollama", LINE, Some("lock"), &secret), &cut, tmp.path()).unwrap_err();
+    assert!(err.contains("Cut network") && err.contains("not available on this operating system"), "{err}");
 }
 
 #[test]
@@ -364,7 +375,7 @@ fn spawns_outside_every_locked_project_and_shells_pass_untouched() {
     shell.agent = false;
     assert!(World::healthy().gate(shell, &projects, tmp.path()).is_ok());
     // No Ollama needed for an unrelated project.
-    let down = World { local: Err(crate::services::ollama_client::MODEL_NOT_RUNNING), endpoint: Err("x".into()), ambient: None, pins_claude: true };
+    let down = World { local: Err(crate::services::ollama_client::MODEL_NOT_RUNNING), endpoint: Err("x".into()), ambient: None, pins_claude: true, can_cut: true };
     assert!(down.gate(opts("claude", &[], Some("open"), &open), &projects, tmp.path()).is_ok());
 }
 
@@ -990,8 +1001,8 @@ fn opencode_is_refused_in_a_locked_project_whichever_way_it_gets_to_the_gate() {
 
 #[test]
 fn the_agents_a_locked_project_can_run_are_derived_from_the_driver_registry() {
-    let with_claude = agents_that_can_run_locked(true);
-    let without = agents_that_can_run_locked(false);
+    let with_claude = agents_that_can_run_locked(true, false);
+    let without = agents_that_can_run_locked(false, false);
     assert!(!with_claude.contains(&"OpenCode") && !without.contains(&"OpenCode"));
     assert!(with_claude.contains(&"Claude Code") && !without.contains(&"Claude Code"));
     // Every other registry driver is on the list, whatever the registry holds today.
@@ -1004,6 +1015,114 @@ fn the_agents_a_locked_project_can_run_are_derived_from_the_driver_registry() {
         let label = crate::services::local_drivers::LOCAL_DRIVERS.iter().find(|d| d.id == *id).unwrap().label;
         assert!(!with_claude.contains(&label), "{label}");
     }
+}
+
+/// A registry whose locked project has Cut network on.
+fn cut_registry(root: &Path) -> ProjectsList {
+    std::fs::create_dir_all(root.join("secret")).unwrap();
+    std::fs::create_dir_all(root.join("open")).unwrap();
+    registry(root, json!({ "local_models_only": true, "cut_network": true }))
+}
+
+#[test]
+fn with_cut_network_on_the_verified_drivers_start_and_the_rest_are_refused_by_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let projects = cut_registry(tmp.path());
+    let cwd = tmp.path().join("secret");
+    // OpenCode starts again (its only way out is the lane); Claude Code and Codex too.
+    for (cmd, line) in [
+        ("opencode", vec!["--model", "ollama/qwen3:8b"]),
+        ("ollama", claude_line()),
+        ("codex", vec!["--oss", "-c", "oss_provider=\"ollama\"", "-m", "qwen3:8b"]),
+    ] {
+        let out = World::healthy().gate(opts(cmd, &line, Some("lock"), &cwd), &projects, tmp.path()).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        assert_eq!(out.env["OLLAMA_HOST"], "127.0.0.1:11434");
+        assert!(verified_launch(&out.id).unwrap().cut);
+    }
+    // The others are refused, naming the agent and what can run.
+    for (cmd, line, label) in [
+        ("ollama", vec!["launch", "pi", "--model", "qwen3:8b"], "Pi"),
+        ("ollama", vec!["launch", "droid", "--model", "qwen3:8b"], "Droid"),
+        ("ollama", vec!["launch", "cline", "--model", "qwen3:8b"], "Cline"),
+        ("ollama", vec!["launch", "openclaw", "--model", "qwen3:8b"], "OpenClaw"),
+    ] {
+        let err = World::healthy().gate(opts(cmd, &line, Some("lock"), &cwd), &projects, tmp.path()).unwrap_err();
+        assert!(err.starts_with(REFUSAL) && err.contains(label) && err.contains("has not been verified with the network cut"), "{label}: {err}");
+        for ok in ["OpenCode", "Claude Code", "Codex"] {
+            assert!(err.contains(ok), "{ok} missing: {err}");
+        }
+        assert!(!err.contains("Mistral"), "{err}");
+    }
+    let mut vibe = opts("vibe", &[], Some("lock"), &cwd);
+    vibe.env.insert(crate::app_env!("LOCAL_MODEL").to_string(), "qwen3:8b".into());
+    let err = World::healthy().gate(vibe, &projects, tmp.path()).unwrap_err();
+    assert!(err.contains("Mistral (vibe)") && err.contains("has not been verified"), "{err}");
+    // Every verified driver is a driver the registry has (or vibe), and the network-on list
+    // still refuses OpenCode.
+    for id in CUT_VERIFIED_DRIVERS {
+        assert!(*id == "vibe" || crate::services::local_drivers::LOCAL_DRIVERS.iter().any(|d| d.id == *id), "{id}");
+    }
+    assert!(agents_that_can_run_locked(true, true).contains(&"OpenCode"));
+    assert!(!agents_that_can_run_locked(false, true).contains(&"Claude Code"));
+    assert!(!agents_that_can_run_locked(true, false).contains(&"OpenCode"));
+    // Without a cut platform nothing starts in a cut project, whatever the driver.
+    let no_cut = World { can_cut: false, ..World::healthy() };
+    assert!(no_cut.gate(opts("opencode", &["--model", "ollama/qwen3:8b"], Some("lock"), &cwd), &projects, tmp.path()).is_err());
+}
+
+#[test]
+fn a_cut_tabs_pins_name_the_relay_address_not_the_configured_host() {
+    assert_eq!(fence_endpoint("localhost:9"), "127.0.0.1:9");
+    assert_eq!(fence_endpoint("127.0.0.2:11434"), "127.0.0.1:11434");
+    assert_eq!(fence_endpoint("[::1]:11434"), "127.0.0.1:11434");
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().join("secret");
+    let world = World { endpoint: Ok("localhost:11500".into()), ..World::healthy() };
+    // Network on: the judged address is what is pinned, as before.
+    let on = world.gate(opts("ollama", &claude_line(), Some("lock"), &cwd), &locked_registry(tmp.path()), tmp.path()).unwrap();
+    assert_eq!(on.env["OLLAMA_HOST"], "localhost:11500");
+    let doc: Value = serde_json::from_str(&claude_managed_for(&on).unwrap().unwrap()).unwrap();
+    assert_eq!(doc["env"]["ANTHROPIC_BASE_URL"], "http://localhost:11500");
+    // Cut: the relay's address, in OLLAMA_HOST and in the Claude pin; the lane is
+    // opened for the judged one.
+    let cut = world.gate(opts("ollama", &claude_line(), Some("lock"), &cwd), &cut_registry(tmp.path()), tmp.path()).unwrap();
+    assert_eq!(cut.env["OLLAMA_HOST"], "127.0.0.1:11500");
+    let doc: Value = serde_json::from_str(&claude_managed_for(&cut).unwrap().unwrap()).unwrap();
+    assert_eq!(doc["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:11500");
+    let v = verified_launch(&cut.id).unwrap();
+    assert_eq!((v.endpoint.as_str(), v.pinned_endpoint().as_str()), ("localhost:11500", "127.0.0.1:11500"));
+    // A Mistral home would be written with the relay's address too.
+    let verified = Verified { project: "lock".into(), driver: "vibe".into(), model: "m".into(), endpoint: "localhost:1".into(), cut: true };
+    assert_eq!(verified.pinned_endpoint(), "127.0.0.1:1");
+}
+
+#[test]
+fn the_fence_is_cut_by_what_the_gate_recorded_and_what_the_registry_says_now() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (cut, plain) = (locked_projects(&cut_registry(tmp.path())), locked_projects(&locked_registry(tmp.path())));
+    let rec = |cut: bool| Verified { project: "lock".into(), driver: "claude".into(), model: "m".into(), endpoint: "127.0.0.1:1".into(), cut };
+    assert_eq!(fence_cut_in(&cut, "lock", Some(&rec(true))), Ok(true));
+    assert_eq!(fence_cut_in(&plain, "lock", Some(&rec(false))), Ok(false));
+    // The switch moved while the tab started: on refuses, off keeps the cut.
+    assert!(fence_cut_in(&cut, "lock", Some(&rec(false))).unwrap_err().contains("Open it again"));
+    assert_eq!(fence_cut_in(&plain, "lock", Some(&rec(true))), Ok(true));
+    // No record: fine without the cut, refused with it.
+    assert_eq!(fence_cut_in(&plain, "lock", None), Ok(false));
+    assert!(fence_cut_in(&cut, "lock", None).unwrap_err().contains("Open it again"));
+}
+
+#[test]
+fn changing_cut_network_names_the_running_tabs_on_the_other_setting() {
+    let rec = |project: &str, cut: bool| Verified { project: project.into(), driver: "codex".into(), model: "m".into(), endpoint: "127.0.0.1:1".into(), cut };
+    let tabs: HashMap<String, Verified> = [
+        ("lock:a".to_string(), rec("lock", false)),
+        ("lock:b".to_string(), rec("lock", true)),
+        ("other:c".to_string(), rec("other", false)),
+    ]
+    .into();
+    assert_eq!(restart_for_cut_in(&tabs, "lock", true), vec!["lock:a".to_string()]);
+    assert_eq!(restart_for_cut_in(&tabs, "lock", false), vec!["lock:b".to_string()]);
+    assert!(restart_for_cut_in(&tabs, "none", true).is_empty());
 }
 
 #[test]
@@ -1114,6 +1233,62 @@ fn both_wrappers_pin_or_refuse_a_verified_claude_tab() {
     assert!(linux.contains("verify_control_pins(&managed_pins)"), "the pinned file is checked last, like the other control paths");
     let mac = body_of(&fence, "pub fn wrap_pty_options_sandbox_exec(");
     assert!(mac.contains("claude_managed_for(opts)") && mac.contains("CLAUDE_NOT_PINNABLE"), "Seatbelt refuses a verified Claude tab");
+}
+
+#[test]
+fn the_cut_fence_binds_the_lane_after_the_private_run_and_starts_the_cli_behind_the_relay() {
+    use crate::services::agent_fence::{bwrap_args, insert_local_lane};
+    use crate::services::local_lane::FenceLane;
+    let plain = bwrap_args("/home/u", Some("/state/agent-homes/x"), "/w/p", "claude", &["--x".into()], &[PathBuf::from("/w/p")], &[], &[]);
+    assert!(!plain.iter().any(|a| a == "--unshare-net"), "a project with its network on keeps it");
+    let lane = FenceLane {
+        ollama_socket: PathBuf::from("/state/local-lane/h.sock"),
+        mcp_socket: Some(PathBuf::from("/state/local-lane/h.mcp.sock")),
+        ollama_port: 11434,
+        mcp_port: Some(40000),
+    };
+    let mut args = plain.clone();
+    insert_local_lane(&mut args, lane.binds(Path::new("/opt/app/bin")), lane.command_prefix()).unwrap();
+    let at = |needle: &str| args.iter().position(|a| a == needle).unwrap_or_else(|| panic!("{needle} missing in {args:?}"));
+    let slug = crate::brand::SLUG;
+    let run = args.windows(2).position(|w| w == ["--tmpfs", "/run"]).unwrap();
+    let relay_bind = at(&format!("/run/{slug}-lane/relay"));
+    let sock_bind = at(&format!("/run/{slug}-lane/ollama.sock"));
+    let home_bind = args.windows(2).position(|w| w == ["--bind", "/state/agent-homes/x"]).unwrap();
+    assert!(run < relay_bind && relay_bind < sock_bind, "the lane is bound after the private /run exists");
+    assert!(sock_bind < home_bind, "the sources are resolved before the home is replaced");
+    assert_eq!(args.iter().filter(|a| *a == "--unshare-net").count(), 1);
+    let sep = at("--");
+    assert!(at("--unshare-net") < sep && at("--unshare-pid") < at("--unshare-net"));
+    // The fence's command is the relay, then the CLI's own line behind `--`.
+    assert_eq!(args[sep + 1], format!("/run/{slug}-lane/relay"));
+    assert_eq!(args[sep + 2], "--local-relay");
+    assert_eq!(args[args.len() - 2..], ["claude", "--x"]);
+    assert_eq!(args[args.len() - 3], "--");
+    // A fence argv without a private /run, or without a command, is an error and not a guess.
+    assert!(insert_local_lane(&mut vec!["--".to_string()], vec![], vec![]).is_err());
+}
+
+#[test]
+fn the_wrappers_the_lane_and_the_exit_are_wired() {
+    let fence = source("services/agent/agent_fence.rs");
+    let linux = body_of(&fence, "pub fn wrap_pty_options_bwrap(");
+    assert!(linux.contains("fence_cut(project, &opts.id)") && linux.contains("add_local_lane("), "the Linux wrapper opens the lane for a cut tab");
+    let lane = linux.find("add_local_lane(").unwrap();
+    assert!(lane > linux.find("mask_local_models_only(").unwrap(), "the lane is opened after every mask, so a refusal above leaves none");
+    assert!(linux.contains("local_lane::close"), "a later failure closes the lane again");
+    let mac = body_of(&fence, "pub fn wrap_pty_options_sandbox_exec(");
+    assert!(mac.contains("fence_cut(project, &opts.id)?"), "Seatbelt refuses a cut project");
+    for gone in ["pub fn on_tab_gone(", "pub fn abandon_spawn("] {
+        assert!(body_of(&fence, gone).contains("local_lane::close(tab_id)"), "{gone}: the lane goes with its tab");
+    }
+    let lib = source("lib.rs");
+    assert!(lib.contains("services::local_lane::stop_for_exit()"), "the lane's sockets are removed at quit");
+    let main = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs")).unwrap();
+    assert!(main.contains("local_lane::relay::MODE_FLAG"), "main dispatches the relay mode");
+    // The relay mode keeps the CLI in its own process: it execs, it does not spawn.
+    let relay = source("services/local_lane/relay.rs");
+    assert!(relay.contains(".exec()") && !relay.contains(".spawn()"));
 }
 
 // ── Agents no registry PTY holds: headless tabs and sessions that outlived a crash ──

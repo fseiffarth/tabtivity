@@ -19,10 +19,14 @@ pub struct AgentPrivacyChange {
     /// The agent tmux sessions that were ended although no window held a PTY on
     /// them: a tab the phone started headless, or a session that outlived a crash.
     pub closed_sessions: Vec<String>,
+    /// The project's running verified local tabs whose sandbox was built under
+    /// the other Cut network setting: they keep it until they are opened again.
+    /// Nothing restarts them; the dialog asks. (`<scope>:<tab key>`, like `closed_tabs`.)
+    pub restart_tabs: Vec<String>,
 }
 
-/// Set a project's agent privacy: Local models only, and Cut network (stored in
-/// the setting's shape, refused until it is enforced). Desktop only: the phone
+/// Set a project's agent privacy: Local models only, and Cut network (accepted on
+/// Linux, where the sandbox cuts the network; refused elsewhere). Desktop only: the phone
 /// reads the setting from the project record and has no setter. Turning Local
 /// models only on is refused with a message naming the project when the
 /// project cannot be covered (remote, container or VM project; another
@@ -43,11 +47,13 @@ pub async fn set_project_agent_privacy(
     } else {
         (Vec::new(), Vec::new())
     };
+    let restart_tabs = if stored.local_models_only { agent_privacy::restart_for_cut(&project_id, stored.cut_network) } else { Vec::new() };
     Ok(AgentPrivacyChange {
         local_models_only: stored.local_models_only,
         cut_network: stored.cut_network,
         closed_tabs,
         closed_sessions,
+        restart_tabs,
     })
 }
 

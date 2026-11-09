@@ -24,6 +24,15 @@ fn main() {
         };
         std::process::exit(app_lib::services::agent_shim::run(cli, rest));
     }
+    // `tabtivity --local-relay PORT=SOCKET… -- <cli> [args…]`: the command of a
+    // fence with no network (`services::local_lane::relay`) — listens on the
+    // loopback ports the CLI was configured with, pumps them to the app over
+    // the sockets bound into the fence, then execs the CLI in this process.
+    #[cfg(unix)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(app_lib::services::local_lane::relay::MODE_FLAG)) {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+        std::process::exit(app_lib::services::local_lane::relay::run(&args));
+    }
     // `tabtivity --fence-scope <bwrap> [args…]`: the agent fence's step before
     // bwrap (`services::fence_scope`) — enters the Landlock scope and execs.
     #[cfg(target_os = "linux")]

@@ -3,8 +3,10 @@
 Phase 1 of `docs/local_models_only_plan.md`. A project marked **Local models
 only** is read by no cloud model: only an agent on an installed local Ollama
 model starts in it, nothing in Tabtivity hands its files to a cloud model, and
-no other tab's fence can see its folder. The switch below it, **Cut network**,
-is stored and shown, and refused until phase 2 (nothing enforces it yet).
+no other tab's fence can see its folder. The switch below it, **Cut network**
+(phase 2, Linux), takes the network away from the project's local tabs: their fence
+has none, and the only way out is a relay in the app (see "Cut network" below). On
+macOS and Windows it is stored in the record's shape and refused.
 
 The code is `services/agent/agent_privacy.rs` (all of it `AppHandle`-free), the
 command `commands/agent_privacy.rs`, the dialog
@@ -39,7 +41,8 @@ the project when the project is remote, VM or has its container on; its record
 names no folder; another registered project's folder (or mirror) or a box folder
 lies **inside** it; `ollama_host` is not loopback (`mail_ai::resolve_endpoint`,
 which refuses a remote host even with `ollama_allow_remote_host`). It refuses
-Cut network outright (`CUT_NETWORK_UNAVAILABLE`). Turning the switch on ends
+Cut network where the sandbox cannot cut the network (`cut_platform`, Linux only; the text is
+`CUT_NETWORK_UNAVAILABLE`) and without Local models only (`check_set`, pure). Turning the switch on ends
 every running agent PTY the gate did not verify **whose fence can see the folder**
 (whole subtree, the local tmux session too; `agent_privacy::ptys_to_end`): the
 project's own, a parent project's, a box's, the root console's with the read-only
@@ -101,16 +104,21 @@ A subject spawn is allowed only when `vet` accepts it:
   `<APP>_LOCAL_MODEL` env names the model. The renderer's `PtyOptions.local_model`
   is never read for the decision; the plan's "`prepare_local_agent` record" is
   not needed because the argv itself is what runs;
-- the driver is not **OpenCode** (`agent_privacy::REFUSED_DRIVERS`): a launch line that
-  would be OpenCode's is refused, before Ollama is asked, with "OpenCode cannot be kept
-  on the local model in a Local models only project yet" and the local agents that can
-  run (`agents_that_can_run_locked`: the `LOCAL_DRIVERS` labels but OpenCode, Claude
-  Code only where it can be pinned, and Mistral (vibe)). Every route into a locked
-  project passes `vet` or the fence's stamp check (window, phone, restore, schedule, a
-  box tab or the root console with a cwd inside, the shell-tab shim), so there is one
-  place to lift this in Phase 2. The ＋ menus hide the row (`driversForLockedProject`,
-  `LOCKED_REFUSED_DRIVERS` in `localModelsOnly.ts`; the phone's sheet lists all rows, as
-  it does the cloud ones, and gets the backend's text);
+- Cut network not recorded on the project, or `Probe::can_cut` (`cut_platform`, Linux);
+  when it is recorded and the platform cannot cut, the project is closed to agents;
+- the driver is allowed for the project's mode. **Network on:** not **OpenCode**
+  (`agent_privacy::REFUSED_DRIVERS`): a launch line that would be OpenCode's is refused,
+  before Ollama is asked, with "OpenCode cannot be kept on the local model in a Local models
+  only project that keeps its network" and the local agents that can run
+  (`agents_that_can_run_locked(pins_claude, cut)`: the `LOCAL_DRIVERS` labels but OpenCode,
+  Claude Code only where it can be pinned, and Mistral (vibe)). **Cut network on:** only
+  `CUT_VERIFIED_DRIVERS` (OpenCode, Claude Code, Codex; the per-driver table below); any other
+  driver is refused naming itself ("has not been verified with the network cut"). Every route
+  into a locked project passes `vet` or the fence's stamp check (window, phone, restore,
+  schedule, a box tab or the root console with a cwd inside, the shell-tab shim). The ＋ menus
+  follow (`driversForLockedProject(drivers, cut)`, `LOCKED_REFUSED_DRIVERS` and
+  `CUT_VERIFIED_DRIVERS` in `localModelsOnly.ts`, `vibeOfferedInLockedProject`; the phone's
+  sheet lists all rows, as it does the cloud ones, and gets the backend's text);
 - `OLLAMA_HOST` of the Tabtivity process, if set, is loopback;
 - the endpoint is the loopback `ollama_host`, and
   `ollama_client::tab_model_is_local_at` passes: a listed model without a remote,

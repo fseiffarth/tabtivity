@@ -64,6 +64,9 @@ interface Props {
   /** The scope is a Local models only project (`services::agent_privacy`):
    *  only the local-model rows start an agent. Unset outside one. */
   localModelsOnly?: boolean;
+  /** With `localModelsOnly`: the project also has Cut network on, so only the
+   *  drivers verified with the network cut are offered. */
+  cutNetwork?: boolean;
   /** A box popout: where a plain pick starts (`detachedNewTabTarget`: the active
    *  tab's member, else the whole box) — named in the menu's first line. `projectCwd`
    *  is then that target's folder; the kinds without a launch directory (monitor,
@@ -92,6 +95,7 @@ export function NewTabMenu({
   machines,
   hostPinned = false,
   localModelsOnly = false,
+  cutNetwork = false,
   target,
   boxSeed,
 }: Props) {
@@ -305,6 +309,7 @@ export function NewTabMenu({
                 localModelOffInRoot,
                 localDrivers,
                 lockedProject: localModelsOnly,
+                cutNetwork,
                 vibeForLocalModel,
                 gpu: localModelGpu,
                 onVibe: (model) => void pickOllamaModel(model),

@@ -32,7 +32,7 @@ import { tabTaskName } from "../../lib/agents/autoTabName";
 import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { isHostPinned } from "../../lib/projectTabHost";
-import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
+import { isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { AddTabMenuList, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
@@ -548,6 +548,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Local models only (`services::agent_privacy`): this menu offers the local
   // model rows alone; the backend refuses a cloud agent here regardless.
   const localModelsOnly = useProjectsStore((s) => isLocalModelsOnly(s.projects.find((p) => p.id === scope)));
+  const cutNetwork = useProjectsStore((s) => isCutNetwork(s.projects.find((p) => p.id === scope)));
   const scopeProject = useProjectsStore((s) => s.projects.find((p) => p.id === scope));
   // Per-tab file source (remote-native vs local mirror), published by the file
   // viewers. Lets the Remote/Local badge ride on the viewer tab itself rather
@@ -1952,6 +1953,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     localModelOffInRoot,
                     localDrivers,
                     lockedProject: localModelsOnly,
+                    cutNetwork,
                     vibeForLocalModel,
                     gpu: localModelGpu,
                     onVibe: (model) => void handleOllamaModel(model),
