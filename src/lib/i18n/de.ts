@@ -2846,6 +2846,8 @@ export const dict: Dict = {
   "agents.defaultsEffortNeedsModel": "Diese CLI benötigt ein Standardmodell, um einen Denkaufwand anzuwenden.",
   "agents.defaultsReset": "CLI-Standards verwenden",
   "agents.defaultsHelp": "Gilt für neue Sitzungen in allen Projekten und der Root-Konsole, auch für am Handy geöffnete Tabs. Fortgesetzte Gespräche, ausdrücklich gewählte Tab-Einstellungen und lokale Modelle behalten ihre Einstellungen.",
+  "agents.defaultsCustomModel": "Eigene Modell-ID oder Alias",
+  "agents.defaultsNoModels": "Für diese CLI ist noch kein Modellkatalog verfügbar. Du kannst unten eine Modell-ID oder einen Alias eingeben.",
   "agents.defaultsModelHelp": "Gib die Modell-ID oder den Alias der CLI ein. Wähle einen vom Modell unterstützten Denkaufwand; verfügbare Stufen hängen vom Modell und deinem Konto ab. OpenCode-Varianten können als provider/model#variant in der Modell-ID stehen.",
   "agents.defaultsModelUnavailable": "Diese CLI verwaltet ihre Modellauswahl selbst; eine Modelloption beim Start wurde nicht verifiziert.",
   "agents.defaultsEffortUnavailable": "Diese CLI verwaltet ihre Denkeinstellungen selbst; eine separate Startoption für den Denkaufwand wurde nicht verifiziert.",
