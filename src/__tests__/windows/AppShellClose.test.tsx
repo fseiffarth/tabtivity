@@ -49,7 +49,7 @@ vi.mock("../../stores/projects", () => {
     // active scope's tab layout, so the mock must carry it alongside the hook.
     useProjectsStore: Object.assign(
       vi.fn((sel: (s: object) => unknown) => sel(state)),
-      { getState: () => state },
+      { getState: () => state, subscribe: () => () => {} },
     ),
     // AppShell subscribes to runtime-switch events on mount; provide a no-op.
     listenProjectRuntimeSwitched: vi.fn().mockResolvedValue(() => {}),
