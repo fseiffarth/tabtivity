@@ -2176,7 +2176,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
     tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
     setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
-    setVoiceFailure, forgetDictation, submitSpokenRef,
+    setVoiceFailure, forgetDictation, submitSpokenRef, prefixCommands,
     handsFree: {
       on: handsFreeRef, guard: handsFreeGuard, sendGuard, voiceOpen, voiceStopping,
       pick: voicePickRef, awaitTurn: awaitTurnRef, stopLoop,
@@ -2184,7 +2184,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   });
   startVoiceRef.current = startVoice;
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
-  const sayVoice = (note: VoiceNote) => t(note.key, note.language ? { language: note.language } : undefined);
+  const sayVoice = (note: VoiceNote) => t(note.key, note.language || note.params ? { ...note.params, ...(note.language ? { language: note.language } : {}) } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
    * that, so it is derived rather than stored beside the failures that do. */
   const voiceProblem: VoiceNote | null = voiceFailure ?? (voiceAvailable ? null : { key: "mobile.voice.unavailable" });
@@ -2646,7 +2646,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {tab.kind === "agent" && handsFreeLine && (handsFreeLine.run
         ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={handsFreeLine.run}>{handsFreeLine.text}{isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</button>
         : <div className="voice-feedback hands-free" role="status" aria-live="polite">{handsFreeLine.text}</div>)}
-      {tab.kind === "agent" && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
+      {tab.kind === "agent" && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || isUntested("mobile.voice.draftEdits")) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
       {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}

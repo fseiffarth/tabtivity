@@ -1,7 +1,7 @@
 ---
 id: talking-to-an-agent
 title: Talking to an agent (dictation, read-aloud, hands-free)
-keywords: [voice, dictate, dictation, microphone, mic, speech, speech model, whisper, read aloud, read-aloud, speak, voice language, hands-free, handsfree, headset, stop word, go on, los, chime, barge-in, talk]
+keywords: [voice, dictate, dictation, microphone, mic, speech, speech model, whisper, read aloud, read-aloud, speak, voice language, hands-free, handsfree, headset, stop word, go on, los, chime, barge-in, talk, correct, correction, scratch that, replace, undo, Tabby plan, Tabby goal]
 related: [agent-clis, mobile, keyboard, settings-and-appearance]
 ---
 
@@ -18,6 +18,24 @@ base, small or large) in a tab, one click. While you speak, **Heard:** shows
 what it understood; each finished sentence lands in the text box, where
 Ctrl+Z takes it back. End with **"go on"** (German **"los"**) to send without
 those words, or press Send.
+
+### Correcting what you said
+
+Start with **"Tabby"** to change the text box instead of adding to it. The
+whole sentence must be one of these, or it is dictated as usual:
+
+| Say | What it does |
+|---|---|
+| "Tabby, scratch that" (German "streich das") | removes the last thing you said; say it again for the one before |
+| "Tabby, replace *login* by *sign-in*" ("ersetze … durch …") | swaps the last place those words stand |
+| "Tabby, correction, *in the frontend*" ("Korrektur, …") | says the last thing again, differently |
+| "Tabby, clear all" ("alles löschen") | empties the box; "scratch that" brings it back |
+| "Tabby, plan" / "Tabby, goal" | starts the prompt with `/plan` or `/goal`, as the chips do |
+
+The line under the box says what changed. Add "go on" to send right after.
+Once you have typed into the box, "scratch that" only takes back what you
+say from then on. It works the same on the phone, in the voice language you
+dictate in, and the English phrases work in every language.
 
 Only one tab listens at a time: starting the mic in another tab stops it in
 the first, and the red mic in the header shows which tab has it — a click

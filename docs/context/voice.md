@@ -107,6 +107,20 @@ leaves the mic open (`useComposer` `submitSpokenRef`); hands-free then holds
 the turn's answers and closes the mic for them only while nothing is being
 dictated (`useHandsFree`), so the voice is never dictated back.
 
+## Spoken edits of the draft
+
+"Tabby scratch that", "Tabby replace X by Y", "Tabby correction …", "Tabby
+clear all", "Tabby plan" / "Tabby goal" edit the composer's draft on both
+hosts (`lib/voice/draftEdit.ts`, matched by `voiceCommands.ts`
+`matchDraftEdit`). The assistant's name in front is required, because "replace
+the loop with a map" is an ordinary prompt; the name is matched loosely (one
+letter off, first letter fixed: "Tabbi", "Tavi"). The rest must be one phrase
+**whole**, never the nearest one, so "Tabby, plan the refactor" stays dictation.
+Undo and restate work off voice's own history of the draft before and after
+each piece. That history only holds while the draft is still what voice left
+it: after typing it is dropped, rather than taking back text the user wrote.
+In hands-free an edit restarts the pause, and an emptied draft sends nothing.
+
 The desktop's voice detector already waits the pause before it closes a
 segment (the backend's `handsFree` mode), so its guard opens the window as
 soon as the segment settles; the phone's recognizer does not, so its guard

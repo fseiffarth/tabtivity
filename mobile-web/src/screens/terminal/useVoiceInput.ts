@@ -3,10 +3,14 @@
 // Their effects read setters and refs the screen passes in. Those are stable,
 // so where `exhaustive-deps` cannot tell, the rule is disabled at the site
 // rather than handed a dependency the screen's own effect never had.
-import { useEffect, type Dispatch, type SetStateAction, type MutableRefObject, type RefObject } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction, type MutableRefObject, type RefObject } from "react";
 import { type TabRow } from "../../api";
 import { readFlag } from "../../prefs";
-import { speechTag } from "../../speechLang";
+import { speechLanguage, speechTag } from "../../speechLang";
+import { leadDraft } from "../../slashCommands";
+import { loadDict } from "../../../../src/lib/i18n";
+import { matchDraftEdit } from "../../../../src/lib/voice/voiceCommands";
+import { DraftVoiceHistory, type DraftEditNote } from "../../../../src/lib/voice/draftEdit";
 import {
   prepareOnDeviceSpeech, speechRecognitionConstructor, advanceDictation, DICTATION_START,
   dictationPreview, readDictation, type DictationProgress,
@@ -39,12 +43,15 @@ export interface HandsFreeHooks {
   stopLoop: () => void;
 }
 
+/** How long a spoken edit's note ("Removed …") stays on the voice line. */
+const EDIT_NOTE_MS = 4_000;
+
 /** Dictation into the composer: the on-device check, the dictation session, and
  * its end with the tab. */
 export function useVoiceInput({
   tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
   setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus, setVoiceFailure,
-  forgetDictation, submitSpokenRef, handsFree,
+  forgetDictation, submitSpokenRef, prefixCommands, handsFree,
 }: {
   tab: TabRow;
   recognition: MutableRefObject<DictationSession | undefined>;
@@ -63,9 +70,13 @@ export function useVoiceInput({
   forgetDictation: () => void;
   /** Sends the draft and leaves the mic open (`useComposer`). */
   submitSpokenRef: MutableRefObject<(text: string) => boolean>;
+  /** The Plan / Goal chips' commands this CLI offers ("Tabby plan"). */
+  prefixCommands: readonly string[];
   handsFree: HandsFreeHooks;
 }) {
   const { voiceOpen, voiceStopping } = handsFree;
+  /** What voice did to the draft, for "Tabby scratch that" (`draftEdit.ts`). */
+  const [edits] = useState(() => new DraftVoiceHistory());
   /** The user's stop also ends the hands-free loop until the mic is tapped
    * again. */
   const stopVoice = () => {
@@ -90,6 +101,9 @@ export function useVoiceInput({
     const request = voiceRequest.current + 1;
     voiceRequest.current = request;
     const language = speechTag();
+    // Spoken edits are matched in the language spoken, not the screen's.
+    const spokenIn = speechLanguage(language);
+    void loadDict(spokenIn);
     setPreparingVoice(true);
     setVoiceStatus({ key: "mobile.voice.checking" });
     setVoiceFailure(null);
@@ -113,10 +127,18 @@ export function useVoiceInput({
     setVoiceFailure(null);
     // The session restarts the browser's recognizer through pauses, so
     // "listening" holds from the tap until the stop (`voiceSession.ts`).
+    let listeningNote: VoiceNote | null = null;
+    /** An edit's note on the voice line, until the listening line comes back. */
+    const showEditNote = (note: DraftEditNote) => {
+      const shown: VoiceNote = { key: note.key, params: note.params };
+      setVoiceStatus(shown);
+      window.setTimeout(() => setVoiceStatus((current) => (current === shown ? listeningNote : current)), EDIT_NOTE_MS);
+    };
     const session: DictationSession = startDictation(Recognition, { lang: language, local: mode === "local" }, {
       onStart: () => {
         setListening(true);
-        setVoiceStatus({ key: handsFree.on.current ? "mobile.voice.listeningHandsFree" : mode === "local" ? "mobile.voice.listeningLocal" : "mobile.voice.listeningRemote" });
+        listeningNote = { key: handsFree.on.current ? "mobile.voice.listeningHandsFree" : mode === "local" ? "mobile.voice.listeningLocal" : "mobile.voice.listeningRemote" };
+        setVoiceStatus(listeningNote);
       },
       onResult: (event) => {
         const reading = readDictation(event);
@@ -126,6 +148,32 @@ export function useVoiceInput({
         // word cancels its window and never reaches the draft; on a question
         // the agent waits on, "two" / "option two" picks that row.
         const guard = handsFree.on.current && !voiceStopping.current ? handsFree.guard() : undefined;
+        // "Tabby scratch that", "Tabby replace X by Y", "Tabby plan" …: the
+        // draft is edited, and the words never go into it (`draftEdit.ts`).
+        const edit = step.insert ? matchDraftEdit(step.insert, spokenIn) : null;
+        if (edit) {
+          voiceOpen.current = false;
+          forgetDictation();
+          const outcome = edits.apply(edit, draftRef.current, (draft, command) => leadDraft(draft, command, prefixCommands));
+          if (outcome.draft !== null) {
+            draftRef.current = outcome.draft;
+            setDraft(outcome.draft);
+          }
+          showEditNote(outcome.note);
+          if (edit.send && draftRef.current.trim()) {
+            // "… go on" after the edit: sent as a spoken send is.
+            guard?.reset();
+            if (submitSpokenRef.current(draftRef.current)) {
+              draftRef.current = "";
+              if (guard) handsFree.awaitTurn.current();
+            }
+          } else {
+            // Hands-free: the pause before a send counts again from here; an
+            // emptied draft sends nothing.
+            guard?.settled(step.insert);
+          }
+          return;
+        }
         if (step.insert && guard) {
           const picked = handsFree.pick.current(step.insert);
           if (picked === "done") {
@@ -160,6 +208,7 @@ export function useVoiceInput({
           const current = draftRef.current;
           const next = `${current}${current && !current.endsWith(" ") ? " " : ""}${step.insert}`;
           const spoken = spokenSend(next);
+          if (spoken === null) edits.piece(current, next, step.insert);
           draftRef.current = spoken ?? next;
           setDraft(spoken ?? next);
           if (spoken !== null) {

@@ -57,7 +57,7 @@ const REOPEN_SETTLE_MS = 800;
  * The mic pauses while the pane is hidden and resumes when it is shown; the
  * session ends with the composer. A browser client offers no mic.
  */
-export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, onSend, hasDraft, pick, commitPick, readProblem = null }: {
+export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, onSend, hasDraft, pick, commitPick, readProblem = null, note = "" }: {
   tabKey: string;
   ptyId: string;
   visible: boolean;
@@ -83,6 +83,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   commitPick: (pick: VoicePick) => void;
   /** Why read-aloud could not speak: said on the same line. */
   readProblem?: TranslationKey | null;
+  /** What a spoken edit of the draft did ("Removed …"), for a moment. */
+  note?: string;
 }) {
   const t = useT();
   const uiLanguage = useI18nStore((s) => s.lang);
@@ -420,6 +422,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     : inWindow ? t("terminal.reader.voice.sendWindow")
     : waiting ? t(reading ? "terminal.reader.voice.reading" : "terminal.reader.voice.waiting")
     : heard ? t("terminal.reader.voice.heard", { text: heard })
+    : note && listening ? note
     : phase === "preparing" ? t("terminal.reader.voice.preparing")
     : listening ? t(sessionHandsFree.current ? "terminal.reader.voice.listeningHandsFree" : "terminal.reader.voice.listening")
     : "";
@@ -482,7 +485,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       ) : line && (
         <div className={shownProblem ? "terminal-reader-voice-line error" : "terminal-reader-voice-line"} role={shownProblem ? "alert" : "status"} aria-live="polite">
           {line}
-          {listening && !heard && !shownProblem && (sessionHandsFree.current
+          {listening && !heard && !shownProblem && note && <UntestedTag id="terminal.reader.voice.draftEdits" />}
+          {listening && !heard && !shownProblem && !note && (sessionHandsFree.current
             ? <UntestedTag id="terminal.reader.voice.handsFree" />
             : <UntestedTag id="terminal.reader.voice.spokenSend" />)}
           {(heard || phase === "preparing") && !shownProblem && <UntestedTag id="terminal.reader.voice.dictate" />}
