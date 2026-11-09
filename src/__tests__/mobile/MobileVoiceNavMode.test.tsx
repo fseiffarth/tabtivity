@@ -581,6 +581,24 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
       expect(screen.getByRole("button", { name: "Dictate" })).toBeTruthy();
     });
 
+    it("ends on one tap of the mic while a line is spoken: the voice stops and the mic opens", async () => {
+      await start();
+      await hear(`${T} navigate`);
+      await hear("go to project Beta");
+      expect(said()).toEqual(["Project Beta?"]);
+      expect(micOpen()).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+      await settle();
+      expect(ended).toBe(spoken.length);
+      expect(micOpen()).toBe(true);
+      expect(screen.queryByText(/^Navigation:/)).toBeNull();
+      expect(screen.queryByText("Project Beta?")).toBeNull();
+      // The mode is over: nothing the mic hears is a command.
+      await hear("go to the done tab");
+      expect(box().value).toBe("go to the done tab");
+      expect(said()).toEqual(["Project Beta?"]);
+    });
+
     it("shows the lines only, with the mic left open, where the browser cannot speak", async () => {
       vi.stubGlobal("speechSynthesis", undefined);
       Reflect.deleteProperty(window, "speechSynthesis");

@@ -2832,10 +2832,13 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               nav.end();
               return;
             }
-            nav.end();
+            const navWasOpen = nav.end();
             if (preparingVoice) cancelVoicePrep();
-            else if (handsFree && speaking) stopSpeaking();
+            // A navigation line has the mic closed while it speaks: the tap stops
+            // the voice and goes on to open the mic, as a tap on a quiet screen does.
+            else if (handsFree && speaking && !navWasOpen) stopSpeaking();
             else {
+              if (navWasOpen) stopSpeaking();
               // The tap is the gesture a browser wants before the page may speak
               // (navigation and the landing speak without one).
               unlockSpeech();
