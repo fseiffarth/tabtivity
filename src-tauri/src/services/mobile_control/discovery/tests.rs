@@ -1771,6 +1771,43 @@ fn a_remote_only_project_runs_everything_on_its_host() {
     }
 }
 
+/// The phone's project row says whether the project is Local models only and whether
+/// its network is cut, as two plain flags read with the backend's own rule
+/// (`agent_privacy::privacy_of_value`): an unset project reads false and carries
+/// neither key, a malformed record reads as locked, and the setting itself, the id
+/// and the folder never cross.
+#[test]
+fn a_project_row_carries_the_local_models_only_flags_and_nothing_else() {
+    let wire_of = |privacy: Option<serde_json::Value>| {
+        let (dir, _) = host_tab_state(None, false);
+        let path = dir.path().join("projects.json");
+        let mut records: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        if let Some(value) = privacy {
+            records[0]["agent_privacy"] = value;
+        }
+        fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+        let project = load_hosts(dir.path(), &HostLive::default(), true);
+        let flags = (project.public.local_models_only, project.public.cut_network);
+        (flags, serde_json::to_string(&project.public).unwrap())
+    };
+    let (flags, wire) = wire_of(None);
+    assert_eq!(flags, (false, false));
+    assert!(!wire.contains("local_models_only") && !wire.contains("cut_network"), "an unlocked project says nothing: {wire}");
+    assert_eq!(wire_of(Some(serde_json::Value::Null)).0, (false, false));
+    assert_eq!(wire_of(Some(serde_json::json!({}))).0, (false, false));
+    assert_eq!(wire_of(Some(serde_json::json!({ "local_models_only": false, "cut_network": false }))).0, (false, false));
+    let (flags, wire) = wire_of(Some(serde_json::json!({ "local_models_only": true, "cut_network": false })));
+    assert_eq!(flags, (true, false));
+    assert!(wire.contains(r#""local_models_only":true"#) && !wire.contains("cut_network"), "{wire}");
+    let (flags, wire) = wire_of(Some(serde_json::json!({ "local_models_only": true, "cut_network": true, "future": 1 })));
+    assert_eq!(flags, (true, true));
+    assert!(wire.contains(r#""cut_network":true"#) && !wire.contains("future") && !wire.contains("agent_privacy"), "{wire}");
+    // Cut network means something only beneath Local models only.
+    assert_eq!(wire_of(Some(serde_json::json!({ "cut_network": true }))).0, (false, false));
+    // A record of another shape reads as locked, as the gate reads it.
+    assert_eq!(wire_of(Some(serde_json::json!("yes"))).0, (true, false));
+}
+
 /// With no machine a phone-made agent may start on (host sessions not
 /// persisted, or a build that lists no host tab), a remote-only project
 /// takes nothing from the phone; a plain remote project's row carries no

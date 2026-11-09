@@ -109,6 +109,7 @@ export const dict: Dict = {
   "mobile.newTab.isDefault": "{agent} öffnet sich, wenn ＋ angetippt wird",
   "mobile.newTab.defaultNote": "Antippen von ＋ öffnet sofort {agent}; ＋ halten für dieses Blatt. ★ wählt einen anderen Agenten, nur auf diesem Telefon.",
   "mobile.newTab.noAgents": "Auf dem Desktop sind keine Agenten eingerichtet. Dieses Projekt kann nur eine Shell öffnen.",
+  "mobile.newTab.localOnly": "Nur lokale Modelle: Dieses Projekt startet Agenten nur auf dem lokalen Modell. Cloud-Agenten, API-Schlüssel und Anmeldungen werden hier nicht angeboten.",
   "mobile.newTab.where": "Agenten starten in",
   "mobile.newTab.runsOn": "Läuft auf",
   "mobile.newTab.thisComputer": "Desktop (lokale Kopie)",

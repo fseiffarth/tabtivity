@@ -56,6 +56,31 @@ export function vibeOfferedInLockedProject(cut: boolean): boolean {
   return !cut || CUT_VERIFIED_DRIVERS.includes("vibe");
 }
 
+/**
+ * Whether a ＋ menu lists the cloud agent rows (the agents, their cloud sessions, the API-key and
+ * sign-in rows): not in a Local models only project, whose menu offers the local-model rows and
+ * the shells alone. The desktop menus (`TabBar`, `NewTabMenu`) and the phone's sheet
+ * (`NewTabSheet`) ask this one rule.
+ */
+export function cloudRowsOffered(locked: boolean): boolean {
+  return !locked;
+}
+
+/**
+ * What a ＋ menu offers of the local model's agents, in one place for the desktop menus
+ * (`localModelMenuGroup`) and the phone's sheet (`localChoiceRows`): outside a Local
+ * models only project every driver and Mistral; inside one, `driversForLockedProject`
+ * and `vibeOfferedInLockedProject`.
+ */
+export function offeredLocalAgents<T extends { id: string }>(
+  drivers: readonly T[],
+  locked: boolean,
+  cut: boolean,
+): { drivers: T[]; vibe: boolean } {
+  if (!locked) return { drivers: [...drivers], vibe: true };
+  return { drivers: driversForLockedProject(drivers, cut), vibe: vibeOfferedInLockedProject(cut) };
+}
+
 /** What `set_project_agent_privacy` answers. */
 export interface AgentPrivacyChange {
   local_models_only: boolean;

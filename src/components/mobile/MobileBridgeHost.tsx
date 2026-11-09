@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
+import { localChoiceRows } from "./localChoiceRows";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import { switchTabLocation } from "../../stores/agents/agentLocationSwitch";
@@ -77,7 +78,7 @@ import {
 } from "../../lib/tabs/newTabItems";
 import { worktreeAgentSpec } from "../tabs/agentWorktrees";
 import { probeLocalModelPlacement } from "../tabs/localModelGroup";
-import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../lib/agents/localDrivers";
+import { listLocalDrivers, loadOllamaModel } from "../../lib/agents/localDrivers";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 import { readerAgent } from "../../lib/agents/agentReader";
 import { agentWorktreeChoices, CARRIES_CONVERSATION, sameDir, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
@@ -1267,13 +1268,8 @@ async function localChoices(scope: MobileScope): Promise<{ model: string; ready:
     probeLocalModelPlacement(model),
   ]);
   const withVibe = enabledInstalledAgentBins(statuses, settings?.disabled_agents).has("vibe");
-  const row = (d: LocalDriverInfo) => ({ key: d.id, label: d.label, caution: d.heavy_harness, driver: d.id as string | undefined });
-  const available = drivers.filter((d) => d.available);
-  const rows = [
-    ...available.filter((d) => !d.heavy_harness).map(row),
-    ...(withVibe ? [{ key: "vibe", label: "Mistral", caution: false, driver: undefined }] : []),
-    ...available.filter((d) => d.heavy_harness).map(row),
-  ];
+  const project = useProjectsStore.getState().projects.find((entry) => entry.id === scope.id);
+  const rows = localChoiceRows(drivers, withVibe, project);
   const choices = await Promise.all(rows.map(async (row) => ({
     driver: row.driver,
     public: {

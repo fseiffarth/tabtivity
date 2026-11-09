@@ -5,7 +5,7 @@ import type { TranslationKey } from "../../lib/i18n";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import type { AddMenuEntry, AddMenuGroup } from "./AddTabMenuList";
 import { TAB_ACCENT } from "../../lib/tabs/newTabItems";
-import { driversForLockedProject, vibeOfferedInLockedProject } from "../../lib/projects/localModelsOnly";
+import { offeredLocalAgents } from "../../lib/projects/localModelsOnly";
 
 /**
  * Where the "tabs" local model sits right now, as far as the "+" menu cares:
@@ -153,9 +153,9 @@ export function localModelMenuGroup(opts: {
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
 }): AddMenuGroup {
   const { localModel, localModelOffInRoot, vibeForLocalModel, gpu, t } = opts;
-  const cut = Boolean(opts.lockedProject && opts.cutNetwork);
-  const localDrivers = opts.lockedProject ? driversForLockedProject(opts.localDrivers, cut) : opts.localDrivers;
-  const offerVibe = vibeForLocalModel && (!opts.lockedProject || vibeOfferedInLockedProject(cut));
+  const offered = offeredLocalAgents(opts.localDrivers, Boolean(opts.lockedProject), Boolean(opts.cutNetwork));
+  const localDrivers = offered.drivers;
+  const offerVibe = vibeForLocalModel && offered.vibe;
   // `heavy_harness` cautions, it never withholds — see
   // lib/agents/localDrivers.ts. The row stays pickable because which local
   // models cope is not something the backend can probe.

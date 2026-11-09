@@ -45,6 +45,7 @@ export const enSource = {
   "mobile.newTab.isDefault": "{agent} opens when ＋ is tapped",
   "mobile.newTab.defaultNote": "Tapping ＋ opens {agent} right away; hold ＋ for this sheet. ★ picks another agent, on this phone only.",
   "mobile.newTab.noAgents": "No agents are configured on the desktop, so this project can open only a shell.",
+  "mobile.newTab.localOnly": "Local models only: this project starts agents on the local model alone. No cloud agent, API key or sign-in is offered here.",
   "mobile.newTab.where": "Agents start in",
   "mobile.newTab.runsOn": "Runs on",
   "mobile.newTab.thisComputer": "Desktop (local copy)",

@@ -109,6 +109,7 @@ export const dict: Dict = {
   "mobile.newTab.isDefault": "{agent} si apre toccando ＋",
   "mobile.newTab.defaultNote": "Toccare ＋ apre subito {agent}; tieni premuto ＋ per questo pannello. ★ sceglie un altro agente, solo su questo telefono.",
   "mobile.newTab.noAgents": "Sul computer non sono configurati agenti. Questo progetto può aprire solo una shell.",
+  "mobile.newTab.localOnly": "Solo modelli locali: questo progetto avvia agenti solo sul modello locale. Qui non sono offerti agenti cloud, chiavi API o accessi.",
   "mobile.newTab.where": "Gli agenti partono in",
   "mobile.newTab.runsOn": "Gira su",
   "mobile.newTab.thisComputer": "Computer (copia locale)",

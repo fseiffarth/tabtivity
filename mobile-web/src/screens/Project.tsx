@@ -873,6 +873,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {newTabOpen && detail && <NewTabSheet
       projectId={id}
       agents={detail.agents}
+      localOnly={detail.project.local_models_only === true}
       shells={detail.shells === true && createVerdict === "all"}
       busy={creating}
       headless={!detail.desktop_available}

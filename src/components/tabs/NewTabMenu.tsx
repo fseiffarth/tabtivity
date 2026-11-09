@@ -29,6 +29,7 @@ import type { CloudLaunch } from "../../lib/agents/cloudSessions";
 import { BOX_SCOPE_PREFIX } from "../../lib/terminal/ptyId";
 import { useExperimental } from "../../lib/experimental";
 import { useT } from "../../lib/i18n";
+import { cloudRowsOffered } from "../../lib/projects/localModelsOnly";
 import { WarningIcon } from "../common/icons/Icon";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 
@@ -226,7 +227,7 @@ export function NewTabMenu({
       <AddTabMenuList
         heading={memberTable && target ? targetHeading(target.member, memberTable, t) : undefined}
         groups={[
-          ...(localModelsOnly ? [] : [{
+          ...(!cloudRowsOffered(localModelsOnly) ? [] : [{
             label: t("newTabMenu.groupAgents"),
             moreLabel: t("newTabMenu.moreAgents"),
             entries: agentMenuEntries({
@@ -268,7 +269,7 @@ export function NewTabMenu({
           // A host-pinned scope (VM, remote-only) has no local tree: its
           // API-key and local-model rows, which start here, are not offered;
           // nor are a local-models-only project's API-key rows.
-          ...(hostPinned || localModelsOnly
+          ...(hostPinned || !cloudRowsOffered(localModelsOnly)
             ? []
             : apiKeyMenuGroups({
                 keyable: keyableAgents,

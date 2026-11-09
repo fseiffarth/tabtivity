@@ -3,6 +3,7 @@ import { CloseIcon } from "../glyphs";
 import { getLaunchOptions, type AgentRow, type ApiKeyLaunchRow, type CloudLaunchRow, type HostMachineRow, type LaunchOptions, type LocalLaunchRow, type SignInRow } from "../api";
 import { isUntested } from "../../../src/lib/untested";
 import { useT } from "../../../src/lib/i18n";
+import { cloudRowsOffered } from "../../../src/lib/projects/localModelsOnly";
 import { useBackLayer } from "../backStack";
 import { HintMessage } from "../components/HintMessage";
 import { apiTarget, localTarget } from "../newTabDefault";
@@ -65,9 +66,13 @@ export interface NewTabLaunch {
  * new session, and the sheet closes on the tap rather than waiting for the
  * desktop, so a slow create is a screen the reader can still read.
  */
-export function NewTabSheet({ projectId, agents, shells, busy, headless = false, creates = true, agentsOnly = false, remoteOnly = false, sendsFile = true, defaultTarget, defaultLabel, onDefault, onPick, onSendFile, onClose }: {
+export function NewTabSheet({ projectId, agents: allAgents, localOnly = false, shells, busy, headless = false, creates = true, agentsOnly = false, remoteOnly = false, sendsFile = true, defaultTarget, defaultLabel, onDefault, onPick, onSendFile, onClose }: {
   projectId: string;
   agents: AgentRow[];
+  /** The project is Local models only (the row's `local_models_only`): the sheet lists the
+   *  local model's agents and shells, never the cloud rows, as the desktop's ＋ menu does
+   *  (`cloudRowsOffered`). The backend refuses a cloud launch there either way. */
+  localOnly?: boolean;
   /** The desktop lets the phone open shells (off by default). */
   shells: boolean;
   /** A create in flight; the file row ignores it. */
@@ -106,6 +111,8 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
 }) {
   useBackLayer(onClose);
   const t = useT();
+  const showCloud = cloudRowsOffered(localOnly);
+  const agents = showCloud ? allAgents : [];
   const [options, setOptions] = useState<LaunchOptions>({ worktrees: [], cloud: [], sign_in: [] });
   const [signingIn, setSigningIn] = useState(false);
   /** The picked worktree's id; "" is the project folder. */
@@ -181,11 +188,11 @@ export function NewTabSheet({ projectId, agents, shells, busy, headless = false,
         {starred && <p className="sheet-note">{t("mobile.newTab.defaultNote", { agent: starred })}{isUntested("mobile.project.fabQuick") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
         {/* A desktop that reports no agents still opens shells — say so, rather
             than leaving the sheet looking half-loaded. */}
-        {agents.length === 0 && <p className="sheet-note">{t("mobile.newTab.noAgents")}</p>}
+        {agents.length === 0 && <p className="sheet-note">{t(showCloud ? "mobile.newTab.noAgents" : "mobile.newTab.localOnly")}</p>}
         {options.local && !headless && here && <LocalModelGroup local={options.local} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(id) => onPick("agent", undefined, undefined, { local: id })} />}
-        {options.api_key && !headless && here && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
+        {showCloud && options.api_key && !headless && here && <ApiKeyGroup agents={agents} rows={options.api_key} busy={busy} defaultTarget={onDefault ? defaultTarget : undefined} onDefault={onDefault} onPick={(agent) => onPick("agent", agent, undefined, { ...(where ? { worktree: where } : {}), api_key: true })} />}
         {!headless && here && <CloudGroup agents={agents} cloud={options.cloud} busy={busy} onPick={pickCloud} />}
-        {options.sign_in.length > 0 && !headless && !pinned && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
+        {showCloud && options.sign_in.length > 0 && !headless && !pinned && <SignInEntry rows={options.sign_in} onOpen={() => setSigningIn(true)} />}
         {headless && !pinned && <NeedsWindow agents={agents} options={options} linked={linked} />}
         </>}
         {/* At the sheet's foot, under everything that opens a tab. No desktop

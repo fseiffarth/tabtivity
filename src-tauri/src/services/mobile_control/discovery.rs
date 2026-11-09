@@ -49,6 +49,10 @@ struct ProjectRecord {
     /// mirror, never a parse error for the file.
     #[serde(default, deserialize_with = "lenient_string")]
     mirror: Option<String>,
+    /// The entry's `agent_privacy` record, read with `agent_privacy::privacy_of_value`
+    /// (a malformed value counts as Local models only).
+    #[serde(default)]
+    agent_privacy: Option<Value>,
     // brand-check: allow — a serde key must be a literal; a test pins it to brand::MOBILE_ACCESS_KEY
     #[serde(default, rename = "tabtivity_mobile_access")]
     app_mobile_access: bool,
@@ -250,6 +254,15 @@ pub struct PublicProject {
     /// type, like `host`; absent for every other project.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remote_only: bool,
+    /// The project is set to Local models only (`services::agent_privacy`): the ＋ sheet
+    /// offers the local-model rows alone, as the desktop's menu does. A plain flag; the
+    /// setting itself, the project's id and folder never cross. Absent when off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub local_models_only: bool,
+    /// With `local_models_only`: Cut network is on (the sheet then offers OpenCode and
+    /// only the drivers verified with the network cut). Absent when off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cut_network: bool,
     pub live_sessions: usize,
     pub last_activity: Option<u64>,
     /// Root only: how many staged root-agent proposals wait for a decision.
@@ -646,6 +659,8 @@ struct ScopeSource {
     pinned: bool,
     /// A box's member project ids, raw, in the box's order; empty otherwise.
     member_ids: Vec<String>,
+    /// The project's Local models only / Cut network setting; off for every other scope.
+    privacy: crate::services::agent_privacy::Privacy,
 }
 
 /// A remote project's hosts as its `projects.json` record names them — never
@@ -1661,6 +1676,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             hosts: None,
             pinned: false,
             member_ids: Vec::new(),
+            privacy: Default::default(),
         });
     }
     if assistant_open(state_dir) {
@@ -1682,6 +1698,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             hosts: None,
             pinned: false,
             member_ids: Vec::new(),
+            privacy: Default::default(),
         });
     }
     for project in &projects {
@@ -1720,6 +1737,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             hosts: ProjectHosts::of(project),
             pinned: host_pinned(project),
             member_ids: Vec::new(),
+            privacy: crate::services::agent_privacy::privacy_of_value(project.agent_privacy.as_ref()),
         });
     }
     for b in &boxes {
@@ -1764,6 +1782,7 @@ fn scope_sources(state_dir: &Path, root: &RootEnv) -> Result<Vec<ScopeSource>, S
             hosts: None,
             pinned: false,
             member_ids: b.member_ids.clone(),
+            privacy: Default::default(),
         });
     }
     Ok(sources)
@@ -1949,6 +1968,8 @@ pub(super) fn fixture_scope(tab_id: &str, tmux_name: &str, devices: Option<Vec<S
             kind: ScopeKind::Project,
             host: ProjectHost::Local,
             remote_only: false,
+            local_models_only: false,
+            cut_network: false,
             live_sessions: 1,
             last_activity: None,
             pending_reviews: None,
@@ -2225,6 +2246,8 @@ fn resolve_scope(
         kind: source.kind,
         host: source.host,
         remote_only: source.pinned && source.host == ProjectHost::Remote,
+        local_models_only: source.privacy.local_models_only,
+        cut_network: source.privacy.local_models_only && source.privacy.cut_network,
         live_sessions: tabs.iter().filter(|t| t.public.available).count(),
         last_activity,
         pending_reviews: (source.kind == ScopeKind::Root)

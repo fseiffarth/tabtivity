@@ -32,7 +32,7 @@ import { tabTaskName } from "../../lib/agents/autoTabName";
 import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { isHostPinned } from "../../lib/projectTabHost";
-import { isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
+import { cloudRowsOffered, isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { AddTabMenuList, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
@@ -1891,7 +1891,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           <AddTabMenuList
             heading={memberTable && boxTarget ? targetHeading(boxTarget.member, memberTable, t) : undefined}
             groups={[
-              ...(localModelsOnly ? [] : [{
+              ...(!cloudRowsOffered(localModelsOnly) ? [] : [{
                 label: t("newTabMenu.groupAgents"),
                 moreLabel: t("newTabMenu.moreAgents"),
                 entries: agentMenuEntries({
@@ -1934,7 +1934,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               // API-key and local-model rows, which start on this machine,
               // are not offered. Nor are the API-key rows of a local-models-only
               // project: they start a cloud agent.
-              ...(hostPinned || localModelsOnly
+              ...(hostPinned || !cloudRowsOffered(localModelsOnly)
                 ? []
                 : apiKeyMenuGroups({
                     keyable: keyableAgents,
