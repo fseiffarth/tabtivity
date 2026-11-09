@@ -6,7 +6,8 @@ import { describeFailure } from "../connection";
 import { CheckIcon, PlayMark, QuestionIcon, SECTION_ICON } from "../glyphs";
 import { ageLabel } from "../terminal/fileLabels";
 import { useVisiblePoll } from "../visiblePoll";
-import { isUnseenDone, type SeenDone } from "../seenDone";
+import { needsYouGroups, since } from "../needsYouGroups";
+import { type SeenDone } from "../seenDone";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { AgentStatusMark } from "./AgentStatusPill";
@@ -57,12 +58,6 @@ const DONE_LABEL: Record<MobileAlertItem["kind"], TranslationKey> = {
 /** What the ▶ beside an interrupted row sends — the desktop tab strip's word
  * (`TabContinueButton`). */
 const CONTINUE_PROMPT = "continue";
-
-/** When the row's state began, as the desktop stamped it: a question since its
- * last output, a finished tab since its turn ended. */
-function since(tab: ActivityTab): number | undefined {
-  return tab.agent_status === "done" ? tab.done_at : tab.working_at ?? tab.done_at;
-}
 
 /**
  * Home's Needs you: what is waiting on the reader, above the projects, in one
@@ -153,14 +148,7 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
   };
 
   const listed = tabs ?? [];
-  const asking = listed
-    .filter((tab) => tab.agent_status === "question" || tab.agent_status === "interrupted")
-    // A question first: it is the one thing that cannot go on without the
-    // reader. Then the newest of each.
-    .sort((a, b) => Number(b.agent_status === "question") - Number(a.agent_status === "question") || (since(b) ?? 0) - (since(a) ?? 0));
-  const finished = listed
-    .filter((tab) => isUnseenDone(seen, tab))
-    .sort((a, b) => (b.done_at ?? 0) - (a.done_at ?? 0));
+  const { asking, finished } = needsYouGroups(listed, seen);
   const working = listed.filter((tab) => tab.agent_status === "working").length;
   const alertItems = alerts?.enabled ? alerts.items : [];
 
