@@ -161,7 +161,8 @@ pub fn refusal_body(api: Api, status: u16, message: &str) -> String {
 /// last one that matches, so `{"model": "local", "MODEL": "x:cloud"}` runs the
 /// cloud model while a plain parse sees the local one: a body that spells the
 /// key twice in different cases is refused, as is anything that is not one JSON
-/// object, a name that is not a string, or one with surrounding space.
+/// object, a name that is not a string, or one with surrounding space. An empty name
+/// names nothing (a request with no other is refused).
 pub fn models_named(route: &Route, body: &[u8]) -> Result<Vec<String>, Refusal> {
     let bad = |why: &str| Refusal::new(400, format!("The request body {why}."));
     let value: Value = serde_json::from_slice(body).map_err(|_| bad("is not one JSON object"))?;
@@ -175,8 +176,14 @@ pub fn models_named(route: &Route, body: &[u8]) -> Result<Vec<String>, Refusal> 
         }
         if let Some(spelling) = spellings.first() {
             let Value::String(name) = &map[spelling.as_str()] else { return Err(bad("names a model that is not a string")) };
-            if name.is_empty() || name != name.trim() || name.chars().any(char::is_control) {
-                return Err(bad("names a model with a blank, padded or control-character name"));
+            // An empty one names nothing: `ollama launch` sends `{"model": "m", "name": ""}` to
+            // `/api/show`, and Ollama takes whichever is set. A request left with no name is
+            // refused below.
+            if name.is_empty() {
+                continue;
+            }
+            if name != name.trim() || name.chars().any(char::is_control) {
+                return Err(bad("names a model with a padded or control-character name"));
             }
             names.push(name.clone());
         }

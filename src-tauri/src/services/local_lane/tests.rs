@@ -361,7 +361,11 @@ fn a_body_that_names_its_model_twice_or_oddly_is_refused() {
     assert_eq!(post(rig.addr, "/api/show", r#"{"name":"mycloud:latest"}"#).status, 403);
     assert_eq!(post(rig.addr, "/api/show", r#"{"model":"llama3","name":"mycloud:latest"}"#).status, 403);
     assert_eq!(post(rig.addr, "/api/show", r#"{"name":"llama3"}"#).status, 200);
-    assert!(stub.requests().len() == 1, "{:?}", stub.requests());
+    // What `ollama launch` sends: the model set and an empty `name`; an empty one alone names nothing.
+    assert_eq!(post(rig.addr, "/api/show", r#"{"model":"llama3","system":"","verbose":false,"options":null,"name":""}"#).status, 200);
+    assert_eq!(post(rig.addr, "/api/show", r#"{"model":"","name":""}"#).status, 400);
+    assert_eq!(post(rig.addr, "/api/show", r#"{"model":"","name":"mycloud:latest"}"#).status, 403);
+    assert!(stub.requests().len() == 2, "{:?}", stub.requests());
 }
 
 #[test]
