@@ -12,6 +12,7 @@ html[data-steering] :is(input,textarea,select):focus { outline-offset:-1px; }
 /* The legend's height: a head line and two lines of keys, plus the safe area.
    A constant, so nothing is measured. Set only while the bar is up. */
 html[data-steer-bar] { --steer-bar-h:calc(58px + env(safe-area-inset-bottom)); }
+html[data-steer-bar][data-steer-folded] { --steer-bar-h:calc(22px + env(safe-area-inset-bottom)); }
 
 /* A row is never left under the bars (the tab bar is ≈76px). */
 html[data-steering] [data-steer-row] { scroll-margin-top:12px; scroll-margin-bottom:calc(96px + var(--steer-bar-h, 0px)); }
@@ -30,7 +31,7 @@ html[data-steer-bar] .terminal-screen { padding-bottom:var(--steer-bar-h); }
 
 /* The bar: solid, above the sheet backdrop (12) and the tab bar (8). */
 .steer-bar { position:fixed; inset:auto 0 0 0; z-index:14; display:flex; flex-direction:column; gap:2px; height:var(--steer-bar-h, calc(58px + env(safe-area-inset-bottom))); padding:5px max(10px,calc((100vw - var(--screen-measure)) / 2)) max(5px,env(safe-area-inset-bottom)); overflow:hidden; border-top:1px solid #363c50; background:#151826; color:#c8cde0; font-size:.6875rem; line-height:1.25; pointer-events:none; }
-.steer-bar.folded { height:auto; padding-top:3px; padding-bottom:max(3px,env(safe-area-inset-bottom)); color:#98a0b4; }
+.steer-bar.folded { height:var(--steer-bar-h, calc(22px + env(safe-area-inset-bottom))); padding-top:3px; padding-bottom:max(3px,env(safe-area-inset-bottom)); color:#98a0b4; }
 .steer-head { display:flex; align-items:center; gap:8px; min-width:0; white-space:nowrap; }
 .steer-badge { color:#d7cffd; font-weight:700; }
 .steer-ladder { display:flex; gap:4px; min-width:0; margin:0; padding:0; list-style:none; overflow:hidden; }

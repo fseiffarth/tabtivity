@@ -604,7 +604,6 @@ export const dict: Dict = {
   "mobile.steering.key.jumpBack": "Zurückspringen",
   "mobile.steering.key.confirm": "Ja",
   "mobile.steering.key.legend": "Tasten",
-  "mobile.steering.paused": "Diese Ansicht hat eigene Tasten",
   "mobile.steering.handoff": "Eingabe — Enter sendet, Esc zurück zum Steuern",
   "mobile.steering.handoffField": "Eingabe — Esc zurück zum Steuern",
   "mobile.steering.none.decision": "Kein Tab wartet auf dich",

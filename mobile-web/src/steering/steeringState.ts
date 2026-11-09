@@ -40,7 +40,8 @@ export interface InsideTarget {
   /** Answer the live question with option `n` (1-9). */
   answer(n: number): AnswerResult;
   /** Put the caret in the composer, unless a live question or hint disabled it. */
-  focusComposer(): "focused" | "blocked";
+  /** "blocked": a question is up; "offline": the box waits for the connection. */
+  focusComposer(): "focused" | "blocked" | "offline";
   hasQuestion(): boolean;
 }
 
@@ -107,7 +108,10 @@ function syncRoot(): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.toggleAttribute("data-steering", state.active);
-  root.toggleAttribute("data-steer-bar", state.active && !state.legendFolded);
+  // A view with its own keys (files library, viewers, Mark up) hides the bar: its own
+  // bottom bars must stay reachable.
+  root.toggleAttribute("data-steer-bar", state.active && !state.view?.paused);
+  root.toggleAttribute("data-steer-folded", state.active && state.legendFolded);
 }
 
 function set(patch: Partial<SteeringSnapshot>): void {

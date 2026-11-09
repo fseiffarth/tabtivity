@@ -143,12 +143,12 @@ describe("SteeringBar", () => {
     expect(keys().join("|")).toContain("Jump back");
   });
 
-  it("says what the view is doing instead of listing keys: paused, typing", () => {
+  it("says what the view is doing instead of listing keys while typing, and hides over a paused view", () => {
     render(<SteeringBar />);
     show(view("tabs", { paused: true }));
-    within(bar()).getByText("This view has its own keys");
-    expect(document.querySelector(".steer-keys")).toBeNull();
+    expect(document.querySelector(".steer-bar")).toBeNull();
     act(() => setView(view("inside", { typing: "composer" })));
+    expect(document.querySelector(".steer-keys")).toBeNull();
     within(bar()).getByText("Typing — Enter sends, Esc back to steering");
     act(() => setView(view("region", { typing: "field" })));
     within(bar()).getByText("Typing — Esc back to steering");
@@ -172,9 +172,30 @@ describe("SteeringBar", () => {
     expect(document.documentElement.hasAttribute("data-steer-bar")).toBe(true);
     press(document.body, "h");
     expect(document.querySelector(".steer-bar.folded")?.textContent).toBe("Steering — H shows the keys");
-    expect(document.documentElement.hasAttribute("data-steer-bar")).toBe(false);
+    // Folded, the bar still keeps its (one-line) room: the tab bar and composer move up.
+    expect(document.documentElement.hasAttribute("data-steer-bar")).toBe(true);
+    expect(document.documentElement.hasAttribute("data-steer-folded")).toBe(true);
     press(document.body, "h");
     expect(document.querySelector(".steer-bar.folded")).toBeNull();
+    expect(document.documentElement.hasAttribute("data-steer-bar")).toBe(true);
+    expect(document.documentElement.hasAttribute("data-steer-folded")).toBe(false);
+    await act(async () => {});
+  });
+
+  it("steps aside, room and all, while a view with its own keys is up", async () => {
+    render(<><SteeringBar /><Harness /></>);
+    press(document.body, " ", { shift: true });
+    expect(document.querySelector(".steer-bar")).not.toBeNull();
+    const viewer = document.createElement("div");
+    viewer.className = "outbox-viewer";
+    document.body.appendChild(viewer);
+    press(document.body, "d");
+    expect(getSteering().active).toBe(true);
+    expect(document.querySelector(".steer-bar")).toBeNull();
+    expect(document.documentElement.hasAttribute("data-steer-bar")).toBe(false);
+    viewer.remove();
+    press(document.body, "d");
+    expect(document.querySelector(".steer-bar")).not.toBeNull();
     expect(document.documentElement.hasAttribute("data-steer-bar")).toBe(true);
     await act(async () => {});
   });

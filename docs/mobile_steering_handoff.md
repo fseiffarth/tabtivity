@@ -303,3 +303,13 @@ branches, `SteeringConfirm` inside `BackNest`), CSS (no blur, no animation, hex 
   behind the confirm fires in WebKit (jsdom does; the spec says it should), and whether Home's
   remembered row wins over a Needs-you row that renders first after a Back (cursor repair focuses
   the first row when the remembered one is not there yet).
+
+## After review (main agent)
+
+Fixed from the review's flags, each with a test:
+- Folded bar overlapped the tab bar and composer: folded now keeps a one-line room (`html[data-steer-folded]`, `--steer-bar-h` 22 px + inset).
+- The bar covered the files library and viewers' bottom bars (Mark up's pen bar): while a view with its own keys is up, the bar and its room are gone (`data-steer-bar` off); the `mobile.steering.paused` string is removed.
+- I on a disabled message box with no question flashed "waiting on a choice": `focusComposer` returns `"offline"` there, flashed as `mobile.indReconnecting`.
+- Help table: Enter/H per level corrected (Inside: S/← and H; Enter is not an Inside key).
+
+Still open for the user: N on a project with a starred default agent starts the agent (a tap does the same); tab bar safe-area gap on notched phones; jump-back records after the fetch / from Tabby records the section; device checks (Android Esc = system Back, WebKit `click()` behind the confirm, late-loading rows after Back).

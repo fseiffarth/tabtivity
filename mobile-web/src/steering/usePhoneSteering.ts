@@ -378,9 +378,12 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
         else if (result === "missing") flash("mobile.steering.noOption", { n });
         return;
       }
-      case "type":
-        if (getInside()?.focusComposer() === "blocked") flash("mobile.steering.blocked");
+      case "type": {
+        const typed = getInside()?.focusComposer();
+        if (typed === "blocked") flash("mobile.steering.blocked");
+        else if (typed === "offline") flash("mobile.indReconnecting");
         return;
+      }
       default:
         return;
     }

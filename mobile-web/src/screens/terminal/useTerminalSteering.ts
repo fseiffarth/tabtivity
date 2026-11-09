@@ -35,7 +35,8 @@ export function useTerminalSteering({ focusView, liveQuestion, answerQuestion, c
       },
       focusComposer() {
         const field = composer.current;
-        if (!field || field.disabled) return "blocked";
+        if (!field) return "blocked";
+        if (field.disabled) return latest.current.liveQuestion ? "blocked" : "offline";
         field.focus();
         field.setSelectionRange(field.value.length, field.value.length);
         return "focused";

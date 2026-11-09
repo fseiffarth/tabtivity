@@ -604,7 +604,6 @@ export const dict: Dict = {
   "mobile.steering.key.jumpBack": "Lieu précédent",
   "mobile.steering.key.confirm": "Oui",
   "mobile.steering.key.legend": "Touches",
-  "mobile.steering.paused": "Cette vue a ses propres touches",
   "mobile.steering.handoff": "Saisie — Entrée envoie, Échap revient au pilotage",
   "mobile.steering.handoffField": "Saisie — Échap revient au pilotage",
   "mobile.steering.none.decision": "Aucun onglet ne vous attend",

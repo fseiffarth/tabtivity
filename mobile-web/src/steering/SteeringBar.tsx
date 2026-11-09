@@ -153,11 +153,12 @@ export function SteeringBar() {
       </div>
       : null;
   }
+  // A view with its own keys keeps its bottom bars: the bar steps aside with steering.
+  if (view?.paused) return null;
   if (legendFolded) return <div className="steer-bar folded" role="group" aria-label={t("mobile.steering.badge")}>{t("mobile.steering.folded")}</div>;
   const off = level === "region" || level === "section";
   const legendKeys = keysText("legend", level);
-  const body = view?.paused ? t("mobile.steering.paused")
-    : view?.typing === "composer" ? t("mobile.steering.handoff")
+  const body = view?.typing === "composer" ? t("mobile.steering.handoff")
     : view?.typing === "field" ? t("mobile.steering.handoffField")
     : null;
   return <div className="steer-bar" role="group" aria-label={t("mobile.steering.badge")}>

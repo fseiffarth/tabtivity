@@ -292,6 +292,15 @@ describe("Mobile steering inside a tab", () => {
     expect(document.activeElement).not.toBe(composer());
   });
 
+  it("says the tab is reconnecting, not that it waits on a choice, when the box is off without a question", async () => {
+    await mount();
+    press(document.body, " ", { shift: true });
+    composer().disabled = true;
+    press(document.body, "i");
+    expect(getSteering().flash?.key).toBe("mobile.indReconnecting");
+    expect(document.activeElement).not.toBe(composer());
+  });
+
   it("scrolls the chat with the arrows and jumps to the latest with F", async () => {
     await mount();
     const chat = document.querySelector<HTMLElement>(".readable-output")!;

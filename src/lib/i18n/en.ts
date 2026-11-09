@@ -648,7 +648,6 @@ export const enSource = {
   "mobile.steering.key.jumpBack": "Jump back",
   "mobile.steering.key.confirm": "Yes",
   "mobile.steering.key.legend": "Keys",
-  "mobile.steering.paused": "This view has its own keys",
   "mobile.steering.handoff": "Typing — Enter sends, Esc back to steering",
   "mobile.steering.handoffField": "Typing — Esc back to steering",
   "mobile.steering.none.decision": "No tab waits on you",

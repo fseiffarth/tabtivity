@@ -245,11 +245,11 @@ mode. **E S D F** work as the arrow keys throughout.
 
 | Level | Keys |
 |---|---|
-| Every level | **E / ↑**, **D / ↓** move the cursor; **S / ←** goes back; **F / →** or **Enter** opens the row; **H** folds the bar |
+| Projects, Tabs, Mail, Calendar, To-do | **E / ↑**, **D / ↓** move the cursor; **S / ←** goes back; **F / →** or **Enter** opens the row; **H** folds the bar |
 | Projects, Tabs, Inside, Mail, Calendar, To-do | **Q / R / X** open the next tab that waits for an answer / is working / is done, in any project (Shift: previous); **Backspace** returns to where you were; **M C T** open Mail, Calendar and To-do; **/** goes to Home's search |
 | Projects (Home) | **N** a new project; **1-9** open project N |
 | Tabs (a project) | **N** or **+** the new-tab button; **W** closes the tab after asking (**Y** or Enter confirms); **.** the card's menu |
-| Inside a tab | **E / D** scroll the chat or terminal (Shift: a page); **F** jumps to the latest; **1-9** answer the agent's question on screen; **I** puts the caret in the message box |
+| Inside a tab | **E / D** scroll the chat or terminal (Shift: a page); **F** jumps to the latest; **S / ←** back to the tab list; **H** folds the bar; **1-9** answer the agent's question on screen; **I** puts the caret in the message box |
 | A sheet or menu on top | **E / D** walk its controls, **Enter** presses one, **S / ← / Esc** close it, **Y** confirms a confirm |
 
 Typing is never taken from you. While the caret is in a text field, every key
@@ -259,7 +259,8 @@ box, **Enter** sends as usual and steering resumes. A free-text answer
 field and the keyboard is yours until Esc.
 
 Some views keep their own keys, so steering steps aside: the file library and
-the viewers (including Mark up) show *This view has its own keys*. The Mail,
+the viewers (including Mark up). While one is open the steering bar hides, so
+the view's own bottom bars stay in reach, and it comes back when you close the view. The Mail,
 Calendar, To-do and Tabby screens are walked control by control. The favourites
 page has no rows for the cursor yet. The phone uses the default keys; rebinding
 in the desktop's settings does not reach it.
