@@ -952,6 +952,8 @@ export const dict: Dict = {
   "mobile.voice.handsFree": "Mains libres",
   "mobile.voice.handsFreeHint": "Une pause envoie ce que vous avez dicté après un signal sonore ; le micro se rouvre une fois la réponse terminée. Gardez l’écran allumé et cette page ouverte.",
   "mobile.voice.listeningHandsFree": "Mains libres : à l’écoute… faites une pause pour envoyer, dites « stop » pour garder",
+  "mobile.voice.tabbyCue": "Envoyé — dites {assistant} pour votre prochain prompt",
+  "mobile.voice.tabbyListening": "À l’écoute de votre prompt",
   "mobile.voice.handsFreeWindow": "Envoi… touchez ici ou dites « stop » pour le garder",
   "mobile.voice.handsFreePickHeard": "Entendu : {text} — répond dans un instant… dites « stop » ou cliquez pour annuler",
   "mobile.voice.handsFreePickWindow": "Entendu : {text} — répond au dialogue dans un instant… cliquez ici ou dites « stop » pour ne pas répondre.",

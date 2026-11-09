@@ -25,11 +25,13 @@ import { isStopWord } from "../../../../shared/voice";
 import { playChime } from "../../../../src/lib/voice/chime";
 import { HANDS_FREE_PAUSE_MS, TURN_SETTLE_MS, handsFreeTurnOver, questionSpeech, voicePick, voicePickable } from "../../handsFree";
 import { type DictationSession } from "../../voiceSession";
+import { type TabbyGate } from "./useTabbyGate";
+import { type StartVoiceOptions } from "./useVoiceInput";
 
 /** Hands-free (`focusHandsFree`): the send guard the dictation feeds, the wait
  * for the turn a send started, and the question read out to be answered. */
 export function useHandsFree({
-  tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation,
+  tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation, tabbyGate,
   connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
   questionSignature, questionAsk, answerQuestion, transcript,
 }: {
@@ -41,8 +43,10 @@ export function useHandsFree({
   recognition: MutableRefObject<DictationSession | undefined>;
   draftRef: MutableRefObject<string>;
   submitDraftRef: MutableRefObject<(text?: string, fromComposer?: boolean, interrupt?: boolean) => boolean>;
-  startVoiceRef: MutableRefObject<() => Promise<void>>;
+  startVoiceRef: MutableRefObject<(options?: StartVoiceOptions) => Promise<void>>;
   endDictation: () => void;
+  /** The Tabby gate: hands-free's own send and reopen turn it off. */
+  tabbyGate: TabbyGate;
   connected: boolean;
   listening: boolean;
   preparingVoice: boolean;
@@ -114,6 +118,7 @@ export function useHandsFree({
         hasDraft: () => staged.current.pending() !== null || draftRef.current.trim() !== "",
         onWindow: () => playChime(),
         onSend: () => {
+          tabbyGate.clear();
           const pick = staged.current.take();
           if (pick) commitPickRef.current(pick);
           else if (submitDraftRef.current()) awaitTurnRef.current();
@@ -187,6 +192,7 @@ export function useHandsFree({
   };
   /** The Focus menu's row. Switching on unlocks speech in the tap. */
   const toggleHandsFree = (unlock: () => void) => {
+    tabbyGate.clear();
     if (handsFree) stopLoop();
     else unlock();
     setHandsFree(!handsFree);
@@ -264,7 +270,8 @@ export function useHandsFree({
       // again when the voice falls quiet).
       if (readTheTurn()) return;
       setHandsFreeWait(null);
-      void startVoiceRef.current();
+      // Its own reopen: the gate (a spoken send's) is off again.
+      void startVoiceRef.current({ gate: false });
     }, TURN_SETTLE_MS);
     return () => window.clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps

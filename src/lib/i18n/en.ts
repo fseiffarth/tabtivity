@@ -996,6 +996,8 @@ export const enSource = {
   "mobile.voice.handsFree": "Hands-free",
   "mobile.voice.handsFreeHint": "A pause sends what you dictated after a chime; the mic opens again once the answer is over. Keep the screen on and this page open.",
   "mobile.voice.listeningHandsFree": "Hands-free: listening… pause to send, say “stop” to keep it",
+  "mobile.voice.tabbyCue": "Sent — say {assistant} for your next prompt",
+  "mobile.voice.tabbyListening": "Listening for your prompt",
   "mobile.voice.handsFreeWindow": "Sending… tap here or say “stop” to keep it",
   "mobile.voice.handsFreePickHeard": "Heard: {text} — answering shortly… say “stop” or click to cancel",
   "mobile.voice.handsFreePickWindow": "Heard: {text} — answering the dialog in a moment… click here or say “stop” to keep it unanswered.",

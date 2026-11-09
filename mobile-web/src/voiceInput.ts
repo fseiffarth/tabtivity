@@ -411,6 +411,9 @@ export interface UtteranceStep {
   bare: boolean;
   /** A new utterance took the gate's open window (or the draft's). */
   opened: boolean;
+  /** Words are being held back (a possible command, or a first word that
+   * cannot tell yet): speech is still open as far as hands-free's pause goes. */
+  held: boolean;
 }
 
 /** The live utterance as words ("how are you today"), finalized and interim
@@ -428,6 +431,7 @@ interface Run {
   opened: boolean;
   /** The live words belong to an utterance that is not kept (yet). */
   hideLive: boolean;
+  held: boolean;
 }
 
 function runUtterances(
@@ -439,7 +443,7 @@ function runUtterances(
 ): Run {
   const records: Record<number, UtteranceRecord> = { ...prev.records };
   const { heard, starts } = scan;
-  const run: Run = { records, cursor: progress.inserted, inserts: [], kept: [], bare: false, opened: false, hideLive: false };
+  const run: Run = { records, cursor: progress.inserted, inserts: [], kept: [], bare: false, opened: false, hideLive: false, held: false };
   const flush = opts.flush === true;
   starts.forEach((s, index) => {
     const e = starts[index + 1] ?? heard.length;
@@ -484,6 +488,7 @@ function runUtterances(
     };
     if (rec.keep === null || (!settled && holds)) {
       // Held back: nothing of it reaches the draft yet.
+      run.held = true;
       if (rec.keep !== null) quote(0);
       return;
     }
@@ -550,6 +555,7 @@ export function stepUtterances(
       insert: [closed.insert, next.insert].filter(Boolean).join(" "),
       bare: closed.bare || next.bare,
       opened: closed.opened || next.opened,
+      held: next.held,
     };
   }
   const run = runUtterances(prev, progress, scan, lex, opts);
@@ -563,21 +569,25 @@ export function stepUtterances(
     preview: [...run.kept, ...tailQuote].join(" "),
     bare: run.bare,
     opened: run.opened,
+    held: run.held,
   };
 }
 
 /** The live utterance is whole: the timer ran out, the recognizer restarted or
  * the mic stopped. Held words are offered to `onWithheld` and, unless a
- * command took them, inserted. */
+ * command took them, inserted. `last` is the reading the quiet followed, so the
+ * live words it showed stay in the preview. */
 export function settleUtterances(
   ledger: UtteranceLedger,
   progress: DictationProgress,
   lex: StartLexicon,
   opts: UtteranceOptions,
+  last?: DictationScan,
 ): UtteranceStep {
-  const scan: DictationScan = { heard: progress.heard, interim: "", starts: [...ledger.starts], tail: "none", live: [] };
-  const step = stepUtterances(ledger, progress, scan, lex, { ...opts, flush: true });
-  return step;
+  const scan: DictationScan = {
+    interim: "", tail: "none", live: [], ...last, heard: progress.heard, starts: [...ledger.starts],
+  };
+  return stepUtterances(ledger, progress, scan, lex, { ...opts, flush: true });
 }
 
 /** The message for a recognizer error, as an i18n key; `null` for an abort,

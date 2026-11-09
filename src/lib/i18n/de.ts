@@ -952,6 +952,8 @@ export const dict: Dict = {
   "mobile.voice.handsFree": "Freihändig",
   "mobile.voice.handsFreeHint": "Eine Pause sendet das Diktierte nach einem Ton; das Mikrofon öffnet sich wieder, sobald die Antwort vorbei ist. Lass den Bildschirm an und diese Seite offen.",
   "mobile.voice.listeningHandsFree": "Freihändig: hört zu … Pause zum Senden, „stopp“ zum Behalten",
+  "mobile.voice.tabbyCue": "Gesendet – sag {assistant} für den nächsten Prompt",
+  "mobile.voice.tabbyListening": "Ich höre auf deinen Prompt",
   "mobile.voice.handsFreeWindow": "Wird gesendet … hier tippen oder „stopp“ sagen, um es zu behalten",
   "mobile.voice.handsFreePickHeard": "Verstanden: {text} — antwortet gleich … „stopp“ sagen oder klicken, um abzubrechen",
   "mobile.voice.handsFreePickWindow": "Verstanden: {text} — beantwortet den Dialog gleich … hier klicken oder „stopp“ sagen, um ihn unbeantwortet zu lassen.",

@@ -137,7 +137,8 @@ import { useOutboxPoll, useOutboxViewers } from "./terminal/useOutbox";
 import { useModelPicker, useModelPickerAnswers } from "./terminal/useModelPicker";
 import { useSignInPageWalk } from "./terminal/useSignInPageWalk";
 import { useLiveQuestion } from "./terminal/useLiveQuestion";
-import { useVoiceInput } from "./terminal/useVoiceInput";
+import { useVoiceInput, type StartVoiceOptions } from "./terminal/useVoiceInput";
+import { useTabbyGate } from "./terminal/useTabbyGate";
 import { useHandsFree } from "./terminal/useHandsFree";
 import { type SendGuard } from "../../../shared/handsFree";
 import { queueFamily, queuedHintShown } from "../terminal/queuePull";
@@ -2162,19 +2163,27 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     followReadable(true);
   };
   /** The mic's start, for hands-free to open it again once a turn is over. */
-  const startVoiceRef = useRef<() => Promise<void>>(async () => {});
+  const startVoiceRef = useRef<(options?: StartVoiceOptions) => Promise<void>>(async () => {});
+  /** The Tabby gate (hands-free): dictation only from an utterance that starts
+   * with the start word, from a spoken send until the next send. */
+  const tabbyGate = useTabbyGate(tab.id);
+  /** What the utterance layer hands on: navigation mode's switch and its hook. */
+  const utteranceHooks = {
+    capture: useRef(false),
+    take: useRef<(utterance: string) => boolean>(() => false),
+  };
   const {
     handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, stopLoop,
     toggleHandsFree, handsFreeLine: handsFreeLineFor,
   } = useHandsFree({
-    tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation,
+    tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation, tabbyGate,
     connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
     questionSignature, questionAsk, answerQuestion, transcript,
   });
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
     tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
     setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
-    setVoiceFailure, forgetDictation, submitSpokenRef,
+    setVoiceFailure, forgetDictation, submitSpokenRef, tabbyGate, utterances: utteranceHooks,
     handsFree: {
       on: handsFreeRef, guard: handsFreeGuard, sendGuard, voiceOpen, voiceStopping,
       pick: voicePickRef, awaitTurn: awaitTurnRef, stopLoop,
@@ -2186,8 +2195,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** A browser without Web Speech says so from the start: no action clears
    * that, so it is derived rather than stored beside the failures that do. */
   const voiceProblem: VoiceNote | null = voiceFailure ?? (voiceAvailable ? null : { key: "mobile.voice.unavailable" });
+  /** The Tabby gate's line: the cue after a spoken send, or the wait for a
+   * prompt after the start word alone. */
+  const tabbyLine = handsFree && listening && tabbyGate.line
+    ? t(tabbyGate.line === "cue" ? "mobile.voice.tabbyCue" : "mobile.voice.tabbyListening")
+    : "";
   const voiceLine = voiceProblem ? sayVoice(voiceProblem)
     : voicePreview ? t("mobile.voice.heard", { text: voicePreview })
+    : tabbyLine ? tabbyLine
     : voiceStatus ? sayVoice(voiceStatus) : "";
   const handsFreeLine = handsFreeLineFor(voiceProblem !== null);
   /** What the sheet paints: the live step, or — between the tap and the
@@ -2644,7 +2659,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {tab.kind === "agent" && handsFreeLine && (handsFreeLine.run
         ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={handsFreeLine.run}>{handsFreeLine.text}{isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</button>
         : <div className="voice-feedback hands-free" role="status" aria-live="polite">{handsFreeLine.text}</div>)}
-      {tab.kind === "agent" && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend")) && <em>{t("mobile.focus.untested")}</em>}</div>}
+      {tab.kind === "agent" && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
       {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}
@@ -2772,7 +2787,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {/* An untouched suggestion reads greyed in the field itself, as the
             CLI dims it; the first edit makes it the reader's own text. */}
         <div className="composer-field">
-          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t("terminal.reader.suggestion") : undefined} value={draft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => setDraft(event.target.value)} onFocus={(event) => { setComposerTyping(true); if (draft && draft === suggestionRef.current.filled) event.currentTarget.select(); }} onBlur={typingStopped} onKeyDown={(event) => {
+          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t("terminal.reader.suggestion") : undefined} value={draft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => { tabbyGate.clear(); setDraft(event.target.value); }} onFocus={(event) => { setComposerTyping(true); if (draft && draft === suggestionRef.current.filled) event.currentTarget.select(); }} onBlur={typingStopped} onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey) return;
             // Enter confirms a candidate inside an IME composition (CJK keyboards,
             // and 229 is what Android keyboards report mid-composition); that
@@ -2785,7 +2800,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {suggested && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
           {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
-          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={listening ? stopVoice : preparingVoice ? cancelVoicePrep : handsFree && speaking ? stopSpeaking : () => void startVoice()}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
+          {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={() => {
+            if (listening) stopVoice();
+            else if (preparingVoice) cancelVoicePrep();
+            else if (handsFree && speaking) stopSpeaking();
+            else void startVoice({ gate: false });
+          }}>{listening ? <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1" /></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8 21h8" /></svg>}</button>}
         </div>
         <div className="composer-bar">
           {tab.kind === "agent" && <>
