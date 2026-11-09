@@ -49,8 +49,24 @@ grants, and the locked folders it masked), so a tab spawned after the switch, wh
 fence masked the folder, is left alone. A container agent records the mounted
 project folder as its view (`container_fence_view`), since a container hides nothing.
 `closed_tabs` carries the PTY ids
-(`<scope>:<tab key>`); the store closes the matching tabs in every scope. Unfenced
-agents (the Host session, Windows) have no recorded view and are not touched: D1.
+(`<scope>:<tab key>`); the store closes exactly those tabs, in every scope, and no
+other (a verified local tab the backend kept is not closed). Unfenced agents (the
+Host session, Windows) have no recorded view and are not touched: D1.
+
+Agents **no registry PTY holds** are swept too (`commands::agent_privacy::
+end_detached_agents`, `agent_privacy::tmux_sessions_to_end`): a tab the phone started
+headless (`prepare`, a detached `tmux new-session`, `commit`: the commit records the
+fence view and the tmux session on the live spawn) and an agent tmux session that
+outlived a crash, which a respawn would attach to (`new-session -A`, while the fence
+built for the respawn describes a new process, not the old one). The app's sessions
+are listed with `tmux ls`; an agent session (`<prefix><project key>--agent-…`) no PTY is
+a client of ends when its recorded view shows the folder, or when its view is
+unknown and it is the project's own, its pane folder lies in, at or above the
+locked folder, or names none (fail closed). A known view that hid the folder, a
+verified tab and shell sessions stay. Each goes with its whole process subtree (the
+pane's process found before the session is killed) and then the session
+(`closed_sessions` in the answer). A verified local tab that survived a crash has no
+recorded view and is ended too, by the same rule.
 
 ## The gate
 
@@ -144,9 +160,9 @@ a verified tab (`mask_project_config`: `--ro-bind /dev/null` over a file, `--tmp
 over a folder; macOS adds them to the Seatbelt `hidden` list, not compiled here).
 Existing paths only: a mount over nothing makes bubblewrap create a placeholder file
 in the project. A file created later is covered at the next spawn, which looks again;
-within a running session a CLI that watches its settings picks up a file its own
-agent writes (measured for Claude Code 2.1.319: `docs/local_models_only_handoff.md`,
-"Review 2 findings") (the agent acting, like a prompt-injected `curl`). A name that is
+within a running session a CLI that re-reads its settings picks up a file its own
+agent writes — see "A CLI re-reads its settings mid-session" below for what is pinned
+against that, per CLI. A name that is
 a link to nowhere refuses the spawn. An empty file reads as no config in every CLI
 below that was run.
 
@@ -160,6 +176,42 @@ below that was run.
 Not covered: `.mcp.json` and other project MCP servers (tools, not a model location);
 a CLI's env-var switches for ignoring project config (above: not effective or not
 checked).
+
+## A CLI re-reads its settings mid-session
+
+The masks above cover config that exists at spawn. Measured with the installed CLIs
+(fix round 3, a plain process, an isolated `HOME`, two loopback listeners standing for
+"Ollama" and "an attacker"; first prompt, then settings files written, then the next
+prompts):
+
+| CLI | Re-reads mid-session? | What pins it |
+| --- | --- | --- |
+| Claude Code 2.1.319 | **Yes**, project `.claude/settings.json`, `.claude/settings.local.json` and the user's `~/.claude/settings.json` (the agent home's, writable in the fence). An `env.ANTHROPIC_BASE_URL` moved the next `POST /v1/messages`; so did `env.HTTP_PROXY`/`HTTPS_PROXY` (the whole request goes through the proxy even to a loopback base URL) and `env.CLAUDE_CODE_USE_BEDROCK` + `ANTHROPIC_BEDROCK_BASE_URL` (the request went to the attacker as `/model/<m>/invoke-with-response-stream`). | A **managed-settings file** (`local_drivers::claude_managed_settings`), written by the backend into `<state>/claude_managed/<digest>/claude-code/managed-settings.json` (content-addressed, `home_io` handles, pinned by inode and re-checked last by `verify_control_pins`) and bound read-only into the fence at Claude's machine-wide path `/etc/claude-code/managed-settings.json`. It outranks project and user settings. It pins `env` (`ANTHROPIC_BASE_URL` to the verified endpoint, the model variables `ollama launch claude` sets, the proxy and `CLAUDE_CODE_USE_*` variables emptied, `NO_PROXY` to loopback), `model`, `availableModels: [model]` and `allowedProviders: ["customEndpoint"]` (Claude Code refuses a session on any other provider; the custom endpoint is admitted only at the value this file pins). Built from what the gate recorded for the tab (driver, model, endpoint), not from the argv. |
+| OpenCode 2.2.6 | **Yes**: a project `opencode.json` / `.opencode/opencode.json` written mid-session moved the next request when the provider came from a project file (`opencode mini --standalone`). | The gate puts an **inline `OPENCODE_CONFIG_CONTENT`** on a verified tab, written from the verified endpoint and model (`opencode_ollama_config`). Measured: with the inline config set, the same mid-session project files moved nothing (all later requests went to the inline endpoint). Not pinned: a project config that adds a new provider or sets `model`/`enabled_providers` (the project's `enabled_providers` replaced the inline list in `opencode models`); it takes a user action (a new session, a model switch) to use. Flagged. |
+| Codex 0.167.0 | **No** (measured): `.codex/config.toml` written mid-session with another `model`/`model_provider`/`openai_base_url` changed nothing; later requests kept the launch model on the launch endpoint. The provider keys in a project file are ignored at start anyway. | Nothing needed. |
+| Pi, Droid, Cline, OpenClaw, Vibe | Not installed, not measured. | The spawn-time masks only. Vibe's home is pinned read-only. |
+
+**Where the managed file goes (Linux).** Claude Code reads `managed-settings.json` and the
+drop-in folder `managed-settings.d/` under `/etc/claude-code` (strace). The environment
+override of that path is compiled out of the release build (`CLAUDE_CODE_MANAGED_SETTINGS_PATH`
+names a function that returns nothing), so the file has to sit at the real path. The fence root
+is `--ro-bind / /`, and bubblewrap cannot create a mount point in it, so
+`agent_fence::managed_claude_args` covers the host's `/etc/claude-code` with an empty tmpfs when
+it exists (hiding an administrator's own policy in this fence), binds the file in and remounts the
+tmpfs read-only (no drop-in can be added); when there is none it overlays `/etc` read-only with the
+file's layer as a second source (`--overlay-src /etc --overlay-src <layer> --ro-overlay /etc`). The
+mounts come right after the root bind. **The bubblewrap argv is a unit test; it was not run**:
+this session's fence forbids a nested namespace, so neither the overlay nor the tmpfs case was
+mounted, and the overlay needs bubblewrap 0.8 and an overlayfs that unprivileged user namespaces may
+mount (a failure refuses the spawn, closed). A host whose `/etc` holds bind mounts of its own (a
+container's `resolv.conf`) is the case to watch for the overlay. The pinned precedence was measured
+by pointing the real binary at an equivalent file through a ptrace path rewrite (a test tool, not
+part of the product); the real bind mount was not exercised.
+
+**macOS and Windows.** Seatbelt cannot bind a file to `/Library/Application
+Support/ClaudeCode/managed-settings.json`, and Windows has no sandbox: `vet` refuses a
+verified Claude tab there (`Probe::pins_claude`, `CLAUDE_NOT_PINNABLE`), and the Seatbelt wrapper
+repeats the refusal. The other local agents are unaffected.
 
 ## Audit of the non-agent paths to a cloud model
 
@@ -196,5 +248,4 @@ only four files wrap an agent in the fence).
 
 Phase 2 (`--unshare-net`, the local lane relay, Cut network), macOS Seatbelt network
 denial, container and VM projects, the phone's ＋ sheet hiding cloud rows in a locked
-project (the spawn is refused with the backend's text), killing a cloud agent's
-surviving tmux session that no live PTY holds.
+project (the spawn is refused with the backend's text).

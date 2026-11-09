@@ -300,3 +300,108 @@ The rest is flagged, not changed.
   verified tab open; not run): the tab would disappear, its PTY keep running. Backend `closed_tabs` is the better source.
 - **Config names:** `.mcp.json` and project MCP servers (code that runs in the fence with network), Pi,
   Droid, Cline, OpenClaw, Vibe folder names stay unverified; unchanged from round 2.
+
+## Fix round 3
+
+Branch `fix3/local-models` (from `develop` 0229355d). The three items the user chose after
+review 2. Commits: `f4c8979b` (store), `17f447d3` (Claude pin, OpenCode inline config),
+`d81706b3` (switch sweep), `a1f0aa4c` (TS type), a final tweak (`--agent-` match, two test-only lints; the `a--b` project-id case in `an_unknown_view_…` was reasoned to fail on the old `split_once` match, not run), then this documentation
+(`git log 0229355d..fix3/local-models`).
+
+| # | Hole | Fix | Test (saw fail by) |
+| --- | --- | --- | --- |
+| 1 | Claude Code re-reads project and user settings mid-session, so a file the agent writes re-aims the next request | A managed-settings file written by the backend (`local_drivers::claude_managed_settings`, built from the gate's record of driver, model and endpoint) under `<state>/claude_managed/<digest>/…`, written through `home_io`, pinned by inode and checked last (`write_managed_claude`, `verify_control_pins`), bound read-only at `/etc/claude-code/managed-settings.json` (`managed_claude_args`: tmpfs over an existing folder, else a read-only overlay of `/etc`). Pins `env` (base URL, the model variables, proxy and `CLAUDE_CODE_USE_*` variables emptied, `NO_PROXY`), `model`, `availableModels`, `allowedProviders: ["customEndpoint"]`. macOS and Windows refuse a verified Claude tab (`Probe::pins_claude`, repeated in the Seatbelt wrapper). A verified OpenCode tab also gets an inline `OPENCODE_CONFIG_CONTENT` from the verified endpoint and model | `the_managed_claude_settings_pin_…`, `the_gate_remembers_a_claude_tabs_endpoint_and_model_for_the_fence`, `claude_is_refused_where_the_sandbox_cannot_pin_its_settings`, `a_verified_opencode_tab_runs_on_an_inline_config_…`, the two argv tests, `the_pinned_settings_file_is_written_once_per_content_and_pinned_by_inode`, `both_wrappers_pin_or_refuse_a_verified_claude_tab`. Mutated, three failed: the gate's OpenCode inline config disabled, the Claude refusal disabled, the wrappers' call replaced by `None`. The new functions did not exist before, so the rest failed to compile |
+| 2 | The switch missed agents with no registry PTY (phone-started headless tabs; tmux sessions that outlived a crash) | The live spawn records its tmux session at `commit` (the headless owner already commits, so its fence view was recorded; now checked by a test). `tmux_sessions_to_end` (pure) over the app's `tmux ls`: a known unverified session ends when it is the project's own or its recorded view shows the folder; an unknown view ends when it is the project's own, its pane folder is in, at or above the locked folder, or empty (fail closed). `end_detached_agents` reaps the pane's whole subtree, then kills the session; `closed_sessions` in the answer | `the_switch_ends_a_phone_started_headless_agent_and_a_session_that_outlived_a_crash`, `an_unknown_view_that_overlaps_the_folder_is_ended_and_one_that_does_not_is_left`, `the_headless_spawn_records_its_view_and_session_and_the_switch_sweeps_them`. Mutated (the sweep's filter forced empty, the command's call removed): all three failed |
+| 3 | The store closed every own-scope agent tab, including a verified local one the backend kept | The store closes exactly the tabs in `closed_tabs`, in every scope | vitest `keeps a verified local agent tab the backend did not end` (failed with the old condition restored: `expected ['p1:cloud','p1:verified'] to deeply equal ['p1:cloud']`) |
+
+### Live measurements (item 1)
+
+Done in the session scratchpad with the installed binaries as plain processes: an isolated
+`HOME`, two loopback listeners (A the verified "Ollama", B the "attacker"), `claude --model m`
+in a pty, a first prompt, then `.claude/settings.json`, `.claude/settings.local.json` and
+`~/.claude/settings.json` written with the hostile values, then two more prompts; requests per
+listener counted.
+
+- **Control (no managed file)**: the settings written mid-session moved every later request
+  to B. Reproduces review 2.
+- **Where Claude reads policy**: `strace` of 2.1.319 shows it reading
+  `/etc/claude-code/managed-settings.json` and the drop-in folder `/etc/claude-code/managed-settings.d`
+  and nothing else on Linux. The env override of that path is compiled out of the release build, and this
+  session can neither write `/etc` nor create a namespace (`bwrap --ro-bind / / true` and `unshare -Ur`
+  fail), so the real bind mount was **not** tested. To test precedence with the real binary a small
+  ptrace tracer rewrote `/etc/claude-code` to a scratch folder in the path arguments of
+  `openat/statx/access/readlink/…` (a `LD_PRELOAD` shim did nothing: the binary makes its own
+  syscalls). The file was owned by the user, mode `0444` in a `0555` folder, and also `0644` in a
+  writable one; both behaved the same.
+- **With the managed file**: all hostile settings written mid-session changed nothing: base URL
+  to B (A kept every request, B none), `ANTHROPIC_MODEL`/`model` to another name (requests kept
+  the managed model, also with a colon in it: `nemotron-3.5-bolt:e4b`), `HTTP_PROXY`/`HTTPS_PROXY`/
+  `http_proxy`/`ALL_PROXY`/`CLAUDE_CODE_*PROXY`/`GLOBAL_AGENT_HTTP_PROXY` to B (without the proxy pins the
+  whole request went through B; with them B saw nothing), and `CLAUDE_CODE_USE_BEDROCK` +
+  `ANTHROPIC_BEDROCK_BASE_URL` to B (without `allowedProviders` and the emptied `USE_*` it went to B; with
+  either one, no request left, the session refused).
+- What was **not** verified live: the actual bind mount or overlay inside bubblewrap; the
+  managed file's behaviour when a real read-only mount reports `EROFS` for a write (the test file
+  was only made unwritable by mode); the drop-in folder being absent in the fence; Claude Code
+  versions other than 2.1.319.
+
+### Reload per CLI
+
+- **Claude Code 2.1.319**: reloads (above). Pinned.
+- **OpenCode 2.2.6** (`opencode mini --standalone --model ollama/m`; the `opencode --model` form
+  of the fallback line is refused by this version's top-level command: `Unrecognized flag: --model`,
+  not changed here, check what the app runs): reloads project config. With the provider in a project
+  file, an edit mid-session moved the next requests to B (4 of 4). With the provider in the inline
+  `OPENCODE_CONFIG_CONTENT` (how the app launches it), the same edits left every request on A (4 of 4).
+  A project config that adds a provider or sets `enabled_providers`/`model` does take effect in
+  `opencode models` over the inline one. The gate now sets the inline config. Not run: the
+  background-service mode (`opencode` without `--standalone`; a service process of 19 hours old
+  that is not mine was left alone).
+- **Codex 0.167.0** (`--oss -c oss_provider="ollama" -m m`, `CODEX_OSS_BASE_URL` at A): does
+  not reload. `.codex/config.toml` written mid-session with `model`, `model_provider`,
+  `openai_base_url` and a provider table changed nothing; later requests kept `model=m` on A.
+  Residual: the requests after the write were retries of a failing turn plus two prompts,
+  all with the launch model.
+
+### Gates (Linux, this tree)
+
+| Gate | Result |
+| --- | --- |
+| `npm run build` | pass |
+| `npm test` | 11325 of 11328 pass (11327 + 1 new); the same 3 known failures (`shell/i18n`, `theme/CursorPacks`, `theme/TypeScale`) |
+| `npm run lint` | 0 errors, 29 warnings (unchanged) |
+| `cargo test --workspace` | pass: 5420 lib tests (12 more than before), 143 + 39 + 1 + 136 + 101 in the other targets |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | pass |
+| clippy: workspace all-targets, no-default-features lib, `app-serverd` | pass at zero warnings (the workspace run was repeated after two test-only lints, `cloned_ref_to_slice_refs` and `needless_borrow`) |
+| `scripts/brand-check.sh`, `scripts/privacy-check.sh`, `git diff --check` | pass |
+
+### Flagged (updated)
+
+Fixed and removed from the list: the Claude Code mid-session re-aim (Linux), agents with no registry
+PTY, the store closing a kept verified tab.
+
+Still flagged:
+- **The bubblewrap mounts for the Claude pin were not run.** `/etc/claude-code` is added with a tmpfs
+  (folder exists) or a read-only overlay of `/etc` (none): both are argv unit tests only. The overlay
+  needs bubblewrap 0.8+ and overlayfs in an unprivileged user namespace; a failure refuses the spawn
+  (closed) but would make a verified Claude tab unusable on that machine. First thing to try live:
+  open a local Claude tab in a locked project and see that it starts (bubblewrap's error is the
+  spawn error otherwise), then have it write a `.claude/settings.json` with another `ANTHROPIC_BASE_URL`
+  and check the next prompt still reaches Ollama. A host whose `/etc` holds submounts
+  (a container's `resolv.conf`) is the likely casualty of the overlay.
+- **An administrator's own `/etc/claude-code` policy is hidden** inside a verified Claude tab's
+  fence (the tmpfs case), by design: the pinned file must be the only policy.
+- **OpenCode**: the inline config pins the provider endpoint, but a project config written
+  mid-session that adds a provider or sets `model` / `enabled_providers` is not pinned and takes a user
+  action (a new session or a model switch) to use. `opencode mini` vs `opencode --model` on 2.2.6
+  and the background-service mode were not checked against what the app runs.
+- **Codex**: no reload measured, so nothing done; `--oss` / `OLLAMA_HOST` stays out of scope.
+- **A verified local tab that survived a crash** is ended by the next switch-on (no recorded view,
+  overlaps): intended, fail closed.
+- **Unfenced agents** (the Host session, Windows), the sweep's `pane_current_path` for an agent that
+  `cd`s elsewhere (the project key rule still catches the project's own sessions) and an
+  unknown-view session of another scope whose pane folder is unrelated to the locked one (left running).
+- Unchanged from earlier rounds: the switch race, Codex `--oss`/`OLLAMA_HOST`, Copilot language-server
+  workspace, `complete_text` path vs id, macOS tmux keys, `.mcp.json`, unverified Pi/Droid/Cline/
+  OpenClaw/Vibe config names, free-text sends, macOS `hidden` entries not compiled here (the new
+  Seatbelt refusal is not compiled here either).
