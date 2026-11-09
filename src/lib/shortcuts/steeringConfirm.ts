@@ -4,8 +4,9 @@
  *
  * The question is a dialog (`SteeringConfirmOverlay`), so steering walks it as
  * the overlay region like any other: Esc cancels, Enter presses the button
- * under the cursor (Cancel, to start with), and the Confirm key (Y by default,
- * `steeringBindings`) presses the button marked {@link STEERING_CONFIRM_ATTR}.
+ * under the cursor (Close/Clear, to start with), and the Confirm key (Y by
+ * default, `steeringBindings`) presses the button marked
+ * {@link STEERING_CONFIRM_ATTR}.
  * Once the box is gone steering is back on the level the key was pressed on.
  */
 import { closeTabInScope } from "../remote/closeRemoteTab";

@@ -75,7 +75,7 @@ the **Root** chip). See `mail-calendar`.
 Press **Shift+Space**. A bar docks under the panes (the level ladder
 Projects › Subwindows › Tabs › Inside, the move keys, the jumps, and the keys
 that leave) and every other key shows as a small coloured cap on the control it
-fires: W on the tab, N O 1–9 + above the + button, I L G K on the prompt line,
+fires: W on the tab, N O 1–9 + above the + button, Space L G K on the prompt line,
 M C T , on the top bar, B P on the side rail. **H** folds the bar down to its
 ladder. The app answers single keys, even while a terminal has focus. (Mid-word, with Shift still held
 from a capital, Shift+Space stays a plain space.) The mode opens on the
@@ -86,9 +86,10 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | S F / ← → | Previous / next tab (on the subwindow level: subwindow; on the project level: project) |
 | E / ↑ | Up a level: tabs → subwindows → projects → the top bar |
 | D / ↓ | Back down a level |
-| 1–9 | Tabs: new agent tab. Projects: jump to a station (1 = root, 2 = first pill) |
+| 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option moves there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |
 | N / M | New shell / System Monitor tab (projects: new project / mail) |
 | + | The new-tab menu, walked with E/D; **/** types into its search |
+| / | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the ring, their digit (1–9, 0) opens one at once |
 | V | Toggle the pane's file viewer |
 | W | Close the active tab |
 | A | Walk the card over the active tab (Undo clear, a sign-in link) |
@@ -96,9 +97,11 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | B | Open the side panel |
 | P | Toggle the side panels |
 | Q / R / X | Next tab waiting for an answer / working / done (Shift: previous) |
+| Backspace | Back to the tab you were on before Q / R / X (again: return). Answering a question you jumped to with Q brings you back by itself |
 | , | Open Settings and walk it: ← → pages, E D controls |
 | ? | Open the cheat sheet: E D scroll it |
-| Space / Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it) |
+| Space | On an agent tab: a prompt box in the window's middle; Enter sends, Esc returns |
+| Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it first) |
 
 Dialogs and menus don't end the mode. Whatever comes up on top — a confirm, the
 New project dialog, a right-click menu, a top-bar menu, the root console — gets

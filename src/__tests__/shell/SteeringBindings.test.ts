@@ -26,10 +26,14 @@ describe("steering bindings", () => {
     expect(steeringActionFor(ev("N"), "projects", null)).toBe("newProject");
     expect(steeringActionFor(ev("n"), "panes", null)).toBe("newShell");
     expect(steeringActionFor(ev("n"), "region", null)).toBeNull();
-    expect(steeringActionFor(ev("Escape"), "panes", null)).toBe("work");
+    expect(steeringActionFor(ev("Escape"), "panes", null)).toBe("exit");
+    expect(steeringActionFor(ev("Escape"), "projects", null)).toBe("exit");
+    expect(steeringActionFor(ev("Enter"), "panes", null)).toBe("work");
+    expect(steeringActionFor(ev(" "), "panes", null)).toBe("agentPrompt");
+    expect(steeringActionFor(ev("i"), "panes", null)).toBeNull();
     expect(steeringActionFor(ev("Escape"), "region", null)).toBe("back");
     expect(steeringActionFor(ev("Enter"), "region", null)).toBe("press");
-    expect(steeringActionFor(ev(" "), "region", null)).toBe("exit");
+    expect(steeringActionFor(ev(" "), "region", null)).toBeNull();
     expect(steeringActionFor(ev("?"), "projects", null)).toBe("help");
     expect(steeringActionFor(ev("="), "panes", null)).toBe("newTabMenu");
   });
@@ -81,7 +85,7 @@ describe("steering bindings", () => {
 
   it("renders the legend's key text from the bindings", () => {
     expect(steeringRowKeys(["left", "right"], null, true)).toBe("S F / ← →");
-    expect(steeringRowKeys(["exit", "work"], null)).toBe("Space / Enter / Esc");
+    expect(steeringRowKeys(["exit", "work"], null)).toBe("Esc / Enter");
     expect(steeringRowKeys(["left", "right"], { left: ["j"], right: ["l"] }, true)).toBe("J L");
     expect(steeringRowKeys(["files"], { files: [] })).toBe("—");
     expect(steeringSlotKeys(null)).toBe("1–9");

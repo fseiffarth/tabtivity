@@ -108,7 +108,8 @@ select option {
    whole screen, and parks just above the edge; `top` rather than a transform,
    because a transformed ancestor would re-anchor the position:fixed menus that
    live inside the bar. Revealed by the pointer at the top edge (`.header-hotzone`,
-   `is-revealed`), by keyboard focus inside it, or by steering aimed at it.
+   `is-revealed`), by keyboard focus inside it, or by steering aimed at it
+   (its projects level, its header region).
    Hidden, it is inert so nothing in it can be clicked or tabbed to. */
 .app-header.is-autohide {
   position: fixed;

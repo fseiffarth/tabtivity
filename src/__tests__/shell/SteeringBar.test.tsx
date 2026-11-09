@@ -22,6 +22,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { STEERING_GROUPS, steeringKeysFor, type SteeringKeyDef, type SteeringLegendState } from "../../lib/shortcuts/shortcuts";
 import { NEW_TAB_SLOTS_EVENT, type NewTabSlotsDetail } from "../../lib/shortcuts/newTabChord";
 import { anchorOf, barModel, ladder, rowCaps, type CapAnchor } from "../../lib/shortcuts/steeringBar";
+import { spreadRows } from "../../lib/shortcuts/steeringCaps";
 
 const tokFor = (g: string) => STEERING_GROUPS.find((x) => x.id === g)!.tok;
 
@@ -84,7 +85,7 @@ describe("steering bar model", () => {
     expect([...placed.caps.keys()].sort()).toEqual(["add", "files", "mail", "prompt", "tab"]);
   });
 
-  it("orders a control's caps by press order: N O 1–3 + above the +, I L G K on the prompt strip", () => {
+  it("orders a control's caps by press order: N O 1–3 + above the +, Space L G K on the prompt strip", () => {
     const m = model(rowsFor({}), "tabs", ["add", "prompt"], [
       { key: "1", label: "Claude" },
       { key: "2", label: "Codex" },
@@ -92,7 +93,7 @@ describe("steering bar model", () => {
     ]);
     const text = (a: CapAnchor) => m.caps.get(a)!.flatMap((r) => r.caps.map((c) => c.key));
     expect(text("add")).toEqual(["N", "O", "1–3", "+"]);
-    expect(text("prompt")).toEqual(["I", "L", "G", "K"]);
+    expect(text("prompt")).toEqual(["Space", "L", "G", "K"]);
     // Each cap wears its group's token colour.
     expect(m.caps.get("add")![0].caps[0].tok).toBe("tok-string");
     expect(m.caps.get("prompt")![0].caps[0].tok).toBe("tok-keyword");
@@ -137,7 +138,7 @@ describe("steering bar model", () => {
       "steering.exit.label",
     ]);
     expect(tail.map((i) => !!i.leave)).toEqual([false, false, true, true]);
-    expect(tail.map((i) => i.caps[0])).toEqual(["?", "H", "Enter", "Space"]);
+    expect(tail.map((i) => i.caps[0])).toEqual(["?", "H", "Enter", "Esc"]);
   });
 
   it("names the surface on the ladder inside a region, and the box when the keyboard is lent", () => {
@@ -253,11 +254,44 @@ describe("steering key caps on a window", () => {
 
   it("draws no caps when folded, and the bar alone says where steering is", () => {
     subwindow();
-    useKeyboardSteeringStore.setState({ legendHidden: true });
     render(<SteeringLegend />);
     act(() => useKeyboardSteeringStore.getState().enter());
+    act(() => useKeyboardSteeringStore.getState().toggleLegend());
     expect(document.querySelector(".steering-caps")).toBeNull();
     expect(document.querySelector(".steering-bar.folded")).not.toBeNull();
+  });
+
+  it("hangs the caps under a control at the window's top edge instead of over its text", () => {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `<div class="subwindow focused"><div class="tab active"></div><button class="tab-new-btn">+</button></div>`,
+    );
+    place(document.querySelector(".tab.active")!, rect(100, 0, 120, 30));
+    place(document.querySelector(".tab-new-btn")!, rect(300, 0, 30, 30));
+    render(<SteeringLegend />);
+    act(() => useKeyboardSteeringStore.getState().enter());
+    const add = document.querySelector('.steering-cap-row[data-anchor="add"]') as HTMLElement;
+    // 4 px up into the control's bottom edge.
+    expect(add.style.top).toBe("26px");
+    expect((document.querySelector('.steering-cap-row[data-anchor="tab"]') as HTMLElement).style.top).toBe("26px");
+  });
+
+  it("pins nothing to a hidden control (the fullscreen header parked above the window)", () => {
+    subwindow();
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `<header class="app-header" style="visibility: hidden"><button data-hint-anchor="settings">s</button></header>`,
+    );
+    place(document.querySelector('[data-hint-anchor="settings"]')!, rect(500, 4, 32, 32));
+    render(<SteeringLegend />);
+    act(() => useKeyboardSteeringStore.getState().enter());
+    expect(caps("settings")).toEqual([]);
+    expect(barLabels()).toContain("Settings");
+    act(() => {
+      (document.querySelector(".app-header") as HTMLElement).style.visibility = "";
+      useKeyboardSteeringStore.getState().setLevel("panes");
+    });
+    expect(caps("settings")).toEqual([","]);
   });
 
   it("measures the region cursor for Enter", () => {
@@ -272,5 +306,22 @@ describe("steering key caps on a window", () => {
     // Enter is also the bar's own "Press".
     expect(barLabels()).toContain("Press");
     expect([...document.querySelectorAll(".steering-rung")].map((r) => r.textContent)).toEqual(["Tabs", "Side panel"]);
+  });
+});
+
+describe("steering cap rows kept apart", () => {
+  const box = (left: number, width: number, top = 0) => ({ left, right: left + width, top, bottom: top + 15 });
+
+  it("moves a row after the one it would cover on the same line", () => {
+    // W on the tab's end, N O + from the + button, V on the files toggle.
+    expect(spreadRows([box(200, 20), box(210, 60), box(250, 20)], 1000)).toEqual([0, 12, 34]);
+  });
+
+  it("leaves rows on other lines and rows with room alone", () => {
+    expect(spreadRows([box(0, 50), box(20, 50, 40), box(60, 20)], 1000)).toEqual([0, 0, 0]);
+  });
+
+  it("brings a row pushed past the right edge back in, with the rows before it", () => {
+    expect(spreadRows([box(940, 40), box(950, 40)], 1000)).toEqual([-24, 8]);
   });
 });

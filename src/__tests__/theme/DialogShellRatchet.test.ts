@@ -52,7 +52,6 @@ const STILL_HAND_ROLLED = new Set([
   "layout/RemoteFeaturesPrompt.tsx",
   "layout/RootOverlay.tsx",
   "layout/SettingsPanel.tsx",
-  "layout/ShortcutHelpOverlay.tsx",
   "layout/ThemeCustomizer.tsx",
   "layout/VpnPasswordPrompt.tsx",
   "mail/MailAccountDialog.tsx",

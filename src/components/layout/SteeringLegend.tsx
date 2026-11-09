@@ -7,15 +7,16 @@ import { steeringTabsActive } from "../../lib/shortcuts/steeringScope";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { voiceInputOffered } from "../../lib/voice/desktopVoice";
-import { STEERING_GROUPS, modifierLabel, steeringKeysFor, type SteeringGroup } from "../../lib/shortcuts/shortcuts";
+import { STEERING_GROUPS, modifierLabel, projectCycleLabels, steeringKeysFor, type SteeringGroup } from "../../lib/shortcuts/shortcuts";
 import { steeringKeyLabel, steeringKeys, steeringSlotKey, type SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
 import { newTabSlotLabels } from "../../lib/shortcuts/newTabChord";
 import { activeTabCard, steeringAppEnabled } from "../../lib/shortcuts/steeringRegion";
-import { statusTabs } from "../../lib/shortcuts/statusJump";
+import { jumpBackTarget, shownStatusTab, statusTabs } from "../../lib/shortcuts/statusJump";
+import { steeringTabAsks } from "../../lib/shortcuts/steeringAnswer";
 import { steeringAgentOffer } from "../../lib/shortcuts/steeringAgent";
 import { steeringConfirmButton } from "../../lib/shortcuts/steeringConfirm";
 import { anchorOf, barModel, ladder, type BarItem, type CapAnchor, type Rung } from "../../lib/shortcuts/steeringBar";
-import { measureCaps, samePlacements, type CapPlacements } from "../../lib/shortcuts/steeringCaps";
+import { measureCaps, samePlacements, spreadRows, type CapPlacements } from "../../lib/shortcuts/steeringCaps";
 import { useActivityStore } from "../../stores/activity";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
@@ -67,7 +68,7 @@ const tokFor = (g: SteeringGroup) => TOK_BY_GROUP.get(g) ?? "tok-comment";
  *    `steeringBar.anchorOf`, `steeringCaps`). A key whose control is not on
  *    screen stays in the bar.
  *
- * Folded (steering's H, remembered per machine) the bar keeps the badge, the
+ * Folded (steering's H, for this visit only) the bar keeps the badge, the
  * ladder and the way out. While steering has lent the keyboard to a box — the
  * project jump, the prompt box, a surface's search field (`handedTo`) — the mode
  * is off but the bar stays with a hollow badge, the box as its lit rung, that
@@ -88,6 +89,7 @@ export function SteeringLegend() {
   const toggleLegend = useKeyboardSteeringStore((s) => s.toggleLegend);
   const handedTo = useKeyboardSteeringStore((s) => s.handedTo);
   const handoffReturn = useKeyboardSteeringStore((s) => s.handoffReturn);
+  const jumpBack = useKeyboardSteeringStore((s) => s.jumpBack);
   // While the Root view is up steering's tab levels are Root's, so the legend
   // reads Root's subwindows and active tab (`steeringScope`).
   const rootShown = useRootOverlayStore((s) => rootViewShown(s));
@@ -200,6 +202,9 @@ export function SteeringLegend() {
           // Only where ↓ could step into it.
           document: !terminal && !!activeTab && (inPane || level === "scroll") && !!documentScroller(tabScope, activeTab.key),
           popouts,
+          // Read off the screen too: the bar redraws on the attention change.
+          question: (inPane || level === "scroll") && steeringTabAsks(tabScope, activeTab),
+          jumpBack: !!jumpBackTarget(jumpBack, shownStatusTab(), tabsByScope),
           statusCounts: {
             decision: statusCount("decision"),
             working: statusCount("working"),
@@ -209,6 +214,18 @@ export function SteeringLegend() {
       : NO_KEYS;
   const wanted = [...new Set(keys.map(anchorOf).filter((a): a is CapAnchor => a !== null))];
   const placed = useCapPlacements(wanted, `${level}|${region}|${tabScope}|${activeTab?.key}|${focusedGroupId}`);
+  const capsRef = useRef<HTMLDivElement>(null);
+  // Rows pinned to neighbouring controls are pushed apart once drawn, since
+  // only the drawn row knows its width (`spreadRows`).
+  useLayoutEffect(() => {
+    const rows = Array.from(capsRef.current?.children ?? []) as HTMLElement[];
+    for (const row of rows) row.style.marginLeft = "";
+    if (rows.length < 2) return;
+    const dx = spreadRows(rows.map((row) => row.getBoundingClientRect()), window.innerWidth);
+    rows.forEach((row, i) => {
+      if (dx[i]) row.style.marginLeft = `${dx[i]}px`;
+    });
+  });
 
   if (!barUp) return null;
 
@@ -226,7 +243,7 @@ export function SteeringLegend() {
     <span
       className="steering-bar-item"
       key={it.id}
-      title={it.title ?? (it.descKey ? t(it.descKey, { modifier: modifierLabel() }) : undefined)}
+      title={it.title ?? (it.descKey ? t(it.descKey, { modifier: modifierLabel(), ...projectCycleLabels() }) : undefined)}
     >
       <span className="steering-bar-caps">{it.caps.map((c, i) => cap(c, tokFor(it.group), i))}</span>
       <span className="steering-bar-label">{t(it.labelKey)}</span>
@@ -344,7 +361,12 @@ export function SteeringLegend() {
           </span>,
         ];
       });
-      caps = rowsAt.length > 0 ? <div className="steering-caps" aria-hidden="true">{rowsAt}</div> : null;
+      caps =
+        rowsAt.length > 0 ? (
+          <div className="steering-caps" aria-hidden="true" ref={capsRef}>
+            {rowsAt}
+          </div>
+        ) : null;
     }
   }
 

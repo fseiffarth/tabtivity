@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { DialogShell } from "../common/PromptDialogs";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
@@ -13,6 +13,8 @@ import {
   type SteeringPromptDetail,
 } from "../../lib/shortcuts/steeringAgent";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
+import { deliverDrop, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
+import { parseDroppedFiles } from "../../lib/files/droppedFiles";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
@@ -33,7 +35,7 @@ type Open = Omit<SteeringPromptDetail, "handled">;
 const drafts = new Map<string, string>();
 
 /**
- * Steering's prompt box (the Prompt key, I by default): a text box in the
+ * Steering's prompt box (the Prompt key, Space by default): a text box in the
  * middle of the window for the active agent tab, so a prompt goes in without
  * leaving the keyboard mode for the terminal. Enter submits it
  * (`sendSteeringPrompt`), Shift+Enter breaks the line; Enter or Escape hands
@@ -41,6 +43,11 @@ const drafts = new Map<string, string>();
  * project jump does. A send that fails keeps the box and the text, with why.
  * Text left unsent (Escape, Cancel) waits in the box for that tab's next open.
  * Plan / Goal open it led with `/plan ` / `/goal ` (`ledDraft`).
+ *
+ * A paste of files (copied in the file manager) or of an image (a screenshot,
+ * no text on the clipboard) goes in as a drop onto the tab would
+ * (`lib/terminal/terminalDrop`): copied into the tab folder's inbox and typed
+ * at the caret as `@<reference>`, which the fenced agent can read.
  *
  * Under the text, the phone composer's chips on Alt+keys (the letters type
  * text here): Alt+M lists the session's own `/model` picker, Alt+E the
@@ -286,6 +293,38 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     return false;
   };
 
+  /** Put `text` at the caret, spaced off the word before it, as the Reader's
+   *  composer takes a drop. */
+  const insertAtCaret = (text: string) => {
+    const box = input.current;
+    setValue((current) => {
+      const at = box ? Math.min(box.selectionEnd, current.length) : current.length;
+      const before = current.slice(0, at);
+      const next = `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+      drafts.set(draftKey, next);
+      return next;
+    });
+    setError(null);
+    box?.focus();
+  };
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = parseDroppedFiles(event.clipboardData);
+    if (files.length > 0) {
+      event.preventDefault();
+      void deliverDrop(ptyId, files, true).then(({ text, error }) => {
+        if (text) insertAtCaret(text);
+        if (error) setError(t(error));
+      });
+      return;
+    }
+    if (event.clipboardData.getData("text/plain")) return;
+    event.preventDefault();
+    void pasteClipboardImage(ptyId, true).then(({ text, error }) => {
+      if (text) insertAtCaret(text);
+      if (error) setError(t(error));
+    });
+  };
+
   async function submit() {
     if (!submittable) return;
     setBusy(true);
@@ -335,6 +374,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
           <span className="steering-prompt-agent">{[agent !== target.tab.label ? agent : "", model].filter(Boolean).join(" · ")}</span>
         )}
         <UntestedTag id="steering.agentPrompt" />
+        <UntestedTag id="steering.promptPaste" />
       </h2>
       <textarea
         ref={input}
@@ -347,6 +387,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         aria-describedby={error ? errorId : undefined}
         value={value}
         disabled={busy}
+        onPaste={onPaste}
         // A kept draft: the caret goes after it, not before.
         onFocus={(e) => {
           const end = e.currentTarget.value.length;

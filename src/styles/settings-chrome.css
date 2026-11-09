@@ -1677,8 +1677,10 @@ label.settings-toggle-card-row {
 
 /* Canonical dialog header: solid accent + subtle divider, matching
    .settings-title-row h2. (Previously a fancy_dark-only gradient-clipped title
-   that diverged from every other dialog.) */
-.project-dialog h2 {
+   that diverged from every other dialog.) A title inside the header band
+   (`.settings-title-row`) is left out: the band draws the divider, and a second
+   one under the h2 alone stopped short of the close button. */
+.project-dialog h2:not(.settings-title-row > h2) {
   font-size: var(--text-xl);
   font-weight: 650;
   color: var(--accent);

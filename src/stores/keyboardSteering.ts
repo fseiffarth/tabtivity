@@ -3,7 +3,6 @@ import { useProjectsStore } from "./projects";
 import { useBoxesStore } from "./boxes";
 import { stripProjects, useBoxSliceStore } from "./boxSlice";
 import { useTabsStore } from "./tabs";
-import { storageKey } from "../lib/brand";
 import { barHiddenIdsNow } from "../lib/projects/barHidden";
 
 /**
@@ -59,7 +58,8 @@ export type SteeringHandoff = "jump" | "prompt" | "search";
  *
  * `subwindowNav`'s sibling: kept out of the tabs store so entering/leaving the
  * mode never churns the layout tree, and deliberately not persisted — a
- * relaunch never starts steering (only `legendHidden` is remembered). While `active`, `useKeyboard` swallows every
+ * relaunch never starts steering, and every entry shows the keys (`legendHidden`
+ * is per visit). While `active`, `useKeyboard` swallows every
  * key in a capture-phase listener (nothing may leak to the terminal
  * underneath), `FocusFrameOverlay` shows the subwindow badges, the project
  * pills wear their station numbers on the projects level, and the bottom legend
@@ -89,8 +89,8 @@ interface KeyboardSteeringState {
    *  still there (any, when omitted), else for the level it was entered from.
    *  Returns the region it came back to, or null for the base level. */
   leaveRegion: (alive?: (region: SteeringRegion) => boolean) => SteeringRegion | null;
-  /** The key list folded into the corner badge (steering's H). Unlike the
-   *  rest this outlives the mode: per machine, in localStorage. */
+  /** The key list folded into the corner badge (steering's H). For this visit
+   *  only: every entry starts with the keys shown. */
   legendHidden: boolean;
   toggleLegend: () => void;
   /** The box that has the keyboard while steering waits to come back — the
@@ -111,25 +111,23 @@ interface KeyboardSteeringState {
   /** The box went away without coming back (a click elsewhere, a pick that
    *  moved focus on): nothing is waiting any more. */
   dropHandoff: () => void;
+  /** Where the Back key returns to: the tab a status jump (Q R X) left, and
+   *  the tab it landed on, so a run of jumps keeps the first tab
+   *  (`lib/shortcuts/statusJump` `afterStatusJump`). Kept across leaving the
+   *  mode; null when nothing was jumped from. */
+  jumpBack: SteeringJumpBack | null;
+  setJumpBack: (jumpBack: SteeringJumpBack | null) => void;
 }
 
-const LEGEND_HIDDEN_KEY = storageKey("steering.legendHidden");
-
-function readLegendHidden(): boolean {
-  try {
-    return localStorage.getItem(LEGEND_HIDDEN_KEY) === "1";
-  } catch {
-    return false;
-  }
+/** One tab in one scope, as the status jumps name it. */
+export interface SteeringTabRef {
+  scope: string;
+  key: string;
 }
 
-function writeLegendHidden(hidden: boolean) {
-  try {
-    if (hidden) localStorage.setItem(LEGEND_HIDDEN_KEY, "1");
-    else localStorage.removeItem(LEGEND_HIDDEN_KEY);
-  } catch {
-    // localStorage unavailable — the choice still holds for this session.
-  }
+export interface SteeringJumpBack {
+  origin: SteeringTabRef;
+  landed: SteeringTabRef;
 }
 
 export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get) => ({
@@ -138,7 +136,7 @@ export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get)
   region: null,
   regionReturn: "tabs",
   regionStack: [],
-  enter: () => set({ active: true, level: "tabs", region: null, regionStack: [], handedTo: null }),
+  enter: () => set({ active: true, level: "tabs", region: null, regionStack: [], handedTo: null, legendHidden: false }),
   exit: () => set({ active: false, level: "tabs", region: null, regionStack: [], handedTo: null }),
   setLevel: (level) => set({ level, region: null, regionStack: [] }),
   enterRegion: (region) => {
@@ -169,12 +167,8 @@ export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get)
     set({ level: get().regionReturn, region: null, regionStack: [] });
     return null;
   },
-  legendHidden: readLegendHidden(),
-  toggleLegend: () => {
-    const legendHidden = !get().legendHidden;
-    writeLegendHidden(legendHidden);
-    set({ legendHidden });
-  },
+  legendHidden: false,
+  toggleLegend: () => set({ legendHidden: !get().legendHidden }),
   handedTo: null,
   handoffReturn: { level: "tabs", region: null, regionReturn: "tabs", regionStack: [] },
   handOff: (box) => {
@@ -183,6 +177,8 @@ export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get)
   },
   resume: () => set({ active: true, handedTo: null, ...get().handoffReturn }),
   dropHandoff: () => set({ handedTo: null }),
+  jumpBack: null,
+  setJumpBack: (jumpBack) => set({ jumpBack }),
 }));
 
 /**

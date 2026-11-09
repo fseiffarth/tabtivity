@@ -1,8 +1,8 @@
 /**
  * Steering asks before W closes a tab or K clears an agent's conversation: the
- * box comes up as the overlay region with the cursor on Cancel; the Confirm
- * key (Y) does it, Escape keeps the tab, and steering is back on the level
- * either way.
+ * box comes up as the overlay region with the cursor on Close/Clear, so Enter
+ * does it, as does the Confirm key (Y); Escape keeps the tab, and steering is
+ * back on the level either way.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -93,6 +93,19 @@ describe("steering asks before closing or clearing", () => {
     await settle();
     expect(steering()).toMatchObject({ active: true, level: "region", region: "overlay", regionReturn: "panes" });
     press("y");
+    await settle();
+    expect(dialog()).toBeNull();
+    expect(useTabsStore.getState().tabsByScope.p ?? []).toHaveLength(0);
+    expect(steering()).toMatchObject({ active: true, level: "panes" });
+  });
+
+  it("Enter closes the tab: the cursor starts on Close", async () => {
+    activeTab({ kind: "shell" });
+    mount();
+    press("w");
+    await settle();
+    expect(document.querySelector(".steer-cursor")?.textContent ?? "").toBe("Close tab");
+    press("Enter");
     await settle();
     expect(dialog()).toBeNull();
     expect(useTabsStore.getState().tabsByScope.p ?? []).toHaveLength(0);

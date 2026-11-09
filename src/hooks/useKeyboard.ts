@@ -22,7 +22,16 @@ import {
 import { useActivityStore } from "../stores/activity";
 import { jumpToTab } from "../lib/shortcuts/tabJump";
 import { focusNextPopout } from "../lib/window/focusPopout";
-import { nextStatusTab, shownStatusTab, statusTabs, type TabStatusKind } from "../lib/shortcuts/statusJump";
+import {
+  afterStatusJump,
+  jumpBackTarget,
+  nextStatusTab,
+  shownStatusTab,
+  statusTabs,
+  type StatusTab,
+  type TabStatusKind,
+} from "../lib/shortcuts/statusJump";
+import { answerSteeringQuestion, settleAfterAnswer, steeringTabAsks } from "../lib/shortcuts/steeringAnswer";
 import {
   steeringActionFor,
   steeringKeyIs,
@@ -203,8 +212,8 @@ export function isEditableTarget(target: EventTarget | null): boolean {
  * sees them and the mode works FROM a focused terminal — the point is that the
  * hands never leave the keyboard. While active every key is swallowed. The
  * mode is a hierarchy (`SteeringLevel`): projects → subwindows → tabs, ↓ in and
- * ↑ out (E S D F double the arrows by default), opening on the tabs; Space,
- * Escape or Enter leave it. Plus a region cursor (`lib/shortcuts/steeringRegion`) for the
+ * ↑ out (E S D F double the arrows by default), opening on the tabs; Escape
+ * or Enter leave it (Space opens the prompt box on an agent tab). Plus a region cursor (`lib/shortcuts/steeringRegion`) for the
  * side panel, the header apps, a pane's + menu and the settings dialog.
  */
 /** `KeyboardEvent.key` of the Super/Windows/Command key, as the engines name it. */
@@ -492,6 +501,65 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       return documentScroller(active.scope, active.tab.key) ? { scope: active.scope, key: active.tab.key } : null;
     };
 
+    // Bring up a tab a status jump or Back names; steering follows it down
+    // to the tab level. Up on Root, a project's tab is not shown by a jump the
+    // window covers: it steps aside (as the cockpit's Enter does), and the tab
+    // levels are the workspace's again.
+    const goToTab = (target: StatusTab) => {
+      if (target.scope !== ROOT_SCOPE && steeringInRoot()) useRootOverlayStore.getState().close();
+      jumpToTab(target.scope, target.key);
+      useKeyboardSteeringStore.getState().setLevel("tabs");
+    };
+    // Once the tab a status jump landed on stopped asking, back to the tab the
+    // jump left — only while steering is still on the answered tab, so a user
+    // who walked on meanwhile stays where they went.
+    const returnAfterAnswer = (from: StatusTab) => {
+      const steering = useKeyboardSteeringStore.getState();
+      if (!steering.active || steering.level === "region") return;
+      const shown = shownStatusTab();
+      const record = steering.jumpBack;
+      if (!shown || shown.scope !== from.scope || shown.key !== from.key) return;
+      if (!record || record.landed.scope !== from.scope || record.landed.key !== from.key) return;
+      const target = jumpBackTarget(record, shown, useTabsStore.getState().tabsByScope);
+      steering.setJumpBack(null);
+      if (target) goToTab(target);
+    };
+    // A digit on the active tab while it asks (`steeringAnswer`): the row by
+    // that number, typed into the session straight away. False when the tab
+    // asks nothing — the digit then opens agent N as before.
+    const answerDigit = (e: KeyboardEvent, slot: number): boolean => {
+      const active = steeringActiveTab();
+      if (!active) return false;
+      const steering = useKeyboardSteeringStore.getState();
+      // Inside the terminal the pane may sit in tmux's copy mode, which would
+      // eat the answer: out to the tabs first, which takes it back to live.
+      if (steering.level === "scroll" && steeringTabAsks(active.scope, active.tab)) steering.setLevel("tabs");
+      // A held digit would run on into the next question.
+      if (e.repeat) return steeringTabAsks(active.scope, active.tab);
+      const result = answerSteeringQuestion(active.scope, active.tab, slot);
+      switch (result.kind) {
+        case "none":
+          return false;
+        case "ignored":
+          return true;
+        case "freeText":
+          // Its words are typed in the terminal itself: steering steps aside.
+          terminalFor(result.ptyId)?.focus();
+          exitSteering();
+          return true;
+        case "answered": {
+          const from = { scope: active.scope, key: active.tab.key };
+          void result.typed
+            .then(() => settleAfterAnswer(result.ptyId, result.agentLabel, result.signature))
+            .then((state) => {
+              if (state === "cleared") returnAfterAnswer(from);
+            })
+            .catch(() => {});
+          return true;
+        }
+      }
+    };
+
     // The panes and tabs levels. With one subwindow there is nothing for ←/→
     // to walk between, so they step its tabs at once.
     function steerPanes(e: KeyboardEvent, action: SteeringAction | null, level: "panes" | "tabs" | "scroll") {
@@ -505,6 +573,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       const walksPanes = level === "panes" && ids.length >= 2;
       const focused = walked.focusedGroupId;
       const group = focused ? findGroup(layout, focused) : null;
+
+      // A digit on a tab that asks picks that row of its dialog (on every tab
+      // level, inside its terminal too); elsewhere it opens agent N below.
+      const slot = steeringSlot(action);
+      if (slot !== null && answerDigit(e, slot)) return;
 
       // Inside the active tab's terminal (its ↓): ←/→ scroll it half a screen
       // back / forward (Shift: a whole one), ↓ back to its live end, ↑ out to
@@ -540,10 +613,9 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       }
 
       // New tabs in the focused pane, the Ctrl+Shift+N / M / Ctrl+1–9 set
-      // without the modifiers. Steering keeps the keyboard (walk on, I to
-      // prompt the new agent, or Space to type). An agent number with nothing
+      // without the modifiers. Steering keeps the keyboard (walk on, Space
+      // to prompt the new agent, or Enter to type). An agent number with nothing
       // behind it does nothing.
-      const slot = steeringSlot(action);
       if (slot !== null) {
         // In Root the request goes to Root's subwindow (`RootNewTabKeys`), the
         // same tab the console's + menu would open.
@@ -680,22 +752,31 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         // in any project; steering follows it down to the tab level.
         const activity = useActivityStore.getState();
         const tabs = useTabsStore.getState();
+        const shown = shownStatusTab();
         const target = nextStatusTab(
           statusTabs(status, activity.busyByTab, activity.attentionByTab, tabs.tabsByScope),
-          shownStatusTab(),
+          shown,
           e.shiftKey ? -1 : 1,
         );
         if (target) {
-          // Up on Root, a project's tab is not shown by a jump the window
-          // covers: it steps aside (as the cockpit's Enter does), and the tab
-          // levels are the workspace's again.
-          if (target.scope !== ROOT_SCOPE && steeringInRoot()) useRootOverlayStore.getState().close();
-          jumpToTab(target.scope, target.key);
-          useKeyboardSteeringStore.getState().setLevel("tabs");
+          // Remember where the jump left from, for Back (and a digit's answer).
+          const steering = useKeyboardSteeringStore.getState();
+          steering.setJumpBack(afterStatusJump(steering.jumpBack, shown, target));
+          goToTab(target);
         }
         return;
       }
       switch (action) {
+        // Back to the tab the status jumps left; again, back to this one.
+        case "jumpBack": {
+          const steering = useKeyboardSteeringStore.getState();
+          const shown = shownStatusTab();
+          const target = jumpBackTarget(steering.jumpBack, shown, useTabsStore.getState().tabsByScope);
+          if (!target) return;
+          steering.setJumpBack(shown ? { origin: shown, landed: target } : null);
+          goToTab(target);
+          return;
+        }
         case "mail":
         case "calendar":
         case "todo":
@@ -724,8 +805,8 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           window.dispatchEvent(new CustomEvent("app:open-settings", { detail: "main" }));
           enterRegion("settings");
           return;
-        // Type a project's name in the header search, open or inactive; the
-        // pick (or Escape) brings steering back on this level.
+        // The jump box (`SteeringProjectJump`): a project's name, or its digit
+        // on the ring; the pick (or Escape) brings steering back on this level.
         case "jumpProject": {
           const level = useKeyboardSteeringStore.getState().level;
           if (level !== "region" && requestProjectJump(level)) handOffSteering("jump");
@@ -736,7 +817,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     }
 
     // The region cursor: ↑/↓ walk the surface's controls, Enter presses one
-    // (Space leaves the mode, as on every level).
+    // (Esc backs out of it; on the tab-bar levels Esc leaves the mode).
     function steerRegion(action: SteeringAction | null, region: SteeringRegion) {
       const root = regionRoot(region);
       if (action === "back") {
@@ -1042,7 +1123,8 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         window.dispatchEvent(new Event("app:open-shortcut-help"));
         return;
       }
-      // Space (by default) leaves the mode from anywhere.
+      // Esc (by default) leaves the mode from the tab-bar levels; a region
+      // never resolves it (its Esc is Back).
       if (action === "exit") {
         exitSteering();
         return;

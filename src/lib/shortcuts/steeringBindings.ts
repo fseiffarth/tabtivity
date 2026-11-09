@@ -65,6 +65,7 @@ export type SteeringAction =
   | "nextDecision"
   | "nextWorking"
   | "nextDone"
+  | "jumpBack"
   | "sidePanel"
   | "panels"
   | "settings"
@@ -114,13 +115,15 @@ const TAB_BAR: readonly SteeringScope[] = ["projects", "panes"];
  */
 export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "help", labelKey: "steering.help.label", scopes: ["mode"], defaults: ["?"] },
-  { action: "exit", labelKey: "steering.exit.label", scopes: ["mode"], defaults: [" "] },
+  // Esc leaves on the tab-bar levels; inside a region it backs out instead
+  // (`back`), so leaving from there is Esc twice.
+  { action: "exit", labelKey: "steering.exit.label", scopes: TAB_BAR, defaults: ["Escape"] },
   { action: "legend", labelKey: "steering.legend.label", scopes: ["mode"], defaults: ["h"] },
   { action: "up", labelKey: "steeringKeys.up", scopes: ["mode"], defaults: ["e", "ArrowUp"] },
   { action: "down", labelKey: "steeringKeys.down", scopes: ["mode"], defaults: ["d", "ArrowDown"] },
   { action: "left", labelKey: "steeringKeys.left", scopes: ["mode"], defaults: ["s", "ArrowLeft"] },
   { action: "right", labelKey: "steeringKeys.right", scopes: ["mode"], defaults: ["f", "ArrowRight"] },
-  { action: "work", labelKey: "steering.work.label", scopes: TAB_BAR, defaults: ["Enter", "Escape"] },
+  { action: "work", labelKey: "steering.work.label", scopes: TAB_BAR, defaults: ["Enter"] },
   { action: "newProject", labelKey: "steering.newProject.label", scopes: ["projects"], defaults: ["n"] },
   { action: "mail", labelKey: "steering.mail.label", scopes: TAB_BAR, defaults: ["m"] },
   { action: "calendar", labelKey: "steering.calendar.label", scopes: TAB_BAR, defaults: ["c"] },
@@ -136,10 +139,12 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "agentClear", labelKey: "steering.agentClear.label", scopes: ["panes"], defaults: ["k"] },
   { action: "agentPlan", labelKey: "steering.agentPlan.label", scopes: ["panes"], defaults: ["l"] },
   { action: "agentGoal", labelKey: "steering.agentGoal.label", scopes: ["panes"], defaults: ["g"] },
-  { action: "agentPrompt", labelKey: "steering.agentPrompt.label", scopes: ["panes"], defaults: ["i"] },
+  { action: "agentPrompt", labelKey: "steering.agentPrompt.label", scopes: ["panes"], defaults: [" "] },
   { action: "nextDecision", labelKey: "steering.nextDecision.label", scopes: TAB_BAR, defaults: ["q"] },
   { action: "nextWorking", labelKey: "steering.nextWorking.label", scopes: TAB_BAR, defaults: ["r"] },
   { action: "nextDone", labelKey: "steering.nextDone.label", scopes: TAB_BAR, defaults: ["x"] },
+  // Back to the tab the status jumps above left (`statusJump.afterStatusJump`).
+  { action: "jumpBack", labelKey: "steering.jumpBack.label", scopes: TAB_BAR, defaults: ["Backspace"] },
   { action: "sidePanel", labelKey: "steering.sidePanel.label", scopes: TAB_BAR, defaults: ["b"] },
   { action: "panels", labelKey: "steering.panels.label", scopes: TAB_BAR, defaults: ["p"] },
   { action: "settings", labelKey: "steering.settings.label", scopes: TAB_BAR, defaults: [","] },

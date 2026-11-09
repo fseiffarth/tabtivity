@@ -866,6 +866,10 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *   inTerminal / inDocument — the scroll level is in a terminal / a document
  *   popouts    — the active scope has a subwindow popped out into its own
  *                window (J raises it)
+ *   question / noQuestion — the active tab asks (a dialog on its screen, or
+ *                its turn waits on a decision): the digits answer it
+ *                (`steeringAnswer`) instead of opening agent N
+ *   jumpBack   — a status jump left a tab Back can return to
  */
 export type SteeringCondition =
   | "stepsPanes"
@@ -892,7 +896,10 @@ export type SteeringCondition =
   | "intoDocument"
   | "inTerminal"
   | "inDocument"
-  | "popouts";
+  | "popouts"
+  | "question"
+  | "noQuestion"
+  | "jumpBack";
 
 /** One row of the steering legend / cheat sheet: the steering actions it
  *  explains (their keys render through `steeringRowLabel`, so a rebind shows
@@ -966,6 +973,10 @@ export interface SteeringLegendState {
   document?: boolean;
   /** The active scope has popped-out subwindows. */
   popouts?: boolean;
+  /** The active tab asks: the digits answer it. */
+  question?: boolean;
+  /** Back has a tab to return to. */
+  jumpBack?: boolean;
   /** The agent keys the active tab takes; unset = none. */
   agent?: { clear: boolean; plan: boolean; goal: boolean; prompt: boolean };
   /** How many tabs, in every scope, need an answer / work / finished unseen. */
@@ -1018,6 +1029,12 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return !s.terminal;
     case "popouts":
       return !!s.popouts;
+    case "question":
+      return !!s.question;
+    case "noQuestion":
+      return !s.question;
+    case "jumpBack":
+      return !!s.jumpBack;
     default:
       return !!s.apps[cond];
   }
@@ -1086,7 +1103,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["up"], labelKey: "steering.upChrome.label", descKey: "steering.upChrome.desc", levels: PANE_LEVELS, when: "upToChrome", group: "move" },
   { actions: ["newShell"], labelKey: "steering.newShell.label", descKey: "steering.newShell.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["newMonitor"], labelKey: "steering.newMonitor.label", descKey: "steering.newMonitor.desc", levels: PANE_LEVELS, group: "new" },
-  { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, agentSlots: true, group: "new" },
+  { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, when: "noQuestion", agentSlots: true, group: "new" },
   { actions: ["newTabMenu"], labelKey: "steering.newTabMenu.label", descKey: "steering.newTabMenu.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["files"], labelKey: "steering.files.label", descKey: "steering.files.desc", levels: PANE_LEVELS, group: "act" },
   { actions: ["closeTab"], labelKey: "steering.closeTab.label", descKey: "steering.closeTab.desc", levels: PANE_LEVELS, group: "act" },
@@ -1094,6 +1111,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["agentClear"], labelKey: "steering.agentClear.label", descKey: "steering.agentClear.desc", levels: PANE_LEVELS, when: "agentClear", group: "agent" },
   { actions: ["agentPlan"], labelKey: "steering.agentPlan.label", descKey: "steering.agentPlan.desc", levels: PANE_LEVELS, when: "agentPlan", group: "agent" },
   { actions: ["agentGoal"], labelKey: "steering.agentGoal.label", descKey: "steering.agentGoal.desc", levels: PANE_LEVELS, when: "agentGoal", group: "agent" },
+  { actions: [], slots: true, labelKey: "steering.answer.label", descKey: "steering.answer.desc", levels: [...PANE_LEVELS, "scroll"], when: "question", group: "agent" },
   { actions: ["agentPrompt"], labelKey: "steering.agentPrompt.label", descKey: "steering.agentPrompt.desc", levels: [...PANE_LEVELS, "scroll"], when: "agentPrompt", group: "agent" },
   { actions: ["exit", "work"], labelKey: "steering.work.label", descKey: "steering.work.desc", levels: [...PANE_LEVELS, "scroll"], group: "mode" },
   // Inside a terminal or a document (its tab's ↓): Shift scrolls a whole screen.
@@ -1126,6 +1144,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["nextDecision"], labelKey: "steering.nextDecision.label", descKey: "steering.nextDecision.desc", levels: BASE_LEVELS, status: "decision", group: "status" },
   { actions: ["nextWorking"], labelKey: "steering.nextWorking.label", descKey: "steering.nextWorking.desc", levels: BASE_LEVELS, status: "working", group: "status" },
   { actions: ["nextDone"], labelKey: "steering.nextDone.label", descKey: "steering.nextDone.desc", levels: BASE_LEVELS, status: "done", group: "status" },
+  { actions: ["jumpBack"], labelKey: "steering.jumpBack.label", descKey: "steering.jumpBack.desc", levels: BASE_LEVELS, when: "jumpBack", group: "status" },
   { actions: ["sidePanel"], labelKey: "steering.sidePanel.label", descKey: "steering.sidePanel.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["panels"], labelKey: "steering.panels.label", descKey: "steering.panels.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["settings"], labelKey: "steering.settings.label", descKey: "steering.settings.desc", levels: BASE_LEVELS, group: "open" },
@@ -1135,6 +1154,5 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["legend"], labelKey: "steering.legend.label", descKey: "steering.legend.desc", levels: ALL_LEVELS, group: "mode" },
   { actions: ["back"], labelKey: "steering.back.label", descKey: "steering.back.desc", levels: ["region"], group: "mode" },
   { actions: ["sidePanel"], labelKey: "steering.sidePanelBack.label", descKey: "steering.sidePanelBack.desc", levels: ["region"], when: "sideRegion", group: "mode" },
-  { actions: ["exit"], labelKey: "steering.exit.label", descKey: "steering.exit.desc", levels: ["region"], group: "mode" },
   { actions: ["exit", "work"], labelKey: "steering.exit.label", descKey: "steering.exit.desc", levels: ["projects"], group: "mode" },
 ];
