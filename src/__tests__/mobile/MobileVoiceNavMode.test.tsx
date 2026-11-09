@@ -250,6 +250,20 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     expect(screen.queryByText(/half a wor/)).toBeNull();
   });
 
+  it("settles nothing for a mic a send ended, when its quiet runs out", async () => {
+    await start();
+    fireEvent.change(box(), { target: { value: "a typed line" } });
+    act(() => mic().onresult?.(reading(["half a wor", false])));
+    expect(screen.getByText(/half a wor/)).toBeTruthy();
+    // The send ends the dictation (an abort: no onend) before the quiet does.
+    fireEvent.keyDown(box(), { key: "Enter" });
+    await settle();
+    expect(micOpen()).toBe(false);
+    expect(screen.queryByText(/half a wor/)).toBeNull();
+    await advance(2_000);
+    expect(screen.queryByText(/half a wor/)).toBeNull();
+  });
+
   it("ignores the navigate phrase with hands-free off", async () => {
     localStorage.setItem(storageKey("mobile.focusHandsFree"), "0");
     await start();

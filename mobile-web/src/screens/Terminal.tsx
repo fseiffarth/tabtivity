@@ -687,6 +687,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const voiceOpen = useRef(false);
   /** The user stopped the mic: what it still settles is plain dictation. */
   const voiceStopping = useRef(false);
+  /** The utterance layer's settle timer (`useVoiceInput`): an ended dictation
+   * (`endDictation`) takes it back, so it never settles a dead mic's words. */
+  const settleTimer = useRef(0);
   const copiedTimer = useRef<number>();
   const sendTimers = useRef<number[]>([]);
   /** When this screen last sent a slash command, and last drew output from
@@ -1364,7 +1367,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     pullQueued, stopTurn, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation,
   } = useComposerSend({
     tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
-    dictateButton, connectedRef, voiceRequest, voiceProgress, sendGuard, voiceOpen, sendTimers, commandSentAt,
+    dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, sendGuard, voiceOpen, sendTimers, commandSentAt,
     lastOutputAt, settleQueue, bracketedPaste, screenRows, viewportRows, connected, setAiOffAt,
     aiOffRef, ctrl, setCtrl, setSendFailed, setDraft, draft, uploadsRef, editing, setEditing,
     editingRef, editSending, setEditSending, liveScreen, setLastSent, slashCliKey, agentKey,
@@ -2188,7 +2191,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     questionSignature, questionAsk, answerQuestion, transcript,
   });
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
-    tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
+    tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, setDraft, draftRef,
     setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
     setVoiceFailure, forgetDictation, submitSpokenRef, tabbyGate, utterances: utteranceHooks,
     handsFree: {

@@ -65,7 +65,7 @@ export interface StartVoiceOptions {
 /** Dictation into the composer: the on-device check, the dictation session, and
  * its end with the tab. */
 export function useVoiceInput({
-  tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
+  tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, setDraft, draftRef,
   setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus, setVoiceFailure,
   forgetDictation, submitSpokenRef, tabbyGate, utterances, handsFree,
 }: {
@@ -75,6 +75,8 @@ export function useVoiceInput({
   connectedRef: MutableRefObject<boolean>;
   voiceRequest: MutableRefObject<number>;
   voiceProgress: MutableRefObject<DictationProgress>;
+  /** The settle timer below; `endDictation` (`useComposer`) clears it too. */
+  settleTimer: MutableRefObject<number>;
   setDraft: Dispatch<SetStateAction<string>>;
   draftRef: MutableRefObject<string>;
   setListening: Dispatch<SetStateAction<boolean>>;
@@ -94,7 +96,6 @@ export function useVoiceInput({
   const { voiceOpen, voiceStopping } = handsFree;
   /** The utterances of the recognizer's current result list (hands-free). */
   const ledger = useRef<UtteranceLedger>(UTTERANCES_START);
-  const settleTimer = useRef(0);
   /** The last reading's live words: a quiet that follows them is not an end. */
   const lastScan = useRef<DictationScan | undefined>(undefined);
   /** Settles the live utterance now: the pending words are released or handed

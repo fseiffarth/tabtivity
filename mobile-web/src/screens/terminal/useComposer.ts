@@ -150,7 +150,7 @@ export function useComposerUploads({
  * and Undo. */
 export function useComposerSend({
   tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
-  dictateButton, connectedRef, voiceRequest, voiceProgress, sendGuard, voiceOpen, sendTimers, commandSentAt, lastOutputAt,
+  dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, sendGuard, voiceOpen, sendTimers, commandSentAt, lastOutputAt,
   settleQueue, bracketedPaste, screenRows, viewportRows, connected, setAiOffAt, aiOffRef, ctrl,
   setCtrl, setSendFailed, setDraft, draft, uploadsRef, editing, setEditing, editingRef, editSending,
   setEditSending, liveScreen, setLastSent, slashCliKey, agentKey, usedSlash, setUsedSlash,
@@ -173,6 +173,8 @@ export function useComposerSend({
   connectedRef: MutableRefObject<boolean>;
   voiceRequest: MutableRefObject<number>;
   voiceProgress: MutableRefObject<DictationProgress>;
+  /** The utterance layer's settle timer (`useVoiceInput`). */
+  settleTimer: MutableRefObject<number>;
   /** Hands-free's send guard and whether the recognizer holds unsettled words
    * (`useHandsFree`): a send ends both. */
   sendGuard: MutableRefObject<SendGuard | undefined>;
@@ -358,6 +360,9 @@ export function useComposerSend({
    * aborted, not stopped: a stop lets the recognizer finalize what it still
    * holds, and those words would land in the draft just emptied. */
   const endDictation = () => {
+    // An abort never reaches `onEnd`: the utterance layer's settle timer would
+    // still fire for the dead mic and hand its held words to a command.
+    window.clearTimeout(settleTimer.current);
     voiceRequest.current += 1;
     setPreparingVoice(false);
     const active = recognition.current;
