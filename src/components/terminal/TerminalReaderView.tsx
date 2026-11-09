@@ -724,9 +724,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   // The keyboard goes to the composer whenever this pane is the focused one,
   // and back to it when steering lets go. A new tab's box is `disabled` until
   // its CLI is up (`inputBlocked`), and a disabled box ignores `focus()`, so
-  // it is taken again when the box unlocks — then only from nowhere (the body)
-  // or this pane's own chat (a question's answer rows), never from a field the
-  // user moved to meanwhile.
+  // it is taken again when the box unlocks — then only from nowhere (the body),
+  // this pane's own chat (a question's answer rows) or its own xterm under the
+  // Reader, never from a field the user moved to meanwhile.
   const wasBlocked = useRef(inputBlocked);
   useEffect(() => {
     const unlocked = wasBlocked.current && !inputBlocked;
@@ -737,10 +737,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (unlocked) {
       const active = document.activeElement;
       const fromNowhere = !active || active === document.body;
-      if (!fromNowhere && !box.closest(".terminal-reader")?.contains(active)) return;
+      const fromThisPane = !!box.closest(".terminal-reader")?.contains(active)
+        || !!terminalFor(ptyId)?.element?.contains(active);
+      if (!fromNowhere && !fromThisPane) return;
     }
     box.focus();
-  }, [focused, visible, steering, inputBlocked]);
+  }, [focused, visible, steering, inputBlocked, ptyId]);
 
   // Files dropped onto the pane (`lib/terminal/terminalDrop`) land here while
   // the Reader is up: at the cursor when the box has focus, else at the end.

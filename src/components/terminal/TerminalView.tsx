@@ -991,7 +991,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       noteFit(built.cols, built.rows);
       notePtyResize(id);
       invoke("pty_resize", { id, cols: built.cols, rows: built.rows }).catch(() => {});
-      if (focusedRef.current) built.focus();
+      // Over a shown Reader its composer takes the keyboard, not the hidden xterm.
+      if (focusedRef.current && !readerOnRef.current) built.focus();
       // The pane may keep growing right after open — the startup fullscreen
       // transition (especially on a larger screen) and late web-font load both
       // change the final cell geometry after this first fit. Re-fit on the next
