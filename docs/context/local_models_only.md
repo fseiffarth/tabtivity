@@ -84,7 +84,10 @@ Codex `--no-daemon`, OpenCode flags):
    call `agent_privacy::fence_gate`, which checks the **stamp** the first gate left
    (`STAMP_ENV`, a control variable, stripped from anything a tab brings). The
    `agent_shim` of a shell tab builds its opts itself and carries no stamp, so a
-   cloud CLI typed into a shell tab in a locked project is refused here.
+   cloud CLI typed into a shell tab in a locked project is refused here, in the gate's
+   words (`unstamped_reason`): the driver-specific text for OpenCode with the network on
+   (or an unverified driver with the cut on), else the general text, and both name the local
+   agents that can run for the project's mode. The refusal is the stamp's; only its text is built.
 
 A spawn is *subject* to a locked project when it runs in that project
 (`project_id`) or its `cwd` lies in the project's folder (`path_inside`: the

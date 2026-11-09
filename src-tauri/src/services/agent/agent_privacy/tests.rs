@@ -1000,6 +1000,43 @@ fn opencode_is_refused_in_a_locked_project_whichever_way_it_gets_to_the_gate() {
 }
 
 #[test]
+fn a_cli_typed_into_a_shell_tab_is_refused_in_the_gates_words() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().join("secret");
+    let (plain, cut) = (locked_projects(&locked_registry(tmp.path())), locked_projects(&cut_registry(tmp.path())));
+    let refused = |locked: &[Locked], cmd: &str| {
+        let shim = opts(cmd, &[], Some("lock"), &cwd);
+        fence_gate_in(locked, &shim, "lock").unwrap_err()
+    };
+    // Network on: OpenCode gets the gate's text, with the agents that can run (not OpenCode).
+    let err = refused(&plain, "opencode");
+    assert!(err.starts_with(REFUSAL) && err.contains("OpenCode cannot be kept on the local model"), "{err}");
+    for label in ["Pi", "Codex", "Mistral"] {
+        assert!(err.contains(label), "{label}: {err}");
+    }
+    assert!(!err.contains("Local agents that can run here: OpenCode"), "{err}");
+    // Any other CLI: the general text plus the same list.
+    let err = refused(&plain, "gemini");
+    assert!(err.contains("`gemini` was not started as a local-model tab") && err.contains("Local agents that can run here: "), "{err}");
+    assert!(err.contains("Pi") && !err.contains("OpenCode,"), "{err}");
+    // A path to the program is the program.
+    assert!(refused(&plain, "/usr/bin/opencode").contains("cannot be kept on the local model"));
+    // Cut network on: OpenCode is allowed, so it gets the general text and is on the list;
+    // an unverified driver is named as such.
+    let err = refused(&cut, "opencode");
+    assert!(err.contains("was not started as a local-model tab") && err.contains("OpenCode"), "{err}");
+    let err = refused(&cut, "pi");
+    assert!(err.contains("Pi has not been verified with the network cut") && err.contains("OpenCode, "), "{err}");
+    assert!(refused(&cut, "vibe").contains("Mistral (vibe) has not been verified"));
+    // The refusal itself is the stamp's and does not change: an unstamped spawn is turned away
+    // in every case, and a stamped one for the project still passes.
+    let mut stamped = opts("opencode", &[], Some("lock"), &cwd);
+    stamped.env.insert(STAMP_ENV.to_string(), "lock".to_string());
+    assert_eq!(fence_gate_in(&cut, &stamped, "lock"), Ok(Some("lock".to_string())));
+    assert!(fence_gate_in(&plain, &opts("opencode", &[], Some("lock"), &cwd), "lock").is_err());
+}
+
+#[test]
 fn the_agents_a_locked_project_can_run_are_derived_from_the_driver_registry() {
     let with_claude = agents_that_can_run_locked(true, false);
     let without = agents_that_can_run_locked(false, false);

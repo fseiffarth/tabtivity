@@ -1655,7 +1655,7 @@ checkout; `npm ci --ignore-scripts`; Windows/macOS runners pinned to
   the spawn gate (`services::agent_privacy`) lets only a verified local-model
   launch start there, other fences mask the folder, box roots and the root
   console's read-only list skip it, and the Copilot, drop and root-MCP git
-  paths are closed. Cut network (phase 2) is stored and shown but refused.
+  paths are closed. Cut network is phase 2 (below; Linux).
     - [x] 🤖 Automated test
     - [ ] 🖐️ Manual test — mark a scratch project Local models only; the + menu
       shows only local rows (no OpenCode row, and an OpenCode tab typed into a
@@ -1664,6 +1664,26 @@ checkout; `npm ci --ignore-scripts`; Windows/macOS runners pinned to
       scratch folder is empty; in a box with another project the box tab cannot
       see it and the local tab cannot see the other member; dropping one of its
       files on a cloud tab is refused; turning it off brings the + menu back.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+- **Local models only, Cut network (phase 2, Linux; DONE ✅ · 🧪 Untested).** Built
+  2026-11-09, `docs/context/local_models_only.md` ("Cut network"): with the switch on, the
+  project's local tabs run in a fence with `--unshare-net` and reach the local Ollama only
+  through the app's lane (`services::local_lane`). Never run inside a real namespace.
+    - [x] 🤖 Automated test
+    - [ ] 🖐️ Manual test — turn Cut network on in the dialog; it offers to restart the
+      running local tabs (Later leaves them). Restart a Claude Code, an OpenCode and a
+      Codex tab: each starts and answers; `curl https://example.com` and `curl
+      127.0.0.1:11434` in the tab fail; `/model` to a `:cloud` model is refused; the cockpit
+      tools work and the web tool does not; `tabtivity-send` still reaches the phone. A Pi tab
+      is refused naming Pi. The phone's + sheet lists the local rows and shells only.
+      Quit the app: `<state>/local-lane/` is empty.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)

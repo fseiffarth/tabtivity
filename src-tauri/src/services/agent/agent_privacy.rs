@@ -863,10 +863,29 @@ pub fn fence_gate_in(locked: &[Locked], opts: &PtyOptions, scope_id: &str) -> Re
     if hit.len() == 1 && stamp.is_some_and(|s| *s == subject.id) {
         return Ok(Some(subject.id.clone()));
     }
-    Err(refuse(
-        subject,
-        &format!("`{}` was not started as a local-model tab. Open a local model from the \u{ff0b} menu.", program(&opts.cmd)),
-    ))
+    Err(refuse(subject, &unstamped_reason(subject, &opts.cmd, claude_pinned_platform())))
+}
+
+/// Why a spawn that carries no stamp (a CLI typed into a shell tab reaches the fence through the
+/// agent shim, which never passed the gate) is turned away, in the words the gate uses: the
+/// driver-specific text when the CLI is one the project's mode does not start (OpenCode with the
+/// network on; any unverified driver with the cut on), else the general text, and in both the local
+/// agents that can run here for the project's mode. The refusal is the stamp's; this is its text.
+pub fn unstamped_reason(subject: &Locked, cmd: &str, pins_claude: bool) -> String {
+    let name = program(cmd);
+    let driver = crate::services::local_drivers::LOCAL_DRIVERS
+        .iter()
+        .find(|d| d.bin == name)
+        .map(|d| d.id)
+        .or((name == "vibe").then_some("vibe"));
+    match driver {
+        Some(id) if subject.cut_network && !CUT_VERIFIED_DRIVERS.contains(&id) => driver_not_verified_cut(id, pins_claude),
+        Some(id) if !subject.cut_network && REFUSED_DRIVERS.contains(&id) => driver_not_pinnable(id, pins_claude),
+        _ => format!(
+            "`{name}` was not started as a local-model tab. Open a local model from the \u{ff0b} menu. Local agents that can run here: {}.",
+            agents_that_can_run_locked(pins_claude, subject.cut_network).join(", ")
+        ),
+    }
 }
 
 /// [`fence_gate_in`] against the live registry; an unreadable registry refuses
