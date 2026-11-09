@@ -108,6 +108,9 @@ opened. On the top bar, S F walk its buttons and D drops a button's menu.
 Enter on a text field leaves the mode so you can type there; Shift+Space brings
 it back on the same dialog.
 
+The phone has the same mode for a Bluetooth keyboard (Shift+Space, E S D F, Q R X, M C T,
+digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
+
 Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
 rebound in the same settings page under *Inside Tabtivity navigation*, one list per
 level. A letter can mean one thing on the projects level and another inside a

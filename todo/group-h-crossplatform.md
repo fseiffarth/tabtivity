@@ -3882,6 +3882,52 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Android
     - [ ] ✅ Works on iOS (Safari tab; a home-screen app has no Back)
     - [ ] ❌ Doesn't work on iOS
+- [~] **31cr — Keyboard steering on the phone** (2026-11-09; ✅ code-complete,
+  `MobileSteering*.test.*` and `MobileKeydownGuards.test.ts` passing; ⚠️ never
+  run on a phone; plan `docs/mobile_steering_plan.md`, rationale
+  `docs/context/phone_steering.md`). With a Bluetooth keyboard, Shift+Space or
+  Alt+Space turns on the desktop's navigation mode on the phone: a bottom bar,
+  a cursor (real focus) over Home's rows, a project's tab cards, a sheet's
+  controls and the Mail / Calendar / To-do screens, Q R X jumps across
+  projects, digits answering an agent's question, I for the message box.
+  Untested pills: `mobile.steering.*` (six rows in `src/lib/untested.ts`).
+  - Needs the PWA rebuilt (`npm run mobile:bundle`).
+  - [ ] 🖐️ Manual QA, phone with a Bluetooth keyboard — (1) Touch only: nothing
+    new shows; typing in the composer with the on-screen keyboard, a capital, a
+    leading and a mid-sentence Shift+Space, an IME word: nothing is eaten.
+    (2) Connect the keyboard and press any key on Home: the tip shows once,
+    never after a reload. (3) Home: Shift+Space shows "Steering · Projects" and
+    an outline on the first row; E/D and the arrows move it and the list
+    scrolls; 3 opens project 3; Shift+Space or Alt+Space leaves. (4) Project:
+    Enter opens a tab, W asks "Close …?" (Y closes, Esc keeps), . opens the ⋯
+    sheet (↑/↓ walk, Esc closes), N opens the + sheet, S goes back with the
+    cursor on the project just left. (5) Inside an agent tab: ↑/↓ scroll, Shift
+    a page, F jumps to the latest; with a question on screen 1 answers it and a
+    number with no option says so; a "Type something" row opens its field and
+    Esc returns; I puts the caret in the composer, Enter sends and steering
+    resumes, Esc keeps the draft; I while a question blocks the box says so.
+    (6) Q/R/X open the next waiting / working / done tab in another project,
+    Backspace returns, Shift+Q goes back, nothing waiting says so. (7) M C T open
+    the sections; ↑/↓ walk their controls; / goes to Home's search. (8) A file
+    viewer or Mark up: the bar says "This view has its own keys". (9) A tap on
+    the screen leaves the mode; leaving it for longer than the idle lock does
+    not lock while keys are pressed. (10) Hold E: the cursor keeps moving;
+    hold Enter on a project: it opens once.
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS (Safari tab and home-screen app)
+    - [ ] ❌ Doesn't work on iOS
+  - [ ] 🖐️ Platform checks, record in the pairs: Shift+Space on a Samsung
+    keyboard with the language switch on (Alt+Space still enters); does a
+    hardware Esc reach the page on iOS and does Android treat it as system
+    Back; Shift+Space with nothing focused on iOS; Alt+Space on a macOS-layout
+    iPad keyboard (types a no-break space); Ctrl+Space and Cmd combos stay the
+    OS's.
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS
+    - [ ] ❌ Doesn't work on iOS
+
 - [~] **31bp — The phone's host updates itself at launch** (2026-09-28;
   ✅ code-complete, unit test `a_launch_updates_a_host_that_is_behind_…`;
   ⚠️ never seen live). `start_host_on_launch` reinstalls the sidecar copy

@@ -1525,6 +1525,7 @@ Tauri v2 Application
 |   +-- hooks/                useKeyboard, useClampToViewport, useWindowFocused
 |   +-- types/index.ts        Shared TypeScript types
 +-- mobile-web/               The companion PWA — its own Vite bundle
+                              (`steering/`: Bluetooth-keyboard steering, docs/context/phone_steering.md)
 ```
 
 **IPC pattern:** Rust ↔ React via Tauri `invoke` for request/response and Tauri

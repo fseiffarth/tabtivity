@@ -227,6 +227,43 @@ is refused. Works with the desktop window closed.
   see and open shells from the phone — they run as you, with no agent's
   permission prompts in between.
 
+## Steering with a keyboard
+
+With a Bluetooth keyboard on the phone or iPad, the same navigation mode as on
+the desktop works without touching the glass. A phone with no keyboard shows
+nothing new. The first time a hardware key is pressed, a small tip names the
+chord once.
+
+Press **Shift+Space** to turn it on, or **Alt+Space** from anywhere, text fields
+included (some Android keyboards use Shift+Space to switch language). A bar at
+the bottom reads *Steering* with the level ladder
+Projects › Tabs › Inside the tab, the keys of the level you are on, and a
+single line for messages such as "No tab waits on you". **H** folds the bar to
+one line. The cursor is an outline on a row of the list. Shift+Space or Alt+Space
+again, **Space**, **Esc** (outside a sheet) or a tap on the screen leaves the
+mode. **E S D F** work as the arrow keys throughout.
+
+| Level | Keys |
+|---|---|
+| Every level | **E / ↑**, **D / ↓** move the cursor; **S / ←** goes back; **F / →** or **Enter** opens the row; **H** folds the bar |
+| Projects, Tabs, Inside, Mail, Calendar, To-do | **Q / R / X** open the next tab that waits for an answer / is working / is done, in any project (Shift: previous); **Backspace** returns to where you were; **M C T** open Mail, Calendar and To-do; **/** goes to Home's search |
+| Projects (Home) | **N** a new project; **1-9** open project N |
+| Tabs (a project) | **N** or **+** the new-tab button; **W** closes the tab after asking (**Y** or Enter confirms); **.** the card's menu |
+| Inside a tab | **E / D** scroll the chat or terminal (Shift: a page); **F** jumps to the latest; **1-9** answer the agent's question on screen; **I** puts the caret in the message box |
+| A sheet or menu on top | **E / D** walk its controls, **Enter** presses one, **S / ← / Esc** close it, **Y** confirms a confirm |
+
+Typing is never taken from you. While the caret is in a text field, every key
+types, except **Esc** (back to steering) and the two chords. In the message
+box, **Enter** sends as usual and steering resumes. A free-text answer
+(Claude Code's "Type something" row) works the same: the digit opens its
+field and the keyboard is yours until Esc.
+
+Some views keep their own keys, so steering steps aside: the file library and
+the viewers (including Mark up) show *This view has its own keys*. The Mail,
+Calendar, To-do and Tabby screens are walked control by control. The favourites
+page has no rows for the cursor yet. The phone uses the default keys; rebinding
+in the desktop's settings does not reach it.
+
 ## The agent's questions about your marks
 
 When a mark is ambiguous ("does this arrow move the paragraph or the

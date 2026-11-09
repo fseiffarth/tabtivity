@@ -137,6 +137,7 @@ import { useOutboxPoll, useOutboxViewers } from "./terminal/useOutbox";
 import { useModelPicker, useModelPickerAnswers } from "./terminal/useModelPicker";
 import { useSignInPageWalk } from "./terminal/useSignInPageWalk";
 import { useLiveQuestion } from "./terminal/useLiveQuestion";
+import { useTerminalSteering } from "./terminal/useTerminalSteering";
 import { useVoiceInput } from "./terminal/useVoiceInput";
 import { useHandsFree } from "./terminal/useHandsFree";
 import { type SendGuard } from "../../../shared/handsFree";
@@ -2066,6 +2067,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   } = useLiveQuestion({
     clearPending, deliver, agentLabel, liveTail, liveQuestion,
   });
+  useTerminalSteering({ focusView: view === "focus", liveQuestion, answerQuestion, composer: composerInput });
   /** The stored session only grows at message boundaries, so a turn busy in
    * tool calls looked finished. The live screen's interrupt hint says it is
    * not; a choice on screen is waiting on the reader instead. */
@@ -2505,7 +2507,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           agent (OpenCode's TUI) still reads as a chat in Focus. */}
       {view === "focus" && altScreen && !sessionFocus && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span><button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}
       {view === "focus" && (!altScreen || sessionFocus) && <>
-        <section ref={readableHost} className="readable-output" aria-label={t("mobile.focus.output")} aria-live="polite"
+        <section ref={readableHost} className="readable-output" data-steer-scroll aria-label={t("mobile.focus.output")} aria-live="polite"
           onScroll={(event) => {
             const stream = event.currentTarget;
             followReadable(stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120);

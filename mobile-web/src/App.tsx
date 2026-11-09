@@ -37,6 +37,7 @@ import type { MarkupBack } from "./components/OutboxViewer";
 import { BUNDLE_VERSION as SPLASH_VERSION } from "./buildInfo";
 import { BackNest, useBackLayer } from "./backStack";
 import { markDoneSeen } from "./seenDone";
+import { SteeringBar } from "./steering/SteeringBar";
 import { SteeringConfirm } from "./steering/SteeringConfirm";
 import { requestFind, type Place } from "./steering/steeringState";
 import { usePhoneSteering, type SteeringBase } from "./steering/usePhoneSteering";
@@ -705,7 +706,7 @@ export function App() {
   // and the tab bar would sit on the keyboard toolbar besides.
   // Each screen nests its sheets above the App's own step back
   // (`backStack.ts`): one opening on arrival registers before the App does.
-  if (terminal) return <BackNest><Terminal
+  if (terminal) return <><BackNest><Terminal
     key={terminal.tab.id}
     tab={terminal.tab}
     project={terminal.project}
@@ -715,13 +716,13 @@ export function App() {
     markupBack={terminal.markupBack}
     openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
     back={() => setTerminal(null)}
-  /></BackNest>;
-  if (tabby) return <BackNest><TabbyOpen
+  /></BackNest><SteeringBar /></>;
+  if (tabby) return <><BackNest><TabbyOpen
     key={tabby}
     id={tabby}
     ready={(row) => { setTabby(null); openTerminal(tabby, row); }}
     back={() => setTabby(null)}
-  /></BackNest>;
+  /></BackNest><SteeringBar /></>;
   return <div className="tabbed"><BackNest>
     {tab === "todo" ? <Todo key={reseed} card={todoCard} />
       : tab === "mail" ? <Mail key={reseed} />
@@ -743,6 +744,7 @@ export function App() {
     <SteeringConfirm />
     </BackNest>
     <TabBar active={tab} open={openSection} hidden={hiddenSections} />
+    <SteeringBar />
     {secretsUntrusted && <SecretsRepinSheet onClose={() => setSecretsUntrusted(false)} />}
     {!secretsUntrusted && secretsNewCode && <SecretsNewCodeSheet onClose={() => setSecretsNewCode(false)} />}
   </div>;

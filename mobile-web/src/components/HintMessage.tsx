@@ -178,6 +178,7 @@ export function resetTips(): void {
   writeHintShown(undefined);
   writeTipShownAt(undefined);
   for (const { flag } of Object.values(HINTS)) writeFlag(flag, false);
+  writeFlag("hintSteering", false);
   draws.clear();
   holder = undefined;
 }

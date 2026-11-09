@@ -37,7 +37,9 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * `hintChatMenu`, `hintSentFiles`, `hintChatSwipe`, `hintMarkup`, `hintStatusLine` and the to-do, mail and calendar
  * screens' `hintTodo*`, `hintMail*`, `hintCalendar*` suppress individual
  * tips: written by the old Never show this message again checkbox, still
- * honoured, cleared by Reset tips. `hintsOff` is the tips' Turn off tips
+ * honoured, cleared by Reset tips. `hintSteering` is set by the first hardware
+ * keydown, which shows the keyboard-steering tip once (`SteeringBar`), likewise
+ * cleared by Reset tips. `hintsOff` is the tips' Turn off tips
  * button, undone under This device → Tips.
  * `limitBars` shows the facts row's usage limits as bars rather than
  * percentages, off unset. `focusHandsFree` is the Focus composer's hands-free
@@ -47,7 +49,7 @@ type FlagStorage = Pick<Storage, "getItem" | "setItem">;
  * (`shared/voiceReading.ts`) — rather than whole, off unset. */
 // `projectsGrid` and `projectsBoxes` remember the Home project list layout on
 // this device: boxes when `projectsBoxes` is set, else grid or list.
-export type MobileFlag = "projectsGrid" | "projectsBoxes" | "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintsOff" | "focusHandsFree" | "voiceBrief";
+export type MobileFlag = "projectsGrid" | "projectsBoxes" | "todoHideDone" | "todoHideArchived" | "projectsAgents" | "focusReadAloud" | "voiceRemote" | "markupAutoReload" | "markupSubagents" | "markupDirect" | "projectHintReorder" | "projectHintSwipe" | "projectHintHold" | "homeHintReorder" | "projectNoteRemote" | "projectNoteRemoteOnly" | "projectNoteContainer" | "projectNoteVm" | "limitBars" | "hintAgentHold" | "hintAgentDefault" | "hintProjectFiles" | "hintChatTools" | "hintTabCard" | "hintSendHold" | "hintChatMenu" | "hintSentFiles" | "hintChatSwipe" | "hintMarkup" | "hintStatusLine" | "hintTodoCards" | "hintTodoBoard" | "hintMailMove" | "hintMailWrite" | "hintCalendarViews" | "hintCalendarManage" | "hintSteering" | "hintsOff" | "focusHandsFree" | "voiceBrief";
 
 /**
  * `fallback` is what an unset flag means, and it is a real parameter rather than
