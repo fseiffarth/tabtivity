@@ -1082,7 +1082,7 @@ fn the_switch_ends_a_phone_started_headless_agent_and_a_session_that_outlived_a_
         known("lock:agent-5", &verified, &[&dir_s], &[]),
     ];
     let is_verified = |tab: &str| tab == "lock:agent-5";
-    let ended = tmux_sessions_to_end("lock", Some(&dir), &sessions, &[held.clone()], &known, &is_verified);
+    let ended = tmux_sessions_to_end("lock", Some(&dir), &sessions, std::slice::from_ref(&held), &known, &is_verified);
     // `own` is unknown (a crash survivor) and the project's own; `parent` is known and sees the folder.
     // `other` is unknown and unrelated: stays. `hidden` saw nothing: stays. `verified` stays;
     // `held` is a registry PTY's (ended by the PTY path); a shell session is not an agent.
@@ -1100,11 +1100,14 @@ fn an_unknown_view_that_overlaps_the_folder_is_ended_and_one_that_does_not_is_le
     };
     assert_eq!(run(&s(&dir)), 1, "in the folder");
     assert_eq!(run(&s(&dir.join("deeper"))), 1, "below it");
-    assert_eq!(run(&s(&dir.parent().unwrap())), 1, "above it");
+    assert_eq!(run(&s(dir.parent().unwrap())), 1, "above it");
     assert_eq!(run(&s(tmp.path())), 1, "further above");
     assert_eq!(run(""), 1, "no folder known: fail closed");
     assert_eq!(run(&s(&tmp.path().join("work").join("secret-neighbour"))), 0, "a sibling sharing a prefix");
     assert_eq!(run("/somewhere/else"), 0);
+    // A project id that itself holds `--` still names agent sessions as agents.
+    let odd = agent_session("a--b", 3);
+    assert_eq!(tmux_sessions_to_end("lock", Some(&dir), &[tmux_agent(&odd, &s(&dir))], &[], &[], &|_| false), vec![odd]);
     // A known spawn that recorded no view falls back to the same rule.
     let session = agent_session("someone", 9);
     let blind = KnownSession { tab: "someone:agent-9".into(), tmux: session.clone(), view: None };

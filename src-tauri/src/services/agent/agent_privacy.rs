@@ -923,7 +923,7 @@ fn agent_session_of(session: &str, project: &str) -> bool {
 /// Whether `session` is some agent tab's session at all (`<prefix><key>--agent-…`).
 fn is_agent_session(session: &str) -> bool {
     crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, session)
-        .is_some_and(|rest| rest.split_once("--").is_some_and(|(_, tab)| tab.starts_with("agent-")))
+        .is_some_and(|rest| rest.contains("--agent-"))
 }
 
 /// The agent tmux sessions turning Local models only on for `project` (folder `dir`)
