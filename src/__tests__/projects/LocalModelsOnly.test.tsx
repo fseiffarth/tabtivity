@@ -102,6 +102,25 @@ describe("the Agent privacy dialog", () => {
     expect(closed).toEqual(["p1:cloud"]);
   });
 
+  it("keeps a verified local agent tab the backend did not end (the switch turned off and on again)", async () => {
+    const closed: string[] = [];
+    useTabsStore.setState({
+      tabsByScope: {
+        p1: [
+          { key: "cloud", kind: "agent", label: "Claude", cmd: "claude", cwd: "/w/p1" },
+          { key: "verified", kind: "agent", label: "Claude (local)", cmd: "ollama", cwd: "/w/p1" },
+        ],
+      } as never,
+      removeTabInScope: ((scope: string, key: string) => void closed.push(`${scope}:${key}`)) as never,
+    });
+    // The backend keeps the gate-verified `p1:verified` and ends only `p1:cloud`.
+    mockInvoke.mockResolvedValue({ local_models_only: true, cut_network: false, closed_tabs: ["p1:cloud"] });
+    await act(async () => {
+      await useProjectsStore.getState().setProjectAgentPrivacy("p1", true, false);
+    });
+    expect(closed).toEqual(["p1:cloud"]);
+  });
+
   it("closes the tabs of other scopes the backend ended because their fence showed the folder", async () => {
     const closed: string[] = [];
     useTabsStore.setState({
