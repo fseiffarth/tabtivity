@@ -163,7 +163,7 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("sends the dictated words when \"go on\" or \"los\" is said last", async () => {
+  it("sends the dictated words when \"go on\" or \"los\" is said last, and keeps listening", async () => {
     render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});
 
@@ -189,8 +189,20 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     expect(sent.join("")).toContain("fix the login");
     expect(sent.join("")).not.toContain("los");
     expect(sent[sent.length - 1]).toBe("\r");
-    expect(abort).toHaveBeenCalledTimes(1);
+    // The mic stays open for the next prompt; what was sent never returns.
+    expect(abort).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Stop dictation" })).toBeTruthy();
     expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("");
+    act(() => speech.onresult?.({
+      resultIndex: 2,
+      results: {
+        0: { 0: { transcript: "fix the login" }, isFinal: true, length: 1 },
+        1: { 0: { transcript: "los" }, isFinal: true, length: 1 },
+        2: { 0: { transcript: "and add a test" }, isFinal: true, length: 1 },
+        length: 3,
+      },
+    } as unknown as MobileSpeechRecognitionResultEvent));
+    expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("and add a test");
   });
 
   it("forgets the dictated words once they are cleared, while it keeps listening", async () => {

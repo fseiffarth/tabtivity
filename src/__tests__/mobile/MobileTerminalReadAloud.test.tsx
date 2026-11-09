@@ -221,6 +221,47 @@ describe(`${BRAND.display} Mobile Reader reads answers aloud`, () => {
     }
   });
 
+  it("hands-free: \"go on\" sends with the mic left open; the answer waits, then the mic closes for it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      FakeRecognition.instances = [];
+      Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: FakeRecognition });
+      localStorage.setItem(storageKey("mobile.focusHandsFree"), "1");
+      localStorage.setItem(storageKey("mobile.focusReadAloud"), "1");
+      let entries = [FIRST];
+      vi.stubGlobal("fetch", sidecarFetch(() => ({ available: true, version: `${entries.length}:1`, truncated: false, entries })));
+      render(<Terminal tab={TAB} back={() => {}} />);
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+      await act(async () => {});
+      const mic = FakeRecognition.instances[0];
+      const abort = vi.spyOn(mic, "abort");
+      act(() => mic.onresult?.(heard("fix the login go on")));
+      // Sent at once, no window; the mic is still the same open one.
+      expect(abort).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Stop dictation" })).toBeTruthy();
+      expect((screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value).toBe("");
+
+      // The answer lands: held, never read into the open mic.
+      entries = [FIRST, SECOND];
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      await settle();
+      expect(spoken.map((utterance) => utterance.text)).toEqual([]);
+      // Nothing is being dictated: the mic closes, the answer is read …
+      await act(async () => { vi.advanceTimersByTime(1_600); });
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(spoken.map((utterance) => utterance.text)).toEqual(["Done: the ✕ empties the draft."]);
+      act(() => { spoken[0].onend?.(); });
+      act(() => { spoken[1].onend?.(); });
+      // … and the mic opens again after it.
+      await act(async () => { vi.advanceTimersByTime(1_600); });
+      expect(FakeRecognition.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+      delete (window as Window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
+    }
+  });
+
   // Before the hold, each answer was read as it arrived. A wait that ends
   // without its read (hands-free switched off, the link lost) must not leave
   // the answers it held unread: they were marked heard while it held them.

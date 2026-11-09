@@ -102,7 +102,10 @@ line cancels it and keeps the draft. A spoken "stop" takes longer to settle
 than the window lasts, so speech that starts inside the window *holds* it
 and its settled text decides: a stop word cancels, other words join the
 draft and the pause starts again. A stop word segment never reaches the
-draft. "go on" is deliberate and skips the window.
+draft. "go on" is deliberate and skips the window. On the phone it also
+leaves the mic open (`useComposer` `submitSpokenRef`); hands-free then holds
+the turn's answers and closes the mic for them only while nothing is being
+dictated (`useHandsFree`), so the voice is never dictated back.
 
 The desktop's voice detector already waits the pause before it closes a
 segment (the backend's `handsFree` mode), so its guard opens the window as

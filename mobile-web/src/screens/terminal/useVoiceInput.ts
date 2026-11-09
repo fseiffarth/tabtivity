@@ -44,7 +44,7 @@ export interface HandsFreeHooks {
 export function useVoiceInput({
   tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
   setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus, setVoiceFailure,
-  forgetDictation, submitDraftRef, handsFree,
+  forgetDictation, submitSpokenRef, handsFree,
 }: {
   tab: TabRow;
   recognition: MutableRefObject<DictationSession | undefined>;
@@ -61,7 +61,8 @@ export function useVoiceInput({
   setVoiceStatus: Dispatch<SetStateAction<VoiceNote | null>>;
   setVoiceFailure: Dispatch<SetStateAction<VoiceNote | null>>;
   forgetDictation: () => void;
-  submitDraftRef: MutableRefObject<(text?: string, fromComposer?: boolean, interrupt?: boolean) => boolean>;
+  /** Sends the draft and leaves the mic open (`useComposer`). */
+  submitSpokenRef: MutableRefObject<(text: string) => boolean>;
   handsFree: HandsFreeHooks;
 }) {
   const { voiceOpen, voiceStopping } = handsFree;
@@ -162,10 +163,15 @@ export function useVoiceInput({
           draftRef.current = spoken ?? next;
           setDraft(spoken ?? next);
           if (spoken !== null) {
-            // Deliberate: it skips the hands-free window.
+            // Deliberate: it skips the hands-free window. The mic stays open
+            // for the next prompt; hands-free still holds the turn's answers
+            // back so the mic never takes down the voice reading them.
             guard?.reset();
             forgetDictation();
-            if (submitDraftRef.current(spoken) && guard) handsFree.awaitTurn.current();
+            if (submitSpokenRef.current(spoken)) {
+              draftRef.current = "";
+              if (guard) handsFree.awaitTurn.current();
+            }
             return;
           }
         }

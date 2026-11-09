@@ -74,6 +74,9 @@ listening: a small mic on the steering badge says so.
 The Focus view's mic dictates with the phone's speech (on the device where it
 can). Its menu holds **Read answers aloud**, the voice language and
 **Hands-free**: the same pause, chime and "stop" window, then the answer is
-read and the mic opens again. Keep the screen on and the page open — a web
-page cannot hold the microphone from a pocket. A tap on the line stops the
-voice or cancels a send.
+read and the mic opens again. Ending with **"go on"** sends and leaves the
+mic open, so the next prompt can follow straight away; with Hands-free on,
+the answer still waits until you stop talking, then the mic pauses while it
+is read. Keep the screen on and the page open — a web page cannot hold the
+microphone from a pocket. A tap on the line stops the voice or cancels a
+send.

@@ -29,13 +29,15 @@ import { type DictationSession } from "../../voiceSession";
 /** Hands-free (`focusHandsFree`): the send guard the dictation feeds, the wait
  * for the turn a send started, and the question read out to be answered. */
 export function useHandsFree({
-  tab, t, sendGuard, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation,
+  tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation,
   connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
   questionSignature, questionAsk, answerQuestion, transcript,
 }: {
   tab: TabRow;
   t: ReturnType<typeof useT>;
   sendGuard: MutableRefObject<SendGuard | undefined>;
+  /** Whether the recognizer is hearing words not settled yet. */
+  voiceOpen: MutableRefObject<boolean>;
   recognition: MutableRefObject<DictationSession | undefined>;
   draftRef: MutableRefObject<string>;
   submitDraftRef: MutableRefObject<(text?: string, fromComposer?: boolean, interrupt?: boolean) => boolean>;
@@ -228,7 +230,10 @@ export function useHandsFree({
   }, [handsFreeWait]);
   // Once the turn is over and the answer has been read — at once with
   // read-aloud off — the mic opens again, after the busy row stayed off a
-  // moment (`TURN_SETTLE_MS`).
+  // moment (`TURN_SETTLE_MS`). A spoken "go on" left the mic open: with
+  // nothing to read the wait just ends; answers to read wait while words are
+  // being dictated (the next send carries them), else the mic closes for
+  // them and opens again after.
   useEffect(() => {
     if (handsFreeWait === null) return;
     if (!handsFree || !connected) {
@@ -243,8 +248,18 @@ export function useHandsFree({
       answerAtSend: handsFreeTurn.current.answer,
       answerNow: lastAnswerKey,
     });
-    if (!over || speaking || listening || preparingVoice || document.hidden) return;
+    if (!over || speaking || preparingVoice || document.hidden) return;
+    if (listening && (!readAloud || handsFreeTurn.current.read)) {
+      setHandsFreeWait(null);
+      return;
+    }
+    const dictating = () => voiceOpen.current || guardPhase !== "idle" || draftRef.current.trim() !== "";
+    if (listening && dictating()) return;
     const timer = window.setTimeout(() => {
+      if (listening) {
+        if (dictating()) return;
+        endDictation();
+      }
       // The answers first; the mic once they were said (this effect runs
       // again when the voice falls quiet).
       if (readTheTurn()) return;
@@ -253,7 +268,7 @@ export function useHandsFree({
     }, TURN_SETTLE_MS);
     return () => window.clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handsFreeWait, handsFree, connected, liveBusy, liveQuestion, questionHeld, lastAnswerKey, speaking, listening, preparingVoice, pageShown, readAloud]);
+  }, [handsFreeWait, handsFree, connected, liveBusy, liveQuestion, questionHeld, lastAnswerKey, speaking, listening, preparingVoice, pageShown, readAloud, guardPhase]);
   /** Hands-free with read-aloud: a question the agent waits on is read out,
    * its rows by number, once per question, so it can be answered by voice. */
   const spokenQuestion = useRef("");

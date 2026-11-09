@@ -373,6 +373,21 @@ export function useComposerSend({
     setVoicePreview("");
     setVoiceStatus(null);
   };
+  /** Set by dictation's spoken send ("go on") around its submit: the draft
+   * empties but the mic stays open for the next prompt. What it heard so far
+   * was settled first (`forgetDictation`), so none of it comes back. */
+  const keepMicOnSend = useRef(false);
+  /** A send from the composer empties it and ends the dictation — or, for a
+   * spoken send, only the hands-free guard's pause and the "Heard:" line. */
+  const clearSentDraft = () => {
+    setDraft("");
+    if (!keepMicOnSend.current) {
+      endDictation();
+      return;
+    }
+    sendGuard.current?.reset();
+    setVoicePreview("");
+  };
   /** The open subagent the composer writes to: Claude's only, the one CLI
    * whose own TUI takes words for a subagent. */
   const subagentTarget = openStep && agentFamily(tab.agent_label ?? tab.label) === "claude" && !inWorkflow(subagentPath) ? openStep : undefined;
@@ -390,10 +405,7 @@ export function useComposerSend({
   const sendToOpenSubagent = (text: string, target: SubagentStep, fromComposer: boolean) => {
     setSubagentNote("");
     setSubagentSending(true);
-    if (fromComposer) {
-      setDraft("");
-      endDictation();
-    }
+    if (fromComposer) clearSentDraft();
     void sendToSubagent({
       rows: () => screenRows.current(),
       key: async (key) => type(key),
@@ -460,9 +472,18 @@ export function useComposerSend({
       if (subagentSending) return false;
       setSubagentNote("");
       setSubagentSending(true);
+      const keepMic = keepMicOnSend.current;
       void viewSession({ rows: readableScreen, key: async (key) => type(key) }, SUBAGENT_WALK).then((back) => {
-        if (!back) setSubagentNote("mobile.subagent.viewed");
-        else submitTextRef.current(text, fromComposer, interrupt, true);
+        if (!back) {
+          setSubagentNote("mobile.subagent.viewed");
+          return;
+        }
+        keepMicOnSend.current = keepMic;
+        try {
+          submitTextRef.current(text, fromComposer, interrupt, true);
+        } finally {
+          keepMicOnSend.current = false;
+        }
       }).finally(() => setSubagentSending(false));
       return true;
     }
@@ -502,8 +523,7 @@ export function useComposerSend({
       void reportSentPrompt(tab.id, text).catch(() => {});
     }
     if (!fromComposer) return true;
-    setDraft("");
-    endDictation();
+    clearSentDraft();
     return true;
   };
   const submitTextRef = useRef(submitText);
@@ -521,6 +541,15 @@ export function useComposerSend({
    * that started them. */
   const submitDraftRef = useRef(submitDraft);
   submitDraftRef.current = submitDraft;
+  /** Dictation's spoken send: the draft goes, the mic stays open. */
+  const submitSpokenRef = useRef((text: string) => {
+    keepMicOnSend.current = true;
+    try {
+      return submitDraftRef.current(text);
+    } finally {
+      keepMicOnSend.current = false;
+    }
+  });
   /** Esc stops the agent's turn; once the CLI has wound down the message is
    * typed like any other — not held for an idle point the interrupt has just
    * made. A failure after the gap marks the bubble, as a dropped piece does. */
@@ -600,10 +629,7 @@ export function useComposerSend({
     setEditNote("mobile.composer.heldNote");
     // `held: ""` — asked for, id not known yet: waiting, not yet editable.
     setPending((current) => [...current, { ...pendingPrompt(id, text, storedEntries), held: "" }].slice(-MAX_PENDING));
-    if (fromComposer) {
-      setDraft("");
-      endDictation();
-    }
+    if (fromComposer) clearSentDraft();
     // The answer may come after the reader left the tab, or came back to it:
     // `patchHeld` hands it to the chat showing the tab then (`onHeldPatched`).
     holdPrompt(tab.id, text).then(
@@ -891,7 +917,7 @@ export function useComposerSend({
     setClearRefused(false);
     if (sendAgentText(NEW_CONVERSATION_COMMAND)) startedOver();
   };
-  return { type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft, submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow, pullQueued, stopTurn, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation };
+  return { type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft, submitDraftRef, submitSpokenRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow, pullQueued, stopTurn, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation };
 }
 
 /** The composer's chips and menus (Commit, the `/` menu, the Plan/Goal

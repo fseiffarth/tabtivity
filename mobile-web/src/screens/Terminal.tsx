@@ -1355,7 +1355,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   });
   const {
     type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft,
-    submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow,
+    submitDraftRef, submitSpokenRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow,
     pullQueued, stopTurn, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation,
   } = useComposerSend({
     tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
@@ -2167,14 +2167,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, stopLoop,
     toggleHandsFree, handsFreeLine: handsFreeLineFor,
   } = useHandsFree({
-    tab, t, sendGuard, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation,
+    tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation,
     connected, listening, preparingVoice, readAloud, liveBusy, liveQuestion, questionHeld,
     questionSignature, questionAsk, answerQuestion, transcript,
   });
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
     tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, setDraft, draftRef,
     setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
-    setVoiceFailure, forgetDictation, submitDraftRef,
+    setVoiceFailure, forgetDictation, submitSpokenRef,
     handsFree: {
       on: handsFreeRef, guard: handsFreeGuard, sendGuard, voiceOpen, voiceStopping,
       pick: voicePickRef, awaitTurn: awaitTurnRef, stopLoop,
