@@ -477,3 +477,38 @@ Flagged, not changed:
 7. **`kill-session -t <name>` is not an exact match** (`local_tmux_kill_args`, shared with the quit path): if
    a session ended between the listing and the kill, tmux prefix-matches a sibling. Names end in a
    uuid, so a prefix of another is not possible for the names Tabtivity mints.
+
+## Fix round 4
+
+Branch `fix4/local-models` (from `develop` 854e436f). The two items the user chose after review 3
+(flagged items 1 and 2). Commits: `62ba71ff` (OpenCode refused, ＋ menus, docs), `07e9abac` (bubblewrap version message), then this section (`git log 854e436f..fix4/local-models`).
+
+| # | Hole | Fix | Test (saw fail by) |
+| --- | --- | --- | --- |
+| 1 | OpenCode cannot be pinned: config arrays merge as a union, so an `opencode.json` the agent writes mid-session adds a provider and model that OpenCode reloads (review 3) | OpenCode is refused in a locked project until Phase 2. `vet` turns a launch line that identifies as the `opencode` driver (`REFUSED_DRIVERS`) away before it asks Ollama, with "OpenCode cannot be kept on the local model in a Local models only project yet" and the agents that can run, derived from `LOCAL_DRIVERS` (`agents_that_can_run_locked`: no OpenCode, Claude Code only where it can be pinned, plus Mistral (vibe)). Every route passes `vet` or the fence's stamp check (window, phone, restore, schedule, box or root tab with a cwd inside, shell-tab shim), so nothing else was needed. The ＋ menus (`TabBar`, popout `NewTabMenu`) drop the OpenCode row through `localModelMenuGroup`'s `lockedProject` (`driversForLockedProject`). The OpenCode inline config `apply` wrote was dead and is removed (`17f447d3` has it); `local_drivers::opencode_ollama_config` stays, `launch_prep` uses it. Docs: context doc, help topic, file map, the todo's manual-test line (a Pi tab, not OpenCode) | `opencode_is_refused_in_a_locked_project_whichever_way_it_gets_to_the_gate` (own project, root console and another project with a cwd inside, Ollama down, no Claude where it cannot be pinned, the shim) and `the_agents_a_locked_project_can_run_are_derived_from_the_driver_registry`; vitest `hides OpenCode, which the backend refuses…`. The first failed on the old gate (`unwrap_err()` on an `Ok`: the line passed and carried the inline config); the vitest with the filter forced off (`expected [...] to deeply equal ['pi','vibe','claude']`, OpenCode present). The tests that used OpenCode as the "genuine local line" fixture now use Pi/Codex |
+| 2 | Bubblewrap older than 0.8 fails a verified Claude spawn with bubblewrap's bare "unknown option" (the overlay form on a host with no `/etc/claude-code`) | `agent_fence::parse_bwrap_version` (pure) and `overlay_bwrap_check(host, version)` (pure): only the overlay form is checked; below 0.8 or unreadable refuses with "pinning Claude Code to the local model needs bubblewrap 0.8 or newer on this machine, and the installed bubblewrap is X.Y.Z" (or "could not be read"). `bwrap_version` runs `<bwrap> --version` for the binary the wrapper will run (the root-owned system copy) and caches the answer per binary file (mtime and size), so an upgrade is seen without a restart; a failed probe is not cached. The wrapper checks before it writes the pinned file or builds the mounts | `an_old_or_unreadable_bubblewrap_is_refused_by_name_where_the_pin_needs_the_overlay` (`bubblewrap 0.6.1`, `0.11.1`, `0.8`, `0.9.0-rc1`, garbage; old, boundary, unknown; the tmpfs form unchecked; a source scan that the wrapper checks before `insert_managed_claude`). Saw it fail with the two functions as stubs (parse returning `None`, check returning `Ok`): `left: None, right: Some((0, 6, 1))` |
+
+### Gates (Linux, this tree)
+
+| Gate | Result |
+| --- | --- |
+| `npm run build` | pass |
+| `npm test` | 11329 tests, 3 known failures (`shell/i18n`, `theme/CursorPacks`, `theme/TypeScale`); one run also failed `MobileTerminalTranscript` ("keeps the chat while a /clear sent mid-turn waits…") under load while cargo ran alongside, 33 of 33 pass alone and in the run that followed; one existing `+ menu` test needed its mock to answer `list_local_drivers` with an array (it answered `null`, which the old code never iterated) |
+| `npm run lint` | 0 errors, 29 warnings (unchanged) |
+| `cargo test --workspace` | pass: 5423 lib tests (3 new, 1 replaced), 143 + 39 + 1 + 136 + 101 in the other targets |
+| `cargo test -p tabtivity --no-default-features --lib --test server_secrets` | pass |
+| clippy: workspace all-targets, no-default-features lib, `app-serverd` | pass at zero warnings |
+| `scripts/brand-check.sh`, `scripts/privacy-check.sh 854e436f..HEAD`, `git diff --check` | pass |
+
+### Flagged (updated)
+
+Fixed and removed from the list: review 3 items 1 (OpenCode, by refusing it) and 2 (the bubblewrap version
+message). Still flagged:
+- **OpenCode is unavailable in a locked project** until Phase 2 (`--unshare-net`), by decision. The phone's ＋
+  sheet still lists its local row (it lists the cloud rows of a locked project too); the spawn is refused with the
+  new text. Every OpenCode-specific path in the fence (its config masks) is now unreachable for a verified tab and kept.
+- **The overlay still needs overlayfs in a user namespace (kernel 5.11+)** and does not follow bind mounts under the
+  lower `/etc` (a container's `resolv.conf`); only the version is checked. The bubblewrap mounts were not run.
+- A bubblewrap with the right version number whose build lacks overlay support still fails with bubblewrap's own error.
+- Review 3 items 3 to 7 and the earlier rounds' list are unchanged (the `forget()` window, settings that run code,
+  sessions without `--agent-`, key collision, `kill-session` prefix match).
