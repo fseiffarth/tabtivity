@@ -396,6 +396,9 @@ pub async fn detach_subwindow(
     if respawn_monitor.is_some() {
         builder = builder.visible(false);
     }
+    if respawn {
+        arm_main_focus_guard(&app);
+    }
     let win = match builder.build() {
         Ok(win) => win,
         Err(e) => {
@@ -405,6 +408,7 @@ pub async fn detach_subwindow(
             return Err(format!("build detached window: {e}"));
         }
     };
+    guard_main_focus(&app, &win);
 
     // Apply restore geometry in PHYSICAL px. Missing/zero bounds keep the logical
     // default size and let the WM place the window. Size before position so a
@@ -1402,10 +1406,11 @@ pub fn show_detached_windows(
     win_registry: &WindowRegistryState,
     labels: &[String],
 ) {
-    let main = app.get_webview_window(crate::services::window_service::MAIN_WINDOW_LABEL);
-    let restore_main_focus = !window_positions_readable()
-        && main.as_ref().is_some_and(|win| win.is_focused().unwrap_or(false));
-    let mut presented = false;
+    // Shown popouts must not take the keyboard the user is typing into in the
+    // main window (a show maps them, and the compositor focuses what maps).
+    if !labels.is_empty() {
+        arm_main_focus_guard(app);
+    }
     for label in labels {
         let Some(win) = app.get_webview_window(label) else {
             continue;
@@ -1439,7 +1444,6 @@ pub fn show_detached_windows(
                         spawn_first_paint_nudge(app.clone(), label.clone());
                     }
                 }
-                presented = true;
             }
             continue;
         }
@@ -1497,11 +1501,6 @@ pub fn show_detached_windows(
                     snap_detached_to_screen(app, label);
                 }
             },
-        }
-    }
-    if presented && restore_main_focus {
-        if let Some(main) = main {
-            let _ = main.set_focus();
         }
     }
 }
@@ -2063,6 +2062,67 @@ pub fn snap_detached_window(app: AppHandle, label: String) -> bool {
     snap_detached_to_screen(&app, &label)
 }
 
+/// How long after a scope switch brought its popouts back a popout taking the
+/// keyboard is undone. The popouts map within this (a Wayland respawn's
+/// fullscreen hop shows the window at its start); a click into one later is
+/// the user's own.
+const MAIN_FOCUS_GUARD: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Until when a popout that takes the keyboard hands it back to the main
+/// window ([`arm_main_focus_guard`]); `None` = not guarding.
+static MAIN_FOCUS_GUARD_UNTIL: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
+/// The guard's next deadline: armed (or kept armed) while the main window has
+/// the keyboard, or while a guard is still running — a second popout of the
+/// same switch is built after the first may have taken the keyboard already.
+fn next_focus_guard(
+    until: Option<std::time::Instant>,
+    now: std::time::Instant,
+    main_focused: bool,
+) -> Option<std::time::Instant> {
+    let live = until.is_some_and(|t| now < t);
+    (main_focused || live).then(|| now + MAIN_FOCUS_GUARD)
+}
+
+/// A scope switch is bringing popouts back while the user types into the main
+/// window: the compositor gives a freshly mapped popout the keyboard anyway
+/// (Mutter ignores `focused(false)` / focus-on-map), which strands keyboard
+/// steering in the main window. Arm the guard, so [`guard_main_focus`] hands
+/// the keyboard back.
+fn arm_main_focus_guard(app: &AppHandle) {
+    let main_focused = app
+        .get_webview_window(crate::services::window_service::MAIN_WINDOW_LABEL)
+        .is_some_and(|w| w.is_focused().unwrap_or(false));
+    let mut until = MAIN_FOCUS_GUARD_UNTIL.lock_ok();
+    *until = next_focus_guard(*until, std::time::Instant::now(), main_focused);
+}
+
+/// The user asked for a popout's keyboard (steering's J): no guard undoes it.
+fn disarm_main_focus_guard() {
+    *MAIN_FOCUS_GUARD_UNTIL.lock_ok() = None;
+}
+
+/// Every popout: taking the keyboard while the guard runs gives it back to
+/// the main window.
+fn guard_main_focus(app: &AppHandle, win: &tauri::WebviewWindow) {
+    let app = app.clone();
+    win.on_window_event(move |event| {
+        if !matches!(event, tauri::WindowEvent::Focused(true)) {
+            return;
+        }
+        let guarded = MAIN_FOCUS_GUARD_UNTIL
+            .lock_ok()
+            .is_some_and(|t| std::time::Instant::now() < t);
+        if !guarded {
+            return;
+        }
+        if let Some(main) = app.get_webview_window(crate::services::window_service::MAIN_WINDOW_LABEL) {
+            let _ = main.set_focus();
+        }
+    });
+}
+
 /// Raise one of the active scope's popouts and give it the keyboard —
 /// steering's J (the main window walks no popout itself). Popout labels only,
 /// so this can never bring up the main window or a presenter. Wayland's
@@ -2073,6 +2133,7 @@ pub fn focus_detached_window(app: AppHandle, label: String) -> bool {
     if !label.starts_with("detached-") {
         return false;
     }
+    disarm_main_focus_guard();
     let Some(win) = app.get_webview_window(&label) else {
         return false;
     };
@@ -2332,6 +2393,22 @@ fn resolve_detached_window_id(_app: &AppHandle, _label: &str, _title: &str) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_guard_arms_while_main_has_the_keyboard_or_a_guard_runs() {
+        let now = std::time::Instant::now();
+        // Main window focused: armed from now.
+        assert_eq!(next_focus_guard(None, now, true), Some(now + MAIN_FOCUS_GUARD));
+        // Main window not focused and nothing running: no guard.
+        assert_eq!(next_focus_guard(None, now, false), None);
+        // A first popout of the switch took the keyboard already: the running
+        // guard covers the next one too.
+        let running = Some(now + std::time::Duration::from_secs(1));
+        assert_eq!(next_focus_guard(running, now, false), Some(now + MAIN_FOCUS_GUARD));
+        // An expired guard is dropped, not extended.
+        let expired = now.checked_sub(std::time::Duration::from_secs(1));
+        assert_eq!(next_focus_guard(expired, now, false), None);
+    }
 
     #[test]
     fn label_embeds_scope_and_group() {
