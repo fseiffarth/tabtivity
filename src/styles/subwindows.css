@@ -3383,6 +3383,30 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-left-color: var(--accent);
 }
 .terminal-changes-files small { color: var(--text-muted); }
+/* The Files tab's column: a Files group and a Links group (headed only once both exist). */
+.terminal-files-group { display: flex; flex-direction: column; gap: 2px; }
+.terminal-files-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs, var(--text-sm));
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.terminal-files-group + .terminal-files-heading { margin-top: var(--space-2); }
+/* A link row: the target (host bold, path dim) over who named it and when. */
+.terminal-changes-files button.terminal-files-link { flex-direction: column; align-items: stretch; gap: 1px; }
+.terminal-files-link-main { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.terminal-files-link-main svg { flex: none; width: 12px; height: 12px; color: var(--text-muted); }
+.terminal-files-link-main strong { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.terminal-files-link-rest { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.terminal-files-link-meta { display: flex; gap: 6px; min-width: 0; padding-left: 18px; white-space: nowrap; }
+.terminal-files-link-meta > span { overflow: hidden; text-overflow: ellipsis; }
+.terminal-files-link-label { flex: 1 1 auto; min-width: 0; font-style: italic; }
+.terminal-files-link-meta > span:last-child { flex: none; }
 .terminal-changes-path {
   flex: 1 1 auto;
   min-width: 0;

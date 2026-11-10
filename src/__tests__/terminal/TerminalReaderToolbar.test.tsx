@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 const invoke = vi.fn();
 const send = vi.fn();
 const openFile = vi.fn();
+const openUrl = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn(() => Promise.resolve()) }));
 vi.mock("../../lib/shortcuts/steeringAgent", () => ({ sendSteeringPrompt: (...args: unknown[]) => send(...args), clearAgentTab: vi.fn(() => Promise.resolve(true)) }));
@@ -47,7 +48,7 @@ function Pane({ host }: { host: HTMLElement }) {
         files: { open: files, empty: !filesKnown, onToggle: () => (files ? showChat() : setPanel("files")) } }} />
     <TerminalReaderView host={host} ptyId="p:a" scope="p" tabKey="a" cwd={tab.cwd}
       visible={on} focused={open && !panel} shown={on} changesOpen={changes} filesOpen={files} onShowChat={showChat}
-      onShowFiles={() => setPanel("files")} onFilesKnown={setFilesKnown}
+      onShowFiles={() => setPanel("files")} onFilesKnown={setFilesKnown} onOpenUrl={openUrl}
       navigationSlot={navigationSlot} actionSlot={actionSlot} />
   </>;
 }
@@ -142,6 +143,28 @@ describe("desktop conversation toolbar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
     expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
     expect(host.querySelector(".terminal-files")).toBeNull();
+  });
+
+  it("enables the Files tab on a link alone and lists it, opening only through onOpenUrl", async () => {
+    entries.push({ kind: "answer", text: "Opened [the PR](https://github.com/o/r/pull/7) for you", at: "2026-10-25T09:01:00Z" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    render(<Pane host={host} />);
+    const filesTab = screen.getByRole("tab", { name: /^Files/ }) as HTMLButtonElement;
+    await waitFor(() => expect(filesTab.disabled).toBe(false));
+    fireEvent.click(filesTab);
+    const row = within(screen.getByRole("listbox", { name: "Links this conversation names" })).getByRole("option");
+    // The target is shown, not only the label; no files, so no headings.
+    expect(row.textContent).toContain("github.com");
+    expect(row.textContent).toContain("/o/r/pull/7");
+    expect(row.textContent).toContain("the PR");
+    expect(host.querySelector(".terminal-files-heading")?.textContent).not.toContain("Links");
+    expect(screen.getByText("No file named yet. A link opens in your browser once you confirm.")).toBeTruthy();
+    expect(host.querySelector(".terminal-files a[href]")).toBeNull();
+    fireEvent.click(row);
+    expect(openUrl).toHaveBeenCalledWith("https://github.com/o/r/pull/7");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("open_external_url", expect.anything());
+    fetchSpy.mockRestore();
   });
 
   it("shows a file clicked in the chat in the Files tab; Ctrl+click still opens a tab", async () => {

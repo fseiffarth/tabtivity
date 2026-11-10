@@ -290,6 +290,11 @@ sent), newest first, and shows the one you pick in its viewer. Clicking a
 file in the chat opens it there instead of in a new tab. To open it as a tab
 anyway, click ↗ above the viewer, or Ctrl+click the file.
 
+Web links the conversation names (the ones you can click in the chat, including
+ones you pasted) are listed under the files, with the address's host and path,
+who wrote it and when. Clicking one asks first, naming the exact address, and
+only opens your browser once you confirm; Tabtivity never loads the page itself.
+
 ## Switch all AI off
 
 The power button (⏻) in the side panel header switches all of Tabtivity's AI
