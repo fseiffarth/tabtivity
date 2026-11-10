@@ -9,7 +9,7 @@ import { ConfirmDialog } from "../../components/common/PromptDialogs";
  *   - Ctrl+Shift+Up/Down preview a subwindow; focus commits on Shift release;
  *   - Ctrl+Enter toggles fullscreen, Escape exits it;
  *   - Ctrl+W closes the active tab; Shift+Ctrl+W closes the subwindow;
- *   - Shift+Ctrl+Tab cycles to the next active project;
+ *   - Alt+Shift+→ cycles to the next active project;
  *   - chords are ignored while a text input is focused.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -194,7 +194,7 @@ describe("#62 keyboard nav wiring", () => {
     expect(useTabsStore.getState().tabs.find((t) => t.key === a.key)).toBeTruthy();
   });
 
-  it("Shift+Ctrl+Tab cycles to the next active project", () => {
+  it("Alt+Shift+→ cycles to the next active project", () => {
     useProjectsStore.setState({
       projects: [
         { id: "p1", name: "P1", status: "current", position: 1 } as never,
@@ -207,11 +207,11 @@ describe("#62 keyboard nav wiring", () => {
     useProjectsStore.setState({ setActive });
     render(<Harness />);
 
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
     expect(setActive).toHaveBeenCalledWith("p2");
   });
 
-  it("Shift+Ctrl+Tab wraps through the ROOT scope, not past it", () => {
+  it("Alt+Shift+→ wraps through the ROOT scope, not past it", () => {
     // The root terminal is the pill strip's first pill, so the cycle stops
     // there. It used to be reachable only by leaving it: `null` matched no
     // pill, so cycling out worked and cycling back in was impossible.
@@ -228,17 +228,17 @@ describe("#62 keyboard nav wiring", () => {
 
     // Last pill → wraps to the root station: the Root view opens, the
     // workspace stays on its project (no switch to the root scope).
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
     expect(setActive).not.toHaveBeenCalled();
     expect(rootViewShown(useRootOverlayStore.getState())).toBe(true);
 
     // And out of Root again, into the first pill; the view steps aside.
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
     expect(setActive).toHaveBeenCalledWith("p1");
     expect(rootViewShown(useRootOverlayStore.getState())).toBe(false);
   });
 
-  it("Shift+Ctrl+Tab inside a box slice walks only the pills the slice shows, an inactive member included", () => {
+  it("Alt+Shift+→ inside a box slice walks only the pills the slice shows, an inactive member included", () => {
     useProjectsStore.setState({
       projects: [
         { id: "p1", name: "P1", status: "active", position: 1 } as never,
@@ -258,16 +258,16 @@ describe("#62 keyboard nav wiring", () => {
     render(<Harness />);
 
     // p1 -> p2 (closed in the general strip, but a pill in the slice).
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
     expect(setActive).toHaveBeenLastCalledWith("p2");
     // p2 -> p4: p3 is not in the box, so it is skipped.
     useTabsStore.setState({ scope: "p2" });
     useProjectsStore.setState({ activeId: "p2" });
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
     expect(setActive).toHaveBeenLastCalledWith("p4");
   });
 
-  it("Shift+Ctrl+Tab from the box's own scope lands on its first visible pill", () => {
+  it("Alt+Shift+→ from the box's own scope lands on its first visible pill", () => {
     useProjectsStore.setState({
       projects: [
         { id: "p1", name: "P1", status: "active", position: 1 } as never,
@@ -285,7 +285,7 @@ describe("#62 keyboard nav wiring", () => {
     useProjectsStore.setState({ setActive });
     render(<Harness />);
 
-    key({ key: "Tab", shiftKey: true, ctrlKey: true });
+    key({ key: "ArrowRight", shiftKey: true, altKey: true });
     expect(setActive).toHaveBeenLastCalledWith("p2");
   });
 

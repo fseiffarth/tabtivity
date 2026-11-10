@@ -222,6 +222,42 @@ describe(`${BRAND.display} Mobile terminal dictation`, () => {
     expect(composerStatus().textContent).toBe("Heard: and add a test");
   });
 
+  it("edits the draft on \"Tabby …\" instead of typing it: scratch that, replace, plan", async () => {
+    render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Dictate" }));
+    await act(async () => {});
+    const speech = FakeRecognition.instances[0];
+    const heard: string[] = [];
+    const say = (transcript: string) => {
+      heard.push(transcript);
+      const results: Record<string, unknown> = { length: heard.length };
+      heard.forEach((text, index) => { results[index] = { 0: { transcript: text }, isFinal: true, length: 1 }; });
+      act(() => speech.onresult?.({ resultIndex: heard.length - 1, results } as unknown as MobileSpeechRecognitionResultEvent));
+    };
+    const draft = () => (screen.getByRole("textbox", { name: "Message agent" }) as HTMLTextAreaElement).value;
+
+    say("fix the login");
+    say("and the logout");
+    expect(draft()).toBe("fix the login and the logout");
+    say("Tabby, scratch that.");
+    expect(draft()).toBe("fix the login");
+    expect(composerStatus().textContent).toContain("Removed “and the logout”");
+    say("Tabby replace login with sign-in");
+    expect(draft()).toBe("fix the sign-in");
+    say("Tabby plan");
+    expect(draft()).toBe("/plan fix the sign-in");
+    say("Tabby scratch that");
+    expect(draft()).toBe("fix the sign-in");
+    // Nothing was typed into the pane, and the mic still listens.
+    expect(FakeWebSocket.instances[0].sent.filter((value) => ArrayBuffer.isView(value))).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Stop dictation" })).toBeTruthy();
+    // Not a whole edit phrase: dictation, word for word.
+    say("Tabby, plan the refactor");
+    expect(draft()).toBe("fix the sign-in Tabby, plan the refactor");
+  });
+
   it("keeps listening through the pause that ends the phone's recognizer", async () => {
     render(<Terminal tab={{ id: "opaque-agent", label: "Claude", kind: "agent", available: true, viewer_busy: false }} back={() => {}} />);
     await act(async () => {});

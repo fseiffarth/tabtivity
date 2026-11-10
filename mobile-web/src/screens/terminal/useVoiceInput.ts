@@ -3,10 +3,11 @@
 // Their effects read setters and refs the screen passes in. Those are stable,
 // so where `exhaustive-deps` cannot tell, the rule is disabled at the site
 // rather than handed a dependency the screen's own effect never had.
-import { useEffect, useRef, type Dispatch, type SetStateAction, type MutableRefObject, type RefObject } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction, type MutableRefObject, type RefObject } from "react";
 import { type TabRow } from "../../api";
 import { readFlag } from "../../prefs";
 import { speechLanguage, speechTag } from "../../speechLang";
+import { leadDraft } from "../../slashCommands";
 import { loadDict } from "../../../../src/lib/i18n";
 import {
   prepareOnDeviceSpeech, speechRecognitionConstructor, advanceDictation, DICTATION_START,
@@ -14,7 +15,8 @@ import {
   type DictationProgress, type DictationScan, type UtteranceLedger, type UtteranceOptions, type UtteranceStep,
 } from "../../voiceInput";
 import { startLexicon } from "../../startLexicon";
-import { matchNavigate } from "../../../../src/lib/voice/voiceCommands";
+import { matchDraftEdit, matchNavigate, type SpokenDraftEdit } from "../../../../src/lib/voice/voiceCommands";
+import { DraftVoiceHistory, type DraftEditNote } from "../../../../src/lib/voice/draftEdit";
 import { type TabbyGate } from "./useTabbyGate";
 import { startDictation, type DictationSession } from "../../voiceSession";
 import { paintMicLevel, spokenSend } from "../../../../shared/voice";
@@ -63,12 +65,15 @@ export interface StartVoiceOptions {
   gate?: boolean;
 }
 
+/** How long a spoken edit's note ("Removed …") stays on the voice line. */
+const EDIT_NOTE_MS = 4_000;
+
 /** Dictation into the composer: the on-device check, the dictation session, and
  * its end with the tab. */
 export function useVoiceInput({
   tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, setDraft, draftRef,
   setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus, setVoiceFailure,
-  forgetDictation, submitSpokenRef, tabbyGate, utterances, handsFree,
+  forgetDictation, submitSpokenRef, tabbyGate, utterances, prefixCommands, handsFree,
 }: {
   tab: TabRow;
   recognition: MutableRefObject<DictationSession | undefined>;
@@ -92,9 +97,13 @@ export function useVoiceInput({
   /** The Tabby gate: on from a spoken send, hands-free only. */
   tabbyGate: TabbyGate;
   utterances: UtteranceHooks;
+  /** The Plan / Goal chips' commands this CLI offers ("Tabby plan"). */
+  prefixCommands: readonly string[];
   handsFree: HandsFreeHooks;
 }) {
   const { voiceOpen, voiceStopping } = handsFree;
+  /** What voice did to the draft, for "Tabby scratch that" (`draftEdit.ts`). */
+  const [edits] = useState(() => new DraftVoiceHistory());
   /** The utterances of the recognizer's current result list (hands-free). */
   const ledger = useRef<UtteranceLedger>(UTTERANCES_START);
   /** The last reading's live words: a quiet that follows them is not an end. */
@@ -168,6 +177,13 @@ export function useVoiceInput({
     setVoiceFailure(null);
     // The session restarts the browser's recognizer through pauses, so
     // "listening" holds from the tap until the stop (`voiceSession.ts`).
+    let listeningNote: VoiceNote | null = null;
+    /** An edit's note on the voice line, until the listening line comes back. */
+    const showEditNote = (note: DraftEditNote) => {
+      const shown: VoiceNote = { key: note.key, params: note.params };
+      setVoiceStatus(shown);
+      window.setTimeout(() => setVoiceStatus((current) => (current === shown ? listeningNote : current)), EDIT_NOTE_MS);
+    };
     /** Hands-free listens to utterances: the gate and the hold-back apply. */
     const layered = () => handsFree.on.current;
     const utteranceOptions = (flush: boolean): UtteranceOptions => {
@@ -185,25 +201,53 @@ export function useVoiceInput({
         // utterance needs no start word.
         open: (after ? after.open : tabbyGate.windowOpen()) || draftRef.current.trim() !== "",
         flush,
-        onWithheld: (text) => (after ? after.capture || matchNavigate(text, spokenIn) !== null : dispatch(text)),
+        onWithheld: (text) => (after ? after.capture || matchNavigate(text, spokenIn) !== null || matchDraftEdit(text, spokenIn) !== null : dispatch(text)),
       };
+    };
+    /** "Tabby scratch that", "Tabby replace X by Y", "Tabby plan" …: the draft is
+     * edited, and the words never go into it (`draftEdit.ts`). */
+    const applyEdit = (edit: SpokenDraftEdit, text: string) => {
+      const guard = handsFree.on.current && !voiceStopping.current ? handsFree.guard() : undefined;
+      voiceOpen.current = false;
+      forgetDictation();
+      const outcome = edits.apply(edit, draftRef.current, (draft, command) => leadDraft(draft, command, prefixCommands));
+      if (outcome.draft !== null) {
+        draftRef.current = outcome.draft;
+        setDraft(outcome.draft);
+      }
+      showEditNote(outcome.note);
+      if (edit.send && draftRef.current.trim()) {
+        // "… go on" after the edit: sent as a spoken send is.
+        guard?.reset();
+        if (submitSpokenRef.current(draftRef.current)) {
+          draftRef.current = "";
+          if (guard) {
+            handsFree.awaitTurn.current();
+            tabbyGate.arm();
+          }
+        }
+      } else {
+        // Hands-free: the pause before a send counts again from here; an
+        // emptied draft sends nothing.
+        guard?.settled(text);
+      }
     };
     /** A held utterance has settled: the one ordered route it takes before it
      * can be dictation, first match wins.
      *   1. navigation mode, if open: a leave word ("stop", "cancel") ends it,
      *      any other utterance is a navigation command (`useVoiceNav`);
      *   2. "{assistant} navigate …" opens the mode (the same `take`);
-     *   3. SLOT for the spoken draft edits ("Tabby scratch that" …,
-     *      `matchDraftEdit`): they are utterances that start with the start
-     *      word, so they must also be *held* until they settle — widen
-     *      `StartLexicon.mayNavigate` (`startLexicon.ts`) to "any start-word
-     *      utterance" and call the matcher here, after 1 and 2;
+     *   3. the spoken draft edits ("Tabby scratch that" …, `matchDraftEdit`):
+     *      utterances that start with the start word, so every start-word
+     *      utterance is held until it settles (`startLexicon.ts`);
      *   4. not claimed: the Tabby gate, then hands-free's guard and `pick`,
      *      then dictation — all in `consume`, below. */
     const dispatch = (text: string): boolean => {
       if (utterances.take.current(text)) return true;
-      // (3) the draft edits slot in here.
-      return false;
+      const edit = matchDraftEdit(text, spokenIn);
+      if (!edit) return false;
+      applyEdit(edit, text);
+      return true;
     };
     /** What a step did to the layer's state and the gate. */
     const took = (step: UtteranceStep) => {
@@ -235,6 +279,15 @@ export function useVoiceInput({
         handsFree.sendGuard.current?.reset();
         setVoicePreview("");
         return;
+      }
+      // Without hands-free, each event's new words are matched as one utterance
+      // for a spoken edit (hands-free does it in `dispatch`, on whole ones).
+      if (insert && !layered()) {
+        const edit = matchDraftEdit(insert, spokenIn);
+        if (edit) {
+          applyEdit(edit, insert);
+          return;
+        }
       }
       // Hands-free: settled words go through the send guard first. A stop
       // word cancels its window and never reaches the draft; on a question
@@ -274,6 +327,7 @@ export function useVoiceInput({
         const current = draftRef.current;
         const next = `${current}${current && !current.endsWith(" ") ? " " : ""}${insert}`;
         const spoken = spokenSend(next);
+        if (spoken === null) edits.piece(current, next, insert);
         draftRef.current = spoken ?? next;
         setDraft(spoken ?? next);
         if (spoken !== null) {
@@ -309,7 +363,8 @@ export function useVoiceInput({
     const session: DictationSession = startDictation(Recognition, { lang: language, local: mode === "local" }, {
       onStart: () => {
         setListening(true);
-        setVoiceStatus({ key: handsFree.on.current ? "mobile.voice.listeningHandsFree" : mode === "local" ? "mobile.voice.listeningLocal" : "mobile.voice.listeningRemote" });
+        listeningNote = { key: handsFree.on.current ? "mobile.voice.listeningHandsFree" : mode === "local" ? "mobile.voice.listeningLocal" : "mobile.voice.listeningRemote" };
+        setVoiceStatus(listeningNote);
       },
       onResult: (event) => {
         const scan = scanDictation(event);

@@ -175,7 +175,7 @@ export function barModel(
       continue;
     }
     if (row.actions.includes("exit") && row.actions.includes("work")) {
-      // Enter works here, Space exits: two entries, as two keys.
+      // Enter works here, Esc exits: two entries, as two keys.
       for (const [action, labelKey] of [
         ["work", "steering.work.label"],
         ["exit", "steering.exit.label"],

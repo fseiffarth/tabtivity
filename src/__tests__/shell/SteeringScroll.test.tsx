@@ -212,7 +212,7 @@ describe("steering scroll level", () => {
     expect(sum(wheels)).toBe(0);
   });
 
-  it("D inside goes back to the live end and stays; Space leaves live", () => {
+  it("D inside goes back to the live end and stays; Escape leaves live", () => {
     const { wheels } = oneTerminalTab();
     render(<Harness />);
     press({ key: " ", shiftKey: true });
@@ -225,7 +225,7 @@ describe("steering scroll level", () => {
 
     press({ key: "ArrowLeft" });
     expect(sum(wheels)).toBe(-4);
-    press({ key: " " });
+    press({ key: "Escape" });
     expect(steering().active).toBe(false);
     expect(sum(wheels)).toBe(0);
   });

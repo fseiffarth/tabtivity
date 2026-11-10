@@ -1133,6 +1133,9 @@ pub struct ChordDescriptor {
     pub alt: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub meta: bool,
+    /// The AltGr (right Alt) key, told apart from Alt (`altGr` in the JSON).
+    #[serde(rename = "altGr", default, skip_serializing_if = "is_false")]
+    pub alt_gr: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -1884,6 +1887,10 @@ mod default_rule_tests {
             ..Default::default()
         };
         assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!({"key":"F9"}));
+        // AltGr round-trips under its frontend name.
+        let gr: ChordDescriptor = serde_json::from_str(r#"{"key":"Tab","altGr":true}"#).unwrap();
+        assert!(gr.alt_gr && !gr.alt);
+        assert_eq!(serde_json::to_value(&gr).unwrap(), serde_json::json!({"key":"Tab","altGr":true}));
     }
 
     /// The per-type viewer prefs and the alert sources are all tri-state and

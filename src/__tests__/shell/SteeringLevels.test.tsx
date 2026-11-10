@@ -1,7 +1,7 @@
 /**
  * Keyboard steering as a hierarchy: projects → subwindows → tabs (↓ in, ↑ out,
  * E S D F doubling the arrows), opened on the tabs by Shift+Space and left by
- * Space / Escape / Enter, the new-tab keys inside a pane, the status jumps, the per-level
+ * Escape / Enter, the new-tab keys inside a pane, the status jumps, the per-level
  * legend table (`steeringKeysFor`) and the region cursor that walks the side
  * panel, the header apps and a pane's + menu.
  */
@@ -134,7 +134,7 @@ describe("steering levels", () => {
     expect(steering().active).toBe(false);
   });
 
-  it("E S D F steer like the arrows, and Space leaves", () => {
+  it("E S D F steer like the arrows, and Escape leaves", () => {
     const { a, b } = twoPanes();
     render(<Harness />);
     press({ key: " ", shiftKey: true });
@@ -150,7 +150,10 @@ describe("steering levels", () => {
     expect(useTabsStore.getState().focusedGroupId).toBe(b);
     press({ key: "d" });
     expect(steering().level).toBe("tabs");
+    // Space is the prompt box now, and no agent tab is active: it stays on.
     press({ key: " " });
+    expect(steering().active).toBe(true);
+    press({ key: "Escape" });
     expect(steering().active).toBe(false);
   });
 
@@ -289,7 +292,7 @@ describe("steering levels", () => {
       expect(requests).toHaveLength(0);
       expect(steering().active).toBe(true);
 
-      // Space and Escape are unbound now; Enter leaves.
+      // Escape is unbound now (Space prompts, and no agent is here); Enter leaves.
       press({ key: " " });
       press({ key: "Escape" });
       expect(steering().active).toBe(true);

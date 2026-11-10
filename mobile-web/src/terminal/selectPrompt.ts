@@ -1040,6 +1040,16 @@ export function freeTextRow(option: SelectOption): boolean {
   return option.input === "opencode" || FREE_TEXT.test(option.label);
 }
 
+/** The row a digit answers on a question: the option the dialog printed with
+ * number `n`, else the nth row when the dialog numbers none. Null when there is
+ * none (the legend then says so). A keyboard's 1-9, like the desktop's. */
+export function optionForDigit(prompt: SelectPrompt, n: number): SelectOption | null {
+  if (prompt.options.some((option) => option.number !== UNNUMBERED)) {
+    return prompt.options.find((option) => option.number === n) ?? null;
+  }
+  return prompt.options[n - 1] ?? null;
+}
+
 /** The writes that answer a question's free-text row with `text`: walk the
  * highlight onto it — which focuses its field — type the words as one line,
  * and accept. Not on a multi-select question: typing there ticks the row's box

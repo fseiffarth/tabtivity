@@ -158,7 +158,7 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
       const asked = lastPrompt(tab);
       const resumeKey = `${tab.id}:${at ?? ""}`;
       const offerContinue = tab.agent_status === "interrupted" && tab.available && !aiOff && !continued.has(resumeKey);
-      const row = <button className="home-needs-row" disabled={!tab.available} onClick={() => open(tab.project_id, tab)}>
+      const row = <button className="home-needs-row" data-steer-row={tab.id} disabled={!tab.available} onClick={() => open(tab.project_id, tab)}>
         {tab.agent_status && <AgentStatusMark status={tab.agent_status} />}
         <span className="home-needs-copy">
           <span className="home-needs-title">{`${tab.project_label} · ${tab.label}`}{tab.agent_status === "done" && index === asking.length && isUntested("mobile.home.seenDone") && <span className="untested">{t("mobile.newTab.untested")}</span>}{offerContinue && isUntested("mobile.home.continue") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>

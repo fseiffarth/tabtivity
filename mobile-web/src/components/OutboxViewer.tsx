@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
-import { MAX_VIEW_FILE, isMedia, markablePicture, openOutside, refreshProjectFile, sentName, viewLimits, viewerFileUrl, type OutboxFile, type TabRow, type ViewerScope } from "../api";
+import { isMedia, markablePicture, openOutside, refreshProjectFile, sentName, viewLimits, viewerFileUrl, type OutboxFile, type TabRow, type ViewerScope } from "../api";
 import { layerKey } from "../markup/store";
-import { shareAs, useOutboxShare } from "../outboxShare";
+import { shareAs, shareSize, useOutboxShare } from "../outboxShare";
+import { ShareSizeSheet } from "./ShareSizeSheet";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { isUntested } from "../../../src/lib/untested";
 import { MarkupView } from "./MarkupView";
@@ -233,8 +234,10 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   const strands = openingOutsideStrands();
   const sharing = useOutboxShare(scope);
   const { prepare } = sharing;
-  // Sharing hands the phone's share sheet the whole file in memory.
-  const shareable = shareAs(file) !== null && file.size <= MAX_VIEW_FILE;
+  // Sharing hands the phone's share sheet the whole file in memory: past
+  // `MAX_VIEW_FILE` the tap asks first (`ShareSizeSheet`), never zips.
+  const shareable = shareAs(file) !== null && shareSize(scope, file.size) !== null;
+  const sizeAsk = <ShareSizeSheet files={sharing.asking} onShare={sharing.confirm} onClose={sharing.cancel} />;
   useEffect(() => {
     const controller = new AbortController();
     setText(null);
@@ -400,8 +403,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
     failed: sharing.failed === file.name,
   } : undefined;
   if (marking && (markup || fresh)) {
-    return <MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place} folder={marked.folder}
-      onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} share={shareWhileMarking} />;
+    return <><MarkupView tabId={markup?.tabId} projectId={target} scope={marked.scope} file={marked.file} place={marked.place} folder={marked.folder}
+      onSend={markup?.onSend} newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} refresh={marked.refresh} adoptFrom={marked.adoptFrom} toChat={markup?.toChat} onClose={() => setMarking(false)} share={shareWhileMarking} />{sizeAsk}</>;
   }
   /** Print: a picture, or a text once the whole of it is read in; a PDF's
    * pages are the reader's to print (`MarkupView`). */
@@ -420,9 +423,9 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
   // A PDF's pages are drawn here, by the sealed pdf.js frame, and Mark up
   // switches on in that same view.
   if (isPdf) {
-    return <MarkupView tabId={markup?.tabId} projectId={target} place={marked.place} folder={marked.folder} onSend={markup?.onSend}
+    return <><MarkupView tabId={markup?.tabId} projectId={target} place={marked.place} folder={marked.folder} onSend={markup?.onSend}
       newTab={fresh} agent={markup?.agent} model={markup?.model} pickModel={markup?.pickModel} dialog={markup?.dialog} toChat={markup?.toChat} refresh={marked.refresh} scope={marked.scope} file={marked.file} adoptFrom={marked.adoptFrom} onClose={onClose}
-      startMarking={startMarking} paned={paned} reader={{ actions, alert: sharing.failed === file.name ? t("mobile.outbox.shareError") : undefined }} share={shareWhileMarking} />;
+      startMarking={startMarking} paned={paned} reader={{ actions, alert: sharing.failed === file.name ? t("mobile.outbox.shareError") : undefined }} share={shareWhileMarking} />{sizeAsk}</>;
   }
   return <div className={`outbox-viewer${isText ? " outbox-text-sheet" : ""}${paned ? " paned" : ""}`} role="dialog" aria-modal={!paned} aria-label={sentName(file)}>
     <div className="outbox-viewer-head">
@@ -476,5 +479,6 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
         : t("mobile.outbox.noPreview")}</p>
       {!tooLarge && <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>}
     </div>}
+    {sizeAsk}
   </div>;
 }

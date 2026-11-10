@@ -1,7 +1,7 @@
 import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { useT, type TranslationKey } from "../../lib/i18n";
+import { useI18nStore, useT, type Language, type TranslationKey } from "../../lib/i18n";
 import {
   READER_STEP,
   composerHistory,
@@ -66,11 +66,13 @@ import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/ter
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
 import { claudeBoxWords, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
-import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
+import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, leadDraft, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu } from "./ReaderSlashMenu";
 import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useReaderVoice } from "./ReaderVoice";
+import { matchDraftEdit } from "../../lib/voice/voiceCommands";
+import { DraftVoiceHistory, type DraftEditNote } from "../../lib/voice/draftEdit";
 import { useReaderReadAloud } from "./ReaderReadAloud";
 import { useAgentTurn } from "../../lib/voice/agentTurn";
 import { useExperimental } from "../../lib/experimental";
@@ -88,6 +90,9 @@ import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
 import type { AskedQuestion, RunningShell, TranscriptEntry } from "../../../mobile-web/src/api";
 import type { UntestedId } from "../../lib/untested";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
+
+/** How long a spoken edit's note ("Removed …") stays on the voice line. */
+const EDIT_NOTE_MS = 4_000;
 
 /** How long a sent prompt shows as sending while the transcript has not
  * recorded it yet — counted from the send, or from the last moment the agent
@@ -724,9 +729,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   // The keyboard goes to the composer whenever this pane is the focused one,
   // and back to it when steering lets go. A new tab's box is `disabled` until
   // its CLI is up (`inputBlocked`), and a disabled box ignores `focus()`, so
-  // it is taken again when the box unlocks — then only from nowhere (the body)
-  // or this pane's own chat (a question's answer rows), never from a field the
-  // user moved to meanwhile.
+  // it is taken again when the box unlocks — then only from nowhere (the body),
+  // this pane's own chat (a question's answer rows) or its own xterm under the
+  // Reader, never from a field the user moved to meanwhile.
   const wasBlocked = useRef(inputBlocked);
   useEffect(() => {
     const unlocked = wasBlocked.current && !inputBlocked;
@@ -737,10 +742,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (unlocked) {
       const active = document.activeElement;
       const fromNowhere = !active || active === document.body;
-      if (!fromNowhere && !box.closest(".terminal-reader")?.contains(active)) return;
+      const fromThisPane = !!box.closest(".terminal-reader")?.contains(active)
+        || !!terminalFor(ptyId)?.element?.contains(active);
+      if (!fromNowhere && !fromThisPane) return;
     }
     box.focus();
-  }, [focused, visible, steering, inputBlocked]);
+  }, [focused, visible, steering, inputBlocked, ptyId]);
 
   // Files dropped onto the pane (`lib/terminal/terminalDrop`) land here while
   // the Reader is up: at the cursor when the box has focus, else at the end.
@@ -789,15 +796,39 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     if (cli === "claude" && !(await viewSession({ rows: paneRows, key: paneKey }))) throw new SubagentViewedError();
   };
 
+  /** What voice did to the draft, for "Tabby scratch that" (`draftEdit.ts`),
+   * and the note an edit leaves on the voice line for a moment. */
+  const [voiceEdits] = useState(() => new DraftVoiceHistory());
+  const [editNote, setEditNote] = useState<DraftEditNote | null>(null);
+  useEffect(() => {
+    if (!editNote) return;
+    const timer = window.setTimeout(() => setEditNote(null), EDIT_NOTE_MS);
+    return () => window.clearTimeout(timer);
+  }, [editNote]);
+  /** Spoken edits are matched in the language listened in; with the
+   * recognizer left to detect it, in the app's. */
+  const uiLanguage = useI18nStore((s) => s.lang);
+  const voiceLangChoice = useSettingsStore((s) => s.settings?.voice_lang);
+  const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
   /** A dictated segment (`useReaderVoice`) joins the draft as typed text
    * would, undoable; one that ends in the spoken send ("go on" / "los")
-   * sends the draft without those words. */
+   * sends the draft without those words. "Tabby scratch that", "Tabby
+   * replace X by Y", "Tabby plan" … edit the draft instead. */
   const dictated = (heard: string) => {
     const clean = sanitizeVoiceTranscript(heard);
     if (!clean) return;
+    const edit = matchDraftEdit(clean, editLanguage);
+    if (edit) {
+      const outcome = voiceEdits.apply(edit, draftRef.current, (draft, command) => leadDraft(draft, command, prefixCommands));
+      if (outcome.draft !== null) editDraft(outcome.draft);
+      setEditNote(outcome.note);
+      if (edit.send) void send();
+      return;
+    }
     const current = draftRef.current;
     const next = `${current}${current && !/\s$/.test(current) ? " " : ""}${clean}`;
     const spoken = spokenSend(next);
+    if (spoken === null) voiceEdits.piece(current, next, clean);
     editDraft(spoken ?? next);
     if (spoken !== null) void send();
   };
@@ -816,6 +847,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     pick: voiceLoop.pick,
     commitPick: voiceLoop.commitPick,
     readProblem: voiceLoop.readProblem,
+    note: editNote ? t(editNote.key, editNote.params) : "",
   });
   const { onListening } = voiceLoop;
   useEffect(() => onListening(voice.listening, voice.speakOver), [onListening, voice.listening, voice.speakOver]);

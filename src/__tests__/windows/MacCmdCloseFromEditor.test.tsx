@@ -96,9 +96,9 @@ describe("⌘W from a focused editor on macOS", () => {
   });
 
   it("does not let any non-close ⌘ chord out of an editor", () => {
-    // Shift+⌘Tab is cycleProject's chord on a Mac; from a field it stays there.
+    // Shift+⌘Tab is prevProjectTab's chord on a Mac; from a field it stays there.
     const ev = new KeyboardEvent("keydown", { key: "Tab", metaKey: true, shiftKey: true });
-    expect(editorMayTakeChord("cycleProject", ev)).toBe(false);
+    expect(editorMayTakeChord("prevProjectTab", ev)).toBe(false);
     expect(editorMayTakeChord("toggleFullscreen", ev)).toBe(false);
     const cmdW = new KeyboardEvent("keydown", { key: "w", metaKey: true });
     expect(editorMayTakeChord("closeTab", cmdW)).toBe(true);

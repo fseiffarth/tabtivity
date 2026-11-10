@@ -362,6 +362,12 @@ fn prepare_home_with(
     } else {
         crate::services::agent_session::register_hooks_in_home(home);
     }
+    // The send skill, after the global layer so a same-named skill there
+    // cannot displace it. Not the assistant's: its tool set is pinned and it
+    // runs no shell.
+    if !matches!(seed, Seed::Assistant | Seed::Probe) {
+        crate::services::agent_hint::write_skill_in_home(home);
+    }
     // Copilot signs in through a keyring the fence hides: its home gets the
     // plain-text token setting Tabtivity's keeper collects from (`copilot_auth`).
     // That is the scope's own home; Copilot drives no local model.

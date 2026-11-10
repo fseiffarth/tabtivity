@@ -36,6 +36,11 @@ import type { MarkupBack } from "./components/OutboxViewer";
  * the desktop's current bundle or is booting a stale one out of the cache. */
 import { BUNDLE_VERSION as SPLASH_VERSION } from "./buildInfo";
 import { BackNest, useBackLayer } from "./backStack";
+import { markDoneSeen } from "./seenDone";
+import { SteeringBar } from "./steering/SteeringBar";
+import { SteeringConfirm } from "./steering/SteeringConfirm";
+import { requestFind, type Place } from "./steering/steeringState";
+import { usePhoneSteering, type SteeringBase } from "./steering/usePhoneSteering";
 import { BRAND, LEGACY_NAMES, NAMES, storageDashKey } from "../../src/lib/brand";
 
 /**
@@ -618,6 +623,52 @@ export function App() {
     }
     setTab(next);
   };
+  // Keyboard steering (a Bluetooth keyboard on the phone). Called here, before
+  // the early returns below, so its window listeners outlive every screen; it
+  // reads this state through a ref and acts only once the reader presses the
+  // chord. Nothing here changes what a touch does.
+  const steeringBase: SteeringBase = terminal ? "inside" : tabby || tab !== "projects" ? "section" : projectView.kind === "project" ? "tabs" : "projects";
+  const steeringPlace: Place = terminal
+    ? { kind: "terminal", project: terminal.project, tab: terminal.tab }
+    : { kind: "list", section: tab, projectId: tab === "projects" && projectView.kind === "project" ? projectView.id : null };
+  usePhoneSteering({
+    enabled: auth === "paired",
+    base: steeringBase,
+    sectionLabel: steeringBase !== "section" ? null : tabby ? "assistant.title" : TABS.find((entry) => entry.id === tab)?.label ?? null,
+    place: steeringPlace,
+    openTab: (projectId, row) => {
+      // As a tap on a Needs you row: a finished tab opened here is seen.
+      if (row.agent_status === "done") markDoneSeen(row.id, row.done_at);
+      openTerminal(projectId, row);
+    },
+    openSection: (next) => {
+      if (hiddenSections.includes(next)) return;
+      // Already there: the tab bar would reseed the section, a key should not.
+      if (next === tab && !terminal && !tabby) return;
+      setTerminal(null);
+      setTabby(null);
+      openSection(next);
+    },
+    restore: (place) => {
+      setTabby(null);
+      if (place.kind === "terminal") {
+        setTerminal({ project: place.project, tab: place.tab });
+        return;
+      }
+      setTerminal(null);
+      setTodoCard(undefined);
+      setTab(place.section);
+      if (place.section === "projects") setProjectView(place.projectId ? { kind: "project", id: place.projectId } : { kind: "home" });
+    },
+    findProject: () => {
+      requestFind();
+      setTerminal(null);
+      setTabby(null);
+      setTodoCard(undefined);
+      setTab("projects");
+      setProjectView({ kind: "home" });
+    },
+  });
   // A failed sign-in after an unlock is retried as a sign-in while the unlock
   // holds: sending the reader back through the fingerprint for a network
   // hiccup made every failure cost two unlocks. A blocked key store never got
@@ -655,7 +706,7 @@ export function App() {
   // and the tab bar would sit on the keyboard toolbar besides.
   // Each screen nests its sheets above the App's own step back
   // (`backStack.ts`): one opening on arrival registers before the App does.
-  if (terminal) return <BackNest><Terminal
+  if (terminal) return <><BackNest><Terminal
     key={terminal.tab.id}
     tab={terminal.tab}
     project={terminal.project}
@@ -667,13 +718,13 @@ export function App() {
     // Spoken navigation to a project with no agent tab: its screen, from here.
     openProject={(id) => { setTerminal(null); setTab("projects"); setProjectView({ kind: "project", id }); }}
     back={() => setTerminal(null)}
-  /></BackNest>;
-  if (tabby) return <BackNest><TabbyOpen
+  /></BackNest><SteeringBar /></>;
+  if (tabby) return <><BackNest><TabbyOpen
     key={tabby}
     id={tabby}
     ready={(row) => { setTabby(null); openTerminal(tabby, row); }}
     back={() => setTabby(null)}
-  /></BackNest>;
+  /></BackNest><SteeringBar /></>;
   return <div className="tabbed"><BackNest>
     {tab === "todo" ? <Todo key={reseed} card={todoCard} />
       : tab === "mail" ? <Mail key={reseed} />
@@ -691,8 +742,11 @@ export function App() {
               todo={openTodo}
               mail={() => setTab("mail")}
             />}
+    {/* Inside the same nest as the screen, so its back layer wins over the screen's. */}
+    <SteeringConfirm />
     </BackNest>
     <TabBar active={tab} open={openSection} hidden={hiddenSections} />
+    <SteeringBar />
     {secretsUntrusted && <SecretsRepinSheet onClose={() => setSecretsUntrusted(false)} />}
     {!secretsUntrusted && secretsNewCode && <SecretsNewCodeSheet onClose={() => setSecretsNewCode(false)} />}
   </div>;

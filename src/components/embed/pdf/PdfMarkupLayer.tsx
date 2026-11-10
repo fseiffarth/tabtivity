@@ -17,10 +17,11 @@
  * stroke held still at its end snaps to a line or an ellipse (`snapStroke`).
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { useT } from "../../../lib/i18n";
+import { useT, type TranslationKey } from "../../../lib/i18n";
 import { textMarks } from "../../../../mobile-web/src/markup/anchors";
 import {
   clampToPage,
+  selectionBox,
   eraseAlong,
   eraseAt,
   eraseRect,
@@ -29,13 +30,16 @@ import {
   markAt,
   markBox,
   marksIn,
+  marksInLoop,
   MAX_COMMENT,
   moveMarks,
   moveNote,
   noteAt,
   replaceMark,
   round,
+  resizeMarks,
   snapStroke,
+  straightenStroke,
   stampSize,
   stylusErases,
   type BoxMark,
@@ -43,12 +47,14 @@ import {
   type Mark,
   type MarkColor,
   type PageLayer,
+  PEN_STYLES,
+  type PenStyle,
   type StampMark,
   type TextMark,
 } from "../../../../mobile-web/src/markup/layer";
 import { drawMark, drawPage, INK, type Paint } from "../../../../mobile-web/src/markup/rasterize";
-import { colorsFor, eraserPx, penCursor, SNAP_HOLD_MS, SNAP_SLOP_PX, strokePressure, strokeWidth } from "../../../../mobile-web/src/markup/pen";
-import { COLOR_KEYS } from "./PdfMarkupBar";
+import { colorsFor, eraserPx, inkStyle, penCursor, SNAP_HOLD_MS, SNAP_SLOP_PX, strokePressure, strokeWidth } from "../../../../mobile-web/src/markup/pen";
+import { COLOR_KEYS, selectionColors } from "./PdfMarkupBar";
 import type { CommentDraft, MarkupEdit, NoteDraft } from "./usePdfMarkup";
 
 /** How strongly the marks of earlier rounds show — sent, never sent again. */
@@ -61,6 +67,12 @@ const DRAG_SLOP = 4;
 const ERASE_PX = 10;
 /** How near a click must come to a mark to select it, CSS pixels. */
 const PICK_PX = 6;
+/** A pen has drawn in this window: from then on a finger pans the pages and
+ *  only the pen (or the mouse) marks — the phone's rule, for a touch screen
+ *  with a pen. Kept for the window's life. */
+let penSeen = false;
+/** The selection's resize handle: its side and how near a press must come, CSS px. */
+const HANDLE_PX = 9;
 
 type Size = [number, number];
 
@@ -89,6 +101,10 @@ type Gesture =
    *  drag of the selection moving it (`move`). */
   | ({ kind: "pick" } & SelectDrag)
   | ({ kind: "move" } & SelectDrag)
+  /** The lasso's freehand loop, page units. */
+  | ({ kind: "loop"; loop: [number, number][] } & SelectDrag)
+  /** The selection's corner handle dragged: resized about its top-left. */
+  | { kind: "scale"; pointerId: number; origin: [number, number]; from: number }
   | { kind: "erase"; pointerId: number; layer: MarkupEdit["base"]; last: [number, number] }
   /** The area eraser's rectangle, from where it was pressed. */
   | { kind: "area"; pointerId: number; start: [number, number] }
@@ -136,16 +152,7 @@ export function pagePoint(
 }
 
 /** The marks at `indices` of `page` boxed together `[x0, y0, x1, y1]`, or `null`. */
-function boxAround(page: PageLayer | undefined, indices: readonly number[]): [number, number, number, number] | null {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const i of indices) {
-    const mark = page?.marks[i];
-    if (!mark) continue;
-    const [x, y, w, h] = markBox(mark);
-    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
-  }
-  return x0 <= x1 ? [x0, y0, x1, y1] : null;
-}
+const boxAround = selectionBox;
 
 /** A dashed outline, white under dark so it shows on any page — the area
  *  eraser's rectangle, the select tool's box and its selection. */
@@ -162,6 +169,40 @@ function dashedRect(ctx: CanvasRenderingContext2D, rect: readonly number[], k: n
   ctx.restore();
 }
 
+/** The lasso's loop as it is drawn, dashed like the select tool's box. */
+function dashedLoop(ctx: CanvasRenderingContext2D, loop: readonly [number, number][], k: number, dpr: number) {
+  if (loop.length < 2) return;
+  const trace = () => {
+    ctx.beginPath();
+    ctx.moveTo(loop[0][0] * k, loop[0][1] * k);
+    for (const [x, y] of loop.slice(1)) ctx.lineTo(x * k, y * k);
+  };
+  ctx.save();
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 2 * dpr;
+  ctx.strokeStyle = "white";
+  trace();
+  ctx.stroke();
+  ctx.setLineDash([4 * dpr, 3 * dpr]);
+  ctx.lineWidth = dpr;
+  ctx.strokeStyle = "#333";
+  trace();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** The selection's resize handle at its bottom-right corner. */
+function handleSquare(ctx: CanvasRenderingContext2D, at: [number, number], dpr: number) {
+  const side = HANDLE_PX * dpr;
+  ctx.save();
+  ctx.fillStyle = "white";
+  ctx.strokeStyle = "#333";
+  ctx.lineWidth = dpr;
+  ctx.fillRect(at[0] - side / 2, at[1] - side / 2, side, side);
+  ctx.strokeRect(at[0] - side / 2, at[1] - side / 2, side, side);
+  ctx.restore();
+}
+
 export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size; scale: number; edit: MarkupEdit }) {
   const t = useT();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -173,6 +214,9 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   /** The area eraser's or the select tool's rectangle while it is dragged,
    *  `[x0, y0, x1, y1]`. */
   const [area, setArea] = useState<[number, number, number, number] | null>(null);
+  /** The lasso's loop while it is drawn. */
+  const [loop, setLoop] = useState<[number, number][] | null>(null);
+  const [fingersPan, setFingersPan] = useState(penSeen);
 
   const cssW = size[0] * scale;
   const cssH = size[1] * scale;
@@ -184,6 +228,8 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   const selection = edit.selection?.n === n ? edit.selection : null;
   /** The selection's outline, following a move in flight. */
   const selBox = selection ? boxAround(page, selection.indices) : null;
+  /** The selection's outline as drawn, padded a little off the marks. */
+  const selPad = 3 / scale;
   const selKey = selBox?.join(",") ?? "";
 
   /** The committed marks drawn once, for the length of a gesture that repaints
@@ -231,7 +277,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const k = canvas.width / size[0];
-    paintCommitted(ctx, canvas, k, preview.length > 0 || area !== null);
+    paintCommitted(ctx, canvas, k, preview.length > 0 || area !== null || loop !== null);
     if (preview.length) {
       ctx.save();
       ctx.scale(k, k);
@@ -241,8 +287,10 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     if (selBox) {
       const pad = 3 / (k / dpr);
       dashedRect(ctx, [selBox[0] - pad, selBox[1] - pad, selBox[2] + pad, selBox[3] + pad], k, dpr);
+      handleSquare(ctx, [(selBox[2] + pad) * k, (selBox[3] + pad) * k], dpr);
     }
     if (area) dashedRect(ctx, area, k, dpr);
+    if (loop) dashedLoop(ctx, loop, k, dpr);
   };
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -251,7 +299,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     canvas.height = pixelH;
     redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, sent, preview, area, selKey, pixelW, pixelH]);
+  }, [page, sent, preview, area, loop, selKey, pixelW, pixelH]);
   // A canvas gives its backing store back the moment it goes; a snap's timer
   // goes with the layer.
   useEffect(
@@ -277,35 +325,60 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     return size[0] / width;
   };
 
-  /** One piece of the stroke in progress, straight onto the canvas — the
-   *  whole layer is redrawn, curved, when the stroke ends. */
-  const paintPiece = (mark: InkMark, from: [number, number], to: [number, number], pressure: number) => {
+  /** The newest piece of the stroke in progress, straight onto the canvas:
+   *  the curve from the midpoint before the last sample, through it, to the
+   *  midpoint after it — the curves `rasterize.ts` draws the finished stroke
+   *  with, so nothing jumps when the pen lifts. The first sample is a dot. */
+  const paintPiece = (mark: InkMark) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
+    const points = mark.points;
+    if (!canvas || !ctx || !points.length) return;
     const k = canvas.width / size[0];
+    const at = points.length - 1;
+    const mid = (a: readonly number[], b: readonly number[]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
     ctx.save();
     ctx.scale(k, k);
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.strokeStyle = INK[mark.color];
-    ctx.lineWidth = inkWidth(mark.width, pressure);
     ctx.beginPath();
-    ctx.moveTo(from[0], from[1]);
-    ctx.lineTo(to[0], to[1]);
+    if (at === 0) {
+      ctx.lineWidth = inkWidth(mark.width, points[0][2]);
+      ctx.moveTo(points[0][0], points[0][1]);
+      ctx.lineTo(points[0][0], points[0][1]);
+    } else {
+      const control = points[at - 1];
+      const from = at >= 2 ? mid(points[at - 2], control) : [control[0], control[1]];
+      const to = mid(control, points[at]);
+      ctx.lineWidth = inkWidth(mark.width, control[2]);
+      ctx.moveTo(from[0], from[1]);
+      ctx.quadraticCurveTo(control[0], control[1], to[0], to[1]);
+    }
     ctx.stroke();
     ctx.restore();
   };
 
   /** A real pen's reading bends by the pressure curve; a mouse or a finger
    *  draws at the even base width. */
+  /** The style the armed pen or highlighter draws in. */
+  const style = inkStyle(edit.pen);
   const pressureOf = (event: { pointerType: string; pressure: number }) =>
     event.pointerType === "pen" && event.pressure > 0
-      ? strokePressure(edit.pen.style, event.pressure, edit.pen.pressure)
-      : strokePressure(edit.pen.style, 0.5);
+      ? strokePressure(style, event.pressure, edit.pen.pressure)
+      : strokePressure(style, 0.5);
   /** Only the plain pen paints its pieces as they come; a styled stroke is
    *  one path (see-through, dashed, headed), shown whole as it grows. */
-  const piecewise = edit.pen.style === "pen";
+  const piecewise = style === "pen";
   const eraseReach = () => eraserPx(ERASE_PX, edit.pen.eraser) * unitsPerPixel();
+  /** How the eraser takes marks: whole strokes unless it rubs (Partial) — a
+   *  pen's eraser end or side button rubs as the eraser's mode says, whole
+   *  strokes for the area mode. */
+  const eraseHow = () => ({ sent: edit.showSent, whole: edit.pen.eraser !== "partial", highlights: edit.pen.eraseHighlights });
+  /** A highlighter stroke with Straight lines on is shown — and kept — as its
+   *  straight line. */
+  const straight = edit.tool === "highlight" && edit.pen.straight;
+  const shaped = (mark: InkMark): InkMark => (straight ? straightenStroke(mark) : mark);
   const areaOf = (a: [number, number], b: [number, number]): [number, number, number, number] =>
     [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
   /** What a text-mark drag from `start` to `at` covers; none until the page's
@@ -327,7 +400,8 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   const holdFor = (g: Extract<Gesture, { kind: "ink" }>) => {
     if (g.timer !== null) window.clearTimeout(g.timer);
     g.timer = null;
-    if (!edit.pen.snap) return;
+    // A straight highlighter stroke is a line already.
+    if (!edit.pen.snap || straight) return;
     g.timer = window.setTimeout(() => {
       g.timer = null;
       if (gesture.current !== g) return;
@@ -339,6 +413,12 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "pen" && !penSeen) {
+      penSeen = true;
+      setFingersPan(true);
+    }
+    // Once a pen has drawn, a finger scrolls: the browser takes it.
+    if (event.pointerType === "touch" && penSeen) return;
     // A pen's eraser end presses button 5.
     if (edit.busy || (event.button !== 0 && !stylusErases(event))) return;
     if (edit.note) {
@@ -358,18 +438,18 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       gesture.current = { kind: "area", pointerId: event.pointerId, start: at };
       setArea(areaOf(at, at));
     } else if (edit.tool === "eraser" || stylusErases(event)) {
-      const next = eraseAt(edit.base, n, at[0], at[1], eraseReach(), edit.showSent);
+      const next = eraseAt(edit.base, n, at[0], at[1], eraseReach(), eraseHow());
       gesture.current = { kind: "erase", pointerId: event.pointerId, layer: next, last: at };
       if (next !== edit.base) edit.scratch(next);
-    } else if (edit.tool === "ink") {
+    } else if (edit.tool === "ink" || edit.tool === "highlight") {
       const pressure = pressureOf(event);
       const mark: InkMark = {
         kind: "ink",
         color: edit.color,
-        width: strokeWidth(size[0], edit.pen),
+        width: strokeWidth(size[0], { size: edit.pen.size, style }),
         points: [[at[0], at[1], pressure]],
       };
-      if (edit.pen.style !== "pen") mark.style = edit.pen.style;
+      if (style !== "pen") mark.style = style;
       const g: Gesture = {
         kind: "ink",
         pointerId: event.pointerId,
@@ -381,9 +461,9 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
         whole: false,
       };
       gesture.current = g;
-      holdFor(g);
-      if (piecewise) paintPiece(mark, at, at, pressure);
-      else setPreview([{ ...mark, points: mark.points.slice() }]);
+      if (!straight) holdFor(g);
+      if (piecewise) paintPiece(mark);
+      else setPreview([shaped({ ...mark, points: mark.points.slice() })]);
     } else if (edit.tool === "box") {
       gesture.current = { kind: "box", pointerId: event.pointerId, start: at };
     } else if (edit.tool === "textmark") {
@@ -394,13 +474,25 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       gesture.current = { kind: "stamp", pointerId: event.pointerId };
       setPreview([stampAt(at)]);
     } else if (edit.tool === "select") {
-      // On the selection's outline: a drag moves it. Elsewhere: a click
-      // picks the mark under it, a drag a box of marks; Shift adds to them.
-      const pad = PICK_PX * unitsPerPixel();
+      // On the selection's corner handle: a drag resizes it; on its outline:
+      // a drag moves it. Elsewhere: a click picks the mark under it, a drag a
+      // loop (or, in rectangle mode, a box) of marks; Shift adds to them.
+      const units = unitsPerPixel();
+      const pad = PICK_PX * units;
+      const corner: [number, number] | null = selBox ? [selBox[2] + selPad, selBox[3] + selPad] : null;
+      if (corner && selBox && !event.shiftKey && Math.max(Math.abs(at[0] - corner[0]), Math.abs(at[1] - corner[1])) <= HANDLE_PX * units) {
+        const origin: [number, number] = [selBox[0], selBox[1]];
+        gesture.current = { kind: "scale", pointerId: event.pointerId, origin, from: Math.max(1e-6, Math.hypot(at[0] - origin[0], at[1] - origin[1])) };
+        return;
+      }
       const onSelection = !!selBox && !event.shiftKey
         && at[0] >= selBox[0] - pad && at[0] <= selBox[2] + pad && at[1] >= selBox[1] - pad && at[1] <= selBox[3] + pad;
       const drag: SelectDrag = { pointerId: event.pointerId, start: at, clientX: event.clientX, clientY: event.clientY, moved: false, add: event.shiftKey };
-      gesture.current = onSelection ? { kind: "move", ...drag } : { kind: "pick", ...drag };
+      gesture.current = onSelection
+        ? { kind: "move", ...drag }
+        : edit.pen.lasso === "free"
+          ? { kind: "loop", loop: [at], ...drag }
+          : { kind: "pick", ...drag };
     } else {
       const index = noteAt(edit.base.pages[n], at[0], at[1]);
       const grabbed = index >= 0 ? (edit.base.pages[n].marks[index] as TextMark) : null;
@@ -437,11 +529,11 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       for (const sample of samples.length ? samples : [native]) {
         const at = toPage(sample.clientX, sample.clientY);
         const pressure = pressureOf(sample);
-        if (pieces && !g.snapped) paintPiece(g.mark, g.last, at, pressure);
         g.mark.points.push([at[0], at[1], pressure]);
+        if (pieces && !g.snapped) paintPiece(g.mark);
         g.last = at;
       }
-      if (!pieces && !g.snapped) setPreview([{ ...g.mark, points: g.mark.points.slice() }]);
+      if (!pieces && !g.snapped) setPreview([shaped({ ...g.mark, points: g.mark.points.slice() })]);
     } else if (g.kind === "area") {
       setArea(areaOf(g.start, toPage(event.clientX, event.clientY)));
     } else if (g.kind === "box") {
@@ -450,15 +542,22 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       setPreview(textMarksTo(g.start, toPage(event.clientX, event.clientY)));
     } else if (g.kind === "stamp") {
       setPreview([stampAt(toPage(event.clientX, event.clientY))]);
-    } else if (g.kind === "pick" || g.kind === "move") {
+    } else if (g.kind === "scale") {
+      if (!selection) return;
+      const at = toPage(event.clientX, event.clientY);
+      edit.scratch(resizeMarks(edit.base, n, selection.indices, g.origin, Math.hypot(at[0] - g.origin[0], at[1] - g.origin[1]) / g.from));
+    } else if (g.kind === "pick" || g.kind === "move" || g.kind === "loop") {
       if (!g.moved && Math.hypot(event.clientX - g.clientX, event.clientY - g.clientY) < DRAG_SLOP) return;
       g.moved = true;
       const at = toPage(event.clientX, event.clientY);
       if (g.kind === "pick") setArea(areaOf(g.start, at));
-      else if (selection) edit.scratch(moveMarks(edit.base, n, selection.indices, at[0] - g.start[0], at[1] - g.start[1]));
+      else if (g.kind === "loop") {
+        g.loop.push(at);
+        setLoop(g.loop.slice());
+      } else if (selection) edit.scratch(moveMarks(edit.base, n, selection.indices, at[0] - g.start[0], at[1] - g.start[1]));
     } else if (g.kind === "erase") {
       const at = toPage(event.clientX, event.clientY);
-      const next = eraseAlong(g.layer, n, g.last, at, eraseReach(), edit.showSent);
+      const next = eraseAlong(g.layer, n, g.last, at, eraseReach(), eraseHow());
       g.last = at;
       if (next !== g.layer) {
         g.layer = next;
@@ -483,17 +582,18 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       // A gesture the engine took over is not a mark, nor a move.
       setPreview([]);
       setArea(null);
-      if (g.kind === "text" || g.kind === "move") edit.scratch(null);
+      setLoop(null);
+      if (g.kind === "text" || g.kind === "move" || g.kind === "scale") edit.scratch(null);
       redraw();
       return;
     }
     if (g.kind === "ink") {
       // Kept, the stroke is redrawn curved with the layer; refused, its pieces go.
       setPreview([]);
-      if (!edit.add(n, size, g.snapped ?? finishStroke(g.mark, size))) redraw();
+      if (!edit.add(n, size, g.snapped ?? shaped(finishStroke(g.mark, size)))) redraw();
     } else if (g.kind === "area") {
       setArea(null);
-      const next = eraseRect(edit.base, n, g.start, toPage(event.clientX, event.clientY), edit.showSent);
+      const next = eraseRect(edit.base, n, g.start, toPage(event.clientX, event.clientY), { sent: edit.showSent, highlights: edit.pen.eraseHighlights });
       if (next !== edit.base) edit.commit(next);
     } else if (g.kind === "box") {
       setPreview([]);
@@ -505,12 +605,18 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     } else if (g.kind === "stamp") {
       setPreview([]);
       edit.add(n, size, stampAt(toPage(event.clientX, event.clientY)));
-    } else if (g.kind === "pick") {
+    } else if (g.kind === "scale") {
+      if (edit.layer !== edit.base) edit.commitSelection(edit.layer);
+      else edit.scratch(null);
+    } else if (g.kind === "pick" || g.kind === "loop") {
       setArea(null);
+      setLoop(null);
       const at = toPage(event.clientX, event.clientY);
-      const picked = g.moved
-        ? marksIn(edit.base.pages[n], areaOf(g.start, at))
-        : [markAt(edit.base.pages[n], at[0], at[1], PICK_PX * unitsPerPixel())].filter((i) => i >= 0);
+      const picked = !g.moved
+        ? [markAt(edit.base.pages[n], at[0], at[1], PICK_PX * unitsPerPixel())].filter((i) => i >= 0)
+        : g.kind === "loop"
+          ? marksInLoop(edit.base.pages[n], g.loop)
+          : marksIn(edit.base.pages[n], areaOf(g.start, at));
       // Shift adds to (a click on a selected mark: takes from) this page's selection.
       const kept = g.add && selection ? selection.indices : [];
       const toggled = g.add && !g.moved && picked.length === 1 && kept.includes(picked[0]);
@@ -545,6 +651,8 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     }
   };
 
+  /** A move, a resize, a loop or a box in flight: the selection bar waits. */
+  const gesturing = edit.layer !== edit.base || area !== null || loop !== null;
   const note = edit.note?.n === n ? edit.note : null;
   const comment = edit.comment?.n === n ? edit.comment : null;
   const commented = comment ? edit.base.pages[n]?.marks[comment.index] : undefined;
@@ -552,15 +660,15 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
    *  at its width, the eraser's ring at its reach; the area eraser, the box
    *  and the note keep the strip's own cursors. */
   const cursor =
-    edit.tool === "ink"
-      ? penCursor("dot", strokeWidth(size[0], edit.pen) * scale, INK[edit.color])
+    edit.tool === "ink" || edit.tool === "highlight"
+      ? penCursor("dot", strokeWidth(size[0], { size: edit.pen.size, style }) * scale, INK[edit.color])
       : edit.tool === "eraser" && edit.pen.eraser !== "area"
         ? penCursor("ring", 2 * eraserPx(ERASE_PX, edit.pen.eraser), "")
         : undefined;
   return (
     <div
       ref={wrapRef}
-      className={`file-viewer-pdf-markup-layer is-${edit.tool}${edit.tool === "eraser" && edit.pen.eraser === "area" ? " is-area" : ""}`}
+      className={`file-viewer-pdf-markup-layer is-${edit.tool}${edit.tool === "eraser" && edit.pen.eraser === "area" ? " is-area" : ""}${fingersPan || penSeen ? " is-fingers-pan" : ""}`}
       style={{ width: cssW, height: cssH, cursor }}
       aria-label={t("pdfMarkup.layerLabel", { n })}
       onPointerDown={onPointerDown}
@@ -578,6 +686,88 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       {comment && commented && (
         <MarkupCommentEditor comment={comment} mark={commented} scale={scale} pageWidth={size[0]} edit={edit} />
       )}
+      {selection && selBox && !comment && !gesturing && (
+        <MarkupSelectionBar box={selBox} scale={scale} pageWidth={size[0]} edit={edit} />
+      )}
+    </div>
+  );
+}
+
+/** The pen styles' names, the highlighter's (`marker`) among them. */
+const STYLE_NAME_KEYS: Record<PenStyle, TranslationKey> = {
+  pen: "mobile.markup.style.pen",
+  marker: "mobile.markup.tool.highlight",
+  dashed: "mobile.markup.style.dashed",
+  arrow: "mobile.markup.style.arrow",
+};
+/** How far a copy lands from the marks it copies, CSS pixels. */
+const COPY_PX = 16;
+/** The selection bar's height and its gap to the marks, CSS pixels. */
+const BAR_H = 34;
+
+/** The selected marks' own bar, just above them (below where the page ends
+ *  above): their colours, Copy, Comment for a lone mark, Delete. */
+function MarkupSelectionBar({ box, scale, pageWidth, edit }: { box: [number, number, number, number]; scale: number; pageWidth: number; edit: MarkupEdit }) {
+  const t = useT();
+  const selection = edit.selection;
+  if (!selection) return null;
+  const marks = selection.indices.flatMap((i) => edit.base.pages[selection.n]?.marks[i] ?? []);
+  const shared = marks.length && marks.every((mark) => mark.color === marks[0].color) ? marks[0].color : null;
+  const inks = marks.flatMap((mark) => (mark.kind === "ink" ? [mark] : []));
+  const style = inks.length && inks.every((mark) => (mark.style ?? "pen") === (inks[0].style ?? "pen")) ? inks[0].style ?? "pen" : null;
+  const top = box[1] * scale - BAR_H - 8 >= 0 ? box[1] * scale - BAR_H - 8 : box[3] * scale + 8;
+  const left = Math.max(0, Math.min(box[0] * scale, pageWidth * scale - 280));
+  return (
+    <div
+      className="context-menu file-viewer-pdf-markup-selbar"
+      style={{ left, top }}
+      role="toolbar"
+      aria-label={t("mobile.markup.selected", { count: selection.indices.length })}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <span className="file-viewer-pdf-markup-colors" role="group" aria-label={t("mobile.markup.color")}>
+        {selectionColors(edit.base, selection).map((color) => (
+          <button
+            key={color}
+            type="button"
+            className={`file-viewer-zoom-btn file-viewer-pdf-markup-swatch is-${color}${shared === color ? " active" : ""}`}
+            aria-pressed={shared === color}
+            title={t("mobile.markup.colorOf", { color: t(COLOR_KEYS[color]) })}
+            aria-label={t("mobile.markup.colorOf", { color: t(COLOR_KEYS[color]) })}
+            onClick={() => edit.restyleSelection({ color })}
+            style={{ ["--swatch" as string]: INK[color] }}
+          >
+            <span aria-hidden="true" />
+          </button>
+        ))}
+      </span>
+      {inks.length > 0 && (
+        <select
+          className="file-viewer-pdf-markup-selstyle"
+          value={style ?? ""}
+          aria-label={t("mobile.markup.style")}
+          title={t("mobile.markup.style")}
+          onChange={(event) => event.target.value && edit.restyleSelection({ style: event.target.value as PenStyle })}
+        >
+          {style === null && <option value="">{t("mobile.markup.style")}</option>}
+          {PEN_STYLES.map((option) => (
+            <option key={option} value={option}>
+              {t(STYLE_NAME_KEYS[option])}
+            </option>
+          ))}
+        </select>
+      )}
+      <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={() => edit.copySelection(COPY_PX / scale)}>
+        {t("pdfMarkup.copy")}
+      </button>
+      {edit.canComment && (
+        <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.openComment}>
+          {t("mobile.markup.comment")}
+        </button>
+      )}
+      <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del" onClick={edit.deleteSelection}>
+        {t("mobile.markup.deleteSelected")}
+      </button>
     </div>
   );
 }

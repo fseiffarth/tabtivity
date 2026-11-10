@@ -59,7 +59,7 @@ export function OptionSheet({ title, note, children, footer, options, waiting, b
         : <ul className="option-list">{options.map((option, index) => <Fragment key={option.key}>
             {option.group && option.group !== options[index - 1]?.group && <li className="option-list-group">{option.group}</li>}
             <li>
-            <button className={option.current ? "current" : ""} aria-current={option.current || undefined} disabled={busy} onClick={() => onPick(option.key)}>
+            <button className={option.current ? "current" : ""} aria-current={option.current || undefined} data-steer-confirm={option.key === "confirm" ? "" : undefined} disabled={busy} onClick={() => onPick(option.key)}>
               <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
               {option.pending
                 ? <span className="sheet-pending" role="status">{t("mobile.optionSheet.switching")}</span>

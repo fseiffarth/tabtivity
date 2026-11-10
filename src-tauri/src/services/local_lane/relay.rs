@@ -171,6 +171,9 @@ pub fn run(args: &[OsString]) -> i32 {
             // and gone with the CLI.
             unsafe {
                 libc::setpgid(0, 0);
+                // Linux only; elsewhere the parent check below and the CLI's exit
+                // closing the lane are what end the server.
+                #[cfg(target_os = "linux")]
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
                 if libc::getppid() != parent {
                     libc::_exit(0);

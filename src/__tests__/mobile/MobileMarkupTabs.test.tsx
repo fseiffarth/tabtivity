@@ -28,6 +28,14 @@ import { Project } from "../../../mobile-web/src/screens/Project";
 import { findFileTab, keepMarkupTab, openFileTab, readFileTabs, type FileTab } from "../../../mobile-web/src/filesPlace";
 import type { TabRow } from "../../../mobile-web/src/api";
 
+/** The round, the ticks and the agent's card wait behind the head's Agent
+ * badge while marking: open its sheet (it stays open while marking). */
+const openAgent = () => {
+  const badge = screen.queryByRole("button", { name: /^Agent/ });
+  if (badge && badge.getAttribute("aria-pressed") !== "true") fireEvent.click(badge);
+};
+
+
 const PICTURE = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
 const LAYER = addMark(addMark(EMPTY_LAYER, 1, [800, 600], { kind: "ink", color: "red", width: 2, points: [[10, 10, 0.5], [40, 30, 0.5]] }),
   1, [800, 600], { kind: "ink", color: "red", width: 2, points: [[50, 50, 0.5], [80, 70, 0.5]] });
@@ -119,6 +127,7 @@ describe("MarkupView · the file's card", () => {
   it("keeps a card for a marked file, naming the tab a Submit opened", async () => {
     desktop();
     render(<MarkupView projectId="p1" scope={{ project: "p1" }} file={PICTURE} newTab={{ projectId: "p1", show: vi.fn() }} onClose={vi.fn()} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(findFileTab("p1", { from: "outbox", place: "", name: PICTURE.name })).toMatchObject({ label: "plot.png" }));
     await waitFor(() => expect(submitButton().disabled).toBe(false));

@@ -827,6 +827,31 @@ describe("the Reader's live rows", () => {
     }
   });
 
+  it("takes the keyboard from its own xterm under the Reader when a new tab's box unlocks", async () => {
+    // The pane's xterm is built on first show and may grab the keyboard
+    // while the box is still disabled; that is this pane, not a field elsewhere.
+    const rows: string[] = [];
+    const xterm = document.createElement("div");
+    const xtermInput = document.createElement("textarea");
+    xterm.appendChild(xtermInput);
+    document.body.appendChild(xterm);
+    try {
+      term = Object.assign(fakeTerminal(rows), { element: xterm });
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      await screen.findByText("fix the parser");
+      const box = host.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea")!;
+      expect(box.disabled).toBe(true);
+      xtermInput.focus();
+      await act(async () => { rows.splice(0, 0, "> ", "  ? for shortcuts"); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(box.disabled).toBe(false);
+      expect(document.activeElement).toBe(box);
+    } finally {
+      xterm.remove();
+    }
+  });
+
   it("sends nothing by itself once a waiting prompt was emptied by hand", async () => {
     useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, scheduleTargetId: "st-1" }] } }));
     sendSteeringPrompt.mockResolvedValue(undefined);

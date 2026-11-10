@@ -1,4 +1,4 @@
-import { firstPromptTabName, holdsAutoLabel } from "../../lib/agents/autoTabName";
+import { firstPromptTabName, holdsAutoLabel, isResumeLaunch } from "../../lib/agents/autoTabName";
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import { useSettingsStore } from "../settings";
 import { useTabsStore } from "../tabs";
@@ -60,7 +60,13 @@ export function autoNameTab(ptyId: string): void {
   if (!autoNamesOn()) return;
   const parts = splitPtyId(ptyId);
   if (!parts) return;
-  const tab = useTabsStore.getState().tabsByScope[parts.scope]?.find((entry) => entry.key === parts.key);
+  let tab = useTabsStore.getState().tabsByScope[parts.scope]?.find((entry) => entry.key === parts.key);
+  // Phone-created and older/restored tabs may predate autoLabel. A default
+  // CLI label is eligible; a custom label or a broken existing match is not.
+  if (tab && tab.autoLabel === undefined && !isResumeLaunch(tab.args) && namingPrompts(ptyId, undefined).length
+      && useTabsStore.getState().armAutoLabelInScope(parts.scope, parts.key)) {
+    tab = useTabsStore.getState().tabsByScope[parts.scope]?.find((entry) => entry.key === parts.key);
+  }
   if (!tab || !holdsAutoLabel(tab)) {
     clearedPrompts.delete(ptyId);
     return;
@@ -81,13 +87,16 @@ export function noteAutoNameRoll(ptyId: string, source: string): void {
   const parts = splitPtyId(ptyId);
   // A tab that opened unarmed (resumed, restored) is armed by the clear while
   // its label is still its CLI's name (`autoLabelOnClear`).
-  if (!parts || !useTabsStore.getState().armAutoLabelInScope(parts.scope, parts.key)) return;
+  if (!parts) return;
+  // Install the baseline before arming: the tab subscription can catch up
+  // synchronously as soon as the marker is written.
   clearedPrompts.set(ptyId, knownPromptKeys(ptyId));
+  if (!useTabsStore.getState().armAutoLabelInScope(parts.scope, parts.key)) clearedPrompts.delete(ptyId);
 }
 
 /** Follow the prompt reads; returns the unsubscribe. */
 export function startAutoTabNames(): () => void {
-  return useAgentModelsStore.subscribe((state, prev) => {
+  const stopModels = useAgentModelsStore.subscribe((state, prev) => {
     if (state.recentByTab === prev.recentByTab && state.promptByTab === prev.promptByTab) return;
     const changed = new Set<string>();
     for (const ptyId of Object.keys(state.recentByTab)) {
@@ -98,6 +107,19 @@ export function startAutoTabNames(): () => void {
     }
     for (const ptyId of changed) autoNameTab(ptyId);
   });
+  // A prompt can arrive before the saved tab is hydrated (or before this
+  // subscriber mounts). Catch up when tabs appear, using the same guards.
+  const catchUp = () => {
+    for (const [scope, tabs] of Object.entries(useTabsStore.getState().tabsByScope)) {
+      for (const tab of tabs) autoNameTab(`${scope}:${tab.key}`);
+    }
+  };
+  const stopTabs = useTabsStore.subscribe((state, prev) => {
+    if (state.tabsByScope !== prev.tabsByScope) catchUp();
+  });
+  catchUp();
+  return () => { stopModels(); stopTabs(); };
+
 }
 
 /** Test seam. */

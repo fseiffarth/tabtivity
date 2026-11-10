@@ -7,7 +7,8 @@ import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
 import { ApiError, MAX_UPLOAD_FILE, checkProjectFolderZip, makeProjectFolder, markablePicture, listProjectFiles, lookUpFileRow, lookUpProjectFile, projectFolderZipUrl, searchProjectFiles, undoProjectFolder, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
 import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
 import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
-import { MAX_SHARE_MANY, canShareFiles, shareAs, useOutboxShare, useShareMany } from "../outboxShare";
+import { canShareFiles, shareAs, shareSize, sizeOfMany, useOutboxShare, useShareMany } from "../outboxShare";
+import { ShareSizeSheet } from "./ShareSizeSheet";
 import { TAB_COLORS, TAB_COLOR_IDS, tabColorCss } from "../../../src/lib/theme/tabColors";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { installFocusSwipe } from "../terminal/focusSwipe";
@@ -410,7 +411,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   projectId: string;
   /** The project's name: the root's title. */
   label: string;
-  /** ‹ Back at the root, Escape, or a right swipe at the root. */
+  /** ‹ Back at the root, × in a folder, Escape, or a right swipe at the root. */
   onClose: () => void;
   /** An agent tab's library offers **Mark up** on its PDFs and pictures; the
    * project screen's passes none (it has no chat). The library finds a
@@ -953,7 +954,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const itemActions = (entry: ProjectFileEntry, at: Crumb[], hit?: ProjectFileHit, saved?: Saved): ItemAction[] => {
     const file = entry.kind === "dir" || saved ? null : asViewerFile(entry);
     const actions: ItemAction[] = [{ key: "open", label: t("mobile.files.item.open"), run: () => saved ? openSaved(saved) : hit ? openHit(hit) : open(entry) }];
-    if (file && shareAs(file)) actions.push({ key: "share", label: t("mobile.files.item.share"), run: () => void sharing.share(file) });
+    if (file && shareAs(file) && shareSize(scope, file.size)) actions.push({ key: "share", label: t("mobile.files.item.share"), run: () => void sharing.share(file) });
     const item: FilesSaved = saved?.item ?? { kind: entry.kind, name: entry.name, token: entry.token, trail: crumbsOf(at) };
     const starred = isFavorite(placeId, item);
     actions.push({ key: "favorite", label: t(starred ? "mobile.files.item.unfavorite" : "mobile.files.item.favorite"), run: () => { toggleFavorite(placeId, item); } });
@@ -1030,7 +1031,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
         </span>
         {entry.kind === "dir" && <svg className="files-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>}
       </button>
-      {file && shareAs(file) && <button
+      {file && shareAs(file) && shareSize(scope, file.size) && <button
         className="files-share"
         disabled={sharing.busy === entry.name}
         onClick={() => void sharing.share(file)}
@@ -1105,9 +1106,9 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
    * the phone shares files and they are small enough to hold), ☆ them, Done. */
   function selectBar() {
     const files = [...picked.values()].map(asViewerFile);
-    const total = files.reduce((sum, file) => sum + file.size, 0);
     const phase = shareMany.phaseOf(files);
-    const shareable = files.length > 0 && canShareFiles() && files.every((file) => shareAs(file) !== null);
+    // Past the share limit the tap asks first (`ShareSizeSheet`), never zips.
+    const shareable = files.length > 0 && canShareFiles() && files.every((file) => shareAs(file) !== null) && sizeOfMany(scope, files) !== null;
     const favorite = () => {
       for (const entry of picked.values()) {
         const item: FilesSaved = { kind: entry.kind, name: entry.name, token: entry.token, trail: crumbsOf(trail) };
@@ -1118,11 +1119,9 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     return <div className="files-select-bar" role="toolbar" aria-label={t("mobile.files.library.select")}>
       <span role="status">{t("mobile.files.select.count", { count: picked.size })}</span>
       {phase === "failed" && <span className="error" role="alert">{t("mobile.outbox.shareError")}</span>}
-      {shareable && (total > MAX_SHARE_MANY
-        ? <span className="files-select-note">{t("mobile.files.select.tooBig")}</span>
-        : <button disabled={phase === "fetching"} onClick={() => void shareMany.share(files)}>
-          {t(phase === "ready" ? "mobile.outbox.shareReady" : "mobile.outbox.share")}
-        </button>)}
+      {shareable && <button disabled={phase === "fetching"} onClick={() => void shareMany.share(files)}>
+        {t(phase === "ready" ? "mobile.outbox.shareReady" : "mobile.outbox.share")}
+      </button>}
       <button disabled={picked.size === 0} onClick={favorite}>{t("mobile.files.select.favorite")}</button>
       <button onClick={leaveSelect}>{t("mobile.gitSheet.done")}</button>
     </div>;
@@ -1265,9 +1264,16 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
           aria-label={t("mobile.files.library.path", { name: here.name })}>{here.name}</button>
         {untested && <small>{t("mobile.outbox.untested")}</small>}
       </h2>
-      <button className="files-library-more" aria-haspopup="dialog" onClick={() => setSheet({ kind: "view" })} aria-label={t("mobile.files.library.view")}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 12h.01M12 12h.01M18.5 12h.01" /></svg>
-      </button>
+      <span className="files-library-actions">
+        <button className="files-library-more" aria-haspopup="dialog" onClick={() => setSheet({ kind: "view" })} aria-label={t("mobile.files.library.view")}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 12h.01M12 12h.01M18.5 12h.01" /></svg>
+        </button>
+        {/* Inside a folder ‹ only goes up: × puts the library away from here,
+            and it opens again in this folder (the trail is remembered). */}
+        {!atRoot && <button className="files-library-more files-library-close" onClick={onClose} aria-label={t("mobile.files.close")}>
+          <CloseIcon size="1em" />
+        </button>}
+      </span>
     </header>
     <div className="files-library-bar">
       {trail.length > 1 && <PathBar trail={trail} label={t("mobile.files.trail")} onPick={(index) => setTrail((current) => current.slice(0, index + 1))} />}
@@ -1345,6 +1351,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     </div>
     {selecting && selectBar()}
     {sheet && sheetOver(sheet)}
+    <ShareSizeSheet files={sharing.asking} onShare={sharing.confirm} onClose={sharing.cancel} />
+    <ShareSizeSheet files={shareMany.asking} onShare={shareMany.confirm} onClose={shareMany.cancel} />
   </section>{viewer}</>;
 }
 

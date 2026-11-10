@@ -139,6 +139,7 @@ import { useSignInPageWalk } from "./terminal/useSignInPageWalk";
 import { useLiveQuestion } from "./terminal/useLiveQuestion";
 import { useVoiceInput, type StartVoiceOptions } from "./terminal/useVoiceInput";
 import { useTabbyGate } from "./terminal/useTabbyGate";
+import { useTerminalSteering } from "./terminal/useTerminalSteering";
 import { useHandsFree } from "./terminal/useHandsFree";
 import { useVoiceNav } from "./terminal/useVoiceNav";
 import { useVoiceLanding } from "./terminal/useVoiceLanding";
@@ -2074,6 +2075,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   } = useLiveQuestion({
     clearPending, deliver, agentLabel, liveTail, liveQuestion,
   });
+  useTerminalSteering({ focusView: view === "focus", liveQuestion, answerQuestion, composer: composerInput });
   /** The stored session only grows at message boundaries, so a turn busy in
    * tool calls looked finished. The live screen's interrupt hint says it is
    * not; a choice on screen is waiting on the reader instead. */
@@ -2193,7 +2195,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
     tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, setDraft, draftRef,
     setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
-    setVoiceFailure, forgetDictation, submitSpokenRef, tabbyGate, utterances: utteranceHooks,
+    setVoiceFailure, forgetDictation, submitSpokenRef, tabbyGate, utterances: utteranceHooks, prefixCommands,
     handsFree: {
       on: handsFreeRef, guard: handsFreeGuard, sendGuard, voiceOpen, voiceStopping,
       pick: voicePickRef, awaitTurn: awaitTurnRef, stopLoop,
@@ -2212,7 +2214,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   });
   const navLine = voiceFailure ? null : nav.line ?? landingLine;
   const dictateLabel = t(listening ? "mobile.voice.stop" : preparingVoice ? "mobile.voice.preparing" : "mobile.voice.dictate");
-  const sayVoice = (note: VoiceNote) => t(note.key, note.language ? { language: note.language } : undefined);
+  const sayVoice = (note: VoiceNote) => t(note.key, note.language || note.params ? { ...note.params, ...(note.language ? { language: note.language } : {}) } : undefined);
   /** A browser without Web Speech says so from the start: no action clears
    * that, so it is derived rather than stored beside the failures that do. */
   const voiceProblem: VoiceNote | null = voiceFailure ?? (voiceAvailable ? null : { key: "mobile.voice.unavailable" });
@@ -2541,7 +2543,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           agent (OpenCode's TUI) still reads as a chat in Focus. */}
       {view === "focus" && altScreen && !sessionFocus && <div className="alt-screen-notice"><strong>{t("mobile.focus.altScreen")}</strong><span>{t("mobile.focus.altScreenHint")}</span><button className="primary" onClick={() => chooseView("terminal")}>{t("mobile.focus.altScreenOpen")}</button></div>}
       {view === "focus" && (!altScreen || sessionFocus) && <>
-        <section ref={readableHost} className="readable-output" aria-label={t("mobile.focus.output")} aria-live="polite"
+        <section ref={readableHost} className="readable-output" data-steer-scroll aria-label={t("mobile.focus.output")} aria-live="polite"
           onScroll={(event) => {
             const stream = event.currentTarget;
             followReadable(stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120);
@@ -2683,7 +2685,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {tab.kind === "agent" && !navLine && handsFreeLine && (handsFreeLine.run
         ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={handsFreeLine.run}>{handsFreeLine.text}{isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</button>
         : <div className="voice-feedback hands-free" role="status" aria-live="polite">{handsFreeLine.text}</div>)}
-      {tab.kind === "agent" && !navLine && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}
+      {tab.kind === "agent" && !navLine && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || isUntested("mobile.voice.draftEdits") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}
       {(aiOff || aiOffAt > 0) && <div className="voice-feedback error" role="alert">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</div>}

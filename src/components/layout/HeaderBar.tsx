@@ -79,6 +79,17 @@ export function HeaderBar() {
       else setRevealed(false);
     }, AUTOHIDE_LEAVE_MS);
   };
+  // The pointer at the top edge brings the bar down. Not while steering has
+  // hidden the pointer (`data-steer-pointer`): a pointer parked up there gets
+  // mouse events from the engine whenever a steering key changes what lies
+  // under it, and the bar would drop over the tab strip on a tab switch. A
+  // real move clears the flag (SteeringLegend, capture phase, before this),
+  // so moving there still reveals — hence onMouseMove as well.
+  const revealFromEdge = () => {
+    if (document.documentElement.dataset.steerPointer === "hidden") return;
+    reveal();
+    scheduleHide();
+  };
   useEffect(() => {
     if (!fullscreen) {
       clearHide();
@@ -111,7 +122,7 @@ export function HeaderBar() {
   return (
     <>
     {fullscreen && !revealed && (
-      <div className="header-hotzone" aria-hidden="true" onMouseEnter={() => { reveal(); scheduleHide(); }} />
+      <div className="header-hotzone" aria-hidden="true" onMouseEnter={revealFromEdge} onMouseMove={revealFromEdge} />
     )}
     <header
       ref={headerRef}

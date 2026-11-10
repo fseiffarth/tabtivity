@@ -25,8 +25,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 
 | Default | Action |
 |---|---|
-| Ctrl+Shift+Tab | Next project |
-| Alt+Shift+← | Previous project |
+| AltGr+Tab / AltGr+Shift+Tab | Next / previous project (AltGr = the right Alt key) — from a focused terminal too; Alt+Shift+→ / ← work as well, and are the default on macOS |
 | Ctrl+Shift+PageDown / PageUp | Next / previous box |
 | Ctrl+Shift+R | Open / close the root console |
 | Shift+Space | Enter Tabtivity navigation |
@@ -37,6 +36,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 | Default | Action |
 |---|---|
 | Ctrl+Shift+← / Ctrl+Shift+→ | Previous / next tab in the pane — from a focused terminal too (a program in it then never gets these keys; plain Shift+←/→ is left to it, e.g. an agent CLI's own use of it) |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab of the project, through all its panes in order (focus moves to the pane that holds it, wrapping) — from a focused terminal too |
 | Shift+Tab | Cycle tabs in the pane |
 | Ctrl+Shift+↑ / Ctrl+Shift+↓ | Cycle pane focus up / down |
 | Ctrl+Enter | Toggle the focused pane's fullscreen |
@@ -75,7 +75,7 @@ the **Root** chip). See `mail-calendar`.
 Press **Shift+Space**. A bar docks under the panes (the level ladder
 Projects › Subwindows › Tabs › Inside, the move keys, the jumps, and the keys
 that leave) and every other key shows as a small coloured cap on the control it
-fires: W on the tab, N O 1–9 + above the + button, I L G K on the prompt line,
+fires: W on the tab, N O 1–9 + above the + button, Space L G K on the prompt line,
 M C T , on the top bar, B P on the side rail. **H** folds the bar down to its
 ladder. The app answers single keys, even while a terminal has focus. (Mid-word, with Shift still held
 from a capital, Shift+Space stays a plain space.) The mode opens on the
@@ -86,9 +86,10 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | S F / ← → | Previous / next tab (on the subwindow level: subwindow; on the project level: project) |
 | E / ↑ | Up a level: tabs → subwindows → projects → the top bar |
 | D / ↓ | Back down a level |
-| 1–9 | Tabs: new agent tab. Projects: jump to a station (1 = root, 2 = first pill) |
+| 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option moves there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |
 | N / M | New shell / System Monitor tab (projects: new project / mail) |
 | + | The new-tab menu, walked with E/D; **/** types into its search |
+| / | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the ring, their digit (1–9, 0) opens one at once |
 | V | Toggle the pane's file viewer |
 | W | Close the active tab |
 | A | Walk the card over the active tab (Undo clear, a sign-in link) |
@@ -96,9 +97,11 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | B | Open the side panel |
 | P | Toggle the side panels |
 | Q / R / X | Next tab waiting for an answer / working / done (Shift: previous) |
+| Backspace | Back to the tab you were on before Q / R / X (again: return). Answering a question you jumped to with Q brings you back by itself |
 | , | Open Settings and walk it: ← → pages, E D controls |
 | ? | Open the cheat sheet: E D scroll it |
-| Space / Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it) |
+| Space | On an agent tab: a prompt box in the window's middle; Enter sends, Esc returns |
+| Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it first) |
 
 Dialogs and menus don't end the mode. Whatever comes up on top — a confirm, the
 New project dialog, a right-click menu, a top-bar menu, the root console — gets
@@ -107,6 +110,9 @@ it the way its own Escape would. The mode then returns to where the dialog was
 opened. On the top bar, S F walk its buttons and D drops a button's menu.
 Enter on a text field leaves the mode so you can type there; Shift+Space brings
 it back on the same dialog.
+
+The phone has the same mode for a Bluetooth keyboard (Shift+Space, E S D F, Q R X, M C T,
+digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
 
 Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
 rebound in the same settings page under *Inside Tabtivity navigation*, one list per

@@ -575,6 +575,29 @@ describe("Mobile project — read-only file browser", () => {
     expect(localStorage.getItem(storageKey("mobile.filesPlace"))).toBeNull();
   });
 
+  it("closes from inside a folder by ×, and opens again in that folder", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    let library = await openLibrary();
+    await within(library).findByRole("button", { name: "Open the folder src" });
+    // At the root ‹ Back closes, so there is no × beside it.
+    expect(within(library).getAllByRole("button", { name: "Close the files" })).toHaveLength(1);
+    fireEvent.click(within(library).getByRole("button", { name: "Open the folder src" }));
+    fireEvent.click(await within(library).findByRole("button", { name: "Open the folder deep" }));
+    await within(library).findByRole("button", { name: "Open leaf.txt" });
+
+    // ‹ still goes up one; × leaves from here, back to the drawer.
+    expect(within(library).getByRole("button", { name: "Up to src" })).toBeTruthy();
+    fireEvent.click(within(library).getByRole("button", { name: "Close the files" }));
+    expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Alpha" })).getByRole("button", { name: "Close the files" }));
+    expect(screen.queryByRole("dialog", { name: "Alpha" })).toBeNull();
+
+    library = await openLibrary();
+    expect(pathOf(library).names).toEqual(["Alpha", "src", "deep"]);
+    await within(library).findByRole("button", { name: "Open leaf.txt" });
+  });
+
   it("steps back from a remembered folder that is gone", async () => {
     vi.stubGlobal("fetch", hostWith(true));
     localStorage.setItem(storageKey("mobile.filesPlace"), JSON.stringify([["p1", [{ token: "tok-src", name: "src" }, { token: "tok-gone", name: "old" }]]]));

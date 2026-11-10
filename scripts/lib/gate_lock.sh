@@ -28,6 +28,10 @@ gate_lock() {
   if ! flock -n 8; then
     owner="$(cat "$gitdir/gates.lock.owner" 2>/dev/null || true)"
     echo "gates: another session's run holds the gate lock${owner:+ ($owner)}; waiting for it" >&2
+    # Where that run is (gates.sh writes it per gate; `cat` it to follow).
+    if [ -f "$gitdir/gates.progress" ]; then
+      echo "gates: it is at $(cat "$gitdir/gates.progress" 2>/dev/null || true)" >&2
+    fi
     t0=$EPOCHREALTIME
     flock 8
     echo "gates: got the lock after $(awk -v a="$t0" -v b="$EPOCHREALTIME" 'BEGIN { printf "%d", b - a }')s" >&2

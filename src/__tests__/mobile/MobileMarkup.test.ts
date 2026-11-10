@@ -172,7 +172,7 @@ describe("markup layer", () => {
     expect(isLayer(JSON.parse(JSON.stringify(good)))).toBe(true);
     for (const bad of [null, {}, { pages: { 0: { size: SIZE, marks: [] } } }, { pages: { 1: { size: [1], marks: [] } } },
       { pages: { 1: { size: SIZE, marks: [{ kind: "laser", color: "red" }] } } },
-      { pages: { 1: { size: SIZE, marks: [{ kind: "ink", color: "pink", width: 2, points: [[1, 1, 1]] }] } } }]) {
+      { pages: { 1: { size: SIZE, marks: [{ kind: "ink", color: "teal", width: 2, points: [[1, 1, 1]] }] } } }]) {
       expect(isLayer(bad)).toBe(false);
     }
   });

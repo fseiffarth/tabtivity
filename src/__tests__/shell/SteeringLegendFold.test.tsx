@@ -90,7 +90,7 @@ describe("steering bar fold (H)", () => {
     expect(bar().querySelector(".steering-rung.lit")?.textContent).toBe("Tabs");
     expect(bar().querySelector(".steering-bar-keys")?.children.length).toBe(0);
     const tail = [...bar().querySelectorAll(".steering-bar-tail .steering-bar-item")].map((el) => el.textContent);
-    expect(tail).toEqual(["HShow keys", "SpaceExit"]);
+    expect(tail).toEqual(["HShow keys", "EscExit"]);
     // The window still wears the steering frame.
     expect(document.documentElement.dataset.steer).toBe("tabs");
 
@@ -99,7 +99,7 @@ describe("steering bar fold (H)", () => {
     expect(bar().classList.contains("folded")).toBe(false);
   });
 
-  it("remembers the fold across leaving steering, and a badge click unfolds", () => {
+  it("shows the keys again on every entry, and a badge click unfolds", () => {
     render(
       <>
         <Harness />
@@ -108,15 +108,20 @@ describe("steering bar fold (H)", () => {
     );
     press({ key: " ", shiftKey: true });
     press({ key: "h" });
-    expect(localStorage.getItem(storageKey("steering.legendHidden"))).toBe("1");
-    press({ key: " " });
+    expect(document.querySelector(".steering-bar.folded")).not.toBeNull();
+    fireEvent.click(document.querySelector(".steering-bar-badge") as HTMLElement);
+    expect(steering()).toMatchObject({ active: true, legendHidden: false });
+
+    press({ key: "h" });
+    press({ key: "Escape" });
     expect(steering().active).toBe(false);
     expect(document.querySelector(".steering-bar")).toBeNull();
 
     press({ key: " ", shiftKey: true });
-    expect(document.querySelector(".steering-bar.folded")).not.toBeNull();
-    fireEvent.click(document.querySelector(".steering-bar-badge") as HTMLElement);
     expect(steering()).toMatchObject({ active: true, legendHidden: false });
+    expect(document.querySelector(".steering-bar.folded")).toBeNull();
+    expect(document.querySelector(".steering-bar-keys")?.children.length).toBeGreaterThan(0);
+    // Nothing is kept per machine any more.
     expect(localStorage.getItem(storageKey("steering.legendHidden"))).toBeNull();
   });
 });

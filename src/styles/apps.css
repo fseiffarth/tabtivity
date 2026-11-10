@@ -670,17 +670,11 @@
   opacity: 0.7;
 }
 
-/* Jump mode (steering's jump key) tags the open projects it lists first. */
+/* A project row's name, its "open" tag and box swatches on one line. */
 .project-search-name {
   display: flex;
   align-items: baseline;
   gap: 6px;
-}
-
-.project-search-jump-head {
-  display: flex;
-  justify-content: flex-end;
-  padding: 0 2px var(--space-1);
 }
 
 .project-search-path {

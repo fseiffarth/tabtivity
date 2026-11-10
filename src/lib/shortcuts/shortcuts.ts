@@ -18,6 +18,8 @@
 import { IS_MAC, PLATFORM } from "../platform";
 import type { UntestedId } from "../untested";
 import { desktopOwnsSuperKey } from "./superKey";
+import { isLoneModifier, normalizeKey } from "./keyNames";
+export { isLoneModifier, normalizeKey } from "./keyNames";
 import { zoomChord, type ZoomChord } from "./zoomChord";
 import type { TranslationKey } from "../i18n";
 import {
@@ -36,7 +38,18 @@ export interface ChordDescriptor {
   shift?: boolean;
   alt?: boolean;
   meta?: boolean;
+  /** AltGr (the right Alt key), matched by `getModifierState("AltGraph")`.
+   *  Its own flag because the OS reports it differently: Linux as neither
+   *  Ctrl nor Alt, Windows as Ctrl+Alt — so an AltGr chord ignores both. */
+  altGr?: boolean;
 }
+
+/** The project cycle's arrow chords: the default on macOS (no AltGr), an
+ *  alias beside AltGr+Tab elsewhere. */
+const PROJECT_CYCLE_ARROWS = {
+  next: { key: "ArrowRight", alt: true, shift: true },
+  back: { key: "ArrowLeft", alt: true, shift: true },
+} satisfies Record<string, ChordDescriptor>;
 
 /** Stable ids for each rebindable navigation action. */
 export type ShortcutAction =
@@ -44,6 +57,8 @@ export type ShortcutAction =
   | "cycleProject"
   | "prevTab"
   | "nextTab"
+  | "prevProjectTab"
+  | "nextProjectTab"
   | "subwindowUp"
   | "subwindowDown"
   | "cycleTabs"
@@ -154,11 +169,32 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     group: "tabs",
     default: { key: "Enter", ctrl: true },
   },
+  // AltGr+Tab (right Alt): the left Alt+Tab is the desktop's window switcher,
+  // and Ctrl+Tab / Ctrl+Shift+Tab are the project's own tab cycle (the
+  // browser's chords). Alt+Shift+→ stays beside it (`actionChords`) for
+  // keyboards without AltGr; macOS has none, so it is the default there.
   {
     action: "cycleProject",
     labelKey: "shortcut.cycleProject",
     group: "navigation",
+    default: IS_MAC ? PROJECT_CYCLE_ARROWS.next : { key: "Tab", altGr: true },
+    untested: "shortcut.projectCycleAltGr",
+  },
+  // Every tab of the project, across its subwindows (`stepOrderedTab`). Handed
+  // over by a focused pane terminal like prevTab/nextTab (`terminalTabChord`).
+  {
+    action: "nextProjectTab",
+    labelKey: "shortcut.nextProjectTab",
+    group: "tabs",
+    default: { key: "Tab", ctrl: true },
+    untested: "shortcut.projectTabCycle",
+  },
+  {
+    action: "prevProjectTab",
+    labelKey: "shortcut.prevProjectTab",
+    group: "tabs",
     default: { key: "Tab", ctrl: true, shift: true },
+    untested: "shortcut.projectTabCycle",
   },
   // Ctrl+Shift, not plain Shift: a plain Shift+Arrow is an agent CLI's own
   // chord (Codex uses it for in-terminal selection/navigation), and a pane
@@ -247,13 +283,13 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     default: { key: " ", shift: true },
     untested: "shortcut.steeringMode",
   },
-  // Backward twin of cycleProject. Alt (not Ctrl) distinguishes it from
-  // prevTab's Ctrl+Shift+← default.
+  // Backward twin of cycleProject; its arrow alias is Alt (not Ctrl) to stay
+  // clear of prevTab's Ctrl+Shift+← default.
   {
     action: "cycleProjectBack",
     labelKey: "shortcut.cycleProjectBack",
     group: "navigation",
-    default: { key: "ArrowLeft", alt: true, shift: true },
+    default: IS_MAC ? PROJECT_CYCLE_ARROWS.back : { key: "Tab", altGr: true, shift: true },
     untested: "shortcut.cycleProjectBack",
   },
   // The boxes' twin of the project cycle: walk the box pills in the leading
@@ -520,30 +556,6 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   },
 ];
 
-/** Lone modifier keys that must be ignored while capturing a chord. */
-const MODIFIER_KEYS = new Set([
-  "Control",
-  "Shift",
-  "Alt",
-  "Meta",
-  "Super",
-  "OS",
-  "AltGraph",
-  "CapsLock",
-]);
-
-/** Normalize a `KeyboardEvent.key` for storage/comparison: single printable
- *  letters become lower-case so "W" and "w" match; everything else is kept. */
-export function normalizeKey(key: string): string {
-  return key.length === 1 ? key.toLowerCase() : key;
-}
-
-/** True when the keystroke is only a modifier (Ctrl/Shift/Alt/Meta) — these
- *  must not be captured as a chord on their own. */
-export function isLoneModifier(key: string): boolean {
-  return MODIFIER_KEYS.has(key);
-}
-
 /**
  * Build a `ChordDescriptor` from a real `KeyboardEvent`. Returns `null` for a
  * lone-modifier keypress (caller should keep waiting for a real key). Used by
@@ -552,6 +564,13 @@ export function isLoneModifier(key: string): boolean {
 export function chordFromEvent(e: KeyboardEvent): ChordDescriptor | null {
   if (isLoneModifier(e.key)) return null;
   const chord: ChordDescriptor = { key: normalizeKey(e.key) };
+  // AltGr: Windows adds Ctrl+Alt to it, which `chordMatches` ignores for an
+  // AltGr chord — so they are not stored either.
+  if (e.getModifierState?.("AltGraph")) {
+    chord.altGr = true;
+    if (e.shiftKey) chord.shift = true;
+    return chord;
+  }
   if (e.ctrlKey) chord.ctrl = true;
   if (e.shiftKey) chord.shift = true;
   if (e.altKey) chord.alt = true;
@@ -577,6 +596,8 @@ export function chordMatches(chord: ChordDescriptor, e: ChordKeyEvent): boolean 
   if (!chord.key || chord.key === LONE_SUPER.key) return false;
   if (normalizeKey(e.key) !== normalizeKey(chord.key) && !isDigitKeyOf(chord.key, e)) return false;
   if (e.shiftKey !== !!chord.shift) return false;
+  // AltGr chords: only Shift besides AltGr counts (see `ChordDescriptor.altGr`).
+  if (chord.altGr) return !!e.getModifierState?.("AltGraph");
   if (e.altKey !== !!chord.alt) return false;
   if (IS_MAC) {
     const wantsPrimary = !!chord.ctrl || !!chord.meta;
@@ -594,7 +615,8 @@ function isDigitKeyOf(key: string, e: ChordKeyEvent): boolean {
 }
 
 /** The fields a chord match reads — a DOM event or a React one both fit. */
-export type ChordKeyEvent = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">;
+export type ChordKeyEvent = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> &
+  Partial<Pick<KeyboardEvent, "getModifierState">>;
 
 /** A chord the user switched off: its empty key matches nothing. Stored as a
  *  chord (not `null`) so the backend's typed map still reads it. */
@@ -620,6 +642,7 @@ export function chordLabel(chord: ChordDescriptor): string {
   if (isUnbound(chord)) return "—";
   if (IS_MAC) {
     const parts: string[] = [];
+    if (chord.altGr) parts.push("AltGr+");
     if (chord.alt) parts.push("⌥"); // Option
     if (chord.shift) parts.push("⇧"); // Shift
     if (chord.ctrl || chord.meta) parts.push("⌘"); // primary modifier / Super
@@ -628,6 +651,7 @@ export function chordLabel(chord: ChordDescriptor): string {
   }
   const parts: string[] = [];
   if (chord.ctrl) parts.push("Ctrl");
+  if (chord.altGr) parts.push("AltGr");
   if (chord.shift) parts.push("Shift");
   if (chord.alt) parts.push("Alt");
   if (chord.meta) parts.push("Super");
@@ -653,6 +677,15 @@ function prettyKey(key: string): string {
  *  go through `useChordHint` instead, so a rebinding shows up there. */
 export function modifierLabel(): string {
   return IS_MAC ? "⌘" : "Ctrl";
+}
+
+/** The default project-cycle chords as prose names them ({cycle} /
+ *  {cycleBack}): AltGr+Tab off macOS, the Alt+Shift arrows on it. */
+export function projectCycleLabels(): { cycle: string; cycleBack: string } {
+  return {
+    cycle: chordLabel(resolveChord("cycleProject", undefined)),
+    cycleBack: chordLabel(resolveChord("cycleProjectBack", undefined)),
+  };
 }
 
 /** The stored shortcut map (action id → chord). Partial: any unset action
@@ -687,6 +720,8 @@ export function actionChords(
   if (action === "togglePanels" && isLoneSuper(chord)) return [chord, { key: "F9" }];
   if (action === "toggleSidePanel" && !IS_MAC) return [chord, { key: "1", alt: true }];
   if (action === "editorRedo") return [chord, { key: "z", ctrl: true, shift: true }];
+  if (action === "cycleProject" && chord.altGr) return [chord, PROJECT_CYCLE_ARROWS.next];
+  if (action === "cycleProjectBack" && chord.altGr) return [chord, PROJECT_CYCLE_ARROWS.back];
   return [chord];
 }
 
@@ -708,7 +743,8 @@ export function chordsEqual(a: ChordDescriptor, b: ChordDescriptor): boolean {
     !!a.ctrl === !!b.ctrl &&
     !!a.shift === !!b.shift &&
     !!a.alt === !!b.alt &&
-    !!a.meta === !!b.meta
+    !!a.meta === !!b.meta &&
+    !!a.altGr === !!b.altGr
   );
 }
 
@@ -830,6 +866,10 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *   inTerminal / inDocument — the scroll level is in a terminal / a document
  *   popouts    — the active scope has a subwindow popped out into its own
  *                window (J raises it)
+ *   question / noQuestion — the active tab asks (a dialog on its screen, or
+ *                its turn waits on a decision): the digits answer it
+ *                (`steeringAnswer`) instead of opening agent N
+ *   jumpBack   — a status jump left a tab Back can return to
  */
 export type SteeringCondition =
   | "stepsPanes"
@@ -856,7 +896,10 @@ export type SteeringCondition =
   | "intoDocument"
   | "inTerminal"
   | "inDocument"
-  | "popouts";
+  | "popouts"
+  | "question"
+  | "noQuestion"
+  | "jumpBack";
 
 /** One row of the steering legend / cheat sheet: the steering actions it
  *  explains (their keys render through `steeringRowLabel`, so a rebind shows
@@ -930,6 +973,10 @@ export interface SteeringLegendState {
   document?: boolean;
   /** The active scope has popped-out subwindows. */
   popouts?: boolean;
+  /** The active tab asks: the digits answer it. */
+  question?: boolean;
+  /** Back has a tab to return to. */
+  jumpBack?: boolean;
   /** The agent keys the active tab takes; unset = none. */
   agent?: { clear: boolean; plan: boolean; goal: boolean; prompt: boolean };
   /** How many tabs, in every scope, need an answer / work / finished unseen. */
@@ -982,6 +1029,12 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return !s.terminal;
     case "popouts":
       return !!s.popouts;
+    case "question":
+      return !!s.question;
+    case "noQuestion":
+      return !s.question;
+    case "jumpBack":
+      return !!s.jumpBack;
     default:
       return !!s.apps[cond];
   }
@@ -1050,7 +1103,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["up"], labelKey: "steering.upChrome.label", descKey: "steering.upChrome.desc", levels: PANE_LEVELS, when: "upToChrome", group: "move" },
   { actions: ["newShell"], labelKey: "steering.newShell.label", descKey: "steering.newShell.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["newMonitor"], labelKey: "steering.newMonitor.label", descKey: "steering.newMonitor.desc", levels: PANE_LEVELS, group: "new" },
-  { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, agentSlots: true, group: "new" },
+  { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, when: "noQuestion", agentSlots: true, group: "new" },
   { actions: ["newTabMenu"], labelKey: "steering.newTabMenu.label", descKey: "steering.newTabMenu.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["files"], labelKey: "steering.files.label", descKey: "steering.files.desc", levels: PANE_LEVELS, group: "act" },
   { actions: ["closeTab"], labelKey: "steering.closeTab.label", descKey: "steering.closeTab.desc", levels: PANE_LEVELS, group: "act" },
@@ -1058,6 +1111,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["agentClear"], labelKey: "steering.agentClear.label", descKey: "steering.agentClear.desc", levels: PANE_LEVELS, when: "agentClear", group: "agent" },
   { actions: ["agentPlan"], labelKey: "steering.agentPlan.label", descKey: "steering.agentPlan.desc", levels: PANE_LEVELS, when: "agentPlan", group: "agent" },
   { actions: ["agentGoal"], labelKey: "steering.agentGoal.label", descKey: "steering.agentGoal.desc", levels: PANE_LEVELS, when: "agentGoal", group: "agent" },
+  { actions: [], slots: true, labelKey: "steering.answer.label", descKey: "steering.answer.desc", levels: [...PANE_LEVELS, "scroll"], when: "question", group: "agent" },
   { actions: ["agentPrompt"], labelKey: "steering.agentPrompt.label", descKey: "steering.agentPrompt.desc", levels: [...PANE_LEVELS, "scroll"], when: "agentPrompt", group: "agent" },
   { actions: ["exit", "work"], labelKey: "steering.work.label", descKey: "steering.work.desc", levels: [...PANE_LEVELS, "scroll"], group: "mode" },
   // Inside a terminal or a document (its tab's ↓): Shift scrolls a whole screen.
@@ -1090,6 +1144,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["nextDecision"], labelKey: "steering.nextDecision.label", descKey: "steering.nextDecision.desc", levels: BASE_LEVELS, status: "decision", group: "status" },
   { actions: ["nextWorking"], labelKey: "steering.nextWorking.label", descKey: "steering.nextWorking.desc", levels: BASE_LEVELS, status: "working", group: "status" },
   { actions: ["nextDone"], labelKey: "steering.nextDone.label", descKey: "steering.nextDone.desc", levels: BASE_LEVELS, status: "done", group: "status" },
+  { actions: ["jumpBack"], labelKey: "steering.jumpBack.label", descKey: "steering.jumpBack.desc", levels: BASE_LEVELS, when: "jumpBack", group: "status" },
   { actions: ["sidePanel"], labelKey: "steering.sidePanel.label", descKey: "steering.sidePanel.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["panels"], labelKey: "steering.panels.label", descKey: "steering.panels.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["settings"], labelKey: "steering.settings.label", descKey: "steering.settings.desc", levels: BASE_LEVELS, group: "open" },
@@ -1099,6 +1154,5 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["legend"], labelKey: "steering.legend.label", descKey: "steering.legend.desc", levels: ALL_LEVELS, group: "mode" },
   { actions: ["back"], labelKey: "steering.back.label", descKey: "steering.back.desc", levels: ["region"], group: "mode" },
   { actions: ["sidePanel"], labelKey: "steering.sidePanelBack.label", descKey: "steering.sidePanelBack.desc", levels: ["region"], when: "sideRegion", group: "mode" },
-  { actions: ["exit"], labelKey: "steering.exit.label", descKey: "steering.exit.desc", levels: ["region"], group: "mode" },
   { actions: ["exit", "work"], labelKey: "steering.exit.label", descKey: "steering.exit.desc", levels: ["projects"], group: "mode" },
 ];

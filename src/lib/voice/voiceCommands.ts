@@ -1,4 +1,4 @@
-import { matchOption, sanitizeVoiceTranscript } from "../../../shared/voice";
+import { matchOption, sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { fuzzyMatch } from "../fuzzy";
 import { translate, type Language, type TranslationKey } from "../i18n";
 
@@ -840,6 +840,124 @@ export function weakPhrase(phrase: string, lang: Language): boolean {
   if (tokens.length === 1 && phraseKey(phrase).length < 6) return true;
   const vocab = catalogWords(lang);
   return tokens.some((token) => /^\d+$/.test(token.norm) || vocab.has(token.norm));
+}
+
+// ---------------------------------------------------------------- the start word and draft edits
+
+/** What a spoken edit does to the composer's draft (`draftEdit.ts` applies
+ * it): lead it with `/plan` or `/goal` as the chip does, take back the last
+ * thing voice did, empty it, swap words in it, or say the last piece again. */
+export type DraftEdit =
+  | { kind: "prefix"; command: "/plan" | "/goal" }
+  | { kind: "undo" }
+  | { kind: "clear" }
+  /** Each way the words split at the template's middle word ("replace meet
+   * with you with see you"), the longest `from` first. */
+  | { kind: "replace"; splits: readonly { from: string; to: string }[] }
+  | { kind: "restate"; text: string };
+
+/** A spoken edit, the language its phrase was matched in (the draft's words
+ * are compared in it), and whether "go on" followed it: send after. */
+export type SpokenDraftEdit = DraftEdit & { lang: Language; send: boolean };
+
+type EditPart = { lit: string } | { slot: "from" | "to" | "text" };
+
+function editTemplates(key: TranslationKey, lang: Language): EditPart[][] {
+  return splitTemplates(translate(lang, key)).map((template) => {
+    const parts: EditPart[] = [];
+    for (const piece of template.split(/(\{\w+\})/u)) {
+      const slot = /^\{(from|to|text)\}$/u.exec(piece);
+      if (slot) parts.push({ slot: slot[1] as "from" | "to" | "text" });
+      else for (const word of norms(piece, lang)) parts.push({ lit: word });
+    }
+    return parts;
+  });
+}
+
+/** Every way `tokens` fill an edit template whole, each slot at least one word. */
+function editFillings(parts: readonly EditPart[], tokens: readonly Token[]): Map<string, [number, number]>[] {
+  const out: Map<string, [number, number]>[] = [];
+  const spans = new Map<string, [number, number]>();
+  const walk = (pi: number, ti: number) => {
+    if (pi === parts.length) {
+      if (ti === tokens.length) out.push(new Map(spans));
+      return;
+    }
+    const part = parts[pi];
+    if ("lit" in part) {
+      if (tokens[ti]?.norm === part.lit) walk(pi + 1, ti + 1);
+      return;
+    }
+    for (let end = ti + 1; end <= tokens.length; end++) {
+      spans.set(part.slot, [ti, end]);
+      walk(pi + 1, end);
+    }
+    spans.delete(part.slot);
+  };
+  walk(0, 0);
+  return out;
+}
+
+/** A slot's words as heard, without the end mark a recognizer puts on the
+ * utterance ("… with bar." → "bar"). */
+function slotText(source: Words, tokens: readonly Token[], span: [number, number] | undefined): string {
+  return span ? rawText(source, tokens, span).replace(/[.!?…]+$/u, "").trim() : "";
+}
+
+function draftEditIn(utterance: string, lang: Language): SpokenDraftEdit | null {
+  // "Tabby scratch that, go on": the edit, then the send.
+  const sendless = spokenSend(utterance);
+  const send = sendless !== null;
+  const source = words(sendless ?? utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return null;
+  const tokens = withoutPolite(source.tokens.slice(skip), lang);
+  if (!tokens.length) return null;
+  const said = tokens.map((token) => token.norm).join(" ");
+  const is = (key: TranslationKey) => alternatives(key, lang).includes(said);
+  // Plan and goal are the catalog's own phrases (`voice.cmd.plan`/`goal`).
+  if (is("voice.cmd.plan")) return { kind: "prefix", command: "/plan", lang, send };
+  if (is("voice.cmd.goal")) return { kind: "prefix", command: "/goal", lang, send };
+  if (is("voice.edit.undo")) return { kind: "undo", lang, send };
+  if (is("voice.edit.clear")) return { kind: "clear", lang, send };
+  const splits: { from: string; to: string }[] = [];
+  for (const parts of editTemplates("voice.edit.replace", lang)) {
+    for (const spans of editFillings(parts, tokens)) {
+      const from = slotText(source, tokens, spans.get("from"));
+      const to = slotText(source, tokens, spans.get("to"));
+      if (from && to && !splits.some((split) => split.from === from && split.to === to)) splits.push({ from, to });
+    }
+  }
+  if (splits.length) return { kind: "replace", splits: splits.sort((a, b) => b.from.length - a.from.length), lang, send };
+  for (const parts of editTemplates("voice.edit.restate", lang)) {
+    const [spans] = editFillings(parts, tokens);
+    const text = spans ? slotText(source, tokens, spans.get("text")) : "";
+    if (text) return { kind: "restate", text, lang, send };
+  }
+  return null;
+}
+
+/**
+ * The edit one dictated utterance asks of the draft, or `null` (dictation).
+ * It must start with the start word, and the rest must be one edit phrase
+ * **whole**, in `lang` or else in English: "Tabby plan" is an edit, "Tabby,
+ * plan the refactor" is not, and nothing is guessed at — what is not an edit
+ * stays dictation, word for word.
+ */
+export function matchDraftEdit(utterance: string, lang: Language): SpokenDraftEdit | null {
+  return draftEditIn(utterance, lang) ?? (lang === "en" ? null : draftEditIn(utterance, "en"));
+}
+
+/** Where `phrase` stands last in `text`, word for word as the matcher
+ * compares words (case, accents, punctuation aside; number words as digits):
+ * its span in `text`, or `null`. */
+export function lastSpokenSpan(text: string, phrase: string, lang: Language): { start: number; end: number } | null {
+  const run = norms(phrase, lang);
+  const tokens = tokenize(text, lang);
+  for (let at = tokens.length - run.length; at >= 0; at--) {
+    if (startsWith(tokens, run, at)) return { start: tokens[at].start, end: tokens[at + run.length - 1].end };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- spoken lines

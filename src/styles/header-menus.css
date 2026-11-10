@@ -1441,7 +1441,7 @@
      thing the user needs to copy into a bug report, so it selects. */
   user-select: text;
   -webkit-user-select: text;
-  cursor: text;
+  cursor: var(--cur-text, text);
 }
 
 /* `.ollama-action-btn` is the settings button in its compact size — look,

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect, useState, useSyncExternalStore, type ComponentType } from "react";
 import { api, type ActivityTab, type MobileAlerts, type ProjectRow, type TabPlace, type AgentCounts as AgentCountsRow } from "../api";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
@@ -28,6 +28,7 @@ import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
 import { customMarkupPrompts, MarkupInstructionSheet, markupInstructionSummary } from "../components/MarkupInstructionSheet";
 import { MarkupOpenSheet, markupOpenSummary } from "../components/MarkupOpenSheet";
+import { getSteering, subscribe as subscribeSteering, takeFindRequest } from "../steering/steeringState";
 import { readMarkupOpen } from "../markupOpen";
 import { getPushState, pushSupport, type HostPushState } from "../push";
 import { AppMark } from "../AppMark";
@@ -192,6 +193,17 @@ export function Home({ open, openTab, tabby, todo, mail }: {
     setView(next);
     writeFlag("projectsAgents", next === "agents");
   };
+  /** The `/` key of keyboard steering asks for the search, possibly from a
+   * screen that unmounted Home: the request waits in the steering store until
+   * Home mounts (or sees the counter move) and then takes it. */
+  const findSeq = useSyncExternalStore(subscribeSteering, () => getSteering().findSeq, () => 0);
+  useEffect(() => {
+    if (!takeFindRequest()) return;
+    choose("search");
+    // `autoFocus` only fires when the box mounts; from the search view already, put the caret in it.
+    const frame = requestAnimationFrame(() => document.querySelector<HTMLInputElement>("input.search")?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [findSeq]);
   /** A view other than Active is one step in: the phone's back comes home. */
   useBackLayer(() => choose("active"), view !== "active");
   useEffect(() => {
@@ -291,7 +303,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   /** One project row's opener — tile, name and caption, agent counts, open
    *  tabs — the same in every layout. `caption` replaces the scope line (a
    *  box head says how many projects it holds). */
-  const projectCard = (project: ProjectRow, caption?: string) => <button className="card" onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{caption ?? scopeCaption(project)}</small></span><span className="card-trailing"><span className="home-agent-counts">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}</span><span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z" /><path d="M3 10h18" /></svg><span>{project.live_sessions}</span></span></span></button>;
+  const projectCard = (project: ProjectRow, caption?: string) => <button className="card" data-steer-row={project.id} onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{caption ?? scopeCaption(project)}</small></span><span className="card-trailing"><span className="home-agent-counts">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}</span><span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z" /><path d="M3 10h18" /></svg><span>{project.live_sessions}</span></span></span></button>;
   const rootWaiting = rootRow?.pending_reviews ?? 0;
   const rootLabel = rootRow ? `${t("mobile.home.openRoot")}${rootWaiting > 0 ? ` · ${t("mobile.home.awaitingApproval", { count: rootWaiting })}` : ""}` : "";
   const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
@@ -353,6 +365,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
         {layoutButton}
         <button
           className="primary new-tab"
+          data-steer-act="new"
           onClick={() => setNewProject(true)}
           aria-haspopup="dialog"
           aria-expanded={newProject}

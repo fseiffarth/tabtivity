@@ -20,6 +20,7 @@ vi.mock("../../lib/terminal/terminalInput", () => ({
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { SteeringPromptOverlay } from "../../components/layout/SteeringPromptOverlay";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
+import { invoke } from "@tauri-apps/api/core";
 import {
   _clearScheduledAgentInputsForTest,
   registerScheduledAgentInput,
@@ -81,7 +82,7 @@ describe("steering prompt box", () => {
       steering().enter();
       steering().setLevel("panes");
     });
-    press("i");
+    press(" ");
     expect(steering().active).toBe(false);
     const input = box()!;
     expect(document.activeElement).toBe(input);
@@ -111,7 +112,7 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     fireEvent.change(box()!, { target: { value: "hello" } });
     await act(async () => {
       fireEvent.keyDown(box()!, { key: "Enter" });
@@ -137,7 +138,7 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     fireEvent.change(box()!, { target: { value: "and then this" } });
     fireEvent.keyDown(box()!, { key: "Enter" });
     await vi.waitFor(() => expect(box()).toBeNull());
@@ -159,17 +160,17 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     fireEvent.change(box()!, { target: { value: "half a thought" } });
     act(() => {
       box()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(box()).toBeNull();
-    press("i");
+    press(" ");
     expect(box()?.value).toBe("half a thought");
     fireEvent.keyDown(box()!, { key: "Enter" });
     await vi.waitFor(() => expect(box()).toBeNull());
-    press("i");
+    press(" ");
     expect(box()?.value).toBe("");
   });
 
@@ -182,7 +183,7 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     fireEvent.change(box()!, { target: { value: "never mind" } });
     act(() => {
       box()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -201,9 +202,61 @@ describe("steering prompt box", () => {
       </>,
     );
     act(() => steering().enter());
-    press("i");
+    press(" ");
     expect(box()).toBeNull();
     expect(steering().active).toBe(true);
+  });
+
+  describe("paste", () => {
+    const invokeMock = vi.mocked(invoke);
+    const openBox = (draft: string) => {
+      activeTab({ kind: "agent", scheduleTargetId: "target" });
+      render(
+        <>
+          <Harness />
+          <SteeringPromptOverlay />
+        </>,
+      );
+      act(() => steering().enter());
+      press(" ");
+      fireEvent.change(box()!, { target: { value: draft } });
+      box()!.setSelectionRange(draft.length, draft.length);
+    };
+    const clipboard = (data: Record<string, string>) => ({
+      getData: (type: string) => data[type] ?? "",
+      files: [],
+      types: Object.keys(data),
+    });
+    afterEach(() => invokeMock.mockReset());
+
+    it("copied files go to the tab's inbox and in as @ references at the caret", async () => {
+      invokeMock.mockImplementation(async (cmd) =>
+        cmd === "pty_drop_files" ? { items: ["inbox/a.pdf", "inbox/b.png"], error: null } : undefined,
+      );
+      openBox("look at");
+      const pasted = fireEvent.paste(box()!, { clipboardData: clipboard({ "text/uri-list": "file:///home/u/a.pdf\r\nfile:///home/u/b.png" }) });
+      expect(pasted).toBe(false);
+      await vi.waitFor(() => expect(box()?.value).toBe("look at @inbox/a.pdf @inbox/b.png "));
+      expect(invokeMock).toHaveBeenCalledWith("pty_drop_files", expect.objectContaining({
+        id: "p:t1",
+        paths: ["/home/u/a.pdf", "/home/u/b.png"],
+        agent: true,
+      }));
+    });
+
+    it("an image with no text on the clipboard goes in as its inbox reference", async () => {
+      invokeMock.mockImplementation(async (cmd) => (cmd === "pty_paste_clipboard_image" ? "inbox/shot.png" : undefined));
+      openBox("");
+      fireEvent.paste(box()!, { clipboardData: clipboard({}) });
+      await vi.waitFor(() => expect(box()?.value).toBe("@inbox/shot.png "));
+    });
+
+    it("text pastes as it always did", () => {
+      openBox("");
+      const pasted = fireEvent.paste(box()!, { clipboardData: clipboard({ "text/plain": "hello" }) });
+      expect(pasted).toBe(true);
+      expect(invokeMock).not.toHaveBeenCalledWith("pty_paste_clipboard_image", expect.anything());
+    });
   });
 
   describe("chips", () => {
@@ -222,7 +275,7 @@ describe("steering prompt box", () => {
         </>,
       );
       act(() => steering().enter());
-      press("i");
+      press(" ");
       return box()!;
     }
     const alt = (input: HTMLTextAreaElement, key: string) =>

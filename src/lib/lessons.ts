@@ -1,6 +1,6 @@
 import { ADVANCED_TOUR_STEPS, TOUR_STEPS, type TourStep } from "./tour";
 import type { TranslationKey } from "./i18n";
-import { modifierLabel } from "./shortcuts/shortcuts";
+import { modifierLabel, projectCycleLabels } from "./shortcuts/shortcuts";
 
 /**
  * Task "lessons" — short, replayable narrated walkthroughs for specific jobs
@@ -459,7 +459,7 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.keyboardSteering.projectCycleTitle",
         bodyKey: "lessons.keyboardSteering.projectCycleBody",
-        bodyParams: () => ({ modifier: modifierLabel() }),
+        bodyParams: () => ({ modifier: modifierLabel(), ...projectCycleLabels() }),
       },
     ],
   },

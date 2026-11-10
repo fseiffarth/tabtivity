@@ -452,13 +452,14 @@ export function regionCursor(): HTMLElement | null {
 }
 
 /** Put the cursor on `root`'s selected control (the active view tab, the open
- *  message), else its first one. False when there is nothing to land on yet. */
+ *  message, a dialog's `data-steering-default` button), else its first one.
+ *  False when there is nothing to land on yet. */
 export function placeRegionCursor(root: HTMLElement): boolean {
   if (cursor?.isConnected && root.contains(cursor)) return true;
   const targets = regionTargets(root);
   if (targets.length === 0) return false;
   const selected = targets.find((el) =>
-    el.matches('[aria-selected="true"], [aria-current]:not([aria-current="false"]), .selected'),
+    el.matches('[aria-selected="true"], [aria-current]:not([aria-current="false"]), .selected, [data-steering-default]'),
   );
   // Never land on a dialog's × first: Enter there would close what was just
   // opened.

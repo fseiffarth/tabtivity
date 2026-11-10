@@ -2,8 +2,8 @@ import { useEffect, type RefObject } from "react";
 
 const FOCUSABLE = "button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
-/** What Tab may reach inside `root`, in document order. */
-function focusables(root: HTMLElement): HTMLElement[] {
+/** What Tab may reach inside `root`, in document order (also what keyboard steering walks over a sheet). */
+export function focusables(root: HTMLElement): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)];
 }
 

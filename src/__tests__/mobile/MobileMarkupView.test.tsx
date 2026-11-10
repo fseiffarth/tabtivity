@@ -205,26 +205,32 @@ describe("MarkupView", () => {
       const calls = store.saveLayer.mock.calls as unknown as [string, Layer][];
       return calls[calls.length - 1]?.[1];
     };
-    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
-    const options = () => within(screen.getByRole("group", { name: "Pen, colour and size" }));
-    // Yellow is the marker's, not the plain pen's.
-    expect(options().queryByRole("button", { name: "Yellow" })).toBeNull();
-    fireEvent.click(options().getByRole("button", { name: "Marker" }));
-    fireEvent.click(options().getByRole("button", { name: "Bold" }));
+    // The highlighter is a tool; tapped again, its sheet opens.
+    fireEvent.click(screen.getByRole("button", { name: "Highlighter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Highlighter" }));
+    const options = () => within(screen.getByRole("group", { name: "Highlighter: options" }));
+    // Red is ink's, not the highlighter's.
+    expect(options().queryByRole("button", { name: "Red" })).toBeNull();
+    fireEvent.change(options().getByRole("slider", { name: "Size" }), { target: { value: "6" } });
     // Colours are plain colours: no meaning is shown beside them.
     expect(options().queryByText(/delete or fix/)).toBeNull();
     fireEvent.click(options().getByRole("button", { name: "Yellow" }));
     const px = (units: number) => units * 336 / 800;
     const canvas = container.querySelector(".markup-page-layer")!;
     fireEvent.pointerDown(canvas, { pointerId: 1, pointerType: "mouse", clientX: px(100), clientY: px(200) });
+    fireEvent.pointerMove(canvas, { pointerId: 1, pointerType: "mouse", clientX: px(200), clientY: px(210) });
     fireEvent.pointerMove(canvas, { pointerId: 1, pointerType: "mouse", clientX: px(300), clientY: px(200) });
     fireEvent.pointerUp(canvas, { pointerId: 1, pointerType: "mouse", clientX: px(300), clientY: px(200) });
     await waitFor(() => expect(lastSaved()?.pages[1].marks).toHaveLength(2));
-    expect(lastSaved()!.pages[1].marks[1]).toMatchObject({ kind: "ink", color: "yellow", style: "marker", width: strokeWidth(800, { size: 2, style: "marker" }) });
-    // The eraser's well offers its sizes and the area.
+    // Straight lines (on by default): the stroke's start and end only.
+    expect(lastSaved()!.pages[1].marks[1]).toMatchObject({
+      kind: "ink", color: "yellow", style: "marker", width: strokeWidth(800, { size: 6, style: "marker" }), points: [[100, 200, 0.5], [300, 200, 0.5]],
+    });
+    // The eraser's sheet offers its modes; Area drags a rectangle.
     fireEvent.click(screen.getByRole("button", { name: "Eraser" }));
-    fireEvent.click(screen.getByRole("button", { name: "Medium eraser" }));
-    fireEvent.click(screen.getByRole("button", { name: "Erase an area" }));
+    fireEvent.click(screen.getByRole("button", { name: "Eraser" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Eraser: options" })).getByRole("button", { name: "Area" }));
+    fireEvent.click(screen.getByRole("button", { name: "Eraser" }));
     expect(screen.getByText(/Drag a rectangle/)).toBeTruthy();
     fireEvent.pointerDown(canvas, { pointerId: 2, pointerType: "mouse", clientX: px(0), clientY: px(0) });
     fireEvent.pointerMove(canvas, { pointerId: 2, pointerType: "mouse", clientX: px(800), clientY: px(600) });
@@ -233,7 +239,7 @@ describe("MarkupView", () => {
     expect(container.querySelector(".markup-area")).toBeNull();
     await waitFor(() => expect(lastSaved()?.pages).toEqual({}));
     // The choices are this phone's, kept for the next view.
-    expect(readPenPrefs()).toMatchObject({ tool: "eraser", eraser: "area", style: "marker", size: 2, colors: { ink: "yellow" } });
+    expect(readPenPrefs()).toMatchObject({ tool: "eraser", eraser: "area", size: 6, colors: { highlight: "yellow" } });
   });
 
   it("clears every page from ⋯ in one step that Undo brings back", async () => {
@@ -574,9 +580,20 @@ describe("MarkupView · tools round 2", () => {
     fireEvent.pointerUp(canvas, { ...init, clientX: px(x), clientY: px(y) });
   };
 
+  /** A Proof mark picked from the slot's grid, the sheet closed again. */
+  const proof = (name: RegExp) => {
+    fireEvent.click(screen.getByRole("button", { name: "Proofreading marks" }));
+    if (!screen.queryByRole("group", { name: "Proofreading marks: options" })) fireEvent.click(screen.getByRole("button", { name: "Proofreading marks" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Proofreading marks: options" })).getByRole("button", { name }));
+  };
+  const closeSheet = (slot: string) => {
+    if (screen.queryByRole("group", { name: `${slot}: options` })) fireEvent.click(screen.getByRole("button", { name: slot }));
+  };
+
   it("says a picture has no text to mark, and marks nothing", async () => {
     const canvas = await open();
-    fireEvent.click(screen.getByRole("button", { name: "Mark text" }));
+    proof(/Highlight/);
+    closeSheet("Proofreading marks");
     expect(screen.getByText("No text on this page — draw instead")).toBeTruthy();
     stroke(canvas, [[100, 100], [300, 100]]);
     expect(lastMarks()).toEqual([]);
@@ -584,10 +601,10 @@ describe("MarkupView · tools round 2", () => {
 
   it("places the stamp picked in the well with one tap", async () => {
     const canvas = await open(LAYER);
-    fireEvent.click(screen.getByRole("button", { name: "Stamp" }));
+    proof(/Swap/);
+    fireEvent.click(within(screen.getByRole("group", { name: "Proofreading marks: options" })).getByRole("button", { name: "Red" }));
+    closeSheet("Proofreading marks");
     expect(screen.getByText("Tap where the stamp goes")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
-    fireEvent.click(within(screen.getByRole("group", { name: "Stamp" })).getByRole("button", { name: "Swap" }));
     stroke(canvas, [[100, 120]]);
     await waitFor(() => expect(lastMarks()).toHaveLength(2));
     expect(lastMarks()[1]).toEqual({ kind: "stamp", color: "red", at: [100, 120], size: stampSize(800), symbol: "swap" });
@@ -595,14 +612,14 @@ describe("MarkupView · tools round 2", () => {
 
   it("selects a mark with a tap, moves it, comments on it and deletes it", async () => {
     const canvas = await open(LAYER);
-    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lasso" }));
     // On the stroke from (10, 10) to (40, 30): dragged 100 units right and down.
     stroke(canvas, [[25, 20], [75, 70], [125, 120]]);
     await waitFor(() => expect(lastMarks()[0]).toMatchObject({ points: [[110, 110, 0.5], [140, 130, 0.5]] }));
     expect(document.querySelector(".markup-selection")).toBeTruthy();
     expect(screen.getByText("1 selected")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
-    const options = () => within(screen.getByRole("group", { name: "Select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lasso" }));
+    const options = () => within(screen.getByRole("group", { name: "Lasso: options" }));
     fireEvent.click(options().getByRole("button", { name: "Blue" }));
     await waitFor(() => expect(lastMarks()[0]).toMatchObject({ color: "blue" }));
     fireEvent.change(options().getByRole("textbox", { name: "Comment" }), { target: { value: "  too\nlong " } });
@@ -620,7 +637,10 @@ describe("MarkupView · tools round 2", () => {
     // Only the pen draws here, yet a finger selects, as it edits notes.
     localStorage.setItem(storageDashKey("markup-pen"), "1");
     const canvas = await open(both);
-    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lasso" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lasso" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Lasso: options" })).getByRole("button", { name: "Rectangle" }));
+    closeSheet("Lasso");
     // From clear page (a press on a mark would grab it) around both marks.
     stroke(canvas, [[500, 400], [300, 300], [0, 0]]);
     expect(screen.getByText("2 selected")).toBeTruthy();
@@ -631,6 +651,19 @@ describe("MarkupView · tools round 2", () => {
     expect(screen.getByText("1 selected")).toBeTruthy();
     // Nothing was drawn or moved: no save.
     expect(store.saveLayer).not.toHaveBeenCalled();
+  });
+
+  it("catches the marks a freehand lasso loop runs around, and copies them", async () => {
+    const both = addMark(LAYER, 1, [800, 600], { kind: "box", color: "yellow", rect: [200, 200, 50, 20] });
+    const canvas = await open(both);
+    fireEvent.click(screen.getByRole("button", { name: "Lasso" }));
+    // A loop around the box only, begun on clear page.
+    stroke(canvas, [[150, 150], [300, 150], [300, 260], [150, 260], [150, 160]]);
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Lasso" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Lasso: options" })).getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(lastMarks()).toHaveLength(3));
+    expect(lastMarks()[2]).toMatchObject({ kind: "box", color: "yellow", rect: [238.1, 238.1, 50, 20] });
   });
 
   it("straightens a stroke held still at its end, unless switched off in ⋯", async () => {
@@ -675,18 +708,20 @@ describe("MarkupView · tools round 2", () => {
     await waitFor(() => expect(lastMarks()).toEqual([expect.objectContaining({ kind: "text", color: "blue", text: "fix" })]));
   });
 
-  it("arms a preset with a tap, saves the pen as one and resets them", async () => {
+  it("arms a favourite with a tap, saves the pen as one and resets them", async () => {
     await open();
-    fireEvent.click(screen.getByRole("button", { name: "Colour: Red" }));
-    fireEvent.click(within(screen.getByRole("group", { name: "Presets" })).getByRole("button", { name: "Preset 2" }));
-    expect(screen.queryByRole("group", { name: "Presets" })).toBeNull();
-    expect(readPenPrefs()).toMatchObject({ tool: "ink", style: "marker", colors: { ink: "yellow" } });
+    // The pen is armed: tapped again, its sheet opens with the favourites.
+    fireEvent.click(screen.getByRole("button", { name: "Pen" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Favourites" })).getByRole("button", { name: "Favourite 4" }));
+    expect(screen.queryByRole("group", { name: "Favourites" })).toBeNull();
+    expect(readPenPrefs()).toMatchObject({ tool: "highlight", colors: { highlight: "yellow" } });
     fireEvent.click(screen.getByRole("button", { name: "Highlighter" }));
-    fireEvent.click(screen.getByRole("button", { name: "Colour: Yellow" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save as preset" }));
-    expect(readPenPrefs().presets).toHaveLength(4);
-    expect(readPenPrefs().presets[3]).toMatchObject({ tool: "box", color: "yellow" });
-    fireEvent.click(screen.getByRole("button", { name: "Reset presets" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Highlighter: options" })).getByRole("button", { name: "Pink" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save as favourite" }));
+    expect(readPenPrefs().presets).toHaveLength(5);
+    expect(readPenPrefs().presets[4]).toMatchObject({ tool: "highlight", color: "pink" });
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: /Reset favourites/ }));
     expect(readPenPrefs().presets).toEqual(DEFAULT_PRESETS);
   });
 
@@ -730,7 +765,8 @@ describe("MarkupView · tools round 2", () => {
     vi.spyOn(frame, "postMessage").mockImplementation((message: unknown) => { asked.push(message as { type: string }); });
     act(() => { say({ type: "ready" }); say({ type: "meta", pages: [{ w: 800, h: 600 }] }); });
     await waitFor(() => expect(store.loadLayer).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "Mark text" }));
+    proof(/Highlight/);
+    closeSheet("Proofreading marks");
     await waitFor(() => expect(asked.some((message) => message.type === "text" && message.page === 1)).toBe(true));
     const request = asked.find((message) => message.type === "text")!;
     await act(async () => say({ type: "text", id: request.id, page: 1, runs: [{ str: "Hello brave world", x: 100, y: 100, w: 340, h: 20 }] }));

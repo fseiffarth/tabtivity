@@ -150,6 +150,7 @@ export function Activity({ open, onConnection }: {
         // sessions is the case the colour is assigned for.
         className={`card activity-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}`}
         key={tab.id}
+        data-steer-row={tab.id}
         disabled={!tab.available}
         style={tabColorCss(tab.color) ? { ["--tab-color" as string]: tabColorCss(tab.color) } : undefined}
         onClick={() => open(tab.project_id, tab)}

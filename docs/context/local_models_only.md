@@ -280,7 +280,7 @@ Windows has no sandbox, both refuse with `CUT_NETWORK_UNAVAILABLE` and the gate 
 has it recorded) gives its verified local tabs a bubblewrap fence with `--unshare-net`. bubblewrap
 brings `lo` up in the new namespace itself (`loopback_setup`, RTM_NEWADDR/RTM_NEWLINK; the strings
 are in the installed 0.11.1), so the agent's loopback is its own and the host's Ollama and Tabtivity MCP
-ports are not there. The abstract-socket Landlock scope is unchanged. The fence decision is the gate's
+ports are not there. The abstract-socket Landlock scope is unchanged (abstract sockets are per network namespace, so the host's are out of reach anyway). `insert_local_lane` also drops the fence's `/run/systemd/resolve` bind: systemd-resolved's varlink socket there is mode 0666 and answers `ResolveHostname` from any namespace, a DNS channel out. The fence decision is the gate's
 record (`Verified::cut`) checked against the registry (`fence_cut_in`): the switch moved on while a tab
 started refuses (open it again), moved off keeps the cut.
 

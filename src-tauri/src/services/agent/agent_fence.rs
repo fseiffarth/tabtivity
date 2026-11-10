@@ -1687,6 +1687,12 @@ pub(crate) fn insert_local_lane(args: &mut Vec<String>, binds: Vec<String>, pref
         .position(|w| w[0] == "--tmpfs" && w[1] == "/run")
         .ok_or("Agent sandbox: the fence has no private /run to bind the local model lane into, so this agent was not started.")?;
     args.splice(run + 2..run + 2, binds);
+    // systemd-resolved's varlink socket (mode 0666) answers `ResolveHostname` for any
+    // local user, from any network namespace: left in the fence it is a DNS channel out.
+    // A fence with no network has no use for the resolver's folder, so it is not shown.
+    while let Some(at) = args.windows(3).position(|w| w[0] == "--ro-bind-try" && w[1] == "/run/systemd/resolve" && w[2] == "/run/systemd/resolve") {
+        args.drain(at..at + 3);
+    }
     let pid = args
         .iter()
         .position(|a| a == "--unshare-pid")

@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const SHEETS = ["mobile-web/src/style.css", "mobile-web/src/themes.css"];
+const SHEETS = ["mobile-web/src/style.css", "mobile-web/src/themes.css", "mobile-web/src/steering/steering.css"];
 const CSS: string = SHEETS.map((file) => readFileSync(file, "utf8") as string).join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
 
 /** Splits at commas outside parentheses. */
