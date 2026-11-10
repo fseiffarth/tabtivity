@@ -405,4 +405,81 @@ describe("sanitizePrintOptions", () => {
     expect(o.scale).toBe(400);
     expect(o.grayscale).toBe(true);
   });
+
+  it("loads options saved before imposition existed as one page per sheet, single-sided", () => {
+    const old = sanitizePrintOptions({ paper: "A4", orientation: "landscape", copies: 2 });
+    expect(old.nup).toBe(1);
+    expect(old.booklet).toBe(false);
+    expect(old.duplex).toBe("none");
+  });
+
+  it("keeps a valid imposition and drops a bogus one", () => {
+    const o = sanitizePrintOptions({ nup: 6, booklet: true, duplex: "short" });
+    expect([o.nup, o.booklet, o.duplex]).toEqual([6, true, "short"]);
+    const junk = sanitizePrintOptions({ nup: 5, booklet: "yes", duplex: "sideways" });
+    expect([junk.nup, junk.booklet, junk.duplex]).toEqual([1, false, "none"]);
+  });
+
+  it("round-trips imposition through storage", () => {
+    savePrintOptions({ ...PAGED_PRINT_OPTIONS, nup: 4, duplex: "long" }, "page");
+    const loaded = loadPrintOptions("page");
+    expect([loaded.nup, loaded.duplex]).toEqual([4, "long"]);
+  });
+});
+
+describe("imposed sheets", () => {
+  const imposed = (patch: Partial<PrintOptions>) =>
+    buildOptionsCss({ ...PAGED_PRINT_OPTIONS, ...patch }, true);
+
+  it("is the plain sheet CSS at one page per sheet", () => {
+    expect(imposed({ nup: 1 })).not.toContain(".app-sheet");
+  });
+
+  it("makes the sheet a grid of cells, each a page", () => {
+    const css = imposed({ nup: 4 });
+    expect(css).toContain(".app-sheet{position:relative;box-sizing:border-box;height:100%;");
+    expect(css).toContain("grid-template-columns:repeat(2,minmax(0,1fr))");
+    expect(css).toContain("grid-template-rows:repeat(2,minmax(0,1fr))");
+    // A cell is a size container of its own and never starts a page.
+    expect(css).toMatch(/\.app-sheet>\.print-page\{[^}]*container-type:size/);
+    expect(css).toMatch(/\.app-sheet>\.print-page\{[^}]*break-before:auto!important/);
+  });
+
+  it("stacks a 2-up on an upright sheet and sets it side by side on a landscape one", () => {
+    expect(imposed({ nup: 2 })).toContain("grid-template-columns:repeat(1,minmax(0,1fr))");
+    expect(imposed({ nup: 2 })).toContain("grid-template-rows:repeat(2,minmax(0,1fr))");
+    const wide = imposed({ nup: 2, orientation: "landscape" });
+    expect(wide).toContain("grid-template-columns:repeat(2,minmax(0,1fr))");
+    expect(wide).toContain("grid-template-rows:repeat(1,minmax(0,1fr))");
+  });
+
+  it("makes a booklet a landscape sheet of two columns, whatever the orientation", () => {
+    const css = imposed({ booklet: true, nup: 9, orientation: "portrait" });
+    expect(css).toContain("@page{size:29.7cm 21cm;margin:0}");
+    expect(css).toContain("grid-template-columns:repeat(2,minmax(0,1fr))");
+    expect(css).toContain("grid-template-rows:repeat(1,minmax(0,1fr))");
+  });
+
+  it("puts the screen paper and its page break on the sheet, not on the cells", () => {
+    const css = imposed({ nup: 4 });
+    expect(css).toMatch(/@media screen\{[^]*\.app-sheet\{height:29\.7cm;margin:0 auto 18px;background:#fff/);
+    expect(css).toContain(".app-sheet+.app-sheet{break-before:page");
+  });
+
+  it("numbers each page inside its own cell", () => {
+    const css = imposed({ nup: 4, pageNumbers: true });
+    expect(css).toContain(".app-sheet>.print-page{padding-bottom:16px}");
+    expect(css).toContain("bottom:0px");
+  });
+
+  it("keeps the sheet's own background when backgrounds are off", () => {
+    expect(imposed({ nup: 4, background: false })).toContain(
+      "body *:not(.print-page):not(.app-sheet){background:transparent!important",
+    );
+  });
+
+  it("sizes a booklet's page cards upright", () => {
+    const [w, h] = thumbSizePx({ ...PAGED_PRINT_OPTIONS, booklet: true });
+    expect(h).toBeGreaterThan(w);
+  });
 });

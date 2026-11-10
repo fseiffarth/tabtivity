@@ -44,6 +44,9 @@ eight pending in the process.
   link on the way), sniffed `application/pdf`, ≤ 24 MB, `%PDF-` head. The
   snapshot stays in memory; the preview and the printer get it via
   `print_mcp_pdf`. Rewriting the file after asking changes nothing.
+- **The agent's layout reaches the preview** (`presetFor`): copies, a page
+  range, grayscale, pages per sheet, two-sided, and booklet (which implies
+  short-edge two-sided). The user can change any of them before approving.
 - **The agent's options are never saved** as the user's printer preferences
   (`apply()` skips `savePrintOptions` in approval mode).
 - **Approve re-checks** that the request still waits (`stillPending`) before

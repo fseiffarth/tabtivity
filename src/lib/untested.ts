@@ -462,6 +462,9 @@ export const UNTESTED = {
 
   // --- lib — Keyboard shortcuts and printing ------------------------
   "print.copiesField": { area: "lib", what: "print · Copies field in the print dialog" },
+  "print.layoutNup": { area: "lib", what: "print · Pages per sheet (2/4/6/9/16-up) in the print preview and the PDF sent to the printer" },
+  "print.booklet": { area: "lib", what: "print · Booklet imposition (saddle-stitch, two per landscape side, short-edge duplex) in the print preview and the PDF sent to the printer" },
+  "print.duplex": { area: "lib", what: "print · Two-sided control: preset in the native print dialog (Linux GTK; Windows/macOS leave it to the system dialog)" },
   "print.queueProgress": { area: "lib", what: "print · Print queue progress strip" },
   "shortcut.toggleSidePanel": { area: "shell", what: "shortcuts · Ctrl+B / ⌘B toggles the side panel (never from a terminal; Alt+1 works there)" },
   "fixedKeys.osFullscreen.label": { area: "lib", what: "shortcuts · F11 and the window-controls fullscreen button: real fullscreen for the main window and every popout (Windows too, no longer maximize); a popout's stray-fullscreen guard leaves it alone" },

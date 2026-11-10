@@ -16,6 +16,7 @@ import {
   type NativePrint,
   type PrintOptions,
 } from "./print";
+import { NUP_CHOICES, type NUp } from "./printImposition";
 import { printPdfNative } from "../window/printing";
 import {
   decidePrintRequest,
@@ -25,10 +26,21 @@ import {
   type PrintRequestOptions,
 } from "../window/printMcp";
 
-/** The agent's options as preview options: copies, a custom range, grayscale.
+/** The agent's options as preview options: copies, a custom range, grayscale,
+ *  and — when it named them — pages per sheet, booklet and two-sided. A
+ *  booklet is two-sided on the short edge, as the preview's own switch sets it.
  *  Everything else stays the user's. */
 export function presetFor(options: PrintRequestOptions): Partial<PrintOptions> {
   const preset: Partial<PrintOptions> = { copies: options.copies, grayscale: options.grayscale };
+  if (options.booklet) {
+    preset.booklet = true;
+    preset.duplex = "short";
+  } else {
+    if (options.pagesPerSheet && (NUP_CHOICES as readonly number[]).includes(options.pagesPerSheet)) {
+      preset.nup = options.pagesPerSheet as NUp;
+    }
+    if (options.duplex) preset.duplex = options.duplex;
+  }
   if (options.pages) {
     preset.pages = "custom";
     preset.range = options.pages;
@@ -56,7 +68,7 @@ export async function reviewPrintRequest(request: PrintRequest, requester: strin
     const title = basename(request.file);
     const native: NativePrint = async (sequence, opts) => {
       const laidOut = await layoutPrintPdf(bytes, sequence, opts);
-      return printPdfNative(laidOut, title, { paper: opts.paper, grayscale: opts.grayscale });
+      return printPdfNative(laidOut, title, { paper: opts.paper, grayscale: opts.grayscale, duplex: opts.duplex });
     };
     await printHtmlBody(body, PDF_PRINT_CSS, title, native, {
       requester,

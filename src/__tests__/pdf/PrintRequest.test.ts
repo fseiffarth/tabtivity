@@ -29,6 +29,17 @@ describe("the agent's options", () => {
     expect(presetFor(request().options)).toEqual({ copies: 1, grayscale: false, pages: "all", range: "" });
   });
 
+  it("carry pages per sheet, two-sided and booklet when named", () => {
+    expect(presetFor(request({ pagesPerSheet: 4, duplex: "long" }).options))
+      .toMatchObject({ nup: 4, duplex: "long" });
+    expect(presetFor(request({ booklet: true, duplex: "long" }).options))
+      .toMatchObject({ booklet: true, duplex: "short" });
+    const plain = presetFor(request().options);
+    expect(plain).not.toHaveProperty("nup");
+    expect(plain).not.toHaveProperty("duplex");
+    expect(plain).not.toHaveProperty("booklet");
+  });
+
   it("read as one line", () => {
     const t = (key: Parameters<typeof translateNow>[0], params?: Record<string, string | number>) => translateNow(key, params);
     expect(optionsSummary(request({ copies: 2, pages: "1-3", duplex: "long", pagesPerSheet: 4 }), t))

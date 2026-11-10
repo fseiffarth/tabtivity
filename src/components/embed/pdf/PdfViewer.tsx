@@ -3117,7 +3117,11 @@ function PdfCanvas({
           stripMetadata: stripMeta,
         });
         const laidOut = await layoutPrintPdf(bytes, sequence, opts);
-        return printPdfNative(laidOut, title, { paper: opts.paper, grayscale: opts.grayscale });
+        return printPdfNative(laidOut, title, {
+          paper: opts.paper,
+          grayscale: opts.grayscale,
+          duplex: opts.duplex,
+        });
       };
       await printHtmlBody(body, PDF_PRINT_CSS, title, native);
     } catch (e) {
