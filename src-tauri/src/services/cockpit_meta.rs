@@ -73,6 +73,9 @@ pub const MILESTONES_MAX: usize = 20;
 pub const ATTENTION_ID_MAX_CHARS: usize = 64;
 /// The whole stored object as JSON, in bytes.
 pub const META_MAX_BYTES: usize = 32 * 1024;
+/// What the host's own markers (`dismissed`, `ended`, a longer revision) may
+/// add above [`META_MAX_BYTES`]; the bound limits the agent, not the host.
+pub const HOST_ALLOWANCE_BYTES: usize = 256;
 /// How long an activity line, a blocker or a progress report counts as current
 /// (a progress report older than this is history, never running).
 pub const ACTIVITY_TTL_MS: u64 = 30 * 60 * 1000;
@@ -291,15 +294,24 @@ pub fn attention_is_live(set_at: u64, now: u64) -> bool {
     set_at <= now.saturating_add(FUTURE_SLACK_MS) && now.saturating_sub(set_at) < ATTENTION_TTL_MS
 }
 
-/// A fresh 128-bit nonce naming one spawn generation (hex).
-pub fn mint_spawn() -> String {
+/// 128 random bits as hex, from `fill`; `None` when `fill` fails. A failed
+/// generator must never leave an all-zero nonce or id (it would join every
+/// spawn and break the dismissal compare-and-swap), so the failure is the
+/// caller's to handle. `fill` is a parameter only so a test can fail it.
+fn mint_with(fill: impl FnOnce(&mut [u8]) -> bool) -> Option<String> {
     let mut bytes = [0u8; 16];
-    let _ = getrandom::fill(&mut bytes);
-    crate::digest::hex(&bytes)
+    fill(&mut bytes).then(|| crate::digest::hex(&bytes))
+}
+
+/// A fresh 128-bit nonce naming one spawn generation (hex). `None` when the
+/// system has no randomness: no grant is made for that spawn.
+pub fn mint_spawn() -> Option<String> {
+    mint_with(|bytes| getrandom::fill(bytes).is_ok())
 }
 
 /// A fresh id for one attention question (same entropy as a spawn nonce).
-pub fn mint_attention_id() -> String {
+/// `None` when the system has no randomness: the ask is refused.
+pub fn mint_attention_id() -> Option<String> {
     mint_spawn()
 }
 
@@ -316,10 +328,23 @@ pub fn read(tab: &TabEntry) -> Result<Meta, &'static str> {
 
 /// Store `meta` on the tab, refusing before any mutation when it would pass
 /// the size bound (JSON bytes, so multi-byte text counts for what it costs).
+/// For what the agent writes.
 pub fn store(tab: &mut TabEntry, meta: &Meta) -> Result<(), &'static str> {
+    store_within(tab, meta, META_MAX_BYTES)
+}
+
+/// [`store`] for the host's own bookkeeping (a dismissal, an `ended` marker):
+/// the bound limits what the agent writes, so a record the agent filled to it
+/// still takes the few bytes of a marker. The allowance is fixed and far
+/// above one marker, so nothing the host adds can grow without limit.
+fn store_host(tab: &mut TabEntry, meta: &Meta) -> Result<(), &'static str> {
+    store_within(tab, meta, META_MAX_BYTES + HOST_ALLOWANCE_BYTES)
+}
+
+fn store_within(tab: &mut TabEntry, meta: &Meta, limit: usize) -> Result<(), &'static str> {
     let value = serde_json::to_value(meta).map_err(|_| CORRUPT)?;
     let size = serde_json::to_vec(&value).map_err(|_| CORRUPT)?.len();
-    if size > META_MAX_BYTES {
+    if size > limit {
         return Err(TOO_LARGE);
     }
     tab.extra.insert(KEY.to_string(), value);
@@ -380,7 +405,7 @@ pub fn drop_transient(tab: &mut TabEntry) {
         // No spawn matches the empty nonce: every spawn-bound field is old.
         if retire_other_spawns(&mut meta, "") {
             meta.revision = meta.revision.saturating_add(1);
-            let _ = store(tab, &meta);
+            let _ = store_host(tab, &meta);
         }
     }
 }
@@ -702,7 +727,7 @@ pub fn clear_other_spawns_in(path: &Path, scope: &str, id: &str, spawn: &str) ->
             return Err(UNCHANGED.into());
         }
         meta.revision = meta.revision.saturating_add(1);
-        store(tab, &meta).map_err(str::to_string)
+        store_host(tab, &meta).map_err(str::to_string)
     });
     match stored {
         Ok(_) => Ok(true),
@@ -727,11 +752,21 @@ pub enum Dismissal {
 /// The user's dismissal, a compare-and-swap on the attention `id` under the
 /// workspace lock: only the question the window drew can be dismissed, and a
 /// newer one stays. One [`workspace::edit_in`], so the revision and versions
-/// move and every window re-adopts it; nothing else of the tab changes. A
-/// closed tab is `tab_not_found`, unreadable metadata fails with no write.
+/// move; nothing else of the tab changes. This writes the session file only:
+/// other windows learn of it from the `workspace:patch` hint the caller sends
+/// for the version [`dismiss_versioned_in`] answers (or on their next sync).
+/// A closed tab is `tab_not_found`, unreadable metadata fails with no write.
+/// The marker is the host's, so it is not held to the agent's size bound
+/// ([`store_host`]).
 pub fn dismiss_in(path: &Path, scope: &str, id: &str, attention_id: &str) -> Result<Dismissal, String> {
+    dismiss_versioned_in(path, scope, id, attention_id).map(|(verdict, _)| verdict)
+}
+
+/// [`dismiss_in`] and, when it wrote, the workspace version it committed: what
+/// the other windows are told to fetch.
+pub fn dismiss_versioned_in(path: &Path, scope: &str, id: &str, attention_id: &str) -> Result<(Dismissal, Option<u64>), String> {
     if attention_id.is_empty() || attention_id.chars().count() > ATTENTION_ID_MAX_CHARS {
-        return Ok(Dismissal::Stale);
+        return Ok((Dismissal::Stale, None));
     }
     let mut verdict = Dismissal::Stale;
     let stored = workspace::edit_in(path, scope, |session| {
@@ -746,14 +781,14 @@ pub fn dismiss_in(path: &Path, scope: &str, id: &str, attention_id: &str) -> Res
                 a.dismissed = true;
                 meta.revision = meta.revision.saturating_add(1);
                 verdict = Dismissal::Dismissed;
-                store(tab, &meta).map_err(str::to_string)
+                store_host(tab, &meta).map_err(str::to_string)
             }
             _ => Err(UNCHANGED.into()),
         }
     });
     match stored {
-        Ok(_) => Ok(verdict),
-        Err(e) if e == UNCHANGED => Ok(verdict),
+        Ok(session) => Ok((verdict, Some(workspace::version_of(&session)))),
+        Err(e) if e == UNCHANGED => Ok((verdict, None)),
         Err(e) => Err(e),
     }
 }

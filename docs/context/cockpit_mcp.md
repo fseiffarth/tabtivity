@@ -64,7 +64,12 @@ and unknown tab fields round-trip). The key is absent until the first write
 and then stays (a clear leaves `{v, revision}`), so a revision is never
 reused. Unreadable metadata (not an object, `v` other than 1, wrong field
 type) refuses reads and writes (`storage_error`) with no write; the cap on the
-object is 32 KiB of JSON (`too_large`, refused before mutation).
+object is 32 KiB of JSON (`too_large`, refused before mutation). The cap
+limits what the *agent* writes: the host's own markers (a dismissal's
+`dismissed`, a progress `ended`) go through `store_host`, which allows
+`HOST_ALLOWANCE_BYTES` (256) above it, so a record the agent filled to the byte
+still takes the user's Dismiss and a grant's `ended` mark, never a `too_large`
+or a silent no-write. Agent setters (`store`) stay refused at exactly 32 KiB.
 
 **Host-owned through the workspace merge.** `toSavedTabEntry` whitelists
 fields, so a window never sends `cockpitMeta`. `workspace::merge` therefore
@@ -110,7 +115,9 @@ switch again inside the lock (`cockpit_mcp::guard`); fixed categories `rate_limi
   every tool; text is never recorded).
 
 **Spawn generation.** `grant_cockpit` mints `Binding.spawn` (random, not
-derived from the token, not secret). Activity stores it. At grant, after the
+derived from the token, not secret; if the system generator fails there is no
+binding and so no grant for that spawn, like an unbound tab - never an
+all-zero nonce). Activity stores it. At grant, after the
 older token is revoked, `clear_other_spawns_in` removes activity from any other
 spawn in one `edit_in` (nothing to clear writes nothing). PTY exit writes
 nothing.
@@ -308,7 +315,8 @@ write). Both count toward the 32 KiB cap (all notes full in ASCII fit, about
 - `tab_request_attention {expectedRevision, question|null}`: one question, 500
   characters, newlines allowed, trimmed, no control or bidi characters; unknown
   keys (options, answer...) refused. The host mints the `id` (128-bit hex) in
-  the handler, used only when the question is new. The same text from the same
+  the handler, used only when the question is new (a failed generator refuses a
+  question `storage_error`, unwritten; a clear needs no id). The same text from the same
   spawn is a no-op while it is open (under 24 h) *and* once dismissed, at any
   age: a retry cannot resurface a dismissed question (only a changed text, or
   an agent clearing it with `null` first, makes a new item - noted below). A
@@ -344,7 +352,11 @@ the stored attention id equals the one the window drew, and bumps the revision;
 answers `dismissed`, `unchanged` (already dismissed) or `stale` (a different id,
 none, an empty or over-long id: nothing written). A closed tab is
 `tab_not_found`, unreadable metadata fails unwritten. The window then calls
-`refreshWorkspaceScope(scope)` to adopt the new revision. A client cannot author
+`refreshWorkspaceScope(scope)` to adopt the new revision, and the command, after
+the commit, broadcasts the same empty-ops `workspace:patch {scope, version}` the
+MCP lane sends (`announce_dismissal`, best effort; nothing is sent for
+`unchanged`/`stale`), so other windows, popouts and the phone drop the question
+without waiting for their next sync. A client cannot author
 `dismissed`: `workspace::merge` hands a kept tab the held copy whatever it sent
 (tested with a forged `dismissed`).
 

@@ -3238,6 +3238,30 @@ fn cockpit_attention_mints_a_fresh_id_per_question_and_a_retry_never_resurfaces_
     assert!(crate::services::cockpit_mcp::refresh_patch(&f.session, &fresh).is_some());
 }
 
+/// A failed random generator is never an all-zero nonce or id: no grant for the
+/// spawn (as for an unbound tab), and a question is refused with nothing written.
+#[test]
+fn cockpit_fails_closed_when_the_random_generator_fails() {
+    use crate::services::{cockpit_mcp as cockpit, workspace};
+    let f = CockpitFixture::new();
+    let version = workspace::snapshot_in(&f.path).unwrap().version;
+    let ask = json!({"expectedRevision":0,"question":"Deploy now?"});
+    let refused = cockpit::set_attention_with(&f.session, &ask, || None);
+    assert_eq!(refused["category"], "storage_error", "{refused}");
+    assert_eq!(f.stored(0).extra.get("cockpitMeta"), None, "nothing was written");
+    assert_eq!(workspace::snapshot_in(&f.path).unwrap().version, version);
+    // Clearing needs no id, so it does not depend on the generator.
+    let cleared = cockpit::set_attention_with(&f.session, &json!({"expectedRevision":0,"question":null}), || None);
+    assert_ne!(cleared["status"], "refused", "{cleared}");
+    // A working generator asks as before, with the id it minted.
+    let asked = cockpit::set_attention_with(&f.session, &ask, || Some("ab".repeat(16)));
+    assert_eq!((asked["status"].as_str(), asked["attention"]["id"].as_str()), (Some("updated"), Some("ab".repeat(16).as_str())), "{asked}");
+    // The spawn nonce: no nonce, no binding (and so no grant); a nonce binds.
+    assert!(cockpit::binding_for_spawn_with(f.state.path(), &f.spawn, || None).is_none());
+    let binding = cockpit::binding_for_spawn_with(f.state.path(), &f.spawn, || Some("n".repeat(32))).unwrap();
+    assert_eq!(binding.spawn, "n".repeat(32));
+}
+
 #[test]
 fn cockpit_attention_is_read_back_only_while_open_and_its_own_and_goes_with_the_spawn() {
     use crate::services::cockpit_meta;

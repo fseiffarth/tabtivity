@@ -42,7 +42,15 @@ impl Binding {
 }
 
 /// Bind only an existing, unambiguous agent tab in this host's session store.
+/// No system randomness for the spawn nonce means no binding, like an unbound tab.
 pub(crate) fn binding_for_spawn(state: &Path, opts: &crate::terminal::PtyOptions) -> Option<Binding> {
+    binding_for_spawn_with(state, opts, meta::mint_spawn)
+}
+
+/// [`binding_for_spawn`] with the nonce source as a parameter, so a test can fail it.
+pub(crate) fn binding_for_spawn_with(
+    state: &Path, opts: &crate::terminal::PtyOptions, mint: impl FnOnce() -> Option<String>,
+) -> Option<Binding> {
     let scope = opts.project_id.as_deref().unwrap_or(crate::storage::ROOT_SCOPE);
     if crate::storage::is_reserved_scope(scope) && scope != crate::storage::ROOT_SCOPE { return None; }
     if opts.assistant.is_some() || opts.sandbox || opts.tmux_attach.is_some() { return None; }
@@ -56,7 +64,7 @@ pub(crate) fn binding_for_spawn(state: &Path, opts: &crate::terminal::PtyOptions
     });
     let tab = matches.next()?;
     if matches.next().is_some() { return None; }
-    Some(Binding { state: state.into(), scope: scope.into(), id: workspace::tab_id(tab)?.into(), spawn: meta::mint_spawn() })
+    Some(Binding { state: state.into(), scope: scope.into(), id: workspace::tab_id(tab)?.into(), spawn: mint()? })
 }
 
 /// A new spawn's grant: activity and a blocker another spawn issued are not
@@ -299,7 +307,10 @@ fn attention_json(a: &meta::Attention) -> Value {
 }
 fn milestone_json(m: &meta::Milestone) -> Value { json!({"requestId":m.request_id,"text":m.text,"at":m.at}) }
 
-fn set_attention(session: &Session, args: &Value) -> Value {
+fn set_attention(session: &Session, args: &Value) -> Value { set_attention_with(session, args, meta::mint_attention_id) }
+
+/// [`set_attention`] with the id source as a parameter, so a test can fail it.
+pub(crate) fn set_attention_with(session: &Session, args: &Value, mint: impl FnOnce() -> Option<String>) -> Value {
     let binding = match bound(session) { Ok(b) => b, Err(refusal) => return refusal };
     let Some((expected, question)) = setter_args(args, "question") else { return refused("invalid_request") };
     let question = match question {
@@ -308,8 +319,15 @@ fn set_attention(session: &Session, args: &Value) -> Value {
         _ => return refused("invalid_request"),
     };
     // The id is minted here, once per call; the change uses it only when the
-    // question is new (an identical open or dismissed one is a no-op).
-    let change = meta::Change::Attention { question, id: meta::mint_attention_id(), spawn: binding.spawn.clone() };
+    // question is new (an identical open or dismissed one is a no-op). With no
+    // randomness a question is refused before anything is written (a zero id
+    // would defeat the dismissal compare-and-swap); a clear needs no id.
+    let id = match (&question, mint()) {
+        (None, _) => String::new(),
+        (Some(_), Some(id)) => id,
+        (Some(_), None) => return refused("storage_error"),
+    };
+    let change = meta::Change::Attention { question, id, spawn: binding.spawn.clone() };
     match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), &change,
         guard(session, binding)) {
         Ok(out) => changed_reply(&out, "attention", out.meta.attention.as_ref().map_or(Value::Null, attention_json)),

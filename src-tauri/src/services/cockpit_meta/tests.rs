@@ -757,7 +757,7 @@ fn attention_gets_a_fresh_id_per_changed_question_and_an_identical_open_one_is_a
     // The key stays after a clear, so a revision is never reused.
     assert_eq!(read(&mine(&path, &id)).unwrap().revision, 3);
     // The mint is random hex, new every time.
-    let (x, y) = (mint_attention_id(), mint_attention_id());
+    let (x, y) = (mint_attention_id().unwrap(), mint_attention_id().unwrap());
     assert_ne!(x, y);
     assert!(x.len() >= 32 && x.chars().all(|c| c.is_ascii_hexdigit()));
 }
@@ -1019,4 +1019,123 @@ fn attention_and_milestones_are_host_owned_through_a_stale_client_sync_even_a_fo
     dismiss_in(&path, "p", &id, "id-real").unwrap();
     let after = workspace::sync_in(&path, "p", ClientSync { base_version: before.version, tabs: before.tabs, ..Default::default() }).unwrap();
     assert_eq!(held(&after, "attention")["dismissed"], true);
+}
+
+// ── Host bookkeeping above the agent's size bound ───────────────────────────
+
+/// The metadata an agent left with an open question, a running progress report
+/// and padding that makes its JSON exactly [`META_MAX_BYTES`] (a key a later
+/// build might add: it rides through every rewrite).
+fn filled_to_the_bound(spawn: &str, question: bool) -> Meta {
+    let mut meta = Meta {
+        revision: 4,
+        attention: question.then(|| Attention { id: "id-1".into(), question: "Deploy?".into(), set_at: 1_000, spawn: spawn.into(), dismissed: false }),
+        progress: Some(Progress {
+            steps: vec![ProgressStep { id: "a".into(), label: "A".into(), state: StepState::Active }],
+            set_at: 1_000, spawn: spawn.into(), ended: false,
+        }),
+        ..Meta::default()
+    };
+    meta.rest.insert("pad".into(), json!(""));
+    let bare = serde_json::to_vec(&meta).unwrap().len();
+    meta.rest.insert("pad".into(), json!("x".repeat(META_MAX_BYTES - bare)));
+    assert_eq!(serde_json::to_vec(&meta).unwrap().len(), META_MAX_BYTES);
+    meta
+}
+
+fn put(path: &Path, id: &str, meta: &Meta) {
+    workspace::edit_in(path, "p", |session| {
+        // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
+        let tab = session.tab_layout.iter_mut().find(|t| tab_id(t) == Some(id)).unwrap();
+        store(tab, meta).map_err(str::to_string)
+    }).unwrap();
+}
+
+fn stored_size(path: &Path, id: &str) -> usize { serde_json::to_vec(&mine(path, id).extra[KEY]).unwrap().len() }
+
+#[test]
+fn the_bound_is_the_agents_exactly_and_the_hosts_markers_fit_above_it() {
+    let (_dir, path) = session_file();
+    let id = seeded(&path);
+    put(&path, &id, &filled_to_the_bound("s1", true));
+    assert_eq!(stored_size(&path, &id), META_MAX_BYTES, "an agent may fill it to the byte");
+
+    // An agent setter that adds anything is refused, unwritten, at exactly the bound.
+    let version = snapshot(&path).version;
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(update_in(&path, "p", &id, 4, 2_000, &activity("x", "s1"), ok).unwrap_err(), TOO_LARGE);
+    assert_eq!(update_in(&path, "p", &id, 4, 2_000, &ask("Another?", "id-2", "s1"), ok).unwrap_err(), TOO_LARGE);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    // One byte over is refused by the agent's `store`; the allowance is the host's.
+    let mut tab = mine(&path, &id);
+    let mut one_over = filled_to_the_bound("s1", true);
+    let pad = one_over.rest["pad"].as_str().unwrap().to_string();
+    one_over.rest.insert("pad".into(), json!(format!("{pad}x")));
+    assert_eq!(store(&mut tab, &one_over).unwrap_err(), TOO_LARGE, "one byte past the bound");
+    assert!(store_host(&mut tab, &one_over).is_ok(), "the same record is within the host's allowance");
+    let mut far_over = filled_to_the_bound("s1", true);
+    far_over.rest.insert("pad".into(), json!("x".repeat(META_MAX_BYTES + HOST_ALLOWANCE_BYTES)));
+    assert_eq!(store_host(&mut tab, &far_over).unwrap_err(), TOO_LARGE, "the host's allowance is fixed, not open");
+    assert_eq!(snapshot(&path).version, version);
+
+    // The user's dismissal still lands: written, not a silent no-op, not too_large.
+    assert_eq!(dismiss_in(&path, "p", &id, "id-1").unwrap(), Dismissal::Dismissed);
+    let meta = read(&mine(&path, &id)).unwrap();
+    assert!(meta.attention.unwrap().dismissed);
+    assert_eq!(meta.revision, 5);
+    assert_eq!(snapshot(&path).version, version + 1);
+    let size = stored_size(&path, &id);
+    assert!(size > META_MAX_BYTES && size <= META_MAX_BYTES + HOST_ALLOWANCE_BYTES, "{size}");
+    // The agent is still held to its bound afterwards.
+    assert_eq!(update_in(&path, "p", &id, 5, 3_000, &activity("x", "s1"), ok).unwrap_err(), TOO_LARGE);
+}
+
+#[test]
+fn grant_time_ended_marking_and_a_reopen_work_for_metadata_at_the_bound() {
+    // A new spawn's grant: the old spawn's progress is marked ended, its question goes.
+    let (_dir, path) = session_file();
+    let id = seeded(&path);
+    put(&path, &id, &filled_to_the_bound("old", true));
+    let version = snapshot(&path).version;
+    assert!(clear_other_spawns_in(&path, "p", &id, "new").unwrap(), "written, not a silent no-write");
+    let meta = read(&mine(&path, &id)).unwrap();
+    assert!(meta.progress.unwrap().ended);
+    assert!(meta.attention.is_none());
+    assert_eq!(meta.revision, 5);
+    assert_eq!(snapshot(&path).version, version + 1);
+
+    // Progress alone (the question already answered): the marker is all that is added.
+    let (_dir, path) = session_file();
+    let id = seeded(&path);
+    let only_progress = filled_to_the_bound("old", false);
+    put(&path, &id, &only_progress);
+    assert_eq!(stored_size(&path, &id), META_MAX_BYTES);
+    assert!(clear_other_spawns_in(&path, "p", &id, "new").unwrap());
+    assert!(read(&mine(&path, &id)).unwrap().progress.unwrap().ended);
+    assert!(stored_size(&path, &id) > META_MAX_BYTES);
+
+    // A reopened record: the same, through `drop_transient`.
+    let mut tab = mine(&path, &id);
+    let mut reopened = only_progress.clone();
+    reopened.progress.as_mut().unwrap().ended = false;
+    store_host(&mut tab, &reopened).unwrap();
+    drop_transient(&mut tab);
+    let meta = read(&tab).unwrap();
+    assert!(meta.progress.unwrap().ended, "the marker was written");
+    assert_eq!(meta.revision, 5);
+}
+
+// ── A failed random generator ───────────────────────────────────────────────
+
+#[test]
+fn a_failed_generator_mints_nothing_and_a_working_one_mints_hex() {
+    assert_eq!(mint_with(|_| false), None, "no all-zero nonce or id");
+    let mut zeros = false;
+    assert_eq!(mint_with(|bytes| { zeros = bytes.iter().all(|b| *b == 0); false }), None);
+    assert!(zeros, "the buffer a failed fill leaves is all zero: it must never be used");
+    assert_eq!(mint_with(|bytes| { bytes.fill(0xab); true }).as_deref(), Some("abababababababababababababababab"));
+    for minted in [mint_spawn().unwrap(), mint_attention_id().unwrap()] {
+        assert!(minted.len() >= 32 && minted.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(minted.chars().any(|c| c != '0'));
+    }
 }
