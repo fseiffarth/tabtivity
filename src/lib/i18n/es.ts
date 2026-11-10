@@ -1049,6 +1049,8 @@ export const dict: Dict = {
   "mobile.transcript.answering": "Enviando…",
   "mobile.question.typePlaceholder": "Tu respuesta…",
   "mobile.question.typeSend": "Enviar",
+  "mobile.question.attach": "Adjuntar un archivo",
+  "mobile.question.attaching": "Añadiendo el archivo…",
   "mobile.transcript.prompt": "Tu prompt",
   "mobile.transcript.answer": "Respuesta",
   "mobile.transcript.plan": "Plan",

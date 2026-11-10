@@ -82,7 +82,7 @@ import { questionSpeech, voicePick, voicePickable } from "../../../mobile-web/sr
 import { isStopWord } from "../../../shared/voice";
 import type { VoicePick, VoicePickResult } from "../../../shared/handsFree";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
-import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
+import { insertIntoReader, onReaderInsert, pasteIntoAgentBox } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
@@ -203,8 +203,11 @@ function walkQuestionOptions(event: KeyboardEvent<HTMLElement>) {
  * headers as steps: ←/→ and a click on one walk the dialog's tabs, so an
  * answer can be changed before Submit. Claude Code's "Type something." row
  * opens a field under it instead: its answer is words, sent as the phone's
- * are (`answerTextKeys`). */
-function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep }: {
+ * are (`answerTextKeys`). Files pasted into that field go to the tab
+ * folder's inbox and in as `@` references, as the composer takes them. */
+function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, onStep }: {
+  /** The agent's pane: where a file pasted into the typed answer is stored. */
+  ptyId: string;
   live: ReaderLive;
   /** A row was clicked and the session has not redrawn yet. */
   answered: boolean;
@@ -223,10 +226,30 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
    * belongs to the dialog step it was opened on. */
   const [typing, setTyping] = useState<number | null>(null);
   const [typed, setTyped] = useState("");
+  const typedBox = useRef<HTMLInputElement>(null);
+  /** Why a file pasted into the field did not make it. */
+  const [pasteError, setPasteError] = useState<TranslationKey | null>(null);
   useEffect(() => {
     setTyping(null);
     setTyped("");
+    setPasteError(null);
   }, [live.signature]);
+  /** Files copied in the file manager, or a screenshot, pasted into the
+   * field: stored in the inbox, their `@` references typed at the caret. */
+  const onTypedPaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    setPasteError(null);
+    pasteIntoAgentBox(event, ptyId, ({ text, error }) => {
+      if (error) setPasteError(error);
+      if (!text) return;
+      const box = typedBox.current;
+      setTyped((current) => {
+        const at = box ? Math.min(box.selectionEnd ?? current.length, current.length) : current.length;
+        const before = current.slice(0, at);
+        return `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+      });
+      box?.focus();
+    });
+  };
   const question = live.question;
   if (!question) return null;
   const sendTyped = (index: number) => {
@@ -324,6 +347,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
                   }}
                 >
                   <input
+                    ref={typedBox}
                     autoFocus
                     type="text"
                     value={typed}
@@ -331,6 +355,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
                     placeholder={t("mobile.question.typePlaceholder")}
                     aria-label={t("mobile.question.typePlaceholder")}
                     onChange={(event) => setTyped(event.target.value)}
+                    onPaste={onTypedPaste}
                     onKeyDown={(event) => {
                       if (event.key !== "Escape") return;
                       event.preventDefault();
@@ -342,6 +367,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
                     {t("mobile.question.typeSend")}
                   </button>
                   <UntestedTag id="terminal.reader.freeText" />
+                  <UntestedTag id="terminal.reader.freeTextPaste" />
                 </form>
               )}
             </Fragment>
@@ -351,6 +377,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
       {question.options.some((option) => option.keys) && <UntestedTag id="terminal.reader.codexHooksPage" />}
       {!!question.hidden && <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small>}
       {answered && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
+      {pasteError && typing !== null && <small className="terminal-reader-question-more" role="alert">{t(pasteError)}</small>}
       {failure && <small className="terminal-reader-question-more" role="alert">{t(failure === "aiOff" ? "terminal.reader.answerAiOff" : "terminal.reader.answerFailed")}</small>}
     </div>
   );
@@ -769,16 +796,14 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     box?.focus();
   }) : undefined, [ptyId, acceptInserts]);
 
-  // A paste that finds no text on the clipboard may be an image (a
-  // screenshot): it lands like a dropped file, an inbox `@` reference typed at
-  // the caret through the insert above. `pastedImage` is that reference, for
-  // the pill while the draft still holds it.
+  // Files copied in the file manager, or an image with no text on the
+  // clipboard (a screenshot), land like a dropped file: an inbox `@`
+  // reference typed at the caret through the insert above. `pastedImage` is
+  // a pasted image's reference, for the pill while the draft still holds it.
   const [pastedImage, setPastedImage] = useState("");
   const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (event.clipboardData.getData("text/plain")) return;
-    event.preventDefault();
-    void pasteClipboardImage(ptyId, true).then(({ text, error }) => {
-      if (text && insertIntoReader(ptyId, text)) setPastedImage(text.trim());
+    pasteIntoAgentBox(event, ptyId, ({ text, error, image }) => {
+      if (text && insertIntoReader(ptyId, text) && image) setPastedImage(text.trim());
       if (error) setSendError(t(error));
     });
   };
@@ -2513,6 +2538,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             </div>
           ))}
           <LiveQuestion
+            ptyId={ptyId}
             live={browsed ? NO_LIVE : shownLive}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             failure={answerFailure}

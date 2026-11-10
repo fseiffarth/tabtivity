@@ -495,7 +495,7 @@ function noSessionReason(transcript: SessionTranscript | null): TranslationKey {
  * is shown as a tag beside the label rather than as part of it. */
 const RECOMMENDED = /\s+\((Recommended)\)$/u;
 
-function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendingLabel, onPick, onType, onStep }: {
+function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendingLabel, onPick, onType, onStep, attach }: {
   prompt: SelectPrompt;
   /** The headers of the questions the dialog asks (`readQuestionTabs`). */
   tabs: readonly QuestionTab[];
@@ -518,6 +518,8 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
   onType: (option: SelectOption, text: string) => void;
   /** Walks the dialog's tab row from step `from` to step `to`. */
   onStep: (from: number, to: number) => void;
+  /** Puts a file into the tab's inbox for the typed answer (`QuestionRows`). */
+  attach?: (file: File) => Promise<string>;
 }) {
   const t = useT();
   /** A question that asks several: its headers are steps of the dialog's tab
@@ -562,7 +564,8 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
       sendingLabel={sendingLabel}
       onPick={(row) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onPick(option); }}
       onType={(row, text) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onType(option, text); }}
-      typeNote={isUntested("mobile.question.freeText") && <em>{t("mobile.focus.untested")}</em>}
+      typeNote={(isUntested("mobile.question.freeText") || (attach && isUntested("mobile.question.freeTextFiles"))) && <em>{t("mobile.focus.untested")}</em>}
+      attach={attach}
     />
     {prompt.options.some((option) => option.keys) && isUntested("mobile.question.codexHooksPage") && <em>{t("mobile.focus.untested")}</em>}
   </>;
@@ -1822,6 +1825,16 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     }
     composerInput.current?.focus();
   };
+  /** A file for the typed answer under a question (`QuestionRows`): into the
+   * project inbox as the composer's are, its reference typed into the
+   * answer rather than held for the next message. */
+  const attachToAnswer = (file: File) => uploadToInbox(tab.id, file, file.name || "attachment").then(
+    (attachment) => attachment.reference,
+    (error: unknown) => {
+      const code = error instanceof ApiError ? error.code : "";
+      throw new Error(t(UPLOAD_FAILURES[code] ?? "mobile.sendToDesktop.failed"));
+    },
+  );
   const dismissUpload = (id: number) => setUploads((current) => current.filter((upload) => upload.id !== id));
   /** Opens the desktop's list and asks for it. The list is read once per
    * opening — the sheet shows what the desktop had when it was asked, and a
@@ -2622,7 +2635,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                         something a phone can do — and the question above them
                         is that list's heading. */}
                     {questionContextShown && <ReadableTurns lines={questionContext} chat={chat} agent={agentLabel} promptLabel={t("mobile.transcript.prompt")} columns={paneColumns.current} />}
-                    <QuestionList prompt={liveQuestion} tabs={questionTabs} tabFocus={questionTabFocus} tabSubmit={questionTabSubmit} question={questionAsk} sent={sentSignature === questionSignature ? questionSent?.number : undefined} sendingLabel={t("mobile.transcript.answering")} onPick={answerQuestion} onType={answerQuestionText} onStep={stepQuestion} />
+                    <QuestionList prompt={liveQuestion} tabs={questionTabs} tabFocus={questionTabFocus} tabSubmit={questionTabSubmit} question={questionAsk} sent={sentSignature === questionSignature ? questionSent?.number : undefined} sendingLabel={t("mobile.transcript.answering")} onPick={answerQuestion} onType={answerQuestionText} onStep={stepQuestion} attach={tab.on_host ? undefined : attachToAnswer} />
                   </div>}
                   {unreadQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")} data-testid="question-unread">
                     <small>{t("mobile.transcript.question")}{isUntested("mobile.focus.questionUnread") && <> · {t("mobile.focus.untested")}</>}</small>

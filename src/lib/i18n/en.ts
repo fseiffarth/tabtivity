@@ -1093,6 +1093,8 @@ export const enSource = {
   "mobile.transcript.answering": "Sending…",
   "mobile.question.typePlaceholder": "Your answer…",
   "mobile.question.typeSend": "Send",
+  "mobile.question.attach": "Attach a file",
+  "mobile.question.attaching": "Adding the file…",
   "mobile.transcript.prompt": "Your prompt",
   "mobile.transcript.answer": "Answer",
   "mobile.transcript.plan": "Plan",

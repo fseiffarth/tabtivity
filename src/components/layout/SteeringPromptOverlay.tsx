@@ -13,8 +13,7 @@ import {
   type SteeringPromptDetail,
 } from "../../lib/shortcuts/steeringAgent";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
-import { deliverDrop, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
-import { parseDroppedFiles } from "../../lib/files/droppedFiles";
+import { pasteIntoAgentBox } from "../../lib/terminal/terminalDrop";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
@@ -308,18 +307,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     box?.focus();
   };
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = parseDroppedFiles(event.clipboardData);
-    if (files.length > 0) {
-      event.preventDefault();
-      void deliverDrop(ptyId, files, true).then(({ text, error }) => {
-        if (text) insertAtCaret(text);
-        if (error) setError(t(error));
-      });
-      return;
-    }
-    if (event.clipboardData.getData("text/plain")) return;
-    event.preventDefault();
-    void pasteClipboardImage(ptyId, true).then(({ text, error }) => {
+    pasteIntoAgentBox(event, ptyId, ({ text, error }) => {
       if (text) insertAtCaret(text);
       if (error) setError(t(error));
     });

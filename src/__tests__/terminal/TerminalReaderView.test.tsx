@@ -899,6 +899,45 @@ describe("the Reader's live rows", () => {
     expect(written).toEqual(["\u001b[B", "\u001b[B", "a pear", "\r"]);
   });
 
+  it("takes files pasted into the \"Type something.\" field as inbox @ references at the caret", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "agent_tab_transcript") return Promise.resolve(transcript);
+      if (command === "pty_drop_files") return Promise.resolve({ items: ["inbox/a.pdf", "inbox/b.png"], error: null });
+      if (command === "pty_paste_clipboard_image") return Promise.resolve("inbox/shot.png");
+      return Promise.resolve([]);
+    });
+    term = fakeTerminal([
+      "> ask me", "", "☐ Fruit", "", "Which fruit?", "",
+      "❯ 1. Apple", "  2. Type something.",
+      "", "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]);
+    registerTerminal("p:agent-1", term);
+    reader(host);
+    await screen.findByRole("group", { name: "Waiting for your answer" });
+    fireEvent.click(screen.getByRole("button", { name: /Type something/ }));
+    const field = screen.getByRole("textbox", { name: "Your answer…" }) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "see" } });
+    field.setSelectionRange(3, 3);
+    const clipboard = (data: Record<string, string>) => ({
+      getData: (type: string) => data[type] ?? "",
+      files: [],
+      types: Object.keys(data),
+    });
+    let pasted = true;
+    await act(async () => {
+      pasted = fireEvent.paste(field, { clipboardData: clipboard({ "text/uri-list": "file:///home/u/a.pdf\r\nfile:///home/u/b.png" }) });
+    });
+    expect(pasted).toBe(false);
+    expect(field.value).toBe("see @inbox/a.pdf @inbox/b.png ");
+    expect(invoke).toHaveBeenCalledWith("pty_drop_files", expect.objectContaining({
+      id: "p:agent-1", paths: ["/home/u/a.pdf", "/home/u/b.png"], agent: true,
+    }));
+    field.setSelectionRange(field.value.length, field.value.length);
+    await act(async () => { fireEvent.paste(field, { clipboardData: clipboard({}) }); });
+    expect(field.value).toBe("see @inbox/a.pdf @inbox/b.png @inbox/shot.png ");
+    expect(fireEvent.paste(field, { clipboardData: clipboard({ "text/plain": "words" }) })).toBe(true);
+  });
+
   it("shows an agent's own question as its header, its question and tagged rows — not the screen", async () => {
     term = fakeTerminal([
       "> push it", "",

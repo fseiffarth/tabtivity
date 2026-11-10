@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { currentPlatform, shellQuote } from "./pythonRun";
 import type { TranslationKey } from "../i18n";
-import type { DroppedFile } from "../files/droppedFiles";
+import { parseDroppedFiles, type DroppedFile } from "../files/droppedFiles";
 
 /**
  * Files dropped from the OS file manager onto a terminal tab
@@ -94,6 +94,31 @@ export async function pasteClipboardImage(
     if (code === "no_clipboard_image") return { text: "", error: null };
     return { text: "", error: PASTE_ERRORS[code] ?? "terminal.paste.imageFailed" };
   }
+}
+
+/** A paste into a box that types for agent tab `ptyId` — the Reader's
+ *  composer, its answer field under a question's "Type something." row, the
+ *  steering prompt. Files copied in the file manager go to the tab folder's
+ *  inbox (`deliverDrop`); with no text on the clipboard, its image goes there
+ *  as a PNG (`pasteClipboardImage`). Either way `done` gets the `@<reference>`
+ *  text to put at the caret (empty when nothing made it), the translation key
+ *  of why something did not, and whether it was a pasted image. A text paste
+ *  is left alone: returns false and the box takes it as it always did. */
+export function pasteIntoAgentBox(
+  event: { clipboardData: DataTransfer; preventDefault: () => void },
+  ptyId: string,
+  done: (pasted: { text: string; error: TranslationKey | null; image: boolean }) => void,
+): boolean {
+  const files = parseDroppedFiles(event.clipboardData);
+  if (files.length > 0) {
+    event.preventDefault();
+    void deliverDrop(ptyId, files, true).then((pasted) => done({ ...pasted, image: false }));
+    return true;
+  }
+  if (event.clipboardData.getData("text/plain")) return false;
+  event.preventDefault();
+  void pasteClipboardImage(ptyId, true).then((pasted) => done({ ...pasted, image: true }));
+  return true;
 }
 
 type ReaderInsert = (text: string) => void;
