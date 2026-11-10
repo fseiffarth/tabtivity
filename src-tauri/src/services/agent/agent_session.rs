@@ -1596,6 +1596,11 @@ pub(crate) fn live_record_dir(project_id: Option<&str>, uid: &str) -> Option<Pat
 /// before the source and the new id, so a reader that sees `clear` sees it.
 pub const LIVE_CLEARED_SUFFIX: &str = ".prev";
 
+/// Suffix of the marker the hook leaves while a new conversation (a fresh
+/// start or a `/clear`) in a Claude tab with the cockpit lane has not had its
+/// first prompt: that prompt carries `cockpit_mcp::NAME_HINT` and spends it.
+pub const LIVE_TITLE_SUFFIX: &str = ".title";
+
 /// The Claude conversation the tab's last `/clear` ended, while taking it back
 /// is still an undo: the current session is the one that clear started (the
 /// source beside the winning record says `clear` — the undo's own `/resume`, or
@@ -2551,6 +2556,7 @@ fn posix_hook_script_body(live_dir: &str) -> String {
 /// the hook runs under the agent's environment, which a project can shape.
 fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     let hint = crate::services::agent_hint::HINT;
+    let name_hint = crate::services::cockpit_mcp::NAME_HINT;
     format!(
         "#!/bin/sh\n\
          # {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\n\
@@ -2650,6 +2656,18 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          case \"$event:${UPPER}_TAB_AGENT\" in SessionStart:claude|SessionStart:codex) [ -z \"${UPPER}_PROJECT_DIR\" ] ||\n\
          \x20 printf '%s\\n' '{hint}' ;;\n\
          esac\n\
+         # A new conversation (a fresh start or a /clear, not a resume) in a Claude\n\
+         # tab holding the cockpit lane arms a reminder to name the tab; the first\n\
+         # real prompt carries it beside itself and spends it.\n\
+         if [ \"${UPPER}_TAB_AGENT\" = claude ] && [ -n \"${UPPER}_COCKPIT_MCP_URL\" ]; then\n\
+         \x20 title=\"$dir/${UPPER}_TAB_UID{LIVE_TITLE_SUFFIX}\"\n\
+         \x20 case \"$event\" in\n\
+         \x20   SessionStart) case \"$src\" in startup|clear) : > \"$title\" ;; resume) rm -f \"$title\" ;; esac ;;\n\
+         \x20   UserPromptSubmit) if [ -f \"$title\" ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
+         \x20     rm -f \"$title\"; printf '%s\\n' '{name_hint}'\n\
+         \x20   fi ;;\n\
+         \x20 esac\n\
+         fi\n\
          # The turn state, from the events the agent fires as it works: a prompt\n\
          # submitted or a tool finished means working (a finished tool is also what\n\
          # ends an approval wait), Stop means done, a permission or elicitation\n\
@@ -2724,6 +2742,7 @@ fn hook_script_body(live_dir: &str) -> String {
     // PowerShell literal so backslashes are not treated as escapes.
     let live_dir = crate::quote::powershell(live_dir);
     let hint = crate::services::agent_hint::HINT;
+    let name_hint = crate::services::cockpit_mcp::NAME_HINT;
     format!(
         "# {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
          # PermissionRequest, Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
@@ -2799,6 +2818,19 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 }} elseif (($src -ne 'clear') -and ($src -ne 'resume')) {{ exit 0 }}\r\n\
          }}\r\n\
          if (($env:{UPPER}_TAB_AGENT -eq 'claude' -or $env:{UPPER}_TAB_AGENT -eq 'codex') -and $env:{UPPER}_PROJECT_DIR -and $event -eq 'SessionStart') {{ Write-Output '{hint}' }}\r\n\
+         # The tab-naming reminder (see the POSIX twin).\r\n\
+         if (($env:{UPPER}_TAB_AGENT -eq 'claude') -and $env:{UPPER}_COCKPIT_MCP_URL) {{\r\n\
+         \x20 $title = $rec + '{LIVE_TITLE_SUFFIX}'\r\n\
+         \x20 $how = ''\r\n\
+         \x20 if ($ms.Success) {{ $how = $ms.Groups[1].Value }}\r\n\
+         \x20 if ($event -eq 'SessionStart') {{\r\n\
+         \x20   if (($how -eq 'startup') -or ($how -eq 'clear')) {{ [IO.File]::WriteAllText($title, '') }}\r\n\
+         \x20   elseif ($how -eq 'resume') {{ Remove-Item -LiteralPath $title -Force -ErrorAction SilentlyContinue }}\r\n\
+         \x20 }} elseif (($event -eq 'UserPromptSubmit') -and (Test-Path -LiteralPath $title) -and ($payload -notmatch '\"prompt\"\\s*:\\s*\"\\s*/(clear|new|resume)')) {{\r\n\
+         \x20   Remove-Item -LiteralPath $title -Force -ErrorAction SilentlyContinue\r\n\
+         \x20   Write-Output '{name_hint}'\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
          # The turn state, from the events the agent fires as it works (see the\r\n\
          # POSIX twin for the mapping).\r\n\
          $turn = ''\r\n\

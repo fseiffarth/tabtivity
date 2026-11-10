@@ -2634,6 +2634,25 @@ fn cockpit_activity_and_handoff_update_unchange_conflict_and_clear() {
     assert_eq!(f.stored(0).extra["cockpitMeta"]["revision"], 4, "a rename does not touch the metadata revision");
 }
 
+/// After a `/clear`, the next conversation may rename a tab only while the
+/// label is the one an agent gave it: `labelByAgent` tells it apart from the
+/// CLI's name and from a name the user typed.
+#[test]
+fn cockpit_label_by_agent_marks_the_agents_own_title() {
+    use crate::services::workspace;
+    let mut f = CockpitFixture::new();
+    assert_eq!(f.call("tab_get_info", json!({}))["labelByAgent"], false, "the CLI's own label");
+    assert_eq!(f.call("tab_rename", json!({"label":"Fix tab names","expectedLabel":"mine"}))["status"], "renamed");
+    assert_eq!(f.call("tab_get_info", json!({}))["labelByAgent"], true);
+    assert_eq!(f.stored(0).extra["cockpitMeta"]["revision"], 0, "the note takes no revision");
+    // A later spawn (the conversation after a /clear) still sees it as the agent's.
+    let next = f.respawn();
+    assert_eq!(CockpitFixture::reply_in(&next, "tab_get_info", json!({}))["result"]["structuredContent"]["labelByAgent"], true);
+    // The user renames the tab (desktop or phone): it is theirs from then on.
+    workspace::rename_tab_in(&f.path, "p", workspace::tmux_of(&f.mine).unwrap(), "My name").unwrap();
+    assert_eq!(CockpitFixture::reply_in(&next, "tab_get_info", json!({}))["result"]["structuredContent"]["labelByAgent"], false);
+}
+
 #[test]
 fn cockpit_activity_expires_on_read_and_republishing_renews_it() {
     use crate::services::{cockpit_meta, workspace};

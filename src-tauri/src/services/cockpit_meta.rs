@@ -269,6 +269,12 @@ pub struct Meta {
     /// Oldest first, newest last, at most [`MILESTONES_MAX`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub milestones: Vec<Milestone>,
+    /// The label the tab's agent last gave it through `tab_rename`. While the
+    /// tab still carries it, the next conversation (after a `/clear`) may
+    /// rename the tab again; a label the user set never matches. Not a note:
+    /// it takes no revision.
+    #[serde(default, rename = "agentLabel", skip_serializing_if = "Option::is_none")]
+    pub agent_label: Option<String>,
     /// Keys a later build adds ride through every rewrite untouched.
     #[serde(flatten)]
     pub rest: Map<String, Value>,
@@ -278,7 +284,8 @@ impl Default for Meta {
     fn default() -> Self {
         Self {
             v: SCHEMA_VERSION, revision: 0, activity: None, handoff: None, results: None,
-            progress: None, blocker: None, verification: None, attention: None, milestones: Vec::new(), rest: Map::new(),
+            progress: None, blocker: None, verification: None, attention: None, milestones: Vec::new(),
+            agent_label: None, rest: Map::new(),
         }
     }
 }
@@ -349,6 +356,20 @@ fn store_within(tab: &mut TabEntry, meta: &Meta, limit: usize) -> Result<(), &'s
     }
     tab.extra.insert(KEY.to_string(), value);
     Ok(())
+}
+
+/// Note on a tab its agent just renamed that the agent gave it `label`. Best
+/// effort: unreadable metadata, or a record the note would push past the size
+/// bound, keeps the rename and drops the note.
+pub fn stamp_agent_label(tab: &mut TabEntry, label: &str) {
+    let Ok(mut meta) = read(tab) else { return };
+    meta.agent_label = Some(label.to_string());
+    let _ = store(tab, &meta);
+}
+
+/// Whether `label` is the one the tab's agent last gave it.
+pub fn label_is_agents(meta: &Meta, label: &str) -> bool {
+    meta.agent_label.as_deref() == Some(label)
 }
 
 /// Remove whatever a client or a record brought. For a tab the host did not

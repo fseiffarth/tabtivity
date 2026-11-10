@@ -675,11 +675,13 @@ pub fn clean_tab_label(raw: &str) -> Option<String> {
         .then(|| label.to_string())
 }
 
-/// Rename one saved identity without changing any other tab fields. The check
-/// runs inside the workspace lock; a no-op does not advance the version.
+/// Rename one saved identity without changing any other tab fields but what
+/// `stamp` adds to the renamed record (the cockpit's note of who named it).
+/// The check runs inside the workspace lock; a no-op does not advance the
+/// version and runs no stamp.
 pub fn rename_tab_id_in(
     path: &Path, scope: &str, id: &str, label: &str, expected: Option<&str>,
-    check: impl FnOnce() -> Result<(), String>,
+    check: impl FnOnce() -> Result<(), String>, stamp: impl FnOnce(&mut TabEntry),
 ) -> Result<(bool, u64), String> {
     const UNCHANGED: &str = "\0unchanged";
     let mut version = 0;
@@ -691,6 +693,7 @@ pub fn rename_tab_id_in(
         if expected.is_some_and(|old| old != tab.label) { return Err("conflict".into()); }
         if tab.label == label { return Err(UNCHANGED.into()); }
         tab.label = label.to_string();
+        stamp(tab);
         Ok(())
     });
     match stored {

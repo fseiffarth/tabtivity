@@ -843,6 +843,63 @@ fn phone_hint_only_reaches_a_scoped_claude_or_codex_session_start() {
     }
 }
 
+/// The first prompt of a new conversation (fresh start or `/clear`, never a
+/// resume) in a Claude tab holding the cockpit lane carries the reminder to
+/// name the tab, once; a session command typed first does not spend it.
+#[cfg(unix)]
+#[test]
+fn name_hint_rides_the_first_prompt_of_a_new_claude_conversation() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    let script = dir.path().join("hook.sh");
+    std::fs::write(&script, posix_hook_script_body(&live.to_string_lossy())).unwrap();
+    let uid = "11111111-1111-4111-8111-111111111111";
+    let cleared = "33333333-3333-4333-8333-333333333333";
+    let hint = crate::services::cockpit_mcp::NAME_HINT;
+    let run = |agent: &str, cockpit: bool, payload: String| -> bool {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(&script).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env(crate::app_env!("TAB_UID"), uid).env(crate::app_env!("TAB_AGENT"), agent)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+        if cockpit { cmd.env(crate::services::root_mcp::COCKPIT_URL_ENV, "http://127.0.0.1:1/mcp/cockpit"); }
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).contains(hint)
+    };
+    let start = |sid: &str, src: &str| format!(r#"{{"session_id":"{sid}","hook_event_name":"SessionStart","source":"{src}","transcript_path":"/t/{sid}.jsonl"}}"#);
+    let prompt = |sid: &str, text: &str| format!(r#"{{"session_id":"{sid}","hook_event_name":"UserPromptSubmit","prompt":"{text}"}}"#);
+
+    assert!(!run("claude", true, start(uid, "startup")), "the start itself stays quiet");
+    assert!(!run("claude", true, prompt(uid, "/clear")), "a session command does not spend it");
+    assert!(run("claude", true, prompt(uid, "fix the tab names")));
+    assert!(!run("claude", true, prompt(uid, "and the phone too")), "once per conversation");
+    // A /clear opens the next conversation.
+    assert!(!run("claude", true, start(cleared, "clear")));
+    assert!(run("claude", true, prompt(cleared, "now something else")));
+    // A resume continues a named conversation; a compact is mid-conversation.
+    assert!(!run("claude", true, start(cleared, "resume")));
+    assert!(!run("claude", true, prompt(cleared, "go on")));
+    assert!(!run("claude", true, start(cleared, "compact")));
+    assert!(!run("claude", true, prompt(cleared, "go on")));
+    // No cockpit lane (switched off, remote, Tabby) or not Claude: never.
+    assert!(!run("claude", false, start(cleared, "clear")));
+    assert!(!run("claude", false, prompt(cleared, "task")));
+    assert!(!run("codex", true, start(cleared, "startup")));
+    assert!(!run("codex", true, prompt(cleared, "task")));
+}
+
+#[test]
+fn name_hint_fits_the_hooks_single_quoted_literals() {
+    let hint = crate::services::cockpit_mcp::NAME_HINT;
+    assert!(!hint.contains('\'') && !hint.contains('\n'));
+    for tool in [crate::services::cockpit_mcp::TOOL_INFO, crate::services::cockpit_mcp::TOOL_RENAME] {
+        assert!(hint.contains(&format!("mcp__{}__{tool}", crate::services::cockpit_mcp::SERVER_NAME)), "{tool}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn hook_script_lets_only_the_tabs_own_session_move_the_record() {

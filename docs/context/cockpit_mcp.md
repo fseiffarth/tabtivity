@@ -51,6 +51,21 @@ effort and does not change the outcome of a committed write. The phone's
 catalog reads the same saved record. Hosted wiring shares the listener/core;
 no claim of a live server test is made.
 
+**Naming a new conversation.** The server's `instructions` ask for one
+rename on the first prompt of a new conversation, but alone they were skipped
+about half the time (Claude 2.1.322, 2026-11-10: the line sits far from the
+prompt and the tools are deferred). So the agent hook (`agent_session`) adds
+`cockpit_mcp::NAME_HINT` beside that prompt in a Claude tab holding this lane
+(`COCKPIT_URL_ENV` set): a `startup` or `clear` start leaves
+`<live_dir>/<uid>.title`, a `resume` removes it, and the first
+`UserPromptSubmit` that is not `/clear|/new|/resume` prints the hint and
+spends it. `tab_rename` also stamps `cockpitMeta.agentLabel` (no revision;
+best effort, the rename stands without it), and `tab_get_info` answers
+`labelByAgent: true` while the label is still that one, false for the CLI's
+name or a name the user gave. That is how the conversation after a
+`/clear` knows the old title is an agent's to replace. Codex gets the
+instructions only.
+
 ## Agent notes: activity and handoff
 
 Plan: `docs/cockpit_mcp_extensions_plan.md` (fixed decisions, delivery steps

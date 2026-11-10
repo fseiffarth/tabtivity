@@ -25,6 +25,19 @@ pub fn is_tool(name: &str) -> bool { TOOL_NAMES.contains(&name) }
 /// Whether `name` only reads.
 pub fn is_read_only(name: &str) -> bool { name == TOOL_INFO }
 
+/// What the agent hook (`agent_session`) adds beside the first prompt of a
+/// new Claude conversation in a tab holding this lane: the server's
+/// instructions alone sit far from the prompt, behind deferred tools, and were
+/// skipped about half the time. Printed from a single-quoted shell and
+/// PowerShell literal, so it never holds a `'`.
+pub const NAME_HINT: &str = concat!(
+    "Name this tab first: this prompt opens a new conversation in it. Before working on the task, call tab_get_info, ",
+    "then tab_rename once with a compact title for the task (2 to 5 words, ideally under 32 characters) and the label ",
+    "you read as expectedLabel (if the tools are deferred, load them with ToolSearch select:mcp__", crate::app_slug!(),
+    "-cockpit__tab_get_info,mcp__", crate::app_slug!(), "-cockpit__tab_rename). Rename only when the label is the ",
+    "CLI name or tab_get_info reports labelByAgent true (a title an earlier conversation gave); keep a name the user chose.",
+);
+
 #[derive(Debug, Clone)]
 pub(crate) struct Binding {
     pub state: PathBuf,
@@ -201,7 +214,7 @@ fn rename(session: &Session, args: &Value) -> Value {
     let Some(label) = args["label"].as_str().and_then(workspace::clean_tab_label) else { return refused("invalid_label") };
     let expected = args.get("expectedLabel").and_then(Value::as_str);
     match workspace::rename_tab_id_in(&binding.path(), &binding.scope, &binding.id, &label, expected,
-        guard(session, binding)) {
+        guard(session, binding), |tab| meta::stamp_agent_label(tab, &label)) {
         Ok((changed, _)) => json!({"status":if changed { "renamed" } else { "unchanged" },"label":label}),
         Err(e) => refusal_of(&e),
     }
@@ -446,7 +459,10 @@ fn get_info(session: &Session, args: &Value) -> Value {
                     value
                 });
             let milestones = m.milestones.iter().map(milestone_json).collect::<Vec<_>>();
-            json!({"status":"ok","label":out.label,"revision":m.revision,"activity":activity,
+            // Whether the label is the title this tab's agent gave it, which a
+            // new conversation in the tab may replace (false: the CLI's own name
+            // or one the user chose).
+            json!({"status":"ok","label":out.label,"labelByAgent":meta::label_is_agents(m, &out.label),"revision":m.revision,"activity":activity,
                 "activityExpired":own.is_some() && activity.is_none(),"handoff":handoff,"results":results,
                 "progress":progress,"blocker":blocker,"blockerExpired":own_blocker.is_some() && blocker.is_none(),
                 "verification":verification,"attention":attention,
@@ -492,7 +508,7 @@ pub fn handle_message(session: &Session, message: &Value) -> Option<Value> {
     match message["method"].as_str().unwrap_or_default() {
         "initialize" => ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},
             "serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},
-            "instructions":"Workspace conveniences for your own tab only. On the first task prompt of a new conversation, use tab_get_info then tab_rename once for a compact task title (2 to 5 words, ideally under 32 characters). Only replace a generic CLI label or an automatic title derived from that prompt; preserve custom user labels and resumed conversation names. Pass the label you read as expectedLabel; if it changed, leave it alone. After that, rename only when the user requests it. Call tab_get_info for the revision, then tab_set_activity (one line, at meaningful transitions only, never as a heartbeat), tab_set_handoff (what was done, checked and remains) or tab_set_results (project-relative paths of files you produced), tab_set_progress (plan steps and the one you are on), tab_set_blocker (one line, only while you cannot continue without the user; clear it when unblocked) or tab_set_verification (the checks you ran or owe), tab_request_attention (one question, only when you cannot continue without the user; clear it when unblocked) or tab_add_milestone (one finished milestone, with a requestId). Your notes are shown to the user as written by you; they confirm nothing."})),
+            "instructions":"Workspace conveniences for your own tab only. On the first task prompt of a new conversation (a new tab or after /clear), use tab_get_info then tab_rename once for a compact task title (2 to 5 words, ideally under 32 characters), before starting on the task. Only replace a generic CLI label, an automatic title derived from that prompt, or a title an earlier conversation gave (tab_get_info labelByAgent true); preserve custom user labels and resumed conversation names. Pass the label you read as expectedLabel; if it changed, leave it alone. After that, rename only when the user requests it. Call tab_get_info for the revision, then tab_set_activity (one line, at meaningful transitions only, never as a heartbeat), tab_set_handoff (what was done, checked and remains) or tab_set_results (project-relative paths of files you produced), tab_set_progress (plan steps and the one you are on), tab_set_blocker (one line, only while you cannot continue without the user; clear it when unblocked) or tab_set_verification (the checks you ran or owe), tab_request_attention (one question, only when you cannot continue without the user; clear it when unblocked) or tab_add_milestone (one finished milestone, with a requestId). Your notes are shown to the user as written by you; they confirm nothing."})),
         "ping" => ok(json!({})),
         "tools/list" => ok(json!({"tools":tools()})),
         "tools/call" => {
