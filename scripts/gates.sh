@@ -30,6 +30,9 @@
 # Before a push: --all, then scripts/ci-local.sh (CI's own steps and the
 # Windows/macOS cross-checks, which this does not run).
 #
+# Progress: each gate's start and end line carry `[k/n]`, its result and the
+# run's time so far; <git dir>/gates.progress holds the gate running now.
+#
 # Each gate's output goes to a log, printed (its tail) only when it fails.
 # A cargo gate that waited for another build's lock says how long, apart
 # from its own time.
@@ -185,12 +188,24 @@ lock_secs() {
   awk '{ s += $2 - $1 } END { printf "%d", s }' "$logs/$1.lock"
 }
 
+# Progress: `[k/n]` on each gate's start and end line, the run's elapsed time
+# on the end line, and the gate running now in <git dir>/gates.progress (one
+# line; gone when the run ends) for a session waiting on the lock, or anyone
+# whose copy of this output is buffered: `cat .git/gates.progress`.
+progress="$(git rev-parse --absolute-git-dir)/gates.progress"
+trap 'rm -f "$progress"' EXIT
+total=0
+for i in "${!G_ID[@]}"; do [ "${G_WHY[$i]}" = 1 ] && total=$((total + 1)); done
+step=0 t_run=$EPOCHREALTIME
+elapsed() { awk -v a="$1" -v b="$EPOCHREALTIME" 'BEGIN { s = int(b - a); printf "%dm%02ds", s / 60, s % 60 }'; }
+
 failed="" rc=0 summary=()
 for i in "${!G_ID[@]}"; do
   id="${G_ID[$i]}" cmd="${G_CMD[$i]}"
   if [ "${G_WHY[$i]}" != 1 ]; then
     summary+=("$(printf '  skip  %-11s %6s  %s' "$id" "" "${G_WHY[$i]}")"); continue
   fi
+  step=$((step + 1))
   if [ -n "$failed" ]; then
     summary+=("$(printf '  -     %-11s %6s  not run: %s failed' "$id" "" "$failed")"); continue
   fi
@@ -199,7 +214,8 @@ for i in "${!G_ID[@]}"; do
     summary+=("$(printf '  MISS  %-11s %6s  %s not found: NOT verified' "$id" "" "$tool")")
     rc=1; continue
   fi
-  printf '%s %s\n' "-> $id:" "$cmd"
+  printf '%s %s\n' "-> [$step/$total] $id:" "$cmd"
+  printf '[%s/%s] %s since %s (run started %s ago, pid %s)\n' "$step" "$total" "$id" "$(date +%H:%M:%S)" "$(elapsed "$t_run")" "$$" >"$progress"
   t0=$EPOCHREALTIME
   status=PASS
   eval "run_logged $id $cmd" || status=FAIL
@@ -207,6 +223,7 @@ for i in "${!G_ID[@]}"; do
   wait_s=$(lock_secs "$id")
   note="$cmd"
   [ "$wait_s" -gt 0 ] && note="(lock wait ${wait_s}s, own $((secs - wait_s))s) $cmd"
+  printf '   [%s/%s] %s %s in %ss · %s so far\n' "$step" "$total" "$id" "$status" "$secs" "$(elapsed "$t_run")"
   summary+=("$(printf '  %-4s  %-11s %5ss  %s' "$status" "$id" "$secs" "$note")")
   if [ "$status" = FAIL ]; then
     failed="$id" rc=1
