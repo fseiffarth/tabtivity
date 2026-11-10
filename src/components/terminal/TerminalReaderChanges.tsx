@@ -20,6 +20,8 @@ import { ArrowUpRightIcon, CloseIcon } from "../common/icons/Icon";
 import { Dropdown } from "../common/Dropdown";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
+import { registerReaderInside, useSteeringInside, type ReaderInsideResult } from "../../lib/agents/readerSteering";
+import type { SteeringAction } from "../../lib/shortcuts/steeringBindings";
 
 /**
  * The Reader's Changes panel: the files the conversation on screen changed,
@@ -95,10 +97,12 @@ function changeKeys(list: FileChange[]): string[] {
 
 /** One change, with its time and diff. The first existing edit opens on entry;
  * newly arriving edits stay folded and marked new until opened. */
-const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold }: {
+const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold }: {
   change: FileChange;
   cardKey: string;
   fresh: boolean;
+  /** Keyboard steering's cursor is on this card (`readerSteering`). */
+  cursor: boolean;
   base: string | undefined;
   use24h: boolean;
   split: boolean;
@@ -123,8 +127,8 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
   const moment = chatMoment(change.at);
   const openable = change.kind !== "delete" && !change.movedTo;
   return (
-    <section className={`terminal-changes-card ${change.kind}${fresh ? " fresh" : ""}`}>
-      <div className="terminal-changes-card-head">
+    <section className={`terminal-changes-card ${change.kind}${fresh ? " fresh" : ""}`} data-card-key={cardKey}>
+      <div className={cursor ? "terminal-changes-card-head steer-cursor" : "terminal-changes-card-head"}>
         <button
           type="button"
           className="terminal-changes-fold"
@@ -194,7 +198,104 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, base, use2
   );
 });
 
-export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, subagentTitle, chat, chatTitle, onClose }: {
+/** What the Inside keys read, from the latest render. */
+interface ChangesSteerState {
+  /** The shown cards, newest first. */
+  cards: { change: FileChange; key: string }[];
+  /** Every card of the read, oldest first (the file filter not applied). */
+  keyed: { change: FileChange; key: string }[];
+  files: { path: string }[];
+  filter: string | null;
+  cursor: string | null;
+  fresh: ReadonlySet<string> | null;
+  openFile: (path: string, newSubwindow: boolean) => void;
+  openDiff: (path: string) => void;
+  root: HTMLElement | null;
+}
+
+/**
+ * One Inside key of the Diffs view: up/down move the card cursor (up on the
+ * first card steps out, not on a held key), Shift+up/down step All, then each
+ * file, `viewToggle` folds, `viewNew` jumps to the next new card, `viewMode`
+ * flips split/unified, `viewOpen` opens the file (Shift: new subwindow),
+ * `viewOpenAlt` the diff viewer. left/right, Enter and Space are the scroll
+ * level's own (`pass`); anything else is swallowed.
+ */
+function changesSteerKey(
+  state: ChangesSteerState,
+  action: SteeringAction,
+  e: Pick<KeyboardEvent, "shiftKey" | "repeat">,
+  set: { setCursor: (key: string | null) => void; setPicked: (path: string | null) => void; setSplit: (fn: (split: boolean) => boolean) => void },
+): ReaderInsideResult {
+  const { cards, cursor } = state;
+  const at = cards.findIndex((card) => card.key === cursor);
+  const move = (index: number) => {
+    const key = cards[index]?.key ?? null;
+    state.cursor = key;
+    set.setCursor(key);
+  };
+  switch (action) {
+    case "work":
+    case "agentPrompt":
+    case "left":
+    case "right":
+      return "pass";
+    case "up":
+    case "down": {
+      if (e.shiftKey) {
+        // [All, ...files], wrapping: past the last file back to All.
+        const order = [null, ...state.files.map((file) => file.path)];
+        if (order.length < 2) return "handled";
+        const from = Math.max(0, order.indexOf(state.filter));
+        const next = order[(from + (action === "down" ? 1 : -1) + order.length) % order.length];
+        const first = [...state.keyed].reverse().find((card) => !next || card.change.path === next)?.key ?? null;
+        state.cursor = first;
+        set.setPicked(next);
+        set.setCursor(first);
+        return "handled";
+      }
+      if (action === "up") {
+        if (at <= 0) return e.repeat ? "handled" : "leave";
+        move(at - 1);
+      } else if (at < cards.length - 1) {
+        move(at + 1);
+      }
+      return "handled";
+    }
+    case "viewToggle": {
+      if (e.repeat || at < 0) return "handled";
+      const card = [...(state.root?.querySelectorAll<HTMLElement>("[data-card-key]") ?? [])].find((el) => el.dataset.cardKey === cursor);
+      card?.querySelector<HTMLButtonElement>(".terminal-changes-fold")?.click();
+      return "handled";
+    }
+    case "viewNew": {
+      if (e.repeat || !state.fresh?.size || cards.length === 0) return "handled";
+      for (let step = 1; step <= cards.length; step++) {
+        const index = (Math.max(at, 0) + step) % cards.length;
+        if (state.fresh.has(cards[index].key)) {
+          move(index);
+          break;
+        }
+      }
+      return "handled";
+    }
+    case "viewMode":
+      if (!e.repeat) set.setSplit((split) => !split);
+      return "handled";
+    case "viewOpen":
+    case "viewOpenAlt": {
+      const change = cards[at]?.change;
+      if (e.repeat || !change || change.kind === "delete" || change.movedTo) return "handled";
+      if (action === "viewOpen") state.openFile(change.path, e.shiftKey);
+      else state.openDiff(change.path);
+      return "handled";
+    }
+    default:
+      return "handled";
+  }
+}
+
+export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, subagentTitle, chat, chatTitle, steerId, onClose }: {
   scope: string;
   tab: TabEntry;
   cwd: string | undefined;
@@ -280,11 +381,14 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
   const filter = picked && files.some((file) => file.path === picked) ? picked : null;
   /** Newest first, keyed by the change itself so a card keeps its fold as
    * newer ones arrive above it. */
-  const cards = useMemo(() => {
+  const keyed = useMemo(() => {
     const keys = changeKeys(list);
-    const keyed = list.map((change, index) => ({ change, key: keys[index] }));
-    return keyed.filter(({ change }) => !filter || change.path === filter).reverse();
-  }, [list, filter]);
+    return list.map((change, index) => ({ change, key: keys[index] }));
+  }, [list]);
+  const cards = useMemo(
+    () => keyed.filter(({ change }) => !filter || change.path === filter).reverse(),
+    [keyed, filter],
+  );
   const freshCards = fresh?.key === readKey ? fresh.cards : null;
   const unfold = useCallback((cardKey: string) => {
     setFresh((previous) => {
@@ -331,8 +435,36 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
     );
   };
 
+  // Keyboard steering (`lib/agents/readerSteering`): a card cursor and an
+  // Inside target. The cursor is a card key; one gone from the list (a file
+  // narrowed away) snaps to the newest card. Keys act through the latest
+  // render's values (`live`), and the fold is the card's own button's click,
+  // so pointer and keys share one path.
+  const inside = useSteeringInside(steerId);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const effCursor = cards.some((card) => card.key === cursor) ? cursor : (cards[0]?.key ?? null);
+  const cursorKey = inside ? effCursor : null;
+  const rootRef = useRef<HTMLElement>(null);
+  const live = useRef<ChangesSteerState | null>(null);
+  live.current = { cards, keyed, files, filter, cursor: effCursor, fresh: freshCards, openFile, openDiff, root: rootRef.current };
+  useEffect(() => {
+    if (!steerId || !visible) return;
+    return registerReaderInside(steerId, {
+      view: "changes",
+      key: (action, e) => {
+        const state = live.current;
+        return state ? changesSteerKey(state, action, e, { setCursor, setPicked, setSplit }) : "handled";
+      },
+    });
+  }, [steerId, visible]);
+  useEffect(() => {
+    if (!cursorKey) return;
+    const card = [...(rootRef.current?.querySelectorAll<HTMLElement>("[data-card-key]") ?? [])].find((el) => el.dataset.cardKey === cursorKey);
+    if (typeof card?.scrollIntoView === "function") card.scrollIntoView({ block: "nearest" });
+  }, [cursorKey]);
+
   return (
-    <aside className={`terminal-changes terminal-changes-tab ${SIGN_IN_CARD_CLASS}`} aria-label={t("terminal.changes.title")} tabIndex={-1}>
+    <aside ref={rootRef} className={`terminal-changes terminal-changes-tab ${SIGN_IN_CARD_CLASS}`} aria-label={t("terminal.changes.title")} tabIndex={-1}>
       <header className="terminal-changes-head">
         <strong>{t("terminal.changes.title")}</strong>
         <UntestedTag id="terminal.reader.changes" />
@@ -389,6 +521,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
               change={change}
               cardKey={key}
               fresh={!!freshCards?.has(key)}
+              cursor={key === cursorKey}
               base={base}
               use24h={use24h}
               split={split}

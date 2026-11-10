@@ -457,6 +457,31 @@ correctness/UX work atop the same layout model #42 detaches.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+213i. **Live-QA steering inside the Reader's Diffs view.** ✅ Implemented · 🧪
+    Awaiting live QA (2026-11-10). On an agent tab whose Diffs view shows
+    edits, Shift+Space, D: the ladder reads "Inside Diffs" and the newest card's
+    head is highlighted. E/D walk the cards (the viewport follows), Shift+D
+    narrows to the next changed file (past the last back to All files), Z folds
+    or unfolds the card, N jumps to the next New card (edit again while
+    watching), U flips split/unified, O opens the file in a tab, Shift+O in a
+    new subwindow, V the diff viewer (none for a deleted or moved file); S/F
+    scroll a long diff. E on the first card steps back to the tabs, holding E
+    does not run out of the view. Tab inside Diffs switches to Files and the
+    legend follows. Enter leaves steering with the keys in the view; Space opens
+    the prompt. Settings → Shortcuts → *Inside a view* lists Z U O V N.
+    *Files: `src/components/terminal/TerminalReaderChanges.tsx`,
+    `src/lib/shortcuts/shortcuts.ts`.*
+    - [x] 🤖 Automated test — `ReaderChangesSteering`.
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 215. **Live-QA one-click installs in the root console.** ✅ Implemented · 🧪
     Awaiting live QA. Every one-click install (`runInstallInTab`: Ollama/agent
     CLI installs, the LaTeX/MiKTeX prompt, `gh`/`glab` install + auth login,

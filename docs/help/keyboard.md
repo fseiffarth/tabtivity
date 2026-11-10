@@ -104,6 +104,21 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | Space | On an agent tab: a prompt box in the window's middle; Enter sends, Esc returns |
 | Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it first) |
 
+Inside an agent tab's **Diffs** view (D from the tab level while it shows), a
+highlighted card is the cursor:
+
+| Key | What it does |
+| --- | --- |
+| E / D (↑ / ↓) | Previous / next change card; E on the first card steps back to the tabs (holding E does not) |
+| Shift+E / Shift+D | Previous / next changed file (All files first; after the last, back to All) |
+| S / F (← / →) | Scroll the diff (Shift: a whole screen) |
+| Z | Fold / unfold the card |
+| N | Jump to the next New card |
+| U | Switch between split and unified |
+| O | Open the file in a tab (Shift+O: in a new subwindow) |
+| V | Open the card's whole file in the diff viewer |
+| Enter / Space | Work here (leave navigation, the keys stay in the view) / the prompt box |
+
 Dialogs and menus don't end the mode. Whatever comes up on top — a confirm, the
 New project dialog, a right-click menu, a top-bar menu, the root console — gets
 the highlight: E D go row to row, S F along a row, Enter presses, and Esc closes

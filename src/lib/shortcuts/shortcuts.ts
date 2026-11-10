@@ -1155,6 +1155,14 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   // Inside the Reader's Diffs view (`when: "inChanges"`, levels ["scroll"]); the
   // Diffs step fills this block, its keys come from the `inside` bindings.
   // -- inside Diffs: begin
+  { actions: ["left", "right"], pair: true, labelKey: "steering.changes.scroll.label", descKey: "steering.changes.scroll.desc", levels: ["scroll"], when: "inChanges", group: "move" },
+  { actions: ["up", "down"], pair: true, labelKey: "steering.changes.card.label", descKey: "steering.changes.card.desc", levels: ["scroll"], when: "inChanges", group: "move" },
+  { actions: ["up", "down"], pair: true, shift: true, labelKey: "steering.changes.file.label", descKey: "steering.changes.file.desc", levels: ["scroll"], when: "inChanges", group: "move" },
+  { actions: ["viewToggle"], labelKey: "steering.changes.fold.label", descKey: "steering.changes.fold.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewNew"], labelKey: "steering.changes.new.label", descKey: "steering.changes.new.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewMode"], labelKey: "steering.changes.layout.label", descKey: "steering.changes.layout.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewOpen"], labelKey: "steering.changes.open.label", descKey: "steering.changes.open.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewOpenAlt"], labelKey: "steering.changes.openDiff.label", descKey: "steering.changes.openDiff.desc", levels: ["scroll"], when: "inChanges", group: "act" },
   // -- inside Diffs: end
   // Inside the Reader's Files view (`when: "inFiles"`, levels ["scroll"]); the
   // Files step fills this block.
