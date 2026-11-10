@@ -640,6 +640,9 @@ fn the_relay_refuses_what_it_cannot_parse() {
     assert!(relay::parse(&os(&["11434=/s", "--", "x", "--", "y"])).is_ok());
 }
 
+// `with_socket_path` reaches a long path through /proc/self/fd, which only Linux has;
+// elsewhere a path past `sun_path` (104 bytes on macOS) cannot bind at all.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_socket_under_a_long_path_still_binds_and_connects() {
     // A state dir under a long home overflows `sun_path` (about 100 bytes).
