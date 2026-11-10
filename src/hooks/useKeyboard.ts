@@ -230,12 +230,23 @@ function isSuperKey(key: string): boolean {
  */
 export const SUPER_RELEASE_SETTLE_MS = 150;
 
+/**
+ * How long the window may lose the keyboard and keep steering on. A desktop
+ * screenshot (PrtSc, a region dragged, Enter) or a glance at a notification
+ * blurs the window for seconds: coming back, steering is where it was. After
+ * a longer absence the window comes back out of steering — keys typed then are
+ * meant as text, not as moves.
+ */
+export const STEERING_BLUR_GRACE_MS = 60_000;
+
 export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: KeyboardOptions) {
   useEffect(() => {
     // Lone-Super press tracking (Linux only; see the binding in `onKeyDown`).
     let superHeld = false;
     let superChorded = false;
     let superToggleTimer: number | null = null;
+    // When the window lost the keyboard while steering was on (`onBlur`).
+    let steeringBlurredAt: number | null = null;
     const cancelSuperToggle = () => {
       if (superToggleTimer !== null) {
         window.clearTimeout(superToggleTimer);
@@ -792,8 +803,10 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           openSidePanel();
           return;
         // The project's popped-out subwindow (the next one, with several): its
-        // window takes the keyboard, and the blur here ends steering.
+        // window takes the keyboard, so steering ends here (a plain blur keeps
+        // it, `onBlur`).
         case "popout":
+          exitSteering();
           void focusNextPopout();
           return;
         case "panels": // toggle the side panels
@@ -1520,9 +1533,14 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       cancelSuperToggle();
       const nav = useSubwindowNavStore.getState();
       if (nav.active) nav.end();
-      // Steering must not survive a window blur either — coming back to a
-      // window silently swallowing every key would read as a hung app.
-      if (useKeyboardSteeringStore.getState().active) exitSteering();
+      // Steering survives a short blur (a desktop screenshot taken with Enter,
+      // a notification): `onFocus` ends it only after a long absence.
+      steeringBlurredAt = useKeyboardSteeringStore.getState().active ? Date.now() : null;
+    }
+    function onFocus() {
+      const away = steeringBlurredAt === null ? 0 : Date.now() - steeringBlurredAt;
+      steeringBlurredAt = null;
+      if (away > STEERING_BLUR_GRACE_MS && useKeyboardSteeringStore.getState().active) exitSteering();
     }
 
     // Which desktop is running decides whether the bare Super key is ours (see
@@ -1561,6 +1579,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
     return () => {
       cancelSuperToggle();
       cancelPlace();
@@ -1573,6 +1592,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
     };
   }, [onTogglePanels, onSidePanel, onToggleSidePanel]);
 }
