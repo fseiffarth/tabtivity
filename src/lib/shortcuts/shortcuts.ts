@@ -22,6 +22,7 @@ import { isLoneModifier, normalizeKey } from "./keyNames";
 export { isLoneModifier, normalizeKey } from "./keyNames";
 import { zoomChord, type ZoomChord } from "./zoomChord";
 import type { TranslationKey } from "../i18n";
+import type { ReaderViewId } from "../agents/readerSteering";
 import {
   steeringRowKeys,
   steeringSlotKeys,
@@ -865,6 +866,12 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *                ↓ can scroll (the scroll level)
  *   intoDocument — the same for a tab whose document scrolls
  *   inTerminal / inDocument — the scroll level is in a terminal / a document
+ *                (inTerminal is also the Chat view; a shown Diffs / Files view
+ *                is neither)
+ *   readerViews — the active tab has a Reader view strip (the cycle key acts)
+ *   inChanges / inFiles — the scroll level is in the Reader's Diffs / Files
+ *   intoReader — where ←/→ step tabs, and the tab's Reader shows Diffs / Files
+ *                (↓ goes inside that view)
  *   popouts    — the active scope has a subwindow popped out into its own
  *                window (J raises it)
  *   question / noQuestion — the active tab asks (a dialog on its screen, or
@@ -897,6 +904,10 @@ export type SteeringCondition =
   | "intoDocument"
   | "inTerminal"
   | "inDocument"
+  | "readerViews"
+  | "inChanges"
+  | "inFiles"
+  | "intoReader"
   | "popouts"
   | "question"
   | "noQuestion"
@@ -972,6 +983,8 @@ export interface SteeringLegendState {
   terminal?: boolean;
   /** The active tab shows a document that scrolls (↓ scrolls it). */
   document?: boolean;
+  /** The active tab draws a Reader view strip: the view it shows now. */
+  reader?: { view: ReaderViewId };
   /** The active scope has popped-out subwindows. */
   popouts?: boolean;
   /** The active tab asks: the digits answer it. */
@@ -982,6 +995,12 @@ export interface SteeringLegendState {
   agent?: { clear: boolean; plan: boolean; goal: boolean; prompt: boolean };
   /** How many tabs, in every scope, need an answer / work / finished unseen. */
   statusCounts: { decision: number; working: number; done: number };
+}
+
+/** The tab's Reader shows Diffs or Files, which answer the scroll level
+ *  themselves; the xterm underneath stays registered. */
+function readerPanelShown(s: SteeringLegendState): boolean {
+  return s.reader?.view === "changes" || s.reader?.view === "files";
 }
 
 function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState): boolean {
@@ -1021,11 +1040,19 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
     case "agentPrompt":
       return !!s.agent?.prompt;
     case "intoTerminal":
-      return !!s.terminal && steeringConditionHolds("stepsTabs", s);
+      return !!s.terminal && !readerPanelShown(s) && steeringConditionHolds("stepsTabs", s);
+    case "intoReader":
+      return !!s.terminal && readerPanelShown(s) && steeringConditionHolds("stepsTabs", s);
     case "intoDocument":
       return !s.terminal && !!s.document && steeringConditionHolds("stepsTabs", s);
     case "inTerminal":
-      return !!s.terminal;
+      return !!s.terminal && !readerPanelShown(s);
+    case "readerViews":
+      return !!s.reader;
+    case "inChanges":
+      return s.reader?.view === "changes";
+    case "inFiles":
+      return s.reader?.view === "files";
     case "inDocument":
       return !s.terminal;
     case "popouts":
@@ -1099,6 +1126,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["down"], labelKey: "steering.intoTabs.label", descKey: "steering.intoTabs.desc", levels: ["panes"], when: "stepsPanes", group: "move" },
   { actions: ["down"], labelKey: "steering.intoTerminal.label", descKey: "steering.intoTerminal.desc", levels: PANE_LEVELS, when: "intoTerminal", group: "move" },
   { actions: ["down"], labelKey: "steering.intoDocument.label", descKey: "steering.intoDocument.desc", levels: PANE_LEVELS, when: "intoDocument", group: "move" },
+  { actions: ["down"], labelKey: "steering.intoReader.label", descKey: "steering.intoReader.desc", levels: PANE_LEVELS, when: "intoReader", group: "move" },
   { actions: ["up"], labelKey: "steering.upPanes.label", descKey: "steering.upPanes.desc", levels: ["tabs"], when: "tabsMultiPane", group: "move" },
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: PANE_LEVELS, when: "upToProjects", group: "move" },
   { actions: ["up"], labelKey: "steering.upChrome.label", descKey: "steering.upChrome.desc", levels: PANE_LEVELS, when: "upToChrome", group: "move" },
@@ -1107,6 +1135,8 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, when: "noQuestion", agentSlots: true, group: "new" },
   { actions: ["newTabMenu"], labelKey: "steering.newTabMenu.label", descKey: "steering.newTabMenu.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["files"], labelKey: "steering.files.label", descKey: "steering.files.desc", levels: PANE_LEVELS, group: "act" },
+  // The Reader's view cycle: plain Tab (Shift reverses; the description says so).
+  { actions: ["readerView"], labelKey: "steering.readerView.label", descKey: "steering.readerView.desc", levels: [...PANE_LEVELS, "scroll"], when: "readerViews", group: "act" },
   { actions: ["closeTab"], labelKey: "steering.closeTab.label", descKey: "steering.closeTab.desc", levels: PANE_LEVELS, group: "act" },
   { actions: ["tabCard"], labelKey: "steering.tabCard.label", descKey: "steering.tabCard.desc", levels: PANE_LEVELS, when: "tabCard", group: "act" },
   { actions: ["agentClear"], labelKey: "steering.agentClear.label", descKey: "steering.agentClear.desc", levels: PANE_LEVELS, when: "agentClear", group: "agent" },
@@ -1122,6 +1152,14 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["left", "right"], pair: true, labelKey: "steering.scrollDocument.label", descKey: "steering.scrollDocument.desc", levels: ["scroll"], when: "inDocument", group: "move" },
   { actions: ["down"], labelKey: "steering.scrollEnd.label", descKey: "steering.scrollEnd.desc", levels: ["scroll"], when: "inDocument", group: "move" },
   { actions: ["up"], labelKey: "steering.scrollOutDocument.label", descKey: "steering.scrollOutDocument.desc", levels: ["scroll"], when: "inDocument", group: "move" },
+  // Inside the Reader's Diffs view (`when: "inChanges"`, levels ["scroll"]); the
+  // Diffs step fills this block, its keys come from the `inside` bindings.
+  // -- inside Diffs: begin
+  // -- inside Diffs: end
+  // Inside the Reader's Files view (`when: "inFiles"`, levels ["scroll"]); the
+  // Files step fills this block.
+  // -- inside Files: begin
+  // -- inside Files: end
   // The region cursor (side panel, header apps, + menu, settings, the top bar,
   // any dialog or menu on top).
   { actions: ["up", "down"], pair: true, labelKey: "steering.move.label", descKey: "steering.move.desc", levels: ["region"], when: "walkRegion", group: "move" },

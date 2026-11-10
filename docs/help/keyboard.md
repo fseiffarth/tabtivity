@@ -91,6 +91,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | + | The new-tab menu, walked with E/D; **/** types into its search |
 | / | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the ring, their digit (1–9, 0) opens one at once |
 | V | Toggle the pane's file viewer |
+| Tab / Shift+Tab | On an agent tab with a view strip: the next / previous view, Chat → Diffs → Files → Terminal (wraps; views with nothing to show are skipped). Works on the subwindow, tab and Inside levels and keeps the level |
 | W | Close the active tab |
 | A | Walk the card over the active tab (Undo clear, a sign-in link) |
 | . | The right-click menu of the active tab (projects: of the project; in a panel: of the highlighted row) |
@@ -124,8 +125,9 @@ digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
 
 Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
 rebound in the same settings page under *Inside Tabtivity navigation*, one list per
-level. A letter can mean one thing on the projects level and another inside a
-pane; the bar, the caps and the cheat sheet always show the keys you have.
+level (*Inside a view* holds the letters that act once you are inside a Diffs or Files
+view: fold, layout, open, other view, next new). A letter can mean one thing on the
+projects level and another inside a pane; the bar, the caps and the cheat sheet always show the keys you have.
 
 ## In editors and viewers
 

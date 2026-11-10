@@ -68,6 +68,8 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
   onOpenTab: (entry: FileEntry, newSubwindow: boolean) => void;
   /** Open a link's address: the Chat's confirmation first, then the browser. */
   onOpenLink?: (url: string) => void;
+  /** The pane's id, for keyboard steering's Inside target (`readerSteering`). */
+  steerId?: string;
   onClose: () => void;
 }) {
   const t = useT();

@@ -2671,6 +2671,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         subagentTitle={openStep ? openStep.task || openStep.role : undefined}
         chat={chatId}
         chatTitle={browsed?.chat.title}
+        steerId={ptyId}
         onClose={() => onShowChat?.()}
       />
     )}
@@ -2689,6 +2690,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           : browsed ? t("terminal.changes.chat", { name: browsed.chat.title ?? "" }) : undefined}
         onPick={setFilePicked}
         onOpenTab={openFileAsTab}
+        steerId={ptyId}
         onClose={() => onShowChat?.()}
       />
     )}

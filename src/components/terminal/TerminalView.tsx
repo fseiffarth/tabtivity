@@ -72,6 +72,11 @@ import { usePortForwardStore } from "../../stores/remote/portForwards";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { changesOffered, readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
+import {
+  publishReaderViewFacts,
+  registerReaderViews,
+  type ReaderViewId,
+} from "../../lib/agents/readerSteering";
 import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
@@ -2471,6 +2476,54 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     if (!readerPreferred) useAgentReaderStore.getState().set(readerAgent, true);
   };
 
+  // Keyboard steering switches this pane's view through `readerSteering`: the
+  // view shown now, the views the strip offers (its enabled tabs), and the
+  // switch itself. Registered only while the strip is drawn and the pane is
+  // visible; the target reads the latest render through a ref.
+  const readerViewNow: ReaderViewId = !readerOn ? "terminal" : changesOn ? "changes" : filesOn ? "files" : "chat";
+  const readerViewsOffered: ReaderViewId[] = ["chat"];
+  if (changesOffered(readerAgent) && !readerOnHost && (changesOn || changesKnown)) readerViewsOffered.push("changes");
+  if (readerTopBar && (filesOn || filesKnown)) readerViewsOffered.push("files");
+  readerViewsOffered.push("terminal");
+  /** Put the keys where `view` takes them: the chat's text box, a panel's own
+   * root, else the terminal. */
+  const focusReaderView = (view: ReaderViewId) => {
+    const box = view === "chat" ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
+    if (box) box.focus();
+    else if (view === "changes" || view === "files") host?.querySelector<HTMLElement>(".terminal-changes")?.focus();
+    else termRef.current?.focus();
+  };
+  const selectReaderView = (view: ReaderViewId) => {
+    if (view === readerViewNow) return;
+    if (view === "terminal") {
+      setReader(false); // focuses the terminal itself
+      return;
+    }
+    if (view === "chat") showReaderChat();
+    else setPanelPicked(view);
+    // The panel is not mounted until this render commits.
+    setTimeout(() => focusReaderView(view), 0);
+  };
+  const readerSteerRef = useRef({ view: readerViewNow, offered: readerViewsOffered, select: selectReaderView });
+  readerSteerRef.current = { view: readerViewNow, offered: readerViewsOffered, select: selectReaderView };
+  const readerSteerOn = readerTopBar && visible;
+  useEffect(() => {
+    if (!readerSteerOn) return;
+    return registerReaderViews(id, {
+      view: () => readerSteerRef.current.view,
+      offered: () => readerSteerRef.current.offered,
+      show: (view) => readerSteerRef.current.select(view),
+    });
+  }, [id, readerSteerOn]);
+  const readerOfferedKey = readerViewsOffered.join();
+  useEffect(() => {
+    if (!readerSteerOn) return;
+    const facts = { view: readerViewNow, offered: readerSteerRef.current.offered };
+    publishReaderViewFacts(id, facts);
+    return () => publishReaderViewFacts(id, null, facts);
+    // `readerOfferedKey` stands for the offered list (a new array every render).
+  }, [id, readerSteerOn, readerViewNow, readerOfferedKey]);
+
   // Take keyboard focus only when this pane is the focused one (and opened);
   // over a shown Reader, its composer takes it.
   useEffect(() => {
@@ -2657,13 +2710,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         tabKey={splitId.key}
         background={terminalTheme(colorScheme).background}
         foreground={terminalTheme(colorScheme).foreground ?? "inherit"}
-        onReturnFocus={() => {
-          // Over the chat the keys go back to its text box, not the terminal under it.
-          const box = readerOn && !panelOn ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
-          if (box) box.focus();
-          else if (panelOn) host?.querySelector<HTMLElement>(".terminal-changes")?.focus();
-          else termRef.current?.focus();
-        }}
+        // Over the chat the keys go back to its text box, not the terminal under it.
+        onReturnFocus={() => focusReaderView(readerViewNow)}
         chatShown={readerOn}
         topBar={readerTopBar}
         navigationSlot={setReaderNavigationSlot}

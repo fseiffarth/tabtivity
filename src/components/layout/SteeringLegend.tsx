@@ -22,6 +22,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { documentScroller } from "../../lib/shortcuts/documentScroll";
+import { useReaderViewFacts } from "../../lib/agents/readerSteering";
 import { ChevronRightIcon, KeyboardIcon, MicIcon } from "../common/icons/Icon";
 
 /** What the box steering lent the keyboard to answers — its own keys, fixed,
@@ -180,6 +181,9 @@ export function SteeringLegend() {
   }, [active]);
 
   const terminal = !!activeTab && !!terminalFor(`${tabScope}:${activeTab.key}`);
+  // The active agent tab's Reader view, while it draws a strip (it redraws on a switch).
+  const readerFacts = useReaderViewFacts(activeTab ? `${tabScope}:${activeTab.key}` : null);
+  const reader = readerFacts ? { view: readerFacts.view } : undefined;
   const folded = active && legendHidden;
   const statusCount = (kind: "decision" | "working" | "done") => statusTabs(kind, busyByTab, attentionByTab, tabsByScope).length;
   // Read live at render: the bar redraws on every steering key.
@@ -199,6 +203,7 @@ export function SteeringLegend() {
           apps: { mail, calendar, todo },
           agent: steeringAgentOffer(activeTab),
           terminal,
+          reader,
           // Only where ↓ could step into it.
           document: !terminal && !!activeTab && (inPane || level === "scroll") && !!documentScroller(tabScope, activeTab.key),
           popouts,
@@ -288,6 +293,7 @@ export function SteeringLegend() {
             region: handoffReturn.region,
             regionReturn: handoffReturn.regionReturn,
             document: !terminal,
+            reader,
             lent: box.where,
           }),
         )}
@@ -322,7 +328,7 @@ export function SteeringLegend() {
     );
     ladderEl = (
       <div className="steering-bar-ladder">
-        {rungs(ladder({ level, region, regionReturn, document: !terminal }))}
+        {rungs(ladder({ level, region, regionReturn, document: !terminal, reader }))}
       </div>
     );
     if (folded) {

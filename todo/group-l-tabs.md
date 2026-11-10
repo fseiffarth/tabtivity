@@ -432,6 +432,31 @@ correctness/UX work atop the same layout model #42 detaches.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+213h. **Live-QA steering's Reader view cycle.** ✅ Implemented · 🧪 Awaiting
+    live QA (2026-11-10). In steering (Shift+Space), Tab / Shift+Tab switch an
+    agent tab's Reader view Chat → Diffs → Files → Terminal and back, from the
+    subwindow, tab and Inside levels; the level is kept, views greyed in the
+    strip are skipped, a tab with no strip (shell, viewer, Tabby, root console)
+    swallows the key and the legend row is hidden there. The Inside rung reads
+    "Inside the chat / Diffs / Files". Verify: on an agent tab that has edited
+    files, Shift+Space, Tab: Diffs, Tab: Files, Tab: Terminal, Tab: Chat;
+    Shift+Tab goes back; on a fresh tab Tab skips Diffs and Files; D (inside),
+    Tab switches the view and the ladder follows; Enter leaves steering with the
+    keys in the shown view; Settings → Shortcuts lists *Inside a view*.
+    *Files: `src/lib/agents/readerSteering.ts`,
+    `src/components/terminal/TerminalView.tsx`, `src/hooks/useKeyboard.ts`.*
+    - [x] 🤖 Automated test — `SteeringReaderView`, `SteeringReaderInside`,
+      `ReaderSteering`, `SteeringReaderLegend`, `TerminalReaderSteerViews`.
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 215. **Live-QA one-click installs in the root console.** ✅ Implemented · 🧪
     Awaiting live QA. Every one-click install (`runInstallInTab`: Ollama/agent
     CLI installs, the LaTeX/MiKTeX prompt, `gh`/`glab` install + auth login,

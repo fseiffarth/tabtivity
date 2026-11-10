@@ -206,6 +206,8 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
    * are shown instead. */
   chat?: string;
   chatTitle?: string;
+  /** The pane's id, for keyboard steering's Inside target (`readerSteering`). */
+  steerId?: string;
   onClose: () => void;
 }) {
   const t = useT();

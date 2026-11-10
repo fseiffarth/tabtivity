@@ -11,6 +11,7 @@
  * works is always listed somewhere.
  */
 import type { TranslationKey } from "../i18n";
+import type { ReaderViewId } from "../agents/readerSteering";
 import type { SteeringBaseLevel, SteeringLevel, SteeringRegion } from "../../stores/keyboardSteering";
 import type { SteeringGroup, SteeringKeyDef } from "./shortcuts";
 import {
@@ -246,6 +247,22 @@ const BASE_RUNGS: { id: SteeringBaseLevel; labelKey: TranslationKey }[] = [
   { id: "scroll", labelKey: "steering.bar.inside" },
 ];
 
+/** What the lit "Inside" rung is called: the document, the Reader's chat /
+ *  Diffs / Files view, else the terminal. */
+function scrollLabel(opts: { document?: boolean; reader?: { view: ReaderViewId } }): TranslationKey {
+  if (opts.document) return "steering.level.scrollDocument";
+  switch (opts.reader?.view) {
+    case "chat":
+      return "steering.level.scrollChat";
+    case "changes":
+      return "steering.level.scrollChanges";
+    case "files":
+      return "steering.level.scrollFiles";
+    default:
+      return "steering.level.scroll";
+  }
+}
+
 /**
  * Projects › Subwindows › Tabs › Inside, the lit rung being where the arrows
  * act. Inside a surface the ladder is cut to the level it was entered from and
@@ -257,12 +274,13 @@ export function ladder(opts: {
   regionReturn: SteeringBaseLevel;
   /** Inside a document rather than a terminal. */
   document?: boolean;
+  /** The active tab's Reader view, when it draws a strip: Inside names it. */
+  reader?: { view: ReaderViewId };
   lent?: TranslationKey;
 }): Rung[] {
   const base = (id: SteeringBaseLevel, lit: boolean): Rung => {
     const def = BASE_RUNGS.find((r) => r.id === id)!;
-    const labelKey =
-      lit && id === "scroll" ? (opts.document ? "steering.level.scrollDocument" : "steering.level.scroll") : def.labelKey;
+    const labelKey = lit && id === "scroll" ? scrollLabel(opts) : def.labelKey;
     return { id, labelKey, lit };
   };
   if (opts.lent) {
