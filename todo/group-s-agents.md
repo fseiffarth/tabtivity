@@ -3151,3 +3151,18 @@ unchanged; the new agents are additive.
   CodeBuddy, Droid, Cursor, Vibe, Pi, Kimi, Crush, Amp, Goose, Kiro): check
   with `verify-cli` whether each reads user skills from its home, and from
   which folder; add the ones that do to `agent_hint::SKILL_DIRS`.
+- [ ] 🖐️ Reader Files · Links section — open an agent tab, have the agent print a
+  claude.ai artifact link, a GitHub PR link and a file path. Reader → Files: the
+  file under Files, the two links under Links (host bold, path dim, who and when),
+  newest first, each once. Click a link: the "Open link?" box names the exact URL;
+  Cancel opens nothing; confirm opens the browser (no network request before
+  that). A Files tab with only a link in the conversation is enabled. On a remote
+  project tab a `localhost:` link forwards instead of opening this machine's port.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

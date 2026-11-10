@@ -83,6 +83,7 @@ import type { VoicePick, VoicePickResult } from "../../../shared/handsFree";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
+import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
 import { recordedRun, recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
@@ -408,6 +409,7 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
  * link afterwards. */
 const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(new Map());
 const NO_PATH_LINKS: ReadonlyMap<string, FileEntry | null> = new Map();
+const NO_LINKS: readonly ChatLink[] = [];
 /** The chat's web links are dressed like its file links (`linkPathsInHtml`). */
 const WEB_LINKS = { webLinks: true } as const;
 
@@ -2360,8 +2362,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   }, [filesOffered, levelEntries, pathLinks, tabDir, readerInbox, pathContext.projectDir]);
   const onFilesKnownRef = useRef(onFilesKnown);
   onFilesKnownRef.current = onFilesKnown;
-  const hasFiles = readerFiles.length > 0;
-  useEffect(() => { onFilesKnownRef.current?.(hasFiles); }, [hasFiles]);
+  // The web links the Chat makes clickable, listed under the files; they open
+  // through `onOpenUrl` (the Chat's own ask-then-open), so no handler, no list.
+  const linksOffered = !!onOpenUrl;
+  const readerLinks = useMemo(() => (linksOffered ? chatLinksOf(turns) : NO_LINKS), [turns, linksOffered]);
+  const hasItems = readerFiles.length > 0 || readerLinks.length > 0;
+  useEffect(() => { onFilesKnownRef.current?.(hasItems); }, [hasItems]);
   const shownFile = filePicked ?? readerFiles[0]?.entry ?? null;
 
   return createPortal(<>
@@ -2671,6 +2677,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       <TerminalReaderFiles
         tabKey={tabKey}
         files={readerFiles}
+        links={readerLinks}
+        onOpenLink={onOpenUrl}
+        use24h={use24h}
         picked={shownFile}
         projectId={projectId}
         disabled={pathContext.disabled}
