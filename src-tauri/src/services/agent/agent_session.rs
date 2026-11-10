@@ -2656,9 +2656,13 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          # notice means blocked on the user, the end of the session means idle —\n\
          # unless a /clear ended it: the CLI is still at its prompt, and the\n\
          # verdict it had (done) is what keeps the tab off its stale screen.\n\
+         # A permission request is the dialog opening (a question, an approval,\n\
+         # a plan to accept): Claude 2.1.322 sends its notice for it only 6 s\n\
+         # later, and none at all for one answered sooner.\n\
          turn=\n\
          case \"$event\" in\n\
          \x20 UserPromptSubmit|PostToolUse) turn=working ;;\n\
+         \x20 PermissionRequest) turn=decision ;;\n\
          \x20 Stop) turn=done ;;\n\
          \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
@@ -2674,13 +2678,9 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20   mv -f \"$dir/${UPPER}_TAB_UID.bg.$$\" \"$dir/${UPPER}_TAB_UID.bg\"\n\
          fi\n\
          [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
-         # A permission request is the dialog opening (a question, an approval,\n\
-         # a plan to accept): Claude 2.1.322 sends its notice for it only 6 s\n\
-         # later, and none at all for one answered sooner.\n\
          # A prompt in the conversation a /clear started ends that clear's undo:\n\
          # resuming the one it ended would leave the prompt behind. Not a session\n\
          # command, which a CLI may report as a prompt too.\n\
-         \x20 PermissionRequest) turn=decision ;;\n\
          if [ \"$event\" = UserPromptSubmit ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
          \x20 rm -f \"$dir/${UPPER}_TAB_UID.prev\"\n\
          fi\n\
@@ -2805,6 +2805,7 @@ fn hook_script_body(live_dir: &str) -> String {
          switch ($event) {{\r\n\
          \x20 'UserPromptSubmit' {{ $turn = 'working' }}\r\n\
          \x20 'PostToolUse' {{ $turn = 'working' }}\r\n\
+         \x20 'PermissionRequest' {{ $turn = 'decision' }}\r\n\
          \x20 'Stop' {{ $turn = 'done' }}\r\n\
          \x20 'Notification' {{ if (@('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input') -contains $ntype) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
          \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
@@ -2837,7 +2838,6 @@ fn hook_script_body(live_dir: &str) -> String {
          exit 0\r\n",
         live_dir = live_dir,
         legacy_env = crate::services::brand_migration::compat::script_preamble_ps1(HOOK_ENV),
-         \x20 'PermissionRequest' {{ $turn = 'decision' }}\r\n\
     )
 }
 
@@ -2858,6 +2858,7 @@ pub const HOOK_EVENTS: [&str; 7] = [
     "Stop",
     "UserPromptSubmit",
     "PostToolUse",
+    "PermissionRequest",
     "Notification",
     "SessionEnd",
 ];
@@ -2890,7 +2891,6 @@ pub(crate) fn register_hook_in_settings_as(settings: &HomeFile, cmd: &str) -> st
     for event in HOOK_EVENTS {
         let entry = hooks
             .as_object_mut()
-    "PermissionRequest",
             .unwrap()
             .entry(event)
             .or_insert_with(|| serde_json::json!([]));
