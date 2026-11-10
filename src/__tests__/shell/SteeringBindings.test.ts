@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   STEERING_BINDINGS,
+  STEERING_BINDING_SECTIONS,
   findSteeringConflicts,
   steeringActionFor,
   steeringKeyFromEvent,
@@ -136,5 +137,71 @@ describe("steering legend agent rows", () => {
       }).map((k) => steeringRowLabel(k, null));
       expect(new Set(keys).size).toBe(keys.length);
     }
+  });
+});
+
+describe("steering bindings Inside a view", () => {
+  it("puts the view cycle on Tab at the panes and Inside, not in the projects", () => {
+    expect(steeringActionFor(ev("Tab"), "panes", null)).toBe("readerView");
+    expect(steeringActionFor(ev("Tab"), "inside", null)).toBe("readerView");
+    expect(steeringActionFor(ev("Tab"), "projects", null)).toBeNull();
+    expect(steeringActionFor(ev("Tab"), "region", null)).toBeNull();
+  });
+
+  it("answers z u o v n with the view actions Inside only", () => {
+    const keys = { z: "viewToggle", u: "viewMode", o: "viewOpen", v: "viewOpenAlt", n: "viewNew" } as const;
+    for (const [key, action] of Object.entries(keys)) {
+      expect(steeringActionFor(ev(key), "inside", null)).toBe(action);
+      expect(steeringActionFor(ev(key.toUpperCase()), "inside", null)).toBe(action);
+    }
+    expect(steeringActionFor(ev("z"), "panes", null)).toBeNull();
+    expect(steeringActionFor(ev("z"), "projects", null)).toBeNull();
+    // The pane keys of the same letters keep their meaning outside Inside.
+    expect(steeringActionFor(ev("n"), "panes", null)).toBe("newShell");
+    expect(steeringActionFor(ev("o"), "panes", null)).toBe("newMonitor");
+    expect(steeringActionFor(ev("v"), "panes", null)).toBe("files");
+    expect(steeringActionFor(ev("u"), "panes", null)).toBe("cockpit");
+  });
+
+  it("still resolves the mode-wide and live pane keys Inside, and swallows the dead ones", () => {
+    expect(steeringActionFor(ev("e"), "inside", null)).toBe("up");
+    expect(steeringActionFor(ev("ArrowRight"), "inside", null)).toBe("right");
+    expect(steeringActionFor(ev("Enter"), "inside", null)).toBe("work");
+    expect(steeringActionFor(ev(" "), "inside", null)).toBe("agentPrompt");
+    expect(steeringActionFor(ev("Escape"), "inside", null)).toBe("exit");
+    expect(steeringActionFor(ev("3"), "inside", null)).toBe("slot3");
+    // Dead Inside (the handler swallows them), but still resolved to their action.
+    expect(steeringActionFor(ev("c"), "inside", null)).toBe("calendar");
+    expect(steeringActionFor(ev("w"), "inside", null)).toBe("closeTab");
+    expect(steeringActionFor(ev("i"), "inside", null)).toBeNull();
+  });
+
+  it("lists an Inside section after the panes in the settings", () => {
+    const scopes = STEERING_BINDING_SECTIONS.map((s) => s.scope);
+    expect(scopes.indexOf("inside")).toBe(scopes.indexOf("panes") + 1);
+    const insideDefs = STEERING_BINDINGS.filter((d) => d.scopes[0] === "inside").map((d) => d.action);
+    expect(insideDefs).toEqual(["viewToggle", "viewMode", "viewOpen", "viewOpenAlt", "viewNew"]);
+  });
+
+  it("flags an Inside key only against what is live Inside", () => {
+    expect(findSteeringConflicts(null).size).toBe(0);
+    // Against the mode-wide up key.
+    expect(findSteeringConflicts({ viewNew: ["e"] }).get("viewNew")).toEqual(["up"]);
+    // Against Work here, which acts Inside.
+    expect(findSteeringConflicts({ viewOpen: ["Enter"] }).get("viewOpen")).toEqual(["work"]);
+    // Against the view cycle and a slot.
+    expect(findSteeringConflicts({ viewMode: ["Tab"] }).get("viewMode")).toEqual(["readerView"]);
+    expect(findSteeringConflicts({ viewMode: ["4"] }).get("viewMode")).toEqual(["slot4"]);
+    // Mail is dead Inside: no clash.
+    expect(findSteeringConflicts({ viewOpen: ["m"] }).size).toBe(0);
+    // Two Inside keys on one letter.
+    expect(findSteeringConflicts({ viewOpen: ["z"] }).get("viewOpen")).toEqual(["viewToggle"]);
+    // The view cycle keeps its panes meeting: rebinding it onto a pane key clashes.
+    expect(findSteeringConflicts({ readerView: ["w"] }).get("readerView")).toEqual(["closeTab"]);
+  });
+
+  it("lets a user list rebind an Inside key", () => {
+    expect(steeringActionFor(ev("y"), "inside", { viewToggle: ["y"] })).toBe("viewToggle");
+    expect(steeringActionFor(ev("z"), "inside", { viewToggle: [] })).toBeNull();
   });
 });

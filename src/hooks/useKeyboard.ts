@@ -73,6 +73,7 @@ import {
   type SteeringApp,
 } from "../lib/shortcuts/steeringRegion";
 import { placeSidePanelCursor, steerSidePanel } from "../lib/shortcuts/steeringSidePanel";
+import { cycleReaderView, readerInsideFor, readerViewFor } from "../lib/agents/readerSteering";
 import {
   openProjectShellInRootConsole,
   rootViewShown,
@@ -589,6 +590,16 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       }
     };
 
+    // The view cycle's step: the active agent tab's Reader goes `dir` views on.
+    function cycleActiveReaderView(dir: 1 | -1) {
+      const pty = steeringActivePty();
+      const target = pty ? readerViewFor(pty) : null;
+      if (!target) return;
+      const current = target.view();
+      const next = cycleReaderView(current, target.offered(), dir);
+      if (next !== current) target.show(next);
+    }
+
     // The panes and tabs levels. With one subwindow there is nothing for ←/→
     // to walk between, so they step its tabs at once.
     function steerPanes(e: KeyboardEvent, action: SteeringAction | null, level: "panes" | "tabs" | "scroll") {
@@ -608,6 +619,14 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       const slot = steeringSlot(action);
       if (slot !== null && answerDigit(e, slot)) return;
 
+      // The Reader's view cycle (Tab, Shift+Tab backwards) on the active agent
+      // tab, at every level but the projects: the level stays, Inside follows
+      // the new view. A tab with no view strip swallows the key.
+      if (action === "readerView") {
+        if (!e.repeat) cycleActiveReaderView(e.shiftKey ? -1 : 1);
+        return;
+      }
+
       // Inside the active tab's terminal (its ↓): ←/→ scroll it half a screen
       // back / forward (Shift: a whole one), ↓ back to its live end, ↑ out to
       // the tabs — which takes it back to live too (the subscription at the
@@ -618,6 +637,18 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       if (level === "scroll") {
         const pty = steeringActivePty();
         const doc = pty ? null : steeringActiveTab();
+        // A Diffs / Files view shown in that tab's Reader answers first
+        // (`lib/agents/readerSteering`): it walks its own items, the rest of
+        // the keys fall through to the scroll below.
+        const inside = pty && action ? readerInsideFor(pty) : null;
+        if (inside && action) {
+          const result = inside.key(action, e);
+          if (result === "leave") {
+            steering.setLevel("tabs");
+            return;
+          }
+          if (result === "handled") return;
+        }
         switch (action) {
           case "left":
           case "right": {
@@ -1140,7 +1171,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       const steering = useKeyboardSteeringStore.getState();
       // The key's meaning on this level, from the user's steering bindings.
       const context: SteeringKeyContext =
-        steering.level === "region" ? "region" : steering.level === "projects" ? "projects" : "panes";
+        steering.level === "region"
+          ? "region"
+          : steering.level === "projects"
+            ? "projects"
+            : steering.level === "scroll"
+              ? "inside"
+              : "panes";
       const bindings = useSettingsStore.getState().settings?.steering_keys as SteeringKeyMap | undefined;
       const action = steeringActionFor(e, context, bindings);
 

@@ -14,6 +14,10 @@
  * inside a pane. Where an action makes sense on both, it keeps its key on both
  * (M C T open mail, calendar and the to-do board from anywhere a tab bar is). `scopes` says where an action acts, which is what the handler
  * resolves against (`steeringActionFor`) and what the conflict check compares.
+ *
+ * `inside` is the scroll level (Inside a tab) of an agent Reader's Diffs and
+ * Files view: its own letters (`viewToggle` …) shadow the panes keys that are
+ * dead there, and everything else of `panes` / `mode` still resolves.
  */
 import type { TranslationKey } from "../i18n";
 import { isLoneModifier, normalizeKey } from "./keyNames";
@@ -71,6 +75,7 @@ export type SteeringAction =
   | "settings"
   | "jumpProject"
   | "popout"
+  | "readerView"
   | "menu"
   | "tabCard"
   | "cockpitDown"
@@ -79,13 +84,18 @@ export type SteeringAction =
   | "cockpitShow"
   | "cockpitContinue"
   | "cockpitFilter"
+  | "viewToggle"
+  | "viewMode"
+  | "viewOpen"
+  | "viewOpenAlt"
+  | "viewNew"
   | SteeringSlotAction;
 
 /** Where an action acts. `mode` is every level; `panes` covers the subwindow
  *  and tab levels, which share one handler. `cockpit` is not a steering level
  *  at all: the cockpit roster's own keys (`CockpitRoster`), kept in this table
  *  so they are rebound where the other bare keys are. */
-export type SteeringScope = "mode" | "projects" | "panes" | "region" | "cockpit";
+export type SteeringScope = "mode" | "projects" | "panes" | "inside" | "region" | "cockpit";
 
 /** The level steering is on, as the resolver sees it. */
 export type SteeringKeyContext = Exclude<SteeringScope, "mode">;
@@ -102,6 +112,7 @@ export const STEERING_BINDING_SECTIONS: { scope: SteeringScope; labelKey: Transl
   { scope: "mode", labelKey: "steeringKeys.section.mode" },
   { scope: "projects", labelKey: "steering.level.projects" },
   { scope: "panes", labelKey: "steeringKeys.section.panes" },
+  { scope: "inside", labelKey: "steeringKeys.section.inside" },
   { scope: "region", labelKey: "steering.level.region" },
   { scope: "cockpit", labelKey: "cockpit.title" },
 ];
@@ -150,6 +161,9 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "settings", labelKey: "steering.settings.label", scopes: TAB_BAR, defaults: [","] },
   { action: "jumpProject", labelKey: "steering.jumpProject.label", scopes: TAB_BAR, defaults: ["/"] },
   { action: "popout", labelKey: "steering.popout.label", scopes: TAB_BAR, defaults: ["j"] },
+  // The agent tab's Reader view (Chat / Diffs / Files / Terminal), one step on;
+  // with Shift the other way. Live on the tabs and Inside, not in the projects.
+  { action: "readerView", labelKey: "steering.readerView.label", scopes: ["panes"], defaults: ["Tab"] },
   ...STEERING_SLOT_ACTIONS.map(
     (action, i): SteeringBindingDef => ({
       action,
@@ -158,6 +172,14 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
       defaults: [String(i + 1)],
     }),
   ),
+  // Inside a Reader view (Diffs, Files): generic names, each view says what the
+  // key does to it (`readerSteering`'s inside targets). They shadow the panes
+  // keys of the same letter only on the scroll level, where those are dead.
+  { action: "viewToggle", labelKey: "steering.viewToggle.label", scopes: ["inside"], defaults: ["z"] },
+  { action: "viewMode", labelKey: "steering.viewMode.label", scopes: ["inside"], defaults: ["u"] },
+  { action: "viewOpen", labelKey: "steering.viewOpen.label", scopes: ["inside"], defaults: ["o"] },
+  { action: "viewOpenAlt", labelKey: "steering.viewOpenAlt.label", scopes: ["inside"], defaults: ["v"] },
+  { action: "viewNew", labelKey: "steering.viewNew.label", scopes: ["inside"], defaults: ["n"] },
   { action: "back", labelKey: "steering.back.label", scopes: ["region"], defaults: ["Escape"] },
   { action: "press", labelKey: "steering.press.label", scopes: ["region"], defaults: ["Enter"] },
   { action: "search", labelKey: "steering.search.label", scopes: ["region"], defaults: ["/"] },
@@ -188,7 +210,18 @@ export function steeringKeys(action: SteeringAction, overrides: SteeringKeyMap |
 }
 
 function scopeFits(scopes: readonly SteeringScope[], context: SteeringKeyContext): boolean {
-  return scopes.includes("mode") || scopes.includes(context);
+  if (scopes.includes("mode") || scopes.includes(context)) return true;
+  // Inside a tab the panes keys still resolve (Work here, the prompt, the view
+  // cycle, a dead letter that is swallowed) under the `inside` ones.
+  return context === "inside" && scopes.includes("panes");
+}
+
+/** The defs that can answer on `context`, in resolution order: Inside, the
+ *  `inside` letters first, then the rest in table order. */
+function defsFor(context: SteeringKeyContext): SteeringBindingDef[] {
+  const fits = STEERING_BINDINGS.filter((def) => scopeFits(def.scopes, context));
+  if (context !== "inside") return fits;
+  return [...fits.filter((d) => d.scopes.includes("inside")), ...fits.filter((d) => !d.scopes.includes("inside"))];
 }
 
 /** Whether a keydown is `key`: by character, and a digit also by physical key
@@ -220,12 +253,11 @@ export function steeringActionFor(
 ): SteeringAction | null {
   // Character matches first, so a letter bound to one action never loses to a
   // digit another action claims by physical position.
-  for (const def of STEERING_BINDINGS) {
-    if (!scopeFits(def.scopes, context)) continue;
+  const defs = defsFor(context);
+  for (const def of defs) {
     if (steeringKeys(def.action, overrides).some((k) => normalizeKey(k) === normalizeKey(e.key))) return def.action;
   }
-  for (const def of STEERING_BINDINGS) {
-    if (!scopeFits(def.scopes, context)) continue;
+  for (const def of defs) {
     if (steeringKeys(def.action, overrides).some((k) => keyMatches(k, e))) return def.action;
   }
   return null;
@@ -237,12 +269,30 @@ export function steeringSlot(action: SteeringAction | null): number | null {
   return i < 0 ? null : i + 1;
 }
 
+/** The `panes` actions that still act Inside a tab. Every other `panes` key is
+ *  dead there (swallowed), so an `inside` key may share its letter. */
+const LIVE_INSIDE: ReadonlySet<SteeringAction> = new Set<SteeringAction>([
+  "work",
+  "exit",
+  "agentPrompt",
+  "readerView",
+  ...STEERING_SLOT_ACTIONS,
+]);
+
 /** Whether two actions can both be live on one level. */
-function scopesMeet(a: readonly SteeringScope[], b: readonly SteeringScope[]): boolean {
+function defsMeet(a: SteeringBindingDef, b: SteeringBindingDef): boolean {
   // The cockpit's keys are live only in its roster, where steering is not.
-  if (a.includes("cockpit") !== b.includes("cockpit")) return false;
-  if (a.includes("mode") || b.includes("mode")) return true;
-  return a.some((s) => b.includes(s));
+  if (a.scopes.includes("cockpit") !== b.scopes.includes("cockpit")) return false;
+  if (a.scopes.includes("mode") || b.scopes.includes("mode")) return true;
+  // `inside` meets `inside`, and a `panes` key only where that is live Inside.
+  const aIn = a.scopes.includes("inside");
+  const bIn = b.scopes.includes("inside");
+  if (aIn !== bIn) {
+    const other = aIn ? b : a;
+    if (!other.scopes.includes("panes")) return false;
+    return LIVE_INSIDE.has(other.action);
+  }
+  return a.scopes.some((s) => b.scopes.includes(s));
 }
 
 /**
@@ -258,7 +308,7 @@ export function findSteeringConflicts(
     for (let j = i + 1; j < STEERING_BINDINGS.length; j++) {
       const a = STEERING_BINDINGS[i];
       const b = STEERING_BINDINGS[j];
-      if (!scopesMeet(a.scopes, b.scopes)) continue;
+      if (!defsMeet(a, b)) continue;
       const bKeys = steeringKeys(b.action, overrides).map(normalizeKey);
       if (!steeringKeys(a.action, overrides).some((k) => bKeys.includes(normalizeKey(k)))) continue;
       out.set(a.action, [...(out.get(a.action) ?? []), b.action]);
