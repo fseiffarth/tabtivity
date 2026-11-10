@@ -158,6 +158,19 @@ describe(`${BRAND.display} Mobile Tabby gate`, () => {
     expect(chime.calls).toBe(2);
   });
 
+  it("edits the draft on a spoken edit in hands-free, holding the words until they settle", async () => {
+    const speech = await dictate();
+    await say(speech, ["fix the login", true]);
+    await say(speech, ["fix the login", true], ["and the logout", true]);
+    expect(box().value).toBe("fix the login and the logout");
+    await say(speech, ["fix the login", true], ["and the logout", true], [`${T} scratch`, true]);
+    expect(box().value).toBe("fix the login and the logout");
+    await say(speech, ["fix the login", true], ["and the logout", true], [`${T} scratch that`, true]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(box().value).toBe("fix the login");
+    expect(sentText()).toBe("");
+  });
+
   it("judges an utterance once: a growing one is kept, the start word taken off", async () => {
     const speech = await sentOnce();
     const base: [string, boolean][] = [["fix the login go on", true]];

@@ -492,18 +492,18 @@ describe(`${BRAND.display} Mobile utterance layer`, () => {
       const session = new Session();
       session.hear([T, true]);
       expect(session.draft).toBe("");
-      session.hear([`${T} scratch`, true]);
-      expect(session.draft).toBe(`${T} scratch`);
-      session.hear([`${T} scratch that`, true]);
-      expect(session.draft).toBe(`${T} scratch that`);
+      session.hear([`${T} write`, true]);
+      expect(session.draft).toBe(`${T} write`);
+      session.hear([`${T} write that`, true]);
+      expect(session.draft).toBe(`${T} write that`);
       expect(session.offered).toEqual([]);
     });
 
     it("types the start word's following words without it when the gate is on", () => {
       const session = new Session({ gate: true });
       session.hear([T, true]);
-      session.hear([`${T} scratch`, true]);
-      expect(session.typed).toEqual(["scratch"]);
+      session.hear([`${T} write`, true]);
+      expect(session.typed).toEqual(["write"]);
     });
 
     it("lets an ordinary utterance through at once", () => {

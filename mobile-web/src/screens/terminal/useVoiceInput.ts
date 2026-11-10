@@ -238,8 +238,8 @@ export function useVoiceInput({
      *      any other utterance is a navigation command (`useVoiceNav`);
      *   2. "{assistant} navigate …" opens the mode (the same `take`);
      *   3. the spoken draft edits ("Tabby scratch that" …, `matchDraftEdit`):
-     *      utterances that start with the start word, so every start-word
-     *      utterance is held until it settles (`startLexicon.ts`);
+     *      utterances that start with the start word, so one that may be
+     *      an edit is held until it settles (`startLexicon.ts`);
      *   4. not claimed: the Tabby gate, then hands-free's guard and `pick`,
      *      then dictation — all in `consume`, below. */
     const dispatch = (text: string): boolean => {

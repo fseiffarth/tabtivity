@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { leadDraft } from "../../../mobile-web/src/slashCommands";
 import { LANGUAGES, loadDict, translate, type Language } from "../../lib/i18n";
 import { DraftVoiceHistory } from "../../lib/voice/draftEdit";
-import { lastSpokenSpan, matchDraftEdit, matchStartWord, type SpokenDraftEdit } from "../../lib/voice/voiceCommands";
+import { lastSpokenSpan, matchDraftEdit, matchStartWord, mayEditDraft, type SpokenDraftEdit } from "../../lib/voice/voiceCommands";
 
 // Spoken corrections of the composer's draft: "Tabby scratch that", "Tabby
 // replace X by Y", "Tabby correction …", "Tabby clear all", "Tabby plan".
@@ -80,6 +80,20 @@ describe("matchDraftEdit", () => {
     expect(matchDraftEdit("Tabby plane", "en")).toBeNull();
     expect(matchDraftEdit("Tabby scratch that line in the parser", "en")).toBeNull();
     expect(matchDraftEdit("Tabby", "en")).toBeNull();
+  });
+});
+
+describe("mayEditDraft", () => {
+  it("holds the start word and the beginning of an edit phrase", () => {
+    for (const heard of ["Tabby", "Tabby scr", "Tabby scratch", "Tabby scratch that", "Tabby replace foo", "Tabby plan", "Tabby correction fix"]) {
+      expect(mayEditDraft(heard, "en"), heard).toBe(true);
+    }
+  });
+
+  it("lets other talk through at once", () => {
+    for (const heard of ["Tabby write that", "Tabby and add a test", "scratch that", "ask Tabby to plan"]) {
+      expect(mayEditDraft(heard, "en"), heard).toBe(false);
+    }
   });
 });
 

@@ -234,7 +234,7 @@ projects still needs a finger.
 - **`unlockSpeech()` is in the mic tap** (start branch only); the five hands-free
   read-aloud tests filter the empty unlock utterance and assert the same things.
 - **One ordered dispatch** in `useVoiceInput.ts` (`dispatch`): navigation mode →
-  "Tabby navigate" → [slot: spoken draft edits] → gate → hands-free guard / `pick`
+  "Tabby navigate" → spoken draft edits (`applyEdit`) → gate → hands-free guard / `pick`
   → dictation. While the mode is open `consume` ignores everything (the send guard
   never runs), so a half-dictated draft is never sent from the mode.
 - **Navigation lines**: spoken and shown for every answer of the mode; "Navigation

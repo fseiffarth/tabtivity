@@ -224,9 +224,9 @@ Worktree `voice-nav`, on top of N1. Commits:
 - **`useVoiceInput.ts`** — `dispatch(text)` is the single ordered route of a held utterance, and `consume` returns early while `utterances.capture` is set (so the send guard never runs in the mode).
 - **`App.tsx`/`Terminal.tsx`** — `openTab(..., { project })`; a new optional `openProject(id)` prop (project with no agent tab → its screen).
 
-### Where the merge of the draft edits slots in
+### How the draft edits are merged in (done with the merge of develop)
 
-`useVoiceInput.ts`, function `dispatch`, marked `// (3) the draft edits slot in here.` Order: `utterances.take` (navigation mode, then "Tabby navigate") → **draft edits** → (not claimed) gate → `consume` (guard, `pick`) → dictation. Two things the merge must do: (a) widen `StartLexicon.mayNavigate` (`startLexicon.ts`) to "any utterance that starts with the start word" so edit utterances are *held* until they settle (today only start word, + a prefix of the navigate word, or the navigate phrase are held); (b) call `matchDraftEdit` in `dispatch` after `take`, return true when it ran. Also drop main's own `startWordLength`/`matchStartWord` in favour of N1's exact one.
+`useVoiceInput.ts`: `applyEdit(edit, text)` is the one place an edit runs (note on the voice line, draft, `/plan` lead, "go on" send). Order in `dispatch`: `utterances.take` (navigation mode, then "Tabby navigate") → **`matchDraftEdit` → `applyEdit`** → (not claimed) gate → `consume` (guard, `pick`) → dictation. Outside hands-free there is no utterance layer: `consume` matches each event's new words for an edit before anything else. `startLexicon.ts` holds back what `mayEditDraft` (`voiceCommands.ts`: the start word alone, or the beginning of an edit phrase / `/plan` / `/goal`) says may be an edit, beside `mayNavigate`, so "Tabby scratch that" is never typed in the meantime; other talk after the start word is dictation at once. After the user's stop, a held edit utterance is dropped (not applied, not typed). Develop's own fuzzy `startWordLength`/`matchStartWord` are gone in favour of the exact one.
 
 ### i18n keys (all five dictionaries)
 

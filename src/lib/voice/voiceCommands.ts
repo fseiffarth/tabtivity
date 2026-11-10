@@ -948,6 +948,33 @@ export function matchDraftEdit(utterance: string, lang: Language): SpokenDraftEd
   return draftEditIn(utterance, lang) ?? (lang === "en" ? null : draftEditIn(utterance, "en"));
 }
 
+/** Whether `utterance`, so far, may still turn out a spoken draft edit: the
+ * start word alone, or with the beginning of an edit phrase ("Tabby scr…",
+ * "Tabby replace …", "Tabby plan"). Until it settles, its words are held back
+ * from the draft, as a "Tabby navigate" is; anything else after the start word
+ * is dictation at once. */
+export function mayEditDraft(utterance: string, lang: Language): boolean {
+  const source = words(utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return false;
+  const heard = withoutPolite(source.tokens.slice(skip), lang).map((token) => token.norm);
+  if (!heard.length) return true;
+  const fits = (parts: readonly EditPart[]) => {
+    for (let at = 0; at < heard.length; at++) {
+      const part = parts[at];
+      // A slot takes whatever follows; a phrase heard whole may carry "go on".
+      if (!part || "slot" in part) return true;
+      const last = at === heard.length - 1;
+      if (last ? !part.lit.startsWith(heard[at]) : part.lit !== heard[at]) return false;
+    }
+    return true;
+  };
+  return [lang, ...(lang === "en" ? [] : ["en" as Language])].some((spoken) => {
+    const keys: TranslationKey[] = ["voice.edit.undo", "voice.edit.clear", "voice.edit.replace", "voice.edit.restate", "voice.cmd.plan", "voice.cmd.goal"];
+    return keys.some((key) => editTemplates(key, spoken).some(fits));
+  });
+}
+
 /** Where `phrase` stands last in `text`, word for word as the matcher
  * compares words (case, accents, punctuation aside; number words as digits):
  * its span in `text`, or `null`. */
