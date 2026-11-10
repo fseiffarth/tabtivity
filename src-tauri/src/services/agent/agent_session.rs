@@ -2554,7 +2554,7 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     format!(
         "#!/bin/sh\n\
          # {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\n\
-         # Notification, SessionEnd) — records, per tab, the agent's live session id\n\
+         # PermissionRequest, Notification, SessionEnd) — records, per tab, the agent's live session id\n\
          # and permission mode (so {DISPLAY} resumes the current session in the mode it\n\
          # was left in, incl. after /clear), how the session started (so a prompt\n\
          # sent after a /clear is filed under the new session, linked to the old\n\
@@ -2660,7 +2660,7 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          case \"$event\" in\n\
          \x20 UserPromptSubmit|PostToolUse) turn=working ;;\n\
          \x20 Stop) turn=done ;;\n\
-         \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
+         \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
          # A Bash call put in the background (`run_in_background`, or moved there\n\
@@ -2674,9 +2674,13 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20   mv -f \"$dir/${UPPER}_TAB_UID.bg.$$\" \"$dir/${UPPER}_TAB_UID.bg\"\n\
          fi\n\
          [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
+         # A permission request is the dialog opening (a question, an approval,\n\
+         # a plan to accept): Claude 2.1.322 sends its notice for it only 6 s\n\
+         # later, and none at all for one answered sooner.\n\
          # A prompt in the conversation a /clear started ends that clear's undo:\n\
          # resuming the one it ended would leave the prompt behind. Not a session\n\
          # command, which a CLI may report as a prompt too.\n\
+         \x20 PermissionRequest) turn=decision ;;\n\
          if [ \"$event\" = UserPromptSubmit ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
          \x20 rm -f \"$dir/${UPPER}_TAB_UID.prev\"\n\
          fi\n\
@@ -2722,7 +2726,7 @@ fn hook_script_body(live_dir: &str) -> String {
     let hint = crate::services::agent_hint::HINT;
     format!(
         "# {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
-         # Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
+         # PermissionRequest, Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
          # and permission mode (so {DISPLAY} resumes the current session in the mode it\r\n\
          # was left in, incl. after /clear) and its turn state (working / decision /\r\n\
          # done / idle), which lights the tab's working and finished marks. No-op\r\n\
@@ -2802,7 +2806,7 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 'UserPromptSubmit' {{ $turn = 'working' }}\r\n\
          \x20 'PostToolUse' {{ $turn = 'working' }}\r\n\
          \x20 'Stop' {{ $turn = 'done' }}\r\n\
-         \x20 'Notification' {{ if (($ntype -eq 'permission_prompt') -or ($ntype -eq 'elicitation_dialog')) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
+         \x20 'Notification' {{ if (@('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input') -contains $ntype) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
          \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
          }}\r\n\
          if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
@@ -2833,6 +2837,7 @@ fn hook_script_body(live_dir: &str) -> String {
          exit 0\r\n",
         live_dir = live_dir,
         legacy_env = crate::services::brand_migration::compat::script_preamble_ps1(HOOK_ENV),
+         \x20 'PermissionRequest' {{ $turn = 'decision' }}\r\n\
     )
 }
 
@@ -2840,12 +2845,15 @@ fn hook_script_body(live_dir: &str) -> String {
 /// live session id across startup/resume/clear/compact; `Stop` re-records it
 /// *with* `permission_mode` after every response — SessionStart payloads don't
 /// carry the mode and a shift+tab mode cycle fires no event of its own, so the
-/// latest Stop record is what resume re-applies. The other four carry the tab's
+/// latest Stop record is what resume re-applies. The others carry the tab's
 /// **turn state** (`services::agent_turn`): a submitted prompt or a finished
-/// tool means working, Stop means done, a permission/elicitation notice means
-/// blocked on the user, the session's end means idle. Codex has no
-/// `Notification` hook; its approval wait is still read off its screen.
-pub const HOOK_EVENTS: [&str; 6] = [
+/// tool means working, Stop means done, a permission request (the dialog
+/// opening) or a permission/elicitation notice means blocked on the user, the
+/// session's end means idle. The notice alone came too late: Claude 2.1.322
+/// sends it 6 s after its dialog opens, and not at all for one answered sooner.
+/// Codex is registered for its own list ([`CODEX_HOOK_EVENTS`]); its approval
+/// wait is still read off its screen.
+pub const HOOK_EVENTS: [&str; 7] = [
     "SessionStart",
     "Stop",
     "UserPromptSubmit",
@@ -2882,6 +2890,7 @@ pub(crate) fn register_hook_in_settings_as(settings: &HomeFile, cmd: &str) -> st
     for event in HOOK_EVENTS {
         let entry = hooks
             .as_object_mut()
+    "PermissionRequest",
             .unwrap()
             .entry(event)
             .or_insert_with(|| serde_json::json!([]));
@@ -2927,7 +2936,8 @@ pub(crate) fn register_hook_in_settings_as(settings: &HomeFile, cmd: &str) -> st
 /// [`crate::services::codex_bind`], the hook-free fallback that keeps Codex tabs
 /// resumable meanwhile.
 /// The events registered with Codex: [`HOOK_EVENTS`] minus `Notification`,
-/// which Codex 0.154 does not offer (its approval wait is read off its screen).
+/// which Codex 0.154 does not offer, and `PermissionRequest`, which Codex 0.167
+/// offers but nobody has verified live (its approval wait is read off its screen).
 pub const CODEX_HOOK_EVENTS: [&str; 5] = [
     "SessionStart",
     "Stop",

@@ -12,9 +12,10 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
 import { reportFrontendIssue } from "../../crashReporter";
 import { isDetachedPtyId, useTabsStore, type TabKind } from "../../stores/tabs";
-import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, noteLiveTurn, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { agentDeliveryTurn, isDialogNavigationInput, isInterruptInput, lastPtyOutputAt, noteAgentResting, noteLiveTurn, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
+import { agentLabelOfCmd, dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { notePrompted } from "../../lib/agents/emptyAgentTab";
 import { noteInput } from "../../lib/agents/promptCount";
 import { forgetInputFrom, noteInputFrom } from "../../lib/agents/inputFrom";
@@ -1152,7 +1153,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (!isTerminalAutoReply(data)) {
         // Read before the keystroke retires the agent's decision verdict.
         const deciding = useActivityStore.getState().attentionByTab[id] === "decision";
-        noteUserInput(id, isInterruptInput(data));
+        // The user types into this pane, so its screen is live: a key that
+        // leaves a dialog up (the next of several questions) keeps the mark.
+        const agentPane = kind === "agent" || kind === "local_agent";
+        noteUserInput(id, isInterruptInput(data), agentPane ? {
+          navigate: isDialogNavigationInput(data),
+          stillAsking: () => dialogOnScreen(id, agentLabelOfCmd(cmd)),
+        } : undefined);
         noteInputFrom(id, "desktop");
         if (noteInput(id, data) > 0) countSubmit();
         // A typed `/clear` (or `/new`) offers "Undo clear" and empties the

@@ -17,6 +17,7 @@
 import { terminalFor } from "../terminal/terminalRegistry";
 import { answerKeys, freeTextRow, readReaderLive, UNNUMBERED } from "../agents/readerLive";
 import { typePaneKeys } from "../agents/paneKeys";
+import { dialogOnScreen } from "../agents/dialogOnScreen";
 import { selectMoveKeys, type SelectOption, type SelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
 import { agentTabLabel } from "../../stores/agents/agentModels";
 import { useActivityStore } from "../../stores/activity";
@@ -94,7 +95,7 @@ export function answerSteeringQuestion(scope: string, tab: TabEntry, n: number):
   const keys = answerKeys(question, option);
   if (keys.length === 0) return { kind: "ignored" };
   inFlight.set(ptyId, { signature, until: Date.now() + IN_FLIGHT_MS });
-  const typed = typePaneKeys(ptyId, keys);
+  const typed = typePaneKeys(ptyId, keys, () => dialogOnScreen(ptyId, live.agentLabel));
   return { kind: "answered", ptyId, agentLabel: live.agentLabel, signature, typed };
 }
 

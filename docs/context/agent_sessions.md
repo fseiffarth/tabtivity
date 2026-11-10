@@ -108,6 +108,16 @@ resumed after a crash never starts out "working" from a stale file. Codex's
 new hooks need the same one-time `/hooks` trust as its `SessionStart` one;
 until then a Codex tab stays on the byte heuristic.
 
+Claude's `decision` comes from `PermissionRequest` (Claude only, since
+2026-11-10), the dialog opening: the notice alone came 6 s late, and never for
+a dialog the user had pressed a key in (2.1.322). Answering retires the
+verdict — a declined question fires no hook at all — except where the pane is
+on screen: there `noteUserInput` keeps it while `dialogOnScreen` (the Reader's
+reading of the live xterm) still finds a dialog, since a multi-question ask
+pages through its questions under one request with no hook between, and
+Claude's cell-diff repaints never put a whole dialog in the byte tail. Arrow,
+Tab and page keys never retire it.
+
 Every record in the slice is written by the agent's hook, and a fenced agent
 can replace it with a FIFO, a link or a huge file. The host reads them all
 (`<key>`, `.turn`, `.src`, `.mode`, `.prev`, on the watcher thread and at

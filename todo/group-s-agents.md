@@ -3151,6 +3151,36 @@ unchanged; the new agents are additive.
   CodeBuddy, Droid, Cursor, Vibe, Pi, Kimi, Crush, Amp, Goose, Kiro): check
   with `verify-cli` whether each reads user skills from its home, and from
   which folder; add the ones that do to `agent_hint::SKILL_DIRS`.
+- [ ] Question mark, Claude: decision from `PermissionRequest` at once, and
+  kept while the pane still shows a dialog after an answer (2026-11-10).
+  Claude 2.1.322 sent its `permission_prompt` notice 6 s after the dialog
+  opened and never once a key was pressed in it, so the lamp came late or not
+  at all; ↑/↓ and Enter on question 1 of several retired it. Now the hook maps
+  `PermissionRequest` (plus `elicitation_url_dialog`, `agent_needs_input`) to
+  `decision`, arrow/Tab keys never retire it, and an answering key on a pane
+  on screen waits for `dialogOnScreen` to find no dialog. Backend change: a
+  restart re-registers the hook in each home.
+  - [x] 🤖 Automated test — `AgentTurnHooks` (navigation, next question,
+    hook settles), `hook_script_records_the_turn_state_for_the_tabs_own_session_only`
+  - [ ] 🖐️ Manual test — after a restart into the new dev build: (1) ask Claude
+    for a two-question AskUserQuestion, switch to another tab at once → the
+    question lamp is up within a second. (2) Back in the tab, press ↓ → still
+    up; Enter on question 1 → still up on question 2 and on the review; Submit
+    → working. (3) Again, but Cancel on the review → the lamp clears within a
+    second. (4) A plan approval (ExitPlanMode) lights it too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] Codex `PermissionRequest` hook: Codex 0.167 has the event (and
+  `Interrupt`); its question lamp still comes from the screen after ~2 s quiet.
+  Verify live (does it fire for an exec approval and for `request_user_input`,
+  payload keys, trust hash label) before adding it to `CODEX_HOOK_EVENTS` and
+  `codex_event_label`.
 - [ ] 🖐️ Reader Files · Links section — open an agent tab, have the agent print a
   claude.ai artifact link, a GitHub PR link and a file path. Reader → Files: the
   file under Files, the two links under Links (host bold, path dim, who and when),

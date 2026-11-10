@@ -11,7 +11,8 @@
 //! rounds of filtering (drop empty frames, drop braille cells) each fixed one
 //! agent's habit and broke another's reading. The agents themselves know
 //! exactly when a turn starts (`UserPromptSubmit`), pauses on the user
-//! (`Notification` with `permission_prompt`), resumes (`PostToolUse`) and ends
+//! (`PermissionRequest`, then `Notification` with `permission_prompt`), resumes
+//! (`PostToolUse`) and ends
 //! (`Stop`), and both Claude Code and Codex run Tabtivity's hook script on those
 //! events already (see `services::agent_session`). The script writes one small
 //! record per tab, `<live_sessions>/<TABTIVITY_TAB_UID>.turn`, holding the state

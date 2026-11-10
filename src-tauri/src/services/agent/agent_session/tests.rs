@@ -1354,6 +1354,23 @@ fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "SessionStart", r#","source":"startup""#));
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", ""));
     assert_eq!(cturn().as_deref(), Some("working"));
+    // The dialog opening (a question, an approval) is the decision at once:
+    // Claude 2.1.322's notice for it comes 6 s later, or never.
+    let ask = r#","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","options":[{"label":"Red"}]}]},"permission_suggestions":[]"#;
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PermissionRequest", ask));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", r#","tool_name":"AskUserQuestion""#));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // Claude's other dialog notices that wait on the user.
+    for ntype in ["elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"] {
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", ""));
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "Notification", &format!(r#","notification_type":"{ntype}""#)));
+        assert_eq!(turn().as_deref(), Some("decision"), "{ntype}");
+    }
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", ""));
+    // A nested `claude -p` asking for permission is not this tab's dialog.
+    run_hook(&script, &live, uid, claude, true, &ev(nested, "PermissionRequest", ask));
+    assert_eq!(turn().as_deref(), Some("working"));
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(nested, "Stop", ""));
     assert_eq!(cturn().as_deref(), Some("working"));
     let (rec, _) = run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "Stop", ""));
@@ -1435,7 +1452,7 @@ fn register_hook_is_idempotent_and_preserves_other_keys() {
     };
     assert!(!ours(&stop[0]) && ours(&stop[1]));
     // The turn-state events are registered too, one group each.
-    for ev in ["UserPromptSubmit", "PostToolUse", "Notification", "SessionEnd"] {
+    for ev in ["UserPromptSubmit", "PostToolUse", "PermissionRequest", "Notification", "SessionEnd"] {
         let groups = v["hooks"][ev].as_array().unwrap();
         assert_eq!(groups.len(), 1, "{ev}");
         assert!(ours(&groups[0]), "{ev}");

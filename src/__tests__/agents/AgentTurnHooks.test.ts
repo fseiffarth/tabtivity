@@ -10,6 +10,7 @@ import {
   agentDeliveryReady,
   attentionStateClass,
   agentDeliveryTurn,
+  isDialogNavigationInput,
   isInterruptInput,
   noteAgentResting,
   noteAgentSessionStart,
@@ -181,6 +182,69 @@ describe("activity store — hook verdicts", () => {
     expect(busy()).toBe(false);
     noteAgentTurn(PTY, "working");
     expect(busy()).toBe(true);
+  });
+
+  it("keeps the question while the user moves the highlight", () => {
+    noteAgentTurn(PTY, "working");
+    noteAgentTurn(PTY, "decision");
+    for (const key of ["\x1b[B", "\x1bOA", "\t", "\x1b[Z"]) {
+      expect(isDialogNavigationInput(key)).toBe(true);
+      noteUserInput(PTY, false, { navigate: true });
+      state().recompute();
+      expect(attention()).toBe("decision");
+    }
+    expect(isDialogNavigationInput("\r")).toBe(false);
+    expect(isDialogNavigationInput("1")).toBe(false);
+    expect(isDialogNavigationInput("\x1b")).toBe(false);
+    noteUserInput(PTY);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+  });
+
+  it("keeps the question while the pane still shows a dialog after an answer (the next question)", () => {
+    noteAgentTurn(PTY, "working");
+    noteAgentTurn(PTY, "decision");
+    let onScreen: boolean | null = true;
+    noteUserInput(PTY, false, { stillAsking: () => onScreen });
+    vi.advanceTimersByTime(1000);
+    state().recompute();
+    expect(attention()).toBe("decision");
+    // The review step, then Cancel: no hook follows, the dialog is gone.
+    onScreen = false;
+    vi.advanceTimersByTime(300);
+    state().recompute();
+    expect(attention()).toBe("decision");
+    vi.advanceTimersByTime(300);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+    // A hook again has the floor: the screen's conversation is not read as a menu.
+    notePtyOutput(PTY, "1. Run the tests\r\n2. Skip them\r\n");
+    vi.advanceTimersByTime(3000);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+  });
+
+  it("lets the agent's next hook settle an answered question", () => {
+    noteAgentTurn(PTY, "working");
+    noteAgentTurn(PTY, "decision");
+    const stillAsking = vi.fn(() => true);
+    noteUserInput(PTY, false, { stillAsking });
+    vi.advanceTimersByTime(100);
+    noteAgentTurn(PTY, "working");
+    vi.advanceTimersByTime(5000);
+    expect(stillAsking).not.toHaveBeenCalled();
+    expect(busy()).toBe(true);
+    // A pane with no terminal cannot tell: the answer retires the verdict.
+    noteAgentTurn(PTY, "decision");
+    noteUserInput(PTY, false, { stillAsking: () => null });
+    vi.advanceTimersByTime(300);
+    state().recompute();
+    expect(attention()).toBeUndefined();
+    // Esc is an interrupt, never a dialog to wait out.
+    noteAgentTurn(PTY, "decision");
+    noteUserInput(PTY, true, { stillAsking: () => true });
+    state().recompute();
+    expect(attention()).not.toBe("decision");
   });
 
   it("lets a quiet approval menu on screen outrank a working verdict (Codex has no notice hook)", () => {

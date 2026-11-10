@@ -318,6 +318,8 @@ const backgroundAtByPty: Record<string, number> = {};
 /// answer a question — so it stood until the user typed. Agents with no hooks
 /// never raise this, and keep the screen check.
 const awaitingHookByPty: Record<string, number> = {};
+/** The input a pending `settleAnswer` belongs to, per PTY: a newer one takes over. */
+const answerSettleByPty: Record<string, number> = {};
 /// When the tab was last opened or resized — what makes its TUI repaint (see
 /// `REPAINT_SETTLE_MS`).
 const repaintAtByPty: Record<string, number> = {};
@@ -382,6 +384,7 @@ const PTY_MAPS: Record<string, unknown>[] = [
   turnStartByPty,
   backgroundAtByPty,
   awaitingHookByPty,
+  answerSettleByPty,
   repaintAtByPty,
 ];
 
@@ -688,7 +691,7 @@ export function lastTabReadAt(ptyId: string): number | undefined {
  *  verdict, or for a tab with no hooks, bytes that read as working — marks the
  *  tab interrupted (see `interruptedByPty`). One on an idle composer (clearing
  *  the line) does not. */
-export function noteUserInput(ptyId: string, interrupt = false) {
+export function noteUserInput(ptyId: string, interrupt = false, dialog?: DialogInput) {
   // Group B #234: a popout's terminal reports to the classifier that lives in
   // the main window — the popout's own maps are never read by anything.
   if (isDetachedWindow()) {
@@ -704,15 +707,92 @@ export function noteUserInput(ptyId: string, interrupt = false) {
     if (inFlight) interruptedByPty[ptyId] = now;
   }
   inputByPty[ptyId] = now;
+  // Moving the highlight answers nothing: the question stands, hook or screen.
+  if (
+    !interrupt &&
+    dialog?.navigate &&
+    (turn?.state === "decision" || useActivityStore.getState().attentionByTab[ptyId] === "decision")
+  ) {
+    scheduleRecompute();
+    return;
+  }
   tailByPty[ptyId] = "";
   if (turn && (turn.state === "decision" || (interrupt && turn.state === "working"))) {
-    delete turnByPty[ptyId];
-    // The agent's next hook says what came of it (see `awaitingHookByPty`).
-    awaitingHookByPty[ptyId] = now;
+    if (!interrupt && turn.state === "decision" && dialog?.stillAsking) settleAnswer(ptyId, now, dialog.stillAsking);
+    else retireVerdict(ptyId, now);
   }
   // A retired verdict, a dropped tail or a fresh interrupted mark all move the
   // lamps; the trailing recompute picks them up.
   scheduleRecompute();
+}
+
+/** What a keystroke's caller can say about the dialog it may be answering
+ *  (`noteUserInput`). Given only by a pane the user is looking at: a hidden
+ *  pane's xterm is not fed, so its screen is stale. */
+export interface DialogInput {
+  /** An arrow, Tab or page key (`isDialogNavigationInput`). */
+  navigate?: boolean;
+  /** Whether the pane still shows a dialog, read off its live screen; null
+   *  when it cannot tell (no terminal). */
+  stillAsking?: () => boolean | null;
+}
+
+/** Arrows, Tab / Shift+Tab, Page Up / Down, Home / End: keys that move within
+ *  a dialog and never answer it. */
+export function isDialogNavigationInput(data: string): boolean {
+  return data === "\t" || /^\x1b(?:\[(?:1;\d+)?[A-DHFZ]|O[A-DHF]|\[[1456]~)$/u.test(data);
+}
+
+/** The agent's next hook says what came of an answered decision (see
+ *  `awaitingHookByPty`). */
+function retireVerdict(ptyId: string, at: number) {
+  delete turnByPty[ptyId];
+  awaitingHookByPty[ptyId] = at;
+}
+
+const SETTLE_POLLS = 10;
+const SETTLE_GAP_MS = 300;
+
+/**
+ * A keystroke on a decision keeps the verdict while the pane still shows a
+ * dialog. One question of several answered is the next question (Claude's
+ * AskUserQuestion pages through its questions and a review under the one
+ * `PermissionRequest`), and typing into its free-text row is still the
+ * question; neither fires a hook. Claude repaints by cell diff, so what it
+ * writes after the key never holds a whole dialog: the live screen is read
+ * instead, as the Reader reads it. Two reads with no dialog retire the verdict
+ * (an answer, a Cancel — which fires no hook at all); a hook since the input
+ * ends the wait; a dialog still up after ~3 s keeps it.
+ */
+function settleAnswer(ptyId: string, at: number, stillAsking: () => boolean | null) {
+  answerSettleByPty[ptyId] = at;
+  let empty = 0;
+  let polls = 0;
+  const poll = () => {
+    if (answerSettleByPty[ptyId] !== at) return;
+    // A hook since the input (the next dialog's request, the tool's end) has
+    // said what came of it.
+    const verdict = turnByPty[ptyId];
+    if (verdict?.state !== "decision" || verdict.at > at) {
+      delete answerSettleByPty[ptyId];
+      return;
+    }
+    const asking = stillAsking();
+    empty = asking === false ? empty + 1 : 0;
+    if (asking === null || empty >= 2) {
+      delete answerSettleByPty[ptyId];
+      retireVerdict(ptyId, at);
+      useActivityStore.getState().recompute();
+      return;
+    }
+    polls += 1;
+    if (polls >= SETTLE_POLLS) {
+      delete answerSettleByPty[ptyId];
+      return;
+    }
+    setTimeout(poll, SETTLE_GAP_MS);
+  };
+  setTimeout(poll, SETTLE_GAP_MS);
 }
 
 /** Record that a tab's agent session (re)started — its `SessionStart` hook

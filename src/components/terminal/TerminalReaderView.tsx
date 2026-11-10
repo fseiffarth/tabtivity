@@ -28,6 +28,7 @@ import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry";
 import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
+import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
@@ -1541,7 +1542,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setAnswerFailure(null);
     setAnsweredBy("row");
     stuck.current = true;
-    void typePaneKeys(ptyId, keys).catch(answerFailed);
+    void typePaneKeys(ptyId, keys, () => dialogOnScreen(ptyId, agentLabel)).catch(answerFailed);
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
@@ -1549,7 +1550,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setAnswered(live.signature);
     setAnswerFailure(null);
     setAnsweredBy("step");
-    void typePaneKeys(ptyId, keys).catch(answerFailed);
+    void typePaneKeys(ptyId, keys, () => dialogOnScreen(ptyId, agentLabel)).catch(answerFailed);
   };
   const stop = pressEscape;
   const shownLive = picking ? NO_LIVE : live;

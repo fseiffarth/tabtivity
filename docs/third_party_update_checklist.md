@@ -168,14 +168,21 @@ Claude's `/fast` — different thing.
 - Permission modes are exactly `default | plan | acceptEdits | auto | dontAsk |
   bypassPermissions` (`is_permission_mode`); anything else is dropped.
 - Hooks: `SessionStart`, `Stop`, `UserPromptSubmit`, `PostToolUse`,
-  `Notification` and `SessionEnd` (`HOOK_EVENTS`) are registered in
+  `PermissionRequest`, `Notification` and `SessionEnd` (`HOOK_EVENTS`) are registered in
   `~/.claude/settings.json` under `hooks.<Event>[].hooks[]` as
   `{type:"command", command:…}`, no matchers. The hook payload carries
   `session_id`, `hook_event_name`, (on `Stop`) `permission_mode`, and (on
   `Notification`) `notification_type` — the tab's working / decision / done
   marks (`services::agent_turn`) read `permission_prompt`,
-  `elicitation_dialog` and `idle_prompt` off it; a renamed type means the
-  decision lamp for a Claude tab falls back to the screen. The hook script
+  `elicitation_dialog`, `elicitation_url_dialog`, `agent_needs_input` and
+  `idle_prompt` off it; a renamed type means the decision lamp for a Claude
+  tab falls back to the screen. `PermissionRequest` is the lamp's real source:
+  it fires as a dialog opens (AskUserQuestion, a permission prompt, the plan
+  approval) and the notice only 6 s later, never once a key was pressed in
+  the dialog (2.1.322, `claude/ask*`/`deny` probes, 2026-11-10). A
+  multi-question ask pages through its questions and a review under that one
+  request, with no hook between; a declined ask (review → Cancel) fires no
+  hook at all, not even `Stop`. The hook script
   greps those keys with `sed`, so a renamed key breaks resume silently.
   Verified against Claude Code 2.1.282 (2026-09-25, live: a `/clear`'s
   SessionStart carried `session_id` + `source: clear`, a Stop carried
