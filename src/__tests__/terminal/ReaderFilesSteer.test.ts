@@ -88,6 +88,12 @@ describe("decide", () => {
     expect(decide(rows, "/p/a.md", "up", { shift: false, repeat: true })).toEqual({});
   });
 
+  it("on an empty list, down stays and up leaves (down never steps out of the view)", () => {
+    expect(decide([], null, "down", plain)).toEqual({});
+    expect(decide([], null, "up", plain)).toEqual({ effect: "out" });
+    expect(decide([], null, "up", { shift: false, repeat: true })).toEqual({});
+  });
+
   it("jumps sections with Shift and never leaves", () => {
     expect(decide(rows, "/p/a.md", "down", { shift: true, repeat: false })).toEqual({ cursor: "https://x.test/1" });
     expect(decide(rows, "/p/a.md", "up", { shift: true, repeat: false })).toEqual({});

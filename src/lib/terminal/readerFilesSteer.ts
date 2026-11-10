@@ -97,6 +97,8 @@ export function decide(rows: readonly Row[], cursor: string | null, action: File
         const next = jumpSection(rows, cursor, delta);
         return next !== null && next !== cursor ? { cursor: next } : {};
       }
+      // Nothing to walk: ↑ steps out as from a first row, but ↓ never leaves.
+      if (rows.length === 0 && delta > 0) return {};
       const next = stepCursor(rows, cursor, delta);
       if (next === "out") return mods.repeat ? {} : { effect: "out" };
       return next === cursor ? {} : { cursor: next };
