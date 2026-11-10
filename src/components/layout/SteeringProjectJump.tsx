@@ -25,19 +25,33 @@ function slotOfDigit(key: string): number | null {
   return digit === 0 ? RING_SLOTS - 1 : digit - 1;
 }
 
-/** Where slot `index` of `count` sits: evenly round an ellipse, the first at
- *  twelve o'clock, clockwise. Percentages of the ring box. */
+/** The wheel's track radius, in percent of the (square) wheel box. */
+const TRACK_RADIUS = 35.7;
+
+/** Where slot `index` of `count` sits: evenly round the wheel's track, the
+ *  first at twelve o'clock, clockwise. Percentages of the wheel box, plus the
+ *  angle's sine and cosine, which the stylesheet uses to push the name out
+ *  past the ring and anchor it on its outer side. */
 function ringSpot(index: number, count: number): CSSProperties {
   const angle = (2 * Math.PI * index) / count;
-  return { left: `${50 + 38 * Math.sin(angle)}%`, top: `${50 - 40 * Math.cos(angle)}%` };
+  const sin = Math.sin(angle);
+  const cos = Math.cos(angle);
+  return {
+    left: `${50 + TRACK_RADIUS * sin}%`,
+    top: `${50 - TRACK_RADIUS * cos}%`,
+    "--jump-sin": sin.toFixed(4),
+    "--jump-cos": cos.toFixed(4),
+  } as CSSProperties;
 }
 
 /**
  * Steering's project jump (the jump key, `/` by default): a search field in
- * the middle of the window. Before a letter is typed the ring holds the open
+ * the middle of the window. Before a letter is typed the wheel holds the open
  * and recently used projects (`jumpStartRows`; recency from
  * `projectRecency`, tracked from mount). While a query leaves at most ten results they
- * sit on a ring round the field, each with a digit (1–9, then 0) that opens it
+ * sit on a wheel round the field (a drawn track and hub, each a round digit
+ * badge with its name outside the track, a spoke to the highlighted one),
+ * each with a digit (1–9, then 0) that opens it
  * at once; more than that, they are a list under the field. ↑/↓ move the
  * highlight, Enter opens it: an open project is switched to, an inactive one
  * activated, a box sliced. A digit with no slot behind it types into the field,
@@ -178,18 +192,27 @@ function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
           aria-label={t("projectSearch.resultsLabel")}
           className={ring ? "steering-jump-ring" : results.length ? "steering-prompt-list steering-jump-list" : "steering-jump-ring"}
         >
+          {ring && current >= 0 && (
+            <span
+              className="steering-jump-spoke"
+              aria-hidden="true"
+              style={{ transform: `rotate(${(360 * current) / results.length}deg)` }}
+            />
+          )}
           {ring
             ? results.map((row, index) => (
                 <button
                   key={rowKey(row)}
                   {...optionProps(index)}
-                  className={index === current ? "steering-prompt-chip steering-jump-slot on" : "steering-prompt-chip steering-jump-slot"}
+                  className={index === current ? "steering-jump-slot on" : "steering-jump-slot"}
                   style={ringSpot(index, results.length)}
                   data-inactive={row.kind === "project" && row.project.status === "inactive" ? "" : undefined}
                 >
                   <kbd>{ringDigit(index)}</kbd>
-                  {row.kind === "box" && <BoxSwatch className="project-search-box-swatch" color={boxColor(row.box)} />}
-                  <span className="steering-jump-slot-name">{rowName(row)}</span>
+                  <span className="steering-jump-slot-name" title={rowName(row)}>
+                    {row.kind === "box" && <BoxSwatch className="project-search-box-swatch" color={boxColor(row.box)} />}
+                    {rowName(row)}
+                  </span>
                 </button>
               ))
             : results.map((row, index) => {
@@ -214,9 +237,11 @@ function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
       </div>
       <div className="file-delete-actions">
         <span className="steering-prompt-hint">
-          {ring && (
-            <span><kbd>1–0</kbd> {t("steering.jump.hintDigit")}</span>
-          )}
+          {/* Kept in place, only hidden, off the ring: the hint row must not
+              reflow (and the dialog resize) as the results cross ten. */}
+          <span aria-hidden={!ring || undefined} style={ring ? undefined : { visibility: "hidden" }}>
+            <kbd>1–0</kbd> {t("steering.jump.hintDigit")}
+          </span>
           <span><kbd>↑ ↓</kbd> {t("steering.jump.hintMove")}</span>
           <span><kbd>{t("steering.prompt.keyEnter")}</kbd> {t("steering.jump.hintOpen")}</span>
           <span><kbd>{t("steering.prompt.keyEsc")}</kbd> {t("steering.prompt.hintBack")}</span>

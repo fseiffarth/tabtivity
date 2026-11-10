@@ -1111,8 +1111,7 @@ html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-.steering-prompt-hint kbd,
-.steering-jump-slot kbd {
+.steering-prompt-hint kbd {
   font-family: inherit;
   font-size: var(--text-xs);
   font-weight: 600;
@@ -1124,26 +1123,37 @@ html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
 }
 
 /* Steering's project jump (SteeringProjectJump): the prompt box's dialog with
-   the search field in the middle. Up to ten results sit round it on an
-   ellipse as the prompt box's chips, each with its digit cap (inline
-   left/top from `ringSpot`); more drop to the prompt list under the field. */
+   the search field in the middle. Up to ten results sit on a wheel round it:
+   a drawn track and a hub behind the field, each result a round digit badge
+   on the track (inline left/top and the angle's --jump-sin/--jump-cos from
+   `ringSpot`) with its name pushed out past the track and anchored on its
+   outer side, a spoke from the hub to the highlighted one. More results drop
+   to the prompt list under the field. Static: only the spoke turns, and not
+   on the software paint path. */
 .file-delete-dialog.steering-jump-dialog {
+  --jump-wheel: min(420px, 58vh);
   width: min(680px, calc(100vw - 32px));
   gap: 14px;
 }
+/* One fixed height for wheel, list and no-match alike: a content-sized stage
+   resized the centered dialog on every keystroke that crossed ten results. */
 .steering-jump-stage {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  height: var(--jump-wheel);
 }
 .steering-jump-stage.is-ring {
   position: relative;
-  height: min(380px, 55vh);
   justify-content: center;
   align-items: center;
 }
 .steering-jump-center { width: 100%; }
-.steering-jump-stage.is-ring .steering-jump-center { width: min(260px, 46%); }
+.steering-jump-stage.is-ring .steering-jump-center {
+  position: relative;
+  z-index: 1;
+  width: calc(var(--jump-wheel) * 0.38);
+}
 .file-paste-name.steering-jump-input {
   width: 100%;
   padding: 8px var(--space-3);
@@ -1151,19 +1161,105 @@ html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
   background: var(--bg-input, var(--bg-panel));
   border-radius: var(--radius);
 }
+.steering-jump-stage.is-ring .file-paste-name.steering-jump-input {
+  text-align: center;
+  border-radius: 999px;
+  border-color: var(--accent);
+  background: var(--bg-elevated, var(--bg-panel));
+}
 .file-paste-name.steering-jump-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .steering-jump-ring { display: contents; }
-.steering-prompt-chip.steering-jump-slot {
+.steering-jump-stage.is-ring .steering-jump-ring {
+  display: block;
   position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--jump-wheel);
+  height: var(--jump-wheel);
+  transform: translateX(-50%);
+}
+/* The track the badges sit on, and the hub behind the field. */
+.steering-jump-stage.is-ring .steering-jump-ring::before,
+.steering-jump-stage.is-ring .steering-jump-ring::after {
+  content: "";
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.steering-jump-stage.is-ring .steering-jump-ring::before {
+  inset: 14.3%;
+  border: 1.5px solid var(--border-color);
+}
+.steering-jump-stage.is-ring .steering-jump-ring::after {
+  inset: 26.2%;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+/* From the hub's rim to the highlighted badge's, turned about the centre. */
+.steering-jump-spoke {
+  position: absolute;
+  z-index: 1;
+  left: calc(50% - 1px);
+  top: calc(50% - var(--jump-wheel) * 0.357 + 15px);
+  width: 2px;
+  height: calc(var(--jump-wheel) * (0.357 - 0.238) - 17px);
+  border-radius: 1px;
+  background: var(--accent);
+  transform-origin: 1px calc(var(--jump-wheel) * 0.357 - 15px);
+  transition: transform 120ms ease-out;
+  pointer-events: none;
+}
+:root[data-software-paint] .steering-jump-spoke { transition: none; }
+.steering-jump-slot {
+  position: absolute;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transform: translate(-50%, -50%);
-  max-width: min(180px, 30%);
-  font-size: var(--text-md);
+  color: var(--text-primary);
+  background: var(--bg-elevated, var(--bg-panel));
+  border: 1.5px solid var(--border-color);
+  border-radius: 50%;
   cursor: var(--cur-pointer, pointer);
 }
+.steering-jump-slot kbd {
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: inherit;
+}
+.steering-jump-slot.on {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* The name, out past the track along the slot's radius, anchored on its
+   outer side: left-aligned on the right half, centred at the top and bottom. */
+.steering-jump-slot .steering-jump-slot-name {
+  position: absolute;
+  left: calc(50% + 24px * var(--jump-sin));
+  top: calc(50% - 24px * var(--jump-cos));
+  max-width: 132px;
+  padding: 2px 4px;
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--text-primary);
+  transform: translate(calc(-50% + 50% * var(--jump-sin)), calc(-50% - 50% * var(--jump-cos)));
+}
 .steering-jump-slot[data-inactive] .steering-jump-slot-name { color: var(--text-muted); }
+.steering-jump-slot-name .project-search-box-swatch { margin-right: 5px; vertical-align: -1px; }
+.steering-jump-slot.on .steering-jump-slot-name {
+  font-weight: 600;
+  color: var(--accent);
+}
 .steering-jump-slot-name,
 .steering-jump-row-name {
   min-width: 0;
@@ -1176,7 +1272,7 @@ html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
   align-items: baseline;
   gap: 6px;
 }
-.steering-prompt-list.steering-jump-list { height: min(40vh, 360px); }
+.steering-prompt-list.steering-jump-list { flex: 1 1 auto; height: auto; min-height: 0; }
 .steering-jump-list .terminal-reader-option[aria-selected="true"] {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
