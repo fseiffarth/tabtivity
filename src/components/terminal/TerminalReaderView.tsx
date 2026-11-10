@@ -1554,7 +1554,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setAnswerFailure(null);
     setAnsweredBy("row");
     stuck.current = true;
-    void typePaneKeys(ptyId, keys).catch(answerFailed);
+    void typePaneKeys(ptyId, keys, () => dialogOnScreen(ptyId, agentLabel)).catch(answerFailed);
   };
   /** Answers the free-text row with the words typed under it. */
   const answerText = (index: number, text: string) => {
@@ -1575,7 +1575,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setAnswered(live.signature);
     setAnswerFailure(null);
     setAnsweredBy("step");
-    void typePaneKeys(ptyId, keys, () => dialogOnScreen(ptyId, agentLabel)).catch(answerFailed);
+    void typePaneKeys(ptyId, keys).catch(answerFailed);
   };
   const stop = pressEscape;
   const shownLive = picking ? NO_LIVE : live;
