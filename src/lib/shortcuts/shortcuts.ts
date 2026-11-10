@@ -858,9 +858,8 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *   walkRegion — a region whose ↑/↓ walk the cursor (all but the top bar)
  *   tabCard    — a card floats over the active tab's terminal (Undo clear, a
  *                sign-in link, an update notice)
+ *   subagents  — the active agent tab's Chat lists subagents, or shows one
  *   mail / calendar / todo — that header app is switched on
- *   agentClear / agentPlan / agentGoal — the active tab is an agent that takes
- *                /clear, /plan, /goal (`steeringAgent.steeringAgentOffer`)
  *   agentPrompt — the active tab is an agent (the prompt box sends to it)
  *   intoTerminal — where ←/→ step tabs, and the active tab is a terminal
  *                ↓ can scroll (the scroll level)
@@ -896,12 +895,10 @@ export type SteeringCondition =
   | "notCockpitRoster"
   | "walkRegion"
   | "tabCard"
+  | "subagents"
   | "mail"
   | "calendar"
   | "todo"
-  | "agentClear"
-  | "agentPlan"
-  | "agentGoal"
   | "agentPrompt"
   | "intoTerminal"
   | "intoDocument"
@@ -982,6 +979,8 @@ export interface SteeringLegendState {
   steeringConfirm?: boolean;
   /** A card floats over the active tab's terminal. */
   tabCard?: boolean;
+  /** The active agent tab's Chat lists subagents, or shows one. */
+  subagents?: boolean;
   multiPane: boolean;
   apps: { mail: boolean; calendar: boolean; todo: boolean };
   /** The active tab is a live terminal (↓ scrolls it). */
@@ -1039,12 +1038,8 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return !s.headerRegion && !s.chromeRegion;
     case "tabCard":
       return !!s.tabCard;
-    case "agentClear":
-      return !!s.agent?.clear;
-    case "agentPlan":
-      return !!s.agent?.plan;
-    case "agentGoal":
-      return !!s.agent?.goal;
+    case "subagents":
+      return !!s.subagents;
     case "agentPrompt":
       return !!s.agent?.prompt;
     case "intoTerminal":
@@ -1147,9 +1142,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["readerView"], labelKey: "steering.readerView.label", descKey: "steering.readerView.desc", levels: [...PANE_LEVELS, "scroll"], when: "readerViews", group: "act" },
   { actions: ["closeTab"], labelKey: "steering.closeTab.label", descKey: "steering.closeTab.desc", levels: PANE_LEVELS, group: "act" },
   { actions: ["tabCard"], labelKey: "steering.tabCard.label", descKey: "steering.tabCard.desc", levels: PANE_LEVELS, when: "tabCard", group: "act" },
-  { actions: ["agentClear"], labelKey: "steering.agentClear.label", descKey: "steering.agentClear.desc", levels: PANE_LEVELS, when: "agentClear", group: "agent" },
-  { actions: ["agentPlan"], labelKey: "steering.agentPlan.label", descKey: "steering.agentPlan.desc", levels: PANE_LEVELS, when: "agentPlan", group: "agent" },
-  { actions: ["agentGoal"], labelKey: "steering.agentGoal.label", descKey: "steering.agentGoal.desc", levels: PANE_LEVELS, when: "agentGoal", group: "agent" },
+  { actions: ["subagents"], labelKey: "steering.subagents.label", descKey: "steering.subagents.desc", levels: PANE_LEVELS, when: "subagents", group: "agent" },
   { actions: [], slots: true, labelKey: "steering.answer.label", descKey: "steering.answer.desc", levels: [...PANE_LEVELS, "scroll"], when: "question", group: "agent" },
   { actions: ["agentPrompt"], labelKey: "steering.agentPrompt.label", descKey: "steering.agentPrompt.desc", levels: [...PANE_LEVELS, "scroll"], when: "agentPrompt", group: "agent" },
   { actions: ["exit", "work"], labelKey: "steering.work.label", descKey: "steering.work.desc", levels: [...PANE_LEVELS, "scroll"], group: "mode" },

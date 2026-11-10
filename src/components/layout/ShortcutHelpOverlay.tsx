@@ -108,6 +108,7 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.pointer" />
               <UntestedTag id="steering.landOnTabs" />
               <UntestedTag id="steering.sidePanelRows" />
+              <UntestedTag id="steering.subagents" />
               <UntestedTag id="steering.shiftPanes" />
               <UntestedTag id="steering.rootView" />
               <UntestedTag id="steering.rootChrome" />

@@ -48,10 +48,12 @@ import { requestProjectJump } from "../lib/projects/projectJumpEvent";
 import {
   activateRegionCursor,
   activeProjectElement,
+  activeSubagentFrame,
   activeTabCard,
   activeTabElement,
   clearRegionCursor,
   closeRegionDropdown,
+  closeSubagentList,
   dismissLayer,
   focusRegionSearch,
   isSteeringSynthetic,
@@ -60,7 +62,9 @@ import {
   moveRegionCursorByLine,
   openContextMenu,
   openCursorPopup,
+  openSubagentList,
   placeRegionCursor,
+  placeSubagentCursor,
   pointRegionCursor,
   regionCursor,
   regionForLayer,
@@ -287,7 +291,9 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       const place = (el: HTMLElement) =>
         region === "side"
           ? placeSidePanelCursor(el, resume)
-          : resume
+          : region === "subagents"
+            ? placeSubagentCursor(el)
+            : resume
             ? resumeRegionCursor(el)
             : region === "cockpit"
               ? placeRegionCursor(el.querySelector<HTMLElement>(".cockpit-roster-list") ?? el) || placeRegionCursor(el)
@@ -449,6 +455,9 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         if (settingsDialog()) window.dispatchEvent(new Event("app:close-settings"));
       } else if (region === "overlay") {
         dropOverlay();
+      } else if (region === "subagents") {
+        const frame = regionRoot(region);
+        if (frame) closeSubagentList(frame);
       } else if (region !== "header" && region !== "card" && region !== "chrome" && region !== "cockpit") {
         closeApp(region);
       }
@@ -801,30 +810,38 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         case "tabCard":
           if (activeTabCard()) enterRegion("card");
           return;
+        // The agent tab's subagents: its Subagents list opened under the
+        // cursor (Enter opens one in the Chat), or an open one's bar.
+        case "subagents": {
+          const frame = activeSubagentFrame();
+          if (!frame) return;
+          if (!openSubagentList(frame)) {
+            enterRegion("subagents");
+            return;
+          }
+          // The list draws after this key: the cursor lands on it then, not
+          // on the toggle it would find now.
+          clearRegionCursor();
+          useKeyboardSteeringStore.getState().enterRegion("subagents");
+          cancelPlace();
+          placeTimer = window.setTimeout(() => {
+            placeTimer = null;
+            const s = useKeyboardSteeringStore.getState();
+            if (s.active && s.region === "subagents") placeCursorSoon("subagents");
+          }, 0);
+          return;
+        }
         case "menu": {
           // The active tab's right-click menu (rename, colour, split, …).
           const tab = activeTabElement();
           if (tab) openContextMenu(tab);
           return;
         }
-        // The phone composer's Clear / Plan / Goal, on the active agent tab
-        // (`steeringAgent`). Steering stays on: Clear asks first, as Close
-        // does, then goes in (Undo clear shows on the tab); Plan / Goal open
-        // the prompt box below led with their command. A tab that takes none
-        // of them leaves the key swallowed.
-        case "agentClear": {
-          const active = steeringActiveTab();
-          if (active) requestSteeringConfirm("agentClear", active.scope, active.tab);
-          return;
-        }
         // A text box over the window for the active agent tab; Enter sends it
         // and steering comes back on this level (the box re-enters it).
-        case "agentPlan":
-        case "agentGoal":
         case "agentPrompt": {
           const active = steeringActiveTab();
-          const lead = action === "agentPlan" ? "/plan" : action === "agentGoal" ? "/goal" : undefined;
-          if (active && requestSteeringPrompt(active.scope, active.tab, level, lead)) handOffSteering("prompt");
+          if (active && requestSteeringPrompt(active.scope, active.tab, level)) handOffSteering("prompt");
           return;
         }
       }
@@ -1056,7 +1073,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
             // now has the keyboard; anything else goes back a level.
             syncSoon(() => {
               const s = useKeyboardSteeringStore.getState();
-              if (!s.active || s.region !== region || regionRoot(region)) return;
+              if (!s.active || s.region !== region) return;
+              // A subagent picked from the list: its bar now holds the cursor.
+              if (region === "subagents" && regionRoot(region)) {
+                if (!regionCursor()) placeCursorSoon(region);
+                return;
+              }
+              if (regionRoot(region)) return;
               if (region === "addTab") exitSteering();
               else returnFromRegion();
             });

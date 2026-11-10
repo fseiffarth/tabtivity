@@ -11,7 +11,7 @@ import { STEERING_GROUPS, modifierLabel, projectCycleLabels, steeringKeysFor, ty
 import { steeringKeyLabel, steeringKeys, steeringSlotKey, type SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
 import { inCockpitRoster } from "../../lib/shortcuts/steeringCockpit";
 import { newTabSlotLabels } from "../../lib/shortcuts/newTabChord";
-import { activeTabCard, steeringAppEnabled } from "../../lib/shortcuts/steeringRegion";
+import { activeSubagentFrame, activeTabCard, steeringAppEnabled } from "../../lib/shortcuts/steeringRegion";
 import { jumpBackTarget, shownStatusTab, statusTabs } from "../../lib/shortcuts/statusJump";
 import { steeringTabAsks } from "../../lib/shortcuts/steeringAnswer";
 import { steeringAgentOffer } from "../../lib/shortcuts/steeringAgent";
@@ -202,6 +202,7 @@ export function SteeringLegend() {
           cockpitRoster: region === "cockpit" && inCockpitRoster(),
           steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
           tabCard: inPane && !!activeTabCard(),
+          subagents: inPane && !!activeSubagentFrame(),
           multiPane,
           apps: { mail, calendar, todo },
           agent: steeringAgentOffer(activeTab),

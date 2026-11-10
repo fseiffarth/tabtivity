@@ -62,9 +62,6 @@ export type SteeringAction =
   | "newTabMenu"
   | "files"
   | "closeTab"
-  | "agentClear"
-  | "agentPlan"
-  | "agentGoal"
   | "agentPrompt"
   | "nextDecision"
   | "nextWorking"
@@ -78,6 +75,7 @@ export type SteeringAction =
   | "readerView"
   | "menu"
   | "tabCard"
+  | "subagents"
   | "cockpitPanel"
   | "cockpitDown"
   | "cockpitUp"
@@ -148,9 +146,8 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "files", labelKey: "steering.files.label", scopes: ["panes"], defaults: ["v"] },
   { action: "closeTab", labelKey: "steering.closeTab.label", scopes: ["panes"], defaults: ["w"] },
   { action: "tabCard", labelKey: "steering.tabCard.label", scopes: ["panes"], defaults: ["a"] },
-  { action: "agentClear", labelKey: "steering.agentClear.label", scopes: ["panes"], defaults: ["k"] },
-  { action: "agentPlan", labelKey: "steering.agentPlan.label", scopes: ["panes"], defaults: ["l"] },
-  { action: "agentGoal", labelKey: "steering.agentGoal.label", scopes: ["panes"], defaults: ["g"] },
+  // G: the agent tab's Subagents list (A, its card, was taken).
+  { action: "subagents", labelKey: "steering.subagents.label", scopes: ["panes"], defaults: ["g"] },
   { action: "agentPrompt", labelKey: "steering.agentPrompt.label", scopes: ["panes"], defaults: [" "] },
   { action: "nextDecision", labelKey: "steering.nextDecision.label", scopes: TAB_BAR, defaults: ["q"] },
   { action: "nextWorking", labelKey: "steering.nextWorking.label", scopes: TAB_BAR, defaults: ["r"] },

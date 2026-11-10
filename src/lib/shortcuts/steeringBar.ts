@@ -36,6 +36,7 @@ export type CapAnchor =
   | "add"
   | "files"
   | "card"
+  | "subagents"
   | "prompt"
   | "cursor";
 
@@ -55,10 +56,8 @@ const ACTION_ANCHOR: Partial<Record<SteeringAction, CapAnchor>> = {
   newTabMenu: "add",
   files: "files",
   tabCard: "card",
+  subagents: "subagents",
   agentPrompt: "prompt",
-  agentPlan: "prompt",
-  agentGoal: "prompt",
-  agentClear: "prompt",
   press: "cursor",
 };
 
@@ -69,9 +68,6 @@ const ALSO_IN_BAR: ReadonlySet<CapAnchor> = new Set(["cursor"]);
 /** Order of a prompt strip's caps: I L G K reads as the prompt box first. */
 const CAP_RANK: Partial<Record<SteeringAction, number>> = {
   agentPrompt: 0,
-  agentPlan: 1,
-  agentGoal: 2,
-  agentClear: 3,
 };
 
 /** The anchor a row is pinned to, or null when it belongs in the bar. */
@@ -238,6 +234,7 @@ export const REGION_LABEL: Record<SteeringRegion, TranslationKey> = {
   header: "steering.region.header",
   chrome: "steering.region.chrome",
   card: "steering.region.card",
+  subagents: "steering.region.subagents",
   overlay: "steering.region.overlay",
 };
 

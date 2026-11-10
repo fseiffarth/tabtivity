@@ -50,9 +50,12 @@ describe("steering bindings", () => {
   });
 
   it("has the agent keys inside a pane only", () => {
-    expect(steeringActionFor(ev("k"), "panes", null)).toBe("agentClear");
-    expect(steeringActionFor(ev("l"), "panes", null)).toBe("agentPlan");
-    expect(steeringActionFor(ev("g"), "panes", null)).toBe("agentGoal");
+    expect(steeringActionFor(ev("k"), "panes", null)).toBeNull();
+    expect(steeringActionFor(ev("l"), "panes", null)).toBeNull();
+    // G is the subagents list now (an agent tab's, but not an agent key).
+    expect(steeringActionFor(ev("g"), "panes", null)).toBe("subagents");
+    expect(steeringActionFor(ev("g"), "projects", null)).toBeNull();
+    expect(steeringActionFor(ev(" "), "panes", null)).toBe("agentPrompt");
     expect(steeringActionFor(ev("k"), "projects", null)).toBeNull();
   });
 
@@ -119,8 +122,10 @@ describe("steering legend agent rows", () => {
     expect(labels({})).not.toContain("steering.agentClear.label");
     const gemini = labels({ agent: { clear: true, plan: true, goal: false, prompt: true } });
     expect(gemini).toEqual(
-      expect.arrayContaining(["steering.agentClear.label", "steering.agentPlan.label", "steering.agentPrompt.label"]),
+      expect.arrayContaining(["steering.agentPrompt.label"]),
     );
+    expect(gemini).not.toContain("steering.agentClear.label");
+    expect(gemini).not.toContain("steering.agentPlan.label");
     expect(gemini).not.toContain("steering.agentGoal.label");
     expect(labels({ level: "projects", agent: { clear: true, plan: true, goal: true, prompt: true } })).not.toContain(
       "steering.agentClear.label",

@@ -42,6 +42,9 @@ export type SteeringRegion =
   /** The card over the active tab's terminal (Undo clear, a sign-in link, a
    *  CLI update notice). */
   | "card"
+  /** The active agent tab's Subagents list (the Chat's top bar) and, with a
+   *  subagent open, its bar (back, previous / next). */
+  | "subagents"
   /** The dialog, right-click menu or top-bar menu on top of everything
    *  (`steeringRegion.topLayer`) — any of them, walked the same way. */
   | "overlay";

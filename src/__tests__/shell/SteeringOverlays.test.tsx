@@ -434,6 +434,123 @@ describe("the active tab's card", () => {
   });
 });
 
+describe("the agent tab's subagents", () => {
+  /** An agent tab's pane, as `TerminalView` draws it: the prompt strip's top
+   *  bar holding the Subagents list (portaled there by the Chat), then the
+   *  Chat, which shows an open subagent's bar. */
+  function Pane({ agents = 2 }: { agents?: number }) {
+    const [listOpen, setListOpen] = useState(false);
+    const [opened, setOpened] = useState<number | null>(null);
+    return (
+      <div className="subwindow focused">
+        <div className="pane-host">
+          <div className="terminal-prompt-strip">
+            <button type="button" id="other">other</button>
+            <span className="reader-topbar-navigation">
+              {agents > 0 && (
+                <nav className="terminal-reader-subagent-index">
+                  <button type="button" id="toggle" className="terminal-reader-subagent-toggle" aria-expanded={listOpen} onClick={() => setListOpen((was) => !was)}>
+                    Subagents
+                  </button>
+                  {listOpen && (
+                    <div className="terminal-reader-subagent-list">
+                      {Array.from({ length: agents }, (_, i) => (
+                        <button type="button" key={i} id={`agent-${i}`} onClick={() => { setOpened(i); setListOpen(false); }}>
+                          agent {i}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </nav>
+              )}
+            </span>
+          </div>
+          <div className="terminal-reader">
+            {opened !== null && (
+              <nav className="terminal-reader-subagent-bar">
+                <button type="button" id="sub-back" className="terminal-reader-subagent-nav" onClick={() => setOpened(null)}>‹</button>
+                <strong id="sub-title">agent {opened}</strong>
+              </nav>
+            )}
+            <button type="button" id="chat-link">a link in the chat</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  it("G opens the list on its first subagent; Enter opens it and the cursor moves to its bar", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    expect(steering()).toMatchObject({ level: "region", region: "subagents", regionReturn: "tabs" });
+    await settle();
+    expect(regionCursor()?.id).toBe("agent-0");
+    press({ key: "ArrowDown" });
+    expect(regionCursor()?.id).toBe("agent-1");
+    // The walk keeps to the subagent controls: on round to the toggle.
+    press({ key: "ArrowDown" });
+    expect(regionCursor()?.id).toBe("toggle");
+    press({ key: "ArrowUp" });
+    press({ key: "Enter" });
+    await settle();
+    expect(document.getElementById("sub-title")?.textContent).toBe("agent 1");
+    expect(steering()).toMatchObject({ level: "region", region: "subagents" });
+    expect(regionCursor()?.id).toBe("sub-back");
+
+    // Back out, then G again with a subagent open: straight onto its bar.
+    press({ key: "Escape" });
+    expect(steering()).toMatchObject({ level: "tabs", region: null });
+    press({ key: "g" });
+    await settle();
+    expect(document.querySelector(".terminal-reader-subagent-list")).toBeNull();
+    expect(regionCursor()?.id).toBe("sub-back");
+  });
+
+  it("Escape closes the list it opened", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    await settle();
+    expect(document.querySelector(".terminal-reader-subagent-list")).not.toBeNull();
+    press({ key: "Escape" });
+    expect(steering()).toMatchObject({ level: "tabs", region: null });
+    expect(document.querySelector(".terminal-reader-subagent-list")).toBeNull();
+  });
+
+  it("G does nothing on a tab without subagents, and the legend lists it only with them", () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane agents={0} />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    expect(steering()).toMatchObject({ level: "tabs", region: null });
+    const base: SteeringLegendState = {
+      level: "tabs",
+      sideRegion: false,
+      multiPane: false,
+      apps: { mail: false, calendar: false, todo: false },
+      statusCounts: { decision: 0, working: 0, done: 0 },
+    };
+    const listed = (s: SteeringLegendState) => steeringKeysFor(s).some((row) => row.actions.includes("subagents"));
+    expect(listed(base)).toBe(false);
+    expect(listed({ ...base, subagents: true })).toBe(true);
+  });
+});
+
 describe("the top bar", () => {
   it("↑ from the projects walks it; ↓ drops a button's menu, Escape takes it back to the button", async () => {
     const plain = vi.fn();

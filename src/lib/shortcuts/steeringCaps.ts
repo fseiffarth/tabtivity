@@ -8,7 +8,7 @@
  * A control that is not on screen (the panel is hidden, the active tab is no
  * agent's) has no placement, and its keys fall back into the bar.
  */
-import { activeTabCard } from "./steeringRegion";
+import { activeSubagentFrame, activeTabCard } from "./steeringRegion";
 import type { CapAnchor } from "./steeringBar";
 
 /** Where a cap row sits: the corner it hangs from and the side of the control
@@ -65,6 +65,14 @@ const ANCHORS: Record<CapAnchor, AnchorDef> = {
   add: { find: () => first(`${FOCUSED} .tab-new-btn`), align: "start" },
   files: { find: () => first(`${FOCUSED} .subwindow-files-toggle`), align: "end" },
   card: { find: () => activeTabCard(), align: "end" },
+  // On the Subagents toggle; with a subagent open, on its bar.
+  subagents: {
+    find: () =>
+      activeSubagentFrame()?.querySelector<HTMLElement>(
+        ".terminal-reader-subagent-toggle, .terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)",
+      ) ?? null,
+    align: "end",
+  },
   prompt: { find: () => first(`${FOCUSED} .prompt-strip`), align: "start" },
   // The control the region cursor is on: Enter presses it.
   cursor: { find: () => first(".steer-cursor"), align: "end" },

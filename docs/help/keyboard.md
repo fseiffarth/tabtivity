@@ -94,6 +94,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | Tab / Shift+Tab | On an agent tab with a view strip: the next / previous view, Chat → Diffs → Files → Terminal (wraps; views with nothing to show are skipped). Works on the subwindow, tab and Inside levels and keeps the level |
 | W | Close the active tab |
 | A | Walk the card over the active tab (Undo clear, a sign-in link) |
+| G | On an agent tab whose Chat lists subagents: open its Subagents list and walk it — E D move, Enter opens a subagent's conversation and the highlight moves to its bar (‹ back, ‹ › previous / next); with one already open, G lands on its bar. Esc closes the list |
 | . | The right-click menu of the active tab (projects: of the project; in a panel: of the highlighted row) |
 | B | Open the side panel |
 | P | Toggle the side panels |

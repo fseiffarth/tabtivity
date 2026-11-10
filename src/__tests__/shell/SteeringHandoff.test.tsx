@@ -20,7 +20,6 @@ import { SteeringLegend } from "../../components/layout/SteeringLegend";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
-import { STEERING_PROMPT_EVENT, type SteeringPromptDetail } from "../../lib/shortcuts/steeringAgent";
 import { BRAND } from "../../lib/brand";
 
 function Harness() {
@@ -105,26 +104,5 @@ describe("steering hand-off", () => {
     });
     press("Escape");
     expect(steering()).toMatchObject({ active: true, level: "region", region: "side", handedTo: null });
-  });
-
-  it("Plan opens the prompt box led with /plan instead of leaving the mode", () => {
-    const seen: SteeringPromptDetail[] = [];
-    const box = (e: Event) => {
-      const detail = (e as CustomEvent<SteeringPromptDetail>).detail;
-      detail.handled = true;
-      seen.push(detail);
-    };
-    window.addEventListener(STEERING_PROMPT_EVENT, box);
-    try {
-      useTabsStore.getState().addTab({ label: "claude", cmd: "claude", cwd: "/p", kind: "agent" });
-      render(<Harness />);
-      act(() => steering().enter());
-      press("l");
-      expect(seen).toHaveLength(1);
-      expect(seen[0].lead).toBe("/plan");
-      expect(steering()).toMatchObject({ active: false, handedTo: "prompt" });
-    } finally {
-      window.removeEventListener(STEERING_PROMPT_EVENT, box);
-    }
   });
 });

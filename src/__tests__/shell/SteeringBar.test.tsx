@@ -111,7 +111,7 @@ describe("steering bar model", () => {
     ]);
     const text = (a: CapAnchor) => m.caps.get(a)!.flatMap((r) => r.caps.map((c) => c.key));
     expect(text("add")).toEqual(["N", "O", "1–3", "+"]);
-    expect(text("prompt")).toEqual(["Space", "L", "G", "K"]);
+    expect(text("prompt")).toEqual(["Space"]);
     // Each cap wears its group's token colour.
     expect(m.caps.get("add")![0].caps[0].tok).toBe("tok-string");
     expect(m.caps.get("prompt")![0].caps[0].tok).toBe("tok-keyword");

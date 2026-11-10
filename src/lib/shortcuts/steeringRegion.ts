@@ -58,6 +58,11 @@ const chromeFrames = new WeakSet<HTMLElement>();
  *  whole window but its view strip, which is the chrome level's. */
 const appFrames = new WeakSet<HTMLElement>();
 const APP_SKIP = ".root-view-strip";
+/** What the subagents region walks in an agent tab's pane: the Subagents (and
+ *  Workspaces) lists in the Chat's top bar, and an open subagent's bar. */
+const SUBAGENT_ZONE = ".terminal-reader-subagent-index, .terminal-reader-subagent-bar";
+/** The panes the subagents region walks, so `regionTargets` keeps to its zone. */
+const subagentFrames = new WeakSet<HTMLElement>();
 /** What the chrome level walks: the title bar's view tabs and buttons, and the
  *  rail's fold toggle. */
 const CHROME_ZONE = ".root-overlay-bar, .cockpit-rail-expand, .cockpit-rail-collapse";
@@ -95,6 +100,11 @@ export function regionRoot(region: SteeringRegion): HTMLElement | null {
     }
     case "card":
       return activeTabCard();
+    case "subagents": {
+      const frame = activeSubagentFrame();
+      if (frame) subagentFrames.add(frame);
+      return frame;
+    }
     case "overlay": {
       // The same frame, walked whole (a cockpit view opened with U).
       const layer = topLayer();
@@ -299,6 +309,52 @@ export function activeTabCard(): HTMLElement | null {
   return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
 }
 
+/** The active agent tab's Subagents toggle, or its open subagent's bar —
+ *  whichever is on screen first; only the active tab's pane is. */
+function activeSubagentControl(): HTMLElement | null {
+  const controls = ".terminal-reader-subagent-toggle, .terminal-reader-subagent-bar";
+  if (steeringInRoot()) {
+    return Array.from(document.querySelectorAll<HTMLElement>(`.root-console-backdrop :is(${controls})`)).find(shown) ?? null;
+  }
+  const all = Array.from(document.querySelectorAll<HTMLElement>(`.subwindow.focused :is(${controls})`));
+  return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
+}
+
+/** The pane the subagents region walks: the one holding both the Chat's top bar
+ *  (the Subagents list) and the Chat (an open subagent's bar). Null while the
+ *  active tab shows neither — no agent tab, the Terminal view, no subagents. */
+export function activeSubagentFrame(): HTMLElement | null {
+  let pane = activeSubagentControl()?.parentElement ?? null;
+  while (pane && !pane.querySelector(".terminal-reader")) pane = pane.parentElement;
+  return pane;
+}
+
+/** Open the pane's Subagents list unless a subagent is open (its bar is then
+ *  what the region walks first). True when it pressed the toggle: the list
+ *  draws after this event, not yet. */
+export function openSubagentList(frame: HTMLElement): boolean {
+  if (frame.querySelector(".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)")) return false;
+  const toggle = Array.from(frame.querySelectorAll<HTMLElement>(".terminal-reader-subagent-toggle")).find(shown);
+  if (!toggle || toggle.getAttribute("aria-expanded") === "true") return false;
+  toggle.click();
+  return true;
+}
+
+/** Close whichever of the pane's lists is open. */
+export function closeSubagentList(frame: HTMLElement): void {
+  frame.querySelector<HTMLElement>('.terminal-reader-subagent-toggle[aria-expanded="true"]')?.click();
+}
+
+/** The subagents region's first stop: an open list's first subagent (the ones
+ *  at work head it), else an open subagent's Back, else the Subagents toggle. */
+export function placeSubagentCursor(frame: HTMLElement): boolean {
+  if (cursor?.isConnected && frame.contains(cursor) && regionTargets(frame).includes(cursor)) return true;
+  const first =
+    frame.querySelector<HTMLElement>(".terminal-reader-subagent-list button:not(:disabled)") ??
+    frame.querySelector<HTMLElement>(".terminal-reader-subagent-bar .terminal-reader-subagent-nav:not(:disabled)");
+  return (first && pointRegionCursor(frame, first)) || placeRegionCursor(frame);
+}
+
 /** The current project's pill (or box chip) in the header. */
 export function activeProjectElement(): HTMLElement | null {
   return Array.from(document.querySelectorAll<HTMLElement>(".project-pill.active, .box-chip.active")).find(shown) ?? null;
@@ -376,6 +432,7 @@ export function regionTargets(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];
   const chrome = chromeFrames.has(root);
   const app = appFrames.has(root);
+  const subagents = subagentFrames.has(root);
   // Every element's cursor is read once: a parent comes before its children
   // in document order, so its answer is already here when they ask. (The mail
   // overlay is thousands of elements; each step walks them all.)
@@ -392,6 +449,7 @@ export function regionTargets(root: HTMLElement): HTMLElement[] {
     if (el.closest(NOT_A_TARGET)) continue;
     if (chrome && (!el.closest(CHROME_ZONE) || el.closest(CHROME_SKIP))) continue;
     if (app && el.closest(APP_SKIP)) continue;
+    if (subagents && !el.closest(SUBAGENT_ZONE)) continue;
     const pressable = el.matches(PRESSABLE);
     if (!pressable) {
       if (!pointerOf(el)) continue;
