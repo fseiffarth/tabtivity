@@ -2592,6 +2592,8 @@ export const dict: Dict = {
   "steering.focus.desc": "Sposta il focus alla sottofinestra precedente / successiva (ordine del documento, ciclico).",
   "steering.tabs.label": "Cambia scheda",
   "steering.tabs.desc": "Scheda precedente / successiva — dopo l'ultima (prima della prima) scheda di una sottofinestra le frecce proseguono nella sottofinestra successiva (precedente): ogni scheda è a poche frecce di distanza.",
+  "steering.tabKey.label": "Scheda successiva",
+  "steering.tabKey.desc": "Scheda successiva (Maiusc: precedente) — dopo l'ultima (prima della prima) scheda di una sottofinestra si prosegue nella sottofinestra successiva (precedente); le frecce fanno lo stesso dove non scorrono le sottofinestre.",
   "steering.focusShift.label": "Cambia sottofinestra",
   "steering.focusShift.desc": "Sottofinestra precedente / successiva direttamente dalle schede (ordine del documento, ciclico) — senza salire prima di un livello.",
   "steering.upPanes.label": "Alle sottofinestre",

@@ -2594,6 +2594,8 @@ export const dict: Dict = {
   "steering.focus.desc": "Fokus auf das vorherige / nächste Unterfenster (Dokumentreihenfolge, umlaufend).",
   "steering.tabs.label": "Tab wechseln",
   "steering.tabs.desc": "Vorheriger / nächster Tab — hinter dem letzten (vor dem ersten) Tab eines Unterfensters geht es ins nächste (vorherige) Unterfenster weiter, so ist jeder Tab nur ein paar Pfeiltasten entfernt.",
+  "steering.tabKey.label": "Nächster Tab",
+  "steering.tabKey.desc": "Nächster Tab (Umschalt: vorheriger) — hinter dem letzten (vor dem ersten) Tab eines Unterfensters geht es ins nächste (vorherige) Unterfenster weiter; die Pfeiltasten tun dasselbe, wo sie nicht die Unterfenster wechseln.",
   "steering.focusShift.label": "Unterfenster wechseln",
   "steering.focusShift.desc": "Vorheriges / nächstes Unterfenster direkt von den Tabs aus (Dokumentreihenfolge, umlaufend) — ohne erst eine Ebene hochzugehen.",
   "steering.upPanes.label": "Zu den Unterfenstern",

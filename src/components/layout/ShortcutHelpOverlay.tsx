@@ -114,6 +114,7 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.rootChrome" />
               <UntestedTag id="steering.answerDigits" />
               <UntestedTag id="steering.jumpBack" />
+              <UntestedTag id="steering.tabKey" />
             </h3>
             <p className="shortcut-help-intro">
               {t("shortcutHelp.steeringIntro", {

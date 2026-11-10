@@ -635,7 +635,8 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     }
 
     // The panes and tabs levels. With one subwindow there is nothing for ←/→
-    // to walk between, so they step its tabs at once.
+    // to walk between, so they step its tabs at once. Tab (Shift: back) steps
+    // the tabs on both levels.
     function steerPanes(e: KeyboardEvent, action: SteeringAction | null, level: "panes" | "tabs" | "scroll") {
       const steering = useKeyboardSteeringStore.getState();
       const tabs = useTabsStore.getState();
@@ -745,8 +746,9 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           else if (steeringActivePty() || steeringActiveDocument()) steering.setLevel("scroll");
           return;
         case "left":
-        case "right": {
-          const fwd = action === "right";
+        case "right":
+        case "nextTab": {
+          const fwd = action === "nextTab" ? !e.shiftKey : action === "right";
           const neighbour = (id: string | null) => {
             const from = id ? ids.indexOf(id) : -1;
             const base = from >= 0 ? from : 0;
@@ -757,9 +759,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           const carryFullscreen = (id: string) => {
             if (!inRoot && tabs.fullscreenGroupId && tabs.fullscreenGroupId !== id) tabs.toggleFullscreen(id);
           };
-          // Shift on the tabs level walks the subwindows too, without the
-          // round trip up to the panes level and back down.
-          if (walksPanes || (level === "tabs" && e.shiftKey && ids.length >= 2)) {
+          // Shift+←/→ on the tabs level walks the subwindows too, without the
+          // round trip up to the panes level and back down. Tab always steps
+          // the tabs.
+          const walk = level === "panes" ? walksPanes : e.shiftKey && ids.length >= 2;
+          if (action !== "nextTab" && walk) {
             // Document order, wrapping, committed at once via focusGroup (no
             // Shift-preview: the badges re-anchor each step).
             const next = neighbour(focused);
@@ -770,9 +774,9 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
             const cur = group.activeKey ? group.tabKeys.indexOf(group.activeKey) : 0;
             const step = cur + (fwd ? 1 : -1);
             if (ids.length >= 2 && (step < 0 || step >= len)) {
-              // Past the subwindow's last (first) tab the arrows walk on into
+              // Past the subwindow's last (first) tab the keys walk on into
               // the next (previous) subwindow's first (last) tab, so every tab
-              // is a run of ←/→ away; the last tab of all wraps to the first.
+              // is a run of presses away; the last tab of all wraps to the first.
               const next = neighbour(group.id);
               const nextGroup = findGroup(layout, next);
               const key = nextGroup?.tabKeys[fwd ? 0 : nextGroup.tabKeys.length - 1];

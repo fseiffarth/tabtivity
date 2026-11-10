@@ -5,7 +5,7 @@
  * Unlike the chords, a steering binding is a bare key (`KeyboardEvent.key`,
  * normalized by `normalizeKey`): the mode swallows every key anyway, so no
  * modifier is needed to keep one apart from typing, and Shift already means
- * something (the status jumps walk backwards with it, and `?` or `+` are
+ * something (the status jumps and Tab walk backwards with it, and `?` or `+` are
  * shifted on many layouts). Each action holds up to two keys — the home-row
  * letter and its arrow, say — stored in `settings.steering_keys` as the whole
  * list, so a user list replaces the defaults, and an empty list unbinds.
@@ -47,6 +47,7 @@ export type SteeringAction =
   | "down"
   | "left"
   | "right"
+  | "nextTab"
   | "work"
   | "back"
   | "press"
@@ -133,6 +134,10 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "down", labelKey: "steeringKeys.down", scopes: ["mode"], defaults: ["d", "ArrowDown"] },
   { action: "left", labelKey: "steeringKeys.left", scopes: ["mode"], defaults: ["s", "ArrowLeft"] },
   { action: "right", labelKey: "steeringKeys.right", scopes: ["mode"], defaults: ["f", "ArrowRight"] },
+  // Tab (Shift: back) steps the tabs across the subwindows on both pane
+  // levels; ←/→ step them too where they don't walk the subwindows.
+  // No default: Tab is the Reader view cycle (`readerView`); bound, it steps the tabs.
+  { action: "nextTab", labelKey: "steering.tabKey.label", scopes: ["panes"], defaults: [] },
   { action: "work", labelKey: "steering.work.label", scopes: TAB_BAR, defaults: ["Enter"] },
   { action: "newProject", labelKey: "steering.newProject.label", scopes: ["projects"], defaults: ["n"] },
   { action: "mail", labelKey: "steering.mail.label", scopes: TAB_BAR, defaults: ["m"] },

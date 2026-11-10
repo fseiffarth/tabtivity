@@ -2608,6 +2608,8 @@ export const enSource = {
   "steering.focus.desc": "Move the focus to the previous / next subwindow (document order, wrapping).",
   "steering.tabs.label": "Switch tab",
   "steering.tabs.desc": "Previous / next tab — past the subwindow's last (first) tab the arrows go on into the next (previous) subwindow, so every tab is a run of arrow presses away.",
+  "steering.tabKey.label": "Next tab",
+  "steering.tabKey.desc": "Next tab (Shift: previous) — past the subwindow's last (first) tab it goes on into the next (previous) subwindow; the arrows do the same where they don't walk the subwindows.",
   "steering.focusShift.label": "Switch subwindow",
   "steering.focusShift.desc": "Previous / next subwindow straight from the tabs (document order, wrapping) — no need to go up a level first.",
   "steering.upPanes.label": "To the subwindows",

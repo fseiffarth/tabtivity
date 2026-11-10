@@ -188,6 +188,29 @@ describe("steering levels", () => {
     expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
   });
 
+  it("Next tab (bound to Tab) steps the tabs on both levels, across the subwindows", () => {
+    // Unbound by default — Tab is the Reader view cycle; bound, it still wins
+    // over that (the earlier table row).
+    useSettingsStore.setState({ settings: { steering_keys: { nextTab: ["Tab"] } } as never });
+    const { a, b } = twoPanes();
+    const [a1, a2] = allGroups(useTabsStore.getState().layout).find((g) => g.id === a)!.tabKeys;
+    const [b1] = allGroups(useTabsStore.getState().layout).find((g) => g.id === b)!.tabKeys;
+    useTabsStore.getState().setGroupActive(a, a1);
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "Tab" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a2 });
+    press({ key: "Tab" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+    expect(steering().level).toBe("tabs");
+    // On the subwindow level Tab still steps tabs, where ←/→ walk subwindows.
+    press({ key: "ArrowUp" });
+    expect(steering().level).toBe("panes");
+    press({ key: "Tab", shiftKey: true });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a2 });
+    expect(steering().level).toBe("panes");
+  });
+
   it("carries a fullscreen subwindow along when the focus moves", () => {
     const { a, b } = twoPanes();
     useTabsStore.getState().toggleFullscreen(a);
@@ -492,6 +515,16 @@ describe("legend table", () => {
   it("lists a header app only while it is switched on", () => {
     expect(labels({})).not.toContain("steering.mail.label");
     expect(labels({ apps: { mail: true, calendar: false, todo: false } })).toContain("steering.mail.label");
+  });
+
+  it("lists next tab on both pane levels, unbound until the user gives it a key", () => {
+    expect(labels({ level: "panes", multiPane: true })).toContain("steering.tabKey.label");
+    expect(labels({ level: "tabs" })).toContain("steering.tabKey.label");
+    expect(labels({ level: "projects" })).not.toContain("steering.tabKey.label");
+    const row = steeringKeysFor({ ...base, level: "tabs" }).find((k) => k.labelKey === "steering.tabKey.label")!;
+    // Tab is the Reader view cycle by default.
+    expect(steeringRowLabel(row, null)).toBe("—");
+    expect(steeringRowLabel(row, { nextTab: ["Tab"] })).toBe("Tab");
   });
 
   it("names what ←/→ do on the panes level", () => {

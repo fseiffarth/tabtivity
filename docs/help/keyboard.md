@@ -83,7 +83,8 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 
 | Key | Action |
 |---|---|
-| S F / ← → | Previous / next tab (on the subwindow level: subwindow; on the project level: project) |
+| (unbound) | Next / previous tab (Shift: back), running on into the next subwindow past the last one, on the subwindow level too. No default key — Tab cycles the Reader views; bind one in Settings → Keyboard |
+| S F / ← → | Previous / next tab as well (on the subwindow level: subwindow; on the project level: project) |
 | E / ↑ | Up a level: tabs → subwindows → projects → the top bar |
 | D / ↓ | Back down a level |
 | 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option moves there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |

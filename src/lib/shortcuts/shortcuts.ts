@@ -837,7 +837,7 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  * When a key is listed beyond its levels:
  *   stepsPanes — the panes level with two or more subwindows (←/→ walk them)
  *   stepsTabs  — the tabs level, or the panes level with one subwindow, where
- *                ←/→ step its tabs instead
+ *                ←/→ step its tabs instead (Tab steps them on both levels)
  *   tabsMultiPane — the tabs level with two or more subwindows (Shift+←/→
  *                walk them, ↑ goes to them)
  *   upToProjects — where ↑ climbs to the projects: the panes level, or the
@@ -1124,6 +1124,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["newProject"], labelKey: "steering.newProject.label", descKey: "steering.newProject.desc", levels: ["projects"], group: "new" },
   // Subwindows and their tabs.
   { actions: ["left", "right"], pair: true, labelKey: "steering.focus.label", descKey: "steering.focus.desc", levels: ["panes"], when: "stepsPanes", group: "move" },
+  { actions: ["nextTab"], labelKey: "steering.tabKey.label", descKey: "steering.tabKey.desc", levels: PANE_LEVELS, group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.tabs.label", descKey: "steering.tabs.desc", levels: PANE_LEVELS, when: "stepsTabs", group: "move" },
   { actions: ["left", "right"], pair: true, shift: true, labelKey: "steering.focusShift.label", descKey: "steering.focusShift.desc", levels: ["tabs"], when: "tabsMultiPane", group: "move" },
   { actions: ["down"], labelKey: "steering.intoTabs.label", descKey: "steering.intoTabs.desc", levels: ["panes"], when: "stepsPanes", group: "move" },
