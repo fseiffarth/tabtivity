@@ -407,6 +407,31 @@ correctness/UX work atop the same layout model #42 detaches.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+213g. **Live-QA steering's rows-first side panel.** ✅ Implemented · 🧪
+    Awaiting live QA (2026-11-10). B lands in the panel's list (the row last
+    on in that view, else the first control) instead of its header; E D move
+    one line per press without wrapping, up through the head to the view tabs
+    (Shift: a screenful); on a folder row F opens it and on a tree row S goes
+    to the parent with the cursor on the folder just left; elsewhere S F step
+    through the row's own buttons; on the view tabs S F switch the view and
+    1–9 (the slot keys, shown as caps on the tabs) switch to that view from
+    anywhere in the panel; Enter on a file opens it and goes to its tab (a
+    panel B opened closes), Shift+Enter opens it and stays, a .zip extracts
+    and stays. Verify: Shift+Space, B; D D, F on a folder, S back; 2 for Git;
+    E up to the view row, S F; 1; Enter on a file; B again, Shift+Enter on a
+    second; Esc. *Files: `src/lib/shortcuts/steeringSidePanel.ts`,
+    `src/components/files/SideViewKey.tsx`, `src/hooks/useKeyboard.ts`.*
+    - [x] 🤖 Automated test — `SteeringSidePanel`.
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 215. **Live-QA one-click installs in the root console.** ✅ Implemented · 🧪
     Awaiting live QA. Every one-click install (`runInstallInTab`: Ollama/agent
     CLI installs, the LaTeX/MiKTeX prompt, `gh`/`glab` install + auth login,

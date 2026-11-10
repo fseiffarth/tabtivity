@@ -66,11 +66,6 @@ const ANCHORS: Record<CapAnchor, AnchorDef> = {
   files: { find: () => first(`${FOCUSED} .subwindow-files-toggle`), align: "end" },
   card: { find: () => activeTabCard(), align: "end" },
   prompt: { find: () => first(`${FOCUSED} .prompt-strip`), align: "start" },
-  // The side panel's row of views (Files, Git, Apps, Agents).
-  sideViews: {
-    find: () => first(".side-panel.open .toolbar-btn--tab")?.parentElement ?? null,
-    align: "start",
-  },
   // The control the region cursor is on: Enter presses it.
   cursor: { find: () => first(".steer-cursor"), align: "end" },
 };

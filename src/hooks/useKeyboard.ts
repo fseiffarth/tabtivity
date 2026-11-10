@@ -43,9 +43,7 @@ import {
 import { closeApp, openApp as showApp, shownApp } from "../lib/shortcuts/appViews";
 import { openProjectDialog } from "../lib/projects/projectDialogEvent";
 import { requestProjectJump } from "../lib/projects/projectJumpEvent";
-import { sidePanelViewKey, sidePanelViewPatch } from "../lib/projects/sidePanelView";
 import {
-  SIDE_PANEL_VIEWS,
   activateRegionCursor,
   activeProjectElement,
   activeTabCard,
@@ -74,6 +72,7 @@ import {
   topLayer,
   type SteeringApp,
 } from "../lib/shortcuts/steeringRegion";
+import { placeSidePanelCursor, steerSidePanel } from "../lib/shortcuts/steeringSidePanel";
 import {
   openProjectShellInRootConsole,
   rootViewShown,
@@ -283,7 +282,14 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     const placeCursorSoon = (region: SteeringRegion, tries = 20, resume = false) => {
       cancelPlace();
       const root = regionRoot(region);
-      if (root && (resume ? resumeRegionCursor(root) : placeRegionCursor(root))) return;
+      // The side panel's cursor lands in its list (`steeringSidePanel`), not on its header.
+      const place = (el: HTMLElement) =>
+        region === "side"
+          ? placeSidePanelCursor(el, resume)
+          : resume
+            ? resumeRegionCursor(el)
+            : placeRegionCursor(el);
+      if (root && place(root)) return;
       if (tries <= 0) return;
       placeTimer = window.setTimeout(() => {
         placeTimer = null;
@@ -433,6 +439,18 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         panelOpenedBySteering = true;
       }
       enterRegion("side");
+    };
+    // What the side panel's keys need from this hook (`steeringSidePanel`): a
+    // file opened with Enter hands steering to its tab — the panel steering
+    // opened closes, as on Back.
+    const sidePanelHooks = {
+      leaveToTabs: () => {
+        leaveRegion("side");
+        cancelPlace();
+        clearRegionCursor();
+        focusSomeGroup();
+        useKeyboardSteeringStore.getState().setLevel("tabs");
+      },
     };
     const openApp = (app: SteeringApp) => {
       if (!steeringAppEnabled(app, useSettingsStore.getState().settings)) return;
@@ -892,11 +910,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         case "right": {
           cancelPlace();
           const delta = action === "right" ? 1 : -1;
-          if (region === "side") {
-            stepSidePanelView(delta);
-            clearRegionCursor();
-            placeCursorSoon("side");
-          } else if (region === "settings") {
+          if (region === "settings") {
             if (stepSettingsPage(delta)) {
               clearRegionCursor();
               // The click re-renders the page after this key; land on the new one.
@@ -1164,6 +1178,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
             return;
           }
           if (landed && (action === "up" || action === "down" || action === "left" || action === "right")) return;
+          if (region === "side" && steerSidePanel(e, action, bindings, sidePanelHooks)) return;
           // The key that opened the side panel leaves it again, as Back does.
           const sideBack = !action && region === "side" && steeringKeyIs(e, "sidePanel", bindings);
           steerRegion(sideBack ? "back" : action, region);
@@ -1615,21 +1630,6 @@ const TYPING_BURST_MS = 400;
 /** Whether a chord would type a character (no Ctrl / Alt / Meta held). */
 function typesText(chord: ChordDescriptor): boolean {
   return !chord.ctrl && !chord.alt && !chord.meta && normalizeKey(chord.key).length === 1;
-}
-
-/** Put the side panel on the next / previous of its views — the settings patch
- *  its switcher and edge rail write. */
-function stepSidePanelView(delta: 1 | -1) {
-  const settings = useSettingsStore.getState().settings;
-  const key = sidePanelViewKey(
-    useProjectsStore.getState().activeId,
-    useTabsStore.getState().scope,
-  );
-  const current = settings?.side_panel_view_by_project?.[key] ?? settings?.side_panel_view ?? "files";
-  const at = SIDE_PANEL_VIEWS.indexOf(current);
-  const n = SIDE_PANEL_VIEWS.length;
-  const next = SIDE_PANEL_VIEWS[at < 0 ? 0 : (at + delta + n) % n];
-  void useSettingsStore.getState().updateSettings(sidePanelViewPatch(next, key, settings));
 }
 
 /**

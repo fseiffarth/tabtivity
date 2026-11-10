@@ -61,6 +61,24 @@ describe("steering bar model", () => {
     expect(anchorOf(back)).toBeNull();
   });
 
+  it("lists the side panel's row and view-switch keys in the bar; the tabs wear their own caps", () => {
+    const side = steeringKeysFor({ ...state, level: "region", sideRegion: true });
+    const row = side.find((r) => r.labelKey === "steering.sideRow.label")!;
+    const jump = side.find((r) => r.labelKey === "steering.sideViewJump.label")!;
+    // Neither is pinned to a floating cap any more (there is no `sideViews` anchor).
+    expect(anchorOf(row)).toBeNull();
+    expect(anchorOf(jump)).toBeNull();
+    const m = barModel(side, "region", new Set<CapAnchor>(["cursor"]), null, [], tokFor);
+    const jumpItem = m.items.find((i) => i.labelKey === "steering.sideViewJump.label")!;
+    expect(jumpItem.caps).toEqual(["1–9"]);
+    expect(m.items.find((i) => i.labelKey === "steering.sideRow.label")!.caps).toEqual(["S", "F"]);
+    // The number keys follow the user's slot bindings.
+    const rebound = barModel(side, "region", new Set<CapAnchor>(), { slot1: ["a"], slot2: ["b"] }, [], tokFor);
+    expect(rebound.items.find((i) => i.labelKey === "steering.sideViewJump.label")!.caps[0]).toMatch(/^A B/);
+    // And the old steps are not offered outside the side panel.
+    expect(rowsFor({ level: "region" }).some((r) => r.labelKey === "steering.sideViewJump.label")).toBe(false);
+  });
+
   it("keeps every key in the bar until its control is on screen", () => {
     const none = model(rowsFor({}), "tabs", []);
     expect(labels(none)).toEqual(expect.arrayContaining(["steering.newShell.label", "steering.closeTab.label", "steering.agentPrompt.label"]));

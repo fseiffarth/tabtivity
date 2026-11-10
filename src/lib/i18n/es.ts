@@ -2543,19 +2543,21 @@ export const dict: Dict = {
 
   "steering.move.desc": "Mueve el resaltado al control anterior / siguiente.",
 
-  "steering.sideView.label": "Cambiar vista",
+  "steering.sideRow.label": "Fila · carpeta",
+  "steering.sideRow.desc": "A lo largo de los botones de una fila; → abre una carpeta, ← sube a la carpeta superior. En las pestañas de vista: vista anterior / siguiente.",
+  "steering.sideViewJump.label": "Cambiar vista",
+  "steering.sideViewJump.desc": "Va a la N.ª vista del panel lateral (el número de su pestaña) y entra en su lista.",
 
-  "steering.sideView.desc": "Vista anterior / siguiente del panel lateral: Archivos, Git, Apps, Agentes.",
   "steering.settingsPage.label": "Cambiar página",
   "steering.settingsPage.desc": "Página de ajustes anterior / siguiente, en el orden de la lista de la izquierda.",
 
   "steering.press.label": "Pulsar",
 
-  "steering.press.desc": "Pulsa el control resaltado — en un campo de texto, sale de la navegación de {app} para escribir en él.",
+  "steering.press.desc": "Pulsa el control resaltado — un archivo del panel lateral se abre (Mayús+Intro se queda en el panel); en un campo de texto, sale de la navegación de {app} para escribir en él.",
 
   "steering.sidePanel.label": "Panel lateral",
 
-  "steering.sidePanel.desc": "Abre el panel lateral para recorrerlo con las flechas; la misma tecla o Escape lo vuelve a cerrar.",
+  "steering.sidePanel.desc": "Abre el panel lateral en su lista de archivos y la recorre fila a fila: las flechas mueven una línea (Mayús: una pantalla), las teclas numéricas cambian la vista; la misma tecla o Escape lo vuelve a cerrar.",
 
   "steering.sidePanelBack.label": "Cerrar panel lateral",
 

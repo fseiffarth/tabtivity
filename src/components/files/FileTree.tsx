@@ -380,6 +380,11 @@ const FileRow = React.memo(function FileRow({
       className={`file-entry ${e.is_dir ? "dir" : "file"}${dragTarget ? " embeddable" : ""}${scaffold ? " scaffold" : ""}${isMoveTarget ? " move-drop-target" : ""}${selected ? " selected" : ""}${notOnRemote ? " not-on-remote" : ""}`}
       // Row key for jump-to-path reveal scroll (search results).
       data-entry-path={e.path}
+      // Keyboard steering opens a file as the pointer does, with a double-click
+      // (a click only selects it); a .zip is extracted in place, so steering
+      // stays in the panel for it (`steeringSidePanel`).
+      data-steer-open={e.is_dir ? undefined : "dblclick"}
+      data-steer-stay={!e.is_dir && e.extension === ".zip" ? "" : undefined}
       // Folders are drag-to-move destinations: dropping a dragged file
       // here relocates it (hit-tested by data-move-rel in the drag).
       data-move-rel={e.is_dir ? rel : undefined}

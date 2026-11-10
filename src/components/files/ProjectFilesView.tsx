@@ -108,6 +108,7 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
+import { SideViewKey } from "./SideViewKey";
 import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
@@ -1784,7 +1785,7 @@ export function ProjectFilesView({
       <div className="side-panel-toolbars">
       <div className="side-panel-toolbars-row">
       <div className="side-panel-toolbar side-panel-views">
-        {availableSidePanelViews(viewGates).map(({ view: v, labelKey, Icon }) => {
+        {availableSidePanelViews(viewGates).map(({ view: v, labelKey, Icon }, i) => {
           const count =
             v === "orange"
               ? orangeFiles.length + newLocalFiles.length
@@ -1806,12 +1807,14 @@ export function ProjectFilesView({
               key={v}
               className={`toolbar-btn toolbar-btn--sm toolbar-btn--tab${view === v ? " active" : ""}${v === "git" && gitPendingColor ? " toolbar-btn--flagged" : ""}`}
               aria-pressed={view === v}
+              data-view={v}
               onClick={() => setView(v)}
               title={title ?? t(labelKey)}
               aria-label={title ?? t(labelKey)}
             >
               <Icon />
               <span className="toolbar-btn-label">{t(labelKey)}</span>
+              <SideViewKey n={i} />
               {count > 0 && <span className="side-panel-orange-count">{count}</span>}
               {v === "git" && gitPendingColor && (
                 <span

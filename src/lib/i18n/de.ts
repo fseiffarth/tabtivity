@@ -2545,19 +2545,21 @@ export const dict: Dict = {
 
   "steering.move.desc": "Bewegt die Markierung zum vorherigen / nächsten Bedienelement.",
 
-  "steering.sideView.label": "Ansicht wechseln",
+  "steering.sideRow.label": "Zeile · Ordner",
+  "steering.sideRow.desc": "Entlang der Knöpfe einer Zeile; → öffnet einen Ordner, ← geht zum übergeordneten Ordner. Auf den Ansichts-Tabs: vorherige / nächste Ansicht.",
+  "steering.sideViewJump.label": "Ansicht wechseln",
+  "steering.sideViewJump.desc": "Wechselt zur N-ten Ansicht des Seitenpanels (die Zahl auf ihrem Tab) und springt in deren Liste.",
 
-  "steering.sideView.desc": "Vorherige / nächste Ansicht des Seitenpanels: Dateien, Git, Apps, Agenten.",
   "steering.settingsPage.label": "Seite wechseln",
   "steering.settingsPage.desc": "Vorherige / nächste Einstellungsseite, in der Reihenfolge der Liste links.",
 
   "steering.press.label": "Drücken",
 
-  "steering.press.desc": "Drückt das markierte Element — in einem Textfeld endet die {app}-Navigation, um dort zu tippen.",
+  "steering.press.desc": "Drückt das markierte Element — eine Datei im Seitenpanel wird geöffnet (Umschalt+Eingabe bleibt im Panel); in einem Textfeld endet die {app}-Navigation, um dort zu tippen.",
 
   "steering.sidePanel.label": "Seitenpanel",
 
-  "steering.sidePanel.desc": "Öffnet das Seitenpanel zum Durchlaufen mit den Pfeiltasten; dieselbe Taste oder Escape schließt es wieder.",
+  "steering.sidePanel.desc": "Öffnet das Seitenpanel auf der Dateiliste und läuft sie Zeile für Zeile durch: die Pfeiltasten bewegen eine Zeile (Umschalt: eine Bildschirmseite), die Zifferntasten wechseln die Ansicht; dieselbe Taste oder Escape schließt es wieder.",
 
   "steering.sidePanelBack.label": "Seitenpanel schließen",
 

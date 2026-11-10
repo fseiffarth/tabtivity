@@ -841,8 +841,9 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *                walk them, ↑ goes to them)
  *   upToProjects — where ↑ climbs to the projects: the panes level, or the
  *                tabs level with one subwindow
- *   sideRegion — the region cursor is in the side panel (←/→ switch its view,
- *                and its opening key leaves it as Back does)
+ *   sideRegion — the region cursor is in the side panel (←/→ along a row or
+ *                folder, 1–9 switch its view, and its opening key leaves it as
+ *                Back does)
  *   settingsRegion — the region cursor is in the settings dialog (←/→ step
  *                its pages)
  *   headerRegion — the region cursor is on the top bar (←/→ walk it, ↓ drops
@@ -1130,7 +1131,9 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["down"], labelKey: "steering.chromeOpen.label", descKey: "steering.chromeOpen.desc", levels: ["region"], when: "chromeRegion", group: "act" },
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: ["region"], when: "chromeRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.overlayRow.label", descKey: "steering.overlayRow.desc", levels: ["region"], when: "overlayRegion", group: "move" },
-  { actions: ["left", "right"], pair: true, labelKey: "steering.sideView.label", descKey: "steering.sideView.desc", levels: ["region"], when: "sideRegion", group: "move" },
+  { actions: ["left", "right"], pair: true, labelKey: "steering.sideRow.label", descKey: "steering.sideRow.desc", levels: ["region"], when: "sideRegion", group: "move" },
+  // The view tabs wear these keys themselves (`SideViewKey`); the bar lists them too.
+  { actions: [], slots: true, labelKey: "steering.sideViewJump.label", descKey: "steering.sideViewJump.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.settingsPage.label", descKey: "steering.settingsPage.desc", levels: ["region"], when: "settingsRegion", group: "move" },
   { actions: ["confirm"], labelKey: "steering.confirm.label", descKey: "steering.confirm.desc", levels: ["region"], when: "steeringConfirm", group: "act" },
   { actions: ["press"], labelKey: "steering.press.label", descKey: "steering.press.desc", levels: ["region"], group: "act" },

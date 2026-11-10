@@ -915,6 +915,29 @@ button.steering-bar-badge:hover {
 html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
   color: var(--danger);
 }
+/* The slot key on a side panel view tab (SideViewKey): a small cap on the tab's
+   top-right corner, out of the layout so the row does not move. Static. */
+.side-panel-views .toolbar-btn--tab {
+  position: relative;
+}
+.side-view-key {
+  /* Only the side panel's own view row: the same row in a Files (Project) tab
+     has no steering keys. */
+  display: none;
+  position: absolute;
+  top: -4px;
+  right: -3px;
+  height: 12px;
+  min-width: 12px;
+  padding: 0 3px;
+  pointer-events: none;
+}
+.side-panel .side-view-key {
+  display: inline-flex;
+}
+.side-view-key .steering-cap-k {
+  font-size: 9px;
+}
 /* The caps pinned to controls: one fixed, click-through layer over the window.
    A row hangs from its anchor point (steeringCaps) by its left edge, middle or
    right edge. */

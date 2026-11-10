@@ -18,7 +18,7 @@
  */
 import { experimentalEnabled } from "../experimental";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
-import type { FilesPanelView, Settings } from "../../types";
+import type { Settings } from "../../types";
 import type { SteeringRegion } from "../../stores/keyboardSteering";
 import { steeringInRoot } from "./steeringScope";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
@@ -31,10 +31,6 @@ const PRESSABLE =
   "select:not(:disabled), textarea:not(:disabled), [contenteditable='true'], " +
   '[tabindex]:not([tabindex="-1"]), [role="button"], [role="tab"], [role="treeitem"], ' +
   '[role="option"], [role="menuitem"], [role="checkbox"], [role="switch"]';
-
-/** The side panel's views in the order ←/→ walk them — the four its edge rail
- *  and switcher lead with (`AppShell`'s EDGE_VIEWS). */
-export const SIDE_PANEL_VIEWS: readonly FilesPanelView[] = ["files", "git", "windows", "agents"];
 
 /** The header apps steering can show (views of the console window), and the gate
  *  each one's button has. */
@@ -407,7 +403,11 @@ let lastCursorIn = new WeakMap<HTMLElement, HTMLElement>();
 
 function setCursor(el: HTMLElement | null, root?: HTMLElement) {
   if (el && root) lastCursorIn.set(root, el);
-  if (cursor === el) return;
+  if (cursor === el) {
+    // A re-render that rewrote the element's `className` dropped the class.
+    if (el && !el.classList.contains(CURSOR_CLASS)) el.classList.add(CURSOR_CLASS);
+    return;
+  }
   cursor?.classList.remove(CURSOR_CLASS);
   cursor = el;
   if (!el) return;
@@ -417,6 +417,18 @@ function setCursor(el: HTMLElement | null, root?: HTMLElement) {
 
 export function clearRegionCursor() {
   setCursor(null);
+}
+
+/** Put the cursor on `el` (a target of `root`) and remember it there — for a
+ *  surface that steers itself (`steeringSidePanel`). */
+export function setRegionCursor(el: HTMLElement, root: HTMLElement) {
+  setCursor(el, root);
+}
+
+/** Where the cursor last was on `root`, if that control is still on screen. */
+export function rememberedCursor(root: HTMLElement): HTMLElement | null {
+  const back = lastCursorIn.get(root);
+  return back?.isConnected && root.contains(back) ? back : null;
 }
 
 /** Forget every surface's last cursor (tests). */
@@ -496,7 +508,7 @@ function sameLine(a: HTMLElement, b: HTMLElement): boolean {
 
 /** `targets` cut into lines: runs, in document order, that share their first
  *  target's line. */
-function regionLines(targets: HTMLElement[]): HTMLElement[][] {
+export function regionLines(targets: HTMLElement[]): HTMLElement[][] {
   const lines: HTMLElement[][] = [];
   for (const el of targets) {
     const line = lines[lines.length - 1];
@@ -535,7 +547,7 @@ function isTextEntry(el: HTMLElement): boolean {
 /**
  * Press the control under the cursor. "type" — it takes text, so it now has
  * DOM focus and the caller leaves steering for the user to type; "press" — it
- * was clicked; null — no cursor.
+ * was clicked; "open" — it was double-clicked; null — no cursor.
  */
 /** `root`'s first shown text field — the + menu's filter, a search box. */
 export function regionSearchField(root: HTMLElement): HTMLElement | null {
@@ -563,13 +575,20 @@ export function closeRegionDropdown(root: HTMLElement): boolean {
   return true;
 }
 
-export function activateRegionCursor(): "type" | "press" | null {
+export function activateRegionCursor(): "type" | "press" | "open" | null {
   const el = regionCursor();
   if (!el) return null;
   if (isTextEntry(el)) {
     setCursor(null);
     el.focus();
     return "type";
+  }
+  // A row that opens on a double-click (a file in the tree) is opened as the
+  // pointer does: with that event, since a click only selects it. No modifier
+  // rides along — Shift would send the file to the OS default app.
+  if (el.matches('[data-steer-open="dblclick"]')) {
+    el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 }));
+    return "open";
   }
   // A dropdown option closes its list, taking the cursor with it: hand the
   // cursor back to the dropdown, so the next ↑/↓ goes on from there.

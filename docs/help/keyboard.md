@@ -111,6 +111,14 @@ opened. On the top bar, S F walk its buttons and D drops a button's menu.
 Enter on a text field leaves the mode so you can type there; Shift+Space brings
 it back on the same dialog.
 
+In the side panel (B) the highlight starts in the list, on the row you were last
+on in that view. E D move one line (Shift: a screenful) and stop at the first and
+last line; S F move along a row's own buttons, and on a folder F opens it and S
+goes back up to its parent. On the view tabs S F switch the view; 1–9 switch to
+that view from anywhere in the panel (the tabs show their number) and land in
+its list. Enter on a file opens it and takes you to its tab — a panel that B
+opened closes; Shift+Enter opens it and stays in the panel.
+
 The phone has the same mode for a Bluetooth keyboard (Shift+Space, E S D F, Q R X, M C T,
 digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
 

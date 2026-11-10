@@ -2544,19 +2544,21 @@ export const dict: Dict = {
 
   "steering.move.desc": "Déplace la surbrillance vers le contrôle précédent / suivant.",
 
-  "steering.sideView.label": "Changer de vue",
+  "steering.sideRow.label": "Ligne · dossier",
+  "steering.sideRow.desc": "Le long des boutons d’une ligne ; → ouvre un dossier, ← remonte au dossier parent. Sur les onglets de vue : vue précédente / suivante.",
+  "steering.sideViewJump.label": "Changer de vue",
+  "steering.sideViewJump.desc": "Va à la N-ième vue du panneau latéral (le chiffre sur son onglet) et entre dans sa liste.",
 
-  "steering.sideView.desc": "Vue précédente / suivante du panneau latéral : Fichiers, Git, Apps, Agents.",
   "steering.settingsPage.label": "Changer de page",
   "steering.settingsPage.desc": "Page de paramètres précédente / suivante, dans l’ordre de la liste de gauche.",
 
   "steering.press.label": "Appuyer",
 
-  "steering.press.desc": "Appuie sur le contrôle en surbrillance — dans un champ de texte, quitte la navigation {app} pour y taper.",
+  "steering.press.desc": "Appuie sur le contrôle en surbrillance — un fichier du panneau latéral s’ouvre (Maj+Entrée reste dans le panneau) ; dans un champ de texte, quitte la navigation {app} pour y taper.",
 
   "steering.sidePanel.label": "Panneau latéral",
 
-  "steering.sidePanel.desc": "Ouvre le panneau latéral, à parcourir avec les flèches ; la même touche ou Échap le referme.",
+  "steering.sidePanel.desc": "Ouvre le panneau latéral sur sa liste de fichiers et la parcourt ligne par ligne : les flèches avancent d’une ligne (Maj : un écran), les chiffres changent de vue ; la même touche ou Échap le referme.",
 
   "steering.sidePanelBack.label": "Fermer le panneau latéral",
 

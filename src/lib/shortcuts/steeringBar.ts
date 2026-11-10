@@ -36,7 +36,6 @@ export type CapAnchor =
   | "files"
   | "card"
   | "prompt"
-  | "sideViews"
   | "cursor";
 
 /** Where each action's control is. An action not listed lives in the bar. */
@@ -64,7 +63,7 @@ const ACTION_ANCHOR: Partial<Record<SteeringAction, CapAnchor>> = {
 
 /** Anchors whose key is also listed in the bar: the caps only point at where
  *  the key acts (the bar still carries the region's whole vocabulary). */
-const ALSO_IN_BAR: ReadonlySet<CapAnchor> = new Set(["sideViews", "cursor"]);
+const ALSO_IN_BAR: ReadonlySet<CapAnchor> = new Set(["cursor"]);
 
 /** Order of a prompt strip's caps: I L G K reads as the prompt box first. */
 const CAP_RANK: Partial<Record<SteeringAction, number>> = {
@@ -79,7 +78,6 @@ export function anchorOf(row: SteeringKeyDef): CapAnchor | null {
   if (row.agentSlots) return "add";
   // The side panel's own key closes it again (a mode row): the bar's.
   if (row.group === "mode") return null;
-  if (row.labelKey === "steering.sideView.label") return "sideViews";
   return row.actions.length === 1 ? (ACTION_ANCHOR[row.actions[0]] ?? null) : null;
 }
 

@@ -524,6 +524,15 @@ describe("legend table", () => {
     expect(labels({ statusCounts: { decision: 0, working: 0, done: 2 } })).toContain("steering.nextDone.label");
   });
 
+  it("lists the side panel's row keys and view numbers only while the cursor is in it", () => {
+    expect(labels({ level: "region", sideRegion: true })).toEqual(
+      expect.arrayContaining(["steering.sideRow.label", "steering.sideViewJump.label"]),
+    );
+    expect(labels({ level: "region", sideRegion: true })).not.toContain("steering.sideView.label");
+    expect(labels({ level: "region" })).not.toContain("steering.sideRow.label");
+    expect(labels({ level: "region" })).not.toContain("steering.sideViewJump.label");
+  });
+
   it("never lists the same key twice on one level", () => {
     const states: Partial<SteeringLegendState>[] = [
       { level: "projects", apps: { mail: true, calendar: true, todo: true } },

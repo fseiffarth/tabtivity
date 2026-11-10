@@ -2543,19 +2543,21 @@ export const dict: Dict = {
 
   "steering.move.desc": "Sposta l'evidenziazione al controllo precedente / successivo.",
 
-  "steering.sideView.label": "Cambia vista",
+  "steering.sideRow.label": "Riga · cartella",
+  "steering.sideRow.desc": "Lungo i pulsanti di una riga; → apre una cartella, ← sale alla cartella superiore. Sulle schede delle viste: vista precedente / successiva.",
+  "steering.sideViewJump.label": "Cambia vista",
+  "steering.sideViewJump.desc": "Va alla N-esima vista del pannello laterale (il numero sulla sua scheda) ed entra nel suo elenco.",
 
-  "steering.sideView.desc": "Vista precedente / successiva del pannello laterale: File, Git, App, Agenti.",
   "steering.settingsPage.label": "Cambia pagina",
   "steering.settingsPage.desc": "Pagina delle impostazioni precedente / successiva, nell’ordine dell’elenco a sinistra.",
 
   "steering.press.label": "Premi",
 
-  "steering.press.desc": "Preme il controllo evidenziato — in un campo di testo esce dalla navigazione {app} per scriverci.",
+  "steering.press.desc": "Preme il controllo evidenziato — un file del pannello laterale si apre (Maiusc+Invio resta nel pannello); in un campo di testo esce dalla navigazione {app} per scriverci.",
 
   "steering.sidePanel.label": "Pannello laterale",
 
-  "steering.sidePanel.desc": "Apre il pannello laterale da percorrere con le frecce; lo stesso tasto o Esc lo richiude.",
+  "steering.sidePanel.desc": "Apre il pannello laterale sull’elenco dei file e lo percorre riga per riga: le frecce spostano di una riga (Maiusc: una schermata), i tasti numerici cambiano vista; lo stesso tasto o Esc lo richiude.",
 
   "steering.sidePanelBack.label": "Chiudi pannello laterale",
 
