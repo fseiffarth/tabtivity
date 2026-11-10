@@ -891,6 +891,9 @@ export type SteeringCondition =
   | "chromeRegion"
   | "overlayRegion"
   | "steeringConfirm"
+  | "cockpitRegion"
+  | "cockpitRoster"
+  | "notCockpitRoster"
   | "walkRegion"
   | "tabCard"
   | "mail"
@@ -973,6 +976,8 @@ export interface SteeringLegendState {
   inRoot?: boolean;
   /** The region cursor is in the dialog or menu on top. */
   overlayRegion?: boolean;
+  cockpitRegion?: boolean;
+  cockpitRoster?: boolean;
   /** That dialog is steering's own "are you sure" (W, K). */
   steeringConfirm?: boolean;
   /** A card floats over the active tab's terminal. */
@@ -1027,6 +1032,9 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return !!s.overlayRegion;
     case "steeringConfirm":
       return !!s.overlayRegion && !!s.steeringConfirm;
+    case "cockpitRegion": return !!s.cockpitRegion;
+    case "cockpitRoster": return !!s.cockpitRoster;
+    case "notCockpitRoster": return !s.cockpitRoster;
     case "walkRegion":
       return !s.headerRegion && !s.chromeRegion;
     case "tabCard":
@@ -1187,8 +1195,15 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: [], slots: true, labelKey: "steering.sideViewJump.label", descKey: "steering.sideViewJump.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.settingsPage.label", descKey: "steering.settingsPage.desc", levels: ["region"], when: "settingsRegion", group: "move" },
   { actions: ["confirm"], labelKey: "steering.confirm.label", descKey: "steering.confirm.desc", levels: ["region"], when: "steeringConfirm", group: "act" },
-  { actions: ["press"], labelKey: "steering.press.label", descKey: "steering.press.desc", levels: ["region"], group: "act" },
-  { actions: ["search"], labelKey: "steering.search.label", descKey: "steering.search.desc", levels: ["region"], group: "act" },
+  { actions: ["cockpitPanel"], labelKey: "cockpit.keys.panel", descKey: "cockpit.keys.panelHint", levels: ["region"], when: "cockpitRegion", group: "move" },
+  { actions: ["cockpitUp"], labelKey: "cockpit.keys.up", descKey: "cockpit.keys.up", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitDown"], labelKey: "cockpit.keys.down", descKey: "cockpit.keys.down", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitJump"], labelKey: "cockpit.keys.jump", descKey: "cockpit.keys.jump", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitShow"], labelKey: "cockpit.keys.show", descKey: "cockpit.keys.show", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitContinue"], labelKey: "cockpit.keys.continue", descKey: "cockpit.keys.continue", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitFilter"], labelKey: "cockpit.keys.filter", descKey: "cockpit.keys.filter", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["press"], labelKey: "steering.press.label", descKey: "steering.press.desc", levels: ["region"], when: "notCockpitRoster", group: "act" },
+  { actions: ["search"], labelKey: "steering.search.label", descKey: "steering.search.desc", levels: ["region"], when: "notCockpitRoster", group: "act" },
   { actions: ["menu"], labelKey: "steering.menu.label", descKey: "steering.menu.desc", levels: [...BASE_LEVELS, "region"], group: "act" },
   // Wherever the tab bars are. Shift walks the status jumps backwards.
   { actions: ["mail"], labelKey: "steering.mail.label", descKey: "steering.mail.desc", levels: BASE_LEVELS, when: "mail", group: "open" },

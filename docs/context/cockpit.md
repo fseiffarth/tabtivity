@@ -133,6 +133,18 @@ it per tab in `lib/agents/readerDrafts`, not in the pane (`NowDraft.test`).
 
 ## Keys and entry points
 
+Steering enters a dedicated cockpit region (also when U opens Now). In the
+roster, E/D or up/down move the selected row; the existing J/K, Enter (jump),
+Space/right (show detail), C (continue) and / (filter) bindings use that row.
+Tab moves between mounted frame, Decisions, roster and detail areas; Shift+Tab
+reverses it. Elsewhere the ordinary region arrows and Enter walk/activate
+controls. Enter on a composer or slider hands it native keyboard control.
+Escape closes a menu/dialog first, returns a narrow detail to its roster, then
+closes the cockpit. The filter's Escape resumes steering. Other cockpit views
+walk their visible controls through the same region; Root and the three apps
+retain their own navigation. No steering action reads or attaches another PTY.
+
+
 The roster's keys (J/K or ↓/↑, Enter, Space or →, C, /) live in the steering
 bindings table under scope `cockpit`, so they are rebound in Settings with the
 other bare keys. They are not steering-mode keys: `scopesMeet` keeps them out of

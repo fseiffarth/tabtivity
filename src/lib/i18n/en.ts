@@ -11866,6 +11866,8 @@ export const enSource = {
   "cockpit.notes.attentionDismissed": "Dismissed. Nothing was answered or approved.",
   "cockpit.notes.milestones": "Agent milestones",
   "cockpit.notes.milestonesMeta": "Reported by the agent. The time is when {app} received each report; {app} did not check them.",
+  "cockpit.keys.panel": "Next area",
+  "cockpit.keys.panelHint": "Move between visible cockpit areas; Shift reverses the direction.",
   "cockpit.keys.down": "Next agent",
   "cockpit.keys.up": "Previous agent",
   "cockpit.keys.jump": "Jump to its tab",

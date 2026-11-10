@@ -11774,6 +11774,8 @@ export const dict: Dict = {
   "cockpit.notes.attentionDismissed": "Verworfen. Nichts wurde beantwortet oder freigegeben.",
   "cockpit.notes.milestones": "Meilensteine des Agenten",
   "cockpit.notes.milestonesMeta": "Vom Agenten gemeldet. Die Zeit ist, wann {app} die Meldung erhalten hat; {app} hat sie nicht geprüft.",
+  "cockpit.keys.panel": "Nächster Bereich",
+  "cockpit.keys.panelHint": "Zwischen sichtbaren Cockpit-Bereichen wechseln; Umschalt kehrt die Richtung um.",
   "cockpit.keys.down": "Nächster Agent",
   "cockpit.keys.up": "Vorheriger Agent",
   "cockpit.keys.jump": "Zu seinem Tab",

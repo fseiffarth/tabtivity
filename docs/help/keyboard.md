@@ -192,3 +192,12 @@ in the settings page's *Terminal* list.
   Hold **Shift** while moving (or press **v**) to select, **V** for whole lines.
   **Enter**, **y** or Ctrl+C copies (with nothing selected: the cursor's line),
   **Esc** or **q** leaves. While it is on, no key reaches the program.
+
+
+Cockpit steering: open Now with U while steering, or enter steering in an open
+cockpit. Tab / Shift+Tab moves between its visible areas. In the roster, E/D or
+up/down (also J/K) moves the selection; Enter jumps to its tab; Space/right
+shows its detail; C continues; / opens its filter. Escape from the filter
+resumes steering. In detail, steer to a question or composer and press Enter.
+Escape returns a narrow detail to the roster before closing the cockpit.
+Sliders take native keyboard control on Enter; the steering chord returns.

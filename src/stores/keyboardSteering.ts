@@ -28,6 +28,7 @@ export type SteeringLevel = "projects" | "panes" | "tabs" | "scroll" | "region";
 
 /** The surfaces the region cursor can walk (see `lib/shortcuts/steeringRegion`). */
 export type SteeringRegion =
+  | "cockpit"
   | "side"
   | "mail"
   | "calendar"

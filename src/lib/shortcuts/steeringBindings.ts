@@ -78,6 +78,7 @@ export type SteeringAction =
   | "readerView"
   | "menu"
   | "tabCard"
+  | "cockpitPanel"
   | "cockpitDown"
   | "cockpitUp"
   | "cockpitJump"
@@ -188,7 +189,8 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   // The right-click menu of what steering points at: the active project, the
   // active tab, the control under the region cursor.
   { action: "menu", labelKey: "steering.menu.label", scopes: ["mode"], defaults: [".", "ContextMenu"] },
-  // The cockpit roster (not steering mode: the list has the focus).
+  // Cockpit roster actions also serve the dedicated steering region.
+  { action: "cockpitPanel", labelKey: "cockpit.keys.panel", scopes: ["cockpit"], defaults: ["Tab"] },
   { action: "cockpitDown", labelKey: "cockpit.keys.down", scopes: ["cockpit"], defaults: ["j", "ArrowDown"] },
   { action: "cockpitUp", labelKey: "cockpit.keys.up", scopes: ["cockpit"], defaults: ["k", "ArrowUp"] },
   { action: "cockpitJump", labelKey: "cockpit.keys.jump", scopes: ["cockpit"], defaults: ["Enter"] },
@@ -210,7 +212,7 @@ export function steeringKeys(action: SteeringAction, overrides: SteeringKeyMap |
 }
 
 function scopeFits(scopes: readonly SteeringScope[], context: SteeringKeyContext): boolean {
-  if (scopes.includes("mode") || scopes.includes(context)) return true;
+  if (scopes.includes("mode") || scopes.includes(context) || (context === "cockpit" && scopes.includes("region"))) return true;
   // Inside a tab the panes keys still resolve (Work here, the prompt, the view
   // cycle, a dead letter that is swallowed) under the `inside` ones.
   return context === "inside" && scopes.includes("panes");
@@ -220,6 +222,7 @@ function scopeFits(scopes: readonly SteeringScope[], context: SteeringKeyContext
  *  `inside` letters first, then the rest in table order. */
 function defsFor(context: SteeringKeyContext): SteeringBindingDef[] {
   const fits = STEERING_BINDINGS.filter((def) => scopeFits(def.scopes, context));
+  if (context === "cockpit") return [...fits.filter((d) => d.scopes.includes("cockpit")), ...fits.filter((d) => !d.scopes.includes("cockpit"))];
   if (context !== "inside") return fits;
   return [...fits.filter((d) => d.scopes.includes("inside")), ...fits.filter((d) => !d.scopes.includes("inside"))];
 }
@@ -281,8 +284,12 @@ const LIVE_INSIDE: ReadonlySet<SteeringAction> = new Set<SteeringAction>([
 
 /** Whether two actions can both be live on one level. */
 function defsMeet(a: SteeringBindingDef, b: SteeringBindingDef): boolean {
-  // The cockpit's keys are live only in its roster, where steering is not.
-  if (a.scopes.includes("cockpit") !== b.scopes.includes("cockpit")) return false;
+  // Cockpit keys shadow region activation/search and mode movement while
+  // the cursor is in the roster. Other cockpit/mode overlaps are conflicts.
+  if (a.scopes.includes("cockpit") !== b.scopes.includes("cockpit")) {
+    const other = a.scopes.includes("cockpit") ? b : a;
+    return other.scopes.includes("mode") && !["up", "down", "left", "right"].includes(other.action);
+  }
   if (a.scopes.includes("mode") || b.scopes.includes("mode")) return true;
   // `inside` meets `inside`, and a `panes` key only where that is live Inside.
   const aIn = a.scopes.includes("inside");

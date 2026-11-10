@@ -73,6 +73,11 @@ function lastMatch(selector: string): HTMLElement | null {
  *  screen (the overlay still loading, the panel closed by the pointer). */
 export function regionRoot(region: SteeringRegion): HTMLElement | null {
   switch (region) {
+    case "cockpit": {
+      const frame = document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
+      if (frame) { chromeFrames.delete(frame); appFrames.delete(frame); }
+      return frame;
+    }
     case "side":
       return document.querySelector<HTMLElement>(".side-panel.open");
     case "addTab":
@@ -176,6 +181,7 @@ export function regionForLayer(layer: HTMLElement): SteeringRegion {
     return view;
   }
   if (holds(".tab-add-menu")) return "addTab";
+  if (open && !["root", "mail", "calendar", "todo"].includes(view) && holds(".root-console-backdrop")) return "cockpit";
   return "overlay";
 }
 

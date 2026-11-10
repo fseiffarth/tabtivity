@@ -9,6 +9,7 @@ import { useExperimental } from "../../lib/experimental";
 import { voiceInputOffered } from "../../lib/voice/desktopVoice";
 import { STEERING_GROUPS, modifierLabel, projectCycleLabels, steeringKeysFor, type SteeringGroup } from "../../lib/shortcuts/shortcuts";
 import { steeringKeyLabel, steeringKeys, steeringSlotKey, type SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
+import { inCockpitRoster } from "../../lib/shortcuts/steeringCockpit";
 import { newTabSlotLabels } from "../../lib/shortcuts/newTabChord";
 import { activeTabCard, steeringAppEnabled } from "../../lib/shortcuts/steeringRegion";
 import { jumpBackTarget, shownStatusTab, statusTabs } from "../../lib/shortcuts/statusJump";
@@ -196,7 +197,9 @@ export function SteeringLegend() {
           headerRegion: region === "header",
           chromeRegion: region === "chrome",
           inRoot: rootShown,
-          overlayRegion: region === "overlay",
+          overlayRegion: region === "overlay" || (region === "cockpit" && !inCockpitRoster()),
+          cockpitRegion: region === "cockpit",
+          cockpitRoster: region === "cockpit" && inCockpitRoster(),
           steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
           tabCard: inPane && !!activeTabCard(),
           multiPane,

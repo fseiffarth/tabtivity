@@ -11770,6 +11770,8 @@ export const dict: Dict = {
   "cockpit.notes.attentionDismissed": "Ignorata. Nulla è stato risposto o approvato.",
   "cockpit.notes.milestones": "Traguardi dell’agente",
   "cockpit.notes.milestonesMeta": "Segnalati dall’agente. L’ora è quella in cui {app} ha ricevuto ogni rapporto; {app} non li ha verificati.",
+  "cockpit.keys.panel": "Area successiva",
+  "cockpit.keys.panelHint": "Passa tra le aree visibili del cockpit; Maiusc inverte la direzione.",
   "cockpit.keys.down": "Agente successivo",
   "cockpit.keys.up": "Agente precedente",
   "cockpit.keys.jump": "Vai alla sua scheda",

@@ -1,4 +1,5 @@
 import { hasActiveModal } from "./useModalFocus";
+import { inCockpitRoster, runCockpitRoster, selectCockpitCursor, stepCockpitArea } from "../lib/shortcuts/steeringCockpit";
 import { useEffect } from "react";
 import { PLATFORM } from "../lib/window/dragPlatform";
 import { IS_MAC } from "../lib/platform";
@@ -288,7 +289,9 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           ? placeSidePanelCursor(el, resume)
           : resume
             ? resumeRegionCursor(el)
-            : placeRegionCursor(el);
+            : region === "cockpit"
+              ? placeRegionCursor(el.querySelector<HTMLElement>(".cockpit-roster-list") ?? el) || placeRegionCursor(el)
+              : placeRegionCursor(el);
       if (root && place(root)) return;
       if (tries <= 0) return;
       placeTimer = window.setTimeout(() => {
@@ -340,6 +343,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     // region cursor; one that went away hands it back to the surface under it.
     // Runs before every steering key and just after it (`syncSoon`). True when
     // it moved steering.
+    let cockpitView = useRootOverlayStore.getState().view;
     const syncLayer = (): boolean => {
       const s = useKeyboardSteeringStore.getState();
       if (!s.active) return false;
@@ -362,8 +366,15 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       }
       if (!layer) return false;
       const root = current ? regionRoot(current) : null;
-      if (root && layer.contains(root)) return false;
       const next = regionForLayer(layer);
+      if (current === "cockpit" && next === "cockpit" &&
+          (cockpitView !== useRootOverlayStore.getState().view || !regionCursor())) {
+        cockpitView = useRootOverlayStore.getState().view;
+        clearRegionCursor();
+        placeCursorSoon("cockpit");
+        return false;
+      }
+      if (root && layer.contains(root) && next === current) return false;
       if (next === current) return false;
       if (next === "overlay") {
         overlayLayer = layer;
@@ -438,7 +449,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         if (settingsDialog()) window.dispatchEvent(new Event("app:close-settings"));
       } else if (region === "overlay") {
         dropOverlay();
-      } else if (region !== "header" && region !== "card" && region !== "chrome") {
+      } else if (region !== "header" && region !== "card" && region !== "chrome" && region !== "cockpit") {
         closeApp(region);
       }
       returnFromRegion();
@@ -862,7 +873,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         // generic overlay one, which walks whatever is on top.
         case "cockpit":
           useRootOverlayStore.getState().openView("now");
-          enterRegion("overlay");
+          enterRegion("cockpit");
           return;
         case "sidePanel":
           openSidePanel();
@@ -908,6 +919,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
 
     // The region cursor: ↑/↓ walk the surface's controls, Enter presses one
     // (Esc backs out of it; on the tab-bar levels Esc leaves the mode).
+    let cockpitBackwards = false;
     function steerRegion(action: SteeringAction | null, region: SteeringRegion) {
       const root = regionRoot(region);
       if (action === "back") {
@@ -915,7 +927,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         if (root && closeRegionDropdown(root)) return;
         // A dialog or menu closes the way its own Escape closes it (it may
         // ask first); steering follows once it is gone (`syncLayer`).
-        if (region === "overlay" && root) dismissLayer(root, () => syncSoon());
+        if (region === "cockpit" && root) {
+          const back = root.querySelector<HTMLButtonElement>(".cockpit-narrow-back button");
+          if (back) { back.click(); placeCursorSoon("cockpit"); }
+          else { useRootOverlayStore.getState().close(); returnFromRegion(); }
+        } else if (region === "overlay" && root) dismissLayer(root, () => syncSoon());
         else leaveRegion(region);
         return;
       }
@@ -924,6 +940,27 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         if (region === "overlay") syncLayer();
         else leaveRegion(region);
         return;
+      }
+      if (region === "cockpit") {
+        if (action === "cockpitPanel") { stepCockpitArea(root, cockpitBackwards); return; }
+        if (inCockpitRoster() && action && ["up", "down", "cockpitUp", "cockpitDown", "cockpitJump", "cockpitShow", "cockpitContinue", "cockpitFilter"].includes(action)) {
+          const mapped = action === "up" ? "cockpitUp" : action === "down" ? "cockpitDown" : action;
+          const selected = runCockpitRoster(mapped);
+          if (mapped === "cockpitFilter") handOffSteering("search");
+          else if (mapped === "cockpitJump") syncLayer();
+          else if (mapped === "cockpitShow") {
+            window.setTimeout(() => {
+              const detail = regionRoot("cockpit")?.querySelector<HTMLElement>(".cockpit-now-detail");
+              if (detail && useKeyboardSteeringStore.getState().active) placeRegionCursor(detail);
+            }, 0);
+          } else {
+            selectCockpitCursor(root, selected || undefined);
+            window.setTimeout(() => {
+              if (useKeyboardSteeringStore.getState().active && inCockpitRoster()) selectCockpitCursor(root, selected || undefined);
+            }, 0);
+          }
+          return;
+        }
       }
       switch (action) {
         case "up":
@@ -1185,7 +1222,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // The key's meaning on this level, from the user's steering bindings.
       const context: SteeringKeyContext =
         steering.level === "region"
-          ? "region"
+          ? steering.region === "cockpit" && inCockpitRoster() ? "cockpit" : "region"
           : steering.level === "projects"
             ? "projects"
             : steering.level === "scroll"
@@ -1228,6 +1265,8 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
             return;
           }
           if (landed && (action === "up" || action === "down" || action === "left" || action === "right")) return;
+          cockpitBackwards = e.shiftKey;
+          if (region === "cockpit" && steeringKeyIs(e, "cockpitPanel", bindings)) { steerRegion("cockpitPanel", region); return; }
           if (region === "side" && steerSidePanel(e, action, bindings, sidePanelHooks)) return;
           // The key that opened the side panel leaves it again, as Back does.
           const sideBack = !action && region === "side" && steeringKeyIs(e, "sidePanel", bindings);

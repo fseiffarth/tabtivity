@@ -7,7 +7,8 @@ import type { Roster, RosterRow } from "../../lib/cockpit/roster";
 import { rosterNote, stepSelection } from "../../lib/cockpit/roster";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
-import { steeringKeyIs, type SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
+import { registerCockpitRoster } from "../../lib/shortcuts/steeringCockpit";
+import { steeringKeyIs, type SteeringAction, type SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
 import { sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
 import { aiIsOff } from "../../lib/aiSwitch";
 import { useSettingsStore } from "../../stores/settings";
@@ -235,34 +236,30 @@ export function CockpitRoster({
     listRef.current?.querySelector<HTMLElement>(`[data-pty="${CSS.escape(selected)}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [selected]);
 
+  const runAction = (action: SteeringAction) => {
+    const store = useCockpitStore.getState();
+    if (action === "cockpitDown" || action === "cockpitUp") {
+      store.select(stepSelection(roster.rows, store.selected, action === "cockpitDown" ? 1 : -1));
+    } else if (action === "cockpitJump" && store.selected) jumpToRow(store.selected);
+    else if (action === "cockpitShow" && store.selected) onShow(store.selected);
+    else if (action === "cockpitContinue") {
+      const row = roster.rows.find((r) => r.ptyId === store.selected);
+      if (row) continueRow(row);
+    } else if (action === "cockpitFilter") filterRef.current?.focus();
+  };
+  const latestAction = useRef(runAction);
+  latestAction.current = runAction;
+  useEffect(() => registerCockpitRoster((action, ptyId) => {
+    if (ptyId) useCockpitStore.getState().select(ptyId);
+    latestAction.current(action);
+    return useCockpitStore.getState().selected;
+  }), []);
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
     const keys = useSettingsStore.getState().settings?.steering_keys as SteeringKeyMap | undefined;
-    const store = useCockpitStore.getState();
-    const is = (action: Parameters<typeof steeringKeyIs>[1]) => steeringKeyIs(e, action, keys);
-    if (is("cockpitDown") || is("cockpitUp")) {
-      e.preventDefault();
-      store.select(stepSelection(roster.rows, store.selected, is("cockpitDown") ? 1 : -1));
-    } else if (is("cockpitJump")) {
-      if (store.selected) {
-        e.preventDefault();
-        jumpToRow(store.selected);
-      }
-    } else if (is("cockpitShow")) {
-      if (store.selected) {
-        e.preventDefault();
-        onShow(store.selected);
-      }
-    } else if (is("cockpitContinue")) {
-      const row = roster.rows.find((r) => r.ptyId === store.selected);
-      if (row) {
-        e.preventDefault();
-        continueRow(row);
-      }
-    } else if (is("cockpitFilter")) {
-      e.preventDefault();
-      filterRef.current?.focus();
-    }
+    const actions: SteeringAction[] = ["cockpitDown", "cockpitUp", "cockpitJump", "cockpitShow", "cockpitContinue", "cockpitFilter"];
+    const action = actions.find((a) => steeringKeyIs(e, a, keys));
+    if (action) { e.preventDefault(); runAction(action); }
   };
 
   const groupLabel = (id: string, label: string) =>
@@ -279,7 +276,7 @@ export function CockpitRoster({
               : roster.counts.total}
           </span>
         </span>
-        <CockpitUntested view="now" />
+        <CockpitUntested view="now" /><UntestedTag id="steering.cockpit" />
         <span className="cockpit-meta">
           {t("cockpit.roster.summary", { working: roster.counts.working, asking: roster.counts.asking })}
         </span>

@@ -11772,6 +11772,8 @@ export const dict: Dict = {
   "cockpit.notes.attentionDismissed": "Écartée. Rien n’a été répondu ni approuvé.",
   "cockpit.notes.milestones": "Jalons de l’agent",
   "cockpit.notes.milestonesMeta": "Signalés par l’agent. L’heure est celle où {app} a reçu chaque rapport ; {app} ne les a pas vérifiés.",
+  "cockpit.keys.panel": "Zone suivante",
+  "cockpit.keys.panelHint": "Passer entre les zones visibles du cockpit ; Maj inverse le sens.",
   "cockpit.keys.down": "Agent suivant",
   "cockpit.keys.up": "Agent précédent",
   "cockpit.keys.jump": "Aller à son onglet",

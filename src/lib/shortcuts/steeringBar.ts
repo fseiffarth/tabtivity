@@ -228,6 +228,7 @@ export interface Rung {
 
 /** Names of the surfaces a region cursor walks. */
 export const REGION_LABEL: Record<SteeringRegion, TranslationKey> = {
+  cockpit: "cockpit.title",
   side: "steering.region.side",
   mail: "steering.mail.label",
   calendar: "steering.calendar.label",

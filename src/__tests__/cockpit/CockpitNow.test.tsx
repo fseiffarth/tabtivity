@@ -14,6 +14,8 @@ vi.mock("../../components/tabs/TabPane", () => ({
 }));
 vi.mock("../../lib/shortcuts/tabJump", () => ({ jumpToTab: vi.fn(), openPromptChartTab: vi.fn() }));
 
+import { runCockpitRoster } from "../../lib/shortcuts/steeringCockpit";
+import { pointRegionCursor, clearRegionCursor } from "../../lib/shortcuts/steeringRegion";
 import { CockpitNow } from "../../components/cockpit/CockpitNow";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import { useCockpitStore } from "../../stores/cockpit";
@@ -124,6 +126,24 @@ describe("CockpitNow", () => {
     expect(useOverlayAgentStore.getState().shownKeys.has("r")).toBe(true);
     expect(screen.getByText("Open in Root")).toBeTruthy();
     expect(screen.queryByText("Jump to tab")).toBeNull();
+  });
+
+  it("steering acts on the cursor row, including before an explicit selection", async () => {
+    const bounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 10, height: 10, x: 0, y: 0, top: 0, left: 0, right: 10, bottom: 10, toJSON: () => ({}),
+    });
+    render(<CockpitNow />);
+    await act(async () => {});
+    const root = document.querySelector<HTMLElement>(".cockpit-view-now")!;
+    const row = root.querySelector<HTMLElement>('[data-pty="p2:b"]')!;
+    pointRegionCursor(root, row);
+    act(() => { runCockpitRoster("cockpitShow"); });
+    expect(useCockpitStore.getState().selected).toBe("p2:b");
+    expect(screen.getByTestId("attached-b")).toBeTruthy();
+    act(() => { runCockpitRoster("cockpitJump"); });
+    expect(jumpToTab).toHaveBeenLastCalledWith("p2", "b");
+    clearRegionCursor();
+    bounds.mockRestore();
   });
 
   it("filters by text", async () => {
