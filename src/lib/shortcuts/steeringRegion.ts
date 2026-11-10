@@ -578,7 +578,7 @@ export function closeRegionDropdown(root: HTMLElement): boolean {
 export function activateRegionCursor(): "type" | "press" | "open" | null {
   const el = regionCursor();
   if (!el) return null;
-  if (isTextEntry(el)) {
+  if (isTextEntry(el) || (el instanceof HTMLInputElement && el.type === "range")) {
     setCursor(null);
     el.focus();
     return "type";

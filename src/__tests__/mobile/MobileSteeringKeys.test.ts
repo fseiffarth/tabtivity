@@ -236,8 +236,14 @@ describe("isTypingTarget", () => {
     expect(isTypingTarget(editable)).toBe(true);
   });
 
+  it("hands a focused slider its native arrows", () => {
+    const range = field("input", "50", "range");
+    expect(isTypingTarget(range)).toBe(true);
+    expect(isEntryChord(kb(" ", { shift: true }), range)).toBe(true);
+  });
+
   it("ignores buttons and the non-text inputs", () => {
-    for (const type of ["button", "checkbox", "radio", "range", "file", "color", "submit", "image", "reset"]) {
+    for (const type of ["button", "checkbox", "radio", "file", "color", "submit", "image", "reset"]) {
       expect(isTypingTarget(field("input", "", type)), type).toBe(false);
     }
     const button = document.createElement("button");

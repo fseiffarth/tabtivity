@@ -228,7 +228,7 @@ export function isSpace(e: Pick<KeyboardEvent, "key" | "code">): boolean {
   return e.code === "Space" || e.key === " " || e.key === " ";
 }
 
-const NON_TEXT_INPUTS = new Set(["button", "checkbox", "radio", "range", "file", "color", "image", "reset", "submit"]);
+const NON_TEXT_INPUTS = new Set(["button", "checkbox", "radio", "file", "color", "image", "reset", "submit"]);
 
 function editableElement(node: unknown): HTMLElement | null {
   if (!(node instanceof HTMLElement)) return null;
@@ -251,6 +251,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 function fieldIsEmpty(field: HTMLElement): boolean {
+  if (field instanceof HTMLInputElement && field.type === "range") return true;
   if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) return field.value === "";
   if (field instanceof HTMLSelectElement) return true;
   return (field.textContent ?? "") === "";
