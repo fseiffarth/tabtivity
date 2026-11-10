@@ -1092,6 +1092,15 @@ Antigravity's newest release comes from the manifest its installer reads
 `install.ps1` exit 0 at "already installed". Inside a fence the binary's folder
 is read-only, so neither `agy update` nor its background self-update can work.
 
+Vibe's `install.sh` (Manage CLIs' Install and Update) picks upgrade over
+install when it finds *any* `vibe` on its PATH, then runs `uv tool upgrade
+mistral-vibe` against the install home's `UV_TOOL_DIR`, where a host-only
+copy is not: "`mistral-vibe` is not installed" and exit 1 (2026-11-10, a host
+`~/.local/bin/vibe`). Its installer therefore runs without the PATH dirs that
+hold a host `vibe` (`agent_install::installer_path_dirs`); system dirs stay.
+It also needs a `uv` ≥ 0.11 for `--python cpython-3.14+gil`
+(`agent_install::installer_prelude`).
+
 Codex's installer gives `releases.openai.com` a hard `--max-time 300` per asset,
 then falls back to a silent GitHub download; 0.166.0's package is 200 MB
 (160 MB through 0.165.0). `services/agent/codex_package.rs` (Unix) fetches it first,

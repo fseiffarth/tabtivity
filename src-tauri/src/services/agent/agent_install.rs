@@ -202,6 +202,34 @@ pub fn installer_prelude(
     }
 }
 
+/// CLIs, by registry id, whose installer takes any copy on its PATH for its
+/// own and then upgrades in the install home, where there is none: Vibe's
+/// `install.sh` finds the user's `~/.local/bin/vibe`, runs `uv tool upgrade
+/// mistral-vibe` against the install home's `UV_TOOL_DIR` and fails
+/// ("`mistral-vibe` is not installed; run `uv tool install`", 2026-11-10).
+const INSTALLER_HIDES_HOST_COPY: &[&str] = &["vibe"];
+
+/// Dirs never left off an installer's PATH: without them it has no shell
+/// tools at all. A host copy there still reaches the installer.
+const SYSTEM_BIN_DIRS: &[&str] = &["/bin", "/sbin", "/usr/bin", "/usr/sbin"];
+
+/// The PATH dirs `agent_id`'s installer runs with: `dirs` minus, for a CLI in
+/// [`INSTALLER_HIDES_HOST_COPY`], every dir outside `root` (the install home)
+/// that holds `bin`, so the installer installs fresh into the install home
+/// instead of upgrading a copy it does not own. Pure over the filesystem.
+pub fn installer_path_dirs(agent_id: &str, bin: &str, root: &Path, dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    if !INSTALLER_HIDES_HOST_COPY.contains(&agent_id) {
+        return dirs;
+    }
+    dirs.into_iter()
+        .filter(|d| {
+            d.starts_with(root)
+                || SYSTEM_BIN_DIRS.iter().any(|s| d == Path::new(s))
+                || !d.join(bin).is_file()
+        })
+        .collect()
+}
+
 /// The auto-update switch of a CLI, by command basename. Only switches that
 /// are documented; a CLI without one simply fails its update on the
 /// read-only tree and carries on.
@@ -286,6 +314,30 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn vibe_installer_does_not_see_the_host_copy_on_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("install");
+        let own = root.join(".local").join("bin");
+        let host = tmp.path().join("home").join(".local").join("bin");
+        let other = tmp.path().join("other");
+        for d in [&own, &host, &other] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(own.join("vibe"), "").unwrap();
+        std::fs::write(host.join("vibe"), "").unwrap();
+        std::fs::write(other.join("uv"), "").unwrap();
+        let dirs = vec![own.clone(), host.clone(), other.clone(), PathBuf::from("/usr/bin")];
+        // The reported failure: the host `~/.local/bin/vibe` made the installer
+        // upgrade a tool the install home never had. Its own copy stays.
+        assert_eq!(
+            installer_path_dirs("vibe", "vibe", &root, dirs.clone()),
+            vec![own.clone(), other.clone(), PathBuf::from("/usr/bin")]
+        );
+        // Every other CLI keeps the PATH as it is.
+        assert_eq!(installer_path_dirs("claude", "vibe", &root, dirs.clone()), dirs);
+    }
 
     #[test]
     fn install_env_points_every_prefix_into_the_install_home() {

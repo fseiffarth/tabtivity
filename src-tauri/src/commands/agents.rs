@@ -404,7 +404,7 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
             use std::os::windows::process::CommandExt;
             c.raw_arg(format!("/D /C {cmd_str} 2>&1"));
         }
-        into_install_home(&mut c)?;
+        into_install_home(&mut c, Some(spec))?;
         Ok(c)
     }
     #[cfg(not(windows))]
@@ -415,10 +415,10 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
                 spec.docs
             ));
         }
-        let prelude = crate::services::agent_install::installer_prelude(spec.id, installer_uv);
+        let prelude = crate::services::agent_install::installer_prelude(spec.id, || installer_uv(spec));
         let mut c = crate::paths::command_no_window("sh");
         c.arg("-c").arg(format!("{prelude}{} 2>&1", spec.install_cmd));
-        into_install_home(&mut c)?;
+        into_install_home(&mut c, Some(spec))?;
         Ok(c)
     }
 }
@@ -426,8 +426,8 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
 /// The `uv` an installer would run first on [`agent_install_path`], and the
 /// version it reports (`None` inside when it prints none).
 #[cfg(not(windows))]
-fn installer_uv() -> Option<Option<String>> {
-    let path = agent_install_path();
+fn installer_uv(spec: &AgentSpec) -> Option<Option<String>> {
+    let path = agent_install_path(Some(spec));
     let uv = std::env::split_paths(&path).map(|dir| dir.join("uv")).find(|p| p.is_file())?;
     let out = crate::paths::command_no_window(&uv).arg("--version").output().ok();
     Some(out.and_then(|o| {
@@ -449,7 +449,7 @@ fn update_command(spec: &AgentSpec) -> Result<std::process::Command, String> {
     update_target_in(spec, &bin, &crate::services::agent_install::install_root())?;
     let mut c = crate::paths::command_no_window(&bin);
     c.args(argv).stdin(std::process::Stdio::null());
-    into_install_home(&mut c)?;
+    into_install_home(&mut c, Some(spec))?;
     Ok(c)
 }
 
@@ -475,8 +475,9 @@ fn update_target_in(spec: &AgentSpec, bin: &std::path::Path, root: &std::path::P
 }
 
 /// Point an installer at Tabtivity's own install home: create it, hand over
-/// its environment and [`agent_install_path`].
-fn into_install_home(c: &mut std::process::Command) -> Result<(), String> {
+/// its environment and [`agent_install_path`] (for `spec`'s installer, when
+/// one runs).
+fn into_install_home(c: &mut std::process::Command, spec: Option<&AgentSpec>) -> Result<(), String> {
     let root = crate::services::agent_install::install_root();
     std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
     let env = crate::services::agent_install::install_env();
@@ -486,16 +487,23 @@ fn into_install_home(c: &mut std::process::Command) -> Result<(), String> {
         std::fs::create_dir_all(appdata).map_err(|e| format!("create {appdata}: {e}"))?;
     }
     c.envs(env);
-    c.env("PATH", agent_install_path());
+    c.env("PATH", agent_install_path(spec));
     Ok(())
 }
 
 /// PATH for an installer: the install home's launcher dirs first, so a
-/// second installer of the same vendor finds the first's tools there.
-fn agent_install_path() -> std::ffi::OsString {
-    let mut dirs = crate::services::agent_install::bin_dirs_in(&crate::storage::state_dir());
+/// second installer of the same vendor finds the first's tools there. For
+/// `spec`'s installer, without the dirs of a host copy it would mistake for
+/// its own (`agent_install::installer_path_dirs`).
+fn agent_install_path(spec: Option<&AgentSpec>) -> std::ffi::OsString {
+    let state_dir = crate::storage::state_dir();
+    let mut dirs = crate::services::agent_install::bin_dirs_in(&state_dir);
     if let Some(path) = crate::paths::effective_path() {
         dirs.extend(std::env::split_paths(&path));
+    }
+    if let Some(spec) = spec {
+        let root = crate::services::agent_install::install_root_in(&state_dir);
+        dirs = crate::services::agent_install::installer_path_dirs(spec.id, spec.bin, &root, dirs);
     }
     std::env::join_paths(dirs).unwrap_or_default()
 }
@@ -777,7 +785,7 @@ fn npm_uninstall_command(
         c
     };
     if in_install_home {
-        into_install_home(&mut c)?;
+        into_install_home(&mut c, None)?;
     }
     Ok(c)
 }
