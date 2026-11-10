@@ -592,6 +592,19 @@ Claude's `/fast` — different thing.
   draws MCP/other tool prompts and a held message from another session the
   same way (changelog); the rule handling is not Bash-specific, but no such
   prompt has been captured live yet.
+- `/model` picker (2.1.322, `claude/model.py`): 2.1.321 folds the older
+  models under an unnumbered `▸   More models` row at the numbers' column
+  (`▾` once open, footer `Enter to expand` / `Enter to collapse`, → does
+  nothing) and numbers on under it (`6.  Fable 5.1` …); 2.1.319 drew it as a
+  numbered `6.  More models  Show 9 more`. The reader ended its run there: the
+  phone listed only rows 1–5, read nothing while the highlight sat on the
+  row, and, opened, walked one model short across it. `selectPrompt.ts`
+  (`EXPANDER_ROW`) keeps it in the run as an `expander` numbered half way
+  between its neighbours, walks go by position (`selectRowPosition`), a tap
+  on it only opens it, and `modelRowsOf` remembers the rows above it only.
+  The `… +N models` note counts it among the rows below. Hook payloads (19
+  events, `cmp.py`, `sedcheck.py` 0 mismatches), `/usage` envelope and panel
+  lines, `--help` and the permission prompt's rows read the same as 2.1.319.
 
 **Verify**
 

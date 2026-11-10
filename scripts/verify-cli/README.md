@@ -52,7 +52,9 @@ gives its usage.
   where the prompt goes. `chat_send.py <label> <bin> [case…]` types prompts
   with the Chat's and the phone's exact writes (`agentInputWrites` and its
   pacing) — fresh, idle, two-line, long, while busy — and reads
-  `UserPromptSubmit` for whether each Enter submitted. These need the login
+  `UserPromptSubmit` for whether each Enter submitted. `model.py <label> <bin>
+  [expand]` walks the `/model` picker at 120×40 and 80×24 with arrows and
+  Esc only (no turn); `expand` opens the folded `More models` row first. These need the login
   and make small paid haiku turns.
   Binaries come from the agent install's `.local/share/claude/versions/<v>`.
 - **OpenCode** (`opencode/`): `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`

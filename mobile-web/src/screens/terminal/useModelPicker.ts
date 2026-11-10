@@ -10,7 +10,7 @@ import { getModelRows, rememberModelRows, type TabRow } from "../../api";
 import { type ReadableLine } from "../../terminal/readableScreen";
 import {
   mergeSelectRows, readSelectPrompt, revealSelectRow, sameSelectStep, selectKeys, selectMoveKeys,
-  type SelectPrompt, type SelectStep,
+  selectRowPosition, type SelectPrompt, type SelectStep,
 } from "../../terminal/selectPrompt";
 import { liveModelPick, modelRowsOf, modelRowsStep, sameModelRows } from "../../terminal/modelRows";
 import {
@@ -55,6 +55,8 @@ export function useModelPicker({
   knownStep: SelectStep | null;
   setKnownStep: Dispatch<SetStateAction<SelectStep | null>>;
   rememberedStep: SelectStep | null;
+  /** `origin` is the printed number the walk started on, `target` the
+   * position it walks to (`selectRowPosition`). */
   setReveal: Dispatch<SetStateAction<{ origin: number; target: number; } | null>>;
   reveal: { origin: number; target: number; } | null;
   revealStuck: MutableRefObject<boolean>;
@@ -142,6 +144,8 @@ export function useModelPicker({
     : null;
   /** The printed number of the row the dialog highlights right now. */
   const pickerAt = pickerStep?.options[pickerStep.current]?.number;
+  /** …and where it sits for the arrow keys (`selectRowPosition`). */
+  const pickerPosition = pickerAt === undefined || !listedStep ? undefined : selectRowPosition(listedStep, pickerAt);
   /** The effort stops Antigravity's dialog is offering right now — the ones
    * belonging to the model its highlight is on, which is why they are read
    * again after every walk rather than kept with the row. */
@@ -204,8 +208,9 @@ export function useModelPicker({
    * walked to each one it hides, which scrolls it into view, and back. Only
    * arrow keys — nothing is accepted — and only while nothing was tapped. */
   useEffect(() => {
-    if (!modelSheet || openCode || answered || !pickerStep || !listedStep || pickerAt === undefined || revealStuck.current) return;
-    if (reveal && pickerAt !== reveal.target) {
+    if (!modelSheet || openCode || answered || !pickerStep || !listedStep || pickerAt === undefined || pickerPosition === undefined || revealStuck.current) return;
+    // Positions, not numbers: the walk's arrows also stop on an expander row.
+    if (reveal && pickerPosition !== reveal.target) {
       // The keys have not landed yet. If they never do, stop walking.
       const stuck = window.setTimeout(() => {
         revealStuck.current = true;
@@ -213,19 +218,20 @@ export function useModelPicker({
       }, MODEL_PICKER_WAIT);
       return () => window.clearTimeout(stuck);
     }
-    const target = revealSelectRow(listedStep, pickerStep) ?? reveal?.origin;
-    if (target === undefined || target === pickerAt) {
+    const target = revealSelectRow(listedStep, pickerStep)
+      ?? (reveal ? selectRowPosition(listedStep, reveal.origin) : undefined);
+    if (target === undefined || target === pickerPosition) {
       if (reveal) setReveal(null);
       return;
     }
-    if (!deliver(selectMoveKeys(pickerAt, target))) {
+    if (!deliver(selectMoveKeys(pickerPosition, target))) {
       setReveal(null);
       return;
     }
     setReveal({ origin: reveal?.origin ?? pickerAt, target });
     // `deliver` is a fresh closure every render; the walk runs on the frames.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelSheet, openCode, answered, pickerStep, listedStep, pickerAt, reveal]);
+  }, [modelSheet, openCode, answered, pickerStep, listedStep, pickerAt, pickerPosition, reveal]);
   return { openCodeWalk, picker, pickerStep, listedStep, listSettled, modelPreview, pickerAt, effortSlider };
 }
 
@@ -363,11 +369,15 @@ export function useModelPickerAnswers({
     }
     // No walk key may follow the answer's into the session.
     if (openCode) openCodeWalk.current?.hold();
-    // Walked by printed number: a windowed picker's rows on screen are a slice.
+    // Walked by position, from the printed numbers: a windowed picker's rows
+    // on screen are a slice, and an expander row is a stop with no number.
     const writes = openCode
       ? picked.keys ?? openCodePickKeys(picked.label)
-      : pickerAt === undefined ? [] : selectKeys(pickerAt, picked.number);
+      : pickerAt === undefined ? [] : selectKeys(selectRowPosition(listedStep, pickerAt), selectRowPosition(listedStep, picked.number));
     if (writes.length === 0 || !deliver(writes)) return;
+    // An expander's Enter opens its rows into the same list, which the sheet
+    // goes on listing: nothing was answered.
+    if (picked.expander) return;
     sheetAnswered.current = true;
     setAnswered(listedStep);
   };

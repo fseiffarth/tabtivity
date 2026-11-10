@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dialogFooterShown, freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, revealSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, selectMoveKeys, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
+import { dialogFooterShown, freeTextRow, freeTextWrites, mergeSelectRows, missingSelectRow, revealSelectRow, questionTabFocus, questionTabKeys, questionTabRowKeys, questionTabsSubmit, readQuestionTabs, readReviewStep, readSelectPrompt, sameSelectStep, selectKeys, optionForDigit, selectMoveKeys, selectRowPosition, selectSignature, UNNUMBERED } from "../../../mobile-web/src/terminal/selectPrompt";
 import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agentModes";
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
@@ -912,6 +912,89 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(mergeSelectRows(step, next).options.map((option) => option.label)).toEqual(["Low", "High"]);
     // A picker that draws every row has nothing missing.
     expect(missingSelectRow(mergeSelectRows(null, next), next)).toBeUndefined();
+  });
+
+  describe("Claude Code 2.1.322's folded older models", () => {
+    // Captured with scripts/verify-cli/claude/model.py (2026-11-10): the
+    // `More models` row has no number, sits at the numbers' column and folds
+    // the models numbered on under it.
+    const frame = (rows: string[], below?: number) => lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names,",
+      "   specify with --model.",
+      "",
+      ...rows,
+      ...(below ? [`      … +${below} models`] : []),
+      "   ● High effort ←/→ to adjust",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    );
+    const TOP = [
+      "     1.  Default (recommended)  Sonnet 5.5 · Efficient for routine tasks",
+      "     2.  Opus 5.5 ✔             For complex work and everyday tasks",
+      "     3.  Fable 5.2              For your toughest challenges",
+      "     4.  Sonnet 5.5             Most efficient for simpler tasks",
+      "     5.  Haiku 5.5              Fastest for quick answers",
+    ];
+
+    it("keeps the expander in the run, highlighted or not", () => {
+      const folded = readSelectPrompt(frame([TOP[0], "   ❯ 2.  Opus 5.5 ✔             For complex work and everyday tasks", ...TOP.slice(2), "     ▸   More models             "]), "Claude")!;
+      expect(folded.options.map((option) => `${option.number}:${option.label}`)).toEqual([
+        "1:Default (recommended)", "2:Opus 5.5 ✔", "3:Fable 5.2", "4:Sonnet 5.5", "5:Haiku 5.5", "5.5:More models",
+      ]);
+      expect(folded.options[5].expander).toBe(true);
+      // Highlighted, it is the dialog's one mark: before, nothing read at all.
+      const on = readSelectPrompt(frame([...TOP, "   ❯ ▸   More models             "]), "Claude")!;
+      expect(on.current).toBe(5);
+    });
+
+    it("reads the opened list on through the expander, walking it as a row", () => {
+      const opened = readSelectPrompt(frame([
+        ...TOP.slice(0, 2), "   ❯ 3.  Fable 5.2              For your toughest challenges", ...TOP.slice(3),
+        "     ▾   More models             ",
+        "     6.  Fable 5.1              Most capable for your hardest and longest-running tasks",
+        "     7.  Haiku 4.5              Fastest for quick answers",
+        "     8.  Sonnet 5               Efficient for routine tasks",
+        "     9.  Opus 5                 Best for everyday, complex tasks",
+        "   ↓ 10. Fable 5                Most capable for your hardest and longest-running tasks",
+      ], 4), "Claude")!;
+      expect(opened.options.map((option) => option.number)).toEqual([1, 2, 3, 4, 5, 5.5, 6, 7, 8, 9, 10]);
+      expect(opened.hidden).toBe(4);
+      const step = mergeSelectRows(null, opened);
+      expect(selectRowPosition(step, 5.5)).toBe(6);
+      expect(selectRowPosition(step, 6)).toBe(7);
+      // From Fable 5.2 to Haiku 4.5 is five arrows, not four: one stops on the
+      // expander. By number the tap picked Fable 5.1.
+      expect(selectKeys(selectRowPosition(step, 3), selectRowPosition(step, 7))).toEqual([...Array(5).fill(`${ESC}[B`), "\r"]);
+      // Fifteen rows: the four the note says are below come after position 11.
+      expect(revealSelectRow(step, opened)).toBe(15);
+    });
+
+    it("reads a slice whose top row is the expander", () => {
+      // 80×24: three rows, the expander above the two it opened.
+      const slice = readSelectPrompt(frame([
+        "   ↑ ▾   More models             ",
+        "     6.  Fable 5.1              Most capable for your hardest and longest-running tasks",
+        "   ❯ 7.  Haiku 4.5              Fastest for quick answers",
+      ], 7), "Claude")!;
+      expect(slice.options.map((option) => option.number)).toEqual([5.5, 6, 7]);
+      expect(slice.current).toBe(2);
+      // Five numbered rows above it, seven below.
+      expect(slice.hidden).toBe(12);
+      const step = mergeSelectRows(null, slice);
+      expect(missingSelectRow(step, slice)).toBe(1);
+      expect(revealSelectRow(step, slice)).toBe(1);
+    });
+
+    it("does not let a stray `▸ More …` line above a dialog swallow it", () => {
+      const prompt = readSelectPrompt(lines("▸ More options", "❯ 1. Yes", "  2. No"))!;
+      expect(prompt.options.map((option) => option.label)).toEqual(["Yes", "No"]);
+    });
+
+    it("leaves the expander out of what a digit answers", () => {
+      const folded = readSelectPrompt(frame([TOP[0], "   ❯ 2.  Opus 5.5 ✔             For complex work and everyday tasks", ...TOP.slice(2), "     ▸   More models             "]), "Claude")!;
+      expect(optionForDigit(folded, 5)?.label).toBe("Haiku 5.5");
+      expect(optionForDigit(folded, 6)).toBeNull();
+    });
   });
 
   it("moves the highlight without accepting it", () => {

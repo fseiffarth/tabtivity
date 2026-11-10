@@ -38,7 +38,7 @@ export function handsFreeTurnOver(state: {
 /** The rows a voice can pick: the numbered ones. A free-text row needs typed
  * words, and an unnumbered Submit row is no answer of its own. */
 function pickable(prompt: SelectPrompt): SelectOption[] {
-  return prompt.options.filter((option) => option.number !== UNNUMBERED && !freeTextRow(option));
+  return prompt.options.filter((option) => option.number !== UNNUMBERED && !option.expander && !freeTextRow(option));
 }
 
 /** A pick-the-row answer that grants a permission or saves a rule: the dialog
