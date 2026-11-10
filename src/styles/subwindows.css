@@ -1054,7 +1054,7 @@ html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
   white-space: nowrap;
 }
 /* The chip row under the prompt (Alt+M model, Alt+E effort, Alt+K clear,
-   Alt+L plan, Alt+G goal): the phone composer's chips with their keys as key
+   Alt+P plan, Alt+G goal): the phone composer's chips with their keys as key
    caps; an open list or a lead in the text marks its chip with the accent. */
 .steering-prompt-chips {
   display: flex;
@@ -1100,6 +1100,14 @@ html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
   padding: var(--space-2);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
+}
+/* The Chat view's `/` menu, under the prompt box's text in the dialog's flow
+   (in the Reader it opens upward over the pane). Fixed height for the reason
+   the list above has one. */
+.steering-prompt-dialog .terminal-reader-slash {
+  position: static;
+  width: auto;
+  height: min(40vh, 340px);
 }
 .steering-prompt-list-head {
   font-size: var(--text-sm);

@@ -282,10 +282,10 @@ describe("steering prompt box", () => {
       fireEvent.keyDown(input, { key, code: `Key${key.toUpperCase()}`, altKey: true });
     const written = () => writeMock.mock.calls.map(([, bytes]) => decode(bytes));
 
-    it("Alt+L / Alt+G lead the text with /plan or /goal and take it off again", () => {
+    it("Alt+P / Alt+G lead the text with /plan or /goal and take it off again", () => {
       const input = openBox();
       fireEvent.change(input, { target: { value: "tidy the tests" } });
-      alt(input, "l");
+      alt(input, "p");
       expect(box()!.value).toBe("/plan tidy the tests");
       alt(input, "g");
       expect(box()!.value).toBe("/goal tidy the tests");
@@ -294,21 +294,37 @@ describe("steering prompt box", () => {
       expect(writeMock).not.toHaveBeenCalled();
     });
 
-    it("Alt+K clears only on the second press", async () => {
+    it("AltGr+E (€ on a German layout) opens the effort list like Alt+E, and types no €", () => {
       const input = openBox();
-      alt(input, "k");
+      // Linux: AltGr is neither Alt nor Ctrl. Windows: Ctrl+Alt as well.
+      const linux = fireEvent.keyDown(input, { key: "€", code: "KeyE", modifierAltGraph: true });
+      expect(linux).toBe(false); // default prevented: no € in the box
+      expect(document.querySelector(".steering-prompt-list")).not.toBeNull();
+      fireEvent.keyDown(input, { key: "€", code: "KeyE", ctrlKey: true, altKey: true, modifierAltGraph: true });
+      expect(document.querySelector(".steering-prompt-list")).toBeNull();
+    });
+
+    it("Ctrl+Alt+E without AltGr is not a chip", () => {
+      const input = openBox();
+      fireEvent.keyDown(input, { key: "e", code: "KeyE", ctrlKey: true, altKey: true });
+      expect(document.querySelector(".steering-prompt-list")).toBeNull();
+    });
+
+    it("Alt+C clears only on the second press", async () => {
+      const input = openBox();
+      alt(input, "c");
       expect(writeMock).not.toHaveBeenCalled();
       expect(document.querySelector(".steering-prompt-chip.on")).not.toBeNull();
-      alt(input, "k");
+      alt(input, "c");
       await vi.waitFor(() => expect(written()).toContain("/clear"));
       expect(box()).not.toBeNull();
     });
 
-    it("another key between the two Alt+K presses disarms Clear", () => {
+    it("another key between the two Alt+C presses disarms Clear", () => {
       const input = openBox();
-      alt(input, "k");
+      alt(input, "c");
       fireEvent.keyDown(input, { key: "a" });
-      alt(input, "k");
+      alt(input, "c");
       expect(writeMock).not.toHaveBeenCalled();
     });
 
@@ -369,8 +385,8 @@ describe("steering prompt box", () => {
         expect(chips.map((c) => chipKeyLabel(c))).toEqual([
           "⌥M",
           "⌥E",
-          "⌥K",
-          "⌥L",
+          "⌥C",
+          "⌥P",
           "⌥G",
         ]);
       } finally {

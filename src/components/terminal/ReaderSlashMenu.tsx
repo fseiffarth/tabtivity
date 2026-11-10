@@ -4,6 +4,29 @@ import { UntestedTag } from "../common/UntestedTag";
 import type { SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { CloseIcon } from "../common/icons/Icon";
 
+/** What a key does to an open `/` menu of `count` rows whose ↑/↓ row is `at`
+ * (null before the arrows were pressed): ↑/↓ move to another row (wrapping;
+ * the first press lands on the first or last), Tab — or Enter once the arrows
+ * picked a row — fills the box with that row, Esc closes the menu. Null: the
+ * key stays the box's own (Enter with no row picked still sends). Shared by
+ * the Reader's composer and steering's prompt box. */
+export function slashMenuKey(
+  e: { key: string; shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean },
+  count: number,
+  at: number | null,
+): { move: number } | { pick: number } | "close" | null {
+  if (count === 0 || e.altKey || e.ctrlKey || e.metaKey) return null;
+  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    if (e.shiftKey) return null;
+    const step = e.key === "ArrowUp" ? -1 : 1;
+    const from = at ?? (step > 0 ? -1 : count);
+    return { move: (from + step + count) % count };
+  }
+  if ((e.key === "Tab" && !e.shiftKey) || (e.key === "Enter" && !e.shiftKey && at !== null)) return { pick: at ?? 0 };
+  if (e.key === "Escape") return "close";
+  return null;
+}
+
 /**
  * The Reader composer's `/` menu — the phone composer's (`slashCommands`), on
  * the desktop: the commands that continue the draft, the ones sent before

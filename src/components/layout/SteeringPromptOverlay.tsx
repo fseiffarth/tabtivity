@@ -1,7 +1,8 @@
-import { useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { DialogShell } from "../common/PromptDialogs";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
+import { ReaderSlashMenu, slashMenuKey } from "../terminal/ReaderSlashMenu";
 import { useT } from "../../lib/i18n";
 import {
   STEERING_PROMPT_EVENT,
@@ -15,8 +16,19 @@ import {
 import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { pasteIntoAgentBox } from "../../lib/terminal/terminalDrop";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
+import { readReaderLive } from "../../lib/agents/readerLive";
+import { isNewConversationCommand } from "../../lib/agents/typedClear";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
+import { agentFamily } from "../../../shared/agentComposer";
+import {
+  completedSlashCommand,
+  forgetSlashCommand,
+  readSlashCommands,
+  rememberSlashCommand,
+  slashSuggestions,
+  type SlashSuggestion,
+} from "../../../mobile-web/src/slashCommands";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { selectMoveKeys } from "../../../mobile-web/src/terminal/selectPrompt";
@@ -41,18 +53,24 @@ const drafts = new Map<string, string>();
  * the keyboard back to steering on the level the key was pressed on, as the
  * project jump does. A send that fails keeps the box and the text, with why.
  * Text left unsent (Escape, Cancel) waits in the box for that tab's next open.
- * Plan / Goal open it led with `/plan ` / `/goal ` (`ledDraft`).
+ * Plan / Goal chips lead it with `/plan ` / `/goal ` (`ledDraft`).
  *
  * A paste of files (copied in the file manager) or of an image (a screenshot,
  * no text on the clipboard) goes in as a drop onto the tab would
  * (`lib/terminal/terminalDrop`): copied into the tab folder's inbox and typed
  * at the caret as `@<reference>`, which the fenced agent can read.
  *
+ * The Chat view composer's suggestions, read the same way: text starting
+ * with `/` opens its `/` menu under the box (`ReaderSlashMenu`: ↑/↓, Tab or
+ * Enter on a picked row fills it, Esc closes it), and the empty box shows
+ * Claude Code's own suggestion for the next prompt, read off the pane's
+ * screen, as its placeholder — Tab or → takes it in.
+ *
  * Under the text, the phone composer's chips on Alt+keys (the letters type
  * text here): Alt+M lists the session's own `/model` picker, Alt+E the
  * effort (Claude's `/effort` levels; elsewhere the `/model` picker, whose
- * next step it is), Alt+K clears the conversation (pressed twice: it asks
- * first, as K does), Alt+L / Alt+G lead the text with `/plan` / `/goal` or
+ * next step it is), Alt+C clears the conversation (pressed twice: it asks
+ * first), Alt+P / Alt+G lead the text with `/plan` / `/goal` or
  * take that lead off again. A list takes ↑/↓, Enter and the digits; Escape
  * closes the list before the box.
  *
@@ -84,9 +102,7 @@ export function SteeringPromptOverlay() {
   return <PromptBox key={id} draftKey={id} target={open} onClose={close} />;
 }
 
-/** The chips' Alt+keys, beside the steering keys that do the same on the
- *  tab level (K, L, G). */
-const CHIP_KEYS = { model: "m", effort: "e", clear: "k", plan: "l", goal: "g" } as const;
+const CHIP_KEYS = { model: "m", effort: "e", clear: "c", plan: "p", goal: "g" } as const;
 type Chip = keyof typeof CHIP_KEYS;
 
 /** A chip's key as its `<kbd>` names it: `chordLabel`'s Alt — "Alt+M", or
@@ -96,7 +112,12 @@ export function chipKeyLabel(chip: Chip): string {
 }
 
 function chipFor(e: ReactKeyboardEvent): Chip | null {
-  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return null;
+  if (e.metaKey || e.shiftKey) return null;
+  // AltGr counts as Alt here (the user's choice): Linux reports it as neither
+  // Alt nor Ctrl, Windows as Ctrl+Alt, and its letter as another character
+  // (AltGr+E is € on a German layout) — so it matches by `code` below. The
+  // cost: AltGr's € µ ¢ þ ŋ are not typed in this one box.
+  if (!e.getModifierState("AltGraph") && (!e.altKey || e.ctrlKey)) return null;
   for (const chip of Object.keys(CHIP_KEYS) as Chip[]) {
     const key = CHIP_KEYS[chip];
     // `code` too: Option+letter types another character on macOS.
@@ -111,6 +132,17 @@ function digitOf(e: ReactKeyboardEvent): number | null {
   return /^[1-9]$/.test(e.key) ? Number(e.key) : null;
 }
 
+/** How long the pane's output rests before its prompt suggestion is read
+ *  again: one read per redraw, not per chunk of it. */
+const SUGGESTION_SETTLE_MS = 120;
+
+/** Claude Code's prompt suggestion on pane `ptyId`'s screen, or "" (another
+ *  CLI, a turn running, a dialog up, no screen in this window). */
+function promptSuggestionOf(ptyId: string, agent: string): string {
+  const term = terminalFor(ptyId);
+  return term ? readReaderLive(term.buffer.active, agent).suggestion : "";
+}
+
 function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Open; onClose: () => void }) {
   const t = useT();
   const modelsByTab = useAgentModelsStore((state) => state.byTab);
@@ -121,7 +153,32 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   const agent = agentTabLabel(target.tab);
   const offer = steeringAgentOffer(target.tab);
   const claude = isClaudeCommand(target.tab.cmd);
+  const cli = agentFamily(agent);
   const [value, setValue] = useState(() => ledDraft(drafts.get(draftKey) ?? "", target.lead));
+  /** The `/` menu (the Chat view's `ReaderSlashMenu`): the commands sent to
+   * this CLI before, the row ↑/↓ moved to and whether Esc closed it for the
+   * text as it stands. */
+  const [usedSlash, setUsedSlash] = useState(() => readSlashCommands(cli));
+  const [slashAt, setSlashAt] = useState<number | null>(null);
+  const [slashClosed, setSlashClosed] = useState(false);
+  /** Claude Code's suggestion for the next prompt, dimmed in its empty input
+   * box: read off the pane's screen now and again as it draws. */
+  const [suggestion, setSuggestion] = useState(() => promptSuggestionOf(ptyId, agent));
+  useEffect(() => {
+    const term = terminalFor(ptyId);
+    if (!term || !isClaudeCommand(target.tab.cmd)) return;
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const writes = term.onWriteParsed(() => {
+      settle ??= setTimeout(() => {
+        settle = undefined;
+        setSuggestion(promptSuggestionOf(ptyId, agent));
+      }, SUGGESTION_SETTLE_MS);
+    });
+    return () => {
+      writes.dispose();
+      if (settle) clearTimeout(settle);
+    };
+  }, [ptyId, agent, target.tab.cmd]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const errorId = useId();
@@ -158,6 +215,15 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   const modelPickable = modelPickOffered(target.tab);
   // Not while the session's picker is up: the text would land in it.
   const submittable = !busy && !picking && value.trim().length > 0;
+  // Not over a model or effort list: ↑/↓ and Enter are that list's.
+  const slashMenu = useMemo(
+    () => (slashClosed || picking || effortOpen ? [] : slashSuggestions(value, cli, usedSlash)),
+    [slashClosed, picking, effortOpen, value, cli, usedSlash],
+  );
+  /** Claude's suggestion while the box is empty, as its own CLI shows it:
+   * the placeholder, taken into the box by Tab or →, so the user still
+   * sends, edits or ignores it. */
+  const shownSuggestion = suggestion && !value && !busy && !working && !picking && !effortOpen ? suggestion : "";
 
   // A picker just gone: the status line may name another model or effort.
   const [wasPicking, setWasPicking] = useState(picking);
@@ -171,6 +237,16 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   useEffect(() => () => { if (latest.current.picking) latest.current.close(); }, []);
 
   const refocus = () => input.current?.focus();
+  /** The text changed (typed, picked, led): kept as the tab's draft, and the
+   *  `/` menu offered afresh for it. */
+  const editValue = (next: string) => {
+    setValue(next);
+    if (next) drafts.set(draftKey, next);
+    else drafts.delete(draftKey);
+    setError(null);
+    setSlashAt(null);
+    setSlashClosed(false);
+  };
   const closeLists = () => {
     if (picking) session.close();
     setEffortOpen(false);
@@ -232,10 +308,36 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   };
   const lead = (command: SteeringAgentCommand) => {
     const led = new RegExp(`^${command}(?:\\s+|$)`, "u");
-    const next = led.test(value) ? value.replace(led, "") : ledDraft(value, command);
-    setValue(next);
-    if (next) drafts.set(draftKey, next);
-    else drafts.delete(draftKey);
+    editValue(led.test(value) ? value.replace(led, "") : ledDraft(value, command));
+  };
+  /** The `/` menu's row taken into the box: only filled, the user still
+   *  sends it, so a stray pick never runs `/clear` on the session. */
+  const pickSlash = (picked: SlashSuggestion) => {
+    editValue(picked.args ? `${picked.line} ` : picked.line);
+    refocus();
+  };
+  const forgetSlash = (line: string) => {
+    forgetSlashCommand(cli, line);
+    setUsedSlash(readSlashCommands(cli));
+    setSlashAt(null);
+  };
+  /** The `/` menu's keys (`slashMenuKey`); true when one was taken. */
+  const slashKey = (e: ReactKeyboardEvent): boolean => {
+    const action = slashMenuKey(e, slashMenu.length, slashAt);
+    if (action === null) return false;
+    if (action === "close") {
+      setSlashClosed(true);
+      setSlashAt(null);
+    } else if ("move" in action) setSlashAt(action.move);
+    else pickSlash(slashMenu[action.pick]);
+    return true;
+  };
+  /** Tab or → in the empty box takes Claude's suggestion into it. */
+  const suggestionKey = (e: ReactKeyboardEvent): boolean => {
+    if (!shownSuggestion || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return false;
+    if (e.key !== "Tab" && e.key !== "ArrowRight") return false;
+    editValue(shownSuggestion);
+    return true;
   };
   const runChip = (chip: Chip) => {
     if (chip !== "clear") setClearArmed(false);
@@ -318,7 +420,17 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     setBusy(true);
     setError(null);
     try {
-      await sendSteeringPrompt(target.tab, value);
+      // A prefix the CLI's popup completes (`/clea`) runs that command.
+      const command = completedSlashCommand(value, cli, usedSlash) ?? value;
+      // A new conversation goes in as the Clear chip's does, so the window
+      // knows of it at once (Codex's hook says so only with the next prompt).
+      if (offer.clear && isNewConversationCommand(command)) {
+        if (!(await clearAgentTab(target.scope, target.tab))) throw new Error(t("steering.prompt.clearFailed"));
+      } else {
+        await sendSteeringPrompt(target.tab, value);
+      }
+      // Offered again by the `/` menu, newest first.
+      rememberSlashCommand(cli, command);
       drafts.delete(draftKey);
       onClose();
     } catch (e) {
@@ -363,14 +475,16 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         )}
         <UntestedTag id="steering.agentPrompt" />
         <UntestedTag id="steering.promptPaste" />
+        <UntestedTag id="steering.promptAltGr" />
+        {(slashMenu.length > 0 || shownSuggestion) && <UntestedTag id="steering.promptSuggestions" />}
       </h2>
       <textarea
         ref={input}
         className="file-paste-name steering-prompt-input"
         autoFocus
         rows={4}
-        aria-label={t("steering.prompt.placeholder")}
-        placeholder={t("steering.prompt.placeholder")}
+        aria-label={shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}` : t("steering.prompt.placeholder")}
+        placeholder={shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion }) : t("steering.prompt.placeholder")}
         aria-invalid={!!error}
         aria-describedby={error ? errorId : undefined}
         value={value}
@@ -381,12 +495,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
           const end = e.currentTarget.value.length;
           e.currentTarget.setSelectionRange(end, end);
         }}
-        onChange={(e) => {
-          setValue(e.target.value);
-          if (e.target.value) drafts.set(draftKey, e.target.value);
-          else drafts.delete(draftKey);
-          setError(null);
-        }}
+        onChange={(e) => editValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return;
           const chip = chipFor(e);
@@ -396,8 +505,8 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
             return;
           }
           if (e.key !== "Alt") setClearArmed(false);
-          if (listKey(e)) {
-            // Taken here: the box's own Escape and Enter stand aside.
+          if (listKey(e) || slashKey(e) || suggestionKey(e)) {
+            // Taken here: the box's own Escape, Enter and Tab stand aside.
             e.preventDefault();
             return;
           }
@@ -406,6 +515,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
           void submit();
         }}
       />
+      {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
       {(picking || effortOpen) && (
         <div className="steering-prompt-list" role="listbox"
           aria-label={picking ? shownStep?.title ?? t("terminal.reader.modelTitle") : t("terminal.reader.effortTitle")}>

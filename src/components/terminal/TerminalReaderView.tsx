@@ -69,7 +69,7 @@ import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSessi
 import { claudeBoxWords, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
 import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, leadDraft, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
-import { ReaderSlashMenu } from "./ReaderSlashMenu";
+import { ReaderSlashMenu, slashMenuKey } from "./ReaderSlashMenu";
 import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useReaderVoice } from "./ReaderVoice";
 import { matchDraftEdit } from "../../lib/voice/voiceCommands";
@@ -1096,24 +1096,15 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
    * the arrows picked a row — fills the box with it, Esc closes it. Enter
    * with no row picked still sends what was typed. */
   const slashKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
-    if (slashMenu.length === 0 || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      if (e.shiftKey) return false;
-      const step = e.key === "ArrowUp" ? -1 : 1;
-      const from = slashAt ?? (step > 0 ? -1 : slashMenu.length);
-      setSlashAt((from + step + slashMenu.length) % slashMenu.length);
-      return true;
-    }
-    if ((e.key === "Tab" && !e.shiftKey) || (e.key === "Enter" && !e.shiftKey && slashAt !== null)) {
-      pickSlash(slashMenu[slashAt ?? 0]);
-      return true;
-    }
-    if (e.key === "Escape") {
+    if (e.nativeEvent.isComposing) return false;
+    const action = slashMenuKey(e, slashMenu.length, slashAt);
+    if (action === null) return false;
+    if (action === "close") {
       setSlashClosed(true);
       setSlashAt(null);
-      return true;
-    }
-    return false;
+    } else if ("move" in action) setSlashAt(action.move);
+    else pickSlash(slashMenu[action.pick]);
+    return true;
   };
 
   /** Undo (or redo) the composer's last change, the caret after it. */
