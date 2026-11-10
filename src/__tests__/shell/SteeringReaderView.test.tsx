@@ -154,6 +154,19 @@ describe("steering view cycle", () => {
     expect(steering().level).toBe("tabs");
   });
 
+  it("leaves Ctrl/Alt/Meta+Tab alone — the tab chords, not a view step", () => {
+    const { show } = agentTab();
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "Tab", ctrlKey: true });
+    press({ key: "Tab", ctrlKey: true, shiftKey: true });
+    press({ key: "Tab", altKey: true });
+    press({ key: "Tab", metaKey: true });
+    expect(show).not.toHaveBeenCalled();
+    press({ key: "Tab" });
+    expect(show).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores a held key's repeats", () => {
     const { show } = agentTab();
     render(<Harness />);

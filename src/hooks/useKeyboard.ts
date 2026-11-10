@@ -622,8 +622,10 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       // The Reader's view cycle (Tab, Shift+Tab backwards) on the active agent
       // tab, at every level but the projects: the level stays, Inside follows
       // the new view. A tab with no view strip swallows the key.
+      // Only the bare key (Shift: back): Ctrl/Alt/Meta+Tab are the app's and
+      // the desktop's tab chords, not a view step.
       if (action === "readerView") {
-        if (!e.repeat) cycleActiveReaderView(e.shiftKey ? -1 : 1);
+        if (!e.repeat && !e.ctrlKey && !e.altKey && !e.metaKey) cycleActiveReaderView(e.shiftKey ? -1 : 1);
         return;
       }
 
