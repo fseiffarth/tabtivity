@@ -492,7 +492,28 @@ export function buildPrintDoc(bodyHtml: string, css: string, title = "Print"): s
  */
 export type NativePrint = (sheets: PageList, opts: PrintOptions) => Promise<NativePdfPrint>;
 
-export function printDocument(fullHtml: string, native?: NativePrint): Promise<void> {
+/**
+ * An agent's print request under review (`services::print_mcp`,
+ * `lib/viewers/printRequest.ts`): the preview opens on the request's PDF with
+ * the agent's options preset, its title names the tab that asked, Print reads
+ * "Approve & print" and a Reject button sits beside it. The preset options are
+ * the agent's, so they are never saved as the user's printer preferences.
+ */
+export interface PrintApproval {
+  /** Who asked: the agent tab's title (or its id). */
+  requester: string;
+  /** The agent's one-line note, shown as plain text. */
+  note?: string;
+  /** The agent's options, laid over the user's for this job only. */
+  preset: Partial<PrintOptions>;
+  /** Whether the request still waits — checked before anything prints. */
+  stillPending: () => Promise<boolean>;
+  /** The job left for the printer (or its system dialog took it over). */
+  onPrinted: () => Promise<void>;
+  onReject: () => Promise<void>;
+}
+
+export function printDocument(fullHtml: string, native?: NativePrint, approval?: PrintApproval): Promise<void> {
   return new Promise<void>((resolve) => {
     // ── Overlay chrome (reuses the app's shared modal classes) ──────────────
     const backdrop = document.createElement("div");
@@ -506,7 +527,9 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
     const title = document.createElement("span");
     title.className = "print-preview-title";
-    title.textContent = translateNow("print.title");
+    title.textContent = approval
+      ? translateNow("printRequest.title", { who: approval.requester })
+      : translateNow("print.title");
 
     const actions = document.createElement("div");
     actions.className = "print-preview-actions";
@@ -678,9 +701,24 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     stripPages.className = "print-strip-pages";
     strip.append(stripBar, stripPages);
 
-    actions.append(printBtn, closeBtn);
+    // An agent's request: Reject beside Approve, and the agent's note under the
+    // title — text only, it is the agent's words.
+    const rejectBtn = document.createElement("button");
+    rejectBtn.className = "settings-btn print-preview-reject";
+    rejectBtn.type = "button";
+    rejectBtn.textContent = translateNow("printRequest.reject");
+    const requestLine = document.createElement("div");
+    requestLine.className = "print-preview-request";
+    if (approval) {
+      requestLine.textContent = approval.note
+        ? translateNow("printRequest.note", { note: approval.note })
+        : translateNow("printRequest.noNote");
+      requestLine.append(...untestedTag("printMcp"));
+    }
+
+    actions.append(...(approval ? [rejectBtn] : []), printBtn, closeBtn);
     titlebar.append(title, progressEl, actions);
-    dialog.append(titlebar, optionsRow, strip, iframe);
+    dialog.append(titlebar, ...(approval ? [requestLine] : []), optionsRow, strip, iframe);
     backdrop.append(dialog);
 
     // ── Live state of the previewed document ────────────────────────────────
@@ -708,7 +746,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
     /** Push the arrangement + options into the previewed document and the UI. */
     const apply = () => {
-      savePrintOptions(opts, kind);
+      if (!approval) savePrintOptions(opts, kind);
       const paged = pageEls.length > 0;
       pages.select.disabled = !paged;
       pageNumbers.input.disabled = !paged;
@@ -758,12 +796,14 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
       if (!ready) return;
       const empty = paged && sequence.length === 0;
-      printBtn.disabled = empty;
+      printBtn.disabled = empty || decided;
       if (empty) {
         printBtn.textContent = translateNow("print.noneSelected");
       } else {
-        const label =
-          (paged && sequence.length < pageEls.length
+        const label = approval && !decided
+          ? translateNow("printRequest.approve") +
+            (opts.copies > 1 ? translateNow("print.copiesSuffix", { count: opts.copies }) : "")
+          : (paged && sequence.length < pageEls.length
             ? sequence.length === 1
               ? translateNow("print.printOnePage")
               : translateNow("print.printPages", { count: sequence.length })
@@ -983,6 +1023,34 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       }
     };
 
+    // ── Approval (an agent's request) ───────────────────────────────────────
+    /** The request was approved or rejected: Approve and Reject are spent. */
+    let decided = false;
+    const settle = () => {
+      decided = true;
+      rejectBtn.disabled = true;
+      printBtn.disabled = true;
+    };
+    /** Approve: the request must still wait, or nothing prints. */
+    const stillWaiting = async (): Promise<boolean> => {
+      if (!approval) return true;
+      if (await approval.stillPending().catch(() => false)) return true;
+      settle();
+      showFailure(new Error(translateNow("printRequest.gone")));
+      return false;
+    };
+    /** The job left (or the system dialog owns it): record the approval. */
+    const approved = () => {
+      if (!approval || decided) return;
+      settle();
+      void approval.onPrinted().catch(() => {});
+    };
+    rejectBtn.addEventListener("click", () => {
+      if (!approval || decided) return;
+      settle();
+      void approval.onReject().catch(() => {}).finally(() => cleanup());
+    });
+
     // ── Teardown (single-shot) ──────────────────────────────────────────────
     let done = false;
     const cleanup = () => {
@@ -1031,26 +1099,37 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       progressEl.replaceChildren(text);
     };
 
-    printBtn.addEventListener("click", () => {
-      if (printBtn.disabled || !frameWin) return;
+    printBtn.addEventListener("click", () => void onPrint());
+    const onPrint = async () => {
+      if (printBtn.disabled || !frameWin || decided) return;
+      printBtn.disabled = true;
+      if (!(await stillWaiting()) || done) return;
       if (!native || pageEls.length === 0) {
+        printBtn.disabled = false;
         printFrame();
+        // `window.print()` says nothing about a cancelled dialog: the user saw
+        // the job and pressed Approve, which is the decision.
+        approved();
         return;
       }
-      printBtn.disabled = true;
       native(printSequence(arrangement, opts), opts)
         .then((outcome) => {
           if (done) return;
-          if (outcome === "unsupported") printFrame();
-          else if (outcome === "sent") void followJob();
+          if (outcome === "unsupported") {
+            printFrame();
+            approved();
+          } else if (outcome === "sent" || outcome === "opened") {
+            approved();
+            if (outcome === "sent") void followJob();
+          }
         })
         .catch((e) => {
           if (!done) showFailure(e);
         })
         .finally(() => {
-          if (!done) printBtn.disabled = printSequence(arrangement, opts).length === 0;
+          if (!done) printBtn.disabled = decided || printSequence(arrangement, opts).length === 0;
         });
-    });
+    };
 
     iframe.onload = () => {
       const win = iframe.contentWindow;
@@ -1074,8 +1153,14 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       if (pageEls.length > 0) {
         kind = "page";
         opts = loadPrintOptions(kind);
-        syncControls();
       }
+      // The agent's options for this job, over the user's own. Counted as a
+      // touch, so the sheet's orientation below does not undo them.
+      if (approval) {
+        opts = sanitizePrintOptions({ ...opts, ...approval.preset });
+        touched = true;
+      }
+      syncControls();
       apply(); // style the preview immediately; the button stays "Preparing…"
 
       Promise.all(
@@ -1268,8 +1353,9 @@ export function printHtmlBody(
   css: string,
   title?: string,
   native?: NativePrint,
+  approval?: PrintApproval,
 ): Promise<void> {
-  return printDocument(buildPrintDoc(bodyHtml, css, title), native);
+  return printDocument(buildPrintDoc(bodyHtml, css, title), native, approval);
 }
 
 /**

@@ -52,6 +52,8 @@ const CONTROL_ENV: &[&str] = &[
     crate::services::root_mcp::HELP_URL_ENV,
     crate::services::root_mcp::MARKUP_TOKEN_ENV,
     crate::services::root_mcp::MARKUP_URL_ENV,
+    crate::services::root_mcp::PRINT_TOKEN_ENV,
+    crate::services::root_mcp::PRINT_URL_ENV,
     crate::services::root_mcp::WEB_TOKEN_ENV,
     crate::services::root_mcp::WEB_URL_ENV,
 ];

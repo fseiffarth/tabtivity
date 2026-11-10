@@ -2153,6 +2153,7 @@ fn launch(
     let push_token = env.and_then(|env| env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned());
     let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
     let cockpit_token = env.and_then(|env| env.get(crate::services::root_mcp::COCKPIT_TOKEN_ENV).cloned());
+    let print_token = env.and_then(|env| env.get(crate::services::root_mcp::PRINT_TOKEN_ENV).cloned());
     let web_token = env.and_then(|env| env.get(crate::services::root_mcp::WEB_TOKEN_ENV).cloned());
     tokio::spawn(async move {
         let emitter = ctx.clone();
@@ -2212,6 +2213,12 @@ fn launch(
                 crate::services::markup_mcp::sweep();
             }
             if let Some(token) = cockpit_token { crate::services::root_mcp::revoke_token(&token); }
+            if let Some(token) = print_token {
+                // The tab's pending print requests close with its session;
+                // the sweep rings `print-mcp-changed` through the change hook.
+                crate::services::root_mcp::revoke_token(&token);
+                crate::services::print_mcp::sweep();
+            }
             if let Some(token) = web_token {
                 // The assistant's web lane: a chat's token dies with its CLI.
                 crate::services::root_mcp::revoke_token(&token);

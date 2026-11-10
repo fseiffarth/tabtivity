@@ -8,5 +8,7 @@ pub mod git_push_mcp;
 pub mod help_mcp;
 pub mod cockpit_mcp;
 pub mod markup_mcp;
+// Agent print requests, approved in the window's print preview.
+pub mod print_mcp;
 // The chat assistant's guarded web lane (docs/assistant_plan.md, A2).
 pub mod web_lane;

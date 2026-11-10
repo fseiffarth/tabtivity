@@ -308,6 +308,27 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         }
         return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
     }
+    if session.identity.caller == root_mcp::Caller::Printer {
+        // The print lane (`services::print_mcp`): as markup — the switch is
+        // read per call and answered as a normal `off` result; tool calls and
+        // refusals are audited by session, tool and fixed category, never the
+        // file or the note.
+        if session.check().is_err() {
+            security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("revoked"));
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let outcome = app_core::rt::spawn_blocking(move || {
+            let (_global, _own) = (global, own);
+            let reply = crate::services::print_mcp::handle_message(&session, &message);
+            let reason = reply.as_ref().and_then(crate::services::print_mcp::refusal_reason);
+            (reply, reason, crate::services::print_mcp::audited(&message, reason))
+        }).await;
+        let Ok((reply, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+        if audited {
+            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+        }
+        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+    }
     if session.identity.caller == root_mcp::Caller::Scheduler {
         if session.identity.project.as_deref().is_none_or(|p| crate::services::schedule_mcp::level(p).is_err()) || session.check().is_err() {
             security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("policy_disabled"));
@@ -512,6 +533,8 @@ fn serve_everything(ctx: &CoreCtx, notify: NoticeSink) -> NoticeSink {
         push_events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     }));
     crate::commands::markup_mcp::install_change_hook(ctx);
+    #[cfg(feature = "desktop")]
+    crate::commands::print_mcp::install_change_hook(ctx);
     let events = ctx.clone();
     Arc::new(move |notice| {
         notify(notice.clone());
@@ -641,6 +664,9 @@ fn router(state: ServerState) -> Router {
     // context: its views are the window's commands (which read the Mobile
     // host's store over the admin socket) and the phone's routes.
     router = router.route("/mcp/markup", post(handle));
+    // The print lane: only the window grants its tokens
+    // (`Runtime::serves_print`), so elsewhere the route authenticates nobody.
+    router = router.route("/mcp/print", post(handle));
     if state.ctx.is_some() {
         router = router.route("/mcp", post(handle));
     }
@@ -973,6 +999,7 @@ fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
         "/mcp/help" => caller == root_mcp::Caller::Helper,
         "/mcp/cockpit" => caller == root_mcp::Caller::Cockpit,
         "/mcp/markup" => caller == root_mcp::Caller::Marker,
+        "/mcp/print" => caller == root_mcp::Caller::Printer,
         "/mcp/web" => caller == root_mcp::Caller::Web,
         _ => false,
     }

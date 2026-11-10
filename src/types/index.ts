@@ -357,6 +357,10 @@ export interface Settings {
   /** The markup questions MCP (`services::markup_mcp`, `markup_ask`) in local
    *  project-agent tabs. **Default true** — absent means on. */
   markup_mcp?: boolean;
+  /** The print requests MCP (`services::print_mcp`, `print_request`) in local
+   *  project-agent tabs; every print waits for the user's Approve.
+   *  **Default true** — absent means on. */
+  print_mcp?: boolean;
   root_mcp_review?: "all" | "destructive" | "off";
   /** Root console: serve the MCP tools to local-model tabs only. Absent means
    *  off. On, cloud agent CLIs get no endpoint and running ones are refused. */

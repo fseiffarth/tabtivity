@@ -56,6 +56,9 @@ pub mod power;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod presenter;
+// Window/OS-only (`client`): agent print requests approved in the preview.
+#[cfg(feature = "desktop")]
+pub mod print_mcp;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod print_native;

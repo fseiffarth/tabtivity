@@ -78,6 +78,10 @@ pub const HELP_URL_ENV: &str = crate::app_env!("HELP_MCP_URL");
 /// project-agent tab with a schedule target while the server is on.
 pub const MARKUP_TOKEN_ENV: &str = crate::app_env!("MARKUP_MCP_TOKEN");
 pub const MARKUP_URL_ENV: &str = crate::app_env!("MARKUP_MCP_URL");
+/// The print identity's pair (`services::print_mcp`), set for a local
+/// project-agent tab the window spawns while the server is on.
+pub const PRINT_TOKEN_ENV: &str = crate::app_env!("PRINT_MCP_TOKEN");
+pub const PRINT_URL_ENV: &str = crate::app_env!("PRINT_MCP_URL");
 /// The web lane's pair (`services::web_lane`), set for a chat-assistant tab
 /// only (`PtyOptions.assistant`), and the only MCP token such a tab gets.
 /// `services::assistant::LaneGrant::from_env` reads them back.
@@ -110,6 +114,14 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// server in v1).
 #[derive(Debug, Clone)]
 pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool, pub serves_web: bool }
+impl Runtime {
+    /// This process approves agent print requests (`services::print_mcp`):
+    /// the window alone — the one listener that serves both the root lane
+    /// (a server daemon does too, but has no web lane) and the web lane (the
+    /// Mobile host does too, but no root lane). Approval needs the window's
+    /// print preview and this machine's printers.
+    pub fn serves_print(&self) -> bool { self.serves_root && self.serves_web }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -170,6 +182,7 @@ fn lane(caller: Caller) -> u8 {
         Caller::Marker => 4,
         Caller::Web => 5,
         Caller::Cockpit => 6,
+        Caller::Printer => 7,
     }
 }
 /// One process's bearer tokens and the sessions they open, in memory only.
@@ -264,7 +277,7 @@ pub fn token_generations() -> Vec<(String, Vec<String>)> {
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().map().values() {
-        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit) {
+        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer) {
             *s.projects_grant.lock_ok() = grant.clone();
         }
     }
@@ -304,6 +317,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
         Caller::Helper => super::help_mcp::SERVER_NAME,
         Caller::Marker => super::markup_mcp::SERVER_NAME,
         Caller::Web => super::web_lane::SERVER_NAME,
+        Caller::Printer => super::print_mcp::SERVER_NAME,
     }).collect();
     names.dedup();
     names
@@ -312,7 +326,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
 /// and web lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
     tokens().map().values()
-        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit))
+        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer))
 }
 
 /// The on-disk half of the mail taint: an empty marker per tab under the root
@@ -456,6 +470,10 @@ pub enum Caller {
     /// nothing else. The root registry's route and policy are positive lists
     /// that do not name it, so it reaches no other path.
     Web,
+    /// A local project-agent tab's print identity (`services::print_mcp`),
+    /// bound at spawn to its project: served `print_request` /
+    /// `print_status` / `print_cancel` on `/mcp/print` and nothing else.
+    Printer,
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -618,7 +636,7 @@ pub struct SessionInfo {
 /// Help, markup and web sessions are left out: one per agent tab, nothing to
 /// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit)).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
@@ -627,7 +645,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
-    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit) { return Err("this session's scope is fixed at spawn".into()); }
+    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
     s.access = access;
@@ -821,7 +839,7 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
 }
 
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
-pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, web: Option<String>, cockpit: Option<String>, armed: bool }
+pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, web: Option<String>, cockpit: Option<String>, print: Option<String>, armed: bool }
 impl SpawnTokenGuard {
     pub fn new(opts: &PtyOptions) -> Self {
         Self {
@@ -831,6 +849,7 @@ impl SpawnTokenGuard {
             markup: opts.env.get(MARKUP_TOKEN_ENV).cloned(),
             web: opts.env.get(WEB_TOKEN_ENV).cloned(),
             cockpit: opts.env.get(COCKPIT_TOKEN_ENV).cloned(),
+            print: opts.env.get(PRINT_TOKEN_ENV).cloned(),
             armed: true,
         }
     }
@@ -842,7 +861,7 @@ impl SpawnTokenGuard {
 impl Drop for SpawnTokenGuard {
     fn drop(&mut self) {
         if self.armed {
-            for token in [&self.token, &self.push, &self.help, &self.markup, &self.web, &self.cockpit].into_iter().flatten() { revoke_token(token); }
+            for token in [&self.token, &self.push, &self.help, &self.markup, &self.web, &self.cockpit, &self.print].into_iter().flatten() { revoke_token(token); }
         }
     }
 }
@@ -992,6 +1011,12 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     // process whose views answer them grants it (`Runtime::serves_markup`).
     if project_lanes && runtime.serves_markup && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
         grant_markup(opts, runtime, store, &trusted.tool_models());
+    }
+    // The print requests server (`services::print_mcp`), merged into the same
+    // Vibe env after markup. Approval needs the window's preview, so only the
+    // window grants it (`Runtime::serves_print`).
+    if project_lanes && runtime.serves_print() && trusted.settings.as_ref().is_some_and(|s| s.print_mcp()) {
+        grant_print(opts, runtime, store, &trusted.tool_models());
     }
     if agent_spawn && reader_project.is_none() && help_reaches(opts, &trusted)
         && trusted.settings.as_ref().is_some_and(|s| s.cockpit_mcp()) {
@@ -1314,6 +1339,48 @@ pub fn grant_markup(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore
     apply_markup_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(MARKUP_TOKEN_ENV) == Some(&token) {
         store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Marker, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None, model: None }, false);
+    }
+}
+
+/// Hand a local project-agent tab the print requests server
+/// (`services::print_mcp`). Pure over `runtime` so it is testable;
+/// [`grant_lanes`] decides who qualifies. Wired as markup is: Claude and
+/// Codex on their own command line, a tool-tagged local Vibe model merged
+/// into its MCP env, every other agent CLI the inert env pair. A tab without
+/// a project, a container tab and an untagged local model get nothing.
+pub fn apply_print_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token: &str, tool_models: &[String]) {
+    let local = is_local_model(opts);
+    if opts.project_id.is_none() || opts.sandbox || (local && !local_model_has_tools(opts, tool_models)) { return; }
+    let url = print_endpoint_url(runtime.port);
+    let name = super::print_mcp::SERVER_NAME;
+    opts.env.insert(PRINT_TOKEN_ENV.into(), token.into());
+    opts.env.insert(PRINT_URL_ENV.into(), url.clone());
+    if local {
+        let mut servers: Vec<Value> = opts.env.get("VIBE_MCP_SERVERS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        servers.retain(|s| s["name"] != name);
+        servers.push(json!({"name": name, "transport": "http", "url": url, "api_key_env": PRINT_TOKEN_ENV}));
+        opts.env.insert("VIBE_MCP_SERVERS".into(), Value::Array(servers).to_string());
+        let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        let pattern = json!(format!("{name}_*"));
+        if !enabled.contains(&pattern) { enabled.push(pattern); }
+        opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
+    } else {
+        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, PRINT_TOKEN_ENV);
+    }
+}
+
+pub fn print_endpoint_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp/print")
+}
+
+/// The print lane of [`grant_lanes`]: the token binds the tab and its project.
+pub fn grant_print(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, tool_models: &[String]) {
+    let Some(token) = mint_token() else { return };
+    apply_print_to_spawn_with(opts, runtime, &token, tool_models);
+    if opts.env.get(PRINT_TOKEN_ENV) == Some(&token) {
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Printer, project: opts.project_id.clone(), schedule_target: None, push: None, endpoint: None, model: None }, false);
     }
 }
 

@@ -54,6 +54,7 @@ import { ExecTrustHost } from "../common/ExecTrustHost";
 import { OpenExternalHost } from "../common/OpenExternalHost";
 import { CalDavSyncHost } from "../calendar/CalDavSyncHost";
 import { PrinterNetworkDefaultsHost } from "../printing/PrinterNetworkDefaultsHost";
+import { PrintRequestsHost } from "../printing/PrintRequests";
 import { AgentContinueHost } from "./AgentContinueHost";
 import { AgentCronHost } from "./AgentCronHost";
 import { AgentScheduleHost } from "./AgentScheduleHost";
@@ -1492,6 +1493,9 @@ export function AppShell() {
           at the shell because the Print Manager that saves it is closed by then.
           Starts no timer until a default is saved. */}
       <PrinterNetworkDefaultsHost />
+      {/* Agent print requests (`services::print_mcp`): a popup wherever the
+          user is, since nothing prints until they approve it. */}
+      <PrintRequestsHost />
       {/* The agent warm-up cron (Manage CLIs → Scheduled warm-up). Renders
           nothing and starts no timer until an agent is scheduled — at the shell
           for `CalDavSyncHost`'s reason turned around: the panel that configures

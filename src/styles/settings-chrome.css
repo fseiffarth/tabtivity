@@ -260,6 +260,12 @@ button.settings-btn.danger:hover:not(:disabled),
   border-radius: var(--radius);
   background: #fff;
 }
+/* An agent's print request under review: its note, the agent's own words. */
+.print-preview-request {
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
 .print-preview-options {
   display: flex;
   align-items: center;

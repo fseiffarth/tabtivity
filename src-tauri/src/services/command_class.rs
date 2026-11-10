@@ -780,6 +780,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("print_test_page", Client),
     // commands/print_native.rs
     ("print_pdf_native", Client),
+    // commands/print_mcp.rs — agent print requests are approved in the
+    // window's own preview and printed on this machine.
+    ("print_mcp_decide", Client),
+    ("print_mcp_pdf", Client),
+    ("print_mcp_requests", Client),
     // commands/project_runtime.rs
     ("load_side_panel_folder", Core),
     ("save_side_panel_folder", Core),

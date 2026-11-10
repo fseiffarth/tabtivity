@@ -3196,3 +3196,31 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+
+### Agent print MCP — `docs/context/print_mcp.md`
+
+- [ ] Wire every agent CLI into the MCP lanes, not only Claude, Codex and
+  tool-tagged Vibe: `root_mcp::wire_named_cli_args` writes a server only for
+  those, so Gemini, Qwen, OpenCode, Copilot, Droid, Cursor, Auggie, CodeBuddy
+  get the `*_MCP_TOKEN`/`_URL` env pair and no config. One change for all lanes
+  (git, markup, help, cockpit, print): each CLI's own MCP config format
+  (Gemini/Qwen `settings.json` `mcpServers`, OpenCode `opencode.json` `mcp`,
+  Copilot, Droid/Cursor), checked against the real CLI version (`verify-cli`).
+  User decision 2026-11-10: print first, all-CLI wiring as this follow-up.
+- [ ] 🖐️ Agent print request — fresh Claude tab in a local project with a PDF:
+  ask it to print the PDF, 2 copies, pages 1-2, with a note. A bottom-left popup
+  ("An agent asks to print") and a row in the Print Manager tab's "Agent print
+  requests" card appear. Review: the print preview opens titled "Print request
+  from <tab>", the note under it, copies 2 and pages 1-2 preset; Approve & print
+  opens the system print dialog; after printing `print_status` says `printed`
+  and the popup is gone. Again with Reject → `rejected`. Ask for a `.txt` →
+  `not_pdf`. Close the tab with one pending → it disappears. Later hides the
+  popup until the next request.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

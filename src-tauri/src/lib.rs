@@ -2415,6 +2415,9 @@ pub fn run() {
             commands::printing::print_set_enabled,
             commands::printing::print_test_page,
             commands::print_native::print_pdf_native,
+            commands::print_mcp::print_mcp_requests,
+            commands::print_mcp::print_mcp_pdf,
+            commands::print_mcp::print_mcp_decide,
             // Disk usage analyzer (commands::disk_usage)
             commands::disk_usage::disk_usage_scan,
             commands::disk_usage::disk_usage_cancel,

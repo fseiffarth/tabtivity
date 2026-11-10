@@ -770,7 +770,7 @@ fn preflight_command(boundary: HookBoundary<'_>, hook: &Path, dir: &Path, remote
             cmd
         }
     };
-    for var in [crate::app_env!("GIT_TOKEN"), crate::services::root_mcp::TOKEN_ENV, crate::services::root_mcp::SCHEDULE_TOKEN_ENV, crate::services::root_mcp::GIT_TOKEN_ENV, crate::services::root_mcp::HELP_TOKEN_ENV, crate::services::root_mcp::MARKUP_TOKEN_ENV, "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"] {
+    for var in [crate::app_env!("GIT_TOKEN"), crate::services::root_mcp::TOKEN_ENV, crate::services::root_mcp::SCHEDULE_TOKEN_ENV, crate::services::root_mcp::GIT_TOKEN_ENV, crate::services::root_mcp::HELP_TOKEN_ENV, crate::services::root_mcp::MARKUP_TOKEN_ENV, crate::services::root_mcp::PRINT_TOKEN_ENV, "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"] {
         cmd.env_remove(var);
     }
     cmd.env(crate::app_env!("PUSH_PREFLIGHT"), "1");

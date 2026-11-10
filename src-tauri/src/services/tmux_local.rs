@@ -470,6 +470,8 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     crate::services::agent_api_keys::OPENAI_CARRIER,
     // The cockpit lane's token (`Caller::Cockpit`), slot 8640 — appended.
     crate::services::root_mcp::COCKPIT_TOKEN_ENV,
+    // The print lane's token (`Caller::Printer`), slot 8641 — appended.
+    crate::services::root_mcp::PRINT_TOKEN_ENV,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -1245,8 +1247,10 @@ mod tests {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
             assert_eq!(SECRET_UPDATE_ENV_SLOT + at, if i < 2 { 8636 + i } else { 8639 }, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 11);
-        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8640);
+        assert_eq!(SECRET_ENV.len(), 12);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8641);
+        let print = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::PRINT_TOKEN_ENV).unwrap();
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + print, 8641, "the print token is appended, slot 8641");
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }

@@ -1399,6 +1399,16 @@
   color: var(--text-primary);
 }
 
+/* Agent print requests (`PrintRequestsHost`) reuse the reminder popup; they
+   sit bottom-left so the two never cover each other. */
+.cal-alarm-popup.print-request-popup {
+  right: auto;
+  left: 18px;
+}
+.print-request-popup .cal-alarm-actions .btn-primary {
+  margin-left: auto;
+}
+
 .cal-alarm-head {
   display: flex;
   align-items: center;

@@ -25,7 +25,7 @@ pub use mail::{
     mail_thunderbird,
 };
 pub mod mcp;
-pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
+pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, print_mcp, schedule_mcp, web_lane};
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;

@@ -160,7 +160,7 @@ impl Policy {
             && match caller {
                 Caller::Reader => true,
                 Caller::LocalModel => self.mail_local_read,
-                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit => false,
+                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer => false,
             }
     }
 }
@@ -213,7 +213,7 @@ impl Access {
     pub fn initial(caller: Caller) -> Self {
         // A web-lane session reaches no calendar, board, project, mail or
         // account, and writes nothing: its tools carry no root family.
-        if matches!(caller, Caller::Web | Caller::Cockpit) {
+        if matches!(caller, Caller::Web | Caller::Cockpit | Caller::Printer) {
             return Self {
                 calendars: Scope::default(),
                 projects: Scope::default(),
@@ -315,6 +315,9 @@ pub struct ToolPolicy {
     /// other class: `web_fetch` and `web_search` set it and nothing else.
     web: bool,
     cockpit: bool,
+    /// Served to [`Caller::Printer`] (`services::print_mcp`) — and then to no
+    /// other class: the three print tools set it and nothing else.
+    printer: bool,
 }
 impl ToolPolicy {
     pub fn serves(&self, caller: Caller) -> bool {
@@ -324,6 +327,7 @@ impl ToolPolicy {
             Caller::Marker => self.marker,
             Caller::Web => self.web,
             Caller::Cockpit => self.cockpit,
+            Caller::Printer => self.printer,
             Caller::Reader => self.reader,
             Caller::LocalModel => self.root || self.local,
             Caller::Agent => self.root,
@@ -335,7 +339,7 @@ impl ToolPolicy {
 pub fn tool(name: &str) -> Option<ToolPolicy> {
     if crate::services::cockpit_mcp::is_tool(name) {
         return Some(ToolPolicy { family: "cockpit", write: !crate::services::cockpit_mcp::is_read_only(name), destructive: false,
-            root: false, reader: false, local: false, help: false, marker: false, web: false, cockpit: true });
+            root: false, reader: false, local: false, help: false, marker: false, web: false, cockpit: true, printer: false });
     }
     let (family, write, destructive, root, reader) = match name {
         "proposals_list" => ("session", false, false, true, true),
@@ -361,7 +365,7 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         "todo_update" | "todo_delete" => ("board", true, true, true, true),
         "mail_accounts_list" | "mail_drafts_list" => ("mail", false, false, true, true),
         "mail_folders" | "mail_search" | "mail_read" | "mail_thread" => {
-            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false, web: false, cockpit: false });
+            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false, web: false, cockpit: false, printer: false });
         }
         // The help corpus (`services::help_mcp`): read-only, compiled in, and
         // served to the help identity alone — never to a root or reader tab
@@ -370,21 +374,27 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         | crate::brand::HELP_TOOL_READ
         | crate::brand::HELP_TOOL_TOPICS
         | crate::brand::HELP_TOOL_STATUS => {
-            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false, web: false, cockpit: false });
+            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false, web: false, cockpit: false, printer: false });
         }
         // The markup questions and ticks (`services::markup_mcp`): they only
         // put a card or a tick in front of the user, served to the markup
         // identity alone on `/mcp/markup` — never to a root or reader tab
         // through `/mcp`.
+        // The print requests (`services::print_mcp`): a request only puts a
+        // card in front of the user, who approves every print; served to the
+        // print identity alone on `/mcp/print`.
+        "print_request" | "print_status" | "print_cancel" => {
+            return Some(ToolPolicy { family: "print", write: name != "print_status", destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: false, cockpit: false, printer: true });
+        }
         "markup_ask" | "markup_withdraw" | "markup_done" => {
-            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true, web: false, cockpit: false });
+            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true, web: false, cockpit: false, printer: false });
         }
         // The chat assistant's web lane (`services::web_lane`): a guarded page
         // fetch and a search, served to the web identity alone on `/mcp/web`
         // — never to a root or reader tab through `/mcp`. Family `web` is on
         // no `Access` list, so the handler gates on `serves(Caller::Web)`.
         "web_fetch" | "web_search" => {
-            return Some(ToolPolicy { family: "web", write: false, destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: true, cockpit: false });
+            return Some(ToolPolicy { family: "web", write: false, destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: true, cockpit: false, printer: false });
         }
         "mail_draft_create" => ("mail", true, false, true, true),
         "mail_draft_update" | "mail_draft_delete" => ("mail", true, true, true, true),
@@ -401,6 +411,7 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         marker: false,
         web: false,
         cockpit: false,
+        printer: false,
     })
 }
 

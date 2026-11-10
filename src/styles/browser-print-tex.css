@@ -652,6 +652,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Agent print requests: Review and Reject side by side. */
+.print-requests-actions {
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
 .print-job-time {
   color: var(--text-muted);
   white-space: nowrap;
