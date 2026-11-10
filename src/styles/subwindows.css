@@ -935,9 +935,6 @@ html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
 .side-panel .side-view-key {
   display: inline-flex;
 }
-.side-view-key .steering-cap-k {
-  font-size: 9px;
-}
 /* The caps pinned to controls: one fixed, click-through layer over the window.
    A row hangs from its anchor point (steeringCaps) by its left edge, middle or
    right edge. */
