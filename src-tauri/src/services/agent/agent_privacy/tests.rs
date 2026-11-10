@@ -1298,6 +1298,8 @@ fn both_wrappers_pin_or_refuse_a_verified_claude_tab() {
     assert!(mac.contains("claude_managed_for(opts)") && mac.contains("CLAUDE_NOT_PINNABLE"), "Seatbelt refuses a verified Claude tab");
 }
 
+// The local lane and the bubblewrap fence exist on Unix only.
+#[cfg(unix)]
 #[test]
 fn the_cut_fence_binds_the_lane_after_the_private_run_and_starts_the_cli_behind_the_relay() {
     use crate::services::agent_fence::{bwrap_args, insert_local_lane};

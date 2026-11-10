@@ -425,6 +425,8 @@ fn state_is_masked_after_overlapping_project_grants() {
     assert!(private_state_paths(&state).contains(&state.join("calendar.json")));
 }
 
+// Plants a symlink (`std::os::unix`); a Windows symlink needs a privilege CI has not.
+#[cfg(unix)]
 #[test]
 fn diagnostic_logs_pierce_the_state_mask_read_only_and_never_via_a_symlink() {
     let dir = tempfile::tempdir().unwrap();
