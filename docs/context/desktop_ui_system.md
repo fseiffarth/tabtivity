@@ -65,8 +65,9 @@ rest need a sizing pass first).
 
 ## Floating surfaces
 
-One recipe in `apps.css`: `--bg-elevated`, an accent rail, an accent `::before`
-wash, rounded corners from the radius tokens (`--radius` 10 px for menus, hover
+One recipe in `apps.css`: `--bg-elevated`, an accent ring (a border on every
+side; a top-only rail until 2026-11-10; none on hover cards and toasts), an
+accent `::before` wash, rounded corners from the radius tokens (`--radius` 10 px for menus, hover
 cards and toasts, `--radius-lg` 14 px for dialogs and the palette), `--shadow-2`
 (popovers, hover cards, toasts) or `--shadow-3` (dialogs, palette). To add a
 member, follow the comment at the top of the recipe;

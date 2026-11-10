@@ -85,6 +85,21 @@ describe("the floating recipe", () => {
     expect(css).toMatch(/\.project-switcher-add-menu button\s*\{[^}]*background: transparent;/);
   });
 
+  // The accent edge runs round every side (user, 2026-11-10), dialogs and the
+  // header hover menus alike; a top-only rail is what it replaced.
+  const RAIL_LESS = ["git-change-tree", "project-pill-popup", "project-switch-toast", "hint-bubble"];
+  const ring = selectorsOf("border: var(--surface-rail) solid var(--accent)");
+  it.each(MEMBERS.filter((m) => !RAIL_LESS.includes(m)))("%s carries the accent ring on every side", (member) => {
+    expect(ring).toMatch(/^\s*:root :is\(/);
+    expect(ring).toContain(`.${member}`);
+  });
+  it.each(RAIL_LESS)("%s carries no ring", (member) => {
+    expect(ring).not.toContain(`.${member}`);
+  });
+  it("paints no top-only rail any more", () => {
+    expect(css).not.toMatch(/linear-gradient\(var\(--accent\), var\(--accent\)\) 0 0 \/ 100% var\(--surface-rail\)/);
+  });
+
   it("never clips with a clip-path, which would take the shadow", () => {
     for (const member of MEMBERS) {
       expect(css).not.toMatch(new RegExp(`\\.${member}\\s*\\{[^}]*clip-path`));

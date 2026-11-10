@@ -814,9 +814,9 @@
   /* No boxed outline, same as the popover menus: a 1px frame drawn around the
      accent wash reads as a pale stripe running outside the dialog rather than
      as its edge, and it is the elevation shadow that actually separates a modal
-     from the app behind it. The accent top rail — matching the header's tint, so
+     from the app behind it. The accent ring — matching the header's tint, so
      every dialog reads as the same themed chrome, with no per-dialog exceptions
-     — is the only edge left that carries meaning. Fill and rail are the floating recipe's (below); the border holds the rail's room. */
+     — is the only edge left that carries meaning. Fill and ring are the floating recipe's (below); the top border holds room above the content. */
   border: 0;
   border-top: 3px solid transparent;
   border-radius: var(--radius-lg);
@@ -825,21 +825,22 @@
 
 /* ── The floating recipe ─────────────────────────────────────────────────
    Every surface that floats over the window — menus, dialogs, hover cards,
-   toasts — is one paint: --bg-elevated, an accent top rail and an accent wash,
+   toasts — is one paint: --bg-elevated, an accent ring and an accent wash,
    on the corners its own radius token gives it (--radius for menus, cards and
    toasts, --radius-lg for dialogs). The corners were two painted 10px cuts
    until 2026-11-02; the user asked for round. Never a `clip-path` here: it
    takes the elevation shadow with it and cuts off whatever hangs outside a
    surface (a submenu).
 
-   The rail is a background layer rather than a border colour so the glass
-   themes can swap the fill under it; a background follows the radius, so the
-   rail's ends curve with the corners.
+   The ring (--surface-rail wide) runs round the whole edge: a top-only rail
+   until 2026-11-10, when the user asked for every side coloured, menus and the
+   header hover menus included. It is the member's own border, set by the
+   `:root :is(…)` rule below the wash; the fill paints under it, so the glass
+   themes still swap only the fill.
 
    To add a member: this list, the wash below and the blur exemption in
-   projects-tabs.css; strip its own background and border, keep `border-top:
-   2px solid transparent` for the rail's room (none for a rail-less member,
-   below) and a radius token, and make sure it forms a stacking context (fixed,
+   projects-tabs.css, plus the ring rule unless it is rail-less (below); strip
+   its own background and border, give it a radius token, and make sure it forms a stacking context (fixed,
    or absolute WITH a z-index), or the `z-index: -1` wash paints behind its own
    background. The glass themes reach every member through --float-fill. */
 .project-dialog,
@@ -861,9 +862,7 @@
 .hint-bubble {
   --surface-fill: var(--float-fill, var(--bg-elevated));
   --surface-rail: 2px;
-  background:
-    linear-gradient(var(--accent), var(--accent)) 0 0 / 100% var(--surface-rail) no-repeat border-box,
-    var(--surface-fill);
+  background: var(--surface-fill);
 }
 
 .project-dialog,
@@ -874,9 +873,9 @@
 }
 
 /* Messages (hints, the terminal's notice cards, toasts) and hover cards carry
-   no rail: on a small card the 2px accent strip read as a fat violet top bar
+   no ring: on a small card the 2px accent strip read as a fat violet top bar
    (user, 2026-11-03). Fill and wash stay; at 0 the wash's inset is 0 too, and
-   their own rules hold no `border-top` for the rail's room. */
+   they are left out of the ring rule and hold no `border-top` of their own. */
 .project-pill-popup,
 .project-switch-toast,
 .hint-bubble {
@@ -918,6 +917,29 @@
   border-radius: inherit;
 }
 
+/* The accent ring: a --surface-rail-wide border round the whole edge, which
+   follows the radius and sits outside the overflow clip of a scrolling dialog.
+   `:root` lifts it over the members' own `border: 0; border-top: …` rules,
+   some of which load after this sheet. The rail-less members (hover cards,
+   messages, the change tree) are left out. */
+:root :is(
+  .project-dialog,
+  .settings-dialog,
+  .stats-dialog,
+  .file-delete-dialog,
+  .context-menu,
+  .tab-new-menu,
+  .project-switcher-add-menu,
+  .box-chip-menu,
+  .project-search-popover,
+  .file-run-args,
+  .file-viewer-run-args,
+  .presentation-settings,
+  .cal-alarm-popup
+) {
+  border: var(--surface-rail) solid var(--accent);
+}
+
 /* The Add/Commit/Push change tree is a list read over the side panel, not a
    menu: on its 480×320 frame the rail read as a thick bar and the accent wash
    as a solid lavender slab (user, 2026-11-06). Plain floating fill, no rail,
@@ -933,14 +955,14 @@
 /* The dropdown menus (+ tab, + project, context, box pill) are lists, like the
    change tree above: a 32% accent wash behind a column of white row cards read
    as a lavender slab full of boxes (user, 2026-11-06). The fill stays plain, the
-   rows sit flat on it (their own rules) and light up on hover; the accent top
-   rail and a hairline ring keep the edge. Declared after the groups it opts
-   out of. Dialogs keep the wash. */
+   rows sit flat on it (their own rules) and light up on hover; the accent ring
+   keeps the edge. Declared after the groups it opts out of. Dialogs keep the
+   wash. */
 .context-menu,
 .tab-new-menu,
 .project-switcher-add-menu,
 .box-chip-menu {
-  box-shadow: var(--shadow-2), 0 0 0 1px var(--border-subtle);
+  box-shadow: var(--shadow-2);
 }
 .context-menu::before,
 .tab-new-menu::before,

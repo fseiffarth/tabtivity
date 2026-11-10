@@ -3004,13 +3004,11 @@ button.tab-todo-link {
 .git-change-tree,
 .presentation-settings,
 .cal-alarm-popup {
-  /* No boxed outline: a 1px frame around a tinted popover reads as a stray
-     hairline ring drawn around the accent wash below, not as an edge. The
-     elevation shadow is what separates the menu from what it floats over; the
-     accent top rail — matching the header bar and the dialog chrome above — is
-     the only edge that carries meaning. Fill and rail are painted by
-     the floating recipe in apps.css; the border only holds the
-     rail's room. */
+  /* No hairline outline: the elevation shadow separates the menu from what
+     it floats over, and the accent ring — matching the header bar and the
+     dialog chrome — is the only edge that carries meaning. Fill and ring come
+     from the floating recipe in apps.css, whose ring rule outranks this
+     border (the change tree, rail-less, keeps it). */
   border: 0;
   border-top: 2px solid transparent;
   border-radius: var(--radius);
