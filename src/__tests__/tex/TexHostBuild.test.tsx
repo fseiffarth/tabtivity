@@ -86,7 +86,13 @@ function setupInvoke() {
   });
 }
 
-async function renderPinned(opts: { viewer: "tex" | "sqlite" | "text"; path: string; ssh?: "connected" | "error" }) {
+async function renderPinned(opts: {
+  viewer: "tex" | "sqlite" | "text";
+  path: string;
+  ssh?: "connected" | "error";
+  /** A plain remote project (with a local mirror) instead of a remote-only one. */
+  mirrored?: boolean;
+}) {
   vi.resetModules();
   const { useProjectsStore } = await import("../../stores/projects");
   const { useRemoteStatusStore } = await import("../../stores/remote/remoteStatus");
@@ -100,7 +106,7 @@ async function renderPinned(opts: { viewer: "tex" | "sqlite" | "text"; path: str
         name: "P",
         directory: "/state/proj",
         local_file: "/state/proj/project.json",
-        remote: { host: "h.invalid", remote_path: ROOT, remote_only: true },
+        remote: { host: "h.invalid", remote_path: ROOT, remote_only: !opts.mirrored },
       } as never,
     ],
   });
@@ -158,6 +164,53 @@ describe("TeX Compile on a host-pinned project", () => {
       },
       { timeout: 6000 },
     );
+  }, 15_000);
+});
+
+describe("TeX Compile of a remote project's file", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    setupInvoke();
+  });
+  afterEach(() => cleanup());
+
+  // The host path `compile_tex` used to get here failed with "canonicalize
+  // <host path>: No such file or directory": it only opens files on this machine.
+  it("builds a file read from the host in a build tab there, even with TeX installed here", async () => {
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+      cmd === "tex_capability"
+        ? Promise.resolve({ available: true, engines: ["pdflatex"], bibtex: true, latexmk: true })
+        : base(cmd, args),
+    );
+    const { useTabsStore } = await renderPinned({ viewer: "tex", path: `${ROOT}/paper.tex`, mirrored: true });
+    await userEvent.click(await screen.findByRole("button", { name: /compile/i }));
+    await waitFor(() => {
+      const all = useTabsStore.getState().tabsByScope["proj"] ?? useTabsStore.getState().tabs;
+      expect(all.filter((t) => t.kind === "shell").map((t) => t.initialInput)).toEqual([
+        "'latexmk' '-cd' '-pdf' '-interaction=nonstopmode' '-synctex=1' './paper.tex'",
+      ]);
+    });
+    expect(mockInvoke).not.toHaveBeenCalledWith("compile_tex", expect.anything());
+  }, 15_000);
+
+  it("still compiles the local mirror's copy on this machine", async () => {
+    const base = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "tex_capability") return Promise.resolve({ available: true, engines: ["pdflatex"], bibtex: true, latexmk: true });
+      if (cmd === "file_source") return Promise.resolve("local");
+      if (cmd === "compile_tex") return Promise.resolve({ success: false, log: "", pdf_path: null, shell_escape: false });
+      return base(cmd, args);
+    });
+    const { useTabsStore } = await renderPinned({ viewer: "tex", path: "/mirror/proj/paper.tex", mirrored: true });
+    // Wait for `file_source` to answer before pressing Compile.
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("file_source", expect.anything()));
+    await act(async () => {});
+    await userEvent.click(await screen.findByRole("button", { name: /compile/i }));
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("compile_tex", expect.objectContaining({ path: "/mirror/proj/paper.tex" })));
+    const all = useTabsStore.getState().tabsByScope["proj"] ?? useTabsStore.getState().tabs;
+    expect(all.some((t) => t.kind === "shell")).toBe(false);
   }, 15_000);
 });
 

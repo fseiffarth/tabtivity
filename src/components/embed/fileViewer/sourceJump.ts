@@ -6,6 +6,9 @@ import { parseDetachedParam } from "../../../stores/detached";
 import { basename, dirname } from "../../../lib/paths";
 import { focusTexWorkspaceForSource } from "../../../lib/viewers/tex/openTexWorkspace";
 import { openLinkedFile, viewerForPath } from "./openLinked";
+import { useProjectsStore } from "../../../stores/projects";
+import { useFileSourcesStore } from "../../../stores/viewers/fileSources";
+import { otherSidePath } from "../../../lib/remote/fileSide";
 
 /** Tauri event carrying a reverse-search jump across the main/detached window
  *  boundary (#42). Only the main window listens; see {@link jumpToSource}. */
@@ -35,6 +38,54 @@ function tabKeyForPath(path: string): string | undefined {
       ? store.tabsByScope[ROOT_SCOPE]?.find(holds)?.key
       : undefined)
   );
+}
+
+/** The embed tabs a jump in this window can land on: the active scope's, plus
+ *  the root console's while its Root view is up (the `tabKeyForPath` rule). */
+function jumpableTabs(): TabEntry[] {
+  const store = useTabsStore.getState();
+  if (!rootViewShown(useRootOverlayStore.getState())) return store.tabs;
+  return [...store.tabs, ...(store.tabsByScope[ROOT_SCOPE] ?? [])];
+}
+
+/**
+ * Show a remote project's file on the side the jump names, in the tab that is
+ * already open for it, instead of a second tab.
+ *
+ * A PDF read from the host names its `.tex` by the HOST path; the `.tex` tab the
+ * user has open usually holds the local MIRROR path (or holds the host path but
+ * is switched to Local). Matching on the exact path missed it, and the jump
+ * opened a duplicate tab on the remote copy. Here, for `input` and the document
+ * root `anchorPath` (the workspace tab's key), the open tab of that file is put
+ * on the jump's side first:
+ *  - a tab on the exact path whose Local/Remote switch points the other way is
+ *    switched back to the path's own side;
+ *  - else a tab on the OTHER side's path is pointed at this one
+ *    (`setTabEmbedPath`), which makes it read that side — what flipping its
+ *    switch shows, kept across a restart like any path a tab was opened on.
+ * The routing that follows then finds it by path as usual. Local projects, and
+ * paths under neither root of a remote one, are left alone.
+ */
+function alignSourceTabSide(input: string, anchorPath?: string) {
+  const store = useTabsStore.getState();
+  const projects = useProjectsStore.getState().projects;
+  const tabs = jumpableTabs().filter(
+    (t): t is TabEntry & { embedPath: string } => t.kind === "embed" && !!t.embedPath,
+  );
+  const targets = anchorPath && anchorPath !== input ? [input, anchorPath] : [input];
+  for (const target of targets) {
+    for (const tab of tabs) {
+      const project = projects.find((p) => p.id === (tab.scope ?? store.scope));
+      const other = otherSidePath(project, target);
+      if (!other) continue;
+      if (tab.embedPath === target) {
+        const controls = useFileSourcesStore.getState().controlsByTab[tab.key];
+        if (controls && controls.current !== other.side) controls.set(other.side);
+      } else if (tab.embedPath === other.twin && !tabs.some((t) => t.embedPath === target)) {
+        store.setTabEmbedPath(tab.key, target);
+      }
+    }
+  }
 }
 
 /** True when this webview is the MAIN window (no `?detached=` param) — the one
@@ -104,6 +155,7 @@ function openStandaloneSourceTab(input: string, line: number, column: number, an
  *  of {@link jumpToSource}, and what {@link listenSourceJump} runs for a jump
  *  broadcast from a detached PDF window. */
 function applySourceJump(input: string, line: number, column: number, anchorPath?: string) {
+  alignSourceTabSide(input, anchorPath);
   routeSourceJump(input, line, column, () =>
     openStandaloneSourceTab(input, line, column, anchorPath),
   );
@@ -136,6 +188,9 @@ function applySourceJump(input: string, line: number, column: number, anchorPath
  * happens to be focused.
  */
 export function jumpToSource(input: string, line: number, column = 0, anchorPath?: string) {
+  // An open tab of this file showing the other side of a remote project is
+  // switched to this side first, so the routing below lands on it.
+  alignSourceTabSide(input, anchorPath);
   // A `.tex` source owned by an open workspace is centered there first (in this
   // window, or wherever the workspace lives — the store write reaches it); only a
   // source no workspace owns falls through to the standalone routing below.

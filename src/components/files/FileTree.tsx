@@ -3533,9 +3533,9 @@ export function FileTree({
                   </>
                 )}
                 {/* `compile_tex` builds on this machine; a host-pinned project
-                    has no local tree to build in (its Compile is the viewer's
-                    host build tab). */}
-                {isTex && texCap?.available && !hostPinned && (
+                    or a host listing has no local tree to build in (their
+                    Compile is the viewer's host build tab). */}
+                {isTex && texCap?.available && !hostPinned && !remoteListing && (
                   <>
                     <button
                       onClick={() => compileTex(entry, true)}

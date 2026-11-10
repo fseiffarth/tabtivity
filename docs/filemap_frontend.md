@@ -350,8 +350,8 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/TensorBoardView.tsx` | Native TensorBoard viewer: an `events.out.tfevents.*` file, or a folder opened as runs, as one SVG chart per scalar tag (`tensorboard/ScalarChart.tsx`); per-file cursors, Live polling (5 s local / 20 s host) gated on `PaneVisibleContext` and a connected host. |
 | `embed/fileViewer/viewerState.ts` | `useViewerState` / `seedViewerState`: a tab's persisted reader position (store, pending flush, detached seed). |
 | `embed/fileViewer/openLinked.ts` | `openLinkedFile`, `openMarkdownTarget`, `viewerForPath`: open a linked file in the routed subwindow. |
-| `embed/fileViewer/sourceJump.ts` | `jumpToSource` / `listenSourceJump`: PDF/TeX → source jumps, routed to the workspace or a standalone tab, cross-window via an event. |
-| `embed/fileViewer/ViewerHeader.tsx` | `ViewerHeader` + its auto-sync / resolve-conflict buttons, `localMirrorRootFor`, `autoSyncRel`. |
+| `embed/fileViewer/sourceJump.ts` | `jumpToSource` / `listenSourceJump`: PDF/TeX → source jumps, routed to the workspace or a standalone tab, cross-window via an event; a remote project's tab open on the other side (mirror ⇄ host) is switched to the jump's side first, not duplicated. |
+| `embed/fileViewer/ViewerHeader.tsx` | `ViewerHeader` + its auto-sync / resolve-conflict buttons; re-exports `localMirrorRootFor`, `autoSyncRel` (defined in `lib/remote/fileSide.ts`, with `otherSidePath`). |
 | `embed/fileViewer/editableFile.tsx` | `useEditableFile` / `useReadonlyFile` (load, save, disk reload, external-change banner), `EditorApi`, the edit-history reducer. |
 | `embed/fileViewer/indent.ts` | Code-editor key helpers: `applyIndent`, `applyLineComment`, `applyAutoIndent`, `detectIndentUnit`, indent guides. |
 | `embed/fileViewer/decorations.ts` | Pure range decorators: links, snippets, search, occurrences, bracket match, change marks, grammar ranges, `applyReplacements`. |

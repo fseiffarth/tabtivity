@@ -1,15 +1,14 @@
 import { createContext, useContext, useMemo } from "react";
 import { useProjectsStore } from "../../../stores/projects";
 import { useRemoteStatusStore } from "../../../stores/remote/remoteStatus";
-import { relFromAbs } from "../../../lib/viewers/fileUtils";
 import { FileSourceSwitch } from "../../files/ProjectFilesPane";
 import { basename, dirname, resolvePath } from "../../../lib/paths";
-import { resolveProjectDirectory, resolveLocalMirror } from "../../../types";
 import { useSyncStore } from "../../../stores/remote/sync";
 import { useT } from "../../../lib/i18n";
 import { ArrowUpRightIcon, RefreshIcon } from "../../common/icons/Icon";
 import { openLinkedFile } from "./openLinked";
 import { isHostPinned } from "../../../lib/projectTabHost";
+import { autoSyncRel, localMirrorRootFor } from "../../../lib/remote/fileSide";
 
 /** The file identity a `ViewerHeader` needs to offer file-scoped actions (the
  *  auto-sync toggle, the Local/Remote source switch) without every sub-viewer
@@ -27,39 +26,9 @@ export const ViewerHeaderInfoContext = createContext<{
   } | null;
 } | null>(null);
 
-/** A remote project's local-mirror root, or `null` for a local project / one
- *  with no resolvable mirror. Shared by `autoSyncRel` and the Local/Remote
- *  switch's path-building — both need the exact same root. A host-pinned
- *  project (VM, remote-only) has no mirror at all, so it answers `null` too
- *  rather than the default `<state dir>/mirror` path nothing ever fills. */
-export function localMirrorRootFor(
-  project: ReturnType<typeof useProjectsStore.getState>["projects"][number] | undefined,
-): string | null {
-  if (!project?.remote || isHostPinned(project)) return null;
-  const projectDir = resolveProjectDirectory(project);
-  return resolveLocalMirror(project) ?? (projectDir ? `${projectDir}/mirror` : null);
-}
-
-/**
- * Resolve `absPath` to the project-relative path the sync backend keys on, for a
- * REMOTE project only (auto-sync doesn't apply to local projects). Handles both a
- * local-mirror file (under the mirror root) and a remote-native file (under the
- * host `remote_path`). Returns `null` when the project isn't remote or the path
- * lies outside both roots (so the toggle simply hides).
- */
-export function autoSyncRel(
-  project: ReturnType<typeof useProjectsStore.getState>["projects"][number] | undefined,
-  absPath: string,
-): string | null {
-  if (!project?.remote) return null;
-  const mirrorRoot = localMirrorRootFor(project);
-  if (mirrorRoot) {
-    const r = relFromAbs(mirrorRoot, absPath);
-    if (r) return r;
-  }
-  const r2 = relFromAbs(project.remote.remote_path, absPath);
-  return r2 || null;
-}
+// Defined in `lib/remote/fileSide` (reverse search needs them without the viewer
+// graph); re-exported for the viewers that already import them from here.
+export { autoSyncRel, localMirrorRootFor };
 
 /**
  * Auto-sync indicator + toggle for the viewer header. Shown only for a file that

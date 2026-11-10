@@ -608,6 +608,10 @@ interface TabsStore {
   // freshly opened duplicate (the `tex` → `texworkspace` upgrade in
   // FileViewerPane / openTexWorkspace). No-op when unchanged.
   setTabViewer: (key: string, viewer: InternalViewer) => void;
+  // Point ONE embed tab at another path of the same file — a remote project's
+  // mirror copy ⇄ its host copy (`lib/remote/fileSide`). Label, viewer and
+  // viewer state stay; works on any scope's tab. No-op when unchanged.
+  setTabEmbedPath: (key: string, embedPath: string) => void;
   // Merge a patch into an embed tab's persisted viewer position (scroll/zoom/
   // pan). The viewer panes call this as the reader scrolls/zooms; the debounced
   // saveLayout effect then flushes it to project.json (see ViewerState).
@@ -2060,6 +2064,21 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       });
       // Stable array when nothing moved, so a repeated heal attempt does not
       // churn the tabs array / wake the saveLayout debounce.
+      if (!changed) return {};
+      return writeScope(s, owner, nextTabs, layout, focusedGroupId);
+    });
+  },
+
+  setTabEmbedPath: (key, embedPath) => {
+    set((s) => {
+      const owner = scopeOfTab(s, key);
+      const { tabs, layout, focusedGroupId } = scopeState(s, owner);
+      let changed = false;
+      const nextTabs = tabs.map((t) => {
+        if (t.key !== key || t.kind !== "embed" || t.embedPath === embedPath) return t;
+        changed = true;
+        return { ...t, embedPath };
+      });
       if (!changed) return {};
       return writeScope(s, owner, nextTabs, layout, focusedGroupId);
     });
