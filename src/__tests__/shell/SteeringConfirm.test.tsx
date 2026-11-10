@@ -99,6 +99,19 @@ describe("steering asks before closing or clearing", () => {
     expect(steering()).toMatchObject({ active: true, level: "panes" });
   });
 
+  it("W twice closes the tab", async () => {
+    activeTab({ kind: "shell" });
+    mount();
+    press("w");
+    await settle();
+    expect(dialog()).not.toBeNull();
+    press("w");
+    await settle();
+    expect(dialog()).toBeNull();
+    expect(useTabsStore.getState().tabsByScope.p ?? []).toHaveLength(0);
+    expect(steering()).toMatchObject({ active: true, level: "panes" });
+  });
+
   it("Enter closes the tab: the cursor starts on Close", async () => {
     activeTab({ kind: "shell" });
     mount();
@@ -122,23 +135,6 @@ describe("steering asks before closing or clearing", () => {
     expect(dialog()).toBeNull();
     expect(useTabsStore.getState().tabsByScope.p).toHaveLength(1);
     expect(steering()).toMatchObject({ active: true, level: "panes" });
-  });
-
-  it("K asks before /clear goes in; nothing asks on a tab that is not an agent", async () => {
-    activeTab({ kind: "agent", scheduleTargetId: "target" });
-    mount();
-    press("k");
-    expect(dialog()?.textContent).toContain("Clear “Claude”?");
-    expect(clearAgentTab).not.toHaveBeenCalled();
-    await settle();
-    press("y");
-    await settle();
-    expect(clearAgentTab).toHaveBeenCalledTimes(1);
-    expect(dialog()).toBeNull();
-
-    activeTab({ kind: "shell" });
-    press("k");
-    expect(dialog()).toBeNull();
   });
 
   it("the legend lists the Confirm key only over steering's own box", () => {

@@ -17,7 +17,8 @@ type Open = Omit<SteeringConfirmDetail, "handled">;
  * conversation (`steeringConfirm`). Steering stays on and walks the box as the
  * overlay region: Enter presses the button under the cursor — Close/Clear to
  * start with (`data-steering-default`, and it has focus), so Enter says yes —
- * the Confirm key (Y) says yes from anywhere, Esc no. Mounted once in
+ * the Confirm key (Y) says yes from anywhere, and so does W again over Close
+ * (the key that asked), Esc no. Mounted once in
  * `AppShell`; opened by `STEERING_CONFIRM_EVENT`.
  */
 export function SteeringConfirmOverlay() {
@@ -42,9 +43,9 @@ export function SteeringConfirmOverlay() {
     runSteeringConfirm(open);
   };
   const confirmLabel = t(close ? "steering.confirm.closeButton" : "steering.confirm.clearButton");
-  const keys = steeringRowKeys(["confirm"], steerKeys);
+  const keys = steeringRowKeys(close ? ["confirm", "closeTab"] : ["confirm"], steerKeys);
   return (
-    <DialogShell onDismiss={() => setOpen(null)}>
+    <DialogShell className="steering-confirm-dialog" onDismiss={() => setOpen(null)}>
       <h2>
         {t(close ? "steering.confirm.closeTitle" : "steering.confirm.clearTitle", { tab: open.tab.label })}
         <UntestedTag id="steering.confirm" />
@@ -68,6 +69,7 @@ export function SteeringConfirmOverlay() {
           className="danger"
           autoFocus
           data-steering-confirm=""
+          data-steering-confirm-kind={open.kind}
           data-steering-default=""
           onClick={confirm}
         >

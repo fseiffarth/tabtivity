@@ -88,7 +88,11 @@ import {
 } from "../stores/rootOverlay";
 import { newTabRequestFor, requestNewTab, requestOverlayAgent } from "../lib/shortcuts/newTabChord";
 import { requestSteeringPrompt, steeringActiveTab } from "../lib/shortcuts/steeringAgent";
-import { requestSteeringConfirm, steeringConfirmButton } from "../lib/shortcuts/steeringConfirm";
+import {
+  requestSteeringConfirm,
+  steeringConfirmButton,
+  steeringConfirmButtonFor,
+} from "../lib/shortcuts/steeringConfirm";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../lib/terminal/terminalScroll";
 import { documentScroller, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
@@ -803,7 +807,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           if (focused && group) tabs.setGroupFilesInScope(scope, focused, !group.filesOpen);
           return;
         // Asked first (`steeringConfirm`): the box comes up as the overlay
-        // region, the Confirm key closes, Esc keeps the tab.
+        // region, the Confirm key (or W again) closes, Esc keeps the tab.
         case "closeTab": {
           const active = steeringActiveTab();
           if (active) requestSteeringConfirm("closeTab", active.scope, active.tab);
@@ -1297,7 +1301,11 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           if (region === "side" && steerSidePanel(e, action, bindings, sidePanelHooks)) return;
           // The key that opened the side panel leaves it again, as Back does.
           const sideBack = !action && region === "side" && steeringKeyIs(e, "sidePanel", bindings);
-          steerRegion(sideBack ? "back" : action, region);
+          // W over its own "Close tab?" box closes: W twice closes a tab.
+          const root = region === "overlay" && !action ? regionRoot(region) : null;
+          const closeAgain =
+            !!root && steeringKeyIs(e, "closeTab", bindings) && !!steeringConfirmButtonFor(root, "closeTab");
+          steerRegion(sideBack ? "back" : closeAgain ? "confirm" : action, region);
           return;
         }
       }

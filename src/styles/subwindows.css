@@ -1020,8 +1020,24 @@ html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
-.steering-prompt-dialog .file-delete-actions {
+.steering-prompt-dialog .file-delete-actions,
+.steering-confirm-dialog .file-delete-actions {
   align-items: center;
+}
+/* Steering's "are you sure" (SteeringConfirmOverlay): the short prompt, a
+   little wider so the key legend and both buttons share one row; the
+   legend's two keys stack, the buttons keep one line each. */
+.file-delete-dialog.steering-confirm-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+.steering-confirm-dialog .steering-prompt-hint {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.steering-confirm-dialog .file-delete-actions button {
+  white-space: nowrap;
+  padding: 7px 14px;
 }
 .steering-prompt-hint {
   margin-right: auto;

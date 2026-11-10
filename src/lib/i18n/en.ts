@@ -2623,7 +2623,7 @@ export const enSource = {
   "steering.agentClear.label": "Clear conversation",
   "steering.agentClear.desc": "Type /clear into the active agent tab, after asking first: a fresh conversation, with Undo clear on the tab to take it back. {app} navigation stays on.",
   "steering.confirm.label": "Confirm",
-  "steering.confirm.desc": "Say yes to the question navigation asks before it closes a tab or clears a conversation. Esc says no.",
+  "steering.confirm.desc": "Say yes to the question navigation asks before it closes a tab or clears a conversation (W again closes the tab too). Esc says no.",
   "steering.confirm.closeTitle": "Close “{tab}”?",
   "steering.confirm.closeBody": "The tab closes. An agent tab can come back with Reopen closed tab.",
   "steering.confirm.closeButton": "Close tab",
