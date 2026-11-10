@@ -4104,6 +4104,17 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-picker:is(.terminal-reader-picker-steps, .terminal-reader-status) {
   height: min(60vh, 460px);
 }
+.terminal-reader-picker-steps {
+  overflow: hidden;
+}
+.terminal-reader-picker-steps > .terminal-reader-options {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.terminal-reader-picker-steps > :not(.terminal-reader-options) {
+  flex-shrink: 0;
+}
 .terminal-reader-picker-head {
   display: flex;
   align-items: center;
@@ -4250,6 +4261,16 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-secondary);
   background: var(--bg-inset);
   border-radius: var(--radius);
+}
+/* Keep an unrecognized screen available without filling the chat with output. */
+.terminal-reader-stray-output {
+  align-self: stretch;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.terminal-reader-stray-output > summary {
+  cursor: var(--cur-pointer, pointer);
+  padding: var(--space-2) 0;
 }
 /* What a screen the chat cannot read shows, over its Go to terminal row. */
 .terminal-reader-stray-screen {

@@ -5820,6 +5820,7 @@ export const dict: Dict = {
   "terminal.reader.workingTokens": "{count} Tokens",
   "terminal.reader.stop": "Stopp",
   "terminal.reader.stopHint": "Den laufenden Schritt des Agenten anhalten (sendet Esc)",
+  "terminal.reader.strayOutput": "Terminalausgabe",
   "terminal.reader.stray": "Das Terminal zeigt etwas, das der Chat nicht darstellen kann.",
   "terminal.reader.strayOpen": "Zum Terminal",
   "terminal.reader.unrecorded": "Deine Nachricht hat das Terminal erreicht, aber der Chat findet diesen Zug nicht im gespeicherten Gespräch. Das Terminal zeigt ihn.",

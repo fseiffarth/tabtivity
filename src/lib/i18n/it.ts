@@ -5794,6 +5794,7 @@ export const dict: Dict = {
   "terminal.reader.workingTokens": "{count} token",
   "terminal.reader.stop": "Ferma",
   "terminal.reader.stopHint": "Ferma il turno in corso dell'agente (invia Esc)",
+  "terminal.reader.strayOutput": "Output del terminale",
   "terminal.reader.stray": "Il terminale mostra qualcosa che la chat non può visualizzare.",
   "terminal.reader.strayOpen": "Vai al terminale",
   "terminal.reader.unrecorded": "Il tuo messaggio è arrivato al terminale, ma la chat non trova quel turno nella conversazione salvata. Il terminale lo mostra.",

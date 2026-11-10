@@ -113,6 +113,35 @@ describe("the agent pane's Reader", () => {
     expect(screen.queryByRole("navigation", { name: "Subagents in this conversation" })).toBeNull();
   });
 
+  it("keeps an unrecognized terminal screen folded and removes it once input returns", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const rows = ["• Ran a build", "  + 224 lines (ctrl+t to expand)"];
+    const term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    try {
+      reader(host);
+      await screen.findByText("fix the parser");
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+      const disclosure = host.querySelector<HTMLDetailsElement>(".terminal-reader-stray-output");
+      expect(disclosure).not.toBeNull();
+      expect(disclosure!.open).toBe(false);
+      expect(disclosure!.querySelector("summary")?.textContent).toBe("Terminal output");
+      expect(disclosure!.querySelector("pre")?.textContent).toContain("224 lines");
+      expect(screen.getByRole("button", { name: "Go to terminal" })).toBeTruthy();
+      fireEvent.click(disclosure!.querySelector("summary")!);
+      expect(disclosure!.open).toBe(true);
+      await act(async () => {
+        rows.splice(0, rows.length, "• Done.", "", "› ", "? for shortcuts");
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(host.querySelector(".terminal-reader-stray-output")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Go to terminal" })).toBeNull();
+    } finally {
+      unregisterTerminal("p:agent-1", term);
+      vi.useRealTimers();
+    }
+  });
+
   it("draws a turn the user cut off as an Interrupted rule, not an answer", async () => {
     invoke.mockImplementation((command: string) =>
       Promise.resolve(command === "agent_tab_transcript"

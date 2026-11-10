@@ -6028,6 +6028,7 @@ export const enSource = {
   "terminal.reader.stop": "Stop",
   "terminal.reader.stopHint": "Stop the agent's current turn (sends Esc)",
   "terminal.reader.stray": "The terminal shows something the chat can't display.",
+  "terminal.reader.strayOutput": "Terminal output",
   "terminal.reader.strayOpen": "Go to terminal",
   "terminal.reader.unrecorded": "Your message reached the terminal, but the chat can't find that turn in the stored conversation. The terminal shows it.",
   "terminal.reader.strayOpenHint": "Switch this agent's panes back to the terminal (the prompt strip's Chat switch brings the chat back)",

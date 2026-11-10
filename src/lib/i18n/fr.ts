@@ -5796,6 +5796,7 @@ export const dict: Dict = {
   "terminal.reader.workingTokens": "{count} jetons",
   "terminal.reader.stop": "Arrêter",
   "terminal.reader.stopHint": "Arrêter le tour en cours de l'agent (envoie Échap)",
+  "terminal.reader.strayOutput": "Sortie du terminal",
   "terminal.reader.stray": "Le terminal affiche quelque chose que le chat ne peut pas afficher.",
   "terminal.reader.strayOpen": "Aller au terminal",
   "terminal.reader.unrecorded": "Votre message est arrivé au terminal, mais le chat ne trouve pas ce tour dans la conversation enregistrée. Le terminal l'affiche.",

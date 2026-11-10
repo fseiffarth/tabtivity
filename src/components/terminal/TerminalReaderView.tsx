@@ -2574,7 +2574,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             </div>
           )}
           {strayShown && !browsed && !openStep && live.screen.length > 0 && (
-            <pre className="terminal-reader-question-context terminal-reader-stray-screen">{live.screen.join("\n")}</pre>
+            <details className="terminal-reader-stray-output">
+              <summary>{t("terminal.reader.strayOutput")}</summary>
+              <pre className="terminal-reader-question-context terminal-reader-stray-screen">{live.screen.join("\n")}</pre>
+            </details>
           )}
           {(strayShown || unrecorded) && !browsed && !openStep && (
             <div className="terminal-reader-working terminal-reader-stray" role="status">
