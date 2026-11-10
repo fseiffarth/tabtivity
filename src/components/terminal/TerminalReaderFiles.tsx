@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { dirname } from "../../lib/paths";
@@ -9,6 +9,9 @@ import { internalViewerFor, type FileEntry, type InternalViewer } from "../../li
 import { FileViewerPane } from "../embed/FileViewerPane";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { UntestedTag } from "../common/UntestedTag";
+import { registerReaderInside, useSteeringInside } from "../../lib/agents/readerSteering";
+import { largestScroller, scrollBox } from "../../lib/shortcuts/documentScroll";
+import { decide, effectiveCursor, rowsOf } from "../../lib/terminal/readerFilesSteer";
 import { ArrowUpRightIcon, CloseIcon, LinkIcon } from "../common/icons/Icon";
 import type { ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
@@ -46,8 +49,13 @@ function middle(text: string, max: number): string {
  * address to `onOpenLink`, the Chat's own ask-then-open path. It is never
  * fetched, previewed or drawn as an `<a href>`, so nothing leaves the machine
  * before the user confirms.
+ *
+ * Under keyboard steering (`steerId`, Inside this view) the files and then the
+ * links are one walkable list with a cursor of its own (`readerFilesSteer`):
+ * `o` opens the row, `v` shows the file here, ←/→ scroll the viewer. Moving
+ * the cursor opens nothing.
  */
-export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, projectId, disabled, visible, scopeNote, use24h, onPick, onOpenTab, onOpenLink, onClose }: {
+export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, projectId, disabled, visible, scopeNote, use24h, onPick, onOpenTab, onOpenLink, steerId, onClose }: {
   /** The agent tab hosting this Reader. Each picked file keeps its scroll/zoom
    *  under `<tab>#<path>` (the tab's `texPanes`, the TeX workspace's sub-pane
    *  slot), so leaving to Chat or another tab and coming back reopens the
@@ -76,6 +84,67 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
   const viewer = picked ? internalViewerFor(picked, disabled) : null;
   const linkRows = onOpenLink ? links : NO_LINKS;
   const headed = files.length > 0 && linkRows.length > 0;
+  const steering = useSteeringInside(steerId);
+  const rows = rowsOf(files, linkRows);
+  // The cursor is a key (path / URL), so rows arriving above it do not move it;
+  // one whose row vanished snaps back to the start (the shown file's row).
+  const [cursorSet, setCursorSet] = useState<string | null>(null);
+  const cursor = effectiveCursor(rows, cursorSet, picked?.path);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const viewerRef = useRef<HTMLDivElement>(null);
+  const liveRef = useRef({ files, rows, cursor, disabled, onPick, onOpenTab, onOpenLink });
+  liveRef.current = { files, rows, cursor, disabled, onPick, onOpenTab, onOpenLink };
+
+  useEffect(() => {
+    if (!steerId || !visible) return;
+    return registerReaderInside(steerId, {
+      view: "files",
+      key(action, e) {
+        if (action === "work" || action === "agentPrompt") return "pass";
+        if (action !== "up" && action !== "down" && action !== "left" && action !== "right" && action !== "viewOpen" && action !== "viewOpenAlt") {
+          return "handled";
+        }
+        const now = liveRef.current;
+        const result = decide(now.rows, now.cursor, action, { shift: e.shiftKey, repeat: e.repeat });
+        if (result.cursor !== undefined) {
+          // Written through so a second press before the re-render steps on.
+          liveRef.current = { ...now, cursor: result.cursor };
+          setCursorSet(result.cursor);
+        }
+        const path = result.row?.key;
+        const file = now.files.find((f) => f.entry.path === path)?.entry;
+        switch (result.effect) {
+          case "out":
+            return "leave";
+          case "scroll": {
+            const box = viewerRef.current ? largestScroller(viewerRef.current) : null;
+            if (box && result.pages) scrollBox(box, result.pages);
+            break;
+          }
+          case "show":
+            if (file) now.onPick(file);
+            break;
+          case "openTab":
+          case "openTabNew":
+            // A file with no in-app viewer has no ↗ button either.
+            if (file && internalViewerFor(file, now.disabled)) now.onOpenTab(file, result.effect === "openTabNew");
+            break;
+          case "openLink":
+            if (result.row) now.onOpenLink?.(result.row.key);
+            break;
+        }
+        return "handled";
+      },
+    });
+  }, [steerId, visible]);
+
+  // Keep the cursor's row on screen (nothing else happens when it moves).
+  useEffect(() => {
+    if (!steering || cursor === null) return;
+    const row = Array.from(bodyRef.current?.querySelectorAll<HTMLElement>("[data-steer-row]") ?? [])
+      .find((el) => el.dataset.steerRow === cursor);
+    row?.scrollIntoView?.({ block: "nearest" });
+  }, [steering, cursor]);
   return (
     <aside className={`terminal-changes terminal-changes-tab terminal-files ${SIGN_IN_CARD_CLASS}`} aria-label={t("terminal.readerFiles.title")} tabIndex={-1}>
       <header className="terminal-changes-head">
@@ -94,7 +163,7 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
         </button>
       </header>
       {scopeNote && <small className="terminal-changes-scope" title={scopeNote}>{scopeNote}</small>}
-      <div className="terminal-changes-body">
+      <div className="terminal-changes-body" ref={bodyRef}>
         {(files.length > 0 || linkRows.length > 0) && (
           <div className="terminal-changes-files">
             {files.length > 0 && <>
@@ -102,9 +171,11 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
               <div className="terminal-files-group" role="listbox" aria-label={t("terminal.readerFiles.list")}>
                 {files.map((file) => {
                   const active = picked?.path === file.entry.path;
+                  const here = steering && cursor === file.entry.path;
                   return (
                     <button type="button" role="option" key={file.entry.path} aria-selected={active}
-                      className={active ? "active" : undefined} title={file.entry.path}
+                      className={[active && "active", here && "steer-cursor"].filter(Boolean).join(" ") || undefined}
+                      aria-current={here || undefined} data-steer-row={file.entry.path} title={file.entry.path}
                       onClick={(event) => (event.ctrlKey || event.metaKey ? onOpenTab(file.entry, true) : onPick(file.entry))}>
                       <span className="terminal-changes-path"><strong>{file.label}</strong></span>
                     </button>
@@ -121,9 +192,11 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
                 {linkRows.map((link) => {
                   const moment = chatMoment(link.at);
                   const who = t(link.from === "you" ? "terminal.readerFiles.linkFromYou" : "terminal.readerFiles.linkFromAgent");
+                  const here = steering && cursor === link.url;
                   return (
                     <button type="button" role="option" key={link.url} aria-selected={false}
-                      className="terminal-files-link" title={`${link.url}\n${t("terminal.readerFiles.linkOpen")}`}
+                      className={here ? "terminal-files-link steer-cursor" : "terminal-files-link"}
+                      aria-current={here || undefined} data-steer-row={link.url} title={`${link.url}\n${t("terminal.readerFiles.linkOpen")}`}
                       onClick={() => onOpenLink(link.url)}>
                       <span className="terminal-files-link-main">
                         <LinkIcon />
@@ -141,7 +214,7 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
             </>}
           </div>
         )}
-        <div className="terminal-files-viewer">
+        <div className="terminal-files-viewer" ref={viewerRef}>
           {!picked ? (
             <div className="terminal-reader-empty">{t(files.length ? "terminal.readerFiles.pick" : linkRows.length ? "terminal.readerFiles.onlyLinks" : "terminal.readerFiles.empty")}</div>
           ) : viewer ? (

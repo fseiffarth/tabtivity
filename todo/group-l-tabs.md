@@ -482,6 +482,38 @@ correctness/UX work atop the same layout model #42 detaches.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+213j. **Live-QA steering inside the Reader's Files view.** ✅ Implemented · 🧪
+    Awaiting live QA (2026-11-10). Inside Files (Tab to Files, then D) the
+    files and then the links are one list with a highlight: E/D walk it
+    (E on the first row returns to the tabs, a held E does not), Shift+E/D jump
+    between Files and Links, S/F scroll the shown file half a screen (Shift: a
+    whole one; the terminal behind is not touched), O opens the file as a tab
+    (Shift+O: new subwindow) or, on a link, asks "Open link?" first, V shows
+    the file in the viewer; moving the highlight opens nothing; Enter stays
+    Work here, Space the prompt. Verify: an agent tab whose chat names a file
+    and two links: Shift+Space, Tab (Diffs/Files), D: the legend reads Inside
+    Files and a row is outlined; E/D walk files then links, Shift+D lands on
+    the first link, Shift+E on the first file; V shows a file, S/F scroll a
+    long Markdown file; O opens it as a tab, Shift+O in a new subwindow; O on a
+    link shows the confirm naming the exact URL (Cancel opens nothing); Enter
+    leaves steering with the keys in the view; E on the first row goes back to
+    the tabs; a remote project tab's `localhost:` link is forwarded, not opened
+    on this machine.
+    *Files: `src/components/terminal/TerminalReaderFiles.tsx`,
+    `src/lib/terminal/readerFilesSteer.ts`,
+    `src/lib/shortcuts/documentScroll.ts`.*
+    - [x] 🤖 Automated test — `ReaderFilesSteer`, `SteeringReaderFiles`,
+      `SteeringScroll` (`largestScroller`).
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 215. **Live-QA one-click installs in the root console.** ✅ Implemented · 🧪
     Awaiting live QA. Every one-click install (`runInstallInTab`: Ollama/agent
     CLI installs, the LaTeX/MiKTeX prompt, `gh`/`glab` install + auth login,

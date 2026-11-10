@@ -23,7 +23,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../../lib/terminal/terminalScroll";
 import { steeringKeysFor, type SteeringLegendState } from "../../lib/shortcuts/shortcuts";
-import { documentScroller, scrollDocument } from "../../lib/shortcuts/documentScroll";
+import { documentScroller, largestScroller, scrollBox as scrollBoxBy, scrollDocument } from "../../lib/shortcuts/documentScroll";
 
 function Harness() {
   useKeyboard({ onTogglePanels: () => {} });
@@ -329,6 +329,41 @@ describe("documentScroll", () => {
     expect(documentScroller("p", "u")).toBeNull();
     other.getBoundingClientRect = () => ({ width: 0, height: 0 }) as DOMRect;
     expect(documentScroller("q", "u")).toBeNull();
+  });
+});
+
+describe("largestScroller", () => {
+  it("scopes the search to one element, however big another box elsewhere is", () => {
+    const root = document.createElement("div");
+    const list = scrollBox(root, { w: 200, h: 100, content: 900 });
+    const viewer = document.createElement("div");
+    root.appendChild(viewer);
+    const doc = scrollBox(viewer, { w: 500, h: 400, content: 4000 });
+    const elsewhere = document.createElement("div");
+    scrollBox(elsewhere, { w: 900, h: 900, content: 9000 });
+    expect(largestScroller(viewer)).toBe(doc);
+    expect(largestScroller(root)).toBe(doc);
+    expect(largestScroller(list)).toBe(list);
+  });
+
+  it("returns the root itself when only it scrolls, and null when nothing does", () => {
+    const root = document.createElement("div");
+    root.style.overflowY = "auto";
+    Object.defineProperty(root, "clientHeight", { value: 300 });
+    Object.defineProperty(root, "scrollHeight", { value: 1200 });
+    expect(largestScroller(root)).toBe(root);
+    const fits = document.createElement("div");
+    scrollBox(fits, { w: 100, h: 100, content: 100 });
+    expect(largestScroller(fits)).toBeNull();
+  });
+
+  it("scrollBox moves a box by pages, a little under a screen each", () => {
+    const box = scrollBox(document.createElement("div"), { w: 500, h: 400, content: 4000 });
+    expect(scrollBoxBy(box, 0.5)).toBe(true);
+    expect(box.scrollTop).toBe(180);
+    scrollBoxBy(box, -0.5);
+    expect(box.scrollTop).toBe(0);
+    expect(scrollBoxBy(box, 0)).toBe(false);
   });
 });
 

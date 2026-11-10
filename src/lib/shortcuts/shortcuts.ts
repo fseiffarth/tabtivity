@@ -1167,6 +1167,11 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   // Inside the Reader's Files view (`when: "inFiles"`, levels ["scroll"]); the
   // Files step fills this block.
   // -- inside Files: begin
+  { actions: ["up", "down"], pair: true, labelKey: "steering.readerFiles.walk.label", descKey: "steering.readerFiles.walk.desc", levels: ["scroll"], when: "inFiles", group: "move" },
+  { actions: ["up", "down"], pair: true, shift: true, labelKey: "steering.readerFiles.section.label", descKey: "steering.readerFiles.section.desc", levels: ["scroll"], when: "inFiles", group: "move" },
+  { actions: ["left", "right"], pair: true, labelKey: "steering.readerFiles.scroll.label", descKey: "steering.readerFiles.scroll.desc", levels: ["scroll"], when: "inFiles", group: "move" },
+  { actions: ["viewOpen"], labelKey: "steering.readerFiles.open.label", descKey: "steering.readerFiles.open.desc", levels: ["scroll"], when: "inFiles", group: "act" },
+  { actions: ["viewOpenAlt"], labelKey: "steering.readerFiles.show.label", descKey: "steering.readerFiles.show.desc", levels: ["scroll"], when: "inFiles", group: "act" },
   // -- inside Files: end
   // The region cursor (side panel, header apps, + menu, settings, the top bar,
   // any dialog or menu on top).

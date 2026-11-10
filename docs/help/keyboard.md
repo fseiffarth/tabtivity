@@ -135,6 +135,14 @@ that view from anywhere in the panel (the tabs show their number) and land in
 its list. Enter on a file opens it and takes you to its tab — a panel that B
 opened closes; Shift+Enter opens it and stays in the panel.
 
+Inside an agent's Reader **Files** view (Tab to it, then D) the files and then
+the links are one list: E D move the highlight (E on the first row goes back to
+the tabs), Shift+E / Shift+D jump to the other section, S F scroll the shown
+file half a screen (Shift: a whole one), **O** opens the highlighted file as a
+tab (Shift+O: in a new subwindow) or the link after the usual "Open link?" ask,
+and **V** shows the file in the viewer beside the list. Moving the highlight
+opens nothing; Enter stays Work here and Space the prompt box.
+
 The phone has the same mode for a Bluetooth keyboard (Shift+Space, E S D F, Q R X, M C T,
 digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
 
