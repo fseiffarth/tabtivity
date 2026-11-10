@@ -12,6 +12,11 @@ import {
 } from "../../../mobile-web/src/terminal/subagentInput";
 
 const FAST = { waitMs: 30, pollMs: 2 };
+/** For walks that must read past torn frames: each poll can sleep a whole
+ * timer tick (~16 ms on Windows), so 30 ms is only two reads there. A walk
+ * that succeeds returns once the screen settles; only its fixed pause before
+ * reading the view back (a third of the wait) grows. */
+const TORN = { waitMs: 300, pollMs: 2 };
 const RULE = "────────────────────────────────────────";
 
 // Claude Code 2.1.287's footer, as captured with the list's cursor on Alpha.
@@ -276,7 +281,7 @@ describe("sendToSubagent", () => {
     ];
     for (const [task, torn] of [["Alpha sleeper", 1], ["Theta long", 2], ["Theta long", 4]] as const) {
       const { state, driver } = fakeClaude(summaries, 1, torn);
-      expect(await sendToSubagent(driver("stop"), { task, role: "general-purpose" }, FAST)).toEqual({ ok: true, backToMain: true });
+      expect(await sendToSubagent(driver("stop"), { task, role: "general-purpose" }, TORN)).toEqual({ ok: true, backToMain: true });
       expect(state.sent).toEqual([{ to: task, text: "stop" }]);
       expect(state.viewed).toBe("main");
       expect(state.focus).toBe("box");
@@ -289,7 +294,7 @@ describe("sendToSubagent", () => {
   it("opens a finished background subagent from /tasks", async () => {
     for (const torn of [0, 2]) {
       const { state, driver } = fakeClaude([agents[0], { kind: "general-purpose", task: "Delta waiter", listed: false }], 1, torn);
-      expect(await sendToSubagent(driver("one more thing"), { task: "Delta waiter", role: "general-purpose" }, FAST)).toEqual({ ok: true, backToMain: true });
+      expect(await sendToSubagent(driver("one more thing"), { task: "Delta waiter", role: "general-purpose" }, TORN)).toEqual({ ok: true, backToMain: true });
       expect(state.commands).toEqual(["/tasks"]);
       expect(state.sent).toEqual([{ to: "Delta waiter", text: "one more thing" }]);
       expect(state.viewed).toBe("main");

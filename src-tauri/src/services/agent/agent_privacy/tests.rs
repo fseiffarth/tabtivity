@@ -1265,9 +1265,13 @@ fn the_pinned_settings_file_is_written_once_per_content_and_pinned_by_inode() {
     assert_eq!(same, pin);
     let (other, _, _) = write_managed_claude(tmp.path(), "{\"a\":2}").unwrap();
     assert_ne!(other, file);
-    // A file swapped in behind the pin refuses the spawn.
-    std::fs::remove_file(&file).unwrap();
-    std::fs::write(&file, "{\"a\":1}").unwrap();
+    // A file swapped in behind the pin refuses the spawn. Made while the pinned one
+    // still exists, so the filesystem cannot hand it the freed inode number. The pin
+    // is an inode, so only unix has one to compare.
+    let swap = tmp.path().join("swap.json");
+    std::fs::write(&swap, "{\"a\":1}").unwrap();
+    std::fs::rename(&swap, &file).unwrap();
+    #[cfg(unix)]
     assert!(verify_control_pins(&[pin]).is_err());
     // A link at the file's name is replaced, never written through.
     let (file2, _, _) = write_managed_claude(tmp.path(), "{\"b\":1}").unwrap();
