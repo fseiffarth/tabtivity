@@ -64,7 +64,7 @@ pub const PROBE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// add an agent: run its `--version`, paste the output as the comment, add the
 /// line. Do not add one from a README.
 const VERSION_ARGV: &[(&str, &[&str])] = &[
-    // "opencode v2.2.6"
+    // "opencode v2.2.7"
     ("opencode", &["--version"]),
     // "2.1.319 (Claude Code)"
     ("claude", &["--version"]),
@@ -114,12 +114,12 @@ pub struct Verified {
 const VERIFIED: &[Verified] = &[
     Verified {
         agent: "opencode",
-        version: "2.2.6",
+        version: "2.2.7",
         surface: "§1.5 — launch flags, session plugin, stored messages and tools, TUI screens, Tabby's tool pin",
     },
     Verified {
         agent: "claude",
-        version: "2.1.319",
+        version: "2.1.322",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
@@ -144,12 +144,12 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "antigravity",
-        version: "1.5.3",
+        version: "1.5.4",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
         agent: "copilot",
-        version: "1.0.107",
+        version: "1.0.108",
         surface: "§1.5 — -p/--session-id/--continue, session-state store, authTokens login layout",
     },
 ];
@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.319")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.322")).0, DriftState::Match);
         // `muse` has a recipe but no recorded check — the honest answer is
         // "nobody has verified this", not a tick.
         assert_eq!(drift("muse", Some("1.3.0")).0, DriftState::Unverified);

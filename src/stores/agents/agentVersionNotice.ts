@@ -70,11 +70,11 @@ export interface NewerAgentVersion {
 // hot-reload. Keep this checked release here too so an already-running window
 // stops showing its old backend's card when the frontend hot-reloads.
 const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
-  claude: "2.1.319",
+  claude: "2.1.322",
   codex: "0.167.0",
-  opencode: "2.2.6",
-  antigravity: "1.5.3",
-  copilot: "1.0.107",
+  opencode: "2.2.7",
+  antigravity: "1.5.4",
+  copilot: "1.0.108",
 };
 
 interface AgentVersionNoticeStore {

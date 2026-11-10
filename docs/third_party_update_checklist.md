@@ -1177,6 +1177,17 @@ continues a Copilot row's label on a line between its number and label
 columns (`HANGLESS_WRAP_AGENT`); `Copilot107Contract.test.ts` holds it at 110
 and 60 columns, and that other agents still end the run there.
 
+Re-checked **1.0.108** (2026-11-10, `npm pack @github/copilot-linux-x64`, beside
+1.0.107): all 13 `copilot-events-probe.py` checks pass on both; `--help` adds
+only the help topics `input`, `mcp` and `sessions`, `login --help` identical;
+the unpacked runtimes hold `authTokens`, `lastLoggedInUser` and
+`storeTokenPlaintext` in as many files. `tui.py` on the stub (BYOK now
+refuses to start without `COPILOT_MODEL`: "BYOK providers require an explicit
+model") captured trust, idle, the create approval at 110 and 60 columns and
+the Esc after it; every frame reads the same on both, the hangless wrap
+included. The changelog's `-p --output-format json` session events are not
+read (Tabtivity reads `events.jsonl`).
+
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
 Auggie, CodeBuddy: `settings.json` `hooks.SessionStart[].hooks[]`, stdout JSON
@@ -1465,6 +1476,28 @@ makes. `opencode run` now waits for background jobs its prompt started before
 it exits: the warm-up's `run` starts none and still exits 0 in under 2 s. The
 TUI's new message spacing changed no reading.
 
+Run again on **2.2.7** (2026-11-10, official npm binary, scratch homes and
+loopback stub models; no app window): `turns.py` full, mini and `ask`,
+`tabby.py`, and `resume.py`. The session plugin records the parent session,
+permission chips still appear at 120/200/100/60/50 columns, `--session` and
+`--continue` restore history in full and mini without a picker, and warm-up
+`run` exits 0 (2.4 s). Tabby's offered tools and refusals match 2.2.6 exactly;
+no shell/subagent marker is created, and its allowed web call succeeds.
+The real Rust `session_transcript` and `session_changes` readers return the
+same 17 entries (including the subagent) and two completed `w.txt` changes
+from each version's database; failed tools contribute no file change.
+The checked top-level, `mini`, `run`, `debug` and `auth` help is unchanged.
+Of 48 captured frames replayed through the real readers, 44 read identically:
+the other four differ only in model-catalog rows/current index and raw mini
+palette text. Questions, permission prompts and decision lamps are unchanged.
+The upstream [release notes](https://github.com/anomalyco/opencode/releases/tag/v2.2.7)
+remove the model picker's Usage action; an additional probe on both versions
+clears a bogus search with the app's 200 backspaces, selects the stub model,
+accepts its variant dialog and completes a stub turn. The SDK plugin-loading changes do
+not break the exercised session plugin or remote MCP pin. This does not
+verify Console/provider sign-in, real provider calls, fencing, the running
+desktop window or a phone; their existing untested tags remain.
+
 Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
 run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
 install -g @opencode/cli`, as both link `opencode`), and the update check
@@ -1635,6 +1668,13 @@ identical; the 35 captures read the same (sign-in frames differ only in the
 wrapped PKCE challenge). 1.5.3 adds each subagent's model to the subagent rows
 above the prompt and in `/agents` — not reached here, as the stub starts no
 subagent — plus plugin, hook and gateway fixes nothing here touches.
+1.5.4 on 2026-11-10 (from the updater manifest's `antigravity-public` tarball,
+sha512 checked, in a read-only directory, beside the 1.5.3 copy): `main.py` at
+80 and 42 columns prints the same lines on both, `agy models` the same list,
+and every `main`/`main42` frame reads the same; `signin.py` at 42×24 and
+80×24 differs only in the OAuth link's random parameters. `--continue` with
+`--model/--effort` flags still drops the history, as on 1.5.3. No release
+notes are published for it.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
