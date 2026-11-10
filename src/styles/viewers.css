@@ -7323,36 +7323,68 @@ select.file-viewer-run-args-input {
   white-space: nowrap;
 }
 
-/* Sync resolver "Hand to an agent" dialog: the ready prompt and the one-click
-   ways to hand it over. */
-.sync-handoff-prompt {
-  width: 100%;
-  box-sizing: border-box;
-  margin: 4px 0 8px;
-  padding: 6px 8px;
-  resize: vertical;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-main);
-  color: var(--text-primary, var(--text));
-  font: inherit;
-  font-size: 12px;
+/* Sync resolver "Hand to an agent" dialog (DialogShell, project-dialog frame):
+   the ready prompt, one main action, and one picker for the open agent tabs —
+   a button per tab ran past the window once a project held ten "Claude" tabs. */
+.project-dialog.sync-handoff-dialog {
+  width: min(560px, calc(100vw - 32px));
 }
-.sync-handoff-targets {
-  flex-direction: column;
-  align-items: stretch;
-  margin-bottom: 8px;
-}
-.sync-handoff-targets button {
-  text-align: left;
+.sync-handoff-text {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
-.sync-handoff-actions {
-  flex-wrap: wrap;
+.sync-handoff-where {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.sync-handoff-warn {
+  color: var(--warning);
+}
+.sync-handoff-note {
+  color: var(--text-secondary);
+}
+.sync-handoff-dialog textarea {
+  resize: vertical;
+  font-size: var(--text-md);
+}
+.sync-handoff-new {
+  align-self: stretch;
+}
+.sync-handoff-send {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.sync-handoff-label {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+}
+.sync-handoff-send-row {
+  display: flex;
+  gap: var(--space-2);
   align-items: center;
 }
+.sync-handoff-tab {
+  flex: 1;
+  min-width: 0;
+}
+.sync-handoff-tab .dropdown-trigger {
+  min-height: 30px;
+  font-size: var(--text-base);
+}
 .sync-handoff-none {
-  align-self: center;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-md);
+}
+.sync-handoff-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.sync-handoff-close {
+  margin-left: auto;
 }

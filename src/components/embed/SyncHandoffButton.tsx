@@ -12,6 +12,7 @@ import { isHostPinned } from "../../lib/projectTabHost";
 import { resolveProjectDirectory } from "../../types";
 import type { HandoffFile } from "../../lib/viewers/syncHandoff";
 import { DialogShell } from "../common/PromptDialogs";
+import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 
 /** What the backend answers (`services::sync_handoff::HandoffExport`). */
@@ -71,6 +72,21 @@ export function SyncHandoffButton({
       ),
     [tabs, project],
   );
+  // Agent tabs are often all called "Claude": a repeated label gets the tab's
+  // place in the project's tab strip, so the picker tells them apart.
+  const tabOptions = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const tab of localTabs) seen.set(tab.label, (seen.get(tab.label) ?? 0) + 1);
+    return localTabs.map((tab) => ({
+      value: tab.key,
+      label:
+        (seen.get(tab.label) ?? 0) > 1
+          ? t("syncHandoff.tabOrdinal", { label: tab.label, n: tabs.indexOf(tab) + 1 })
+          : tab.label,
+    }));
+  }, [localTabs, tabs, t]);
+  const [pickedKey, setPickedKey] = useState("");
+  const picked = localTabs.find((tab) => tab.key === pickedKey) ?? localTabs[0];
 
   const prompt = result ? t("syncHandoff.prompt", { dir: result.out.agentDir }) : "";
 
@@ -157,44 +173,57 @@ export function SyncHandoffButton({
         </DialogShell>
       )}
       {result && (
-        <DialogShell onDismiss={() => setResult(null)}>
-          <h2>{t("syncHandoff.title")}</h2>
-          <p className="file-delete-body">
+        <DialogShell
+          frame="project-dialog"
+          className="sync-handoff-dialog"
+          scroll
+          title={t("syncHandoff.title")}
+          onDismiss={() => setResult(null)}
+        >
+          <p className="sync-handoff-text">
             {t("syncHandoff.done", { count: result.out.fileCount, dir: result.out.agentDir })}
           </p>
           {result.skipped > 0 && (
-            <p className="file-delete-body">{t("syncHandoff.skipped", { count: result.skipped })}</p>
+            <p className="sync-handoff-text sync-handoff-warn">{t("syncHandoff.skipped", { count: result.skipped })}</p>
           )}
-          <p className="file-delete-body">{t("syncHandoff.where")}</p>
-          <textarea
-            className="sync-handoff-prompt"
-            readOnly
-            value={prompt}
-            rows={6}
-            onFocus={(e) => e.currentTarget.select()}
-          />
-          {note && <p className="file-delete-body">{note}</p>}
-          {error && <p className="file-delete-body">{error}</p>}
-          <div className="file-delete-actions sync-handoff-targets">
-            <button type="button" className="btn-primary" autoFocus onClick={openNew}>
-              {t("syncHandoff.newTab")}
-            </button>
-            {localTabs.map((tab) => (
-              <button type="button" key={tab.key} onClick={() => sendTo(tab)}>
-                {t("syncHandoff.sendTo")}: {tab.label}
-              </button>
-            ))}
-            {localTabs.length === 0 && <span className="sync-handoff-none">{t("syncHandoff.noTabs")}</span>}
+          <p className="project-dialog-path sync-handoff-where">{t("syncHandoff.where")}</p>
+          <label>
+            {t("syncHandoff.promptLabel")}
+            <textarea readOnly value={prompt} rows={5} onFocus={(e) => e.currentTarget.select()} />
+          </label>
+          <button type="button" className="btn-primary sync-handoff-new" autoFocus onClick={openNew}>
+            {t("syncHandoff.newTab")}
+          </button>
+          <div className="sync-handoff-send" role="group" aria-label={t("syncHandoff.sendTo")}>
+            <span className="sync-handoff-label">{t("syncHandoff.sendTo")}</span>
+            {picked ? (
+              <div className="sync-handoff-send-row">
+                <Dropdown
+                  className="dropdown-block sync-handoff-tab"
+                  value={picked.key}
+                  options={tabOptions}
+                  ariaLabel={t("syncHandoff.sendTo")}
+                  onChange={setPickedKey}
+                />
+                <button type="button" className="settings-btn" onClick={() => sendTo(picked)}>
+                  {t("syncHandoff.send")}
+                </button>
+              </div>
+            ) : (
+              <span className="sync-handoff-none">{t("syncHandoff.noTabs")}</span>
+            )}
           </div>
-          <div className="file-delete-actions sync-handoff-actions">
-            <button type="button" onClick={copy}>
+          {note && <p className="sync-handoff-text sync-handoff-note">{note}</p>}
+          {error && <p className="sync-handoff-text sync-handoff-warn">{error}</p>}
+          <div className="sync-handoff-actions">
+            <button type="button" className="btn-quiet" onClick={copy}>
               {t("syncHandoff.copyPrompt")}
             </button>
-            <button type="button" onClick={reveal} title={t("syncHandoff.showFolderTitle")}>
+            <button type="button" className="btn-quiet" onClick={reveal} title={t("syncHandoff.showFolderTitle")}>
               {t("syncHandoff.showFolder")}
             </button>
             <UntestedTag id="syncHandoff.reveal" />
-            <button type="button" onClick={() => setResult(null)}>
+            <button type="button" className="settings-btn sync-handoff-close" onClick={() => setResult(null)}>
               {t("common.close")}
             </button>
           </div>

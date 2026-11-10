@@ -6,10 +6,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-const { mockInvoke, queuePrompt, addTabToScope } = vi.hoisted(() => ({
+const { mockInvoke, queuePrompt, addTabToScope, tabsState } = vi.hoisted(() => ({
   mockInvoke: vi.fn(),
   queuePrompt: vi.fn((..._args: unknown[]) => Promise.resolve({ pruned: 0, id: "x" })),
   addTabToScope: vi.fn(),
+  tabsState: { tabsByScope: { p1: [] as Record<string, unknown>[] } },
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 vi.mock("../../stores/agents/agentPrompts", () => ({ queuePromptForTab: queuePrompt }));
@@ -42,12 +43,12 @@ vi.mock("../../stores/tabs", async (importActual) => {
     cmd: "claude",
     location,
   });
-  const state = {
-    tabsByScope: {
-      p1: [tab("local-agent", "agent"), tab("host-agent", "agent", "remote"), { key: "sh", kind: "shell", label: "sh" }],
-    },
-    addTabToScope,
-  };
+  tabsState.tabsByScope.p1 = [
+    tab("local-agent", "agent"),
+    tab("host-agent", "agent", "remote"),
+    { key: "sh", kind: "shell", label: "sh" },
+  ];
+  const state = { ...tabsState, addTabToScope };
   return {
     ...actual,
     useTabsStore: Object.assign((sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state), {
@@ -107,14 +108,39 @@ describe("SyncHandoffButton", () => {
     );
   });
 
-  it("queues the prompt at an open local agent tab, and lists no host tab", async () => {
+  it("queues the prompt at the picked local agent tab, and offers no host tab", async () => {
     setup();
     fireEvent.click(screen.getByRole("button", { name: /Hand to an agent/ }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
-    expect(screen.queryByText(/host-agent/)).toBeNull();
-    fireEvent.click(screen.getByText(/local-agent/));
+    fireEvent.click(screen.getByRole("button", { name: "Send the prompt to an open agent tab" }));
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["local-agent"]);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(queuePrompt).toHaveBeenCalled());
     expect(queuePrompt).toHaveBeenCalledWith("p1", "target-local-agent", expect.stringContaining("~/handoff/conflicts-1"));
+  });
+
+  it("tells tabs with the same label apart by their place in the tab strip", async () => {
+    tabsState.tabsByScope.p1.push(
+      { key: "c1", kind: "agent", label: "Claude", scheduleTargetId: "target-c1", cmd: "claude", location: undefined },
+      { key: "c2", kind: "agent", label: "Claude", scheduleTargetId: "target-c2", cmd: "claude", location: undefined },
+    );
+    try {
+      setup();
+      fireEvent.click(screen.getByRole("button", { name: /Hand to an agent/ }));
+      await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "Send the prompt to an open agent tab" }));
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "local-agent",
+        "Claude · tab 4",
+        "Claude · tab 5",
+      ]);
+      fireEvent.click(screen.getByRole("option", { name: "Claude · tab 5" }));
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await waitFor(() => expect(queuePrompt).toHaveBeenCalledWith("p1", "target-c2", expect.any(String)));
+    } finally {
+      tabsState.tabsByScope.p1.splice(3);
+    }
   });
 
   it("opens a new agent tab with the prompt queued", async () => {
