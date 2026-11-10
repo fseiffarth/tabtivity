@@ -70,6 +70,7 @@ export type SteeringHandoff = "jump" | "prompt" | "search";
  */
 interface KeyboardSteeringState {
   /** Steering on → keys captured, badges/legend visible. */
+  visit: number;
   active: boolean;
   level: SteeringLevel;
   /** The surface the region cursor walks; set only while `level` is "region". */
@@ -131,12 +132,13 @@ export interface SteeringJumpBack {
 }
 
 export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get) => ({
+  visit: 0,
   active: false,
   level: "tabs",
   region: null,
   regionReturn: "tabs",
   regionStack: [],
-  enter: () => set({ active: true, level: "tabs", region: null, regionStack: [], handedTo: null, legendHidden: false }),
+  enter: () => set({ visit: get().visit + 1, active: true, level: "tabs", region: null, regionStack: [], handedTo: null, legendHidden: false }),
   exit: () => set({ active: false, level: "tabs", region: null, regionStack: [], handedTo: null }),
   setLevel: (level) => set({ level, region: null, regionStack: [] }),
   enterRegion: (region) => {

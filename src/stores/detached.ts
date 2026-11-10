@@ -60,6 +60,7 @@ import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../
 import { isTabColor, type TabColor } from "../lib/theme/tabColors";
 import { normalizeStackName } from "../lib/tabStacks";
 import { isTabMark, type TabMark } from "../lib/tabMarks";
+import { STEER_FROM_POPOUT } from "../lib/shortcuts/steeringChord";
 
 /** Parsed `?detached=<scope>:<groupId>` query. */
 export interface DetachedParam {
@@ -131,6 +132,12 @@ export const DETACHED_HIDE = "detached-hide";
  * into that popout. Same envelope shape as the dock.
  */
 export const DETACHED_REOPEN = "detached-reopen";
+/**
+ * Detached → main: the steering chord was pressed in a popout. Steering lives
+ * in the main window only, so the main window takes the keyboard back and
+ * turns it on there (`STEER_FROM_POPOUT`). Same envelope shape as the dock.
+ */
+export const DETACHED_STEER = "detached-steer";
 /** Detached → main: the popout's OS geometry changed (persisted for respawn). */
 export const DETACHED_BOUNDS = "detached-bounds";
 /**
@@ -1230,6 +1237,15 @@ export async function listenDetachedHost(): Promise<() => void> {
     const { scope, groupId } = ev.payload;
     // A parked scope has nothing else to write the new tab (see the close handler).
     if (reopenClosedAgentTab(scope, undefined, groupId)) void persistScopeNow(scope);
+  });
+
+  await on<DetachedDockEnvelope>(DETACHED_STEER, () => {
+    try {
+      void getCurrentWindow().setFocus().catch(() => {});
+    } catch {
+      /* no Tauri window (tests) */
+    }
+    window.dispatchEvent(new CustomEvent(STEER_FROM_POPOUT));
   });
 
   await on<DetachedDockEnvelope>(DETACHED_HIDE, (ev) => {

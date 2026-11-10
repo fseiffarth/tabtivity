@@ -24,6 +24,7 @@ import {
   DETACHED_GAVE_UP,
   DETACHED_REOPEN,
   DETACHED_REQUEST_SEED,
+  DETACHED_STEER,
   DETACHED_ZOOM,
   applyEditToSubtree,
   applyColorToTabs,
@@ -75,6 +76,7 @@ import { listenPdfReveal } from "../../stores/viewers/pdfSync";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
 import { listenTexCenter } from "../../stores/viewers/texCenter";
 import { chordMatches, resolveChord, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
+import { isTextKey, steeringChordFires } from "../../lib/shortcuts/steeringChord";
 import { DetachedCenterPanel } from "./DetachedCenterPanel";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
@@ -274,6 +276,27 @@ export function DetachedApp({ param }: Props) {
       e.preventDefault();
       e.stopPropagation();
       void emit(DETACHED_REOPEN, { scope: param.scope, groupId: param.groupId });
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [param.scope, param.groupId]);
+
+  // The steering chord. Steering lives in the main window (it walks no popout),
+  // so the chord sends the keyboard there and turns steering on (DETACHED_STEER).
+  // Captured on `document` so it works from a focused terminal, and held back
+  // in a typing burst exactly as the main window does (`steeringChordFires`).
+  useEffect(() => {
+    let lastTypedAt = -Infinity;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const overrides = useSettingsStore.getState().settings
+        ?.keyboard_shortcuts as ShortcutMap | undefined;
+      if (steeringChordFires(resolveChord("steeringMode", overrides), e, false, lastTypedAt)) {
+        e.preventDefault();
+        e.stopPropagation();
+        void emit(DETACHED_STEER, { scope: param.scope, groupId: param.groupId });
+        return;
+      }
+      if (isTextKey(e)) lastTypedAt = e.timeStamp;
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);

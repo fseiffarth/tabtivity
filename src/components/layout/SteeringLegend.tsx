@@ -95,7 +95,7 @@ export function SteeringLegend() {
   // reads Root's subwindows and active tab (`steeringScope`).
   const rootShown = useRootOverlayStore((s) => rootViewShown(s));
   const multiPane = useTabsStore((s) => allGroups(rootShown ? (s.layoutByScope[ROOT_SCOPE] ?? null) : s.layout).length >= 2);
-  const popouts = useTabsStore((s) => (s.detachedGroupsByScope[s.scope]?.length ?? 0) > 0);
+  const popouts = useTabsStore((s) => (s.detachedGroupsByScope[rootShown ? ROOT_SCOPE : s.scope]?.length ?? 0) > 0);
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
   const mail = useSettingsStore((s) => steeringAppEnabled("mail", s.settings));
   const calendar = useSettingsStore((s) => steeringAppEnabled("calendar", s.settings));

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { steeringTabs } from "../shortcuts/steeringScope";
 import { useTabsStore } from "../../stores/tabs";
 
 /** The popout each scope's J raised last, so the next J takes the one after. */
@@ -14,20 +15,21 @@ export function nextPopoutLabel(labels: readonly string[], last: string | undefi
 
 /**
  * Steering's J: raise the active scope's next popped-out subwindow and give it
- * the keyboard (`focus_detached_window`). The main window then blurs, which
- * ends steering by itself. False when the scope has no popout or the raise
+ * the keyboard (`focus_detached_window`). The caller ends the initiating
+ * steering visit after success. False when the scope has no popout or the raise
  * failed (a backend that predates the command included).
  */
-export async function focusNextPopout(): Promise<boolean> {
-  const { scope, detachedGroupsByScope } = useTabsStore.getState();
+export async function focusNextPopout(scope = steeringTabs().scope): Promise<boolean> {
+  const { detachedGroupsByScope } = useTabsStore.getState();
   const label = nextPopoutLabel(
     (detachedGroupsByScope[scope] ?? []).map((g) => g.label),
     lastRaised.get(scope),
   );
   if (!label) return false;
-  lastRaised.set(scope, label);
   try {
-    return await invoke<boolean>("focus_detached_window", { label });
+    const focused = await invoke<boolean>("focus_detached_window", { label });
+    if (focused) lastRaised.set(scope, label);
+    return focused;
   } catch {
     return false;
   }

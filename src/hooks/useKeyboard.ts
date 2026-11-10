@@ -22,6 +22,7 @@ import {
 import { useActivityStore } from "../stores/activity";
 import { jumpToTab } from "../lib/shortcuts/tabJump";
 import { focusNextPopout } from "../lib/window/focusPopout";
+import { STEER_FROM_POPOUT, isTextKey, steeringChordFires } from "../lib/shortcuts/steeringChord";
 import {
   afterStatusJump,
   jumpBackTarget,
@@ -92,10 +93,8 @@ import {
   chordMatches,
   isLoneModifier,
   isLoneSuper,
-  normalizeKey,
   resolveChord,
   zoomFor,
-  type ChordDescriptor,
   type ShortcutAction,
   type ShortcutMap,
 } from "../lib/shortcuts/shortcuts";
@@ -304,6 +303,21 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     const dropOverlay = () => {
       overlayLayer = null;
       markLayer(null);
+    };
+    // The mode opens on the tabs, so a subwindow has to hold the focus — or on
+    // the dialog or menu on top, when one is up (back from typing in one of its
+    // fields, say); Escape then closes it.
+    const enterSteering = () => {
+      const tabs = useTabsStore.getState();
+      const first = allGroups(tabs.layout)[0]?.id;
+      if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
+      useKeyboardSteeringStore.getState().enter();
+      syncLayer();
+    };
+    // A popout's steering chord (`DETACHED_STEER`; the popout has no steering
+    // of its own): steering comes on here, where the keyboard was sent back.
+    const onSteerFromPopout = () => {
+      if (!useKeyboardSteeringStore.getState().active) enterSteering();
     };
     const exitSteering = () => {
       cancelPlace();
@@ -856,10 +870,22 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         // The project's popped-out subwindow (the next one, with several): its
         // window takes the keyboard, so steering ends here (a plain blur keeps
         // it, `onBlur`).
-        case "popout":
-          exitSteering();
-          void focusNextPopout();
+        case "popout": {
+          const visit = useKeyboardSteeringStore.getState().visit;
+          const scope = steeringTabs().scope;
+          const before = useKeyboardSteeringStore.getState();
+          const tab = steeringTabsActive()?.tab.key;
+          const group = steeringTabs().focusedGroupId;
+          const view = useRootOverlayStore.getState().view;
+          void focusNextPopout(scope).then((focused) => {
+            const now = useKeyboardSteeringStore.getState();
+            if (focused && now.active && now.visit === visit && steeringTabs().scope === scope &&
+                now.level === before.level && now.region === before.region &&
+                steeringTabsActive()?.tab.key === tab && steeringTabs().focusedGroupId === group &&
+                useRootOverlayStore.getState().view === view) exitSteering();
+          });
           return;
+        }
         case "panels": // toggle the side panels
           onTogglePanels();
           return;
@@ -1025,28 +1051,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       const overrides = useSettingsStore.getState().settings
         ?.keyboard_shortcuts as ShortcutMap | undefined;
 
-      // The chord toggles: enter when inactive, exit when active.
-      // A chord that types text (the Shift+Space default) is left alone in the
-      // middle of a typing burst: "I am" with the Shift still down from the I
-      // is a space, not a request to steer.
-      const steerChord = resolveChord("steeringMode", overrides);
-      if (
-        chordMatches(steerChord, e) &&
-        (steering.active || !typesText(steerChord) || e.timeStamp - lastTypedAt > TYPING_BURST_MS)
-      ) {
+      // The chord toggles: enter when inactive, exit when active (not in a
+      // typing burst, `steeringChordFires`).
+      if (steeringChordFires(resolveChord("steeringMode", overrides), e, steering.active, lastTypedAt)) {
         e.preventDefault();
         e.stopPropagation();
         if (steering.active) exitSteering();
-        else {
-          // The mode opens on the tabs, so a subwindow has to hold the focus —
-          // or on the dialog or menu on top, when one is up (back from typing
-          // in one of its fields, say); Escape then closes it.
-          const tabs = useTabsStore.getState();
-          const first = allGroups(tabs.layout)[0]?.id;
-          if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
-          steering.enter();
-          syncLayer();
-        }
+        else enterSteering();
         return;
       }
       // The root console toggles from anywhere, a focused terminal included —
@@ -1108,7 +1119,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         }
       }
       if (!steering.active) {
-        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) lastTypedAt = e.timeStamp;
+        if (isTextKey(e)) lastTypedAt = e.timeStamp;
         return;
       }
 
@@ -1634,6 +1645,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
+    window.addEventListener(STEER_FROM_POPOUT, onSteerFromPopout);
     return () => {
       cancelSuperToggle();
       cancelPlace();
@@ -1647,6 +1659,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener(STEER_FROM_POPOUT, onSteerFromPopout);
     };
   }, [onTogglePanels, onSidePanel, onToggleSidePanel]);
 }
@@ -1661,14 +1674,6 @@ const STATUS_ACTIONS: Partial<Record<SteeringAction, TabStatusKind>> = {
 /** Whether a lone Super tap toggles the panels (the panel toggle's chord). */
 function superTogglesPanels(overrides: ShortcutMap | undefined): boolean {
   return isLoneSuper(resolveChord("togglePanels", overrides));
-}
-
-/** A steering chord typed within this long of the last text key is text. */
-const TYPING_BURST_MS = 400;
-
-/** Whether a chord would type a character (no Ctrl / Alt / Meta held). */
-function typesText(chord: ChordDescriptor): boolean {
-  return !chord.ctrl && !chord.alt && !chord.meta && normalizeKey(chord.key).length === 1;
 }
 
 /**
