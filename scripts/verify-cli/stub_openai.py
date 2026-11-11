@@ -2,7 +2,7 @@
 # Stub OpenAI-compatible model + MCP server on loopback, so a CLI can be driven
 # through calls no real model would make, offline and for free.
 #   stub_openai.py <port> <log.jsonl>
-# Model endpoint: http://127.0.0.1:<port>/v1 (chat completions, streaming).
+# Model endpoint: http://127.0.0.1:<port>/v1 (chat completions or Responses, streaming).
 # MCP endpoints:  /mcp/web (web_search, web_fetch), /mcp/help (the help search).
 # A user prompt holding
 #   STUB:CALL <tool> <json>                  makes the model call that tool, then answer "stub answer done";
@@ -39,6 +39,8 @@ class H(BaseHTTPRequestHandler):
         except Exception: d={}
         if self.path.startswith('/mcp/'):
             return self.mcp(d)
+        if self.path.rstrip('/').endswith('/responses'):
+            return self.responses_api(d)
         msgs=d.get('messages',[])
         tools=[t.get('function',{}).get('name') for t in d.get('tools',[])]
         last=msgs[-1] if msgs else {}
@@ -67,6 +69,53 @@ class H(BaseHTTPRequestHandler):
             for w in ('stub ','answer ','done'): chunk({'content':w})
             chunk({},'stop')
         self.wfile.write(b'data: [DONE]\n\n'); self.wfile.flush(); self.close_connection=True
+    def responses_api(self,d):
+        """The Responses API (`/v1/responses`, streamed), for CLIs that speak
+        it instead of chat completions (Muse, Codex): same STUB: prompts.
+        Not `responses`: that name is BaseHTTPRequestHandler's status table."""
+        items=d.get('input',[])
+        if isinstance(items,str): items=[{'type':'message','role':'user','content':items}]
+        users=[i for i,x in enumerate(items) if x.get('role')=='user']
+        prompt=text_of(items[users[-1]]) if users else ''
+        after=items[users[-1]+1:] if users else []
+        outs=[x for x in after if x.get('type')=='function_call_output']
+        tools=[t.get('name') or t.get('function',{}).get('name') or t.get('type') for t in d.get('tools',[])]
+        rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':(items[-1].get('role') or items[-1].get('type')) if items else None,
+             'tool_results':[str(x.get('output'))[:700] for x in outs]}
+        log.write(json.dumps(rec)+'\n')
+        seq=[]
+        m=re.search(r'STUB:(?:CALL|SEQ) (.*)',prompt,re.S)
+        if m:
+            for part in m.group(1).split(';;'):
+                tn,_,arg=part.strip().partition(' '); seq.append((tn,arg.strip() or '{}'))
+        rid=f'resp_{int(time.time()*1000)}'; n=[0]
+        self.send_response(200); self.send_header('content-type','text/event-stream'); self.send_header('cache-control','no-cache'); self.send_header('connection','close'); self.end_headers()
+        def ev(kind,**o):
+            o['type']=kind; o['sequence_number']=n[0]; n[0]+=1
+            self.wfile.write(f'event: {kind}\ndata: {json.dumps(o)}\n\n'.encode()); self.wfile.flush()
+        base={'id':rid,'object':'response','created_at':int(time.time()),'model':d.get('model','stub'),'status':'in_progress','output':[]}
+        ev('response.created',response=base); ev('response.in_progress',response=base)
+        if len(outs)<len(seq):
+            tn,arg=seq[len(outs)]
+            item={'type':'function_call','id':'fc_'+rid,'call_id':'call_'+rid,'name':tn,'arguments':'','status':'in_progress'}
+            ev('response.output_item.added',output_index=0,item=item)
+            ev('response.function_call_arguments.delta',item_id=item['id'],output_index=0,delta=arg)
+            ev('response.function_call_arguments.done',item_id=item['id'],output_index=0,arguments=arg)
+            item=dict(item,arguments=arg,status='completed')
+        else:
+            text='stub answer done'
+            item={'type':'message','id':'msg_'+rid,'role':'assistant','status':'in_progress','content':[]}
+            ev('response.output_item.added',output_index=0,item=item)
+            ev('response.content_part.added',item_id=item['id'],output_index=0,content_index=0,part={'type':'output_text','text':'','annotations':[]})
+            for w in ('stub ','answer ','done'): ev('response.output_text.delta',item_id=item['id'],output_index=0,content_index=0,delta=w)
+            ev('response.output_text.done',item_id=item['id'],output_index=0,content_index=0,text=text)
+            part={'type':'output_text','text':text,'annotations':[]}
+            ev('response.content_part.done',item_id=item['id'],output_index=0,content_index=0,part=part)
+            item=dict(item,status='completed',content=[part])
+        ev('response.output_item.done',output_index=0,item=item)
+        usage={'input_tokens':100,'input_tokens_details':{'cached_tokens':0},'output_tokens':10,'output_tokens_details':{'reasoning_tokens':0},'total_tokens':110}
+        ev('response.completed',response=dict(base,status='completed',output=[item],usage=usage))
+        self.close_connection=True
     def mcp(self,d):
         i=d.get('id'); meth=d.get('method')
         log.write(json.dumps({'mcp':self.path,'method':meth})+'\n')

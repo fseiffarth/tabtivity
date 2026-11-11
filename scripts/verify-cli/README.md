@@ -18,7 +18,7 @@ and the new version through the same probe, then compare the two labels.
 |------|---------------|
 | `flags.sh <cli> <label> <bin> [sub ...]` | `--version`, `--help`, each subcommand's `--help` → `flags/`; `diff -ru` two labels' `flags/` to see flags that moved. |
 | `tui.py <cli> <label> <name> [--step …] -- <bin> [args]` | Drives the TUI with steps (`sleep:`, `wait:TEXT[:SECS]`, `cap:`, `key:`, `type:`, `enter:`, `size:COLSxROWS`) and saves frames as `<name>/<frame>@<cols>x<rows>.esc`. `--home DIR` reuses a home (resume tests); `--env K=V`; `--stub openai\|gemini --port N` starts a stub. Default steps: one frame each at 120, 60 and 42 columns. |
-| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several. It logs every request (offered tools, tool results), so you can force calls no real model would make. |
+| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several. It logs every request (offered tools, tool results), so you can force calls no real model would make. |
 | `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. |
 | `parsers/frames.probe.ts` | Replays every frame of two labels through the app's own readers (Reader live view, model pickers, decision lamp, cold-resume dialog, Antigravity picker/effort, phone sign-in) and lists the frames and fields that read differently. See below. |
 
@@ -70,9 +70,23 @@ gives its usage.
   conversation. `signin.py <label> <bin> <cols> <rows>` reaches the sign-in
   link at a width. Copy `<bin>` into a directory you made read-only first:
   agy updates itself in place.
-- **Codex**: there's no script here. Use
+- **Codex** (`codex/`): `writer_lock.py <label> <bin> [model]` opens a
+  thread on the local Ollama, resumes it in a second window (it must show the
+  lock screen), SIGKILLs the first and resumes again (it must open). Beyond
+  that, use
   `C2_PROBE_CODEX=<bin> cargo test -p tabtivity --lib codex_parses_the_local_catalog -- --ignored`
-  (checklist §1.2) plus `flags.sh` and `tui.py`.
+  (checklist §1.2) plus `flags.sh` and `tui.py`. Binaries come from the agent
+  install's `.codex/packages/standalone/releases/<v>-<triple>/`. A
+  Codex approval could now come from the stub's `/v1/responses` through a
+  custom provider, but no round has tried it yet. Give the
+  work folder its own `git init`, or the trust question offers to trust
+  the enclosing repo.
+
+- **Muse**: no script yet. Fetch a binary from the public channel manifest
+  (checklist §1.5, Meta Muse Code). Run the binary, not the launcher, and drive
+  it with `tui.py … -- <bin> --provider echo`, which answers offline. Don't
+  use its `meta` provider from a probe: with `--base-url` at the stub, one
+  turn was still answered by something that wasn't the stub.
 
 ## Traps
 
