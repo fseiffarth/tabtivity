@@ -49,6 +49,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "opencode" => crate::services::opencode_session::resolve(opts),
         "copilot" => crate::services::copilot_session::resolve(opts),
         "agy" => crate::services::google_chat::resolve(opts),
+        "muse" => crate::services::muse_session::resolve(opts),
         _ => opts,
     }
 }
@@ -1708,7 +1709,8 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// turns it into `--session <chat>` (`opencode_session::resolve`),
 /// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
 /// Copilot's record is pointed at `chat` and the tab relaunched too; its spawn
-/// pins `--session-id <chat>` (`copilot_session::resolve`).
+/// pins `--session-id <chat>` (`copilot_session::resolve`). Muse's likewise,
+/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`).
 /// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
     if !is_uuid_shaped(uid) {
@@ -1731,7 +1733,7 @@ pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: 
             restore_cleared_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
-        "agy" | "copilot" => {
+        "agy" | "copilot" | "muse" => {
             write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }

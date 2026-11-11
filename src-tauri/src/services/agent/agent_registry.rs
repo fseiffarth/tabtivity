@@ -450,7 +450,9 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "muse",
         label: "Meta Muse Code",
         bin: "muse",
-        resume: Resume::No,
+        // The folder's latest session (1.4.15); `muse_session::resolve` aims
+        // it at the Resume menu's pick, or drops it where there is none.
+        resume: Resume::Args(&["resume", "--last"]),
         install_cmd: "curl -fsSL https://dev.meta.ai/install.sh | bash",
         install_cmd_windows: None,
         extra_paths: &[".local/bin/muse"],

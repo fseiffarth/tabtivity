@@ -2225,6 +2225,7 @@ mod tests {
         assert_eq!(resume_args_for_bin("codex", "abc"), Some(Vec::new()));
         assert_eq!(resume_args_for_bin("gemini", "abc"), Some(vec!["--resume".to_string(), "latest".to_string()]));
         assert_eq!(resume_args_for_bin("agy", "abc"), Some(vec!["--continue".to_string()]));
+        assert_eq!(resume_args_for_bin("muse", "abc"), Some(vec!["resume".to_string(), "--last".to_string()]));
         assert_eq!(resume_args_for_bin("aider", "abc"), None);
         assert_eq!(resume_args_for_bin("not-an-agent", "abc"), None);
         assert!(is_resumable_bin("droid"));

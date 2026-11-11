@@ -8,7 +8,7 @@ pub use agent::{
     agent_install, agent_latest, agent_privacy, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,
     assistant_attach, assistant_model_probe, claude_token, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
-    model_rows, opencode_models, opencode_session, opencode_store, transcript_watch,
+    model_rows, muse_session, opencode_models, opencode_session, opencode_store, transcript_watch,
 };
 #[cfg(unix)]
 pub use agent::codex_package;

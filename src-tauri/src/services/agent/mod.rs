@@ -76,6 +76,9 @@ pub mod copilot_auth;
 // Copilot CLI's own session store: the tab's pinned session, its events, its
 // folder's chats (the Reader's chat, Diffs and Resume menu).
 pub mod copilot_session;
+// Meta Muse Code's session store: the Reader's chat, the Resume menu and a
+// restored tab's `resume --last`.
+pub mod muse_session;
 pub mod opencode_models;
 pub mod opencode_session;
 pub mod opencode_store;
