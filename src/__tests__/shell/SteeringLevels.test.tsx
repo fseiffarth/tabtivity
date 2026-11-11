@@ -182,22 +182,24 @@ describe("steering levels", () => {
     expect(steering().level).toBe("tabs");
   });
 
-  it("←/→ on the tabs run on past the last tab into the next subwindow and back", () => {
+  it("←/→ on the tabs wrap inside the subwindow and never cross into another", () => {
     const { a, b } = twoPanes();
     const [a1, a2] = allGroups(useTabsStore.getState().layout).find((g) => g.id === a)!.tabKeys;
     const [b1] = allGroups(useTabsStore.getState().layout).find((g) => g.id === b)!.tabKeys;
     useTabsStore.getState().setGroupActive(a, a2);
     render(<Harness />);
     press({ key: " ", shiftKey: true });
+    // Past the last tab: back to the first of the same subwindow.
     press({ key: "ArrowRight" });
-    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a1 });
     expect(steering().level).toBe("tabs");
     press({ key: "s" });
     expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a2 });
-    press({ key: "s" });
-    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: a, activeKey: a1 });
-    // Before the first tab of all: the last subwindow's last tab.
-    press({ key: "s" });
+    // A one-tab subwindow stays put both ways.
+    useTabsStore.getState().focusGroup(b);
+    press({ key: "f" });
+    expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
+    press({ key: "ArrowLeft" });
     expect(useTabsStore.getState()).toMatchObject({ focusedGroupId: b, activeKey: b1 });
   });
 

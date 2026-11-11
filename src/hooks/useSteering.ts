@@ -919,10 +919,11 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
             const len = group.tabKeys.length;
             const cur = group.activeKey ? group.tabKeys.indexOf(group.activeKey) : 0;
             const step = cur + (fwd ? 1 : -1);
-            if (ids.length >= 2 && (step < 0 || step >= len)) {
-              // Past the subwindow's last (first) tab the keys walk on into
-              // the next (previous) subwindow's first (last) tab, so every tab
-              // is a run of presses away; the last tab of all wraps to the first.
+            // ←/→ stay in their subwindow, wrapping (a lone tab stays put);
+            // Shift or the panes level crosses. Only the Next tab key runs on
+            // past the subwindow's last (first) tab into the next (previous)
+            // subwindow's first (last) tab; the last tab of all wraps.
+            if (action === "nextTab" && ids.length >= 2 && (step < 0 || step >= len)) {
               const next = neighbour(group.id);
               const nextGroup = findGroup(layout, next);
               const key = nextGroup?.tabKeys[fwd ? 0 : nextGroup.tabKeys.length - 1];
