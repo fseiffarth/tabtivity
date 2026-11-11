@@ -557,7 +557,8 @@ fn the_registry_opens_and_closes_a_lane_per_tab_and_removes_its_files() {
     assert!(lane.ollama_socket.exists() && lane.mcp_socket.as_ref().unwrap().exists());
     assert_eq!((lane.ollama_port, lane.mcp_port), (11434, Some(40123)));
     // The file name is a hash, never the id.
-    assert!(!lane.ollama_socket.to_string_lossy().contains("t1"));
+    // (The name only: the random temp dir above it may spell "t1".)
+    assert!(!lane.ollama_socket.file_name().unwrap().to_string_lossy().contains("t1"));
     // A second spawn of the id replaces the first.
     let again = super::open("p:t1", state.path(), "127.0.0.1:11434", Some(40123)).unwrap();
     assert_eq!(again.ollama_socket, lane.ollama_socket);
