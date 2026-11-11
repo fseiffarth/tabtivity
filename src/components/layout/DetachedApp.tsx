@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRendererWatchdog } from "../../lib/window/rendererWatchdog";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -48,6 +48,7 @@ import {
   type DetachedWindowContext,
 } from "../../stores/detachedContext";
 import { applyDetachedStatus } from "../../stores/activity";
+import { usePopoutViewStore } from "../../stores/popoutView";
 import {
   allGroups,
   orderedTabKeys,
@@ -406,6 +407,13 @@ export function DetachedApp({ param }: Props) {
   // announces this popout as able to answer (`detached_retire_ready`).
   useTauriListener(() => answerRetireRequests(label), [label]);
 
+  // Which window this is, for the popout view (`stores/popoutView`): steering
+  // and the cross-window handover address this popout by its label. The tree,
+  // tabs and focus are written by `DetachedCenterPanel`, which renders them.
+  useLayoutEffect(() => {
+    usePopoutViewStore.getState().setView({ label, scope: param.scope, popoutId: param.groupId });
+  }, [label, param.scope, param.groupId]);
+
   // Seed + edit listeners. The main window owns the source of truth and ships
   // the group's tabs + subtree; subsequent main-side edits re-seed.
   //
@@ -616,7 +624,6 @@ export function DetachedApp({ param }: Props) {
   // used to silently vanish. Installed once, reading the live callbacks through
   // refs so it never needs re-binding; removed on unmount so a test (or a
   // future in-main mount) cannot inherit it.
-  const focusedGroupRef = useRef<string | null>(null);
   const seamRef = useRef({ group, pushEdit, handleClose });
   seamRef.current = { group, pushEdit, handleClose };
   // Installed during RENDER, not in an effect: child effects run before the
@@ -636,7 +643,7 @@ export function DetachedApp({ param }: Props) {
       targetGroupId: () => {
         const tree = seamRef.current.group;
         const groups = tree ? allGroups(tree) : [];
-        const focused = focusedGroupRef.current;
+        const focused = usePopoutViewStore.getState().focusedGroupId;
         if (focused && groups.some((g) => g.id === focused)) return focused;
         return groups[0]?.id ?? param.groupId;
       },
@@ -761,9 +768,6 @@ export function DetachedApp({ param }: Props) {
       tabs={tabs}
       remoteInfo={remoteInfo}
       windowVisible={windowVisible}
-      onFocusedGroup={(id) => {
-        focusedGroupRef.current = id;
-      }}
       onActivate={(key) => pushEdit({ kind: "activate", key })}
       onClose={handleClose}
       onDockWindow={handleDock}

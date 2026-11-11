@@ -18,7 +18,8 @@ import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
 import { useSettingsStore } from "./settings";
 import { basename, relativePathWithin, resolvePath } from "../lib/paths";
-import { getDetachedWindowContext } from "./detachedContext";
+import { getDetachedWindowContext, type DetachedWindowContext } from "./detachedContext";
+import { usePopoutViewStore } from "./popoutView";
 import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { currentTabCommand } from "../lib/brandMigration";
 import { ASSISTANT_SCOPE, readAssistantLaunch } from "../lib/assistant";
@@ -1131,6 +1132,15 @@ function writeScope(
   };
 }
 
+/** In a popout heap, the context when `scope` is the popout's own: its tabs and
+ *  subwindows are the popout view's (`stores/popoutView`), and a write to them
+ *  goes to the main window as an edit. Null in the main window, and for another
+ *  scope's tabs. */
+function popoutOwns(scope: string): DetachedWindowContext | null {
+  const ctx = getDetachedWindowContext();
+  return ctx && ctx.scope === scope ? ctx : null;
+}
+
 /** Convenience accessor for a scope's mutable state. */
 function scopeState(s: TabsStore, scope: string) {
   return {
@@ -1263,9 +1273,16 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
-  focusGroup: (groupId) => get().focusGroupInScope(get().scope, groupId),
+  focusGroup: (groupId) => get().focusGroupInScope(getDetachedWindowContext()?.scope ?? get().scope, groupId),
 
   focusGroupInScope: (scope, groupId) => {
+    // Popout heap: its subwindows are the popout view's, and which one is
+    // focused is this window's own business (the main window keeps no focus
+    // for a popout's panes).
+    if (popoutOwns(scope)) {
+      usePopoutViewStore.getState().focusGroup(groupId);
+      return;
+    }
     set((s) => {
       const { tabs, layout } = scopeState(s, scope);
       if (!findGroup(layout, groupId)) return {};
@@ -1308,6 +1325,17 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
   setGroupActive: (groupId, key) => get().setGroupActiveInScope(get().scope, groupId, key),
 
   setGroupActiveInScope: (scope, groupId, key) => {
+    // Popout heap: focus the subwindow here, stream the activation to the main
+    // window (whose reseed redraws the strip).
+    const ctx = popoutOwns(scope);
+    if (ctx) {
+      const view = usePopoutViewStore.getState();
+      const group = findGroup(view.tree, groupId);
+      if (!group || !group.tabKeys.includes(key)) return;
+      view.focusGroup(groupId);
+      if (group.activeKey !== key) ctx.pushEdit({ kind: "activate", key });
+      return;
+    }
     set((s) => {
       const { tabs, layout } = scopeState(s, scope);
       const group = findGroup(layout, groupId);
@@ -1826,6 +1854,13 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
   },
 
   removeTabInScope: (scope, key) => {
+    // Popout heap: the popout's own close (its × path), so the last tab closes
+    // the window exactly as the button does.
+    const ctx = popoutOwns(scope);
+    if (ctx) {
+      ctx.closeTab(key);
+      return;
+    }
     // A tab that lives in a popout is not in this scope's in-window layout at
     // all, and its pane is mounted in the detached window — so it is closed the
     // way `closeDetachedGroup` closes one, PTY kill included, whether or not
@@ -2409,6 +2444,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
   setGroupFiles: (groupId, open) => get().setGroupFilesInScope(get().scope, groupId, open),
 
   setGroupFilesInScope: (scope, groupId, open) => {
+    // Popout heap: the same `files` edit the popout's ◫ button streams.
+    const ctx = popoutOwns(scope);
+    if (ctx) {
+      if (findGroup(usePopoutViewStore.getState().tree, groupId)) ctx.pushEdit({ kind: "files", groupId, open });
+      return;
+    }
     set((s) => {
       const { tabs, layout, focusedGroupId } = scopeState(s, scope);
       if (!layout || !findGroup(layout, groupId)) return {};

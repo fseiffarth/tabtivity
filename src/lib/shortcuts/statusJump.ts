@@ -13,6 +13,8 @@ import type { AttentionKind } from "../../stores/activity";
 import { projectStations, type SteeringJumpBack } from "../../stores/keyboardSteering";
 import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { ROOT_SCOPE, allGroups, isPtyTabKind, useTabsStore, type TabEntry } from "../../stores/tabs";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { popoutActiveTab, usePopoutViewStore } from "../../stores/popoutView";
 
 export type TabStatusKind = "decision" | "working" | "done";
 
@@ -71,6 +73,12 @@ export function nextStatusTab(
  *  root tab does not change the workspace's active tab, so going by that one
  *  would land on the same root tab again and again); else the workspace's. */
 export function shownStatusTab(): StatusTab | null {
+  // A popout: the active tab of its focused subwindow (its tabs store is empty).
+  if (isDetachedWindow()) {
+    const view = usePopoutViewStore.getState();
+    const tab = popoutActiveTab(view);
+    return tab && view.scope ? { scope: view.scope, key: tab.key } : null;
+  }
   const tabs = useTabsStore.getState();
   if (rootViewShown(useRootOverlayStore.getState())) {
     const groups = allGroups(tabs.layoutByScope[ROOT_SCOPE] ?? null);

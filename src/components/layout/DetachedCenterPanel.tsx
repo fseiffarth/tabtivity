@@ -1,5 +1,5 @@
 import { CommandPalette } from "./CommandPalette";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -90,6 +90,7 @@ import { isPaneTerminalTarget, terminalMayTakeChord } from "../../lib/shortcuts/
 import { useDragStore } from "../../stores/drag/drag";
 import { useTabLandStore } from "../../stores/drag/tabLand";
 import { useSettingsStore } from "../../stores/settings";
+import { usePopoutViewStore } from "../../stores/popoutView";
 import {
   DEFAULT_MIN_SUBWINDOW_PX,
   allGroups,
@@ -152,9 +153,6 @@ interface Props {
    *  popout must stop streaming its terminals and polling its file views — panes
    *  compose their own visibility with this. */
   windowVisible?: boolean;
-  /** Report which pane is current, so the window's store seam can land a new tab
-   *  (a Ctrl+clicked link, an install) in the pane the user is working in. */
-  onFocusedGroup?: (groupId: string | null) => void;
   onActivate: (key: string) => void;
   onClose: (key: string) => void;
   /** Dock the WHOLE popout back into the main window's tiled layout (#237) —
@@ -222,7 +220,6 @@ export function DetachedCenterPanel({
   tabs,
   remoteInfo,
   windowVisible = true,
-  onFocusedGroup,
   onActivate,
   onClose,
   onDockWindow,
@@ -362,22 +359,19 @@ export function DetachedCenterPanel({
   // rendered every pane as `.focused` with no active-pane marker; mirror the main
   // window, where `focusedGroupId` drives the `.focus-frame` accent outline. The
   // detached window is inert to the main tabs store (separate JS heap, layout
-  // streamed via props), so focus is tracked locally here.
-  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
+  // streamed via props), so focus lives in this heap's popout view
+  // (`stores/popoutView`), which steering and the window's store seam (#231: a
+  // link opened from a pane lands in that pane) read too. The view follows the
+  // streamed tree and tabs here, before paint; a tree that loses the focused
+  // group keeps focus on its first.
+  useLayoutEffect(() => {
+    usePopoutViewStore.getState().setView({ scope, popoutId, tree, tabs });
+  }, [scope, popoutId, tree, tabs]);
+  const focusedGroupId = usePopoutViewStore((s) => s.focusedGroupId);
+  const setFocusedGroupId = usePopoutViewStore((s) => s.focusGroup);
   // Only paint this popout's active subwindow while the popout itself owns OS
   // focus, so it and the main window never both highlight one at once (#42).
   const windowFocused = useWindowFocused();
-  // Keep focus on a group that still exists as the tree changes (split added /
-  // removed / docked back); default to the first group.
-  useEffect(() => {
-    const ids = allGroups(tree).map((g) => g.id);
-    setFocusedGroupId((cur) => (cur && ids.includes(cur) ? cur : (ids[0] ?? null)));
-  }, [tree]);
-  // Publish it to the window's store seam (#231), so a link opened from a pane
-  // lands in the pane it was opened from rather than always in the first one.
-  useEffect(() => {
-    onFocusedGroup?.(focusedGroupId);
-  }, [focusedGroupId, onFocusedGroup]);
 
   // Per-tab lamps (#234), mirrored from the main window's classifier — the same
   // two maps `TabBar` reads, keyed by the composed PTY id.
@@ -480,7 +474,7 @@ export function DetachedCenterPanel({
         const step = stepOrderedTab(t, focused?.id ?? null, prevAll ? -1 : 1);
         if (step) {
           e.preventDefault();
-          if (step.groupId !== focused?.id) setFocusedGroupId(step.groupId);
+          if (step.groupId !== focused?.id) usePopoutViewStore.getState().focusGroup(step.groupId);
           activate(step.key);
         }
         return;
@@ -496,7 +490,7 @@ export function DetachedCenterPanel({
           e.preventDefault();
           const from = fid ? ids.indexOf(fid) : -1;
           const base = from >= 0 ? from : 0;
-          setFocusedGroupId(ids[(base + (down ? 1 : -1) + ids.length) % ids.length]);
+          usePopoutViewStore.getState().focusGroup(ids[(base + (down ? 1 : -1) + ids.length) % ids.length]);
         }
         return;
       }

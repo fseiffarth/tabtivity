@@ -34,6 +34,8 @@ import { noteClosedAgentTab } from "../../stores/agents/closedAgentTabs";
 import { MOBILE_ACCESS_KEY } from "../brand";
 import { ROOT_SCOPE } from "../terminal/ptyId";
 import { isHostPinned } from "../projectTabHost";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { popoutTab } from "../../stores/popoutView";
 
 /**
  * The persistent host tmux session a tab owns, or `null` if the tab is not a
@@ -128,10 +130,15 @@ export function mintedLocalSessionOf(scope: string, tab: TabEntry): string | nul
  */
 export function closeTabInScope(scope: string, key: string): void {
   const store = useTabsStore.getState();
-  const tab = (store.tabsByScope[scope] ?? []).find((t) => t.key === key);
+  // In a popout the tab is the popout view's (its tabs store is empty), and
+  // `removeTabInScope` closes it the way its × does: the main window records it
+  // for "Reopen closed tab" from that close (`noteClosedPopoutTabs`), so the
+  // record is not written in this heap too.
+  const inPopout = isDetachedWindow();
+  const tab = inPopout ? popoutTab(scope, key) : (store.tabsByScope[scope] ?? []).find((t) => t.key === key);
   const session = tab ? mintedLocalSessionOf(scope, tab) : null;
   // An agent tab a restart would resume can be reopened the same way.
-  if (tab) noteClosedAgentTab(scope, tab, !!session);
+  if (tab && !inPopout) noteClosedAgentTab(scope, tab, !!session);
   store.removeTabInScope(scope, key);
   if (session) void invoke<void>("local_tmux_kill", { session }).catch(() => {});
 }

@@ -651,6 +651,62 @@ describe("Group B — two heaps, one protocol", () => {
       main.tabs.useTabsStore.getState().tabsByScope["p"]!.some((t) => t.key === b.key),
     ).toBe(true);
   });
+
+  // ── Steering in a popout: the tabs-store actions it calls are routed ────
+  /** A popout of two tabs (`b`, `c`), its view seeded from the main record. */
+  async function steeringPopout() {
+    const { main, b, groupId, label } = await setup();
+    const record0 = main.tabs.useTabsStore.getState().detachedGroupsByScope["p"]!.find((d) => d.id === groupId)!;
+    // A second tab in the popout, as its own + menu adds one.
+    main.tabs.useTabsStore
+      .getState()
+      .addDetachedTab("p", groupId, shell("c"), main.tabLayoutTree.allGroups(record0.subtree)[0].id);
+    const record = () => main.tabs.useTabsStore.getState().detachedGroupsByScope["p"]!.find((d) => d.id === groupId)!;
+    const popout = await popoutHeapFor("p", groupId, label);
+    const view = popout.popoutView.usePopoutViewStore;
+    view.getState().setView({
+      scope: "p",
+      popoutId: groupId,
+      label,
+      tree: record().subtree,
+      tabs: main.tabs.useTabsStore.getState().tabsByScope["p"]!,
+    });
+    return { main, b, popout, view, record, groupId };
+  }
+
+  it("a popout's group focus stays in the popout's view", async () => {
+    const { main, popout, view, record } = await steeringPopout();
+    const inner = popout.tabLayoutTree.allGroups(record().subtree)[0].id;
+    const mainFocus = main.tabs.useTabsStore.getState().focusedGroupId;
+    popout.tabs.useTabsStore.getState().focusGroupInScope("p", inner);
+    expect(view.getState().focusedGroupId).toBe(inner);
+    expect(main.tabs.useTabsStore.getState().focusedGroupId).toBe(mainFocus);
+    // The popout's own tabs store stays empty: nothing mirrors a layout into it.
+    expect(popout.tabs.useTabsStore.getState().layout).toBeNull();
+  });
+
+  it("activating a popout tab from its heap moves the main window's record", async () => {
+    const { main, b, popout, record } = await steeringPopout();
+    const group = popout.tabLayoutTree.allGroups(record().subtree)[0];
+    const other = group.tabKeys.find((k) => k !== group.activeKey) ?? b.key;
+    popout.tabs.useTabsStore.getState().setGroupActiveInScope("p", group.id, other);
+    expect(shared.emitted.some((e) => e.event === main.detached.DETACHED_EDIT &&
+      (e.payload as { edit: { kind: string; key?: string } }).edit.kind === "activate")).toBe(true);
+    expect(popout.tabLayoutTree.allGroups(record().subtree)[0].activeKey).toBe(other);
+  });
+
+  it("toggling a popout subwindow's files column from its heap reaches the record", async () => {
+    const { popout, record } = await steeringPopout();
+    const group = popout.tabLayoutTree.allGroups(record().subtree)[0];
+    popout.tabs.useTabsStore.getState().setGroupFilesInScope("p", group.id, true);
+    expect(popout.tabLayoutTree.allGroups(record().subtree)[0].filesOpen).toBe(true);
+  });
+
+  it("removing a popout tab from its heap closes it through the popout's close", async () => {
+    const { main, b, popout } = await steeringPopout();
+    popout.tabs.useTabsStore.getState().removeTabInScope("p", b.key);
+    expect(main.tabs.useTabsStore.getState().tabsByScope["p"]!.some((t) => t.key === b.key)).toBe(false);
+  });
 });
 
 /** Re-import the store modules WITHOUT resetting them — the same instances the
