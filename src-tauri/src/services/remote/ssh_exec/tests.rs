@@ -32,6 +32,36 @@ fn reader_secret_never_enters_the_ssh_command_line() {
 }
 
 #[test]
+fn claude_token_never_enters_the_ssh_command_line() {
+    use crate::services::claude_token::{remote_export_line, REMOTE_ENV};
+    let mut env = HashMap::new();
+    env.insert(REMOTE_ENV.into(), "claude-token-fixture".into());
+    env.insert("KEEP".into(), "kept".into());
+
+    let plain = remote_command("claude", &[], &env, "/work", None);
+    assert!(!plain.contains("claude-token-fixture"));
+    assert!(plain.contains(&remote_export_line(true)), "{plain}");
+    assert!(!plain.contains(&format!("export {REMOTE_ENV}")));
+
+    let wrap = TmuxWrap::Session("claude-tab".into());
+    let wrapped = remote_command("claude", &[], &env, "/work", Some(&wrap));
+    assert!(!wrapped.contains("claude-token-fixture"));
+    // The client keeps the variable for tmux to copy; the session drops it.
+    assert!(wrapped.contains(&format!("&& {} &&", remote_export_line(false))), "{wrapped}");
+    assert!(wrapped.contains(&format!("set -g 'update-environment[{CLAUDE_TOKEN_SLOT}]' {REMOTE_ENV} ';'")));
+    assert!(wrapped.contains("\"tmux \"[012].*)"));
+    assert!(!wrapped.contains(&format!("-e {REMOTE_ENV}")));
+
+    // Without the token nothing of it is written.
+    env.remove(REMOTE_ENV);
+    for tmux in [None, Some(&wrap)] {
+        let command = remote_command("claude", &[], &env, "/work", tmux);
+        assert!(!command.contains(REMOTE_ENV));
+        assert!(!command.contains("update-environment"));
+    }
+}
+
+#[test]
 fn shell_quote_wraps_and_escapes() {
     assert_eq!(shell_quote("abc"), "'abc'");
     assert_eq!(shell_quote("a b"), "'a b'");

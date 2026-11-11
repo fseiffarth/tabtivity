@@ -740,6 +740,9 @@ export interface Settings {
    *  newest releases once a day by itself. Off: only a click in Manage CLIs or the
    *  Ollama row asks. Read by the backend at every tick (Manage CLIs). */
   daily_release_check?: boolean;
+  /** Remote Claude tabs are sent the saved long-lived token too (absent = on);
+   *  the host uses it only without its own login (`services::claude_token`). */
+  claude_token_remote?: boolean;
   /** UTC date ("YYYY-MM-DD") the recap was last auto-shown, so it opens once a day
    *  rather than once per window. Written by the recap host. */
   daily_stats_last_shown?: string;

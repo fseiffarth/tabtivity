@@ -1805,6 +1805,11 @@ pub fn wrap_pty_options_bwrap(
         let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
         let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
         crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+        // Claude's long-lived token where no shared login holds one (not on
+        // a server administrator's key).
+        if admin.is_none() {
+            crate::services::claude_token::inject_launch(opts);
+        }
     }
     let mut args = bwrap_args(
         &paths::home_dir_string(),
@@ -2282,6 +2287,11 @@ pub fn wrap_pty_options_sandbox_exec(
         let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
         let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
         crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+        // Claude's long-lived token where no shared login holds one (not on
+        // a server administrator's key).
+        if admin.is_none() {
+            crate::services::claude_token::inject_launch(opts);
+        }
     }
     let mut args = vec![
         "-f".to_string(),

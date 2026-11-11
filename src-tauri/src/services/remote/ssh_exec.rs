@@ -448,6 +448,11 @@ pub const TMUX_HISTORY_LINES: u32 = 10_000;
 /// session's target because a pane does not inherit them from the client (see
 /// [`remote_command`]). A [`TmuxWrap::Attach`] takes none: it runs no target of
 /// its own, and the session it attaches belongs to whoever created it.
+/// The `update-environment` slot the saved Claude token takes on a remote
+/// tmux server (fixed, so every tab re-sets the same entry; far above tmux's
+/// defaults and the local slots, `tmux_local`).
+const CLAUDE_TOKEN_SLOT: usize = 8700;
+
 fn tmux_wrap_exec(exec_line: &str, wrap: &TmuxWrap, env_prefix: &str) -> String {
     // The extra options are passed as separate tmux commands: a standalone
     // `;` token (quoted so the remote shell hands it to tmux literally, not as a
@@ -472,11 +477,28 @@ fn tmux_wrap_exec(exec_line: &str, wrap: &TmuxWrap, env_prefix: &str) -> String 
             let credential = if env_prefix.contains(concat!("LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN")) {
                 concat!(" -e \"LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN=${LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN:?}\"")
             } else { "" };
-            format!(
-                "if command -v tmux >/dev/null 2>&1; then \
-                 exec tmux {history} new-session -A -D -s {q}{credential} {target} {opts} {prefix}; \
-                 else printf '{SLUG}: tmux not found on the remote host; session persistence is OFF (install tmux to enable it)\\n' >&2; {exec_line}; fi"
-            )
+            let new_session = format!("new-session -A -D -s {q}{credential} {target} {opts} {prefix}");
+            let missing = format!(
+                "else printf '{SLUG}: tmux not found on the remote host; session persistence is OFF (install tmux to enable it)\\n' >&2; {exec_line}; fi"
+            );
+            if env_prefix.contains(crate::services::claude_token::REMOTE_ENV) {
+                // The saved Claude token reaches the session from the client's
+                // environment through a fixed `update-environment` slot (tmux
+                // 3.0+ arrays; never `-e`, which would put it on the argv). An
+                // older tmux leaves it out: the host's own login applies.
+                let slot = format!(
+                    "set -g 'update-environment[{CLAUDE_TOKEN_SLOT}]' {} ';'",
+                    crate::services::claude_token::REMOTE_ENV
+                );
+                format!(
+                    "if command -v tmux >/dev/null 2>&1; then \
+                     case \"$(tmux -V 2>/dev/null)\" in \"tmux \"[012].*) exec tmux {history} {new_session};; \
+                     *) exec tmux {history} {slot} {new_session};; esac; \
+                     {missing}"
+                )
+            } else {
+                format!("if command -v tmux >/dev/null 2>&1; then exec tmux {history} {new_session}; {missing}")
+            }
         }
         TmuxWrap::Attach(name) => {
             let q = shell_quote(name);
@@ -530,10 +552,17 @@ pub fn remote_command(
         .filter(|k| {
             let k = k.as_str();
             // is_valid_env_key gates injection via a metacharacter-bearing key.
-            is_valid_env_key(k) && k != "TERM" && k != "COLORTERM" && !AGENT_AUTH_ENV.contains(&k)
+            is_valid_env_key(k)
+                && k != "TERM"
+                && k != "COLORTERM"
+                && !AGENT_AUTH_ENV.contains(&k)
+                && k != crate::services::claude_token::REMOTE_ENV
         })
         .collect();
     keys.sort();
+    // The saved Claude token (`claude_token`) rides ssh's environment channel,
+    // never this command line: only the line that reads it is written here.
+    let claude_token = env.contains_key(crate::services::claude_token::REMOTE_ENV);
     let exports: Vec<String> = keys
         .into_iter()
         .map(|k| if k == crate::services::root_mcp::TOKEN_ENV {
@@ -543,6 +572,12 @@ pub fn remote_command(
         } else { format!("export {}={}", k, shell_quote(&env[k])) })
         .collect();
     parts.extend(exports.iter().cloned());
+    if claude_token {
+        // Inside a tmux wrap the variable must survive to the tmux client,
+        // which copies it into the session (`tmux_wrap_exec`); the session's
+        // own copy of the line drops it there.
+        parts.push(crate::services::claude_token::remote_export_line(tmux.is_none()));
+    }
 
     let exec = if local_cmd.is_empty() {
         // Login shell — let the remote pick its own $SHELL.
@@ -581,10 +616,14 @@ pub fn remote_command(
     // start the server (the local half of this is `tmux_local::local_tmux_args`).
     // The `cd` needs no such repeat — a new session does take its start directory
     // from the client.
-    let env_prefix = if exports.is_empty() {
+    let mut session_exports = exports.clone();
+    if claude_token {
+        session_exports.push(crate::services::claude_token::remote_export_line(true));
+    }
+    let env_prefix = if session_exports.is_empty() {
         String::new()
     } else {
-        format!("{}; ", exports.join("; "))
+        format!("{}; ", session_exports.join("; "))
     };
     let exec = match tmux {
         Some(wrap) => tmux_wrap_exec(&exec, wrap, &env_prefix),
@@ -1693,6 +1732,12 @@ pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<(), String> {
     if mcp_token.is_some() {
         args.splice(0..0, ["-o".into(), concat!("SendEnv=LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN").into()]);
     }
+    // The saved Claude token (`claude_token`): the same encrypted channel. A
+    // host that refuses it runs on its own login.
+    let claude_token = opts.env.get(crate::services::claude_token::REMOTE_ENV).cloned();
+    if claude_token.is_some() {
+        args.splice(0..0, ["-o".into(), format!("SendEnv={}", crate::services::claude_token::REMOTE_ENV)]);
+    }
 
     opts.cmd = "ssh".to_string();
     opts.args = args;
@@ -1704,6 +1749,9 @@ pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<(), String> {
         opts.env.insert(concat!("LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN").into(), token.clone());
         // Kept for PTY teardown's generation-safe revocation, never in argv.
         opts.env.insert(crate::services::root_mcp::TOKEN_ENV.into(), token);
+    }
+    if let Some(token) = claude_token {
+        opts.env.insert(crate::services::claude_token::REMOTE_ENV.into(), token);
     }
     opts.cwd = storage::root_work_dir().to_string_lossy().into_owned();
     Ok(())

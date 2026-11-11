@@ -2125,6 +2125,25 @@ pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
     app_core::rt::try_blocking("agent", move || crate::services::agent_auth::sign_out(&id)).await
 }
 
+/// Claude's saved long-lived token (`services::claude_token`): whether one is
+/// saved and in use. Never the token.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn claude_token_status() -> Result<crate::services::claude_token::ClaudeTokenStatus, String> {
+    app_core::rt::try_blocking("agent", || Ok(crate::services::claude_token::status())).await
+}
+
+/// Save a token `claude setup-token` printed (pasted by the user).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn claude_token_save(token: String) -> Result<(), String> {
+    app_core::rt::try_blocking("agent", move || crate::services::claude_token::save(&token)).await
+}
+
+/// Forget the saved token.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn claude_token_clear() -> Result<(), String> {
+    app_core::rt::try_blocking("agent", crate::services::claude_token::clear).await
+}
+
 /// Sign OpenCode out of one scope whose database the startup sweep flagged as
 /// holding a `wellknown` source (`agent_auth::sign_out_scope`).
 #[cfg_attr(feature = "desktop", tauri::command)]

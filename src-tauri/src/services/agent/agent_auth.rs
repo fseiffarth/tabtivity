@@ -1010,6 +1010,26 @@ pub struct WellknownHome {
     pub origins: Vec<String>,
 }
 
+/// Whether the store holds a login for `cli` under `paths` (a row's `signed_in`).
+fn store_holds_login(state_dir: &Path, cli: &str, paths: &[AuthPath]) -> bool {
+    paths.iter().any(|p| {
+        let s = store_path_in(state_dir, cli, p);
+        match p.kind {
+            AuthKind::File => std::fs::metadata(&s).is_ok_and(|m| m.len() > 0),
+            AuthKind::Dir(names) => !store_dir_logins(&s, names).is_empty(),
+        }
+    })
+}
+
+/// Whether the store holds a shared login for `cli` — what the Agents view
+/// shows as signed in. False for a CLI whose login is not shared.
+pub fn signed_in_in(state_dir: &Path, cli: &str) -> bool {
+    registry()
+        .into_iter()
+        .find(|(id, _)| *id == cli)
+        .is_some_and(|(id, paths)| store_holds_login(state_dir, id, paths))
+}
+
 pub fn status_in(state_dir: &Path, user_home: &Path) -> Vec<LoginStatus> {
     status_with(state_dir, user_home, &BTreeSet::new())
 }
@@ -1022,13 +1042,7 @@ pub fn status_with(state_dir: &Path, user_home: &Path, offered: &BTreeSet<String
         .into_iter()
         .map(|(cli, paths)| {
             let store_dir = store_dir_in(state_dir, cli);
-            let signed_in = paths.iter().any(|p| {
-                let s = store_path_in(state_dir, cli, p);
-                match p.kind {
-                    AuthKind::File => std::fs::metadata(&s).is_ok_and(|m| m.len() > 0),
-                    AuthKind::Dir(names) => !store_dir_logins(&s, names).is_empty(),
-                }
-            });
+            let signed_in = store_holds_login(state_dir, cli, paths);
             let importable = paths.iter().any(|p| {
                 let src = home_path(user_home, p.rel);
                 match p.kind {

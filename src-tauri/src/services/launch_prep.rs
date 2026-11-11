@@ -124,6 +124,10 @@ fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> 
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
     crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+    // Claude's long-lived token where no shared login holds one.
+    if admin.is_none() {
+        crate::services::claude_token::inject_launch(opts);
+    }
     #[cfg(unix)]
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
@@ -1226,8 +1230,18 @@ pub async fn prepare(
         && resolve_agent_remote_control(opts.project_id.as_deref())
         && !opts.args.iter().any(|a| a == "--remote-control")
         && !local_claude_keyed(&opts, remote_agent_run)
+        // Nor for one that will run on the saved long-lived token
+        // (`claude_token`, no shared login): Claude refuses Remote Control on
+        // an inference-only token.
+        && !crate::services::claude_token::injects_local(&opts, remote_agent_run)
     {
         opts.args.push("--remote-control".to_string());
+    }
+
+    // A local `claude setup-token` tab (Manage CLIs → Generate token): its
+    // token is read off the screen into the keyring once it prints.
+    if !remote_agent_run && !opts.sandbox && crate::services::claude_token::is_setup_token(&opts.cmd, &opts.args) {
+        crate::services::claude_token::watch_setup_tab(opts.id.clone(), opts.tmux_session.clone());
     }
 
     // Container (Docker) and ssh-remote wrapping are mutually exclusive: the
@@ -1313,6 +1327,11 @@ pub async fn prepare(
                 };
                 let _ = crate::services::remote::connect_host(pool, &project_id, &host_id, None).await;
             }
+        }
+        // The saved Claude token for a remote Claude tab, sent over ssh's
+        // environment channel; the host uses it only without its own login.
+        if crate::services::ssh_exec::remote_target_of(&opts).is_some() {
+            crate::services::claude_token::inject_remote(&mut opts);
         }
         crate::services::ssh_exec::wrap_pty_options(&mut opts)?;
     }

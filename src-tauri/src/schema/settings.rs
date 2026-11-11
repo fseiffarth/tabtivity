@@ -687,6 +687,11 @@ pub struct Settings {
     /// CLIs / the Ollama row. Read at every tick, so a change applies at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_release_check: Option<bool>,
+    /// Absent counts as on: remote Claude tabs are sent the saved long-lived
+    /// token too (`services::claude_token`), which the host uses only when it
+    /// keeps no login of its own. Off: it never leaves this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_token_remote: Option<bool>,
     /// UTC date ("YYYY-MM-DD") the recap was last auto-shown, so it opens once a
     /// day rather than on every window. Written by the recap host itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1264,6 +1269,11 @@ impl Settings {
     /// Whether the background daily release check runs. Defaults ON when unset.
     pub fn daily_release_check(&self) -> bool {
         self.daily_release_check.unwrap_or(true)
+    }
+
+    /// Whether remote Claude tabs get the saved long-lived token. Defaults ON.
+    pub fn claude_token_remote(&self) -> bool {
+        self.claude_token_remote.unwrap_or(true)
     }
 
     /// The rule every experimental flag follows (mirrors `src/lib/experimental.ts`):

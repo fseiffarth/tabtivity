@@ -54,6 +54,9 @@ pub mod agent_turn;
 // were checked against: the version recipes, the "verified against" notes from
 // docs/third_party_update_checklist.md as data, and the day-long probe cache.
 pub mod agent_versions;
+// Claude's long-lived token (`claude setup-token`): kept in the keyring,
+// the fallback login of every Claude tab with no shared login, local and remote.
+pub mod claude_token;
 // One overview of the CLIs in use: plan, account, usage windows
 // (docs/cli_overview_plan.md).
 pub mod cli_overview;

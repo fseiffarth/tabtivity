@@ -429,6 +429,16 @@ keyring entry and hands it to each fenced Copilot as `COPILOT_GITHUB_TOKEN`
 keeper moves a `/login` token out of the file within seconds). A harvested
 token replaces a stored one only once GitHub rejects the stored one.
 
+Claude's long-lived token (`claude setup-token`, `services::claude_token`)
+is a fallback, not a second login: kept in the keyring (`agent-token:claude`),
+handed to a Claude spawn as `CLAUDE_CODE_OAUTH_TOKEN` (through its carrier)
+only while `agent_auth` holds no shared Claude login. The token is
+inference-only — Claude refuses Remote Control and Claude in Chrome on it —
+so a full login always wins, and a token spawn gets no `--remote-control`.
+Unlike an API key it reaches the agent process, as the shared credentials
+file already does. Remote tabs get it over ssh's `SendEnv` channel, used only
+by a host without its own `~/.claude/.credentials.json`.
+
 Provider API keys (`services::agent_api_keys`, `docs/api_chat_plan.md` Parts
 A and C) take the same keychain route: one key per provider under
 `remote_credentials`' service (account `agent-key:<provider>`), never in a
