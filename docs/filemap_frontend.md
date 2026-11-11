@@ -479,7 +479,8 @@ stores stay at the top. No `index.ts` barrels.
 | `localLoss.ts` | The active project's local-loss log (#28q). Pulled from the backend's on-disk record — not pushed as an event — so a deletion during a background pass, or while the app was closed, still surfaces. |
 | `presentation.ts` | Two counters readable outside their owners: `armed` (presentation overlay has marker/laser) and `presenting` (deck presenter on screen) — so Escape goes to the right listener. |
 | `vpnStatus.ts` | Machine-level OpenVPN state keyed by config path; holder refcount (`releaseVpn`) and `markVpn*` helpers. |
-| `hooks/useKeyboard.ts` | Global keyboard-shortcut hook; workspace navigation pauses while a shared modal owns focus. |
+| `hooks/useKeyboard.ts` | Global keyboard-shortcut hook (window chords, lone Super, F11, zoom); mounts `useSteering` first; workspace navigation pauses while a shared modal owns focus. |
+| `hooks/useSteering.ts` | Keyboard steering mode: the document capture-phase handler for every level and region, the blur grace, the layer observer; `cycleProject` / `landOnStation`. Takes a surface (`main` / `popout`). |
 | `hooks/useModalFocus.ts` | Modal stack: focus containment/restoration, topmost Escape, visibility filtering and workspace shortcut guard. |
 | `hooks/useHeaderMenu.ts` | Shared single-open header menu behavior: hover grace, click/keyboard opening, arrow/Home/End navigation, Escape and natural Tab exit. |
 | `lib/useEscapeToClose.ts` | Escape closes a floating surface wherever focus is (a hover-opened menu never took focus). |
