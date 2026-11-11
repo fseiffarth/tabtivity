@@ -37,9 +37,12 @@ export function topModal(): HTMLElement | null {
  * one: a visible, non-inert one exists and no other modal is on top of it. A
  * sheet opened over it makes the sheet the top modal and its surface inert, so
  * it is walked as a region instead. A paned surface is `aria-modal="false"`.
+ * The library docked beside a landscape tablet's chat (`data-docked`) owns
+ * the keys only while the focus is inside it: the chat beside it is steered.
  */
 export function ownKeysUp(): boolean {
-  const surfaces = [...document.querySelectorAll<HTMLElement>(OWN_KEYS_SELECTOR)].filter(isReachable);
+  const surfaces = [...document.querySelectorAll<HTMLElement>(OWN_KEYS_SELECTOR)]
+    .filter((surface) => isReachable(surface) && (!surface.hasAttribute("data-docked") || surface.contains(document.activeElement)));
   if (surfaces.length === 0) return false;
   const modal = topModal();
   return modal === null || surfaces.some((surface) => surface === modal || surface.contains(modal));
@@ -124,9 +127,12 @@ function actButton(scope: ParentNode, act: SteerAct): HTMLElement | null {
  * which only the confirm sheet needs; the button must still be enabled.
  */
 export function rowAct(id: string, act: SteerAct, behindSheet = false): boolean {
+  // In the split tier a tab can stand twice (Home's "Needs you" row, which has
+  // no card, and its project's card): the row to act on is the one in a card.
+  const inCard = (el: HTMLElement) => el.closest(".tab-card, .home-project-card") !== null;
   const row = behindSheet
-    ? [...document.querySelectorAll<HTMLElement>("[data-steer-row]")].find((el) => rowId(el) === id) ?? null
-    : rowById(id);
+    ? [...document.querySelectorAll<HTMLElement>("[data-steer-row]")].filter((el) => rowId(el) === id).find(inCard) ?? null
+    : rows(document).filter((el) => rowId(el) === id).find(inCard) ?? null;
   const card = row?.closest(".tab-card, .home-project-card");
   const button = card
     ? behindSheet

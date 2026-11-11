@@ -28,7 +28,8 @@ import { TabbyOpen } from "./screens/TabbyOpen";
 import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
-import { SECTION_ICON } from "./glyphs";
+import { DiamondIcon, SECTION_ICON } from "./glyphs";
+import { useTier } from "./useTier";
 import type { SubagentStep } from "./terminal/subagents";
 import type { MarkupBack } from "./components/OutboxViewer";
 /** The bundle this phone is running, on every splash: a connect that hangs or
@@ -39,7 +40,8 @@ import { BackNest, useBackLayer } from "./backStack";
 import { markDoneSeen } from "./seenDone";
 import { SteeringBar } from "./steering/SteeringBar";
 import { SteeringConfirm } from "./steering/SteeringConfirm";
-import { requestFind, type Place } from "./steering/steeringState";
+import { getSteering, requestFind, type Place } from "./steering/steeringState";
+import { focusRow, rowById } from "./steering/steeringDom";
 import { usePhoneSteering, type SteeringBase } from "./steering/usePhoneSteering";
 import { BRAND, LEGACY_NAMES, NAMES, storageDashKey } from "../../src/lib/brand";
 
@@ -257,6 +259,11 @@ export function App() {
     if (hiddenSections.includes(tab)) setTab("projects");
   }, [hiddenSections, tab]);
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
+  /** A tablet in landscape keeps Home's list on the left and the chosen
+   * project on the right (`useTier.ts`); only the Projects section does — the
+   * others, the terminal and Tabby stay full-window. The route is the same
+   * `projectView`: the list is simply not unmounted by a project being chosen. */
+  const splitProjects = useTier() === "split" && tab === "projects";
   const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
   /** Home's Tabby FAB was tapped: the assistant scope's id while its one chat
@@ -591,13 +598,29 @@ export function App() {
     // (`onVisibility`) locked the app again seconds after it was unlocked.
   }, [reset, auth, keepUnlock]);
 
+  /** The project to the list. Beside the list (split) the project's pane is
+   * emptied and, while keyboard steering is on, the cursor goes to the row of
+   * the project just left — the pane it stood in is gone. */
+  const leftProject = useRef<string | null>(null);
+  const leaveProject = () => {
+    if (splitProjects && projectView.kind === "project" && getSteering().active) leftProject.current = projectView.id;
+    setProjectView({ kind: "home" });
+  };
+  useEffect(() => {
+    const id = leftProject.current;
+    if (id === null || projectView.kind !== "home") return;
+    leftProject.current = null;
+    const row = rowById(id, document.querySelector("[data-steer-pane='list']") ?? document);
+    if (row) focusRow(row);
+  }, [projectView]);
   // Back: a tab returns to where it was opened from, another section to
-  // Projects, a project to the list. At the list Back leaves the app.
+  // Projects, a project to the list (in split too, where it empties the
+  // project's pane). At the list Back leaves the app.
   useBackLayer(() => {
     if (terminal) setTerminal(null);
     else if (tabby) setTabby(null);
     else if (tab !== "projects") { setTodoCard(undefined); setTab("projects"); }
-    else setProjectView({ kind: "home" });
+    else leaveProject();
   }, auth === "paired" && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
   const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => {
     // Only from a list on screen: a switch between tabs inside a terminal (or a
@@ -725,23 +748,39 @@ export function App() {
     ready={(row) => { setTabby(null); openTerminal(tabby, row); }}
     back={() => setTabby(null)}
   /></BackNest><SteeringBar /></>;
-  return <div className="tabbed"><BackNest>
+  const home = <Home
+    key="home"
+    selectedId={splitProjects && projectView.kind === "project" ? projectView.id : undefined}
+    open={(id) => setProjectView({ kind: "project", id })}
+    // Straight into the session, leaving the Projects tab on its
+    // list: the agents mode is a triage list, and its loop is
+    // list → tab → back to the list, not a detour through the
+    // project the tab happens to live in.
+    openTab={(projectId, row) => openTerminal(projectId, row)}
+    tabby={setTabby}
+    todo={openTodo}
+    mail={() => setTab("mail")}
+  />;
+  const project = projectView.kind === "project"
+    ? <Project key={`project:${projectView.id}`} id={projectView.id} back={leaveProject} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
+    : null;
+  return <div className={splitProjects ? "tabbed split" : "tabbed"}><BackNest>
     {tab === "todo" ? <Todo key={reseed} card={todoCard} />
       : tab === "mail" ? <Mail key={reseed} />
         : tab === "calendar" ? <Calendar key={reseed} />
-          : projectView.kind === "project"
-            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
-            : <Home
-              open={(id) => setProjectView({ kind: "project", id })}
-              // Straight into the session, leaving the Projects tab on its
-              // list: the agents mode is a triage list, and its loop is
-              // list → tab → back to the list, not a detour through the
-              // project the tab happens to live in.
-              openTab={(projectId, row) => openTerminal(projectId, row)}
-              tabby={setTabby}
-              todo={openTodo}
-              mail={() => setTab("mail")}
-            />}
+          // One parent and one key per screen in every tier, so a turn of the
+          // iPad (or a Split View resize) changes which of them are drawn and
+          // never remounts the one that stays: Home is drawn beside a project in
+          // split and instead of it elsewhere; a chosen project is the same
+          // element in all of them.
+          : <>
+            {splitProjects || project === null ? home : null}
+            {project ?? (splitProjects ? <div key="empty" className="home-empty split-empty" data-steer-pane="detail">
+              <span className="home-empty-glyph" aria-hidden="true"><DiamondIcon size="1em" /></span>
+              <strong>{t("mobile.split.emptyTitle")}</strong>
+              <p>{t("mobile.split.emptyHint")}</p>
+            </div> : null)}
+          </>}
     {/* Inside the same nest as the screen, so its back layer wins over the screen's. */}
     <SteeringConfirm />
     </BackNest>

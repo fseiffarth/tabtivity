@@ -39,14 +39,14 @@ import {
   controls,
   cursorRow,
   focusRow,
+  isReachable,
   ownKeysUp,
   press,
-  rowAct,
   rowById,
   rowId,
   rows,
-  screenAct,
   scrollStep,
+  type SteerAct,
   toLatest,
   topModal,
   walk,
@@ -120,6 +120,19 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
   const active = () => getSteering().active;
   const base = () => input.current.base;
   const levelNow = (): PhoneLevel => (topModal() ? "region" : base());
+  /** The rows the cursor walks at the current level. Beside Home's list (the
+   * split tier) the list and the open project are two panes on one screen, each
+   * its own level; their rows must not run into each other. Elsewhere there is
+   * no pane marker and every row on the page is the level's. A tab can stand
+   * in both panes (Needs you and its card) under one row id, so a remembered
+   * row and the screen's own ＋ are looked up in the pane too. */
+  const lane = (): ParentNode => document.querySelector<HTMLElement>(`[data-steer-pane='${base() === "tabs" ? "detail" : "list"}']`) ?? document;
+  const laneRows = (): HTMLElement[] => rows(lane());
+  const laneRowById = (id: string): HTMLElement | null => rowById(id, lane());
+  /** Clicks the first reachable `act` button under `scope` (`screenAct`, `rowAct`, scoped). */
+  const clickAct = (scope: ParentNode, act: SteerAct) => {
+    [...scope.querySelectorAll<HTMLElement>(`[data-steer-act='${act}']`)].find(isReachable)?.click();
+  };
   const keyId = (e: KeyboardEvent) => e.code || e.key;
   const swallow = (e: KeyboardEvent) => {
     e.preventDefault();
@@ -153,9 +166,9 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
     if (!active()) return;
     const level = base();
     if (isBodyLike(document.activeElement) && LIST_LEVELS.has(level) && !topModal() && !ownKeysUp()) {
-      const list = rows();
+      const list = laneRows();
       const remembered = memory[level];
-      const target = (remembered === undefined ? null : rowById(remembered)) ?? list[0];
+      const target = (remembered === undefined ? null : laneRowById(remembered)) ?? list[0];
       if (target) focusRow(target);
     }
     publishView();
@@ -183,10 +196,10 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
     startObserver();
     const level = base();
     if (LIST_LEVELS.has(level) && !topModal() && !ownKeysUp()) {
-      const list = rows();
+      const list = laneRows();
       if (list.length > 0 && cursorRow(list, document.activeElement) === null) {
         const remembered = memory[level];
-        focusRow((remembered === undefined ? null : rowById(remembered)) ?? list[0]);
+        focusRow((remembered === undefined ? null : laneRowById(remembered)) ?? list[0]);
       }
     }
     publishView();
@@ -199,11 +212,11 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
 
   /** The row the cursor stands on: the focused one, or the remembered one when nothing has focus. */
   function currentRow(): HTMLElement | null {
-    const list = rows();
+    const list = laneRows();
     const focused = cursorRow(list, document.activeElement);
     if (focused) return focused;
     const remembered = memory[base()];
-    return isBodyLike(document.activeElement) && remembered !== undefined ? rowById(remembered) : null;
+    return isBodyLike(document.activeElement) && remembered !== undefined ? laneRowById(remembered) : null;
   }
 
   /** Esc in a text field: let go of it and carry on steering from the next control or the row. */
@@ -261,7 +274,7 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
     }
     if (LIST_LEVELS.has(level)) {
       const from = isBodyLike(document.activeElement) ? currentRow() : document.activeElement;
-      const next = walk(rows(), dir, from);
+      const next = walk(laneRows(), dir, from);
       if (next) focusRow(next);
       return;
     }
@@ -349,22 +362,23 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
         return;
       case "newProject":
       case "newTab":
-        screenAct("new");
+        clickAct(lane(), "new");
         return;
       case "closeTab":
         askClose();
         return;
       case "menu": {
-        const row = currentRow();
-        if (row) rowAct(rowId(row), "menu");
+        // The cursor's own card: its id may also stand on a Needs you row in the other pane.
+        const card = currentRow()?.closest(".tab-card, .home-project-card");
+        if (card) clickAct(card, "menu");
         return;
       }
       case "openRow": {
         const n = phoneDigit(e, null);
         if (n === null) return;
         // The digits count the project rows, not Needs you's; the Agents list has none, so they count its rows.
-        const projects = rows().filter((row) => row.closest(".home-project-card"));
-        const row = (projects.length > 0 ? projects : rows())[n - 1];
+        const projects = laneRows().filter((row) => row.closest(".home-project-card"));
+        const row = (projects.length > 0 ? projects : laneRows())[n - 1];
         if (!row) return;
         focusRow(row);
         press(row);
@@ -438,7 +452,7 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
     if (!active()) return;
     const level = base();
     if (e.type === "focusin" && LIST_LEVELS.has(level) && !topModal() && e.target instanceof Element) {
-      const row = cursorRow(rows(), e.target);
+      const row = cursorRow(laneRows(), e.target);
       if (row) memory[level] = rowId(row);
     }
     queueMicrotask(publishView);

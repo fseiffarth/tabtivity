@@ -2340,3 +2340,185 @@ ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) 
 .home-projects-grid .card strong { white-space:normal; overflow-wrap:anywhere; }
 .home-projects-grid .tab-card-grip { position:absolute; right:0; bottom:0; height:var(--hit); }
 .home-projects-grid .tab-card-head > .untested { position:absolute; top:40px; right:4px; }
+
+/* ---- Tablet tiers -------------------------------------------------------
+   The one place the iPad layout lives; a phone matches neither query below and
+   keeps every rule above unchanged. The two queries are `TABLET_QUERY` and
+   `SPLIT_QUERY` in `useTier.ts` (a test keeps the copies equal). The height
+   guard keeps a phone turned on its side a phone.
+
+   Tablet: the screens take the window (`--screen-measure`), surfaces lose their
+   borders for one soft static shadow (never animated), corners are 22px on
+   cards and 26px on the side panel, primary and header buttons are pills.
+   Split (landscape): Home's list stays on the left as a floating panel and the
+   chosen project fills the right (`.tabbed.split`, App.tsx).
+   Every colour is an authored hex like its neighbours, so each theme recolours
+   it (`themeColors.ts`); the shadows are black shades, which stay as written. */
+@media (min-width:700px) and (min-height:600px) {
+  :root { --screen-measure:100vw; --gutter:28px; --r-card:22px; --r-panel:26px; --soft:0 1px 2px rgba(0,0,0,.14),0 8px 24px rgba(0,0,0,.16); }
+  .home-screen,.project-screen { padding-inline:var(--gutter); }
+  .tabbed > .screen,.tabbed > .todo-screen,.tabbed > .project-screen,.tabbed > .home-screen.has-fab { padding-bottom:calc(112px + max(24px,env(safe-area-inset-bottom))); }
+
+  /* The section bar floats, centred and 420px wide, instead of spanning the window. */
+  .mobile-tabbar { inset:auto auto max(12px,env(safe-area-inset-bottom)) 50%; transform:translateX(-50%); width:min(420px,calc(100vw - 32px)); gap:4px; padding:5px; border:0; border-radius:var(--r-card); background:#1a1d2b; -webkit-backdrop-filter:none; backdrop-filter:none; box-shadow:var(--soft); }
+  .mobile-tab { min-height:52px; padding:6px 4px; border-radius:13px; }
+
+  /* Titles: larger and tighter. */
+  .project-header h1,.home-screen > .projects-row h1 { font-size:30px; font-weight:700; letter-spacing:-.025em; }
+  .project-header h1 { line-height:1.15; }
+  .home-section-head,.project-group-head { font-size:var(--fs-headline); font-weight:650; letter-spacing:-.01em; text-transform:none; }
+
+  /* Home, portrait: Needs you as a row of tiles, projects as the grid. */
+  .home-glance-tile { border:0; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft); }
+  .home-needs > .home-group { grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+  .home-needs .home-group-row,.home-needs .home-group-more { border:0; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft); }
+  .home-needs .home-group-more { grid-column:1 / -1; }
+  .home-needs .home-needs-row { min-height:72px; padding:12px 14px; }
+  .home-needs .home-needs-title { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; white-space:normal; overflow-wrap:anywhere; }
+  .home-needs .mobile-alert-row { min-height:72px; padding:12px 14px; }
+  .home-screen > .home-projects:not(.home-projects-grid) { --o:var(--r-card); box-shadow:var(--soft); }
+  .home-screen > .home-projects.home-projects-grid { gap:14px; }
+  .home-projects-grid > .tab-card { border:0; border-radius:var(--r-card); box-shadow:var(--soft); }
+  .home-screen > .projects-row > .new-tab { display:inline-flex; align-items:center; justify-content:center; gap:6px; width:auto; min-width:var(--hit); padding:0 16px 0 12px; border-radius:999px; font-size:var(--fs-sub); font-weight:600; }
+  .home-screen > .projects-row > .new-tab > svg { flex:0 0 auto; }
+
+  /* The project screen. */
+  .project-header { margin-inline:calc(-1 * var(--gutter)); gap:8px; padding:max(12px,env(safe-area-inset-top)) 20px 8px 16px; border-bottom:0; background:#0b0d13; -webkit-backdrop-filter:none; backdrop-filter:none; }
+  .project-header .terminal-title small { font-size:var(--fs-foot); }
+  .project-header-tools { gap:8px; }
+  .project-prompts-button,.project-new-tab { display:inline-flex; align-items:center; justify-content:center; gap:8px; flex:0 0 auto; height:var(--hit); min-width:var(--hit); padding:0; border:0; border-radius:999px; font-size:var(--fs-sub); font-weight:600; white-space:nowrap; }
+  .project-prompts-button { background:#1a1d2b; box-shadow:var(--soft); font-size:1.15rem; font-weight:500; }
+  .project-prompts-button .project-action-label { display:none; font-size:var(--fs-sub); }
+  .project-new-tab { padding:0 16px 0 12px; }
+  .project-new-tab > svg { flex:0 0 auto; }
+  .project-header .untested { align-self:center; }
+
+  /* Two sections, headline and count each. */
+  .project-screen .cards.project-sections { display:flex; flex-direction:column; gap:22px; }
+  .project-group { display:grid; gap:10px; }
+  .project-group-head { margin:0 2px; }
+  .project-group-count { margin-left:.4em; color:var(--ink-muted); font-weight:600; font-variant-numeric:tabular-nums; }
+  .project-group-count::before { content:"· "; }
+  .project-agents > .project-group-body { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; align-items:start; }
+  .project-agents .tab-card.swiped-out { margin-bottom:-14px; }
+
+  /* A card: no border, a soft shadow. The PLAN/GOAL ring and a tab's colour
+     stay as inset rings, since they say something; a drop line replaces them
+     while a card is dragged. */
+  .project-screen .tab-card { --ring:0 0 0 0 transparent; --stripe:0 0 0 0 transparent; border:0; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft),var(--ring),var(--stripe); }
+  .project-screen .tab-card.in-plan { --ring:inset 0 0 0 1.5px #7b6ee0; }
+  .project-screen .tab-card.in-goal { --ring:inset 0 0 0 1.5px #4fb3c0; }
+  .project-screen .tab-card.has-tab-color { --stripe:inset 4px 0 0 var(--tab-color); }
+  .project-screen .tab-card.drop-before { box-shadow:inset 3px 0 0 0 #7c6cff; }
+  .project-screen .tab-card.drop-after { box-shadow:inset -3px 0 0 0 #7c6cff; }
+  .project-screen .tab-card-grip { border-radius:0 0 var(--r-card) 0; }
+  /* Without a tile an agent card's prompts start at the name. */
+  .project-screen .tab-card-prompts { margin-left:12px; }
+  .project-screen .tab-card-foot { margin-left:12px; }
+  .tab-card-earlier { position:relative; z-index:1; justify-self:start; min-height:var(--hit); margin:0 0 -10px -8px; padding:0 8px; border:0; border-radius:10px; background:transparent; color:#bcb0ff; font-size:var(--fs-foot); font-weight:600; }
+
+  /* Files: one-line rows in one grouped surface. */
+  .project-files > .project-group-body { display:grid; overflow:hidden; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft); }
+  .project-screen .file-tab-card { border:0; border-radius:0; background:transparent; box-shadow:none; }
+  .project-screen .file-tab-card + .file-tab-card { border-top:1px solid var(--hairline); }
+  .project-screen .file-tab-card.swiped-out { margin-bottom:0; }
+  .project-screen .file-tab-card .tab-card-head { align-items:center; min-height:60px; }
+  .project-screen .file-tab-card .tab-card-head .card { padding:8px 0 8px 12px; }
+  .project-screen .file-tab-card .tab-card-tile { align-self:center; margin:0 0 0 14px; }
+  .project-screen .file-tab-card .tab-card-close { align-self:center; margin-top:0; }
+  .project-screen .file-tab-card .tab-card-open { border-radius:0; }
+
+  /* Closed tabs, the one thing left in the foot (Collected prompts moved up). */
+  .project-foot { --o:var(--r-card); box-shadow:var(--soft); }
+
+  /* The agent chat. The markup keeps the phone's order and `order` sets the
+     tablet's: ‹, the tab's name under its project's, the connection dot, the
+     model and the queue as pills, the sent files, Chat | Terminal, the files. */
+  .terminal-screen > header { gap:8px; padding:6px 20px 8px 12px; border-bottom:0; }
+  .terminal-screen > header > .terminal-title { order:1; flex:1 1 auto; align-content:center; gap:0; }
+  .terminal-screen > header > .terminal-title small { order:-1; display:block; color:var(--ink-muted); font-size:var(--fs-foot); }
+  .terminal-screen > header > .terminal-title h1 { font-size:1.25rem; font-weight:700; letter-spacing:-.015em; }
+  .terminal-screen > header > .untested { order:2; align-self:center; }
+  .terminal-screen > header > .lamp { order:2; margin:0 4px; }
+  .terminal-screen > header > .header-model { order:3; }
+  .terminal-screen > header > .header-queue { order:4; }
+  .terminal-screen > header > .terminal-gallery { order:5; }
+  .terminal-screen > header > .terminal-view-switch { order:6; margin-left:0; }
+  .terminal-screen > header > .drawer-open { order:7; }
+  .header-pill,.terminal-screen > header > .terminal-gallery,.terminal-screen > header > .drawer-open { display:inline-flex; align-items:center; justify-content:center; gap:6px; flex:0 0 auto; height:var(--hit); min-width:var(--hit); padding:0 14px; border:0; border-radius:999px; background:#1a1d2b; color:#e7e9f2; font-size:var(--fs-sub); font-weight:600; box-shadow:var(--soft); }
+  .terminal-screen > header > .drawer-open { width:var(--hit); padding:0; }
+  .terminal-screen > header > .drawer-open svg { width:20px; height:20px; }
+  .terminal-screen > header > .drawer-open[aria-pressed="true"] { background:#2b2650; color:#e9e4ff; }
+  .header-queue { padding:0 12px; }
+  .header-model .fact-action-label { max-width:11rem; white-space:nowrap; }
+  .header-model .view-caret { margin:0 2px 2px 4px; }
+  .header-count { display:grid; place-items:center; min-width:20px; height:20px; padding:0 5px; box-sizing:border-box; border-radius:999px; background:#6c5ce7; color:#fff; font-size:var(--fs-caption); font-weight:700; font-variant-numeric:tabular-nums; }
+  .terminal-screen > header > .terminal-view-switch { gap:2px; padding:2px; border-radius:999px; background:#1a1d2b; box-shadow:var(--soft); }
+  .terminal-screen > header .terminal-view-switch button { min-height:var(--hit); min-width:var(--hit); padding:0 16px; border-radius:999px; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:500; }
+  .terminal-screen > header .terminal-view-switch .view-seg[aria-pressed="true"] { background:#2b2650; color:#e9e4ff; font-weight:600; }
+  .terminal-screen > header .terminal-view-switch .view-pill { padding:0 10px; color:#e7e9f2; }
+  .terminal-screen > header .terminal-view-switch .view-pill .view-caret { margin:0 0 2px; }
+
+  /* The Chat view: transcript and composer in a 660px column in the middle; the
+     Terminal view keeps the whole width. A prompt stays a bubble on the right,
+     at most 520px wide (the theme rules colour it); an answer is flat text. */
+  .terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(14px,calc((100% - 660px) / 2)); }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-pinned-prompt { right:max(14px,calc((100% - 660px) / 2)); max-width:min(520px,calc(100% - 28px)); }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-lines .readable-turn.user:not(.with-files) { max-width:min(88%,520px); padding:12px 16px; border-radius:20px 20px 6px 20px; }
+  .terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(0px,calc((100% - 660px) / 2)); }
+
+  /* The composer: one floating pill surface around the field, the tools and
+     Send, a soft shadow in place of the rim (the rim returns on focus). */
+  .terminal-screen.agent-tab[data-view="focus"] .prompt-composer { margin:6px 16px max(14px,env(safe-area-inset-bottom)); padding:8px 8px 8px 16px; border:0; border-radius:28px; background:#1a1d2b; box-shadow:var(--soft); }
+  .terminal-screen.agent-tab[data-view="focus"] .prompt-composer:focus-within { box-shadow:var(--soft),0 0 0 2px #7c6cff; }
+}
+
+/* Split: a landscape tablet. */
+@media (min-width:1000px) and (min-height:600px) and (orientation:landscape) {
+  .project-prompts-button { padding:0 14px; font-size:var(--fs-sub); }
+  .project-prompts-button .project-action-label { display:inline; }
+
+  .tabbed.split { display:grid; grid-template-columns:320px minmax(0,1fr); align-items:start; min-height:100dvh; background:#0b0d13; }
+  /* The list is a floating panel that keeps its place while the project scrolls.
+     z-index 7 keeps its sheets under the tray (8) and over the project header (5). */
+  .tabbed.split > .home-screen { position:sticky; top:12px; z-index:7; align-self:start; height:calc(100dvh - 24px); min-height:0; max-width:none; margin:12px 0 12px 12px; padding:4px 12px calc(92px + max(8px,env(safe-area-inset-bottom))); overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); }
+  /* The project (or the empty pane) is a grid item of its own, with no wrapper:
+     the same element stands in every tier, so a turn of the iPad keeps it. */
+  .tabbed.split > .project-screen,.tabbed.split > .split-empty { min-width:0; }
+  .tabbed.split > .project-screen { max-width:none; margin:0; padding-bottom:calc(32px + max(24px,env(safe-area-inset-bottom))); }
+  .split-empty { min-height:60dvh; align-content:center; }
+
+  /* The panel is the compact column: a list, whatever layout was chosen. */
+  .tabbed.split .home-header { padding-inline:6px 0; }
+  .tabbed.split .home-glance-tile { min-height:64px; padding:8px 10px; background:#0b0d13; box-shadow:none; }
+  .tabbed.split .home-needs > .home-group { grid-template-columns:minmax(0,1fr); gap:6px; }
+  .tabbed.split .home-needs .home-group-row,.tabbed.split .home-needs .home-group-more { border-radius:14px; background:#0b0d13; box-shadow:none; }
+  .tabbed.split .home-needs .home-needs-row,.tabbed.split .home-needs .mobile-alert-row { min-height:var(--hit); padding:8px 12px; }
+  .tabbed.split .home-needs .home-needs-title { display:block; white-space:nowrap; }
+  .tabbed.split .home-screen > .projects-row h1 { font-size:1.25rem; }
+  .tabbed.split .home-screen > .projects-row > .new-tab { width:var(--hit); padding:0; border-radius:var(--r-md); background:transparent; color:#bcb0ff; }
+  .tabbed.split .home-screen > .home-projects { --o:0; gap:2px; background:transparent; box-shadow:none; }
+  .tabbed.split .home-projects > * + * { border-top:0; }
+  .tabbed.split .home-projects > .tab-card { border-radius:16px; overflow:hidden; }
+  .tabbed.split .home-projects > .tab-card.is-current { background:#2e2b48; }
+  .tabbed.split .home-project-card .card strong { font-size:1rem; }
+  .tabbed.split .home-project-card .card-trailing { grid-template-columns:auto auto; }
+
+  /* The files, docked: the chat gives up the pane's width and the library
+     stands in the space as a floating rounded panel. z-index 11 keeps a sheet
+     (12) and the viewer (13) over it. Once a file is open the library's own
+     two-pane layout (`files-split`) takes the window, as it does today. */
+  .terminal-screen[data-files-docked] { padding-right:424px; }
+  .terminal-screen[data-files-docked] .files-library:not(.files-split) { inset:12px 12px 12px auto; z-index:11; width:400px; padding:0; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); overflow:hidden; }
+  .terminal-screen[data-files-docked] .focus-menu { right:434px; }
+
+  /* Home's assistant button stays on the list panel (x 12 to 332) just over the
+     tray, instead of floating over the project beside it. */
+  .tabbed.split .home-screen .fab { right:auto; left:calc(12px + 320px - 58px - 14px); bottom:calc(92px + max(8px,env(safe-area-inset-bottom))); }
+
+  /* The section bar is a compact tray at the foot of the list. */
+  .tabbed.split > .mobile-tabbar { inset:auto auto max(24px,calc(env(safe-area-inset-bottom) + 12px)) 24px; transform:none; width:296px; padding:4px; border-radius:18px; background:#0b0d13; box-shadow:none; }
+  /* Under the list's own layers (z-index 7) the tray would paint over them: a
+     sheet, and the files library or viewer Favorites opens. */
+  .tabbed.split:has(.sheet-backdrop,.files-library,.outbox-viewer) > .mobile-tabbar { visibility:hidden; }
+}

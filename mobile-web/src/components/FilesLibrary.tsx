@@ -407,7 +407,7 @@ const CHECK = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5
  * and its PDFs become no cards on the project screen. With the desktop not
  * connected to the host it says so.
  */
-export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, showTab: showTabOffer, linked, side = "here", onSide, hostLabel, focusSearch = false }: {
+export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, showTab: showTabOffer, linked, side = "here", onSide, hostLabel, focusSearch = false, docked = false }: {
   projectId: string;
   /** The project's name: the root's title. */
   label: string;
@@ -431,6 +431,9 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   hostLabel?: string;
   /** Opened to search: the box takes the focus, so its recents show. */
   focusSearch?: boolean;
+  /** A pane beside the chat (a landscape tablet's Chat screen), not a modal
+   * layer over it: the chat behind stays reachable. */
+  docked?: boolean;
 }) {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
@@ -451,6 +454,10 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
    * the list stays live, and another tap swaps the file shown. */
   const split = useMediaQuery(SPLIT_QUERY);
   const paned = split && fileOpen !== null;
+  /** A pane beside the chat (no file open beside the folder, which takes the
+   * window): its keys are its own only while the focus is in it. */
+  const dockedRef = useRef(false);
+  dockedRef.current = docked && !paned;
   /** A file is open over the library, which stays mounted under it — its
    * list keeps its place and the covers already made — but takes no focus,
    * keys or screen reader (`inert`), and starts no new cover meanwhile. The
@@ -745,6 +752,9 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     // closes the top one first.
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      // Docked beside the chat, an Escape typed there (the composer, a sheet
+      // over the chat) is not the library's.
+      if (dockedRef.current && !host.current?.contains(document.activeElement)) return;
       // The viewer is closed the way Back closes it: a markup view's Done
       // keeps the note being typed, and a sheet over the view goes first.
       if (fileOpen) goBack();
@@ -770,6 +780,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       const node = host.current;
       const active = document.activeElement;
       if (!node || (active && active !== document.body && !node.contains(active))) return;
+      // Docked, the page itself (focus nowhere) is the chat beside it: its keys stay the chat's.
+      if (dockedRef.current && !node.contains(active)) return;
       const typing = active instanceof HTMLElement
         && (active.isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT");
       const command = event.metaKey || event.ctrlKey;
@@ -1252,7 +1264,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     || isUntested("mobile.files.refresh") || isUntested("mobile.files.longPress") || isUntested("mobile.files.searchScope") || isUntested("mobile.files.wide") || isUntested("mobile.files.stream") || isUntested("mobile.files.split") || isUntested("mobile.files.keys") || isUntested("mobile.files.drop") || isUntested("mobile.files.newFolder") || isUntested("mobile.files.zip") || isUntested("mobile.files.select") || isUntested("mobile.files.bigUpload") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
     || ((onSide !== undefined || onHost) && isUntested("mobile.files.host"));
 
-  return <><section ref={host} className={paned ? "files-library files-split" : "files-library"} role="dialog" aria-modal={!paned} aria-label={t("mobile.files.title")}>
+  return <><section ref={host} className={paned ? "files-library files-split" : "files-library"} role="dialog" aria-modal={!paned && !docked} data-docked={docked && !paned ? "" : undefined} aria-label={t("mobile.files.title")}>
     <header className="files-library-head">
       <button className="files-library-back" onClick={up}
         aria-label={parent ? t("mobile.files.library.up", { name: parent.name }) : t("mobile.files.close")}>

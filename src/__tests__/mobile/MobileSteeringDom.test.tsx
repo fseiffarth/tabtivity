@@ -189,6 +189,15 @@ describe("topModal and ownKeysUp", () => {
     expect(ownKeysUp()).toBe(false);
   });
 
+  it("a library docked beside the chat owns the keys only while the focus is in it", () => {
+    mount(`<main><textarea id="composer"></textarea></main><section class="files-library" aria-modal="false" data-docked=""><button id="item">src</button></section>`);
+    expect(ownKeysUp()).toBe(false);
+    (document.getElementById("composer") as HTMLElement).focus();
+    expect(ownKeysUp()).toBe(false);
+    (document.getElementById("item") as HTMLElement).focus();
+    expect(ownKeysUp()).toBe(true);
+  });
+
   it("names the two surface classes", () => {
     expect(OWN_KEYS_SELECTOR).toBe(".files-library, .outbox-viewer");
   });
@@ -245,6 +254,19 @@ describe("row and screen acts", () => {
     document.getElementById("p")!.addEventListener("click", onClick);
     expect(rowAct("p1", "menu")).toBe(true);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("acts through the row that stands in a card when a tab stands twice (split: Needs you, then its project's card)", () => {
+    // The Needs-you row comes first in document order and has no card.
+    mount(`<ul><li><button data-steer-row="t1">needs you</button></li></ul>
+      <div class="tab-card"><button data-steer-row="t1">open</button><button data-steer-act="close" id="x1">x</button></div>`);
+    const onClick = vi.fn();
+    document.getElementById("x1")!.addEventListener("click", onClick);
+    expect(rowAct("t1", "close")).toBe(true);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    // Behind a sheet (the confirm that asked) it is the same row.
+    expect(rowAct("t1", "close", true)).toBe(true);
+    expect(onClick).toHaveBeenCalledTimes(2);
   });
 
   it("reaches a card behind a sheet (inert) only when asked to, and never a disabled button", () => {

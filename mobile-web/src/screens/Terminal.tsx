@@ -1,5 +1,5 @@
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
-import { BranchIcon, ChevronLeftIcon, CloseIcon, MeterIcon, NewChatIcon, UndoIcon } from "../glyphs";
+import { BranchIcon, ChevronLeftIcon, CloseIcon, FolderIcon, ListIcon, MeterIcon, NewChatIcon, UndoIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { AgentStatusMark } from "../components/AgentStatusPill";
 import { HintQueue, type HintKey } from "../components/HintMessage";
@@ -61,6 +61,7 @@ import {
 import { describeFailure } from "../connection";
 import { readDraft } from "../drafts";
 import { readFlag, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
+import { useTier } from "../useTier";
 import { readSpeechLang, speechTag, type SpeechLang } from "../speechLang";
 import { readableText, type ReadableLine } from "../terminal/readableScreen";
 import { type HistoryChunk } from "../terminal/readableHistory";
@@ -1166,8 +1167,43 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [filesSides, setFilesSides] = useState<{ here: boolean; host: boolean; hostLabel?: string }>({ here: true, host: false });
   /** The files drawer, the project screen's own, opened here by a right→left
    * swipe over the output. */
-  const [filesOpen, setFilesOpen] = useState(false);
-  const closeFiles = useCallback(() => setFilesOpen(false), []);
+  /** The tablet tier (`useTier`): a tablet's header carries the model and the
+   * queue, and the landscape one docks the files beside the chat. The screen
+   * itself never branches on it, so a turn of the iPad changes attributes and
+   * a few header buttons, not the tree the socket, draft and scroll live in. */
+  const tier = useTier();
+  const tablet = tier !== "phone";
+  const splitTier = tier === "split";
+  const splitRef = useRef(splitTier);
+  splitRef.current = splitTier;
+  /** The project's name, for the tablet header's line over the tab's. */
+  const [projectName, setProjectName] = useState<string | null>(null);
+  /** Docked, the drawer is a pane beside the chat that stays open (`chatFilesPane`
+   * remembers it on this device); anywhere else it opens and closes as ever. */
+  const [filesOpen, setFilesOpen] = useState(() => splitTier && readFlag("chatFilesPane"));
+  const closeFiles = useCallback(() => {
+    setFilesOpen(false);
+    if (splitRef.current) writeFlag("chatFilesPane", false);
+  }, []);
+  const toggleFiles = () => {
+    const next = !filesOpen;
+    setFilesOpen(next);
+    if (splitTier) writeFlag("chatFilesPane", next);
+  };
+  // A turn of the screen brings the pane back as this device left it in
+  // landscape (a drawer already open stays, docked) and puts it away elsewhere, where it would be a full-screen
+  // drawer over the chat — unless a file or a markup view is open in it (or
+  // tucked away from it): that stays, as the drawer. Neither writes the preference.
+  const tierSeen = useRef(tier);
+  useEffect(() => {
+    if (tierSeen.current === tier) return;
+    const was = tierSeen.current;
+    tierSeen.current = tier;
+    if (tier === "split") setFilesOpen((open) => open || readFlag("chatFilesPane"));
+    else if (was === "split" && !document.querySelector(".markup-host.away, .markup-host .outbox-viewer")) setFilesOpen(false);
+  }, [tier]);
+  /** The queue's sheet (a tablet's header pill): the moves the queued bubbles carry. */
+  const [queueSheet, setQueueSheet] = useState(false);
   /** Turns asked for; grows with "Show earlier turns". */
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_STEP);
   /** The subagents walked into from the stored session (`subagents.ts`),
@@ -1794,7 +1830,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           : "terminal.reader.assistantModelFailed");
       });
   };
-  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery
+  const sheetUp = modelSheet || assistantSheet || modeSheet || worktreeSheet || locationSheet || statusSheet || desktopSheet || gallery || queueSheet
     || (outboxOpen !== null && markupAway === null) || inboxOpen !== null;
   useLayoutEffect(() => {
     setFrozenLines(sheetUp ? linesRef.current : null);
@@ -1926,6 +1962,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         .then((detail) => {
           setFilesLabel(detail.files || detail.host_files ? detail.project.label : null);
           setFilesSides({ here: !!detail.files, host: !!detail.host_files, hostLabel: detail.host_label });
+          setProjectName(detail.project?.label ?? null);
         })
         .catch(() => {});
     };
@@ -1937,19 +1974,26 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     };
   }, [project]);
   const filesSwipe = filesLabel !== null && view === "focus";
+  /** The drawer is on screen (what `filesOpen` asks, once the project allows it). */
+  const filesShown = filesOpen && !!project && filesLabel !== null;
+  /** Landscape on a tablet: the drawer is a pane beside the chat. While a
+   * markup view is tucked away its hosts, this one too, are hidden
+   * (`.markup-host.away`), so the chat then keeps its whole width (`main`'s
+   * `data-files-docked` is left off). */
+  const filesDocked = splitTier && filesShown;
   /** Where the output is up for a swipe to read; `readableHost` is mounted
    * with it. */
   const readableShown = view === "focus" && (!altScreen || sessionFocus);
   useEffect(() => {
     const stream = readableHost.current;
-    if (filesOpen || !stream) return;
+    if (filesShown || !stream) return;
     // Left→right goes back, as the header's ‹ does, from the left edge too;
     // right→left pulls the files in from the right.
     return installFocusSwipe(stream, {
       onSwipeRight: () => backRef.current(),
       onSwipeLeft: () => { if (filesSwipe) setFilesOpen(true); },
     }, { leftEdge: true, rightEdge: filesSwipe });
-  }, [filesSwipe, filesOpen, readableShown]);
+  }, [filesSwipe, filesShown, readableShown]);
   /** Agent tabs read as a chat (`ReadableTurns`); a shell's output has no
    * turns to lay out. */
   const chat = tab.kind === "agent";
@@ -2458,7 +2502,40 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         </div>}
   </>;
   const shownBranch = statusBranch ?? linkedBranch ?? cwdBranch;
-  return <main className={`terminal-screen ${tab.kind}-tab`} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
+  /** A tablet's header pills open what the phone keeps lower down: the model
+   * chip's sheet (`selectModel`) and the queued bubbles' two moves
+   * (`sendQueuedNow`, `pullQueued`), under the same conditions. */
+  const modelPill = tablet && tab.kind === "agent" && !bare && !tab.local_model;
+  const queuePill = tablet && tab.kind === "agent" && queueCli !== null;
+  const queuedCount = sessionEntries.filter((entry) => entry.kind === "prompt" && entry.queued).length;
+  // Where the bubbles carry the pair: the session chat on screen (not the
+  // Terminal view, nor a subagent's chat), under a queued prompt.
+  const queueMoves = sessionFocus && !openStep && queuedCount > 0 && agentAtWork && !editing && queueReadable && queuedShown;
+  const queueOptions: SheetOption[] = queueMoves ? [
+    // No `sendNowTitle` here: that is the desktop's Esc, and the phone's Send
+    // now waits for the queue hint instead (`useComposer`, `send_now`).
+    ...(sendNowOffered ? [{ key: "send", label: t("terminal.reader.sendNow"), current: false }] : []),
+    { key: "pull", label: t("terminal.reader.cancelEdit"), description: t("terminal.reader.cancelEditTitle"), current: false },
+  ] : [];
+  const pickQueue = (key: string) => {
+    if (!connected) return;
+    if (key === "send" && !sendNowWaiting) sendQueuedNow();
+    if (key === "pull" && !queuePulling) pullQueued();
+    setQueueSheet(false);
+  };
+  /** The view pill's list and a tablet's Chat | Terminal switch choose alike. */
+  const pickView = (choice: "focus" | "diffs" | "terminal") => {
+    if (choice === "focus" && chatUnavailable) return;
+    setFocusMenu(false);
+    if (choice === "diffs") {
+      setDiffsOpen(true);
+      return;
+    }
+    setDiffsOpen(false);
+    if (view !== choice) chooseView(choice);
+  };
+  const worktreeCaption = tab.kind !== "agent" && tab.worktree ? [t("terminal.reader.worktree", { name: tab.worktree.label })] : [];
+  return <main className={`terminal-screen ${tab.kind}-tab`} data-view={view} data-files-docked={filesDocked && markupAway === null ? "" : undefined} style={viewportHeight ? { height: viewportHeight } : undefined}><header><button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>{bare && projectOfTab
         // Tabby's one chat: its CLI is the title, a dropdown, with Relaunch.
         ? <TabbyHead tab={tab} scope={projectOfTab} openTab={openTab} model={{
           label: assistantModels?.models.find((model) => model.id === assistantModels.current)?.label ?? modelChip,
@@ -2466,29 +2543,41 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           disabled: !connected || tab.agent_status === "working" || tab.agent_status === "question",
           expanded: assistantSheet,
         }} />
-        : <div className="terminal-title"><h1>{tab.label}</h1><small>{[t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession"), ...(tab.kind !== "agent" && tab.worktree ? [t("terminal.reader.worktree", { name: tab.worktree.label })] : [])].join(" · ")}</small></div>}
+        : <div className="terminal-title"><h1>{tab.label}</h1><small>{tablet && projectName ? [projectName, ...worktreeCaption].join(" · ") : [t(tab.kind === "agent" ? "mobile.focus.agentSession" : "mobile.focus.shellSession"), ...worktreeCaption].join(" · ")}</small></div>}
+      {/* A tablet has the width to keep the model and the queue in the header
+          (a phone has them in the facts row and under the queued bubbles). */}
+      {tablet && isUntested("mobile.tablet") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+      {modelPill && <button type="button" className="header-pill header-model" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")} aria-label={chipEffort ? `${chipModel} · ${t("terminal.reader.effort", { effort: chipEffort })}` : chipModel}><span className="fact-action-label">{chipModel}</span>{chipEffort && <span className="fact-effort" aria-hidden="true"><MeterIcon size="1em" />{chipEffort}</span>}<span className="view-caret" aria-hidden="true" /></button>}
+      {queuePill && <button type="button" className="header-pill header-queue" onClick={() => setQueueSheet(true)} aria-haspopup="dialog" aria-expanded={queueSheet} title={t("mobile.queue.title")} aria-label={queuedCount > 0 ? t("mobile.queue.count", { count: queuedCount }) : t("mobile.queue.title")}><ListIcon size="1em" />{queuedCount > 0 && <span className="header-count" aria-hidden="true">{queuedCount}</span>}</button>}
       {/* The project's drawer, the ☰ the project screen carries too: what a
           right→left swipe over the output pulls in, offered while the
           desktop's "Project files on the phone" switch is on. */}
       {project && filesLabel !== null && <button
         className="drawer-open"
         data-phone-hint="menu"
-        onClick={() => setFilesOpen(true)}
-        aria-haspopup="dialog"
-        aria-expanded={filesOpen}
-        aria-label={t("mobile.project.menu")}
-        title={t("mobile.project.menu")}
-      ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg></button>}
+        onClick={splitTier ? toggleFiles : () => setFilesOpen(true)}
+        {...(splitTier ? { "aria-pressed": filesOpen } : { "aria-haspopup": "dialog" as const, "aria-expanded": filesOpen })}
+        aria-label={t(splitTier ? "mobile.files.toggle" : "mobile.project.menu")}
+        title={t(splitTier ? "mobile.files.toggle" : "mobile.project.menu")}
+      >{tablet ? <FolderIcon size="1em" /> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>}</button>}
       {outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{outbox.length}</small></button>}
       {/* One pill named after the view on screen; its list switches views and,
           on an agent tab's Chat, says where the chat reads from. */}
-      <div className="terminal-view-switch"><button
+      <div className="terminal-view-switch" role={tablet ? "group" : undefined} aria-label={tablet ? t("mobile.focus.outputView") : undefined}>
+        {/* A tablet shows the two views side by side; the pill after them keeps
+            the list's other rows (Diffs, read aloud, hands-free, languages). */}
+        {tablet && <>
+          <button type="button" className="view-seg" aria-pressed={view === "focus" && !diffsShown} aria-disabled={chatUnavailable ? "true" : undefined} onClick={() => pickView("focus")}>{t(focusLabel)}</button>
+          <button type="button" className="view-seg" aria-pressed={view === "terminal" && !diffsShown} onClick={() => pickView("terminal")}>{t("mobile.focus.terminal")}</button>
+        </>}
+        <button
         className="view-pill"
         aria-haspopup="menu"
         aria-expanded={focusMenu}
         title={t("mobile.focus.outputView")}
+        aria-label={tablet && !diffsShown ? t("mobile.focus.outputView") : undefined}
         onClick={() => setFocusMenu((open) => !open)}
-      >{t(diffsShown ? "terminal.reader.changes" : view === "terminal" ? "mobile.focus.terminal" : focusLabel)}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
+      >{!tablet || diffsShown ? t(diffsShown ? "terminal.reader.changes" : view === "terminal" ? "mobile.focus.terminal" : focusLabel) : null}<span className="view-caret" aria-hidden="true" /></button></div><span className={connected ? "lamp" : "lamp off"} /></header>
     {focusMenu && <div className="focus-menu-backdrop" role="presentation" onClick={() => setFocusMenu(false)}>
       <div className="focus-menu" role="menu" aria-label={t("mobile.focus.outputView")} onClick={(event) => event.stopPropagation()}>
         {/* Chat / Diffs / Terminal, in the desktop's order. Chat is the stored
@@ -2497,16 +2586,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           const checked = choice === "diffs" ? diffsShown : view === choice && !diffsShown;
           const off = choice === "focus" && chatUnavailable;
           const googleUntested = choice === "focus" && chat && (antigravity || /gemini/iu.test(agentLabel)) && isUntested("mobile.focus.googleSession");
-          return <button key={choice} role="menuitemradio" aria-checked={checked} aria-disabled={off ? "true" : undefined} className={off ? "unavailable" : undefined} onClick={() => {
-            if (off) return;
-            setFocusMenu(false);
-            if (choice === "diffs") {
-              setDiffsOpen(true);
-              return;
-            }
-            setDiffsOpen(false);
-            if (view !== choice) chooseView(choice);
-          }}>
+          return <button key={choice} role="menuitemradio" aria-checked={checked} aria-disabled={off ? "true" : undefined} className={off ? "unavailable" : undefined} onClick={() => pickView(choice)}>
             <span>
               <strong>{t(label)}{((choice === "diffs" && isUntested("mobile.focus.diffs")) || googleUntested) && <em>{t("mobile.focus.untested")}</em>}</strong>
               {choice === "diffs" && <small>{t("mobile.focus.diffsHint")}</small>}
@@ -2801,7 +2881,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               driver's list would only offer to move it off. */}
           {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
-            : <button className="fact-action" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")} aria-label={chipEffort ? `${chipModel} · ${t("terminal.reader.effort", { effort: chipEffort })}` : undefined}><span className="fact-action-label">{chipModel}</span>{chipEffort && <span className="fact-effort" aria-hidden="true"><MeterIcon size="1em" />{chipEffort}</span>}</button>}
+            : !modelPill && <button className="fact-action" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")} aria-label={chipEffort ? `${chipModel} · ${t("terminal.reader.effort", { effort: chipEffort })}` : undefined}><span className="fact-action-label">{chipModel}</span>{chipEffort && <span className="fact-effort" aria-hidden="true"><MeterIcon size="1em" />{chipEffort}</span>}</button>}
           <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
@@ -2925,6 +3005,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       <button className={ctrl ? "selected" : ""} aria-pressed={ctrl} disabled={!connected} onClick={() => setCtrl((on) => !on)}>Ctrl</button><button disabled={!connected} onClick={() => press("\u001b")}>Esc</button><button disabled={!connected} onClick={() => press("\t")}>Tab</button><button disabled={!connected} onClick={() => press("\u001b[D")}>←</button><button disabled={!connected} onClick={() => press("\u001b[A")}>↑</button><button disabled={!connected} onClick={() => press("\u001b[B")}>↓</button><button disabled={!connected} onClick={() => press("\u001b[C")}>→</button><button disabled={!connected} onClick={() => press("\r")}>Enter</button><button disabled={!connected} onClick={() => press("\u007f")}>⌫</button><button className="danger" disabled={!connected} onClick={() => setInterruptSheet(true)}>{t("mobile.keys.interrupt")}</button>
       </div>}
     </div>
+    {queueSheet && <OptionSheet
+      title={t("mobile.queue.title")}
+      note={sendNowWaiting ? { text: t("mobile.chat.sendNowWaiting") } : undefined}
+      options={queueOptions}
+      waiting={t("mobile.queue.none")}
+      busy={false}
+      onPick={pickQueue}
+      onClose={() => setQueueSheet(false)}
+    />}
     {/* Lifted over a markup view, whose model chip opens it too. */}
     {modelSheet && <div className="sheet-lift">{effortStep
       ? <OptionSheet
@@ -3086,7 +3175,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         markup={markupFor && { ...markupFor, place: askedFile.place, folder: askedFile.folder, refresh: refreshAskedFile }} />
     </BackNest></div>}
     {filesOpen && project && filesLabel !== null && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
-      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles} here={filesSides.here} host={filesSides.host} hostLabel={filesSides.hostLabel}
+      <ProjectFiles key={project} projectId={project} label={filesLabel} onClose={closeFiles} docked={filesDocked} here={filesSides.here} host={filesSides.host} hostLabel={filesSides.hostLabel}
         markup={markupFor && { tabId: markupFor.tabId, onSend: markupFor.onSend, agent: markupFor.agent, model: markupFor.model, pickModel: markupFor.pickModel, toChat: markupFor.toChat, dialog: markupFor.dialog }} showTab={markupNewTab?.show} />
     </BackNest></div>}
 

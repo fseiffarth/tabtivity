@@ -43,6 +43,8 @@ import { FavoritesPage } from "../components/FavoritesPage";
 import { markDoneSeen, readSeenDone, type SeenDone } from "../seenDone";
 import { useBackLayer } from "../backStack";
 import { useVisiblePoll } from "../visiblePoll";
+import { effectiveLayout, readChosenLayout, writeLayout, type HomeLayout } from "../homeLayout";
+import { useTier } from "../useTier";
 
 /** A reorder hint with the drag grip drawn where its `{grip}` stands, so the
  * sentence stays one translatable string. The project screen's hint too. */
@@ -86,18 +88,16 @@ function projectTile(project: ProjectRow): string {
  * (`FavoritesPage`). */
 type HomeView = "active" | "agents" | "favorites" | "search";
 
-/** How the project list is drawn: one row per project, two tiles a line, or
- * each box folding its member projects under it (the rest below). Remembered
- * on this phone; `projectsGrid` predates the box layout and still says grid. */
-type HomeLayout = "list" | "grid" | "boxes";
-const readLayout = (): HomeLayout => (readFlag("projectsBoxes") ? "boxes" : readFlag("projectsGrid") ? "grid" : "list");
+/** The layouts the button offers (`HomeLayout`, `homeLayout.ts`). */
 const HOME_LAYOUTS: [HomeLayout, TranslationKey, ComponentType<IconProps>][] = [["list", "mobile.home.listLayout", ListIcon], ["grid", "mobile.home.gridLayout", GridIcon], ["boxes", "mobile.home.boxLayout", HexagonIcon]];
 /** Each view but Active, as its page title: the header's 🔍 and ☆ and the
  *  agent tiles lead into them, and ‹ (or the phone's back) comes home. */
 const SUBVIEW_TITLE: Record<Exclude<HomeView, "active">, TranslationKey> = { agents: "mobile.home.agentsTitle", favorites: "mobile.home.viewFavorites", search: "mobile.home.viewSearch" };
 
-export function Home({ open, openTab, tabby, todo, mail }: {
+export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
   open: (id: string) => void;
+  /** The project open beside this list (the split tier): its row is marked. */
+  selectedId?: string;
   /** Opens Tabby's one chat (the FAB): the assistant scope is no row here. */
   tabby: (id: string) => void;
   openTab: (projectId: string, tab: ActivityTab) => void;
@@ -105,11 +105,16 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   mail: () => void;
 }) {
   const [view, setView] = useState<HomeView>(() => (readFlag("projectsAgents") ? "agents" : "active"));
-  const [layout, setLayout] = useState<HomeLayout>(readLayout);
+  // The tablet tiers (`useTier.ts`) change how the list is drawn without
+  // touching what the reader chose: with no choice yet a tablet in portrait
+  // draws the grid, and beside the project (split) it is always the list.
+  const tier = useTier();
+  const split = tier === "split";
+  const [chosenLayout, setChosenLayout] = useState<HomeLayout | null>(() => readChosenLayout());
+  const layout = effectiveLayout(chosenLayout, tier);
   const chooseLayout = (next: HomeLayout) => {
-    setLayout(next);
-    writeFlag("projectsGrid", next === "grid");
-    writeFlag("projectsBoxes", next === "boxes");
+    setChosenLayout(next);
+    writeLayout(next);
   };
   /** The boxes folded shut in the box layout, this phone's own. */
   const [foldedBoxes, setFoldedBoxes] = useState<string[]>(() => readOrder("homeFoldedBoxes"));
@@ -303,19 +308,19 @@ export function Home({ open, openTab, tabby, todo, mail }: {
   /** One project row's opener — tile, name and caption, agent counts, open
    *  tabs — the same in every layout. `caption` replaces the scope line (a
    *  box head says how many projects it holds). */
-  const projectCard = (project: ProjectRow, caption?: string) => <button className="card" data-steer-row={project.id} onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{caption ?? scopeCaption(project)}</small></span><span className="card-trailing"><span className="home-agent-counts">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}</span><span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z" /><path d="M3 10h18" /></svg><span>{project.live_sessions}</span></span></span></button>;
+  const projectCard = (project: ProjectRow, caption?: string) => <button className="card" data-steer-row={project.id} aria-current={project.id === selectedId ? "true" : undefined} onClick={() => open(project.id)}><span className="home-tile" aria-hidden="true">{projectTile(project)}</span><span><strong>{project.label}</strong><small>{caption ?? scopeCaption(project)}</small></span><span className="card-trailing"><span className="home-agent-counts">{project.agents && <AgentCounts counts={project.agents} tagged={project.id === firstCounted} />}</span><span className="count" title={t("mobile.home.openTabs", { count: project.live_sessions })} aria-label={t("mobile.home.openTabs", { count: project.live_sessions })}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-7l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1Z" /><path d="M3 10h18" /></svg><span>{project.live_sessions}</span></span></span></button>;
   const rootWaiting = rootRow?.pending_reviews ?? 0;
   const rootLabel = rootRow ? `${t("mobile.home.openRoot")}${rootWaiting > 0 ? ` · ${t("mobile.home.awaitingApproval", { count: rootWaiting })}` : ""}` : "";
   const connection = t(offline ? "mobile.home.offline" : "mobile.home.connected");
   const LayoutGlyph = HOME_LAYOUTS.find(([id]) => id === layout)?.[2] ?? ListIcon;
   /** One button for the three layouts, drawn as the one in use; its sheet
    *  holds the choice. Active and Search share it. */
-  const layoutButton = <button className="home-layout-button" aria-haspopup="dialog" aria-expanded={layoutSheet} aria-label={t("mobile.home.layout")} title={t("mobile.home.layout")} onClick={() => setLayoutSheet(true)}>
+  const layoutButton = split ? null : <button className="home-layout-button" aria-haspopup="dialog" aria-expanded={layoutSheet} aria-label={t("mobile.home.layout")} title={t("mobile.home.layout")} onClick={() => setLayoutSheet(true)}>
     <LayoutGlyph size="22px" />
     {isUntested("mobile.home.projectGrid") && <span className="untested">{t("mobile.newTab.untested")}</span>}
     {isUntested("mobile.home.boxLayout") && <span className="untested">{t("mobile.newTab.untested")}</span>}
   </button>;
-  return <main className={assistantId ? "screen home-screen has-fab" : "screen home-screen"}>
+  return <main className={assistantId ? "screen home-screen has-fab" : "screen home-screen"} data-steer-pane={split ? "list" : undefined}>
     {/* A slim bar: the mark and name, the link's lamp — worded only when the
         link is down, where it is news — and the gear for this phone's own
         settings. The global views live in the tab bar at the bottom. */}
@@ -361,7 +366,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
       </p>}
       {view === "active" && <NeedsYou alerts={alerts} onAlerts={setAlerts} seen={seen} open={openAgentTab} todo={todo} mail={mail} showAgents={() => choose("agents")} />}
       {view === "active" && <div className="projects-row">
-        <h1>{t("mobile.home.projectsTitle")}</h1>
+        <h1>{t("mobile.home.projectsTitle")}{tier !== "phone" && isUntested("mobile.tablet") && <span className="untested">{t("mobile.newTab.untested")}</span>}</h1>
         {layoutButton}
         <button
           className="primary new-tab"
@@ -371,7 +376,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
           aria-expanded={newProject}
           aria-label={t("mobile.newProject.title")}
           title={t("mobile.newProject.title")}
-        ><PlusIcon size="1em" /></button>
+        ><PlusIcon size="1em" />{tier === "tablet" && <span className="new-tab-label">{t("mobile.newProject.title")}</span>}</button>
       </div>}
       {!loaded && !offline && <ListSkeleton label={t("mobile.home.loading")} />}
       {loaded && rows.length === 0 && <div className="home-empty">
@@ -389,7 +394,7 @@ export function Home({ open, openTab, tabby, todo, mail }: {
           project row says its status: a "Paper" box beside a "Paper" project
           must be tellable apart. */}
       {listed.length > 0 && !boxGroups && <section className={`cards home-projects${layout === "grid" ? " home-projects-grid" : ""}`}>{listed.map((project, index) => <div
-        className={`tab-card one-row home-project-card${drag.rowClass(project.id)}`}
+        className={`tab-card one-row home-project-card${project.id === selectedId ? " is-current" : ""}${drag.rowClass(project.id)}`}
         key={project.id}
         ref={drag.rowRef(project.id)}
       >
@@ -422,13 +427,13 @@ export function Home({ open, openTab, tabby, todo, mail }: {
               ><ChevronRightIcon size="1em" /></button>}
             </div>
           </div>
-          {!folded && members.map((project) => <div className="tab-card one-row home-project-card home-box-member" key={project.id}>
+          {!folded && members.map((project) => <div className={`tab-card one-row home-project-card home-box-member${project.id === selectedId ? " is-current" : ""}`} key={project.id}>
             <div className="tab-card-head">{projectCard(project)}</div>
           </div>)}
         </section>;
       })}
       {boxGroups && view === "active" && rows.length > 0 && boxGroups.groups.length === 0 && <p className="home-box-none">{t("mobile.home.noBoxes")}</p>}
-      {boxGroups && boxGroups.loose.length > 0 && <section className="cards home-projects">{boxGroups.loose.map((project) => <div className="tab-card one-row home-project-card" key={project.id}>
+      {boxGroups && boxGroups.loose.length > 0 && <section className="cards home-projects">{boxGroups.loose.map((project) => <div className={`tab-card one-row home-project-card${project.id === selectedId ? " is-current" : ""}`} key={project.id}>
         <div className="tab-card-head">{projectCard(project)}</div>
       </div>)}</section>}
       {canReorder && !hintGone && <p className="home-hint">

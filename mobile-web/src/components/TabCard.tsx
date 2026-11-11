@@ -1,6 +1,7 @@
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { ClockIcon, CloseIcon, GripIcon, MoreIcon } from "../glyphs";
-import { promptClock, promptLines, promptsFromTranscript, scheduleClock } from "../agentPrompts";
+import { capPrompts, promptClock, promptLines, promptsFromTranscript, scheduleClock } from "../agentPrompts";
+import { useTier } from "../useTier";
 import type { TabRow, TabSchedules } from "../api";
 import { type FileTab } from "../filesPlace";
 import type { RowDrag } from "../rowDrag";
@@ -47,7 +48,12 @@ export function scheduleLine(schedules: TabSchedules | undefined, t: Translate):
  */
 export function PromptLines({ tab, draft }: { tab: TabRow; draft?: string }) {
   const t = useT();
+  // A tablet's card keeps the newest prompt and two older ones; the rest wait
+  // behind one control (a phone's card lists what it always did).
+  const tier = useTier();
+  const [expanded, setExpanded] = useState(false);
   const lines = promptLines(tab);
+  const { shown, hidden } = capPrompts(lines.length, { capped: tier !== "phone", hasDraft: !!draft, expanded });
   const scheduled = tab.schedules?.upcoming ?? [];
   return <div className="tab-card-prompts">
     <small className="tab-card-prompts-label">{t("mobile.project.lastPrompts")}</small>
@@ -66,13 +72,14 @@ export function PromptLines({ tab, draft }: { tab: TabRow; draft?: string }) {
       ? !draft && <p className="tab-card-prompt empty">{promptsFromTranscript(tab)
         ? t("mobile.project.noPromptsRead")
         : t("mobile.project.openCodeHistory")}</p>
-      : lines.map((prompt, index) => {
+      : lines.slice(0, shown).map((prompt, index) => {
         const when = promptClock(prompt.at);
         return <p className={index === 0 && !draft ? "tab-card-prompt latest" : "tab-card-prompt"} key={`${prompt.at ?? ""}-${index}`}>
           {when && <span className="tab-card-prompt-when">{when}</span>}
           <span className="tab-card-prompt-text">{prompt.text}</span>
         </p>;
       })}
+    {hidden > 0 && <button className="tab-card-earlier" aria-expanded="false" onClick={() => setExpanded(true)}>{t(hidden === 1 ? "mobile.project.earlierPromptsOne" : "mobile.project.earlierPrompts", { count: hidden })}</button>}
   </div>;
 }
 

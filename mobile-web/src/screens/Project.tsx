@@ -42,6 +42,7 @@ import { describeFailure } from "../connection";
 import { installFocusSwipe } from "../terminal/focusSwipe";
 import type { SubagentStep } from "../terminal/subagents";
 import { startVisiblePoll } from "../visiblePoll";
+import { useTier } from "../useTier";
 
 /** The orders this list offers, in the words this screen can use for them. The
  * cross-project Agents list calls `native` "Status", because there the arrival
@@ -149,6 +150,13 @@ function cardViewerFile(file: FileTab, outbox: readonly OutboxFile[]): OutboxFil
 
 export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack }) => void }) {
   const t = useT();
+  /** The tablet tiers (`useTier.ts`): the same screen with its two sections,
+   * the header's actions and, beside Home's list, no way back of its own. */
+  const tier = useTier();
+  const tablet = tier !== "phone";
+  const split = tier === "split";
+  const splitRef = useRef(split);
+  splitRef.current = split;
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   useRestoreListScroll(listScrollKey(id), detail !== null);
   const [creating, setCreating] = useState(false);
@@ -274,7 +282,8 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     // not through a sheet laid over the list. Left→right goes back, as the
     // header's ‹ does; right→left pulls the drawer in, from the right edge too.
     return installFocusSwipe(host, {
-      onSwipeRight: () => backRef.current(),
+      // Beside Home's list there is nothing to go back to: a swipe would only empty this pane.
+      onSwipeRight: () => { if (!splitRef.current) backRef.current(); },
       // A leftward drag over a card closes it (`installCardSwipe`, below), not
       // the drawer.
       onSwipeLeft: (_start, target) => { if (drawerOffered && !target?.closest("[data-swipe-close]")) setDrawerOpen(true); },
@@ -686,7 +695,39 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     ...(drawerOffered ? ["projectFiles" as const] : []),
     ...(tabs.length > 0 ? ["tabCard" as const] : []),
   ];
-  return <main className="screen project-screen" ref={screenRef}>
+  /** The session cards and the phone-side file cards, drawn by the phone's one
+   *  flat grid and by the tablet's two sections alike. */
+  const agentCards = tabs.map((tab) => <TabCard
+    key={tab.id}
+    tab={tab}
+    draft={drafts[tab.id]}
+    statusShown={showsStatusBadge(seenDone, seenInterrupted, tab)}
+    drag={drag}
+    canReorder={canReorder}
+    schedulesOffered={schedulesOffered(tab, terminalsOffered, detail?.desktop_available)}
+    restart={terminalsOffered && tab.kind === "agent" && !tab.on_host ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
+    swiped={swipedId === tab.id}
+    closing={closingId !== null}
+    moreOpen={moreTab?.id === tab.id}
+    scheduleOpen={scheduleTab?.tab.id === tab.id}
+    onOpen={() => (!tab.available && terminalsOffered && tab.kind === "agent" && !tab.on_host ? void startTab(tab) : openTab(tab))}
+    onModel={() => terminal(tab, { pickModel: true })}
+    onMore={() => setMoreTab(tab)}
+    onSchedule={() => setScheduleTab({ tab })}
+    onSubagents={() => setSubagentsTab(tab)}
+    onClose={() => void close(tab)}
+  />);
+  const fileCards = shownFileTabs.map((file) => <FileTabCard
+    key={fileTabKey(file)}
+    file={file}
+    swipeKey={fileTabKey(file)}
+    swiped={swipedId === fileTabKey(file)}
+    unsent={unsentMarks[fileTabKey(file)] ?? 0}
+    linked={file.tab ? tabs.find((row) => row.id === file.tab && row.kind === "agent") : undefined}
+    onOpen={() => setFileTabOpen(file)}
+    onForget={() => closeFileTab(id, file)}
+  />);
+  return <main className="screen project-screen" ref={screenRef} data-steer-pane={tier === "split" ? "detail" : undefined}>
     {/* One dense row, shaped like an agent tab's header: chevron, the name
         (ellipsized) with the order it sorts by under it, then the drawer's ☰
         — so the name keeps the rest. Sticky, so the way back and the menu
@@ -698,7 +739,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         order is the desktop's own tab order — the one a drag writes into. Plain
         text while there is only one tab to order. */}
     <header className="project-header">
-      <button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>
+      {!split && <button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>}
       <div className="terminal-title">{tabs.length > 1
         ? <><h1><button
           className="project-title"
@@ -710,6 +751,32 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           <small>{t("mobile.project.sortedBy", { order: t(SORT_LABEL[sort]) })}</small></>
         : <h1>{projectName}</h1>}</div>
       <div className="project-header-tools">
+        {/* A tablet has the room the phone lacks: the collected prompts and the
+            new tab are header actions here, in place of the row under the
+            cards and the floating ＋ (a phone keeps both). */}
+        {tablet && <>
+          {isUntested("mobile.tablet") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+          <button
+            className="project-prompts-button"
+            disabled={!detail}
+            onClick={() => setPromptsOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={promptsOpen}
+            aria-label={t("agentPrompts.heading")}
+            title={t("agentPrompts.heading")}
+          ><ClockIcon size="1em" /><span className="project-action-label">{t("agentPrompts.heading")}</span></button>
+          {fabOffered && <button
+            className="primary project-new-tab"
+            data-steer-act="new"
+            disabled={!detail}
+            {...fabPress}
+            aria-haspopup="dialog"
+            aria-expanded={newTabOpen}
+            aria-busy={creating}
+            aria-label={t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send")}
+            title={quickTarget ? t("mobile.project.fabQuick", { agent: quickLabel ?? "" }) : t(creates ? "mobile.project.newTabTitle" : "mobile.projectInbox.send")}
+          ><PlusIcon size="1em" /><span>{t(creates ? "mobile.newTab.title" : "mobile.projectInbox.send")}</span></button>}
+        </>}
         {/* What this project has besides its tabs — the agent's files (the
             🖼 the Focus screen carries), Git and the file browser — lives in
             the drawer a right→left swipe also pulls in. The 🔍 goes straight
@@ -777,41 +844,29 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     {detail && tabs.length === 0 && shownFileTabs.length === 0 && <div className="project-empty">
       <span className="project-empty-glyph" aria-hidden="true"><WindowIcon size="1em" /></span>
       <strong>{t("mobile.project.emptyTitle")}</strong>
-      <p>{t(!fabOffered ? "mobile.project.emptyHintNone" : !creates ? "mobile.project.emptyHintFiles" : createVerdict === "agents" ? "mobile.project.emptyHintAgents" : "mobile.project.emptyHint")}</p>
+      <p>{t(!fabOffered ? "mobile.project.emptyHintNone" : !creates ? (tablet ? "mobile.project.tabletEmptyHintFiles" : "mobile.project.emptyHintFiles") : createVerdict === "agents" ? (tablet ? "mobile.project.tabletEmptyHintAgents" : "mobile.project.emptyHintAgents") : tablet ? "mobile.project.tabletEmptyHint" : "mobile.project.emptyHint")}</p>
     </div>}
-    <section className="cards">{tabs.map((tab) => <TabCard
-      key={tab.id}
-      tab={tab}
-      draft={drafts[tab.id]}
-      statusShown={showsStatusBadge(seenDone, seenInterrupted, tab)}
-      drag={drag}
-      canReorder={canReorder}
-      schedulesOffered={schedulesOffered(tab, terminalsOffered, detail?.desktop_available)}
-      restart={terminalsOffered && tab.kind === "agent" && !tab.on_host ? { busy: startingId !== null, starting: startingId === tab.id } : undefined}
-      swiped={swipedId === tab.id}
-      closing={closingId !== null}
-      moreOpen={moreTab?.id === tab.id}
-      scheduleOpen={scheduleTab?.tab.id === tab.id}
-      onOpen={() => (!tab.available && terminalsOffered && tab.kind === "agent" && !tab.on_host ? void startTab(tab) : openTab(tab))}
-      onModel={() => terminal(tab, { pickModel: true })}
-      onMore={() => setMoreTab(tab)}
-      onSchedule={() => setScheduleTab({ tab })}
-      onSubagents={() => setSubagentsTab(tab)}
-      onClose={() => void close(tab)}
-    />)}
-    {/* The PDFs opened from the file drawer, after the sessions: the phone's
-        own cards, so the desktop opens nothing and ✕ only forgets one. The
-        drawer's switch gates them, as it gates the files they read. */}
-    {shownFileTabs.map((file) => <FileTabCard
-      key={fileTabKey(file)}
-      file={file}
-      swipeKey={fileTabKey(file)}
-      swiped={swipedId === fileTabKey(file)}
-      unsent={unsentMarks[fileTabKey(file)] ?? 0}
-      linked={file.tab ? tabs.find((row) => row.id === file.tab && row.kind === "agent") : undefined}
-      onOpen={() => setFileTabOpen(file)}
-      onForget={() => closeFileTab(id, file)}
-    />)}</section>
+    {tablet
+      ? <section className="cards project-sections">
+        {/* A tablet's two sections, each with its headline and count: the
+            agents' cards (the order a drag arranges, in the desktop's own tab
+            order), then the files in one grouped surface. */}
+        {tabs.length > 0 && <div className="project-group project-agents">
+          <h2 className="project-group-head">{t("mobile.project.sectionAgents")}<span className="project-group-count">{tabs.length}</span></h2>
+          <div className="project-group-body">{agentCards}</div>
+        </div>}
+        {shownFileTabs.length > 0 && <div className="project-group project-files">
+          <h2 className="project-group-head">{t("mobile.project.sectionFiles")}<span className="project-group-count">{shownFileTabs.length}</span></h2>
+          <div className="project-group-body">{fileCards}</div>
+        </div>}
+      </section>
+      : <section className="cards">
+        {agentCards}
+        {/* The PDFs opened from the file drawer, after the sessions: the phone's
+            own cards, so the desktop opens nothing and ✕ only forgets one. The
+            drawer's switch gates them, as it gates the files they read. */}
+        {fileCards}
+      </section>}
     {/* The list's gestures, said once under it in one muted line: gone for
         good once dismissed, and each half once its gesture has been used. */}
     {(showReorderHint || showSwipeHint) && <p className="project-hint">
@@ -822,7 +877,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       </span>
       <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
     </p>}
-    <div className="project-foot">
+    {(!tablet || closedRows.length > 0) && <div className="project-foot">
       {/* Agent tabs closed on either surface, newest first, folded under one
           row: a tap reopens one on the desktop, resuming its conversation,
           and its card comes back. */}
@@ -844,15 +899,15 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
           ? <><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span> {t("mobile.project.reopening", { label: row.label })}{isUntested("mobile.project.reopening") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
           : <>{row.label}</>}</button>)}
       </section>}
-      <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}><span aria-hidden="true" className="project-foot-icon"><ClockIcon size="1em" /></span>{t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>
-    </div>
+      {!tablet && <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}><span aria-hidden="true" className="project-foot-icon"><ClockIcon size="1em" /></span>{t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>}
+    </div>}
     {/* Opening a session is what this screen is for, so it rides above the
         list where the thumb already is, rather than in the header's corner
         (`NewTabSheet`). It opens without the desktop too: sending a file from
         the phone needs only this host, and the sheet holds its create buttons
         instead — the notice above says why. On a host with no tmux it stays
         for that file row alone, and is named after it. */}
-    {fabOffered && <button
+    {fabOffered && !tablet && <button
       className="primary fab fab-round"
       data-steer-act="new"
       disabled={!detail}
