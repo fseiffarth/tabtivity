@@ -135,6 +135,53 @@ planned 3a / 3b split was dropped because both halves touch
 - Tests: `src/__tests__/shell/SteeringPopout.test.tsx` (11 in all);
   `DetachedTwoHeap` +1 (besideActive add, 29).
 
+## Step 4 — between windows: owner, Up, J, main-only keys
+
+Commit: `feat(steering): steering follows the keyboard between windows`
+
+- `stores/detached.ts`: `SteerAct`, `DetachedSteerPayload` (`DETACHED_STEER`,
+  now with `label`, `act`, `shown`), `detachedSteerEvent(label)` +
+  `DetachedSteerRequest`, `STEERING_OWNER` / `MAIN_STEERING_LABEL` ("main"),
+  `STEERING_STATUS` (name only; step 5 uses it). The host's `DETACHED_STEER`
+  handler only re-dispatches `STEER_FROM_POPOUT` with the payload as `detail`;
+  the focus decision moved into `useSteering` (J may raise another popout
+  instead of the main window).
+- `useSteering`:
+  - `enterSteering` announces `STEERING_OWNER { label }`; a listener on it
+    leaves steering (or drops a lent box's `handedTo`) when another label
+    announces. A sender never ends its own steering.
+  - `whenFocused(run)`: rule 1 (`document.hasFocus()`, else wait for this
+    window's `focus` up to `STEER_HANDOVER_WAIT_MS` = 800, then drop).
+  - `arrive(act)`: enters (or, already on, resets to the tabs level), announces,
+    then runs a handed-over action through `steerCommon` (synthetic keydown
+    carrying `shift`).
+  - Main: `STEER_FROM_POPOUT` → `raiseMainWindow()` (`unminimize()` then
+    `setFocus()`, errors swallowed) + `whenFocused(arrive)`; a popout's J picks
+    `popoutAfter(scope, label)` and raises it (`raisePopout`) + sends it
+    `enter`, else goes to the main window. A missing `detail` reads as `enter`.
+  - Main J: `focusNextPopout` now returns the raised label; the existing visit
+    guard now guards sending `enter` to it (it used to `exitSteering()`).
+  - Popout: listens on `detachedSteerEvent(label)`; Up in `chrome` sends
+    `enter`; `POPOUT_MAIN_ONLY` keys and J send `action`. Status jumps and Back
+    are still swallowed (step 5).
+  - `STEER_FROM_POPOUT` is listened for only on the main surface.
+- `lib/window/focusPopout.ts`: `popoutAfter`, `raisePopout` (sets the shared
+  `lastRaised`), `focusNextPopout` → `Promise<string | null>`.
+- Legend: row "To the main window" (↑ on a popout's title bar). The J row's
+  description (`steering.popout.desc`, all locales) no longer says steering
+  ends.
+- Tests: new `src/__tests__/windows/SteeringHandover.test.tsx` (5: J with one
+  and two popouts, Up from the title bar, `/` = settings handed over, a target
+  without focus never announces). It runs one `useSteering` per heap (main +
+  1–2 popouts) on the shared jsdom document, with `document.hasFocus` stubbed.
+  Rewritten `shell/SteeringFromPopout.test.tsx` (payload, focus wait, drop
+  after 800 ms, arrival lands on tabs). Changed existing
+  `shell/SteeringCoverage.test.tsx` J case: after a successful raise the main
+  window now stays steering and sends `enter` (asserted through a mocked
+  `emit`) instead of ending steering — the plan replaces that behaviour.
+- Note: the plan's example key `,` for settings is not the default binding
+  (`/` is); tests use `/`.
+
 ## Flagged for user
 
 - Closing a popout tab with its × does not end the tab's minted local tmux

@@ -13,8 +13,14 @@ vi.mock("@tauri-apps/api/window", () => ({
     setFullscreen: vi.fn(),
   }),
 }));
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: vi.fn(() => Promise.resolve()),
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
 
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
+import { detachedSteerEvent } from "../../stores/detached";
 import { registerCockpitRoster } from "../../lib/shortcuts/steeringCockpit";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import type { DetachedGroup } from "../../stores/tabs/types";
@@ -99,6 +105,11 @@ afterEach(() => {
 
 describe("steering coverage", () => {
   it("keeps steering on failed focus and ignores a successful reply from an older visit", async () => {
+    // A raised popout is asked to take steering (`detachedSteerEvent`); this
+    // window steers on until it announces itself.
+    const asked = () =>
+      vi.mocked(emit).mock.calls.filter(([event]) => event === detachedSteerEvent("detached-test")).length;
+    vi.mocked(emit).mockClear();
     render(<Keyboard />);
     on();
     press({ key: "j" });
@@ -116,10 +127,12 @@ describe("steering coverage", () => {
     on();
     await act(async () => { finish(true); });
     expect(steering().active).toBe(true);
+    expect(asked()).toBe(0);
     vi.mocked(invoke).mockResolvedValueOnce(true);
     press({ key: "j" });
     await settle();
-    expect(steering().active).toBe(false);
+    expect(asked()).toBe(1);
+    expect(steering().active).toBe(true);
   });
 
   it("uses Root popouts while Root is shown, and retries a failed first popout", async () => {

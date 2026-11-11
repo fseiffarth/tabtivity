@@ -1218,6 +1218,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: ["region"], when: "chromeRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.titleBarWalk.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
   { actions: ["down"], labelKey: "steering.titleBarDown.label", descKey: "steering.titleBarDown.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
+  { actions: ["up"], labelKey: "steering.upMain.label", descKey: "steering.upMain.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.overlayRow.label", descKey: "steering.overlayRow.desc", levels: ["region"], when: "overlayRegion", group: "move" },
   { actions: ["left"], labelKey: "steering.sideParent.label", descKey: "steering.sideParent.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["right"], labelKey: "steering.sideEnter.label", descKey: "steering.sideEnter.desc", levels: ["region"], when: "sideRegion", group: "move" },

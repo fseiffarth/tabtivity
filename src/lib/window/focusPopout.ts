@@ -2,7 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { steeringTabs } from "../shortcuts/steeringScope";
 import { useTabsStore } from "../../stores/tabs";
 
-/** The popout each scope's J raised last, so the next J takes the one after. */
+/** The popout each scope's J raised last, so the next J takes the one after.
+ *  Set by both paths — the main window's J and a popout's J the main window
+ *  answers — so the cycle main → popouts → main has one position. */
 const lastRaised = new Map<string, string>();
 
 /** The popout label to raise after `last` in `labels` (wrapping); the first
@@ -13,19 +15,25 @@ export function nextPopoutLabel(labels: readonly string[], last: string | undefi
   return labels[(i + 1) % labels.length];
 }
 
+/** The scope's popout labels, in the order J walks them. */
+function popoutLabels(scope: string): string[] {
+  return (useTabsStore.getState().detachedGroupsByScope[scope] ?? []).map((g) => g.label);
+}
+
 /**
- * Steering's J: raise the active scope's next popped-out subwindow and give it
- * the keyboard (`focus_detached_window`). The caller ends the initiating
- * steering visit after success. False when the scope has no popout or the raise
- * failed (a backend that predates the command included).
+ * A popout's J, as the main window answers it: the scope's popout after
+ * `label`, or null after the last one (J then goes back to the main window).
+ * A label the scope no longer lists also goes back to the main window.
  */
-export async function focusNextPopout(scope = steeringTabs().scope): Promise<boolean> {
-  const { detachedGroupsByScope } = useTabsStore.getState();
-  const label = nextPopoutLabel(
-    (detachedGroupsByScope[scope] ?? []).map((g) => g.label),
-    lastRaised.get(scope),
-  );
-  if (!label) return false;
+export function popoutAfter(scope: string, label: string): string | null {
+  const labels = popoutLabels(scope);
+  const i = labels.indexOf(label);
+  return i >= 0 && i + 1 < labels.length ? labels[i + 1] : null;
+}
+
+/** Raise one popout and give it the keyboard (`focus_detached_window`). False
+ *  when the raise failed (a backend that predates the command included). */
+export async function raisePopout(scope: string, label: string): Promise<boolean> {
   try {
     const focused = await invoke<boolean>("focus_detached_window", { label });
     if (focused) lastRaised.set(scope, label);
@@ -33,4 +41,16 @@ export async function focusNextPopout(scope = steeringTabs().scope): Promise<boo
   } catch {
     return false;
   }
+}
+
+/**
+ * Steering's J in the main window: raise the active scope's next popped-out
+ * subwindow and give it the keyboard. The raised popout's label, which the
+ * caller then asks to take steering; null when the scope has no popout or the
+ * raise failed.
+ */
+export async function focusNextPopout(scope = steeringTabs().scope): Promise<string | null> {
+  const label = nextPopoutLabel(popoutLabels(scope), lastRaised.get(scope));
+  if (!label) return null;
+  return (await raisePopout(scope, label)) ? label : null;
 }

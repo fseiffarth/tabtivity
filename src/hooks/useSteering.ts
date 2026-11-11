@@ -11,7 +11,21 @@ import { inCockpitRoster, runCockpitRoster, selectCockpitCursor, stepCockpitArea
 import { useEffect } from "react";
 import { ROOT_SCOPE, allGroups, findGroup, useTabsStore } from "../stores/tabs";
 import { steeringInRoot, steeringTabs, steeringTabsActive } from "../lib/shortcuts/steeringScope";
-import { POPOUT_HANDS_OVER } from "../lib/shortcuts/steeringPopout";
+import { POPOUT_HANDS_OVER, POPOUT_MAIN_ONLY } from "../lib/shortcuts/steeringPopout";
+import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeTauri } from "./useTauriListener";
+import { getDetachedWindowContext } from "../stores/detachedContext";
+import {
+  DETACHED_STEER,
+  MAIN_STEERING_LABEL,
+  STEERING_OWNER,
+  detachedSteerEvent,
+  type DetachedSteerPayload,
+  type DetachedSteerRequest,
+  type SteerAct,
+} from "../stores/detached";
+import { popoutAfter, raisePopout } from "../lib/window/focusPopout";
 import { reopenClosedAgentTab } from "../stores/agents/closedAgentTabs";
 import { useProjectsStore } from "../stores/projects";
 import { useSettingsStore } from "../stores/settings";
@@ -24,6 +38,7 @@ import {
 import { useActivityStore } from "../stores/activity";
 import { jumpToTab } from "../lib/shortcuts/tabJump";
 import { focusNextPopout } from "../lib/window/focusPopout";
+
 import { STEER_FROM_POPOUT, isTextKey, steeringChordFires } from "../lib/shortcuts/steeringChord";
 import {
   afterStatusJump,
@@ -124,6 +139,14 @@ const BESIDE_ACTIVE = { besideActive: true } as const;
  */
 export const STEERING_BLUR_GRACE_MS = 60_000;
 
+/**
+ * How long a window asked to take steering (by another window's J, Up or a
+ * handed-over key) waits for the keyboard to arrive before it drops the
+ * request. Without the keyboard it never enters, so the sender — which keeps
+ * steering until a window announces itself — stays where the keys still go.
+ */
+export const STEER_HANDOVER_WAIT_MS = 800;
+
 export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOptions) {
   useEffect(() => {
     // A popout window (`DetachedApp`): its own subwindows and tabs, read through
@@ -193,14 +216,127 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // the dialog or menu on top, when one is up (back from typing in one of its
     // fields, say); Escape then closes it.
     const enterSteering = () => {
+      cancelArrival();
       focusSomeGroup();
       useKeyboardSteeringStore.getState().enter();
+      announceOwner();
       syncLayer();
     };
-    // A popout's request (`DETACHED_STEER`): steering comes on here, where the
-    // keyboard was sent back.
-    const onSteerFromPopout = () => {
-      if (!useKeyboardSteeringStore.getState().active) enterSteering();
+
+    // ── Between windows ────────────────────────────────────────────────────
+    // One window steers at a time, and steering follows the keyboard: a window
+    // that takes it announces itself (`STEERING_OWNER`) and every other one
+    // leaves. A window that hands steering over keeps it until it hears the
+    // target's announcement, so a focus move the window manager refused leaves
+    // steering where the keys still go.
+    const myLabel = popout ? (getDetachedWindowContext()?.label ?? "") : MAIN_STEERING_LABEL;
+    const announceOwner = () => {
+      try {
+        void emit(STEERING_OWNER, { label: myLabel }).catch(() => {});
+      } catch {
+        /* no Tauri event bus */
+      }
+    };
+    const sendSteer = (event: string, payload: unknown) => {
+      try {
+        void emit(event, payload).catch(() => {});
+      } catch {
+        /* no Tauri event bus */
+      }
+    };
+    // Another window took steering: this one steps aside, and a box it lent
+    // the keyboard to no longer brings it back.
+    const onOwner = (label: string) => {
+      if (label === myLabel) return;
+      cancelArrival();
+      const s = useKeyboardSteeringStore.getState();
+      if (s.active) exitSteering();
+      else if (s.handedTo) s.dropHandoff();
+    };
+    // A request to take steering waits for the keyboard (`STEER_HANDOVER_WAIT_MS`).
+    let pendingArrival: (() => void) | null = null;
+    const cancelArrival = () => {
+      const cancel = pendingArrival;
+      pendingArrival = null;
+      cancel?.();
+    };
+    const whenFocused = (run: () => void) => {
+      cancelArrival();
+      if (document.hasFocus()) {
+        run();
+        return;
+      }
+      const go = () => {
+        cancelArrival();
+        run();
+      };
+      const timer = window.setTimeout(cancelArrival, STEER_HANDOVER_WAIT_MS);
+      window.addEventListener("focus", go);
+      pendingArrival = () => {
+        window.clearTimeout(timer);
+        window.removeEventListener("focus", go);
+      };
+    };
+    // Every arrival lands on this window's tabs level; a handed-over key then
+    // runs here as if pressed here.
+    const arrive = (act: SteerAct) => {
+      const s = useKeyboardSteeringStore.getState();
+      if (!s.active) enterSteering();
+      else {
+        cancelPlace();
+        clearRegionCursor();
+        dropOverlay();
+        panelOpenedBySteering = false;
+        focusSomeGroup();
+        s.setLevel("tabs");
+        announceOwner();
+      }
+      if (act.kind === "action") steerCommon(new KeyboardEvent("keydown", { shiftKey: act.shift }), act.action);
+    };
+    // The main window comes forward (un-minimized, focused) for a popout's
+    // request; the arrival then waits for the keyboard.
+    const raiseMainWindow = () => {
+      try {
+        const win = getCurrentWindow();
+        void win
+          .unminimize()
+          .then(() => win.setFocus())
+          .catch(() => {});
+      } catch {
+        /* no Tauri window */
+      }
+    };
+    // Main: a popout's request (`DETACHED_STEER` → `STEER_FROM_POPOUT`). Its J
+    // goes on to the scope's next popout, after the last one to this window.
+    const onSteerFromPopout = (e: Event) => {
+      const request = (e as CustomEvent<DetachedSteerPayload | null>).detail;
+      const act: SteerAct = request?.act ?? { kind: "enter" };
+      if (request && act.kind === "action" && act.action === "popout") {
+        const next = popoutAfter(request.scope, request.label);
+        if (next) {
+          void raisePopout(request.scope, next).then((raised) => {
+            if (raised) sendSteer(detachedSteerEvent(next), { act: { kind: "enter" } } satisfies DetachedSteerRequest);
+          });
+          return;
+        }
+        raiseMainWindow();
+        whenFocused(() => arrive({ kind: "enter" }));
+        return;
+      }
+      raiseMainWindow();
+      whenFocused(() => arrive(act));
+    };
+    // Popout: hand steering, or a key, to the main window.
+    const sendToMain = (act: SteerAct) => {
+      const ctx = getDetachedWindowContext();
+      if (!ctx) return;
+      sendSteer(DETACHED_STEER, {
+        scope: ctx.scope,
+        groupId: ctx.groupId,
+        label: ctx.label,
+        act,
+        shown: shownStatusTab(),
+      } satisfies DetachedSteerPayload);
     };
     const exitSteering = () => {
       cancelPlace();
@@ -768,9 +904,14 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // The keys every tab-bar level shares.
     function steerCommon(e: KeyboardEvent, action: SteeringAction | null) {
       // A popout does not run a key whose target is the main window's, or one
-      // that crosses windows: it is swallowed here (the handover to the main
-      // window is the cross-window protocol's).
-      if (popout && action && POPOUT_HANDS_OVER.has(action)) return;
+      // that crosses windows: it hands it to the main window, which runs it
+      // there (J: the next popout, or the main window after the last one).
+      if (popout && action && POPOUT_HANDS_OVER.has(action)) {
+        if (POPOUT_MAIN_ONLY.has(action) || action === "popout") {
+          sendToMain({ kind: "action", action, shift: e.shiftKey });
+        }
+        return;
+      }
       const status = action ? STATUS_ACTIONS[action] : undefined;
       if (status) {
         // Next (Shift: previous) tab needing an answer / working / finished,
@@ -817,8 +958,9 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           openSidePanel();
           return;
         // The project's popped-out subwindow (the next one, with several): its
-        // window takes the keyboard, so steering ends here (a plain blur keeps
-        // it, `onBlur`).
+        // window takes the keyboard and is asked to take steering too. This
+        // window keeps steering until that one announces itself
+        // (`STEERING_OWNER`), so a refused focus move leaves it here.
         case "popout": {
           const visit = useKeyboardSteeringStore.getState().visit;
           const scope = steeringTabs().scope;
@@ -826,12 +968,14 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           const tab = steeringTabsActive()?.tab.key;
           const group = steeringTabs().focusedGroupId;
           const view = useRootOverlayStore.getState().view;
-          void focusNextPopout(scope).then((focused) => {
+          void focusNextPopout(scope).then((label) => {
             const now = useKeyboardSteeringStore.getState();
-            if (focused && now.active && now.visit === visit && steeringTabs().scope === scope &&
+            if (label && now.active && now.visit === visit && steeringTabs().scope === scope &&
                 now.level === before.level && now.region === before.region &&
                 steeringTabsActive()?.tab.key === tab && steeringTabs().focusedGroupId === group &&
-                useRootOverlayStore.getState().view === view) exitSteering();
+                useRootOverlayStore.getState().view === view) {
+              sendSteer(detachedSteerEvent(label), { act: { kind: "enter" } } satisfies DetachedSteerRequest);
+            }
           });
           return;
         }
@@ -914,10 +1058,13 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           }
           if (region === "chrome") {
             // The root window's bar, the same shape: ↓ drops a menu or goes
-            // back down to Root's tabs; ↑ goes on up to the projects. A
-            // popout's title bar has nothing above it in this window.
+            // back down to Root's tabs; ↑ goes on up to the projects. Above a
+            // popout's title bar is the main window: ↑ hands the keyboard over.
             if (action === "up") {
-              if (popout) return;
+              if (popout) {
+                sendToMain({ kind: "enter" });
+                return;
+              }
               clearRegionCursor();
               useKeyboardSteeringStore.getState().setLevel("projects");
             } else if (!openCursorPopup()) leaveRegion(region);
@@ -1269,8 +1416,20 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     document.addEventListener("pointerdown", onSteeringPointerDown, true);
     window.addEventListener("blur", onBlur);
     window.addEventListener("focus", onFocus);
-    window.addEventListener(STEER_FROM_POPOUT, onSteerFromPopout);
+    if (!popout) window.addEventListener(STEER_FROM_POPOUT, onSteerFromPopout);
+    const unlistenOwner = subscribeTauri(() =>
+      listen<{ label: string }>(STEERING_OWNER, (ev) => onOwner(ev.payload.label)),
+    );
+    // A popout is asked by the main window (its J, a status jump) to steer.
+    const unlistenRequest = popout
+      ? subscribeTauri(() =>
+          listen<DetachedSteerRequest>(detachedSteerEvent(myLabel), (ev) => whenFocused(() => arrive(ev.payload.act))),
+        )
+      : () => {};
     return () => {
+      cancelArrival();
+      unlistenOwner();
+      unlistenRequest();
       cancelPlace();
       for (const id of syncTimers) window.clearTimeout(id);
       unsubscribeScroll();

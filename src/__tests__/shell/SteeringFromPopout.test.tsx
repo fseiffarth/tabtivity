@@ -1,8 +1,9 @@
 /**
- * The steering chord pressed in a popout: the popout has no steering of its
- * own, so it sends the chord to the main window (`DETACHED_STEER`), which turns
- * steering on there (`STEER_FROM_POPOUT`). Both windows hold the chord back in
- * a typing burst the same way (`steeringChordFires`).
+ * A popout handing steering to the main window (`DETACHED_STEER`, passed on by
+ * the main window's host as `STEER_FROM_POPOUT` with the popout's payload): the
+ * main window takes steering only once it has the keyboard, and lands on its
+ * tabs. Both windows hold the chord back in a typing burst the same way
+ * (`steeringChordFires`). The full round trips are `windows/SteeringHandover`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -16,6 +17,8 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { useKeyboard } from "../../hooks/useKeyboard";
+import { STEER_HANDOVER_WAIT_MS } from "../../hooks/useSteering";
+import type { DetachedSteerPayload } from "../../stores/detached";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
@@ -60,6 +63,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   document.body.innerHTML = "";
+  vi.restoreAllMocks();
 });
 
 describe("steering chord", () => {
@@ -80,12 +84,23 @@ describe("steering chord", () => {
 });
 
 describe("steering from a popout", () => {
-  it("turns steering on in the main window, on its tabs", () => {
+  const request = (act: DetachedSteerPayload["act"]) =>
+    new CustomEvent<DetachedSteerPayload>(STEER_FROM_POPOUT, {
+      detail: { scope: "p", groupId: "pop", label: "detached-p-pop", act },
+    });
+
+  it("turns steering on in the main window, on its tabs, once it has the keyboard", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
     useTabsStore.getState().addTab({ label: "a", cmd: "bash", cwd: "/p", kind: "shell" });
     useTabsStore.setState({ focusedGroupId: null });
     render(<Harness />);
     act(() => {
-      window.dispatchEvent(new CustomEvent(STEER_FROM_POPOUT));
+      window.dispatchEvent(request({ kind: "enter" }));
+    });
+    // Not yet: the window manager has not handed this window the keyboard.
+    expect(steering().active).toBe(false);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
     });
     expect(steering()).toMatchObject({ active: true, level: "tabs" });
     // A subwindow holds the focus for the tabs level to walk.
@@ -94,7 +109,29 @@ describe("steering from a popout", () => {
     );
   });
 
-  it("leaves steering that is already on where it is", () => {
+  it("drops the request when the keyboard never arrives", () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      useTabsStore.getState().addTab({ label: "a", cmd: "bash", cwd: "/p", kind: "shell" });
+      render(<Harness />);
+      act(() => {
+        window.dispatchEvent(request({ kind: "enter" }));
+      });
+      act(() => {
+        vi.advanceTimersByTime(STEER_HANDOVER_WAIT_MS + 1);
+      });
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(steering().active).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an arrival while steering is on lands on the tabs", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
     useTabsStore.getState().addTab({ label: "a", cmd: "bash", cwd: "/p", kind: "shell" });
     render(<Harness />);
     act(() => {
@@ -102,8 +139,8 @@ describe("steering from a popout", () => {
       useKeyboardSteeringStore.getState().setLevel("projects");
     });
     act(() => {
-      window.dispatchEvent(new CustomEvent(STEER_FROM_POPOUT));
+      window.dispatchEvent(request({ kind: "enter" }));
     });
-    expect(steering()).toMatchObject({ active: true, level: "projects" });
+    expect(steering()).toMatchObject({ active: true, level: "tabs" });
   });
 });

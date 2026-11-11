@@ -296,7 +296,7 @@ describe("steering in a popout", () => {
     try {
       mount();
       chord();
-      press(",");
+      press("/");
       press("m");
       expect(opened).not.toHaveBeenCalled();
       expect(steering()).toMatchObject({ active: true, level: "tabs", region: null });

@@ -61,6 +61,8 @@ import { isTabColor, type TabColor } from "../lib/theme/tabColors";
 import { normalizeStackName } from "../lib/tabStacks";
 import { isTabMark, type TabMark } from "../lib/tabMarks";
 import { STEER_FROM_POPOUT } from "../lib/shortcuts/steeringChord";
+import type { SteeringAction } from "../lib/shortcuts/steeringBindings";
+import type { StatusTab } from "../lib/shortcuts/statusJump";
 
 /** Parsed `?detached=<scope>:<groupId>` query. */
 export interface DetachedParam {
@@ -133,11 +135,50 @@ export const DETACHED_HIDE = "detached-hide";
  */
 export const DETACHED_REOPEN = "detached-reopen";
 /**
- * Detached → main: the steering chord was pressed in a popout. Steering lives
- * in the main window only, so the main window takes the keyboard back and
- * turns it on there (`STEER_FROM_POPOUT`). Same envelope shape as the dock.
+ * Keyboard steering between windows (`useSteering`; one window steers at a
+ * time and steering follows the keyboard). What a window asks of another:
+ *  - `enter`: take steering, landing on the tabs level;
+ *  - `tab`: take steering on this tab (a status jump's target);
+ *  - `action`: run this steering key here (a popout's main-only key, J, a
+ *    status jump or Back), `shift` as pressed.
+ */
+export type SteerAct =
+  | { kind: "enter" }
+  | { kind: "tab"; key: string }
+  | { kind: "action"; action: SteeringAction; shift: boolean };
+
+/**
+ * Detached → main: a popout hands steering (or a key) to the main window —
+ * Up from its title bar, a main-only key, J, a status jump. `shown` is the
+ * popout's active tab, for the status jumps and Back. The main window's host
+ * passes it on as `STEER_FROM_POPOUT`; `useSteering` answers it.
  */
 export const DETACHED_STEER = "detached-steer";
+export interface DetachedSteerPayload {
+  scope: string;
+  groupId: string;
+  label: string;
+  act: SteerAct;
+  shown?: StatusTab | null;
+}
+/** Main → one popout (namespaced like the seed): take steering. */
+export const detachedSteerEvent = (label: string) => `detached-steer-${label}`;
+export interface DetachedSteerRequest {
+  act: SteerAct;
+}
+/**
+ * Any window → all: "I am steering now" (`label`: the window's, `"main"` for
+ * the main window). Every other window that steers, or waits on a box it lent
+ * the keyboard to, leaves quietly. A handover never ends steering in the
+ * sender by itself: a target that did not get the keyboard never announces.
+ */
+export const STEERING_OWNER = "steering-owner";
+export const MAIN_STEERING_LABEL = "main";
+/**
+ * Main → all popouts: the main window's status counts and whether Back has a
+ * tab to go to, for a popout's steering bar (it cannot count them itself).
+ */
+export const STEERING_STATUS = "steering-status";
 /** Detached → main: the popout's OS geometry changed (persisted for respawn). */
 export const DETACHED_BOUNDS = "detached-bounds";
 /**
@@ -1243,13 +1284,10 @@ export async function listenDetachedHost(): Promise<() => void> {
     if (reopenClosedAgentTab(scope, undefined, groupId)) void persistScopeNow(scope);
   });
 
-  await on<DetachedDockEnvelope>(DETACHED_STEER, () => {
-    try {
-      void getCurrentWindow().setFocus().catch(() => {});
-    } catch {
-      /* no Tauri window (tests) */
-    }
-    window.dispatchEvent(new CustomEvent(STEER_FROM_POPOUT));
+  // A popout hands steering or a key over: `useSteering` decides whether this
+  // window takes the keyboard (J may go on to another popout instead).
+  await on<DetachedSteerPayload>(DETACHED_STEER, (ev) => {
+    window.dispatchEvent(new CustomEvent<DetachedSteerPayload>(STEER_FROM_POPOUT, { detail: ev.payload }));
   });
 
   await on<DetachedDockEnvelope>(DETACHED_HIDE, (ev) => {
