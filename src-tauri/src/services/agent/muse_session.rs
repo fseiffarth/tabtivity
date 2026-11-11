@@ -247,7 +247,7 @@ pub fn folder_chats(home: &Path, directory: &str, offset: usize, limit: usize, s
         let (turns, _) = turns(&raw, &session.id);
         let mut prompts = turns.iter().filter(|t| t.role == "prompt" && !t.text.trim().is_empty());
         let Some(first) = prompts.next() else { continue };
-        let last = prompts.last().map(|t| t.text.clone()).filter(|text| *text != first.text);
+        let last = prompts.next_back().map(|t| t.text.clone()).filter(|text| *text != first.text);
         let updated = file.open_read()
             .and_then(|f| f.metadata().ok()?.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
