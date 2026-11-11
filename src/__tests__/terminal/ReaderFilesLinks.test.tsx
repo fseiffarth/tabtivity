@@ -20,18 +20,19 @@ const doc = link("https://docs.example.org/guide", { from: "you" });
 
 const base = { picked: null, projectId: "p", visible: true, onPick: () => {}, onOpenTab: () => {}, onClose: () => {} };
 
-describe("Reader Files: the Links section", () => {
+describe("Reader Data: Files and Links sections", () => {
   it("heads both groups once files and links both exist", () => {
     const { container } = render(<TerminalReaderFiles {...base} files={[file]} links={[pr, doc]} onOpenLink={() => {}} />);
+    expect(screen.getByRole("complementary", { name: "Data" })).toBeTruthy();
     const headings = [...container.querySelectorAll(".terminal-files-heading")].map((el) => el.textContent);
     expect(headings.map((text) => text?.replace(/untested$/, ""))).toEqual(["Files", "Links"]);
     expect(within(screen.getByRole("listbox", { name: "Links this conversation names" })).getAllByRole("option")).toHaveLength(2);
     expect(within(screen.getByRole("listbox", { name: "Files this conversation names" })).getAllByRole("option")).toHaveLength(1);
   });
 
-  it("shows no heading with files only, as before", () => {
+  it("labels the Files section when it is the only section", () => {
     const { container } = render(<TerminalReaderFiles {...base} files={[file]} links={[]} onOpenLink={() => {}} />);
-    expect(container.querySelector(".terminal-files-heading")).toBeNull();
+    expect(container.querySelector(".terminal-files-heading")?.textContent).toBe("Files");
     expect(screen.queryByRole("listbox", { name: "Links this conversation names" })).toBeNull();
   });
 
@@ -71,6 +72,7 @@ describe("Reader Files: the Links section", () => {
 
   it("says a link opens in the browser when only links exist", () => {
     render(<TerminalReaderFiles {...base} files={[]} links={[pr]} onOpenLink={() => {}} />);
+    expect(screen.getByText("Links")).toBeTruthy();
     expect(screen.getByText("No file named yet. A link opens in your browser once you confirm.")).toBeTruthy();
   });
 

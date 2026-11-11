@@ -83,7 +83,6 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
   const t = useT();
   const viewer = picked ? internalViewerFor(picked, disabled) : null;
   const linkRows = onOpenLink ? links : NO_LINKS;
-  const headed = files.length > 0 && linkRows.length > 0;
   const steering = useSteeringInside(steerId);
   const rows = rowsOf(files, linkRows);
   // The cursor is a key (path / URL), so rows arriving above it do not move it;
@@ -167,7 +166,7 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
         {(files.length > 0 || linkRows.length > 0) && (
           <div className="terminal-changes-files">
             {files.length > 0 && <>
-              {headed && <div className="terminal-files-heading">{t("terminal.readerFiles.filesHeading")}</div>}
+              <div className="terminal-files-heading">{t("terminal.readerFiles.filesHeading")}</div>
               <div className="terminal-files-group" role="listbox" aria-label={t("terminal.readerFiles.list")}>
                 {files.map((file) => {
                   const active = picked?.path === file.entry.path;
@@ -185,7 +184,7 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
             </>}
             {linkRows.length > 0 && onOpenLink && <>
               <div className="terminal-files-heading">
-                {headed ? t("terminal.readerFiles.linksHeading") : null}
+                {t("terminal.readerFiles.linksHeading")}
                 <UntestedTag id="terminal.reader.links" />
               </div>
               <div className="terminal-files-group" role="listbox" aria-label={t("terminal.readerFiles.linksList")}>

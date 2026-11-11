@@ -112,7 +112,7 @@ describe("desktop conversation toolbar", () => {
     render(<Pane host={host} />);
     await screen.findByText("hello");
     expect(screen.queryByRole("button", { name: /Subagents|Workspaces/ })).toBeNull();
-    expect((screen.getByRole("tab", { name: /^Files/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("tab", { name: /^Data/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("returns to Chat when a prompt or dropped file is inserted while reviewing Diffs", async () => {
@@ -129,7 +129,7 @@ describe("desktop conversation toolbar", () => {
   it("lists the conversation's files in the Files tab with the picked one in its viewer", async () => {
     entries.push({ kind: "answer", text: "Updated src/result.ts", at: "2026-10-25T09:01:00Z" });
     render(<Pane host={host} />);
-    const filesTab = screen.getByRole("tab", { name: /^Files/ }) as HTMLButtonElement;
+    const filesTab = screen.getByRole("tab", { name: /^Data/ }) as HTMLButtonElement;
     await waitFor(() => expect(filesTab.disabled).toBe(false));
     fireEvent.click(filesTab);
     const option = within(screen.getByRole("listbox", { name: "Files this conversation names" })).getByRole("option", { name: "src/result.ts" });
@@ -149,15 +149,15 @@ describe("desktop conversation toolbar", () => {
     entries.push({ kind: "answer", text: "Opened [the PR](https://github.com/o/r/pull/7) for you", at: "2026-10-25T09:01:00Z" });
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     render(<Pane host={host} />);
-    const filesTab = screen.getByRole("tab", { name: /^Files/ }) as HTMLButtonElement;
+    const filesTab = screen.getByRole("tab", { name: /^Data/ }) as HTMLButtonElement;
     await waitFor(() => expect(filesTab.disabled).toBe(false));
     fireEvent.click(filesTab);
     const row = within(screen.getByRole("listbox", { name: "Links this conversation names" })).getByRole("option");
-    // The target is shown, not only the label; no files, so no headings.
+    // The target is shown with its section heading, even without file rows.
     expect(row.textContent).toContain("github.com");
     expect(row.textContent).toContain("/o/r/pull/7");
     expect(row.textContent).toContain("the PR");
-    expect(host.querySelector(".terminal-files-heading")?.textContent).not.toContain("Links");
+    expect(host.querySelector(".terminal-files-heading")?.textContent).toContain("Links");
     expect(screen.getByText("No file named yet. A link opens in your browser once you confirm.")).toBeTruthy();
     expect(host.querySelector(".terminal-files a[href]")).toBeNull();
     fireEvent.click(row);
@@ -180,7 +180,7 @@ describe("desktop conversation toolbar", () => {
     expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(link);
     expect(openFile).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("tab", { name: /^Files/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: /^Data/ }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("file-viewer").textContent).toBe("/project/src/result.ts");
   });
 
@@ -201,7 +201,7 @@ describe("desktop conversation toolbar", () => {
     // No viewer tab to open: Ctrl+click shows it in the Files tab as well.
     fireEvent.click(link, { ctrlKey: true });
     expect(openFile).not.toHaveBeenCalled();
-    expect(screen.getByRole("tab", { name: /^Files/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: /^Data/ }).getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByTestId("file-viewer")).toBeNull();
     expect(screen.getByText("No in-app viewer shows this file.")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /^Open in a tab/ })).toBeNull();
