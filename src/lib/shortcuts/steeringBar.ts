@@ -202,7 +202,9 @@ export function barModel(
       items.unshift({ id: "upDown", group: "move", caps: keys, labelKey: "steering.bar.upDown" });
     }
   }
-  const rank = (i: BarItem) => (i.leave ? 100 : i.group === "mode" ? 90 : BAR_ORDER.indexOf(i.group));
+  // A popout's Main window key leads the bar: the way back is always there.
+  const rank = (i: BarItem) =>
+    i.id.startsWith("mainWindow|") ? -1 : i.leave ? 100 : i.group === "mode" ? 90 : BAR_ORDER.indexOf(i.group);
   // Array.sort is stable: the table's order holds inside a group.
   items.sort((a, b) => rank(a) - rank(b));
   return { items, caps };
@@ -273,8 +275,9 @@ export function regionLabel(region: SteeringRegion, popout?: boolean): Translati
  * the surface's name; lent to a box, to that level and the box.
  *
  * In a popout (`popout`) there is no projects level: the ladder is
- * Main window › Title bar › Subwindows › Tabs › Inside, the title bar lit
- * while its buttons are walked.
+ * Title bar › Subwindows › Tabs › Inside (no Subwindows rung with one), the
+ * title bar lit while its buttons are walked. The way to the main window is a
+ * key in the bar (`mainWindow`), not a rung: ↑ stops at the title bar.
  */
 export function ladder(opts: {
   level: SteeringLevel;
@@ -303,7 +306,6 @@ export function ladder(opts: {
     const titleBar = opts.level === "region" && opts.region === "chrome";
     if (titleBar || opts.level !== "region") {
       return [
-        { id: "main", labelKey: "steering.level.mainWindow" },
         { id: "titleBar", labelKey: "steering.region.titleBar", lit: titleBar },
         ...BASE_RUNGS.filter((r) => r.id !== "projects" && (!single || r.id !== "panes")).map((r) =>
           base(r.id, r.id === (opts.level === "panes" ? shown("panes") : opts.level)),

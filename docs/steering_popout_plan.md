@@ -58,14 +58,26 @@ Gaps found on the way, fixed by this plan because they sit in the touched code:
 
 ### The user's (2026-11-11; a reviewer may not undo them)
 
-U1. **Up above the popout's top level = its title bar, then the main window.**
+> **Replaced 2026-11-11, after the user tried it live.** "Up twice reaches the
+> main window" (U1) and "J cycles through the main window" (U2) are replaced by
+> one dedicated key: the user picked "One dedicated key — a single key shown
+> first in the popout's bar always goes back to the main window. J then only
+> walks popouts; Up stops at the title bar." The key is the steering action
+> `mainWindow` (scope `mode`, so every level and region of a popout; defaults
+> Home and 0; rebindable). It hands the keyboard over as `{ kind: "enter" }`,
+> and D4 still holds: the popout leaves steering only when the main window
+> announces itself. The main window ignores it and does not list it. The rest of
+> U1 and U2 stands as written below.
+
+U1. **Up above the popout's top level = its title bar.**
     The title bar's buttons are walked as a row (the popout's `chrome` region,
-    as Root has one). One more Up hands the keyboard to the main window with
-    steering on there.
-U2. **Steering follows the keyboard, and J cycles.** J in the main window
-    raises the next popout with steering already on in it. J in a popout goes
-    to the next popout of the scope, and after the last one back to the main
-    window. Only one window steers at a time.
+    as Root has one). Up stops there; the way to the main window is the
+    `mainWindow` key (see the note above).
+U2. **Steering follows the keyboard, and J walks the popouts.** J in the main
+    window raises the next popout with steering already on in it. J in a
+    popout goes to the next popout of the scope, wrapping to the first after
+    the last, never to the main window; with a single popout it does nothing.
+    Only one window steers at a time.
 U3. **Status jumps work across windows.** Q / R / X and Back in a popout walk
     the same list as in the main window. The jump lands on the tab wherever it
     lives (main window or any popout) and steering follows it. The same holds
@@ -100,8 +112,8 @@ D4. **A window enters steering only when it has the keyboard**, and announces
     when it hears the target's announcement. A focus move the window manager
     refused therefore leaves steering where the keyboard still is, the same
     rule `docs/steering_gaps_plan.md` §2 set for J.
-D5. **Every arrival in a window lands on its tabs level**: the chord, J, Up
-    from a popout's title bar, a main-only key (which then runs its action).
+D5. **Every arrival in a window lands on its tabs level**: the chord, J, the
+    `mainWindow` key, a main-only key (which then runs its action).
     A status jump lands on the target tab.
 D6. **The main window stays the owner of everything cross-project**: the
     status lists, the Back record (`jumpBack`), the popout order. A popout
@@ -126,8 +138,9 @@ D7. **No backend change.** Main → popout focus uses the existing
 | region `chrome` | The popout's title bar: dock back, hide, minimize, maximize, close. |
 | regions `side`, `header`, `settings`, `mail`, `calendar`, `todo`, `cockpit` | None. Reached by handover (U4). |
 
-Ladder in the bar: `Main window › Title bar › Subwindows › Tabs › Inside`
-(no Subwindows rung with one subwindow, as today).
+Ladder in the bar: `Title bar › Subwindows › Tabs › Inside` (no Subwindows
+rung with one subwindow, as today). The Main window key is the first key item
+of the bar, not a rung.
 
 Keys that act in the popout: arrows / E S D F, Tab (Reader view), Shift+arrows,
 W (close, asked first), N / O / 1–9 / + (new tabs), V (files column), `.`
@@ -137,8 +150,9 @@ chord (leave).
 
 Keys that hand over: project ←/→/digits do not exist (no projects level);
 `newProject`, `jumpProject`, `mail`, `calendar`, `todo`, `cockpit`,
-`sidePanel`, `panels`, `settings`. Cross-window keys: `popout` (J),
-`nextDecision` / `nextWorking` / `nextDone`, `jumpBack`.
+`sidePanel`, `panels`, `settings`. Cross-window keys: `popout` (J, the
+popouts only), `nextDecision` / `nextWorking` / `nextDone`, `jumpBack`, and
+`mainWindow` (Home / 0, a popout's way back to the main window).
 
 ## The cross-window protocol
 
@@ -288,7 +302,8 @@ the new files in the working tree and its `useKeyboard.ts` hunks ported to
     Up rule below), `carryFullscreen`.
   - Up on tabs with one subwindow, or on panes: `enterRegion("chrome")`. In
     `chrome`: ←/→ walk, Enter presses, ↓ leaves to the level it came from,
-    Up is the handover of step 4 (a no-op until then).
+    Up stops there (it was the handover of step 4 until 2026-11-11; the
+    `mainWindow` key replaced it).
   - Main-only and cross-window actions: collected in one
     `POPOUT_HANDS_OVER: ReadonlySet<SteeringAction>` beside
     `STATUS_ACTIONS`; in a popout `steerCommon` sends them (step 4/5) instead
@@ -321,8 +336,8 @@ the new files in the working tree and its `useKeyboard.ts` hunks ported to
     instead of `useTabsStore` (`CenterPanel.tsx:1387`), so the panes level
     shows the ↓/↑ badges.
 - `components/layout/SteeringLegend.tsx`: the six `useTabsStore` selectors
-  (`:99-110`) become `useSteeringTabs()`; `popouts` is true in a popout (J
-  always has the main window to go to); status counts and the Back cap come
+  (`:99-110`) become `useSteeringTabs()`; `popouts` is true in a popout (it
+  cannot count the other popouts, so J is always listed); status counts and the Back cap come
   from `STEERING_STATUS` in a popout (zero until step 5).
 - `lib/shortcuts/shortcuts.ts` / `steeringBar.ts`: `steeringKeysFor` and
   `ladder` take the surface. Popout: no projects rows; the hand-over actions
@@ -419,10 +434,14 @@ Live steps for the user (the dev build after the commits land):
 3. N opens a shell beside the active tab; `+` opens the menu under the
    cursor; W asks, then closes.
 4. Space on an agent tab opens the prompt box in the popout; Enter sends.
-5. Up from the tabs: the cursor is on the title bar; Enter on ⤓ docks back.
-   Pop out again; Up twice: the main window has the keyboard and the bar.
+5. Up from the tabs: the cursor is on the title bar; Enter on ⤓ docks back;
+   Up again stays on the title bar. Pop out again; Home (or 0), from the tabs,
+   from inside a terminal and from the title bar: the main window has the
+   keyboard and the bar, and the popout's bar goes only then. The key is the
+   first item of the popout's bar; the main window ignores it.
 6. J in the main window: the popout has the bar. J again with one popout:
-   back in the main window. With two popouts: main → first → second → main.
+   nothing happens. With two popouts: first → second → first, never the main
+   window.
 7. `,` in a popout: settings open in the main window, steering on its pages.
 8. An agent in the main window asks a question; Q in the popout: the main
    window comes forward on that tab. Answer with a digit: back in the popout.

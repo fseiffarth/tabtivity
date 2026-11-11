@@ -1,9 +1,10 @@
 /**
  * Steering between windows (the cross-window protocol of
  * `docs/steering_popout_plan.md`): one window steers at a time, and steering
- * follows the keyboard. J walks main → popouts → main, Up from a popout's title
- * bar and its main-only keys hand over to the main window, and a window that
- * did not get the keyboard never announces, so the sender keeps steering.
+ * follows the keyboard. A popout's Main window key (Home / 0) and its main-only
+ * keys hand over to the main window; J walks the popouts only (Up stops at the
+ * title bar); and a window that did not get the keyboard never announces, so
+ * the sender keeps steering.
  *
  * Two (or three) heaps on the two-heap harness: each runs its own `useSteering`
  * on the one shared document, so a key reaches every window's capture listener
@@ -215,45 +216,97 @@ afterEach(() => {
 });
 
 describe("steering follows the keyboard between windows", () => {
-  it("J: main → popout → main, with one popout", async () => {
+  it("J in a popout with a single popout does nothing: steering stays where it is", async () => {
     const { main, pops, labels } = await windows(1);
     await main.rtl.act(async () => main.steering.useKeyboardSteeringStore.getState().enter());
     await press(main, "j");
     expect(shared.calls).toContainEqual({ cmd: "focus_detached_window", args: { label: labels[0] } });
     expect(on(pops[0])).toBe(true);
     expect(on(main)).toBe(false);
+    const raises = shared.calls.filter((c) => c.cmd === "focus_detached_window").length;
     await press(pops[0], "j");
-    expect(on(main)).toBe(true);
-    expect(main.steering.useKeyboardSteeringStore.getState().level).toBe("tabs");
-    expect(on(pops[0])).toBe(false);
-    expect(shared.mainFocused).toBeGreaterThan(0);
+    expect(on(pops[0])).toBe(true);
+    expect(on(main)).toBe(false);
+    expect(shared.calls.filter((c) => c.cmd === "focus_detached_window")).toHaveLength(raises);
+    expect(shared.mainFocused).toBe(0);
   });
 
-  it("J: main → first → second → main, with two popouts", async () => {
+  it("J in a popout walks the popouts only, 1 → 2 → 1, never the main window", async () => {
     const { main, pops, labels } = await windows(2);
+    const raised = () => shared.calls.filter((c) => c.cmd === "focus_detached_window").pop()?.args;
     await main.rtl.act(async () => main.steering.useKeyboardSteeringStore.getState().enter());
     await press(main, "j");
     expect([on(main), on(pops[0]), on(pops[1])]).toEqual([false, true, false]);
     await press(pops[0], "j");
-    expect(shared.calls.filter((c) => c.cmd === "focus_detached_window").pop()?.args).toEqual({ label: labels[1] });
+    expect(raised()).toEqual({ label: labels[1] });
     expect([on(main), on(pops[0]), on(pops[1])]).toEqual([false, false, true]);
     await press(pops[1], "j");
-    expect([on(main), on(pops[0]), on(pops[1])]).toEqual([true, false, false]);
-    // And round again from the first.
-    await press(main, "j");
+    expect(raised()).toEqual({ label: labels[0] });
     expect([on(main), on(pops[0]), on(pops[1])]).toEqual([false, true, false]);
+    expect(shared.mainFocused).toBe(0);
+    // The main window's own J is unchanged: it carries on from the popout the
+    // walk left, with steering on in it.
+    await main.rtl.act(async () => main.steering.useKeyboardSteeringStore.getState().enter());
+    await press(main, "j");
+    expect(raised()).toEqual({ label: labels[1] });
+    expect([on(main), on(pops[0]), on(pops[1])]).toEqual([false, false, true]);
   });
 
-  it("Up from a popout's title bar hands the keyboard to the main window", async () => {
+  it("Up at a popout's title bar stops there: the cursor stays, the main window is not asked", async () => {
     const { main, pops } = await windows(1);
     const pop = pops[0];
     await pop.rtl.act(async () => pop.steering.useKeyboardSteeringStore.getState().enter());
     await press(pop, "ArrowUp");
     expect(pop.steering.useKeyboardSteeringStore.getState()).toMatchObject({ level: "region", region: "chrome" });
+    const cursor = document.querySelector(".steer-cursor");
+    expect(cursor).not.toBeNull();
     await press(pop, "ArrowUp");
-    expect(on(main)).toBe(true);
-    expect(main.steering.useKeyboardSteeringStore.getState().level).toBe("tabs");
-    expect(on(pop)).toBe(false);
+    await press(pop, "ArrowUp");
+    expect(pop.steering.useKeyboardSteeringStore.getState()).toMatchObject({ active: true, level: "region", region: "chrome" });
+    expect(document.querySelector(".steer-cursor")).toBe(cursor);
+    expect(on(main)).toBe(false);
+    expect(shared.emitted.some((e) => e.event.startsWith("detached-steer"))).toBe(false);
+    expect(shared.mainFocused).toBe(0);
+    // Down still comes back to the tabs.
+    await press(pop, "ArrowDown");
+    expect(pop.steering.useKeyboardSteeringStore.getState().level).toBe("tabs");
+  });
+
+  describe("the Main window key", () => {
+    const places: Array<[string, (pop: SteerHeap) => Promise<void>]> = [
+      ["the tabs", async () => {}],
+      [
+        "Inside a tab",
+        async (pop) => void (await pop.rtl.act(async () => pop.steering.useKeyboardSteeringStore.getState().setLevel("scroll"))),
+      ],
+      ["the title bar", async (pop) => void (await press(pop, "ArrowUp"))],
+    ];
+    for (const [where, go] of places) {
+      for (const key of ["Home", "0"]) {
+        it(`${key} from ${where} lands the main window on its tabs; the popout leaves on its announcement`, async () => {
+          const { main, pops } = await windows(1);
+          const pop = pops[0];
+          await pop.rtl.act(async () => pop.steering.useKeyboardSteeringStore.getState().enter());
+          await go(pop);
+          await press(pop, key);
+          expect(on(main)).toBe(true);
+          expect(main.steering.useKeyboardSteeringStore.getState()).toMatchObject({ level: "tabs", region: null });
+          expect(on(pop)).toBe(false);
+          expect(shared.mainFocused).toBeGreaterThan(0);
+        });
+      }
+    }
+
+    it("is inert in the main window: swallowed, steering stays, nothing is sent", async () => {
+      const { main } = await windows(1);
+      await main.rtl.act(async () => main.steering.useKeyboardSteeringStore.getState().enter());
+      const before = shared.emitted.length;
+      await press(main, "Home");
+      await press(main, "0");
+      expect(main.steering.useKeyboardSteeringStore.getState()).toMatchObject({ active: true, level: "tabs" });
+      expect(shared.emitted.slice(before).filter((e) => e.event.startsWith("detached-steer"))).toEqual([]);
+      expect(shared.calls.some((c) => c.cmd === "focus_detached_window")).toBe(false);
+    });
   });
 
   it("a main-only key in a popout runs in the main window: / (settings) opens settings there", async () => {
@@ -277,8 +330,7 @@ describe("steering follows the keyboard between windows", () => {
     const pop = pops[0];
     await pop.rtl.act(async () => pop.steering.useKeyboardSteeringStore.getState().enter());
     shared.hasFocus = false;
-    await press(pop, "ArrowUp");
-    await press(pop, "ArrowUp");
+    await press(pop, "Home");
     await main.rtl.act(async () => {
       await new Promise((r) => setTimeout(r, 900));
     });

@@ -43,6 +43,7 @@ export type SteeringAction =
   | "help"
   | "exit"
   | "legend"
+  | "mainWindow"
   | "up"
   | "down"
   | "left"
@@ -132,6 +133,9 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   // (`back`), so leaving from there is Esc twice.
   { action: "exit", labelKey: "steering.exit.label", scopes: TAB_BAR, defaults: ["Escape"] },
   { action: "legend", labelKey: "steering.legend.label", scopes: ["mode"], defaults: ["h"] },
+  // A popout's way back to the main window, on every one of its levels: it
+  // hands the keyboard over (`steeringPopout`). The main window ignores it.
+  { action: "mainWindow", labelKey: "steering.mainWindow.label", scopes: ["mode"], defaults: ["Home", "0"] },
   { action: "up", labelKey: "steeringKeys.up", scopes: ["mode"], defaults: ["e", "ArrowUp"] },
   { action: "down", labelKey: "steeringKeys.down", scopes: ["mode"], defaults: ["d", "ArrowDown"] },
   { action: "left", labelKey: "steeringKeys.left", scopes: ["mode"], defaults: ["s", "ArrowLeft"] },

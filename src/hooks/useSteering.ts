@@ -347,7 +347,10 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       }
     };
     // Main: a popout's request (`DETACHED_STEER` → `STEER_FROM_POPOUT`). Its J
-    // goes on to the scope's next popout, after the last one to this window.
+    // goes on to the scope's next popout (the first after the last) and never
+    // to this window; with no other popout it does nothing, and the popout
+    // keeps steering. The Main window key hands over `enter`, which raises
+    // this window.
     const onSteerFromPopout = (e: Event) => {
       const request = (e as CustomEvent<DetachedSteerPayload | null>).detail;
       const act: SteerAct = request?.act ?? { kind: "enter" };
@@ -365,8 +368,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           });
           return;
         }
-        raiseMainWindow();
-        whenFocused(() => arrive({ kind: "enter" }));
+        // The only popout of the scope: nowhere to go, and nothing to change.
         return;
       }
       raiseMainWindow();
@@ -1096,7 +1098,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     function steerCommon(e: KeyboardEvent, action: SteeringAction | null) {
       // A popout does not run a key whose target is the main window's, or one
       // that crosses windows: it hands it to the main window, which runs it
-      // there (J: the next popout, or the main window after the last one).
+      // there (J: the scope's next popout, wrapping, never the main window).
       if (popout && action && POPOUT_HANDS_OVER.has(action)) {
         sendToMain({ kind: "action", action, shift: e.shiftKey });
         return;
@@ -1223,13 +1225,11 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           }
           if (region === "chrome") {
             // The root window's bar, the same shape: ↓ drops a menu or goes
-            // back down to Root's tabs; ↑ goes on up to the projects. Above a
-            // popout's title bar is the main window: ↑ hands the keyboard over.
+            // back down to Root's tabs; ↑ goes on up to the projects. A
+            // popout's title bar is its top: ↑ stops there (the way to the
+            // main window is its own key, `mainWindow`).
             if (action === "up") {
-              if (popout) {
-                sendToMain({ kind: "enter" });
-                return;
-              }
+              if (popout) return;
               clearRegionCursor();
               useKeyboardSteeringStore.getState().setLevel("projects");
             } else if (!openCursorPopup()) leaveRegion(region);
@@ -1545,6 +1545,14 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // mode itself stays on.
       if (action === "legend") {
         steering.toggleLegend();
+        return;
+      }
+      // Home / 0 (by default): a popout hands the keyboard to the main window,
+      // from any level or region of it; it stays steering until the main window
+      // announces itself. The main window has nowhere to go: swallowed. A
+      // chord (Ctrl+0 is the zoom reset) is not the key.
+      if (action === "mainWindow") {
+        if (popout && !e.ctrlKey && !e.altKey && !e.metaKey) sendToMain({ kind: "enter" });
         return;
       }
       switch (steering.level) {

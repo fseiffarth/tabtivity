@@ -5,8 +5,9 @@
  * `"popout"`). Some keys have no target in it: the projects and the project
  * jump, mail / calendar / to-do, the cockpit, settings, the side panel and the
  * panels live only in the main window — those hand the keyboard over and run
- * there. Others cross windows by nature: J walks the popouts and the main
- * window, the status jumps and Back land on a tab wherever it lives. The main
+ * there. Others cross windows by nature: J walks the popouts (never the main
+ * window: that is the `mainWindow` key, which hands the keyboard over itself),
+ * the status jumps and Back land on a tab wherever it lives. The main
  * window owns all of that (the status lists, the Back record, the popout order),
  * so a popout asks it rather than computing them from its own empty store.
  */

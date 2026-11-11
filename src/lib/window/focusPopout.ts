@@ -4,7 +4,7 @@ import { useTabsStore } from "../../stores/tabs";
 
 /** The popout each scope's J raised last, so the next J takes the one after.
  *  Set by both paths — the main window's J and a popout's J the main window
- *  answers — so the cycle main → popouts → main has one position. */
+ *  answers — so the main window's J carries on from where a popout's left. */
 const lastRaised = new Map<string, string>();
 
 /** The popout label to raise after `last` in `labels` (wrapping); the first
@@ -22,13 +22,14 @@ function popoutLabels(scope: string): string[] {
 
 /**
  * A popout's J, as the main window answers it: the scope's popout after
- * `label`, or null after the last one (J then goes back to the main window).
- * A label the scope no longer lists also goes back to the main window.
+ * `label`, wrapping to the first after the last one. Null when there is no
+ * other popout (the only one, or a label the scope no longer lists): J then
+ * does nothing. It never goes to the main window; that is its own key.
  */
 export function popoutAfter(scope: string, label: string): string | null {
   const labels = popoutLabels(scope);
   const i = labels.indexOf(label);
-  return i >= 0 && i + 1 < labels.length ? labels[i + 1] : null;
+  return i >= 0 && labels.length > 1 ? labels[(i + 1) % labels.length] : null;
 }
 
 /** Raise one popout and give it the keyboard (`focus_detached_window`). False

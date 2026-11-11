@@ -174,13 +174,17 @@ opens nothing; Enter stays Work here and Space the prompt box.
 subwindows and tabs: Shift+Space there docks the bar at its bottom, and the
 tab, prompt, close and new-tab keys act in it. There are no projects in a
 popout: **E / ↑** from its tabs (or its subwindows) walks its title bar — dock
-back, hide and the window buttons, **Enter** presses one — and one more **↑**
-hands the keyboard to the main window, steering on its tabs. The ladder reads
-Main window › Title bar › Subwindows › Tabs › Inside. Only one window steers at
-a time, and steering follows the keyboard:
+back, hide and the window buttons, **Enter** presses one; **↑** stops there. The
+ladder reads Title bar › Subwindows › Tabs › Inside (without Subwindows when the
+window has one). One key always goes back to the main window: **Home** (or
+**0**), the first key in the popout's bar, from any level, the title bar
+included. It hands the keyboard over with steering on the main window's tabs
+(the main window has no such key and ignores it); both keys are rebindable.
+Only one window steers at a time, and steering follows the keyboard:
 
 - **J** in the main window raises the next popout with steering on in it; J in
-  a popout goes to the next popout, after the last one back to the main window.
+  a popout goes to the next popout, after the last one back to the first, and
+  never to the main window (with a single popout it does nothing).
 - Keys whose target is only in the main window — the project jump, mail,
   calendar, to-do, the cockpit, settings, the side panel and the panels — are
   listed in the popout's bar under *Main window*: pressing one brings the main

@@ -16,6 +16,7 @@ import {
 } from "../../lib/shortcuts/shortcuts";
 import type { SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
 import { DialogShell } from "../common/PromptDialogs";
+import { isDetachedWindow } from "../../stores/detachedContext";
 
 /**
  * The keyboard-shortcut cheat sheet (part 2 of the keyboard-only steering
@@ -128,7 +129,10 @@ export function ShortcutHelpOverlay() {
                 (B, P, the status jumps and ? work on every tab-bar level; they
                 are listed once). */}
             {STEERING_CONTEXTS.map((level) => {
-              const rows = STEERING_KEYS.filter((k) => k.levels[0] === level.id);
+              // The Main window key is a popout's: the main window has none.
+              const rows = STEERING_KEYS.filter(
+                (k) => k.levels[0] === level.id && (k.when !== "inPopout" || isDetachedWindow()),
+              );
               if (rows.length === 0) return null;
               return (
                 <div className="shortcut-help-steering-level" key={level.id}>

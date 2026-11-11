@@ -100,7 +100,8 @@ export function SteeringLegend() {
   const popout = walked.popout;
   const rootShown = walked.inRoot;
   const multiPane = allGroups(walked.layout).length >= 2;
-  // A popout always has somewhere for J to go: the main window.
+  // A popout cannot count the scope's other popouts (its heap knows only its
+  // own), so it always lists J; with no other popout the key does nothing.
   const scopePopouts = useTabsStore((s) => (s.detachedGroupsByScope[rootShown ? ROOT_SCOPE : s.scope]?.length ?? 0) > 0);
   const popouts = popout || scopePopouts;
   const focusedGroupId = walked.focusedGroupId;

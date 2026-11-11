@@ -882,7 +882,8 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *   upToTitleBar — where ↑ climbs to a popout's title bar: the panes level, or
  *                the tabs level with one subwindow, in a popout window
  *   titleBarRegion — the region cursor is on a popout's title bar (←/→ walk
- *                it, ↓ back down to its tabs)
+ *                it, ↓ back down to its tabs; ↑ stops there)
+ *   inPopout   — steering runs in a popout window (the Main window key)
  * In a popout `chromeRegion` is false: its chrome is the title bar.
  */
 export type SteeringCondition =
@@ -893,6 +894,7 @@ export type SteeringCondition =
   | "upToChrome"
   | "upToTitleBar"
   | "titleBarRegion"
+  | "inPopout"
   | "sideRegion"
   | "settingsRegion"
   | "headerRegion"
@@ -1040,6 +1042,8 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return !!s.popout && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
     case "titleBarRegion":
       return !!s.popout && !!s.chromeRegion;
+    case "inPopout":
+      return !!s.popout;
     case "sideRegion":
       return s.sideRegion;
     case "settingsRegion":
@@ -1218,7 +1222,6 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: ["region"], when: "chromeRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.titleBarWalk.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
   { actions: ["down"], labelKey: "steering.titleBarDown.label", descKey: "steering.titleBarDown.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
-  { actions: ["up"], labelKey: "steering.upMain.label", descKey: "steering.upMain.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.overlayRow.label", descKey: "steering.overlayRow.desc", levels: ["region"], when: "overlayRegion", group: "move" },
   { actions: ["left"], labelKey: "steering.sideParent.label", descKey: "steering.sideParent.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["right"], labelKey: "steering.sideEnter.label", descKey: "steering.sideEnter.desc", levels: ["region"], when: "sideRegion", group: "move" },
@@ -1250,6 +1253,9 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["settings"], labelKey: "steering.settings.label", descKey: "steering.settings.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["jumpProject"], labelKey: "steering.jumpProject.label", descKey: "steering.jumpProject.desc", levels: BASE_LEVELS, group: "move" },
   { actions: ["popout"], labelKey: "steering.popout.label", descKey: "steering.popout.desc", levels: BASE_LEVELS, when: "popouts", group: "move" },
+  // A popout's one way back to the main window, from every level of it
+  // (`mainWindow`); first in its bar, and in the cheat sheet of a popout only.
+  { actions: ["mainWindow"], labelKey: "steering.mainWindow.label", descKey: "steering.mainWindow.desc", levels: [...PANE_LEVELS, "scroll", "region"], when: "inPopout", group: "main" },
   { actions: ["help"], labelKey: "steering.help.label", descKey: "steering.help.desc", levels: ALL_LEVELS, group: "mode" },
   { actions: ["legend"], labelKey: "steering.legend.label", descKey: "steering.legend.desc", levels: ALL_LEVELS, group: "mode" },
   { actions: ["back"], labelKey: "steering.back.label", descKey: "steering.back.desc", levels: ["region"], group: "mode" },

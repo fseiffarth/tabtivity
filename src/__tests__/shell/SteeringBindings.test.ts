@@ -81,6 +81,20 @@ describe("steering bindings", () => {
     expect(new Set(STEERING_BINDINGS.map((d) => d.action)).size).toBe(STEERING_BINDINGS.length);
   });
 
+  it("answers Home and 0 as the Main window key on every level, and clashes like a mode key", () => {
+    for (const context of ["projects", "panes", "inside", "region", "cockpit"] as const) {
+      expect(steeringActionFor(ev("Home"), context, null)).toBe("mainWindow");
+      expect(steeringActionFor(ev("0", "Digit0"), context, null)).toBe("mainWindow");
+    }
+    // Rebindable: a user list replaces the defaults, empty unbinds.
+    expect(steeringActionFor(ev("Home"), "panes", { mainWindow: ["m"] })).toBeNull();
+    expect(steeringActionFor(ev("m"), "panes", { mainWindow: ["m"] })).toBe("mainWindow");
+    expect(steeringActionFor(ev("Home"), "panes", { mainWindow: [] })).toBeNull();
+    // A mode key meets every level: moving another action onto it is a clash.
+    expect(findSteeringConflicts({ files: ["Home"] }).get("files")).toEqual(["mainWindow"]);
+    expect(findSteeringConflicts({ newProject: ["0"] }).get("newProject")).toEqual(["mainWindow"]);
+  });
+
   it("reports a clash only where both actions are live", () => {
     // N on the projects level (new project) and inside a pane (new shell)
     // never meet; W moved onto the up key does.

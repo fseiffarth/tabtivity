@@ -54,6 +54,7 @@ vi.mock("../../components/header/WindowControls", () => ({
   ),
 }));
 
+import { emit } from "@tauri-apps/api/event";
 import { useSteering } from "../../hooks/useSteering";
 import { DetachedCenterPanel } from "../../components/layout/DetachedCenterPanel";
 import { SteeringLegend } from "../../components/layout/SteeringLegend";
@@ -262,10 +263,14 @@ describe("steering in a popout", () => {
     expect(badges).toEqual(["0", "1↓"]);
   });
 
-  it("its bar has no projects: Main window › Title bar over the tabs, main-only keys apart", () => {
+  it("its bar has no projects: Title bar over the tabs (no Main window rung), main-only keys apart", () => {
     const rungs = ladder({ level: "tabs", region: null, regionReturn: "tabs", popout: true });
-    expect(rungs.map((r) => r.id)).toEqual(["main", "titleBar", "panes", "tabs", "scroll"]);
+    expect(rungs.map((r) => r.id)).toEqual(["titleBar", "panes", "tabs", "scroll"]);
     expect(rungs.find((r) => r.lit)?.id).toBe("tabs");
+    // One subwindow: no Subwindows rung, as in the main window's ladder.
+    const single = ladder({ level: "tabs", region: null, regionReturn: "tabs", popout: true, multiPane: false });
+    expect(single.map((r) => r.id)).toEqual(["titleBar", "tabs", "scroll"]);
+    expect(single.find((r) => r.lit)?.id).toBe("tabs");
     const onTitleBar = ladder({ level: "region", region: "chrome", regionReturn: "tabs", popout: true });
     expect(onTitleBar.find((r) => r.lit)?.labelKey).toBe("steering.region.titleBar");
 
@@ -282,12 +287,53 @@ describe("steering in a popout", () => {
     const labels = rows.map((r) => r.labelKey);
     expect(labels).toContain("steering.upTitleBar.label");
     expect(labels).not.toContain("steering.up.label");
+    // The one way to the main window is a key, on every level of the popout.
+    expect(rows.find((r) => r.actions[0] === "mainWindow")?.group).toBe("main");
+    for (const level of ["panes", "tabs", "scroll", "region"] as const) {
+      expect(steeringKeysFor({ ...state, level }).some((r) => r.actions[0] === "mainWindow")).toBe(true);
+    }
     expect(rows.find((r) => r.actions[0] === "settings")?.group).toBe("main");
     expect(rows.find((r) => r.actions[0] === "closeTab")?.group).toBe("act");
-    // The main window's own bar is unchanged.
+    // The main window's own bar is unchanged, and has no Main window key.
     const main = steeringKeysFor({ ...state, popout: false });
     expect(main.find((r) => r.actions[0] === "settings")?.group).toBe("open");
     expect(main.map((r) => r.labelKey)).toContain("steering.up.label");
+    for (const level of ["panes", "tabs", "scroll", "region"] as const) {
+      expect(steeringKeysFor({ ...state, popout: false, level }).some((r) => r.actions[0] === "mainWindow")).toBe(false);
+    }
+  });
+
+  it("the bar lists the Main window key first, with its label", () => {
+    mount();
+    chord();
+    const items = Array.from(document.querySelectorAll(".steering-bar-keys .steering-bar-item"));
+    expect(items[0].querySelector(".steering-bar-label")?.textContent).toBe("Main window");
+    expect(items[0].querySelector(".steering-bar-caps")?.textContent).toBe("Home");
+    // In the bar itself, not pinned as a floating cap.
+    expect(document.querySelector(".steering-caps")?.textContent ?? "").not.toContain("Home");
+    // The ladder no longer has a Main window rung.
+    const rungs = Array.from(document.querySelectorAll(".steering-rung")).map((r) => r.textContent);
+    expect(rungs).not.toContain("Main window");
+    expect(rungs).toContain("Title bar");
+  });
+
+  it("Home hands the keyboard over from the tabs, and up stops at the title bar", () => {
+    mount();
+    chord();
+    vi.mocked(emit).mockClear();
+    press("Home");
+    expect(emit).toHaveBeenCalledWith(
+      "detached-steer",
+      expect.objectContaining({ label: "detached-p-pop", act: { kind: "enter" } }),
+    );
+    // Steering stays on in the popout until the main window announces itself.
+    expect(steering()).toMatchObject({ active: true, level: "tabs" });
+    press("ArrowUp");
+    expect(steering()).toMatchObject({ level: "region", region: "chrome" });
+    vi.mocked(emit).mockClear();
+    press("ArrowUp");
+    expect(steering()).toMatchObject({ level: "region", region: "chrome" });
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it("a key whose target is the main window's does nothing here", () => {

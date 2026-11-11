@@ -374,3 +374,50 @@ the old code, the last two guard the reseeds that must stay).
   in the popout's seed handler would spare its panes on those. Out of scope.
 - Other popout edits (`files`, `reorder`, `resize`, `move`) also answer with a
   reseed; only `activate` was the steering key.
+
+## One dedicated key back to the main window
+
+The user's decision after trying it live (2026-11-11): "One dedicated key: a
+single key shown first in the popout's bar always goes back to the main window.
+J then only walks popouts; Up stops at the title bar." It replaces the parts of
+U1 and U2 that sent Up (twice) and J (after the last popout) to the main window;
+the plan carries a dated note.
+
+- New steering action `mainWindow` (`steeringBindings.ts`), scope `mode` (every
+  level and region), defaults `Home` and `0`. Neither is bound in any scope
+  (slots are 1-9; Ctrl+0 is the zoom chord, which the handler leaves alone: it
+  acts only without Ctrl / Alt / Meta). A `mode` key meets every other key, so
+  the conflict check flags another action bound to Home or 0, as for H or ?.
+  Label `steering.mainWindow.label` in all five locales (it is the settings
+  label too).
+- `useSteering.steerKey`: right after `legend`, before the level switch, so it
+  works on tabs, subwindows, Inside and in every region. In a popout it sends
+  `{ kind: "enter" }` (the existing hand-over: the popout leaves steering only
+  when the main window announces itself, D4). In the main window it is
+  swallowed and sends nothing.
+- Up in the popout's `chrome` region now returns (cursor stays); Down and Back
+  are unchanged.
+- `popoutAfter` (`focusPopout.ts`): the scope's next popout, wrapping, null
+  with one popout. The main window's `STEER_FROM_POPOUT` handler does nothing
+  for a J with no target: no raise, no arrival, so the popout keeps steering.
+  J in the main window is unchanged (`focusNextPopout`).
+- Bar: a `STEERING_KEYS` row (`inPopout` condition, group `main`, every popout
+  level and region) that `barModel` sorts first, so it is the first key item of
+  the popout's bar, not a floating cap. The ladder lost its `main` rung and the
+  `steering.level.mainWindow` string; the old Up-to-main row and its
+  `steering.upMain.*` strings are gone. The popout branch of `ladder` already
+  agreed with fdb411ee9 (no Subwindows rung with one subwindow); a test now
+  pins it. The cheat sheet (`ShortcutHelpOverlay`) lists the row only when it
+  runs in a popout (`isDetachedWindow()`); the main window's does not.
+- Left to the implementer's judgement: the popout always lists J (its heap
+  cannot count other popouts), so with a single popout J is listed and does
+  nothing. The folded bar (H) shows no Main window key (it keeps the badge,
+  ladder and way out only), as for every other key.
+- Pill: `steering.popoutHandover`'s text updated (no new id).
+- Tests: `SteeringHandover` (J with one popout stays; 1 -> 2 -> 1 never main;
+  Up at the title bar stays; Home and 0 from tabs / Inside / title bar land the
+  main window on tabs and the popout leaves on the announcement; refused focus
+  keeps the popout steering; inert in the main window), `SteeringPopout` (bar
+  lists it first, no Main window rung, one-subwindow ladder, Up stops), `FocusPopout`
+  (`popoutAfter`), `SteeringBindings` (Home / 0 on every level, rebind,
+  conflicts). Nothing was run live.

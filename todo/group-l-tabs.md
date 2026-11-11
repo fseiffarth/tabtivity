@@ -525,15 +525,20 @@ correctness/UX work atop the same layout model #42 detaches.*
     terminal and scrolls, E comes back; (3) N opens a shell beside the active
     tab, + opens the menu under the cursor, W asks then closes; (4) Space on an
     agent tab opens the prompt box in the popout, Enter sends; (5) E from the
-    tabs: the cursor is on the title bar, Enter on ⤓ docks back; pop out again,
-    E twice: the main window has the keyboard and the bar; (6) J in the main
-    window: the popout has the bar; J again with one popout: back in the main
-    window; with two popouts main → first → second → main; (7) / in a popout:
+    tabs: the cursor is on the title bar, Enter on ⤓ docks back; E again stays
+    on the title bar (it is the top); Home (or 0), from the tabs, from inside a
+    terminal and from the title bar, brings the main window forward with the
+    keyboard and the bar on its tabs, and the popout's bar goes only then (the
+    key is the first item of the popout's bar; the main window ignores it and
+    does not list it); (6) J in the main window: the popout has the bar; J
+    again with one popout: nothing happens, steering stays in the popout; with
+    two popouts first → second → first, never the main window (Home goes
+    there); (7) / in a popout:
     settings open in the main window, steering on its pages; (8) an agent in
     the main window asks, Q in the popout: the main window comes forward on
     that tab; answer with a digit: back in the popout; (9) split the popout:
     E from the tabs reaches the subwindows level with ↓/↑ badges, Shift+S/F
-    jump between them; (10) on Wayland repeat 5 and 6: a refused focus move
+    jump between them; (10) on Wayland repeat 5 (Home) and 6: a refused focus move
     must leave steering where the keyboard is, never the bar in one window and
     the keys in another.
     *Files: `src/hooks/useSteering.ts`, `src/stores/popoutView.ts`,
