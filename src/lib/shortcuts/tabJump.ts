@@ -1,7 +1,8 @@
 import { useBoxesStore, BOX_SCOPE_PREFIX } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
 import { translateNow } from "../i18n";
-import { PROMPTCHART_TAB_CMD, ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
+import { invoke } from "@tauri-apps/api/core";
+import { PROMPTCHART_TAB_CMD, ROOT_SCOPE, orderedTabKeys, useTabsStore } from "../../stores/tabs";
 import { resolveProjectDirectory } from "../../types";
 import { ASSISTANT_SCOPE } from "../assistant";
 import { showAssistant } from "../../stores/assistantView";
@@ -30,21 +31,43 @@ import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootO
  *  - In a popout this store owns no layout, so the scope-addressed reveal finds
  *    nothing; `setActive` is forwarded to the main window and does the same job
  *    for the scope the popout is showing.
- *  - A tab in a hidden subwindow or a detached window isn't in the scope's
- *    visible tree; the switch still happens, since landing in the right scope is
- *    the half of the request that can be honoured.
+ *  - A tab in a hidden subwindow isn't in the scope's visible tree; the switch
+ *    still happens, since landing in the right scope is the half of the
+ *    request that can be honoured.
+ *
+ * A tab that lives in a **popout** of its scope (main window only): the scope
+ * comes up (which un-parks its popouts), the tab becomes its popout group's
+ * active one (an `activate` on the record, which reseeds the popout) and that
+ * window is raised (`focus_detached_window`).
+ *
+ * Returns where the tab lives: `"main"` (`MAIN_TAB_HOME`) or the popout's
+ * window label, so keyboard steering can follow it there.
  */
-export function jumpToTab(scope: string, key: string) {
+export const MAIN_TAB_HOME = "main";
+
+export function jumpToTab(scope: string, key: string): string {
+  const tabs = useTabsStore.getState();
+  if (!isDetachedWindow()) {
+    const popout = (tabs.detachedGroupsByScope[scope] ?? []).find((entry) =>
+      orderedTabKeys(entry.subtree).includes(key),
+    );
+    if (popout) {
+      void bringUpScope(scope);
+      tabs.applyDetachedEdit(scope, popout.id, { kind: "activate", key });
+      void invoke<boolean>("focus_detached_window", { label: popout.label }).catch(() => false);
+      return popout.label;
+    }
+  }
   if (scope === ROOT_SCOPE && !isDetachedWindow()) {
     useRootOverlayStore.getState().show(key);
-    return;
+    return MAIN_TAB_HOME;
   }
-  const tabs = useTabsStore.getState();
   // A Tabby chat is shown by the side panel's Tabby view, which a jump opens on
   // that chat.
   if (scope === ASSISTANT_SCOPE) showAssistant(key);
   if (!tabs.revealTabInScope(scope, key) && tabs.scope === scope) tabs.setActive(key);
   void bringUpScope(scope);
+  return MAIN_TAB_HOME;
 }
 
 /** Bring `scope` up as the one the tab bar shows: a box through the boxes

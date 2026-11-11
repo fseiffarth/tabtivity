@@ -11,7 +11,7 @@ import { inCockpitRoster, runCockpitRoster, selectCockpitCursor, stepCockpitArea
 import { useEffect } from "react";
 import { ROOT_SCOPE, allGroups, findGroup, useTabsStore } from "../stores/tabs";
 import { steeringInRoot, steeringTabs, steeringTabsActive } from "../lib/shortcuts/steeringScope";
-import { POPOUT_HANDS_OVER, POPOUT_MAIN_ONLY } from "../lib/shortcuts/steeringPopout";
+import { POPOUT_HANDS_OVER } from "../lib/shortcuts/steeringPopout";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { subscribeTauri } from "./useTauriListener";
@@ -20,12 +20,15 @@ import {
   DETACHED_STEER,
   MAIN_STEERING_LABEL,
   STEERING_OWNER,
+  STEERING_STATUS,
   detachedSteerEvent,
   type DetachedSteerPayload,
   type DetachedSteerRequest,
   type SteerAct,
 } from "../stores/detached";
 import { popoutAfter, raisePopout } from "../lib/window/focusPopout";
+import { MAIN_TAB_HOME } from "../lib/shortcuts/tabJump";
+import { usePopoutViewStore, type PopoutSteeringStatus } from "../stores/popoutView";
 import { reopenClosedAgentTab } from "../stores/agents/closedAgentTabs";
 import { useProjectsStore } from "../stores/projects";
 import { useSettingsStore } from "../stores/settings";
@@ -248,10 +251,35 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // the keyboard to no longer brings it back.
     const onOwner = (label: string) => {
       if (label === myLabel) return;
+      // The popout that now steers draws the main window's counts.
+      if (!popout) publishStatus(true);
       cancelArrival();
       const s = useKeyboardSteeringStore.getState();
       if (s.active) exitSteering();
       else if (s.handedTo) s.dropHandoff();
+    };
+    // Main: the counts a popout's bar shows (`STEERING_STATUS`), sent when they
+    // change and only while some popout is open.
+    let lastStatus = "";
+    const publishStatus = (force = false) => {
+      const tabs = useTabsStore.getState();
+      if (!Object.values(tabs.detachedGroupsByScope).some((list) => (list?.length ?? 0) > 0)) {
+        lastStatus = "";
+        return;
+      }
+      const activity = useActivityStore.getState();
+      const count = (kind: TabStatusKind) =>
+        statusTabs(kind, activity.busyByTab, activity.attentionByTab, tabs.tabsByScope).length;
+      const status: PopoutSteeringStatus = {
+        decision: count("decision"),
+        working: count("working"),
+        done: count("done"),
+        back: !!jumpBackTarget(useKeyboardSteeringStore.getState().jumpBack, null, tabs.tabsByScope),
+      };
+      const sig = `${status.decision}|${status.working}|${status.done}|${status.back}`;
+      if (!force && sig === lastStatus) return;
+      lastStatus = sig;
+      sendSteer(STEERING_STATUS, status);
     };
     // A request to take steering waits for the keyboard (`STEER_HANDOVER_WAIT_MS`).
     let pendingArrival: (() => void) | null = null;
@@ -280,6 +308,13 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // Every arrival lands on this window's tabs level; a handed-over key then
     // runs here as if pressed here.
     const arrive = (act: SteerAct) => {
+      // A status jump's target here: its subwindow takes the focus, the tab
+      // shows (the main window already made it the active one).
+      if (act.kind === "tab") {
+        const walked = steeringTabs();
+        const group = allGroups(walked.layout).find((g) => g.tabKeys.includes(act.key));
+        if (group) useTabsStore.getState().setGroupActiveInScope(walked.scope, group.id, act.key);
+      }
       const s = useKeyboardSteeringStore.getState();
       if (!s.active) enterSteering();
       else {
@@ -311,6 +346,12 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     const onSteerFromPopout = (e: Event) => {
       const request = (e as CustomEvent<DetachedSteerPayload | null>).detail;
       const act: SteerAct = request?.act ?? { kind: "enter" };
+      // A status jump or Back: the window comes forward only if the tab lives
+      // here (`goToTab`).
+      if (request && act.kind === "action" && (STATUS_ACTIONS[act.action] || act.action === "jumpBack")) {
+        runFromPopout(request, act);
+        return;
+      }
       if (request && act.kind === "action" && act.action === "popout") {
         const next = popoutAfter(request.scope, request.label);
         if (next) {
@@ -592,18 +633,86 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // to the tab level. Up on Root, a project's tab is not shown by a jump the
     // window covers: it steps aside (as the cockpit's Enter does), and the tab
     // levels are the workspace's again.
-    const goToTab = (target: StatusTab) => {
+    //
+    // The tab may live in a popout (`jumpToTab` returns its window): that
+    // window is raised and asked to steer on the tab, and this one keeps
+    // steering until it announces itself. `asker`: the popout whose key asked
+    // for the jump — a tab here then brings this window forward too.
+    const goToTab = (target: StatusTab, asker?: string) => {
       if (target.scope !== ROOT_SCOPE && steeringInRoot()) useRootOverlayStore.getState().close();
-      jumpToTab(target.scope, target.key);
+      const home = jumpToTab(target.scope, target.key);
+      if (home && home !== MAIN_TAB_HOME) {
+        sendSteer(detachedSteerEvent(home), { act: { kind: "tab", key: target.key } } satisfies DetachedSteerRequest);
+        return;
+      }
+      if (asker) {
+        raiseMainWindow();
+        whenFocused(() => arrive({ kind: "enter" }));
+        return;
+      }
       useKeyboardSteeringStore.getState().setLevel("tabs");
+    };
+    // A status jump (Shift: backwards) or Back from `shown`, the tab showing in
+    // the window the key was pressed in. The main window owns the lists and the
+    // Back record (a popout asks, `runFromPopout`).
+    const statusJump = (action: SteeringAction, shift: boolean, shown: StatusTab | null, asker?: string) => {
+      const steering = useKeyboardSteeringStore.getState();
+      const tabsByScope = useTabsStore.getState().tabsByScope;
+      if (action === "jumpBack") {
+        const target = jumpBackTarget(steering.jumpBack, shown, tabsByScope);
+        if (!target) return;
+        steering.setJumpBack(shown ? { origin: shown, landed: target } : null);
+        goToTab(target, asker);
+        return;
+      }
+      const status = STATUS_ACTIONS[action];
+      if (!status) return;
+      // Next (Shift: previous) tab needing an answer / working / finished, in
+      // any project; steering follows it down to the tab level.
+      const activity = useActivityStore.getState();
+      const target = nextStatusTab(
+        statusTabs(status, activity.busyByTab, activity.attentionByTab, tabsByScope),
+        shown,
+        shift ? -1 : 1,
+      );
+      if (!target) return;
+      // Remember where the jump left from, for Back (and a digit's answer).
+      steering.setJumpBack(afterStatusJump(steering.jumpBack, shown, target));
+      goToTab(target, asker);
+    };
+    // The return after a digit answered the tab a jump landed on: only while
+    // the Back record still names `shown` as where it landed.
+    const returnFrom = (shown: StatusTab, asker?: string) => {
+      const steering = useKeyboardSteeringStore.getState();
+      const record = steering.jumpBack;
+      if (!record || record.landed.scope !== shown.scope || record.landed.key !== shown.key) return;
+      const target = jumpBackTarget(record, shown, useTabsStore.getState().tabsByScope);
+      steering.setJumpBack(null);
+      if (target) goToTab(target, asker);
+    };
+    // Main: a status jump, Back or answer-return a popout's key asked for.
+    const runFromPopout = (request: DetachedSteerPayload, act: Extract<SteerAct, { kind: "action" }>) => {
+      const shown = request.shown ?? null;
+      if (act.auto) {
+        if (shown) returnFrom(shown, request.label);
+        return;
+      }
+      statusJump(act.action, act.shift, shown, request.label);
     };
     // Once the tab a status jump landed on stopped asking, back to the tab the
     // jump left — only while steering is still on the answered tab, so a user
-    // who walked on meanwhile stays where they went.
+    // who walked on meanwhile stays where they went. In a popout the main
+    // window checks the Back record and moves.
     const returnAfterAnswer = (from: StatusTab) => {
       const steering = useKeyboardSteeringStore.getState();
       if (!steering.active || steering.level === "region") return;
       const shown = shownStatusTab();
+      if (popout) {
+        if (shown && shown.scope === from.scope && shown.key === from.key) {
+          sendToMain({ kind: "action", action: "jumpBack", shift: false, auto: true });
+        }
+        return;
+      }
       const record = steering.jumpBack;
       if (!shown || shown.scope !== from.scope || shown.key !== from.key) return;
       if (!record || record.landed.scope !== from.scope || record.landed.key !== from.key) return;
@@ -907,42 +1016,16 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // that crosses windows: it hands it to the main window, which runs it
       // there (J: the next popout, or the main window after the last one).
       if (popout && action && POPOUT_HANDS_OVER.has(action)) {
-        if (POPOUT_MAIN_ONLY.has(action) || action === "popout") {
-          sendToMain({ kind: "action", action, shift: e.shiftKey });
-        }
+        sendToMain({ kind: "action", action, shift: e.shiftKey });
         return;
       }
-      const status = action ? STATUS_ACTIONS[action] : undefined;
-      if (status) {
-        // Next (Shift: previous) tab needing an answer / working / finished,
-        // in any project; steering follows it down to the tab level.
-        const activity = useActivityStore.getState();
-        const tabs = useTabsStore.getState();
-        const shown = shownStatusTab();
-        const target = nextStatusTab(
-          statusTabs(status, activity.busyByTab, activity.attentionByTab, tabs.tabsByScope),
-          shown,
-          e.shiftKey ? -1 : 1,
-        );
-        if (target) {
-          // Remember where the jump left from, for Back (and a digit's answer).
-          const steering = useKeyboardSteeringStore.getState();
-          steering.setJumpBack(afterStatusJump(steering.jumpBack, shown, target));
-          goToTab(target);
-        }
+      // The status jumps, and Back to the tab they left (again: back to this
+      // one), from the tab showing here.
+      if (action && (STATUS_ACTIONS[action] || action === "jumpBack")) {
+        statusJump(action, e.shiftKey, shownStatusTab());
         return;
       }
       switch (action) {
-        // Back to the tab the status jumps left; again, back to this one.
-        case "jumpBack": {
-          const steering = useKeyboardSteeringStore.getState();
-          const shown = shownStatusTab();
-          const target = jumpBackTarget(steering.jumpBack, shown, useTabsStore.getState().tabsByScope);
-          if (!target) return;
-          steering.setJumpBack(shown ? { origin: shown, landed: target } : null);
-          goToTab(target);
-          return;
-        }
         case "mail":
         case "calendar":
         case "todo":
@@ -1426,10 +1509,36 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           listen<DetachedSteerRequest>(detachedSteerEvent(myLabel), (ev) => whenFocused(() => arrive(ev.payload.act))),
         )
       : () => {};
+    // The status counts and Back for a popout's bar: the main window counts
+    // (`STEERING_STATUS`) on change while any popout is open, and once more
+    // whenever a popout starts steering; the popout shows what it is told.
+    const unlistenStatus = popout
+      ? subscribeTauri(() =>
+          listen<PopoutSteeringStatus>(STEERING_STATUS, (ev) => usePopoutViewStore.getState().setStatus(ev.payload)),
+        )
+      : () => {};
+    const unsubscribeStatus = popout
+      ? () => {}
+      : (() => {
+          const subs = [
+            useActivityStore.subscribe((s, prev) => {
+              if (s.busyByTab !== prev.busyByTab || s.attentionByTab !== prev.attentionByTab) publishStatus();
+            }),
+            useTabsStore.subscribe((s, prev) => {
+              if (s.tabsByScope !== prev.tabsByScope || s.detachedGroupsByScope !== prev.detachedGroupsByScope) publishStatus();
+            }),
+            useKeyboardSteeringStore.subscribe((s, prev) => {
+              if (s.jumpBack !== prev.jumpBack) publishStatus();
+            }),
+          ];
+          return () => subs.forEach((un) => un());
+        })();
     return () => {
       cancelArrival();
       unlistenOwner();
       unlistenRequest();
+      unlistenStatus();
+      unsubscribeStatus();
       cancelPlace();
       for (const id of syncTimers) window.clearTimeout(id);
       unsubscribeScroll();

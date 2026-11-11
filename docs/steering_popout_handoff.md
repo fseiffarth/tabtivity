@@ -182,6 +182,43 @@ Commit: `feat(steering): steering follows the keyboard between windows`
 - Note: the plan's example key `,` for settings is not the default binding
   (`/` is); tests use `/`.
 
+## Step 5 — status jumps across windows
+
+Commit: `feat(steering): status jumps and Back cross windows`
+
+- `lib/shortcuts/tabJump.ts`: `jumpToTab` returns the tab's home
+  (`MAIN_TAB_HOME` = "main", or the popout's label). Main window, tab in a
+  popout of its scope (`orderedTabKeys(entry.subtree)`): `bringUpScope`, an
+  `activate` on the record (`applyDetachedEdit`; the host's sweep reseeds the
+  popout), `focus_detached_window(label)`. Callers that ignore the result (the
+  command palette, cockpit, pills, to-do) now also raise a popout tab.
+- `useSteering` main: `goToTab(target, asker?)` — a popout home gets
+  `{ kind: "tab", key }`; a main home asked from a popout raises the main
+  window and arrives on its tabs. `statusJump(action, shift, shown, asker?)`
+  is the one status / Back implementation for both a key here and a popout's
+  request (`runFromPopout`, which uses the popout's `shown`).
+- Choice: `SteerAct.action` gained `auto?: boolean` for rule 7: the popout's
+  `returnAfterAnswer` sends `jumpBack` with `auto: true`, and only an `auto`
+  Back checks that the record landed on `shown` (a manual Back from a popout
+  behaves as Back in the main window, which has no such check).
+- Popout: all `POPOUT_HANDS_OVER` keys are now sent (status jumps and Back
+  too); a received `{ kind: "tab" }` focuses the tab's group in the popout view
+  (`setGroupActiveInScope`, an `activate` edit) and lands on the tabs.
+- Choice: the `STEERING_STATUS` publisher lives in `useSteering` (main
+  surface), not in `listenDetachedHost` as the plan says: it reads the
+  steering store's Back record, and keeping it out of the host spares every
+  host test a new stream on its bus. It publishes only while some popout is
+  open, on a change of the counts / Back (compared before emitting), and
+  forced whenever a popout announces `STEERING_OWNER`. `back` is "the record's
+  origin is still open" (`jumpBackTarget(record, null, …)`): the main window
+  does not know the popout's shown tab between keys. The popout writes it
+  into `popoutView.status`, which its bar reads.
+- Tests: `windows/SteeringHandover.test.tsx` +6 (11): Q in a popout to a tab
+  in main / another popout / the same popout; Q in main to a popout and Back
+  across; the auto-return (moves only when the record landed on `shown`; the
+  digit answer itself is not driven, the popout's request is emitted
+  directly); counts reach the popout.
+
 ## Flagged for user
 
 - Closing a popout tab with its × does not end the tab's minted local tmux

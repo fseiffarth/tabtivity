@@ -159,7 +159,29 @@ async function windows(popouts = 1) {
     unmounts.push(() => pop.context.setDetachedWindowContext(null));
     pops.push(pop);
   }
-  return { main, pops, labels };
+  /** Popout `i`'s record in the main store. */
+  const record = (i: number) => store.getState().detachedGroupsByScope["p"]!.find((d) => d.id === groupIds[i])!;
+  /** Popout `i`'s view caught up with its record, as a reseed does. */
+  const sync = async (i: number) => {
+    await pops[i].rtl.act(async () =>
+      pops[i].view.usePopoutViewStore.getState().setView({
+        tree: record(i).subtree,
+        tabs: store.getState().tabsByScope["p"]!,
+      }),
+    );
+  };
+  /** The key of popout `i`'s first tab, and of the main window's tab `a`. */
+  const popTab = (i: number) => main.tabLayoutTree.orderedTabKeys(record(i).subtree)[0];
+  const mainTab = store.getState().tabsByScope["p"]!.find((t) => t.label === "a")!.key;
+  return { main, pops, labels, record, sync, popTab, mainTab, groupIds };
+}
+
+/** Mark `key` as asking for a decision, in the main window's classifier (the
+ *  one window that sees every PTY). */
+async function asks(main: SteerHeap, key: string) {
+  await main.rtl.act(async () => {
+    main.activity.useActivityStore.setState({ attentionByTab: { [`p:${key}`]: "decision" } });
+  });
 }
 
 const on = (h: SteerHeap) => h.steering.useKeyboardSteeringStore.getState().active;
@@ -265,5 +287,95 @@ describe("steering follows the keyboard between windows", () => {
     // A focus that arrives after the wait no longer pulls steering over.
     await main.rtl.act(async () => void window.dispatchEvent(new Event("focus")));
     expect(on(main)).toBe(false);
+  });
+});
+
+describe("status jumps across windows", () => {
+  const raised = () => shared.calls.filter((c) => c.cmd === "focus_detached_window").map((c) => (c.args as { label: string }).label);
+
+  it("Q in a popout to a tab in the main window: the main window takes it, on that tab", async () => {
+    const { main, pops, mainTab } = await windows(1);
+    await asks(main, mainTab);
+    const pop = pops[0];
+    await pop.rtl.act(async () => pop.steering.useKeyboardSteeringStore.getState().enter());
+    await press(pop, "q");
+    expect(on(main)).toBe(true);
+    expect(on(pop)).toBe(false);
+    expect(main.tabs.useTabsStore.getState().activeKey).toBe(mainTab);
+    expect(shared.mainFocused).toBeGreaterThan(0);
+  });
+
+  it("Q in a popout to a tab in another popout: that popout takes it", async () => {
+    const { main, pops, labels, popTab } = await windows(2);
+    await asks(main, popTab(1));
+    await pops[0].rtl.act(async () => pops[0].steering.useKeyboardSteeringStore.getState().enter());
+    await press(pops[0], "q");
+    expect(raised()).toContain(labels[1]);
+    expect([on(main), on(pops[0]), on(pops[1])]).toEqual([false, false, true]);
+    expect(shared.mainFocused).toBe(0);
+  });
+
+  it("Q in a popout to a tab in the same popout: it stays, on that tab", async () => {
+    const { main, pops, record, sync, groupIds, popTab } = await windows(1);
+    const store = main.tabs.useTabsStore;
+    const first = popTab(0);
+    const second = store.getState().addDetachedTab("p", groupIds[0], shell("p0b"), groupIds[0])!;
+    // Back on the first, the second asks.
+    store.getState().applyDetachedEdit("p", groupIds[0], { kind: "activate", key: first });
+    await sync(0);
+    await asks(main, second);
+    const pop = pops[0];
+    await pop.rtl.act(async () => pop.steering.useKeyboardSteeringStore.getState().enter());
+    await press(pop, "q");
+    expect(on(pop)).toBe(true);
+    expect(on(main)).toBe(false);
+    expect(main.tabLayoutTree.allGroups(record(0).subtree)[0].activeKey).toBe(second);
+    expect(shared.mainFocused).toBe(0);
+  });
+
+  it("Q in the main window to a tab in a popout, and Back across again", async () => {
+    const { main, pops, labels, popTab, mainTab } = await windows(1);
+    await asks(main, popTab(0));
+    await main.rtl.act(async () => main.steering.useKeyboardSteeringStore.getState().enter());
+    await press(main, "q");
+    expect(raised()).toContain(labels[0]);
+    expect(on(pops[0])).toBe(true);
+    expect(on(main)).toBe(false);
+    // Back, pressed in the popout: to the main window's tab the jump left.
+    await pops[0].rtl.act(async () => pops[0].view.usePopoutViewStore.getState().setView({ tabs: main.tabs.useTabsStore.getState().tabsByScope["p"]! }));
+    await press(pops[0], "Backspace");
+    expect(on(main)).toBe(true);
+    expect(on(pops[0])).toBe(false);
+    expect(main.tabs.useTabsStore.getState().activeKey).toBe(mainTab);
+  });
+
+  it("the return after a digit answer moves only while the jump landed on that tab", async () => {
+    const { main, pops, labels, popTab, groupIds, mainTab } = await windows(1);
+    await asks(main, popTab(0));
+    await main.rtl.act(async () => main.steering.useKeyboardSteeringStore.getState().enter());
+    await press(main, "q");
+    expect(on(pops[0])).toBe(true);
+    const returnFrom = (key: string) =>
+      main.rtl.act(async () => {
+        await bus.emit(main.detached.DETACHED_STEER, {
+          scope: "p",
+          groupId: groupIds[0],
+          label: labels[0],
+          act: { kind: "action", action: "jumpBack", shift: false, auto: true },
+          shown: { scope: "p", key },
+        });
+      });
+    // Steering walked on to another tab meanwhile: nothing moves.
+    await returnFrom("elsewhere");
+    expect(on(main)).toBe(false);
+    await returnFrom(popTab(0));
+    expect(on(main)).toBe(true);
+    expect(main.tabs.useTabsStore.getState().activeKey).toBe(mainTab);
+  });
+
+  it("the main window's counts reach the popout's bar", async () => {
+    const { main, pops, popTab } = await windows(1);
+    await asks(main, popTab(0));
+    expect(pops[0].view.usePopoutViewStore.getState().status).toMatchObject({ decision: 1, working: 0, done: 0 });
   });
 });

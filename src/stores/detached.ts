@@ -140,12 +140,14 @@ export const DETACHED_REOPEN = "detached-reopen";
  *  - `enter`: take steering, landing on the tabs level;
  *  - `tab`: take steering on this tab (a status jump's target);
  *  - `action`: run this steering key here (a popout's main-only key, J, a
- *    status jump or Back), `shift` as pressed.
+ *    status jump or Back), `shift` as pressed. `auto`: a Back the popout sent
+ *    by itself after a digit answered its tab — only taken while the jump's
+ *    record still names that tab as where it landed.
  */
 export type SteerAct =
   | { kind: "enter" }
   | { kind: "tab"; key: string }
-  | { kind: "action"; action: SteeringAction; shift: boolean };
+  | { kind: "action"; action: SteeringAction; shift: boolean; auto?: boolean };
 
 /**
  * Detached → main: a popout hands steering (or a key) to the main window —
