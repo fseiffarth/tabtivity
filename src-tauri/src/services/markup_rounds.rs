@@ -2325,8 +2325,11 @@ mod tests {
             .collect();
         assert_eq!(left.len(), KEEP_ROUNDS);
         assert!(left.contains(ids.last().unwrap()));
-        // An old one goes whatever the count.
-        let old = state.join(ROUNDS_DIR).join(&ids[ids.len() - 2]);
+        // An old one goes whatever the count. `created` is whole seconds, so
+        // which of the rounds begun within one second survived is not fixed:
+        // age one that did.
+        let survivor = left.iter().find(|name| *name != ids.last().unwrap()).unwrap();
+        let old = state.join(ROUNDS_DIR).join(survivor);
         let mut record: serde_json::Value = serde_json::from_slice(&fs::read(old.join("round.json")).unwrap()).unwrap();
         record["created"] = serde_json::json!(now_secs() - KEEP_FOR.as_secs() - 10);
         fs::write(old.join("round.json"), serde_json::to_vec(&record).unwrap()).unwrap();
