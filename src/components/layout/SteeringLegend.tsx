@@ -59,7 +59,7 @@ const tokFor = (g: SteeringGroup) => TOK_BY_GROUP.get(g) ?? "tok-comment";
  * user's own bindings (`steeringRowKeys`, `steeringSlotKey`), so it can never
  * list a key the handler doesn't act on:
  *
- *  - a wrapping bar docked under the panes: the badge (a click folds it), the
+ *  - a one-row bar docked under the panes: the badge (a click folds it), the
  *    ladder Projects › Subwindows › Tabs › Inside with the lit rung being where
  *    the arrows act, the level's move keys, the status jumps with their counts,
  *    and at the right end the keys that leave the mode. It takes its height out
@@ -405,12 +405,10 @@ export function SteeringLegend() {
     <>
       <div ref={barRef} className={`steering-bar${folded ? " folded" : ""}`} role="status" aria-label={t("steering.legendTitle")}>
         {badge}
-        <div className="steering-bar-heading">
-          {ladderEl}
-          <UntestedTag id="steering.bar" />
-          <div className="steering-bar-tail">{tailItems}</div>
-        </div>
+        {ladderEl}
+        <UntestedTag id="steering.bar" />
         <div className="steering-bar-keys">{keyItems}</div>
+        <div className="steering-bar-tail">{tailItems}</div>
       </div>
       {caps}
     </>,

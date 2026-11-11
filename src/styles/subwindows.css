@@ -750,7 +750,7 @@
   border-radius: 3px;
 }
 
-/* The steering bar (SteeringLegend): a wrapping bar docked under the panes, and
+/* The steering bar (SteeringLegend): a one-row bar docked under the panes, and
    the key caps pinned to the controls they fire. The bar takes its height out
    of the window (`html[data-steer-bar]`), so it never covers a prompt line; it
    is click-through but for the badge. Corners are the desktop radius scale
@@ -768,13 +768,13 @@ html[data-steer-bar] .detached-center {
   right: 0;
   bottom: 0;
   z-index: 9998;
-  min-height: 28px;
+  height: 28px;
   box-sizing: border-box;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  column-gap: 12px;
+  gap: 14px;
   padding: 0 10px 0 0;
+  overflow: hidden;
   font-size: var(--text-md);
   color: var(--text-primary);
   background: var(--bg-panel);
@@ -782,8 +782,6 @@ html[data-steer-bar] .detached-center {
   pointer-events: none;
 }
 .steering-bar-badge {
-  grid-column: 1;
-  grid-row: 1 / 3;
   pointer-events: auto;
   position: relative;
   flex: none;
@@ -823,8 +821,8 @@ button.steering-bar-badge:hover {
   border-radius: 50%;
 }
 .steering-bar-ladder {
+  flex: none;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
   color: var(--text-muted);
@@ -855,32 +853,16 @@ button.steering-bar-badge:hover {
 .steering-bar-keys,
 .steering-bar-tail {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
 }
 .steering-bar-keys {
-  grid-column: 2;
+  flex: 1 1 0;
   min-width: 0;
-  gap: 8px 18px;
-  padding: 6px 0 8px;
-  border-top: 1px solid var(--border-subtle);
-}
-.steering-bar-keys:empty {
-  display: none;
-}
-.steering-bar-heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 14px;
-  min-height: 28px;
-  padding: 3px 0;
-  box-sizing: border-box;
+  overflow: hidden;
 }
 .steering-bar-tail {
-  margin-left: auto;
-  gap: 6px 14px;
+  flex: none;
 }
 .steering-bar-item {
   display: inline-flex;
@@ -898,6 +880,13 @@ button.steering-bar-badge:hover {
   height: 16px;
   background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
+/* A narrow window drops the words first; the caps stay. */
+@media (max-width: 1280px) {
+  .steering-bar-label {
+    display: none;
+  }
+}
+
 /* A key cap: the group's editor-token colour as the fill, the inner span the
    ink. Outside the fancy (Helix) pair \`.tok-tag\` is \`.tok-func\`'s colour
    (accent / blue), which would paint Open like Move; red keeps them apart. */
