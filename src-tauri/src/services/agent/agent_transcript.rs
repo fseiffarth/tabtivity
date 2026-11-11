@@ -376,6 +376,19 @@ pub fn agent_session_transcript(
         let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
         return crate::services::google_chat::transcript(cmd, &home, directory, since, own, version, limit);
     }
+    if cmd == "muse" {
+        if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
+        let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
+            return AgentTranscript::unavailable("no_session");
+        };
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return AgentTranscript::unavailable("unsupported");
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        let own = crate::services::google_chat::recorded_conversation(project_id, launch_id);
+        let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
+        return crate::services::muse_session::transcript(&home, directory, since, own, version, limit);
+    }
     if cmd == "copilot" {
         return copilot_transcript(project_id, launch_id, subagent, version, limit);
     }
@@ -417,16 +430,19 @@ pub fn stored_chat_transcript(
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
-    if matches!(cmd, "opencode" | "agy") {
+    if matches!(cmd, "opencode" | "agy" | "muse") {
         if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
             return AgentTranscript::unavailable("no_transcript");
         }
         let dir = tab_dir.unwrap_or_default();
-        if cmd == "agy" {
+        if matches!(cmd, "agy" | "muse") {
             if subagent.is_some() {
                 return AgentTranscript::unavailable("no_subagent");
             }
             let home = crate::services::agent_home::scope_home(project_id);
+            if cmd == "muse" {
+                return crate::services::muse_session::chat(&home, dir, chat, version, limit);
+            }
             return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
         }
         let db = crate::services::opencode_store::db_path_for(project_id);

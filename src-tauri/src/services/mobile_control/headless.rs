@@ -297,7 +297,7 @@ pub fn prompts(state_dir: &Path, project_id: &str) -> Result<Vec<ProjectAgentPro
 // ── Transcript ──────────────────────────────────────────────────────────────
 
 /// The agents whose transcript Tabtivity reads at all (`TRANSCRIPT_AGENTS`).
-const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "agy"];
+const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "agy", "muse"];
 
 /// `agentTranscriptFor` off the tab record: the same two "not yet" answers
 /// (`no_session` for a transcript family whose hook has not recorded a
@@ -331,7 +331,7 @@ pub fn transcript(
         );
     }
     let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
-    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy").then_some("")) else {
+    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy" | "muse").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };

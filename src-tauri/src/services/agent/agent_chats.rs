@@ -7,7 +7,9 @@
 //! by id (Copilot's: a folder per session, `copilot_session`, named for its
 //! `workspace.yaml` `cwd` and held to a session a prompt went into).
 //! OpenCode and Antigravity keep theirs in SQLite stores read by folder
-//! (`opencode_store::folder_chats`, `google_chat::antigravity_chats`): a
+//! (`opencode_store::folder_chats`, `google_chat::antigravity_chats`), Muse in
+//! a dated log per session matched by its `workspace_root`
+//! (`muse_session::folder_chats`): a
 //! listed id is checked to be one of the folder's top-level conversations
 //! ([`is_folder_chat`]) before it is read or resumed. Claude files a folder's sessions as
 //! `<scope home>/.claude/projects/<folder slug>/<uuid>.jsonl` — the folder is
@@ -109,7 +111,7 @@ pub fn list_chats(
 ) -> ChatList {
     let limit = limit.clamp(1, MAX_PAGE);
     let dir = tab_dir.map(normal_dir);
-    if matches!(cmd, "opencode" | "agy") {
+    if matches!(cmd, "opencode" | "agy" | "muse") {
         return folder_store_chats(cmd, project_id, dir.as_deref(), launch_id, offset, limit);
     }
     let Some(kind) = kind_of(cmd) else {
@@ -198,6 +200,11 @@ fn folder_store_chats(
             crate::services::opencode_store::folder_chats(&db, dir, offset, limit, MAX_SCANNED),
             crate::services::opencode_session::recorded_session(project_id, launch_id),
         )
+    } else if cmd == "muse" {
+        (
+            crate::services::muse_session::folder_chats(&home, dir, offset, limit, MAX_SCANNED),
+            crate::services::muse_session::recorded_tab_session(&home, dir, project_id, launch_id),
+        )
     } else {
         (
             crate::services::google_chat::antigravity_chats(&home, dir, offset, limit, MAX_SCANNED),
@@ -241,6 +248,12 @@ pub fn is_folder_chat(cmd: &str, project_id: Option<&str>, tab_dir: Option<&str>
                 && local()
                 && dir.as_deref().filter(|dir| Path::new(dir).is_absolute()).is_some_and(|dir| {
                     crate::services::google_chat::antigravity_folder_chat(&crate::services::agent_home::scope_home(project_id), dir, chat)
+                })
+        }
+        "muse" => {
+            local()
+                && dir.as_deref().filter(|dir| Path::new(dir).is_absolute()).is_some_and(|dir| {
+                    crate::services::muse_session::folder_chat(&crate::services::agent_home::scope_home(project_id), dir, chat)
                 })
         }
         _ => chat_file(cmd, project_id, tab_dir, launch_id, chat).is_some(),
