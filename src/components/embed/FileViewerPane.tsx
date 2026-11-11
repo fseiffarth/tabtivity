@@ -1,4 +1,5 @@
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { seedViewerState } from "./fileViewer/viewerState";
 import { useWindowsStore } from "../../stores/windows";
 import { findTabByKey, useTabsStore } from "../../stores/tabs";
 import { useExperimental } from "../../lib/experimental";
@@ -144,7 +145,9 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
   // A viewer tab is opened against one fixed absolute path (mirror OR host). For
   // a remote project this manual override lets the SAME tab show the other side
   // instead — same rel path, root swapped — without touching the tab's
-  // persisted path. Session-only: resets to "no override" when the tab is
+  // persisted path. Kept on the tab (`ViewerState.fileSide`), so a popout, a
+  // dock-back and a restart reopen it on the side the user picked (session state
+  // alone was lost at every remount). Resets to "no override" when the tab is
   // retargeted to a different file, so `effectiveSource` falls back to the file's
   // OWN resolved side (`source`, from `fileSource(path)`) — i.e. the side the
   // path already points at. That is the load-bearing default: `openFileEntry`
@@ -155,10 +158,25 @@ export function FileViewerPane({ viewer, path, projectId, tabKey, visible = true
   // silently rewrite a host path back to the mirror — the Files-tab / subwindow
   // sidebar use an *independent* source that never writes that pref, so a file
   // opened there on Remote was read locally. `null` = follow the path.
-  const [sideOverride, setSideOverride] = useState<"local" | "remote" | null>(null);
+  const [sideOverride, setSideOverrideState] = useState<"local" | "remote" | null>(
+    () => seedViewerState(tabKey)?.fileSide ?? null,
+  );
+  const setSideOverride = useCallback(
+    (side: "local" | "remote") => {
+      setSideOverrideState(side);
+      if (tabKey) useTabsStore.getState().setViewerState(tabKey, { fileSide: side });
+    },
+    [tabKey],
+  );
+  // Only a CHANGE of file resets the flip — the mount itself restores it.
+  // `setTabEmbedPath` drops the persisted copy with the path.
+  const fileId = `${projectId ?? ""}\n${path}`;
+  const shownFile = useRef(fileId);
   useEffect(() => {
-    setSideOverride(null);
-  }, [path, projectId]);
+    if (shownFile.current === fileId) return;
+    shownFile.current = fileId;
+    setSideOverrideState(null);
+  }, [fileId]);
   const rel = useMemo(() => autoSyncRel(project, path), [project, path]);
   const mirrorRoot = useMemo(() => localMirrorRootFor(project), [project]);
   const effectiveSource: FileSource = hostPinned ? "remote" : (sideOverride ?? source ?? "none");

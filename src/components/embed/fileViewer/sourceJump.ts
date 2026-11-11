@@ -80,7 +80,13 @@ function alignSourceTabSide(input: string, anchorPath?: string) {
       if (!other) continue;
       if (tab.embedPath === target) {
         const controls = useFileSourcesStore.getState().controlsByTab[tab.key];
-        if (controls && controls.current !== other.side) controls.set(other.side);
+        if (controls) {
+          if (controls.current !== other.side) controls.set(other.side);
+        } else if (tab.viewerState?.fileSide && tab.viewerState.fileSide !== other.side) {
+          // Not mounted (a hidden group): its flip is only the persisted one,
+          // which it would come back on.
+          store.setViewerState(tab.key, { fileSide: other.side });
+        }
       } else if (tab.embedPath === other.twin && !tabs.some((t) => t.embedPath === target)) {
         store.setTabEmbedPath(tab.key, target);
       }

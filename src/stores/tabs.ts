@@ -2114,7 +2114,11 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       const nextTabs = tabs.map((t) => {
         if (t.key !== key || t.kind !== "embed" || t.embedPath === embedPath) return t;
         changed = true;
-        return { ...t, embedPath };
+        // A side flip of the old path would override the new path's own side
+        // (`ViewerState.fileSide`): the new path IS the side asked for.
+        if (t.viewerState?.fileSide === undefined) return { ...t, embedPath };
+        const { fileSide: _flip, ...viewerState } = t.viewerState;
+        return { ...t, embedPath, viewerState };
       });
       if (!changed) return {};
       return writeScope(s, owner, nextTabs, layout, focusedGroupId);

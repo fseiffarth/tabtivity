@@ -253,6 +253,12 @@ export interface ViewerState {
   texEngine?: string;
   texOutDir?: string;
   texExtraFlags?: string;
+  // A remote project's file tab flipped to the OTHER side of its path with the
+  // Local/Remote switch (`FileViewerPane`). Absent = follow the path's own side.
+  // Persisted per tab so the flip survives a popout, a dock-back and a restart —
+  // the pane remounts in each, and session state alone came back on the path's
+  // side. Dropped when the tab is pointed at another path (`setTabEmbedPath`).
+  fileSide?: "local" | "remote";
 }
 
 export interface TabEntry {
