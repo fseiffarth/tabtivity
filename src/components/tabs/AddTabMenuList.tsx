@@ -1,5 +1,5 @@
 import { DotIcon } from "../common/icons/Icon";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { UntestedTag } from "../common/UntestedTag";
 import { MenuShortcut } from "../common/MenuShortcut";
 import type { ChordDescriptor, ShortcutAction } from "../../lib/shortcuts/shortcuts";
@@ -66,6 +66,15 @@ interface Flyout {
   label: string;
   entries: AddMenuEntry[];
   anchor: DOMRect;
+  trigger: HTMLButtonElement;
+}
+
+function escapeFlyout(e: KeyboardEvent<HTMLDivElement>, flyout: Flyout, close: () => void) {
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  e.stopPropagation();
+  close();
+  flyout.trigger.focus();
 }
 
 /** Place a fly-out against its anchor, flipping to the left when there is no
@@ -169,19 +178,24 @@ export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; he
   // one (Agents has "More agents…" and "Cloud session").
   const openMoreMenu = (label: string, entries: AddMenuEntry[], anchor?: HTMLButtonElement | null) => {
     if (!anchor) return;
+    clearHover();
     setMorePos(null);
     setMachineMenu(null);
-    setMoreMenu({ label, entries, anchor: anchor.getBoundingClientRect() });
+    setMoreMenu({ label, entries, anchor: anchor.getBoundingClientRect(), trigger: anchor });
   };
   const openMachineMenu = (entry: AddMenuEntry, anchor?: HTMLButtonElement | null, hover = false) => {
     clearHover();
     if (!anchor || !entry.machineEntries) return;
+    // The flyouts are DOM siblings. More is the parent only when its own
+    // caret opened this picker.
+    if (!hover && !moreMenuRef.current?.contains(anchor)) setMoreMenu(null);
     setMachinePos(null);
     setMachineMenu({
       key: entry.key,
       label: entry.machineTitle ?? entry.label,
       entries: entry.machineEntries,
       anchor: anchor.getBoundingClientRect(),
+      trigger: anchor,
       hover,
     });
   };
@@ -481,6 +495,12 @@ export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; he
         <div
           ref={moreMenuRef}
           className="tab-new-menu tab-new-menu-more"
+          data-steer-add-tab-submenu=""
+          onKeyDown={(e) => escapeFlyout(e, moreMenu, () => {
+            clearHover();
+            setMachineMenu(null);
+            setMoreMenu(null);
+          })}
           style={{
             position: "fixed",
             left: morePos?.left ?? -10000,
@@ -497,6 +517,11 @@ export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; he
         <div
           ref={machineMenuRef}
           className="tab-new-menu tab-new-menu-more"
+          data-steer-add-tab-submenu={machineMenu.hover ? "hover" : ""}
+          onKeyDown={(e) => escapeFlyout(e, machineMenu, () => {
+            clearHover();
+            setMachineMenu(null);
+          })}
           style={{
             position: "fixed",
             left: machinePos?.left ?? -10000,

@@ -52,6 +52,7 @@ import {
   activeTabCard,
   activeTabElement,
   clearRegionCursor,
+  closeAddTabSubmenu,
   closeRegionDropdown,
   closeSubagentList,
   dismissLayer,
@@ -383,6 +384,13 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         clearRegionCursor();
         placeCursorSoon("cockpit");
         return false;
+      }
+      if (current === "addTab" && next === "addTab" && root && !root.contains(regionCursor())) {
+        // The flyout opens inside the same portal, so only the cursor root
+        // changes. On return the parent still remembers its trigger.
+        clearRegionCursor();
+        placeCursorSoon("addTab", 20, true);
+        return !!regionCursor();
       }
       if (root && layer.contains(root) && next === current) return false;
       if (next === current) return false;
@@ -948,6 +956,7 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
     function steerRegion(action: SteeringAction | null, region: SteeringRegion) {
       const root = regionRoot(region);
       if (action === "back") {
+        if (region === "addTab" && root && closeAddTabSubmenu(root)) return;
         // An open dropdown list closes first; the next Back leaves.
         if (root && closeRegionDropdown(root)) return;
         // A dialog or menu closes the way its own Escape closes it (it may

@@ -6,7 +6,8 @@
  * panel, the header apps and a pane's + menu.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { useEffect, useState } from "react";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -22,6 +23,8 @@ vi.mock("../../lib/shortcuts/tabJump", () => ({
 
 import { useKeyboard } from "../../hooks/useKeyboard";
 import { SteeringLegend } from "../../components/layout/SteeringLegend";
+import { ContextMenuPortal } from "../../components/common/ContextMenuPortal";
+import { AddTabMenuList, type AddMenuGroup } from "../../components/tabs/AddTabMenuList";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { allGroups, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
@@ -280,6 +283,130 @@ describe("steering levels", () => {
     } finally {
       window.removeEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
     }
+  });
+
+  it("steers into nested New Tab flyouts and returns to each opener on Escape", async () => {
+    twoPanes();
+    // jsdom has no layout. Give the menu, flyouts and buttons visible bounds.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: 100,
+      height: 20,
+      top: 0,
+      left: 0,
+      right: 100,
+      bottom: 20,
+    } as DOMRect);
+
+    const pick = vi.fn();
+
+    function NewTabMenuFixture() {
+      const [open, setOpen] = useState(false);
+      useEffect(() => {
+        const onRequest = (event: Event) => {
+          const { request } = (event as CustomEvent<NewTabShortcutDetail>).detail;
+          if (request.kind !== "menu") return;
+          event.preventDefault();
+          setOpen((shown) => !shown);
+        };
+        window.addEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+        return () => window.removeEventListener(NEW_TAB_SHORTCUT_EVENT, onRequest);
+      }, []);
+
+      const entry = (key: string, label: string) => ({
+        key,
+        label,
+        color: "#fff",
+        onPick: () => {
+          pick(key);
+          setOpen(false);
+        },
+      });
+      const quick = entry("claude", "Claude");
+      const groups: AddMenuGroup[] = [{
+        label: "Agents",
+        compactEntries: [quick],
+        moreLabel: "More agents",
+        entries: [
+          quick,
+          {
+            ...entry("gemini", "Gemini"),
+            machineTitle: "Choose Gemini machine",
+            machineEntries: [entry("local", "Local mirror"), entry("primary", "Primary host")],
+          },
+          entry("codex", "Codex"),
+        ],
+      }];
+      return open && (
+        <ContextMenuPortal x={0} y={0} className="tab-new-menu tab-add-menu" onClose={() => setOpen(false)}>
+          <AddTabMenuList groups={groups} />
+        </ContextMenuPortal>
+      );
+    }
+
+    render(<><Harness /><NewTabMenuFixture /></>);
+    const button = (name: string | RegExp) => screen.getByRole("button", { name });
+    press({ key: " ", shiftKey: true });
+    const openMore = async () => {
+      press({ key: "+" });
+      await waitFor(() => expect(regionCursor()).toBe(screen.getByRole("textbox")));
+      press({ key: "ArrowDown" });
+      expect(regionCursor()).toBe(button("Claude"));
+      press({ key: "d" });
+      const more = button(/More agents/);
+      expect(regionCursor()).toBe(more);
+      press({ key: "Enter" });
+      await waitFor(() => expect(regionCursor()).toBe(button("Gemini")));
+      return more;
+    };
+    const openMachines = async () => {
+      press({ key: "d" });
+      const machine = button("Choose Gemini machine");
+      expect(regionCursor()).toBe(machine);
+      press({ key: "Enter" });
+      await waitFor(() => expect(regionCursor()).toBe(button("Local mirror")));
+      return machine;
+    };
+
+    const more = await openMore();
+
+    // Going up from the first item wraps inside the More agents flyout.
+    press({ key: "ArrowUp" });
+    expect(regionCursor()).toBe(button("Codex"));
+    press({ key: "d" });
+    expect(regionCursor()).toBe(button("Gemini"));
+    const machine = await openMachines();
+    press({ key: "e" });
+    expect(regionCursor()).toBe(button("Primary host"));
+    press({ key: "ArrowDown" });
+    expect(regionCursor()).toBe(button("Local mirror"));
+
+    press({ key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Local mirror" })).toBeNull();
+      expect(regionCursor()).toBe(machine);
+    });
+    press({ key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Gemini" })).toBeNull();
+      expect(regionCursor()).toBe(more);
+    });
+    press({ key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /More agents/ })).toBeNull();
+      expect(steering()).toMatchObject({ active: true, level: "tabs" });
+    });
+    expect(pick).not.toHaveBeenCalled();
+
+    await openMore();
+    await openMachines();
+    press({ key: "d" });
+    expect(regionCursor()).toBe(button("Primary host"));
+    press({ key: "Enter" });
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /More agents/ })).toBeNull();
+      expect(steering().active).toBe(false);
+    });
+    expect(pick).toHaveBeenCalledExactlyOnceWith("primary");
   });
 
   it("acts on the user's steering keys, not the defaults they replaced", () => {

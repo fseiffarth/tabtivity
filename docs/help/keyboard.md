@@ -129,6 +129,10 @@ opened. On the top bar, S F walk its buttons and D drops a button's menu.
 Enter on a text field leaves the mode so you can type there; Shift+Space brings
 it back on the same dialog.
 
+In the new-tab menu (+), highlight **More agents**, **Cloud session**, or a row's
+**▾** button and press Enter. E/D or ↑/↓ move through the submenu. Esc closes
+one submenu at a time and returns the highlight to the button that opened it.
+
 In the side panel (B) the highlight starts in the list, on the row you were last
 on in that view. E D move one line (Shift: a screenful) and stop at the first and
 last line; S F move along a row's own buttons, and on a folder F opens it and S

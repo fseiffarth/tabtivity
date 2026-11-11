@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { useKeyboard } from "../../hooks/useKeyboard";
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { ContextMenuPortal } from "../../components/common/ContextMenuPortal";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
@@ -358,6 +359,45 @@ describe("steering over dialogs", () => {
 });
 
 describe("right-click menus", () => {
+  it("Escape closes a picker over a modal and restores the picker trigger", async () => {
+    function Modal({ onClose }: { onClose: () => void }) {
+      const modalRef = useModalFocus(onClose);
+      const [pickerOpen, setPickerOpen] = useState(false);
+      return (
+        <div className="modal-backdrop">
+          <div ref={modalRef} id="parent-modal" role="dialog" aria-modal="true">
+            <button type="button" id="picker-trigger" onClick={() => setPickerOpen(true)}>Open picker</button>
+            {pickerOpen && (
+              <ContextMenuPortal x={10} y={10} onClose={() => setPickerOpen(false)}>
+                <button type="button" id="picker-option">Picker choice</button>
+              </ContextMenuPortal>
+            )}
+          </div>
+        </div>
+      );
+    }
+    function App() {
+      const [open, setOpen] = useState(true);
+      return open && <Modal onClose={() => setOpen(false)} />;
+    }
+    render(<><Keyboard /><App /></>);
+    on();
+    expect(regionCursor()?.id).toBe("picker-trigger");
+    press({ key: "Enter" });
+    await settle();
+    expect(regionCursor()?.id).toBe("picker-option");
+
+    press({ key: "Escape" });
+    await settle();
+    expect(document.getElementById("picker-option")).toBeNull();
+    expect(document.getElementById("parent-modal")).not.toBeNull();
+    expect(regionCursor()?.id).toBe("picker-trigger");
+
+    press({ key: "Escape" });
+    await settle();
+    expect(document.getElementById("parent-modal")).toBeNull();
+  });
+
   it(". opens the active tab's menu, walked as the overlay; Escape closes it back to the tabs", async () => {
     render(
       <>

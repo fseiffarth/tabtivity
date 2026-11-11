@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
 import { surfaceExitMs } from "../../lib/motion";
@@ -68,20 +68,6 @@ export function ContextMenuPortal({
     setPos({ x, y });
   }, [x, y]);
   useClampToViewport(ref, pos, setPos, keepBelow ? { margin: MARGIN, axis: "x" } : undefined);
-  // Escape is the other half of "click away": the menu is not focus-trapped, so
-  // the key is taken on the document. An Escape some other handler already
-  // claimed (an editor cancelling its own mode) is left alone, and the one this
-  // menu eats is marked handled so it doesn't also back out of what's behind it.
-  useEffect(() => {
-    if (!dismiss) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      leaveRef.current();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [dismiss]);
   const [leaving, setLeaving] = useState(false);
   const leaveTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(leaveTimer.current), []);
@@ -97,6 +83,21 @@ export function ContextMenuPortal({
   };
   const leaveRef = useRef(leave);
   leaveRef.current = leave;
+  const dismissOnEscape = useCallback((e: Pick<KeyboardEvent, "key" | "defaultPrevented" | "preventDefault">) => {
+    if (!dismiss || e.key !== "Escape" || e.defaultPrevented) return;
+    // Portals share a z-index, so the last in the document paints on top.
+    const menus = document.querySelectorAll(".context-menu-portal");
+    if (menus[menus.length - 1] !== ref.current) return;
+    e.preventDefault();
+    leaveRef.current();
+  }, [dismiss]);
+  // Focus can stay outside a popup, so listen on the document too. Escape
+  // dispatched inside the menu is handled before the parent modal can take it.
+  useEffect(() => {
+    if (!dismiss) return;
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => document.removeEventListener("keydown", dismissOnEscape);
+  }, [dismiss, dismissOnEscape]);
   const left = pos?.x ?? x;
   const top = pos?.y ?? y;
   // Anchored menus give up height, not position: whatever is left between the
@@ -121,6 +122,7 @@ export function ContextMenuPortal({
         ref={ref}
         className={`${className} context-menu-portal${leaving ? " is-leaving" : ""}`}
         style={{ left, top, ...fit, ...style }}
+        onKeyDown={dismissOnEscape}
         onPointerDown={(e) => e.stopPropagation()}
       >
         {children}

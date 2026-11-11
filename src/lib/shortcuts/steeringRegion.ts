@@ -68,6 +68,7 @@ const subagentFrames = new WeakSet<HTMLElement>();
 const CHROME_ZONE = ".root-overlay-bar, .cockpit-rail-expand, .cockpit-rail-collapse";
 /** Root's own tab strip sits in the bar too: those tabs are the tab level's. */
 const CHROME_SKIP = ".root-overlay-slot .tab-strip, .root-overlay-slot .tab-new-wrap";
+const ADD_TAB_SUBMENU = "[data-steer-add-tab-submenu]";
 
 function lastMatch(selector: string): HTMLElement | null {
   const all = document.querySelectorAll<HTMLElement>(selector);
@@ -85,8 +86,18 @@ export function regionRoot(region: SteeringRegion): HTMLElement | null {
     }
     case "side":
       return document.querySelector<HTMLElement>(".side-panel.open");
-    case "addTab":
-      return lastMatch(".tab-add-menu");
+    case "addTab": {
+      const menu = lastMatch(".tab-add-menu");
+      const submenus = menu?.querySelectorAll<HTMLElement>(`${ADD_TAB_SUBMENU}:not([data-steer-add-tab-submenu="hover"])`);
+      // More and its machine picker are siblings. The deeper one is rendered
+      // last. A pointer preview does not take over the keyboard cursor.
+      if (submenus) {
+        for (let i = submenus.length - 1; i >= 0; i--) {
+          if (shown(submenus[i])) return submenus[i];
+        }
+      }
+      return menu;
+    }
     case "header":
       return document.querySelector<HTMLElement>(".app-header");
     case "chrome": {
@@ -209,6 +220,11 @@ function sendKey(target: HTMLElement, key: string): boolean {
   return target.dispatchEvent(e);
 }
 
+/** Let the add-tab flyout consume Escape without closing its parent portal. */
+export function closeAddTabSubmenu(root: HTMLElement): boolean {
+  return root.matches(ADD_TAB_SUBMENU) && !sendKey(root, "Escape");
+}
+
 /**
  * Close `layer` the way its own Escape does — the dialog decides (a dirty form
  * may ask first). The key goes to what has focus inside it, else to the layer
@@ -223,9 +239,9 @@ export function dismissLayer(layer: HTMLElement, after?: () => void): void {
     focused instanceof HTMLElement && layer.contains(focused) && !isTextEntry(focused) && !focused.closest(".xterm")
       ? focused
       : layer;
-  sendKey(target, "Escape");
+  const needsFallback = sendKey(target, "Escape");
   window.setTimeout(() => {
-    fallBack();
+    if (needsFallback) fallBack();
     if (after) window.setTimeout(after, 0);
   }, 0);
   function fallBack() {
@@ -433,6 +449,7 @@ export function regionTargets(root: HTMLElement): HTMLElement[] {
   const chrome = chromeFrames.has(root);
   const app = appFrames.has(root);
   const subagents = subagentFrames.has(root);
+  const addTab = root.matches(".tab-add-menu");
   // Every element's cursor is read once: a parent comes before its children
   // in document order, so its answer is already here when they ask. (The mail
   // overlay is thousands of elements; each step walks them all.)
@@ -447,6 +464,7 @@ export function regionTargets(root: HTMLElement): HTMLElement[] {
   };
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
     if (el.closest(NOT_A_TARGET)) continue;
+    if (addTab && el.closest(ADD_TAB_SUBMENU)) continue;
     if (chrome && (!el.closest(CHROME_ZONE) || el.closest(CHROME_SKIP))) continue;
     if (app && el.closest(APP_SKIP)) continue;
     if (subagents && !el.closest(SUBAGENT_ZONE)) continue;
