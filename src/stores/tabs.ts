@@ -3701,7 +3701,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const detached = s.detachedGroupsByScope[scope];
     const hidden = s.hiddenGroupsByScope[scope];
     const merged = withHiddenDocked(
-      withDetachedDocked(serializeTree(layout), detached),
+      withDetachedDocked(serializeTree(layout, s.pendingRespawnByScope[scope]), detached),
       hidden,
     );
     const tabGroups = pruneSavedTree(merged, keepKeys);
@@ -3995,7 +3995,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         // via get().tabs). Prune AFTER merging so dropped (non-restorable) tabs in
         // a detached group are pruned consistently.
         const detached = get().detachedGroupsByScope[scope];
-        const merged = withDetachedDocked(serializeTree(layout), detached);
+        const merged = withDetachedDocked(
+          serializeTree(layout, get().pendingRespawnByScope[scope]),
+          detached,
+        );
         const groups = pruneSavedTree(merged, keep);
         // The layout is keyed by PROJECT ID now, not by the path to a
         // project.json: it lives in the state dir, because the host reads it back
