@@ -55,6 +55,7 @@ vi.mock("../../lib/agents/readerLive", async (importOriginal) => {
 });
 
 import { useKeyboard } from "../../hooks/useKeyboard";
+import { registerQuestionField } from "../../lib/agents/readerSteering";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
@@ -186,6 +187,27 @@ describe("steering digits on a tab that asks", () => {
     expect(h.typed).toEqual([[`p:${tab.key}`, ["\u001b[B", "\u001b[B"]]]);
     expect(h.focus).toHaveBeenCalled();
     expect(steering().active).toBe(false);
+  });
+
+  it("the free-text digit opens the Chat view's field when it shows the question, else types in the terminal", () => {
+    const tab = agentTab("a");
+    const id = `p:${tab.key}`;
+    useActivityStore.setState({ attentionByTab: { [id]: "decision" } });
+    h.screens.set(id, { question: askUser, signature: "q1" });
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    const opened: number[] = [];
+    const off = registerQuestionField(id, (index) => opened.push(index));
+    press({ key: "3" });
+    off();
+    expect(opened).toEqual([2]);
+    expect(h.typed).toEqual([]);
+    expect(useKeyboardSteeringStore.getState().active).toBe(false);
+    // No Chat field: the highlight walks onto the row and the terminal types.
+    press({ key: " ", shiftKey: true });
+    press({ key: "3" });
+    expect(h.typed.length).toBe(1);
+    expect(h.focus).toHaveBeenCalled();
   });
 
   it("a turn waiting on a decision with no dialog read gets the digit typed as is", () => {

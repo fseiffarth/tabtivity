@@ -31,6 +31,7 @@ import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
+import { registerQuestionField } from "../../lib/agents/readerSteering";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
@@ -234,6 +235,9 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
     setTyped("");
     setPasteError(null);
   }, [live.signature]);
+  // Keyboard steering's digit on the free-text row opens this field (the
+  // terminal behind the Chat view cannot take the words).
+  useEffect(() => registerQuestionField(ptyId, (index) => setTyping(index)), [ptyId]);
   /** Files copied in the file manager, or a screenshot, pasted into the
    * field: stored in the inbox, their `@` references typed at the caret. */
   const onTypedPaste = (event: ClipboardEvent<HTMLInputElement>) => {

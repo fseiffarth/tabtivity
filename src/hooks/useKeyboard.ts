@@ -618,6 +618,10 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
           return false;
         case "ignored":
           return true;
+        case "freeTextField":
+          // The Chat view's own field has the words: steering steps aside.
+          exitSteering();
+          return true;
         case "freeText":
           // Its words are typed in the terminal itself: steering steps aside.
           terminalFor(result.ptyId)?.focus();

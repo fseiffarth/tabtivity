@@ -16,6 +16,7 @@
  */
 import { terminalFor } from "../terminal/terminalRegistry";
 import { answerKeys, freeTextRow, readReaderLive, UNNUMBERED } from "../agents/readerLive";
+import { openQuestionField } from "../agents/readerSteering";
 import { typePaneKeys } from "../agents/paneKeys";
 import { dialogOnScreen } from "../agents/dialogOnScreen";
 import { selectMoveKeys, type SelectOption, type SelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
@@ -29,6 +30,8 @@ export type SteeringAnswer =
   | { kind: "answered"; ptyId: string; agentLabel: string; signature: string; typed: Promise<void> }
   /** The free-text row: the highlight is on it, the terminal should type. */
   | { kind: "freeText"; ptyId: string; typed: Promise<void> }
+  /** The free-text row of a question the Chat view shows: its field opened. */
+  | { kind: "freeTextField"; ptyId: string }
   /** A dialog is up but has no row by that number (or an answer to it is on
    *  its way): the key is spent, nothing else happens. */
   | { kind: "ignored" }
@@ -89,6 +92,8 @@ export function answerSteeringQuestion(scope: string, tab: TabEntry, n: number):
   const option = optionForDigit(question, n);
   if (!option) return { kind: "ignored" };
   if (freeTextRow(option) && !option.keys) {
+    // Over the Chat view the terminal is hidden: the words go in its field.
+    if (openQuestionField(ptyId, option.index)) return { kind: "freeTextField", ptyId };
     const typed = typePaneKeys(ptyId, selectMoveKeys(question.current, option.index));
     return { kind: "freeText", ptyId, typed };
   }

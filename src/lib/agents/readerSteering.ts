@@ -100,6 +100,21 @@ export function readerInsideFor(id: string): ReaderInsideTarget | null {
   return insideTargets.get(id) ?? null;
 }
 
+const questionFields = new Map<string, (index: number) => void>();
+
+/** Register pane `id`'s Chat question: how to open the field under the free-text row `index`. */
+export function registerQuestionField(id: string, open: (index: number) => void): () => void {
+  return register(questionFields, id, open);
+}
+
+/** Opens the Chat field under pane `id`'s free-text row `index`; false when the pane shows no such question (the terminal then types the words). */
+export function openQuestionField(id: string, index: number): boolean {
+  const open = questionFields.get(id);
+  if (!open) return false;
+  open(index);
+  return true;
+}
+
 /** What a pane shows and offers, for the legend. */
 export interface ReaderViewFacts {
   view: ReaderViewId;
