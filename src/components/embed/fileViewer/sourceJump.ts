@@ -64,9 +64,11 @@ function jumpableTabs(): TabEntry[] {
  *    (`setTabEmbedPath`), which makes it read that side — what flipping its
  *    switch shows, kept across a restart like any path a tab was opened on.
  * The routing that follows then finds it by path as usual. Local projects, and
- * paths under neither root of a remote one, are left alone.
+ * paths under neither root of a remote one, are left alone. A compile's PDF
+ * goes through here too (`TexView`'s `openPdf`): a host build names the host
+ * PDF while the open PDF tab may hold the mirror's.
  */
-function alignSourceTabSide(input: string, anchorPath?: string) {
+export function alignFileTabSide(input: string, anchorPath?: string) {
   const store = useTabsStore.getState();
   const projects = useProjectsStore.getState().projects;
   const tabs = jumpableTabs().filter(
@@ -161,7 +163,7 @@ function openStandaloneSourceTab(input: string, line: number, column: number, an
  *  of {@link jumpToSource}, and what {@link listenSourceJump} runs for a jump
  *  broadcast from a detached PDF window. */
 function applySourceJump(input: string, line: number, column: number, anchorPath?: string) {
-  alignSourceTabSide(input, anchorPath);
+  alignFileTabSide(input, anchorPath);
   routeSourceJump(input, line, column, () =>
     openStandaloneSourceTab(input, line, column, anchorPath),
   );
@@ -196,7 +198,7 @@ function applySourceJump(input: string, line: number, column: number, anchorPath
 export function jumpToSource(input: string, line: number, column = 0, anchorPath?: string) {
   // An open tab of this file showing the other side of a remote project is
   // switched to this side first, so the routing below lands on it.
-  alignSourceTabSide(input, anchorPath);
+  alignFileTabSide(input, anchorPath);
   // A `.tex` source owned by an open workspace is centered there first (in this
   // window, or wherever the workspace lives — the store write reaches it); only a
   // source no workspace owns falls through to the standalone routing below.

@@ -502,6 +502,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("sync_handoff_export", "files", BodyConfined),
     ("sync_handoff_load_resolved", "relPath", BodyConfined),
     // ── On a remote host ────────────────────────────────────────────────
+    ("compile_tex_host", "path", Remote), // checked inside the project root (`tex/host.rs`)
     ("hpc_ws_anchor", "mirrorPath", Remote),
     ("hpc_ws_anchor", "workspacePath", Remote),
     ("hpc_ws_link", "workspacePath", Remote),

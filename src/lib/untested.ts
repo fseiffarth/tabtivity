@@ -233,8 +233,8 @@ export const UNTESTED = {
   "yamlGrid.1": { area: "embed", what: "YamlGrid · Card view of an empty YAML document" },
   "yamlGrid.2": { area: "embed", what: "YamlGrid · Card view's breadcrumb bar" },
   "tableView.selection": { area: "embed", what: "Table viewer · select cells, rows (row number) and columns (header name): click, Shift+click, drag, arrows, Ctrl+A, Ctrl+C copies as TSV, Esc clears; header ⇅ sorts" },
-  "tex.compileOnHostTab": { area: "embed", what: "Remote-only or VM project · TeX Compile opens a latexmk build tab on the host (replaced on the next Compile) and the PDF tab opens once the build writes it; no hover preview or compiler options" },
-  "tex.compileRemoteFileOnHost": { area: "embed", what: "Remote project, .tex opened from the Remote side · Compile opens a latexmk build tab on the host (not the local compile that failed with \"canonicalize …: No such file\"); the PDF tab opens once the build writes it; the file tree's Compile entries are hidden on the Remote side" },
+  "tex.compileOnHost": { area: "embed", what: "Remote-only or VM project · TeX Compile runs latexmk on the host in the background (no tab), shows the log/errors like a local build and opens or reloads the PDF tab; no hover preview or compiler options" },
+  "tex.compileRemoteFileOnHost": { area: "embed", what: "Remote project, .tex opened from the Remote side · Compile runs latexmk on the host in the background (no tab; not the local compile that failed with \"canonicalize …: No such file\"), shows errors like a local build and opens the PDF in the PDF tab already open for it on either side, not a second one; the file tree's Compile entries are hidden on the Remote side" },
   "fileTree.sqliteHostOnly": { area: "embed", what: "A SQLite file on the host (remote-only/VM, or the Remote side of a remote project) · the viewer says it opens only local files and points at Download to…" },
 
   // --- files — Project files, tree and git --------------------------

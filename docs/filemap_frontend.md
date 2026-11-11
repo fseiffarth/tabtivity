@@ -368,7 +368,7 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/fileViewer/TextView.tsx` | Code/YAML/JSON/table/SVG text viewer (tree/grid/card halves, rendered/SVG previews). |
 | `embed/fileViewer/pythonLinks.ts` | `usePythonLinks`: the Python editor's Ctrl+click go-to-definition; resolves outgoing (imported) names in the background and underlines only those that land, external libraries via the project interpreter's `site-packages` (`pythonRun.pythonLibRootsFor`; in-tree venvs only, since reads are confined). |
 | `embed/fileViewer/MarkdownView.tsx` | Markdown viewer/editor: follows local links and `#fragment`s (`stores/viewers/mdAnchor`), remote-image consent, link graph. |
-| `embed/fileViewer/TexView.tsx` | TeX editor: compile, SyncTeX, diagnostics, hover preview. On a host-pinned project Compile saves and opens the host build tab (`hostTexBuild.ts`), then watches the PDF's mtime over SFTP. |
+| `embed/fileViewer/TexView.tsx` | TeX editor: compile, SyncTeX, diagnostics, hover preview. A host file (host-pinned project, or a remote project's Remote side) builds on the host through `compile_tex_host` (no tab), reported like a local build; `openPdf` aligns an open PDF tab's side first (`sourceJump`'s `alignFileTabSide`). |
 | `embed/fileViewer/texParts.tsx` | TeX helpers shared by TexView and the workspace: compile options, Beamer bar, create-ref banner, copy-diagnostic button. |
 | `embed/fileViewer/TexWorkspaceView.tsx` | The multi-pane TeX workspace (structure sidebar, source panes, PDF). |
 | `embed/fileViewer/ImageView.tsx` | Image viewer (zoom/pan, drag-out, annotator, **Mark up** — `usePdfMarkup` with `picture`, the PDF strip over the image, `pdf_markup_submit` + `picturePng`) and the shared `zoomOffset`/`clampScale`/scale constants. |
@@ -581,7 +581,7 @@ stores stay at the top. No `index.ts` barrels.
 | `lib/files/fileAccess.ts` | File IPC the viewers share: `readFileText/Bytes`, `writeFileText/Bytes`, `fileMtime`, the `FileScopeContext`/`FileSourceContext`/`PaneVisibleContext` and their hooks, `describeFileErrorKey`. Lives in `lib/` because `usePoll`, the tex helpers and stores use it. |
 | `lib/files/openFileEntry.ts` | The single open-a-file policy every file listing shares (native viewer tab in the focused subwindow, TeX workspace, or the OS default app). |
 | `lib/viewers/tex/openTexWorkspace.ts` | Open / focus / recompile the single TeX workspace tab for a `.tex` source (kept out of `FileViewerPane` to avoid its import cycles). |
-| `lib/viewers/tex/hostTexBuild.ts` | Host-pinned TeX Compile: the `latexmk` argv/command and the one-click host build tab (replaced on the next Compile, ephemeral, HPC guard). |
+| `lib/viewers/tex/hostTexBuild.ts` | The engines a host TeX build offers (`HOST_TEX_ENGINES`); the build itself is `compile_tex_host`. |
 | `lib/projects/useSavedCredential.ts` | `useSavedCredential`: the one answer to "is a password saved for this host?" (checking / saved / notSaved / unreadable — a locked keyring is not "empty"); `SavedPasswordState` is also used by `stores/projects`. |
 | `lib/agents/skills.ts` | Typed invoke surface for the Skills Library (`skills_*`); no manifest, installed list is a disk read; install addressed by `SkillTarget`, never a path. |
 | `lib/agents/localDrivers.ts` | Typed invoke surface for local-model coding agents + model-update check. `listLocalDrivers(model)` hides agents a completion-only model (no tool calls) can't serve. |

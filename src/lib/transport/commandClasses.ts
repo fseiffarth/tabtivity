@@ -763,6 +763,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["pty_write", "core"],
   ["register_host_bound_tab", "core"],
   ["compile_tex", "core"],
+  ["compile_tex_host", "core"],
   ["list_fonts", "core"],
   ["resolve_tex_root", "core"],
   ["synctex_edit", "core"],

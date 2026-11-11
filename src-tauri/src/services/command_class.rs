@@ -1018,6 +1018,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("register_host_bound_tab", Core),
     // commands/tex.rs
     ("compile_tex", Core),
+    ("compile_tex_host", Core),
     ("list_fonts", Core),
     ("resolve_tex_root", Core),
     ("synctex_edit", Core),

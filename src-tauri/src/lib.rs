@@ -2425,6 +2425,7 @@ pub fn run() {
             // LaTeX view / compile (gated on a TeX engine being on PATH)
             commands::tex::tex_capability,
             commands::tex::compile_tex,
+            commands::tex::compile_tex_host,
             commands::tex::tex_preview_snippet,
             commands::synctex::synctex_edit,
             commands::synctex::synctex_status,
