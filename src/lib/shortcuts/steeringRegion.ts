@@ -20,7 +20,7 @@ import { experimentalEnabled } from "../experimental";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import type { Settings } from "../../types";
 import type { SteeringRegion } from "../../stores/keyboardSteering";
-import { steeringInRoot } from "./steeringScope";
+import { steeringInRoot, steeringTabsActive } from "./steeringScope";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { isDetachedWindow } from "../../stores/detachedContext";
 
@@ -344,8 +344,15 @@ function activeSubagentControl(): HTMLElement | null {
   if (steeringInRoot()) {
     return Array.from(document.querySelectorAll<HTMLElement>(`.root-console-backdrop :is(${controls})`)).find(shown) ?? null;
   }
-  const all = Array.from(document.querySelectorAll<HTMLElement>(`.subwindow.focused :is(${controls})`));
-  return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
+  const active = steeringTabsActive();
+  if (!active) return null;
+  // CenterPanel draws tab bodies in a sibling pane layer, outside the
+  // subwindow frame. Match the active scope and tab, not that frame's DOM.
+  const pane = Array.from(document.querySelectorAll<HTMLElement>(".center-pane")).find(
+    (el) => el.dataset.scopeKey === active.scope && el.dataset.tabKey === active.tab.key && shown(el),
+  );
+  if (!pane) return null;
+  return Array.from(pane.querySelectorAll<HTMLElement>(controls)).find(shown) ?? null;
 }
 
 /** The pane the subagents region walks: the one holding both the Chat's top bar

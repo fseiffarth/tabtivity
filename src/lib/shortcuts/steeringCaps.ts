@@ -67,10 +67,20 @@ const ANCHORS: Record<CapAnchor, AnchorDef> = {
   card: { find: () => activeTabCard(), align: "end" },
   // On the Subagents toggle; with a subagent open, on its bar.
   subagents: {
-    find: () =>
-      activeSubagentFrame()?.querySelector<HTMLElement>(
-        ".terminal-reader-subagent-toggle, .terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)",
-      ) ?? null,
+    find: () => {
+      const frame = activeSubagentFrame();
+      if (!frame) return null;
+      // The top-bar toggle can stay mounted while a subagent is open, and
+      // hidden Reader copies may precede the visible control in DOM order.
+      for (const selector of [
+        ".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)",
+        ".terminal-reader-subagent-toggle",
+      ]) {
+        const control = Array.from(frame.querySelectorAll<HTMLElement>(selector)).find(drawn);
+        if (control) return control;
+      }
+      return null;
+    },
     align: "end",
   },
   prompt: { find: () => first(`${FOCUSED} .prompt-strip`), align: "start" },

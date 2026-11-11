@@ -623,44 +623,51 @@ describe("the agent tab's subagents", () => {
   /** An agent tab's pane, as `TerminalView` draws it: the prompt strip's top
    *  bar holding the Subagents list (portaled there by the Chat), then the
    *  Chat, which shows an open subagent's bar. */
+  beforeEach(() => {
+    useTabsStore.getState().addTab({ label: "agent", cmd: "bash", cwd: "/p", kind: "shell" });
+  });
+
   function Pane({ agents = 2 }: { agents?: number }) {
     const [listOpen, setListOpen] = useState(false);
     const [opened, setOpened] = useState<number | null>(null);
     return (
-      <div className="subwindow focused">
-        <div className="pane-host">
-          <div className="terminal-prompt-strip">
-            <button type="button" id="other">other</button>
-            <span className="reader-topbar-navigation">
-              {agents > 0 && (
-                <nav className="terminal-reader-subagent-index">
-                  <button type="button" id="toggle" className="terminal-reader-subagent-toggle" aria-expanded={listOpen} onClick={() => setListOpen((was) => !was)}>
-                    Subagents
-                  </button>
-                  {listOpen && (
-                    <div className="terminal-reader-subagent-list">
-                      {Array.from({ length: agents }, (_, i) => (
-                        <button type="button" key={i} id={`agent-${i}`} onClick={() => { setOpened(i); setListOpen(false); }}>
-                          agent {i}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+      <>
+        <div className="subwindow focused" />
+        <div className="center-pane" data-scope-key="p" data-tab-key={useTabsStore.getState().activeKey}>
+          <div className="pane-host">
+            <div className="terminal-prompt-strip">
+              <button type="button" id="other">other</button>
+              <span className="reader-topbar-navigation">
+                {agents > 0 && (
+                  <nav className="terminal-reader-subagent-index">
+                    <button type="button" id="toggle" className="terminal-reader-subagent-toggle" aria-expanded={listOpen} onClick={() => setListOpen((was) => !was)}>
+                      Subagents
+                    </button>
+                    {listOpen && (
+                      <div className="terminal-reader-subagent-list">
+                        {Array.from({ length: agents }, (_, i) => (
+                          <button type="button" key={i} id={`agent-${i}`} onClick={() => { setOpened(i); setListOpen(false); }}>
+                            agent {i}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </nav>
+                )}
+              </span>
+            </div>
+            <div className="terminal-reader">
+              {opened !== null && (
+                <nav className="terminal-reader-subagent-bar">
+                  <button type="button" id="sub-back" className="terminal-reader-subagent-nav" onClick={() => setOpened(null)}>‹</button>
+                  <strong id="sub-title">agent {opened}</strong>
                 </nav>
               )}
-            </span>
-          </div>
-          <div className="terminal-reader">
-            {opened !== null && (
-              <nav className="terminal-reader-subagent-bar">
-                <button type="button" id="sub-back" className="terminal-reader-subagent-nav" onClick={() => setOpened(null)}>‹</button>
-                <strong id="sub-title">agent {opened}</strong>
-              </nav>
-            )}
-            <button type="button" id="chat-link">a link in the chat</button>
+              <button type="button" id="chat-link">a link in the chat</button>
+            </div>
           </div>
         </div>
-      </div>
+      </>
     );
   }
 

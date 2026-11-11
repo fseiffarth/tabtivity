@@ -295,6 +295,35 @@ describe("steering key caps on a window", () => {
     expect(barLabels()).toContain("Switch tab");
   });
 
+  it("pins G to the visible Subagents toggle, then to the open conversation bar", () => {
+    subwindow();
+    const pane = document.createElement("div");
+    pane.className = "center-pane";
+    pane.dataset.scopeKey = "p";
+    pane.dataset.tabKey = useTabsStore.getState().activeKey!;
+    document.body.append(pane);
+    place(pane, rect(0, 80, 800, 500));
+    pane.insertAdjacentHTML("beforeend", `
+      <button class="terminal-reader-subagent-toggle" hidden></button>
+      <button class="terminal-reader-subagent-toggle" id="visible-subagents"></button>
+      <div class="terminal-reader"></div>
+    `);
+    place(document.getElementById("visible-subagents")!, rect(400, 100, 100, 24));
+    render(<SteeringLegend />);
+    act(() => useKeyboardSteeringStore.getState().enter());
+    expect(caps("subagents")).toEqual(["G"]);
+    const cap = () => document.querySelector<HTMLElement>('.steering-cap-row[data-anchor="subagents"]')!;
+    expect(cap().style.left).toBe("502px");
+
+    act(() => {
+      pane.insertAdjacentHTML("beforeend", '<nav class="terminal-reader-subagent-bar"></nav>');
+      place(pane.querySelector(".terminal-reader-subagent-bar")!, rect(100, 180, 500, 24));
+      useKeyboardSteeringStore.getState().setLevel("panes");
+    });
+    expect(caps("subagents")).toEqual(["G"]);
+    expect(cap().style.left).toBe("602px");
+  });
+
   it("gives the keys back to the bar when their control is not on screen", () => {
     subwindow();
     render(<SteeringLegend />);
