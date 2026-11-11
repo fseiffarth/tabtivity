@@ -127,7 +127,7 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
     expect(screen.getByRole("dialog", { name: "run12.png" }).querySelector("img")?.getAttribute("src")).toBe("/api/v1/tabs/tab-7/outbox/run12.png?v=1789448580-48000");
   });
 
-  it("posts only what this tab sent in its chat; a file from another tab is in the gallery alone", async () => {
+  it("posts and lists only what this tab sent; a file from another tab is the project screen's alone", async () => {
     vi.stubGlobal("fetch", sidecarFetch([
       { name: "theirs.png", kind: "image/png", size: 9_000, modified: secs("2026-09-15T05:02:40Z") },
       { name: "mine.png", kind: "image/png", size: 9_000, modified: secs("2026-09-15T05:02:30Z"), from_tab: true },
@@ -146,10 +146,52 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
     const chat = screen.getByTestId("session-transcript");
     const imgs = Array.from(chat.querySelectorAll("img")).map((img) => img.getAttribute("src"));
     expect(imgs).toEqual(["/api/v1/tabs/tab-7/outbox/mine.png?v=1789448550-9000"]);
+    fireEvent.click(screen.getByRole("button", { name: "Files from the agent (1)" }));
+    const gallery = screen.getByRole("dialog", { name: "Files from the agent" });
+    expect(gallery.textContent).toContain("1 file this tab sent");
+    expect(gallery.textContent).toContain("mine.png");
+    expect(gallery.textContent).not.toContain("theirs.png");
+  });
+
+  it("shows no gallery button while only other tabs have sent files", async () => {
+    vi.stubGlobal("fetch", sidecarFetch([
+      { name: "theirs.png", kind: "image/png", size: 9_000, modified: 200 },
+    ]));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    expect(screen.queryByRole("button", { name: /^Files from the agent/ })).toBeNull();
+  });
+
+  it("deletes all of this tab's files from its gallery and leaves the other tabs' files", async () => {
+    const calls: string[] = [];
+    let files: { name: string; kind: string; size: number; modified: number; from_tab?: boolean }[] = [
+      { name: "theirs.png", kind: "image/png", size: 9_000, modified: 300 },
+      { name: "b.png", kind: "image/png", size: 2_000, modified: 200, from_tab: true },
+      { name: "a.pdf", kind: "application/pdf", size: 400, modified: 100, from_tab: true },
+    ];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.endsWith("/outbox")) return Promise.resolve(jsonResponse(200, { files }));
+      if (url.includes("/outbox/")) {
+        files = files.filter((file) => !url.endsWith(`/${file.name}`));
+        return Promise.resolve(jsonResponse(200, { removed: true }));
+      }
+      return Promise.resolve(jsonResponse(404, { error: "not_found" }));
+    }));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+
     fireEvent.click(screen.getByRole("button", { name: "Files from the agent (2)" }));
     const gallery = screen.getByRole("dialog", { name: "Files from the agent" });
-    expect(gallery.textContent).toContain("theirs.png");
-    expect(gallery.textContent).toContain("mine.png");
+    fireEvent.click(within(gallery).getByRole("button", { name: /^Delete all/ }));
+    fireEvent.click(within(within(gallery).getByRole("group", { name: "Delete every file this tab sent?" })).getByRole("button", { name: "Delete all" }));
+    await settle();
+
+    expect(calls.filter((call) => call.startsWith("DELETE")).sort())
+      .toEqual(["DELETE /api/v1/tabs/tab-7/outbox/a.pdf", "DELETE /api/v1/tabs/tab-7/outbox/b.png"]);
+    expect(files.map((file) => file.name)).toEqual(["theirs.png"]);
+    expect(screen.queryByRole("dialog", { name: "Files from the agent" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Files from the agent/ })).toBeNull();
   });
 
   it("posts one send as one album, and leaves files from before the conversation to the gallery", async () => {
@@ -190,10 +232,10 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
 
   it("steps through the gallery's pictures in the full-screen viewer, skipping the other kinds", async () => {
     vi.stubGlobal("fetch", sidecarFetch([
-      { name: "c.png", kind: "image/png", size: 3_000, modified: 300 },
-      { name: "paper.pdf", kind: "application/pdf", size: 400, modified: 250 },
-      { name: "b.png", kind: "image/png", size: 2_000, modified: 200 },
-      { name: "a.jpg", kind: "image/jpeg", size: 1_000, modified: 100 },
+      { name: "c.png", kind: "image/png", size: 3_000, modified: 300, from_tab: true },
+      { name: "paper.pdf", kind: "application/pdf", size: 400, modified: 250, from_tab: true },
+      { name: "b.png", kind: "image/png", size: 2_000, modified: 200, from_tab: true },
+      { name: "a.jpg", kind: "image/jpeg", size: 1_000, modified: 100, from_tab: true },
     ]));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -228,8 +270,8 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
 
   it("zooms a picture on a double tap, and a drag then pans it instead of stepping", async () => {
     vi.stubGlobal("fetch", sidecarFetch([
-      { name: "b.png", kind: "image/png", size: 2_000, modified: 200 },
-      { name: "a.png", kind: "image/png", size: 1_000, modified: 100 },
+      { name: "b.png", kind: "image/png", size: 2_000, modified: 200, from_tab: true },
+      { name: "a.png", kind: "image/png", size: 1_000, modified: 100, from_tab: true },
     ]));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -258,8 +300,8 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
 
   it("saves any file from its tile, the picture that has no ⋯ included", async () => {
     vi.stubGlobal("fetch", sidecarFetch([
-      { name: "run12.png", kind: "image/png", size: 48_000, modified: 200 },
-      { name: "paper.pdf", kind: "application/pdf", size: 400, modified: 100 },
+      { name: "run12.png", kind: "image/png", size: 48_000, modified: 200, from_tab: true },
+      { name: "paper.pdf", kind: "application/pdf", size: 400, modified: 100, from_tab: true },
     ]));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -276,8 +318,8 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
   it("deletes one of the agent's files from the gallery, through this tab's scope", async () => {
     const calls: string[] = [];
     let files: unknown[] = [
-      { name: "run12.png", kind: "image/png", size: 48_000, modified: 200 },
-      { name: "paper.pdf", kind: "application/pdf", size: 400, modified: 100 },
+      { name: "run12.png", kind: "image/png", size: 48_000, modified: 200, from_tab: true },
+      { name: "paper.pdf", kind: "application/pdf", size: 400, modified: 100, from_tab: true },
     ];
     vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
       calls.push(`${init?.method ?? "GET"} ${url}`);
@@ -307,8 +349,8 @@ describe(`${BRAND.display} Mobile shows the files the agent sent in the chat and
   it("keeps the files out of the screen's chat, which has no times to place them by, and the button in both views", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     vi.stubGlobal("fetch", sidecarFetch([
-      { name: "paper.pdf", kind: "application/pdf", size: 400, modified: 200 },
-      { name: "plot.png", kind: "image/png", size: 9_000, modified: 100 },
+      { name: "paper.pdf", kind: "application/pdf", size: 400, modified: 200, from_tab: true },
+      { name: "plot.png", kind: "image/png", size: 9_000, modified: 100, from_tab: true },
     ]));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();

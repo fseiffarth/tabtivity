@@ -11,7 +11,7 @@ import {
   type MutableRefObject, type RefObject,
 } from "react";
 import {
-  clearOutbox, deleteOutboxFile, listOutbox, type OutboxFile, type ViewerScope, type TabRow,
+  deleteOutboxFile, listOutbox, type OutboxFile, type ViewerScope, type TabRow,
 } from "../../api";
 import { OUTBOX_POLL, sameOutbox } from "../../outbox";
 import { type OutboxPost as ChatPost } from "../../terminal/outboxPosts";
@@ -55,7 +55,7 @@ export function useOutboxPoll({
 export function useOutboxViewers({
   tab, readableHost, atBottomRef, setOutbox, outboxScope, gallery, setGallery, outboxOpen,
   setOutboxOpen, inboxOpen, setInboxOpen, askedFile, markupAway, setMarkupAway, filesOpen,
-  inboxFiles,
+  inboxFiles, tabOutbox,
 }: {
   tab: TabRow;
   readableHost: RefObject<HTMLElement>;
@@ -73,6 +73,8 @@ export function useOutboxViewers({
   setMarkupAway: Dispatch<SetStateAction<string | null>>;
   filesOpen: boolean;
   inboxFiles: ReturnType<typeof useInboxFiles>;
+  /** The files this tab sent (`from_tab`) — what its gallery lists. */
+  tabOutbox: readonly OutboxFile[];
 }) {
   useEffect(() => {
     const viewerUp = outboxOpen !== null && markupAway === null;
@@ -129,27 +131,32 @@ export function useOutboxViewers({
   }, []);
   /** Removes one of the files the agent sent, from the tile's own confirm — the
    * same removal the project screen's shelf does, through this tab's scope. The
-   * row goes now rather than at the next poll, and the sheet closes with the
-   * last file rather than standing empty over the session. */
+   * row goes now rather than at the next poll, and the sheet closes with this
+   * tab's last file rather than standing empty over the session. */
   const removeOutbox = useCallback(async (file: OutboxFile) => {
     await deleteOutboxFile({ tab: tab.id }, file.name);
     setOutbox((current) => {
       const left = current.filter((row) => row.name !== file.name);
-      if (left.length === 0) setGallery(false);
+      if (!left.some((row) => row.from_tab)) setGallery(false);
       return left;
     });
     setOutboxOpen((open) => open?.name === file.name ? null : open);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id]);
-  /** The gallery's Delete all, through this tab's scope: the project's whole
-   * outbox goes (every tab's sends, as the gallery lists them all), to free
-   * the space, and the sheet closes over the empty list. */
+  /** The gallery's Delete all, through this tab's scope: the files this tab
+   * sent go, as the gallery lists only those — other tabs' sends stay for the
+   * project screen's gallery, whose Delete all clears the whole outbox. Every
+   * file is tried; the ones that went leave the list, and a refusal is thrown
+   * after, so the sheet stays up with what is left and says so. */
   const removeAllOutbox = useCallback(async () => {
-    await clearOutbox({ tab: tab.id });
-    setOutbox([]);
+    const results = await Promise.allSettled(tabOutbox.map((file) => deleteOutboxFile({ tab: tab.id }, file.name)));
+    const gone = new Set(tabOutbox.filter((_file, at) => results[at].status === "fulfilled").map((file) => file.name));
+    setOutbox((current) => current.filter((row) => !gone.has(row.name)));
+    setOutboxOpen((open) => open && gone.has(open.name) ? null : open);
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
     setGallery(false);
-    setOutboxOpen(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.id]);
+  }, [tab.id, tabOutbox]);
   return { openOutbox, renderPost, chatInbox, inboxScope, openSentFile, removeOutbox, removeAllOutbox };
 }

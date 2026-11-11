@@ -1048,8 +1048,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** This screen reads the project's outbox through its own tab — the project
    * screen reads the same files through the project (`OutboxScope`). */
   const outboxScope = useMemo(() => ({ tab: tab.id }), [tab.id]);
+  /** What this tab sent (`from_tab`): the gallery beside the tab name holds
+   * these alone — every tab's files are the project screen's gallery. */
+  const tabOutbox = useMemo(() => outbox.filter((file) => file.from_tab), [outbox]);
   /** The pictures among them, which the full-screen viewer steps through. */
-  const outboxPictures = useMemo(() => outbox.filter((file) => file.kind.startsWith("image/")), [outbox]);
+  const outboxPictures = useMemo(() => tabOutbox.filter((file) => file.kind.startsWith("image/")), [tabOutbox]);
   /** Whether the gallery sheet is up (the button beside the tab name). */
   const [gallery, setGallery] = useState(false);
   /** The picture open full-screen. */
@@ -1408,7 +1411,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   } = useOutboxViewers({
     tab, readableHost, atBottomRef, setOutbox, outboxScope, gallery, setGallery, outboxOpen,
     setOutboxOpen, inboxOpen, setInboxOpen, askedFile, markupAway, setMarkupAway, filesOpen,
-    inboxFiles,
+    inboxFiles, tabOutbox,
   });
   const { visibleChunks, hiddenLines, showEarlier } = useEarlierOutput({
     readableHost, earlier, revealed, setRevealed, revealAnchor,
@@ -2567,7 +2570,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         aria-label={t(splitTier ? "mobile.files.toggle" : "mobile.project.menu")}
         title={t(splitTier ? "mobile.files.toggle" : "mobile.project.menu")}
       >{tablet ? <FolderIcon size="1em" /> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" /></svg>}</button>}
-      {outbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: outbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{outbox.length}</small></button>}
+      {tabOutbox.length > 0 && <button className="terminal-gallery" onClick={() => setGallery(true)} aria-label={t("mobile.outbox.galleryOpen", { count: tabOutbox.length })} title={t("mobile.outbox.region")}><span aria-hidden="true"><FileImageIcon /></span><small>{tabOutbox.length}</small></button>}
       {/* One pill named after the view on screen; its list switches views and,
           on an agent tab's Chat, says where the chat reads from. */}
       <div className="terminal-view-switch" role={tablet ? "group" : undefined} aria-label={tablet ? t("mobile.focus.outputView") : undefined}>
@@ -3168,7 +3171,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     />}
     {/* The viewer covers the phone; the gallery stays chosen behind it, so
         closing the file lands back on the grid. */}
-    {gallery && (!outboxOpen || markupAway !== null) && <OutboxGallery scope={outboxScope} files={outbox} onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
+    {gallery && (!outboxOpen || markupAway !== null) && <OutboxGallery scope={outboxScope} files={tabOutbox} tabOnly onOpen={openOutbox} onDetails={setOutboxOpen} onDelete={removeOutbox} onDeleteAll={removeAllOutbox} onClose={() => setGallery(false)} />}
     {/* A markup view's Chat tucks its viewer away (`markupAway`) without
         unmounting it; the host is always there, so the switch never remounts. */}
     {outboxOpen && <div className={markupAway === null ? "markup-host" : "markup-host away"}><BackNest off={markupAway !== null}>
