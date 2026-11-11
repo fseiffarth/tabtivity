@@ -3,7 +3,7 @@ import { DialogShell } from "../common/PromptDialogs";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
 import { ReaderSlashMenu, slashMenuKey } from "../terminal/ReaderSlashMenu";
-import { useT } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import {
   STEERING_PROMPT_EVENT,
   clearAgentTab,
@@ -39,6 +39,10 @@ import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { chordLabel } from "../../lib/shortcuts/shortcuts";
+import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
+
+const COMMIT_LABELS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit.own", state: "mobile.commit.state", split: "mobile.commit.split" };
+const COMMIT_HINTS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit.ownHint", state: "mobile.commit.stateHint", split: "mobile.commit.splitHint" };
 
 type Open = Omit<SteeringPromptDetail, "handled">;
 
@@ -70,7 +74,8 @@ const drafts = new Map<string, string>();
  * text here): Alt+M lists the session's own `/model` picker, Alt+E the
  * effort (Claude's `/effort` levels; elsewhere the `/model` picker, whose
  * next step it is), Alt+C clears the conversation (pressed twice: it asks
- * first), Alt+P / Alt+G lead the text with `/plan` / `/goal` or
+ * first), Alt+T lists the Commit chip's three commit prompts (the composer's:
+ * each goes to the agent as a prompt of its own, the draft kept), Alt+P / Alt+G lead the text with `/plan` / `/goal` or
  * take that lead off again. A list takes ↑/↓, Enter and the digits; Escape
  * closes the list before the box.
  *
@@ -102,7 +107,7 @@ export function SteeringPromptOverlay() {
   return <PromptBox key={id} draftKey={id} target={open} onClose={close} />;
 }
 
-const CHIP_KEYS = { model: "m", effort: "e", clear: "c", plan: "p", goal: "g" } as const;
+const CHIP_KEYS = { model: "m", effort: "e", clear: "c", plan: "p", goal: "g", commit: "t" } as const;
 type Chip = keyof typeof CHIP_KEYS;
 
 /** A chip's key as its `<kbd>` names it: `chordLabel`'s Alt — "Alt+M", or
@@ -203,6 +208,8 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   });
   // Which list is under the text: the session's picker, or Claude's levels.
   const [effortOpen, setEffortOpen] = useState(false);
+  const [commitOpen, setCommitOpen] = useState(false);
+  const [commitCursor, setCommitCursor] = useState(0);
   const [effortCursor, setEffortCursor] = useState(0);
   const [effortSending, setEffortSending] = useState("");
   const [note, setNote] = useState<"effortFailed" | "cleared" | "clearFailed" | null>(null);
@@ -217,13 +224,13 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   const submittable = !busy && !picking && value.trim().length > 0;
   // Not over a model or effort list: ↑/↓ and Enter are that list's.
   const slashMenu = useMemo(
-    () => (slashClosed || picking || effortOpen ? [] : slashSuggestions(value, cli, usedSlash)),
-    [slashClosed, picking, effortOpen, value, cli, usedSlash],
+    () => (slashClosed || picking || effortOpen || commitOpen ? [] : slashSuggestions(value, cli, usedSlash)),
+    [slashClosed, picking, effortOpen, commitOpen, value, cli, usedSlash],
   );
   /** Claude's suggestion while the box is empty, as its own CLI shows it:
    * the placeholder, taken into the box by Tab or →, so the user still
    * sends, edits or ignores it. */
-  const shownSuggestion = suggestion && !value && !busy && !working && !picking && !effortOpen ? suggestion : "";
+  const shownSuggestion = suggestion && !value && !busy && !working && !picking && !effortOpen && !commitOpen ? suggestion : "";
 
   /** OpenCode's picker is answered by typing a row's query into its search
    * field, and its walk (`OpenCodePickerWalk`) moves the dialog's highlight
@@ -279,6 +286,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     if (picking) session.close();
     setEffortOpen(false);
     setEffortSending("");
+    setCommitOpen(false);
   };
   const openModel = () => {
     if (picking) {
@@ -324,6 +332,35 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         setNote("effortFailed");
       },
     );
+  };
+  // A Tabby chat has no files to commit.
+  const commitOffered = offer.clear && target.scope !== "assistant";
+  const openCommit = () => {
+    if (!commitOffered) return;
+    if (commitOpen) {
+      setCommitOpen(false);
+      return;
+    }
+    if (picking) session.close();
+    setEffortOpen(false);
+    setNote(null);
+    setCommitCursor(0);
+    setCommitOpen(true);
+  };
+  /** One of the composer's three commit prompts, sent as a prompt of its own;
+   *  the draft stays for the tab's next open. */
+  const chooseCommit = async (choice: CommitChoice) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await sendSteeringPrompt(target.tab, COMMIT_PROMPTS[choice]);
+      onClose();
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+      setCommitOpen(false);
+    }
   };
   const clear = () => {
     if (!offer.clear) return;
@@ -372,12 +409,13 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     if (chip === "model") openModel();
     else if (chip === "effort") openEffort();
     else if (chip === "clear") clear();
+    else if (chip === "commit") openCommit();
     else if (offer[chip]) lead(chip === "plan" ? "/plan" : "/goal");
   };
 
   /** The keys a list takes while it is open; true when one was taken. */
   const listKey = (e: ReactKeyboardEvent): boolean => {
-    if (!picking && !effortOpen) return false;
+    if (!picking && !effortOpen && !commitOpen) return false;
     if (e.key === "Escape") {
       closeLists();
       return true;
@@ -416,6 +454,23 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
       }
       if (e.key === "Enter" && !e.shiftKey) {
         if (step) session.choose(step.current);
+        return true;
+      }
+      return false;
+    }
+    if (commitOpen) {
+      const n = COMMIT_CHOICES.length;
+      const digit = digitOf(e);
+      if (digit !== null) {
+        if (digit <= n) void chooseCommit(COMMIT_CHOICES[digit - 1]);
+        return true;
+      }
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        setCommitCursor((at) => (at + (e.key === "ArrowDown" ? 1 : -1) + n) % n);
+        return true;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        void chooseCommit(COMMIT_CHOICES[commitCursor]);
         return true;
       }
       return false;
@@ -508,6 +563,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     },
     { chip: "plan", label: t("steering.prompt.chipPlan"), shown: offer.plan, on: /^\/plan(?:\s|$)/u.test(value) },
     { chip: "goal", label: t("steering.prompt.chipGoal"), shown: offer.goal, on: /^\/goal(?:\s|$)/u.test(value) },
+    { chip: "commit", label: t("mobile.commit.open"), shown: commitOffered, on: commitOpen },
   ];
 
   return (
@@ -612,6 +668,29 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
             ))
           )}
           {picking && session.step?.hidden ? <small className="terminal-reader-question-more">{t("steering.prompt.moreRows")}</small> : null}
+          <small className="terminal-reader-question-more">{t("steering.prompt.listKeys")}</small>
+        </div>
+      )}
+      {commitOpen && (
+        <div className="steering-prompt-list" role="listbox" aria-label={t("mobile.commit.title")}>
+          <div className="steering-prompt-list-head">{t("mobile.commit.title")}</div>
+          {COMMIT_CHOICES.map((choice, index) => (
+            <button
+              key={choice}
+              type="button"
+              role="option"
+              aria-selected={index === commitCursor}
+              className="terminal-reader-option"
+              disabled={busy}
+              onClick={() => { void chooseCommit(choice); }}
+            >
+              <span className="terminal-reader-option-number">{index + 1}</span>
+              <span className="terminal-reader-option-label">
+                <span>{t(COMMIT_LABELS[choice])}</span>
+                <small>{t(COMMIT_HINTS[choice])}</small>
+              </span>
+            </button>
+          ))}
           <small className="terminal-reader-question-more">{t("steering.prompt.listKeys")}</small>
         </div>
       )}

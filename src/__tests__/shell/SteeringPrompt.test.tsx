@@ -328,6 +328,19 @@ describe("steering prompt box", () => {
       expect(writeMock).not.toHaveBeenCalled();
     });
 
+    it("Alt+T lists the three commit prompts: a digit sends one as a prompt of its own and closes the box, the draft kept", async () => {
+      const input = openBox();
+      fireEvent.change(input, { target: { value: "half a thought" } });
+      alt(input, "t");
+      expect(document.querySelectorAll(".steering-prompt-list .terminal-reader-option").length).toBe(3);
+      fireEvent.keyDown(input, { key: "2" });
+      await vi.waitFor(() => expect(written().join("")).toContain("Commit the current state"));
+      await vi.waitFor(() => expect(box()).toBeNull());
+      // The draft waits for the tab's next open.
+      press(" ");
+      expect(box()?.value).toBe("half a thought");
+    });
+
     it("Alt+E lists Claude's efforts: ↓ and Enter send one, Escape closes the list first", async () => {
       const input = openBox();
       alt(input, "e");
@@ -381,13 +394,14 @@ describe("steering prompt box", () => {
       }));
       try {
         const { chipKeyLabel } = await import("../../components/layout/SteeringPromptOverlay");
-        const chips = ["model", "effort", "clear", "plan", "goal"] as const;
+        const chips = ["model", "effort", "clear", "plan", "goal", "commit"] as const;
         expect(chips.map((c) => chipKeyLabel(c))).toEqual([
           "⌥M",
           "⌥E",
           "⌥C",
           "⌥P",
           "⌥G",
+          "⌥T",
         ]);
       } finally {
         vi.doUnmock("../../lib/platform");
